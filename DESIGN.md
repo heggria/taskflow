@@ -204,6 +204,19 @@ pi-taskflow/
 | `map` | 对上游数组**动态 fan-out**，每项一个 agent | ≤concurrency |
 | `gate` | 质量门 / 对抗 review（可决定是否继续） | 1+ |
 | `reduce` | 把多结果聚合为一（synthesize） | 1 |
+| `approval` | **人在环**：暂停等待 approve / reject / edit | 1 |
+| `flow` | 把一个**已保存的 taskflow** 当作单个 phase 运行（组合复用） | 子流程并发 |
+
+### 3.3b 控制流 / 可靠性字段（任意 phase）
+
+| 字段 | 语义 |
+|------|------|
+| `when` | 条件守卫：表达式为假则 skip 该 phase。支持 `{refs}`、`== != < > <= >=`、`&& \|\| !`、括号、字符串/数字字面量。解析失败 fail-open（仍运行） |
+| `join` | 依赖 join：`all`（默认，等全部 dep）/ `any`（OR-join，任一 dep 完成即运行） |
+| `retry` | `{max, backoffMs, factor}`：失败重试，延迟 = `backoffMs * factor^attempt` |
+| `use` / `with` | `flow` 子流程的名字与入参（入参字符串值会插值） |
+
+顶层 `budget: {maxUSD, maxTokens}`：累计成本/token 超限即停（剩余 phase skip，运行态 `blocked`）。
 
 ### 3.4 模板插值
 
@@ -293,7 +306,8 @@ export async function runTaskflow(def, args, ctx): Promise<TaskflowResult>
 | **v0.1** | DSL + schema + runtime（agent/parallel/map/reduce）+ `taskflow` 工具 + `/tf run` + 内存隔离 + 流式进度 | ✅ 已发布 (npm 0.0.1) |
 | **v0.2** | 保存/动态命令注册 + 跨 session 恢复 + `gate` 真门控 + run 历史交互 TUI | ✅ 已完成 (npm 0.0.3) |
 | **v0.3** | examples + SKILL.md（教 LLM 写定义）+ YAML 支持 + 发布 npm | 🚧 examples/SKILL/npm 已做；YAML 待办 |
-| **v0.4** | 真·后台执行（detached + 轮询）+ 成本预估/上限 + 内置 `deep-research` 工作流 | ⏳ 待办 |
+| **v0.6** | 控制流 & 可靠性：`when` 条件分支 + `join:any` OR-join + 声明式 `retry` + `approval` 人在环 + `flow` 子流程组合 + `budget` 成本上限 | ✅ 已完成 |
+| **v0.7+** | 真·后台执行（detached + 轮询）+ 事件/cron 触发 + 成本**预估** + mermaid DAG 导出 + 内置 `deep-research` 工作流 | ⏳ 待办 |
 
 ---
 

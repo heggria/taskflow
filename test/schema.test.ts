@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dependenciesOf, finalPhase, type Taskflow, topoLayers, validateTaskflow } from "../extensions/schema.ts";
+import { dependenciesOf, finalPhase, resolveArgs, type Taskflow, topoLayers, validateTaskflow } from "../extensions/schema.ts";
 
 const valid: Taskflow = {
 	name: "audit",
@@ -27,6 +27,39 @@ test("validateTaskflow: per-type requirements", () => {
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "map", task: "t" }] }).ok, false); // no over
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "parallel" }] }).ok, false); // no branches
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "reduce", task: "t" }] }).ok, false); // no from
+	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow" }] }).ok, false); // no use
+});
+
+test("validateTaskflow: new phase types and fields", () => {
+	// flow with use is valid
+	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow", use: "other" }] }).ok, true);
+	// approval needs no task
+	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "approval" }] }).ok, true);
+	// retry.max must be >= 0
+	assert.equal(
+		validateTaskflow({ name: "x", phases: [{ id: "p", type: "agent", task: "t", retry: { max: -1 } }] }).ok,
+		false,
+	);
+	assert.equal(
+		validateTaskflow({ name: "x", phases: [{ id: "p", type: "agent", task: "t", retry: { max: 2 } }] }).ok,
+		true,
+	);
+	// when + join accepted
+	assert.equal(
+		validateTaskflow({
+			name: "x",
+			phases: [
+				{ id: "a", type: "agent", task: "t" },
+				{ id: "b", type: "agent", task: "t", dependsOn: ["a"], when: "{steps.a.output} == ok", join: "any" },
+			],
+		}).ok,
+		true,
+	);
+	// budget accepted at top level
+	assert.equal(
+		validateTaskflow({ name: "x", budget: { maxUSD: 1 }, phases: [{ id: "p", type: "agent", task: "t" }] }).ok,
+		true,
+	);
 });
 
 test("validateTaskflow: duplicate ids and unknown deps", () => {
@@ -34,6 +67,14 @@ test("validateTaskflow: duplicate ids and unknown deps", () => {
 	assert.equal(validateTaskflow(dup).ok, false);
 	const badDep = { name: "x", phases: [{ id: "p", type: "agent", task: "t", dependsOn: ["ghost"] }] };
 	assert.equal(validateTaskflow(badDep).ok, false);
+});
+
+test("validateTaskflow: does not throw on malformed phases (null / non-object)", () => {
+	// Regression: finals filter must not deref a null phase.
+	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [null] }));
+	assert.equal(validateTaskflow({ name: "x", phases: [null] }).ok, false);
+	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [{ id: "a", task: "t" }, 42] }));
+	assert.equal(validateTaskflow({ name: "x", phases: [42] }).ok, false);
 });
 
 test("validateTaskflow: detects cycles", () => {
@@ -58,6 +99,17 @@ test("validateTaskflow: at most one final", () => {
 		],
 	};
 	assert.equal(validateTaskflow(two).ok, false);
+});
+
+test("resolveArgs: applies defaults, honors overrides, passes through extras", () => {
+	const def: Taskflow = {
+		name: "x",
+		args: { a: { default: 1 }, b: {} },
+		phases: [{ id: "p", task: "t" }],
+	};
+	assert.deepEqual(resolveArgs(def, { b: 2, c: 3 }), { a: 1, b: 2, c: 3 });
+	assert.deepEqual(resolveArgs(def, undefined), { a: 1 });
+	assert.deepEqual(resolveArgs(def, { a: 9 }), { a: 9 });
 });
 
 test("topoLayers: produces correct execution layers", () => {

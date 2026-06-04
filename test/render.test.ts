@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderProgress, summarizeRun } from "../extensions/render.ts";
-import { emptyUsage } from "../extensions/runner.ts";
+import { emptyUsage } from "../extensions/usage.ts";
 import type { Taskflow } from "../extensions/schema.ts";
 import type { PhaseState, RunState } from "../extensions/store.ts";
 

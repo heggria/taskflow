@@ -1,0 +1,50 @@
+{
+  "name": "guarded-refactor",
+  "description": "Plan a change, pause for human approval before touching code (HITL), then implement with retries and a final review gate. Budget-capped.",
+  "version": 1,
+  "args": {
+    "target": { "default": "src", "description": "Directory or module to refactor" },
+    "goal": { "description": "What the refactor should achieve" }
+  },
+  "concurrency": 4,
+  "agentScope": "user",
+  "budget": { "maxUSD": 2.0 },
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "task": "Produce a concrete, step-by-step refactor plan for {args.target} to achieve: {args.goal}. List the files you would change and the risks."
+    },
+    {
+      "id": "approve",
+      "type": "approval",
+      "dependsOn": ["plan"],
+      "task": "Review the refactor plan above. Approve to proceed, reject to abort, or edit to add constraints the implementer must follow."
+    },
+    {
+      "id": "implement",
+      "type": "agent",
+      "agent": "executor_code",
+      "dependsOn": ["approve"],
+      "task": "Implement the approved plan for {args.target}.\nPlan:\n{steps.plan.output}\nExtra human guidance (if any):\n{steps.approve.output}",
+      "retry": { "max": 1, "backoffMs": 1000 }
+    },
+    {
+      "id": "review",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["implement"],
+      "task": "Review the implementation report below. If it is correct and complete, end with 'VERDICT: PASS'; otherwise 'VERDICT: BLOCK' with reasons.\n\n{steps.implement.output}"
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["review"],
+      "dependsOn": ["review"],
+      "agent": "doc-writer",
+      "task": "Write a short changelog entry summarizing what was done:\n\n{steps.implement.output}",
+      "final": true
+    }
+  ]
+}

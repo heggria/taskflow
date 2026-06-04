@@ -12,15 +12,39 @@ import { Type, type Static } from "typebox";
 // Phase types
 // ---------------------------------------------------------------------------
 
-export const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce"] as const;
+export const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow"] as const;
 export type PhaseType = (typeof PHASE_TYPES)[number];
 
 export const OUTPUT_FORMATS = ["text", "json"] as const;
+export const JOIN_MODES = ["all", "any"] as const;
 
 const ParallelTaskSchema = Type.Object(
 	{
 		task: Type.String({ description: "Task for this parallel branch (supports interpolation)" }),
 		agent: Type.Optional(Type.String({ description: "Override the phase agent for this branch" })),
+	},
+	{ additionalProperties: false },
+);
+
+/** Declarative retry policy for a phase's subagent call(s). */
+const RetrySchema = Type.Object(
+	{
+		max: Type.Number({ description: "Max retry attempts after the first try (>= 0)" }),
+		backoffMs: Type.Optional(Type.Number({ description: "Base delay between attempts, in ms", default: 0 })),
+		factor: Type.Optional(
+			Type.Number({ description: "Backoff multiplier per attempt (1 = fixed, 2 = exponential)", default: 1 }),
+		),
+	},
+	{ additionalProperties: false },
+);
+
+/** Run-wide cost / token ceiling. Exceeding it halts the run (remaining phases skipped). */
+const BudgetSchema = Type.Object(
+	{
+		maxUSD: Type.Optional(Type.Number({ description: "Halt the run once accumulated cost exceeds this many USD" })),
+		maxTokens: Type.Optional(
+			Type.Number({ description: "Halt the run once accumulated input+output tokens exceed this" }),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -46,7 +70,28 @@ const PhaseSchema = Type.Object(
 			Type.Array(Type.String(), { description: "[reduce] Phase ids whose outputs are aggregated" }),
 		),
 
+		// sub-workflow (flow)
+		use: Type.Optional(Type.String({ description: "[flow] Name of a saved taskflow to run as this phase" })),
+		with: Type.Optional(
+			Type.Record(Type.String(), Type.Unknown(), {
+				description: "[flow] Args passed to the sub-flow (string values support interpolation)",
+			}),
+		),
+
 		dependsOn: Type.Optional(Type.Array(Type.String(), { description: "Phase ids this phase depends on" })),
+		join: Type.Optional(
+			StringEnum(JOIN_MODES, {
+				description: "Dependency join: 'all' (default) waits for every dep; 'any' runs as soon as one dep completes",
+				default: "all",
+			}),
+		),
+		when: Type.Optional(
+			Type.String({
+				description:
+					"Conditional guard: skip this phase unless the expression is truthy. Supports {refs} and == != < > <= >= && || ! ()",
+			}),
+		),
+		retry: Type.Optional(RetrySchema),
 		output: Type.Optional(StringEnum(OUTPUT_FORMATS, { description: "Parse output as text or json", default: "text" })),
 		model: Type.Optional(Type.String({ description: "Model override for this phase" })),
 		thinking: Type.Optional(Type.String({ description: "Thinking level override for this phase" })),
@@ -77,6 +122,7 @@ export const TaskflowSchema = Type.Object(
 		version: Type.Optional(Type.Number({ default: 1 })),
 		args: Type.Optional(Type.Record(Type.String(), ArgSpecSchema, { description: "Declared invocation arguments" })),
 		concurrency: Type.Optional(Type.Number({ description: "Default max concurrent subagents", default: 8 })),
+		budget: Type.Optional(BudgetSchema),
 		agentScope: Type.Optional(
 			StringEnum(["user", "project", "both"] as const, { description: "Agent discovery scope", default: "user" }),
 		),
@@ -89,6 +135,9 @@ export type ParallelTask = Static<typeof ParallelTaskSchema>;
 export type Phase = Static<typeof PhaseSchema>;
 export type Taskflow = Static<typeof TaskflowSchema>;
 export type ArgSpec = Static<typeof ArgSpecSchema>;
+export type RetryPolicy = Static<typeof RetrySchema>;
+export type Budget = Static<typeof BudgetSchema>;
+export type JoinMode = (typeof JOIN_MODES)[number];
 
 // ---------------------------------------------------------------------------
 // Shorthand (non-DAG) specs — subagent-style ergonomics
@@ -227,6 +276,25 @@ export function validateTaskflow(def: unknown): ValidationResult {
 			if (!p.from || p.from.length === 0) errors.push(`Phase '${p.id}' (reduce) requires 'from'`);
 			if (!p.task) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
 		}
+		if (type === "flow") {
+			if (!p.use) errors.push(`Phase '${p.id}' (flow) requires 'use' (a saved flow name)`);
+		}
+		if (p.retry) {
+			if (typeof p.retry.max !== "number" || p.retry.max < 0) {
+				errors.push(`Phase '${p.id}': retry.max must be a number >= 0`);
+			} else if (p.retry.max > 20) {
+				errors.push(`Phase '${p.id}': retry.max must be <= 20`);
+			}
+			if (p.retry.backoffMs !== undefined && (p.retry.backoffMs < 0 || p.retry.backoffMs > 60000)) {
+				errors.push(`Phase '${p.id}': retry.backoffMs must be between 0 and 60000`);
+			}
+			if (p.retry.factor !== undefined && (p.retry.factor < 1 || p.retry.factor > 10)) {
+				errors.push(`Phase '${p.id}': retry.factor must be between 1 and 10`);
+			}
+		}
+		if (p.join && !JOIN_MODES.includes(p.join as JoinMode)) {
+			errors.push(`Phase '${p.id}': unknown join mode '${p.join}'`);
+		}
 	}
 
 	// dependsOn / from references must exist
@@ -247,7 +315,7 @@ export function validateTaskflow(def: unknown): ValidationResult {
 	}
 
 	// Exactly handle final-phase resolution lazily (0 finals => last phase is final)
-	const finals = (flow.phases as Phase[]).filter((p) => p.final);
+	const finals = (flow.phases as Phase[]).filter((p) => p?.final);
 	if (finals.length > 1) errors.push(`Only one phase may be marked 'final' (found ${finals.length})`);
 
 	return { ok: errors.length === 0, errors };
@@ -340,4 +408,19 @@ export function topoLayers(phases: Phase[]): Phase[][] {
 /** Resolve which phase is the result-bearing phase. */
 export function finalPhase(phases: Phase[]): Phase {
 	return phases.find((p) => p.final) ?? phases[phases.length - 1];
+}
+
+/**
+ * Apply a flow's declared arg defaults over the provided values, then pass
+ * through any extra provided keys. Shared by the tool entrypoint (index) and the
+ * sub-flow (`flow`) phase (runtime).
+ */
+export function resolveArgs(def: Taskflow, provided?: Record<string, unknown>): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+	for (const [key, spec] of Object.entries(def.args ?? {})) {
+		if (provided && key in provided) args[key] = provided[key];
+		else if (spec.default !== undefined) args[key] = spec.default;
+	}
+	if (provided) for (const [k, v] of Object.entries(provided)) if (!(k in args)) args[k] = v;
+	return args;
 }

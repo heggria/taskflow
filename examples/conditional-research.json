@@ -1,0 +1,56 @@
+{
+  "name": "conditional-research",
+  "description": "Triage a topic, route to a deep or quick research branch (conditional `when` + OR-join), gate the result, and report.",
+  "version": 1,
+  "args": {
+    "topic": { "description": "The subject to research" }
+  },
+  "concurrency": 4,
+  "agentScope": "user",
+  "budget": { "maxUSD": 1.0 },
+  "phases": [
+    {
+      "id": "triage",
+      "type": "agent",
+      "agent": "analyst",
+      "task": "Decide how much research the topic \"{args.topic}\" needs. Output ONLY JSON: {\"route\": \"deep\"} for broad/ambiguous topics, or {\"route\": \"quick\"} for narrow/well-defined ones.",
+      "output": "json"
+    },
+    {
+      "id": "deep",
+      "type": "agent",
+      "agent": "explorer",
+      "when": "{steps.triage.json.route} == deep",
+      "dependsOn": ["triage"],
+      "task": "Do a thorough, multi-angle investigation of \"{args.topic}\". Cover background, key players, trade-offs, and open questions.",
+      "retry": { "max": 2, "backoffMs": 500, "factor": 2 }
+    },
+    {
+      "id": "quick",
+      "type": "agent",
+      "agent": "explorer",
+      "when": "{steps.triage.json.route} == quick",
+      "dependsOn": ["triage"],
+      "task": "Give a concise, focused answer on \"{args.topic}\" with the 3 most important points.",
+      "retry": { "max": 2, "backoffMs": 500, "factor": 2 }
+    },
+    {
+      "id": "review",
+      "type": "gate",
+      "agent": "critic",
+      "join": "any",
+      "from": ["deep", "quick"],
+      "dependsOn": ["deep", "quick"],
+      "task": "Review the research below for unsupported claims. If it is solid, end with 'VERDICT: PASS'; if it is too thin, end with 'VERDICT: BLOCK' and one reason.\n\n{steps.deep.output}{steps.quick.output}"
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["review"],
+      "dependsOn": ["review"],
+      "agent": "doc-writer",
+      "task": "Write a clean markdown brief on \"{args.topic}\" from the validated research:\n\n{steps.deep.output}{steps.quick.output}",
+      "final": true
+    }
+  ]
+}

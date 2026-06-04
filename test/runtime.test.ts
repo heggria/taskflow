@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgentConfig } from "../extensions/agents.ts";
-import { emptyUsage, type RunResult, type RunOptions } from "../extensions/runner.ts";
+import type { RunResult, RunOptions } from "../extensions/runner.ts";
+import { emptyUsage } from "../extensions/usage.ts";
 import { executeTaskflow, type RuntimeDeps } from "../extensions/runtime.ts";
 import type { Taskflow } from "../extensions/schema.ts";
 import type { RunState } from "../extensions/store.ts";
@@ -208,6 +209,33 @@ test("runtime: resume skips cached completed phases", async () => {
 	assert.equal(res.ok, true);
 	// Only phase two should have run (one was cached).
 	assert.deepEqual(record, ["use out:start"]);
+});
+
+test("runtime: resume caches a completed reduce phase (unified inputHash)", async () => {
+	const def: Taskflow = {
+		name: "reduce-resume",
+		phases: [
+			{ id: "x", type: "agent", agent: "a", task: "tx" },
+			{ id: "sum", type: "reduce", from: ["x"], agent: "a", task: "combine {steps.x.output}", dependsOn: ["x"], final: true },
+		],
+	};
+	const record: string[] = [];
+	const runner = mockRunner((t) => `o:${t}`, { record });
+	const { hashInput } = await import("../extensions/store.ts");
+	const state = mkState(def);
+	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput("x", "a", "tx"), usage: emptyUsage() };
+	// reduce cache key is hashInput(id, agent, interpolatedText) — same shape as agent/gate.
+	state.phases.sum = {
+		id: "sum",
+		status: "done",
+		output: "o:combine o:tx",
+		inputHash: hashInput("sum", "a", "combine o:tx"),
+		usage: emptyUsage(),
+	};
+	const res = await executeTaskflow(state, baseDeps(runner));
+	assert.equal(res.ok, true);
+	// Both phases were cached → nothing re-ran.
+	assert.deepEqual(record, []);
 });
 
 test("runtime: concurrency cap is respected in map", async () => {

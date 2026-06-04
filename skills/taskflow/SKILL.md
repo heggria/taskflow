@@ -86,6 +86,71 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `map` | fan out over `over` (an array) — one subagent per item, `{item}` bound |
 | `gate` | quality/review step that can **halt the flow** (see below) |
 | `reduce` | aggregate `from[]` phases into one output |
+| `approval` | **human-in-the-loop** pause: ask a person to approve / reject / edit before continuing |
+| `flow` | run a **saved sub-flow** (by `use`) as a single phase — composition/reuse |
+
+### Control-flow fields (any phase)
+
+| field | meaning |
+|-------|---------|
+| `when` | conditional guard — skip the phase unless the expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& \|\| !`, parentheses, quoted strings/numbers. Parse errors fail **open** (phase runs). |
+| `join` | dependency join: `"all"` (default — wait for every dep) or `"any"` (OR-join — run as soon as one dep completes). |
+| `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
+
+### Conditional routing (when + gate/branches)
+
+Pair `when` with an upstream phase that emits a decision to build real if/else
+routing. Use `join: "any"` on the merge phase so it runs whichever branch fired:
+
+```jsonc
+{ "id": "triage", "type": "agent", "agent": "analyst", "output": "json",
+  "task": "Classify the task. Output ONLY {\"route\":\"deep\"} or {\"route\":\"quick\"}." },
+{ "id": "deep",  "when": "{steps.triage.json.route} == deep",  "dependsOn": ["triage"], "agent": "analyst", "task": "..." },
+{ "id": "quick", "when": "{steps.triage.json.route} == quick", "dependsOn": ["triage"], "agent": "executor_fast", "task": "..." },
+{ "id": "report", "type": "reduce", "from": ["deep","quick"], "join": "any",
+  "dependsOn": ["deep","quick"], "agent": "writer", "task": "...", "final": true }
+```
+
+> `when` should reference **upstream** (`dependsOn`) phases — a ref to a phase
+> that hasn't completed resolves empty and the guard is treated as false.
+
+### Approval phases (human-in-the-loop)
+
+An `approval` phase pauses the run and asks the operator to **Approve / Reject /
+Edit**. Distinct from `gate` (which is an *agent* reviewing): this is a *human*
+deciding. The (interpolated) `task` is the prompt shown.
+
+- **Approve** → continue; the phase output is `(approve)`.
+- **Reject** → halt the flow (same mechanism as a blocking gate).
+- **Edit** → the typed note becomes this phase's `output`, so you can inject
+  guidance mid-run: reference it downstream with `{steps.<id>.output}`.
+- **Non-interactive** runs (headless/CI/print mode) **auto-approve** and record it.
+
+```jsonc
+{ "id": "checkpoint", "type": "approval", "dependsOn": ["plan"],
+  "task": "Review the plan above before the expensive fan-out. Approve, reject, or add guidance." }
+```
+
+### Sub-flows (composition)
+
+A `flow` phase runs another **saved** taskflow by name and bubbles up its final
+output. Pass args via `with` (string values interpolate). Recursion is detected
+and rejected.
+
+```jsonc
+{ "id": "research", "type": "flow", "use": "deep-research",
+  "with": { "topic": "{item}" }, "dependsOn": ["plan"] }
+```
+
+### Budget (cost / token caps)
+
+Add a run-wide ceiling at the top level. When accumulated cost/tokens exceed it,
+remaining phases are skipped (and an in-flight `map`/`parallel` stops spawning
+new items); the run ends as `blocked`.
+
+```jsonc
+{ "name": "...", "budget": { "maxUSD": 1.50, "maxTokens": 2000000 }, "phases": [ ... ] }
+```
 
 ### Gate phases (quality control)
 
@@ -132,8 +197,8 @@ variables, and storage paths — read `configuration.md` (next to this file).
 
 Quick reference:
 
-- **Flow:** `name`, `description`, `concurrency` (default 8), `agentScope` (user|project|both), `args`.
-- **Phase:** `model`, `thinking`, `tools` (whitelist), `cwd`, `output:"json"`, `concurrency` (map/parallel fan-out), `final`.
+- **Flow:** `name`, `description`, `concurrency` (default 8), `budget` (`maxUSD`/`maxTokens`), `agentScope` (user|project|both), `args`.
+- **Phase:** `model`, `thinking`, `tools` (whitelist), `cwd`, `output:"json"`, `concurrency` (map/parallel fan-out), `when`, `join` (all|any), `retry`, `use`/`with` (flow), `final`.
 - **Precedence (model/thinking/tools):** phase value → `settings.subagents.agentOverrides[agent]` → agent frontmatter → global/default.
 - **Concurrency:** same-layer phases use `flow.concurrency`; a `map`/`parallel` phase uses `phase.concurrency ?? flow.concurrency ?? 8`.
 

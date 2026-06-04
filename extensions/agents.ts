@@ -55,7 +55,14 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
-		const { frontmatter, body } = parseFrontmatter<Record<string, string>>(content);
+		const { frontmatter, body } = (() => {
+			try {
+				return parseFrontmatter<Record<string, string>>(content);
+			} catch {
+				// A single malformed agent file must not break discovery for every flow.
+				return { frontmatter: {} as Record<string, string>, body: "" };
+			}
+		})();
 		if (!frontmatter.name || !frontmatter.description) continue;
 
 		const tools = frontmatter.tools

@@ -7,7 +7,7 @@
 
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { formatTokens, type UsageStats } from "./runner.ts";
+import { formatTokens, type UsageStats } from "./usage.ts";
 import type { PhaseState, RunState } from "./store.ts";
 import { dependenciesOf, type Phase, topoLayers } from "./schema.ts";
 
@@ -121,7 +121,7 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 		return theme.fg("muted", `skipped · ${snip}`);
 	}
 
-	const isFanout = type === "map" || type === "parallel";
+	const isFanout = type === "map" || type === "parallel" || type === "flow";
 
 	if (ps.status === "failed") {
 		const e = (ps.error ?? "failed").replace(/\s+/g, " ");
@@ -171,6 +171,14 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	// single-agent done
 	const model = shortModel(ps.model);
 	const u = compactUsage(ps.usage, theme);
+	if (ps.approval) {
+		const d = ps.approval.decision;
+		const color = d === "reject" ? "error" : d === "edit" ? "warning" : "success";
+		let a = theme.fg(color as Parameters<typeof theme.fg>[0], theme.bold(d.toUpperCase()));
+		if (ps.approval.auto) a += theme.fg("dim", " auto");
+		if (time) a += `  ${time}`;
+		return a;
+	}
 	if (ps.gate) {
 		const badge =
 			ps.gate.verdict === "block" ? theme.fg("error", theme.bold("BLOCK")) : theme.fg("success", "PASS");
@@ -186,6 +194,7 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	let s = "";
 	if (model) s += theme.fg("accent", model);
 	if (u) s += (s ? "  " : "") + u;
+	if (ps.attempts && ps.attempts > 1) s += theme.fg("warning", `  ↻${ps.attempts - 1}`);
 	if (time) s += `  ${time}`;
 	return s || theme.fg("dim", "done");
 }
@@ -217,7 +226,9 @@ function headerLine(state: RunState, theme: Theme): string {
 	if (failed) line += theme.fg("error", ` · ${failed}✗`);
 	if (state.status === "blocked") line += theme.fg("error", " · blocked");
 	const cost = aggregateCost(state);
-	if (cost) line += theme.fg("muted", ` · $${cost.toFixed(3)}`);
+	const budget = state.def.budget;
+	if (budget?.maxUSD !== undefined) line += theme.fg("muted", ` · $${cost.toFixed(3)}/$${budget.maxUSD}`);
+	else if (cost) line += theme.fg("muted", ` · $${cost.toFixed(3)}`);
 	const el = runElapsed(state);
 	if (el) line += theme.fg("dim", ` · ${elapsed(el)}`);
 	return line;

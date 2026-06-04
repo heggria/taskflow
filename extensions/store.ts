@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Taskflow } from "./schema.ts";
-import type { UsageStats } from "./runner.ts";
+import type { UsageStats } from "./usage.ts";
 
 export interface SavedFlow {
 	name: string;
@@ -39,6 +39,12 @@ export interface PhaseState {
 	liveText?: string;
 	/** Gate verdict (gate phases only). */
 	gate?: { verdict: "pass" | "block"; reason?: string };
+	/** Total subagent attempts incl. retries (when > calls, a retry happened). */
+	attempts?: number;
+	/** True when a map/parallel fan-out was cut short by the budget cap. */
+	budgetTruncated?: boolean;
+	/** Human-in-the-loop outcome (approval phases only). */
+	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
 }
 
 export interface RunState {
@@ -118,7 +124,7 @@ export function saveFlow(
 	fs.mkdirSync(dir, { recursive: true });
 	const safe = def.name.replace(/[^\w.-]+/g, "_");
 	const filePath = path.join(dir, `${safe}.json`);
-	fs.writeFileSync(filePath, `${JSON.stringify(def, null, 2)}\n`, "utf-8");
+	writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`);
 	return { filePath };
 }
 
@@ -138,7 +144,7 @@ export function saveRun(state: RunState): void {
 	const dir = runsDir(state.cwd);
 	fs.mkdirSync(dir, { recursive: true });
 	state.updatedAt = Date.now();
-	fs.writeFileSync(path.join(dir, `${state.runId}.json`), JSON.stringify(state, null, 2), "utf-8");
+	writeFileAtomic(path.join(dir, `${state.runId}.json`), JSON.stringify(state, null, 2));
 }
 
 export function loadRun(cwd: string, runId: string): RunState | null {
@@ -173,4 +179,24 @@ export function listRuns(cwd: string, limit = 20): RunState[] {
 /** Stable hash of a phase's resolved task + inputs, for resume caching. */
 export function hashInput(...parts: string[]): string {
 	return crypto.createHash("sha256").update(parts.join("\u0000")).digest("hex").slice(0, 16);
+}
+
+/**
+ * Write a file atomically: write to a unique temp file in the same directory,
+ * then rename over the target (rename is atomic on the same filesystem). Prevents
+ * a crash or concurrent write from leaving a half-written, corrupt JSON file.
+ */
+function writeFileAtomic(filePath: string, data: string): void {
+	const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+	try {
+		fs.writeFileSync(tmp, data, "utf-8");
+		fs.renameSync(tmp, filePath);
+	} catch (e) {
+		try {
+			if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+		} catch {
+			/* ignore cleanup failure */
+		}
+		throw e;
+	}
 }

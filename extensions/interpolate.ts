@@ -149,3 +149,234 @@ export function coerceArray(value: unknown): unknown[] | null {
 	}
 	return null;
 }
+
+// ---------------------------------------------------------------------------
+// Conditional expressions (phase.when)
+// ---------------------------------------------------------------------------
+//
+// A tiny, safe boolean expression language — NO eval / Function. Operands are
+// either interpolation placeholders `{...}` (resolved to their raw value) or
+// literals (quoted string, number, true/false/null, or a bare word treated as
+// a string). Operators, by precedence (low → high):
+//
+//   ||   logical or
+//   &&   logical and
+//   ==  != == >= <= > <   comparison
+//   !    logical not / unary
+//   ( )  grouping
+//
+// A bare operand is evaluated for truthiness. Parse errors fail OPEN (return
+// true) so a malformed guard never silently drops a phase.
+
+type Tok =
+	| { t: "ref"; v: string }
+	| { t: "str"; v: string }
+	| { t: "num"; v: number }
+	| { t: "bool"; v: boolean }
+	| { t: "null" }
+	| { t: "op"; v: string };
+
+const OPS = ["&&", "||", "==", "!=", ">=", "<=", ">", "<", "!", "(", ")"];
+
+function tokenize(input: string): Tok[] {
+	const toks: Tok[] = [];
+	let i = 0;
+	const n = input.length;
+	while (i < n) {
+		const c = input[i];
+		if (c === " " || c === "\t" || c === "\n" || c === "\r") {
+			i++;
+			continue;
+		}
+		// placeholder {path.to.value}
+		if (c === "{") {
+			const end = input.indexOf("}", i);
+			if (end === -1) throw new Error("unterminated placeholder");
+			toks.push({ t: "ref", v: input.slice(i + 1, end).trim() });
+			i = end + 1;
+			continue;
+		}
+		// quoted string
+		if (c === '"' || c === "'") {
+			const end = input.indexOf(c, i + 1);
+			if (end === -1) throw new Error("unterminated string");
+			toks.push({ t: "str", v: input.slice(i + 1, end) });
+			i = end + 1;
+			continue;
+		}
+		// multi/single char operators
+		const op = OPS.find((o) => input.startsWith(o, i));
+		if (op) {
+			toks.push({ t: "op", v: op });
+			i += op.length;
+			continue;
+		}
+		// number
+		const numMatch = /^-?\d+(?:\.\d+)?/.exec(input.slice(i));
+		if (numMatch) {
+			toks.push({ t: "num", v: Number(numMatch[0]) });
+			i += numMatch[0].length;
+			continue;
+		}
+		// bareword → literal (true/false/null keywords, else string)
+		const word = /^[^\s&|!=<>()"'{}]+/.exec(input.slice(i));
+		if (word) {
+			const w = word[0];
+			if (w === "true") toks.push({ t: "bool", v: true });
+			else if (w === "false") toks.push({ t: "bool", v: false });
+			else if (w === "null") toks.push({ t: "null" });
+			else toks.push({ t: "str", v: w });
+			i += w.length;
+			continue;
+		}
+		throw new Error(`unexpected char '${c}'`);
+	}
+	return toks;
+}
+
+function isNumeric(v: unknown): boolean {
+	if (typeof v === "number") return Number.isFinite(v);
+	if (typeof v === "string" && v.trim() !== "") return Number.isFinite(Number(v));
+	return false;
+}
+
+function truthy(v: unknown): boolean {
+	if (v === undefined || v === null) return false;
+	if (typeof v === "boolean") return v;
+	if (typeof v === "number") return v !== 0;
+	if (typeof v === "string") {
+		const s = v.trim().toLowerCase();
+		return !(s === "" || s === "false" || s === "0" || s === "no" || s === "off" || s === "null");
+	}
+	if (Array.isArray(v)) return v.length > 0;
+	if (typeof v === "object") return Object.keys(v as object).length > 0;
+	return Boolean(v);
+}
+
+function compare(a: unknown, op: string, b: unknown): boolean {
+	if (isNumeric(a) && isNumeric(b)) {
+		const x = Number(a);
+		const y = Number(b);
+		switch (op) {
+			case "==": return x === y;
+			case "!=": return x !== y;
+			case ">": return x > y;
+			case "<": return x < y;
+			case ">=": return x >= y;
+			case "<=": return x <= y;
+		}
+	}
+	const sa = a === undefined || a === null ? "" : String(a);
+	const sb = b === undefined || b === null ? "" : String(b);
+	switch (op) {
+		case "==": return sa === sb;
+		case "!=": return sa !== sb;
+		case ">": return sa > sb;
+		case "<": return sa < sb;
+		case ">=": return sa >= sb;
+		case "<=": return sa <= sb;
+	}
+	return false;
+}
+
+/** Recursive-descent parser/evaluator over the token stream. */
+class CondParser {
+	private pos = 0;
+	private readonly toks: Tok[];
+	private readonly ctx: InterpolationContext;
+	constructor(toks: Tok[], ctx: InterpolationContext) {
+		this.toks = toks;
+		this.ctx = ctx;
+	}
+
+	parse(): unknown {
+		const v = this.parseOr();
+		if (this.pos < this.toks.length) throw new Error("trailing tokens");
+		return v;
+	}
+	private peek(): Tok | undefined {
+		return this.toks[this.pos];
+	}
+	private eat(op: string): boolean {
+		const t = this.peek();
+		if (t && t.t === "op" && t.v === op) {
+			this.pos++;
+			return true;
+		}
+		return false;
+	}
+	private parseOr(): unknown {
+		let left = this.parseAnd();
+		while (this.eat("||")) {
+			const right = this.parseAnd();
+			left = truthy(left) || truthy(right);
+		}
+		return left;
+	}
+	private parseAnd(): unknown {
+		let left = this.parseNot();
+		while (this.eat("&&")) {
+			const right = this.parseNot();
+			left = truthy(left) && truthy(right);
+		}
+		return left;
+	}
+	private parseNot(): unknown {
+		if (this.eat("!")) return !truthy(this.parseNot());
+		return this.parseComparison();
+	}
+	private parseComparison(): unknown {
+		const left = this.parsePrimary();
+		const t = this.peek();
+		if (t && t.t === "op" && ["==", "!=", ">", "<", ">=", "<="].includes(t.v)) {
+			this.pos++;
+			const right = this.parsePrimary();
+			return compare(left, t.v, right);
+		}
+		return left;
+	}
+	private parsePrimary(): unknown {
+		if (this.eat("(")) {
+			const v = this.parseOr();
+			if (!this.eat(")")) throw new Error("missing )");
+			return v;
+		}
+		const t = this.peek();
+		if (!t) throw new Error("unexpected end");
+		this.pos++;
+		switch (t.t) {
+			case "ref": return resolvePath(t.v, this.ctx);
+			case "str": return t.v;
+			case "num": return t.v;
+			case "bool": return t.v;
+			case "null": return null;
+			default: throw new Error(`unexpected operator '${(t as { v: string }).v}'`);
+		}
+	}
+}
+
+/**
+ * Evaluate a `when` expression to a boolean. Returns `{ value, error }`.
+ * Parse errors set `error` and fail OPEN (`value: true`) so a broken guard
+ * never silently drops a phase.
+ */
+export function tryEvaluateCondition(
+	expr: string,
+	ctx: InterpolationContext,
+): { value: boolean; error?: string } {
+	const trimmed = (expr ?? "").trim();
+	if (!trimmed) return { value: true };
+	try {
+		const toks = tokenize(trimmed);
+		if (toks.length === 0) return { value: true };
+		const result = new CondParser(toks, ctx).parse();
+		return { value: truthy(result) };
+	} catch (e) {
+		return { value: true, error: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/** Boolean convenience wrapper over {@link tryEvaluateCondition}. */
+export function evaluateCondition(expr: string, ctx: InterpolationContext): boolean {
+	return tryEvaluateCondition(expr, ctx).value;
+}

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { desugar, isShorthand, validateTaskflow } from "../extensions/schema.ts";
 import type { AgentConfig } from "../extensions/agents.ts";
-import { emptyUsage, type RunOptions, type RunResult } from "../extensions/runner.ts";
+import type { RunOptions, RunResult } from "../extensions/runner.ts";
+import { emptyUsage } from "../extensions/usage.ts";
 import { executeTaskflow, type RuntimeDeps } from "../extensions/runtime.ts";
 import type { RunState } from "../extensions/store.ts";
 

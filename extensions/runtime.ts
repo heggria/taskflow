@@ -11,10 +11,26 @@
  */
 
 import type { AgentConfig } from "./agents.ts";
-import { coerceArray, interpolate, type InterpolationContext, safeParse } from "./interpolate.ts";
-import { aggregateUsage, emptyUsage, isFailed, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult, type UsageStats } from "./runner.ts";
-import { dependenciesOf, finalPhase, type Phase, type Taskflow, topoLayers } from "./schema.ts";
-import { hashInput, type PhaseState, type RunState } from "./store.ts";
+import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse } from "./interpolate.ts";
+import { isFailed, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult } from "./runner.ts";
+import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
+import { type Budget, dependenciesOf, finalPhase, type Phase, resolveArgs, type Taskflow, topoLayers } from "./schema.ts";
+import { hashInput, newRunId, type PhaseState, type RunState } from "./store.ts";
+
+/** A human-in-the-loop approval request raised by an `approval` phase. */
+export interface ApprovalRequest {
+	phaseId: string;
+	/** Interpolated prompt shown to the human. */
+	message: string;
+	/** Output of the immediately-upstream phase, for context. */
+	upstream?: string;
+}
+
+/** The human's decision. `edit` carries guidance passed downstream as the phase output. */
+export interface ApprovalDecision {
+	decision: "approve" | "reject" | "edit";
+	note?: string;
+}
 
 export interface RuntimeDeps {
 	cwd: string;
@@ -27,6 +43,12 @@ export interface RuntimeDeps {
 	onProgress?: (state: RunState) => void;
 	/** Injectable task runner (defaults to spawning a real subagent). Enables testing. */
 	runTask?: typeof runAgentTask;
+	/** Resolve an `approval` phase. Omit for non-interactive runs (auto-approve). */
+	requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
+	/** Resolve a saved taskflow by name for `flow` (sub-workflow) phases. */
+	loadFlow?: (name: string) => Taskflow | undefined;
+	/** Internal: sub-flow call stack, for recursion detection. */
+	_stack?: string[];
 }
 
 export interface RuntimeResult {
@@ -52,6 +74,7 @@ function buildInterpolationContext(
 
 function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJson: boolean): PhaseState {
 	const failed = isFailed(r);
+	const attempts = attemptsOf(r);
 	return {
 		id,
 		status: failed ? "failed" : "done",
@@ -59,10 +82,58 @@ function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJs
 		json: parseJson && !failed ? safeParse(r.output) : undefined,
 		usage: r.usage,
 		model: r.model,
+		attempts: attempts > 1 ? attempts : undefined,
 		error: failed ? r.errorMessage || r.stderr || r.output : undefined,
 		inputHash,
 		endedAt: Date.now(),
 	};
+}
+
+/** Attempts recorded by the retry wrapper (defaults to 1). */
+function attemptsOf(r: RunResult): number {
+	const a = r.attempts;
+	return typeof a === "number" && a > 0 ? a : 1;
+}
+
+/** Cancellable delay used between retry attempts. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (ms <= 0) return resolve();
+		let onAbort: (() => void) | undefined;
+		const t = setTimeout(() => {
+			if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		if (signal) {
+			if (signal.aborted) {
+				clearTimeout(t);
+				return resolve();
+			}
+			onAbort = () => {
+				clearTimeout(t);
+				resolve();
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
+		}
+	});
+}
+
+function failPhase(id: string, error: string): PhaseState {
+	return { id, status: "failed", error, inputHash: hashInput(id, error), endedAt: Date.now(), usage: emptyUsage() };
+}
+
+/** Aggregate run cost/tokens so far and test against the budget. */
+function overBudget(state: RunState): { over: boolean; reason: string } {
+	const budget: Budget | undefined = state.def.budget;
+	if (!budget) return { over: false, reason: "" };
+	const u = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
+	if (budget.maxUSD !== undefined && u.cost > budget.maxUSD) {
+		return { over: true, reason: `cost $${u.cost.toFixed(3)} exceeded cap $${budget.maxUSD}` };
+	}
+	if (budget.maxTokens !== undefined && u.input + u.output > budget.maxTokens) {
+		return { over: true, reason: `tokens ${u.input + u.output} exceeded cap ${budget.maxTokens}` };
+	}
+	return { over: false, reason: "" };
 }
 
 /** Merge several sub-results into a single PhaseState (for map/parallel). */
@@ -72,24 +143,48 @@ function mergePhaseState(
 	inputHash: string,
 	parseJson: boolean,
 ): PhaseState {
-	const anyFailed = results.some(isFailed);
+	const budgetSkips = results.filter((r) => r.stopReason === "budget-skipped");
+	const ran = results.filter((r) => r.stopReason !== "budget-skipped");
+	const anyFailed = ran.some(isFailed);
 	const usage = aggregateUsage(results.map((r) => r.usage));
 	// Combine outputs as a labelled list; also expose a JSON array of outputs.
-	const combinedText = results
-		.map((r, i) => `### [${i + 1}/${results.length}] ${r.agent}${isFailed(r) ? " (failed)" : ""}\n\n${r.output}`)
+	const combinedText = ran
+		.map((r, i) => `### [${i + 1}/${ran.length}] ${r.agent}${isFailed(r) ? " (failed)" : ""}\n\n${r.output}`)
 		.join("\n\n---\n\n");
-	const jsonArray = parseJson ? results.map((r) => safeParse(r.output) ?? r.output) : undefined;
-	const failedCount = results.filter(isFailed).length;
+	// Only successful runs feed the parsed JSON array (no error/skip strings).
+	const jsonArray = parseJson ? ran.filter((r) => !isFailed(r)).map((r) => safeParse(r.output) ?? r.output) : undefined;
+	const failedCount = ran.filter(isFailed).length;
+	const attempts = results.reduce((sum, r) => sum + attemptsOf(r), 0);
+	const errors = ran.filter(isFailed).map((r) => `${r.agent}: ${r.errorMessage ?? r.stderr}`);
+	if (budgetSkips.length) errors.push(`${budgetSkips.length} item(s) skipped: budget exceeded`);
 	return {
 		id,
 		status: anyFailed ? "failed" : "done",
 		output: combinedText,
 		json: jsonArray,
 		usage,
-		subProgress: { done: results.length, total: results.length, running: 0, failed: failedCount },
-		error: anyFailed ? results.filter(isFailed).map((r) => `${r.agent}: ${r.errorMessage ?? r.stderr}`).join("; ") : undefined,
+		attempts: attempts > results.length ? attempts : undefined,
+		budgetTruncated: budgetSkips.length > 0 || undefined,
+		subProgress: { done: ran.length, total: results.length, running: 0, failed: failedCount },
+		error: errors.length ? errors.join("; ") : undefined,
 		inputHash,
 		endedAt: Date.now(),
+	};
+}
+
+/**
+ * A live-update sink that mirrors a subagent's streaming progress into a single
+ * phase's state row, then notifies the TUI. Shared by all single-agent phases.
+ */
+function liveSink(state: RunState, phaseId: string, emitProgress: () => void): (l: LiveUpdate) => void {
+	return (l: LiveUpdate) => {
+		const live = state.phases[phaseId];
+		if (live) {
+			live.liveText = l.text;
+			live.usage = l.usage;
+			live.model = l.model;
+		}
+		emitProgress();
 	};
 }
 
@@ -105,7 +200,7 @@ async function executePhase(
 	const previousOutput = lastCompletedOutput(state, phase);
 	const run = deps.runTask ?? runAgentTask;
 
-	const runOne = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void) =>
+	const baseRun = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void) =>
 		run(
 			deps.cwd,
 			deps.agents,
@@ -121,6 +216,44 @@ async function executePhase(
 			},
 			deps.globalThinking,
 		);
+
+	// Wrap each subagent call in the phase's retry policy. Usage is summed across
+	// attempts; the attempt count rides along on the result for the TUI.
+	const retry = phase.retry;
+	const runOne = async (agentName: string, task: string, onLive?: (l: LiveUpdate) => void): Promise<RunResult> => {
+		const maxAttempts = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
+		const usages: UsageStats[] = [];
+		let last: RunResult | undefined;
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			if (deps.signal?.aborted) break;
+			last = await baseRun(agentName, task, onLive);
+			usages.push(last.usage);
+			if (!isFailed(last)) break;
+			// Stop retrying on abort or once the run is over budget.
+			if (deps.signal?.aborted || overBudget(state).over) break;
+			if (attempt < maxAttempts - 1) {
+				const wait = Math.min(60000, Math.round((retry?.backoffMs ?? 0) * (retry?.factor ?? 1) ** attempt));
+				await delay(wait, deps.signal);
+			}
+		}
+		// Aborted before any attempt ran → return a clean aborted result (no crash).
+		if (!last) {
+			return {
+				agent: agentName,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "Aborted before execution",
+				usage: emptyUsage(),
+				stopReason: "aborted",
+				errorMessage: "Aborted before execution",
+				attempts: 0,
+			};
+		}
+		if (usages.length > 1) last.usage = aggregateUsage(usages);
+		last.attempts = usages.length;
+		return last;
+	};
 
 	const parseJson = phase.output === "json";
 
@@ -145,6 +278,20 @@ async function executePhase(
 		};
 		refresh();
 		return mapWithConcurrencyLimit(items, concurrency, async (it, idx) => {
+			// Budget guard: stop spawning new fan-out items once the run is over budget.
+			if (overBudget(state).over) {
+				done++;
+				refresh();
+				return {
+					agent: it.agent,
+					task: it.task,
+					exitCode: 0,
+					output: "(skipped: budget exceeded)",
+					stderr: "",
+					usage: emptyUsage(),
+					stopReason: "budget-skipped",
+				} satisfies RunResult;
+			}
 			running++;
 			refresh();
 			const r = await runOne(it.agent, it.task, (l) => {
@@ -162,22 +309,17 @@ async function executePhase(
 		});
 	};
 
-	if (type === "agent" || type === "gate") {
+	// Single-agent phases: agent, gate, and reduce all run one subagent on an
+	// interpolated task. gate additionally parses a verdict; reduce simply pulls
+	// its inputs from `from` phases (already exposed via interpolation).
+	if (type === "agent" || type === "gate" || type === "reduce") {
 		const ctx = buildInterpolationContext(state, previousOutput);
 		const { text } = interpolate(phase.task ?? "", ctx);
 		const inputHash = hashInput(phase.id, phase.agent ?? "", text);
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
-		const live = state.phases[phase.id];
-		const r = await runOne(phase.agent ?? defaultAgent(deps), text, (l) => {
-			if (live) {
-				live.liveText = l.text;
-				live.usage = l.usage;
-				live.model = l.model;
-			}
-			emitProgress();
-		});
+		const r = await runOne(phase.agent ?? defaultAgent(deps), text, liveSink(state, phase.id, emitProgress));
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
 		return ps;
@@ -228,24 +370,117 @@ async function executePhase(
 		return mergePhaseState(phase.id, results, inputHash, parseJson);
 	}
 
-	if (type === "reduce") {
+	if (type === "approval") {
 		const ctx = buildInterpolationContext(state, previousOutput);
-		// Inputs for reduce come from `from` phases; interpolation already exposes them.
-		const { text } = interpolate(phase.task ?? "", ctx);
-		const inputHash = hashInput(phase.id, text);
+		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
+		const inputHash = hashInput(phase.id, "approval", message);
+		const cached = cachedPhase(prior, inputHash);
+		if (cached) return cached;
+
+		// Non-interactive (headless/CI/tests): auto-approve, fail-open, but record it.
+		if (!deps.requestApproval) {
+			return {
+				id: phase.id,
+				status: "done",
+				output: "(auto-approved: no interactive approver available)",
+				approval: { decision: "approve", auto: true },
+				usage: emptyUsage(),
+				inputHash,
+				endedAt: Date.now(),
+			};
+		}
+		const decision = await deps.requestApproval({ phaseId: phase.id, message, upstream: previousOutput });
+		const note = decision.note?.trim();
+		const ps: PhaseState = {
+			id: phase.id,
+			status: "done",
+			output: note || `(${decision.decision})`,
+			approval: { decision: decision.decision, note },
+			usage: emptyUsage(),
+			inputHash,
+			endedAt: Date.now(),
+		};
+		// A rejection halts the flow via the same mechanism as a blocking gate.
+		if (decision.decision === "reject") {
+			ps.gate = { verdict: "block", reason: note || "Rejected by user" };
+		}
+		return ps;
+	}
+
+	if (type === "flow") {
+		const ctx = buildInterpolationContext(state, previousOutput);
+		const name = phase.use;
+		if (!name) return failPhase(phase.id, `flow phase '${phase.id}' requires 'use'`);
+		if (!deps.loadFlow) return failPhase(phase.id, `flow phase '${phase.id}': no sub-flow loader available`);
+		const subDef = deps.loadFlow(name);
+		if (!subDef) return failPhase(phase.id, `flow phase '${phase.id}': saved flow not found: '${name}'`);
+		const stack = deps._stack ?? [];
+		if (name === state.flowName || stack.includes(name)) {
+			return failPhase(phase.id, `flow phase '${phase.id}': recursive sub-flow ${[...stack, state.flowName, name].join(" -> ")}`);
+		}
+		// Resolve sub-flow args (interpolate string values), then apply declared defaults.
+		const provided: Record<string, unknown> = {};
+		for (const [k, v] of Object.entries(phase.with ?? {})) {
+			provided[k] = typeof v === "string" ? interpolate(v, ctx).text : v;
+		}
+		const subArgs = resolveArgs(subDef, provided);
+		const inputHash = hashInput(phase.id, `flow:${name}`, JSON.stringify(subArgs));
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
 		const live = state.phases[phase.id];
-		const r = await runOne(phase.agent ?? defaultAgent(deps), text, (l) => {
-			if (live) {
-				live.liveText = l.text;
-				live.usage = l.usage;
-				live.model = l.model;
-			}
-			emitProgress();
+		// Sub-flows enforce their own budget; if they declare none, inherit the
+		// parent cap as a soft per-flow ceiling (best-effort — spend does not cross
+		// flow boundaries, so the parent's already-spent total is not subtracted).
+		const subDefEffective = subDef.budget || !state.def.budget ? subDef : { ...subDef, budget: state.def.budget };
+		const subState: RunState = {
+			runId: newRunId(subDef.name),
+			flowName: subDef.name,
+			def: subDefEffective,
+			args: subArgs,
+			status: "running",
+			phases: {},
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			cwd: deps.cwd,
+		};
+		const subResult = await executeTaskflow(subState, {
+			...deps,
+			_stack: [...stack, state.flowName],
+			persist: undefined,
+			onProgress: () => {
+				if (live) {
+					const ph = Object.values(subState.phases);
+					live.subProgress = {
+						done: ph.filter((p) => p.status === "done").length,
+						total: subDef.phases.length,
+						running: ph.filter((p) => p.status === "running").length,
+						failed: ph.filter((p) => p.status === "failed").length,
+					};
+					const cur = ph.find((p) => p.status === "running");
+					if (cur) live.liveText = `↳ ${cur.id}${cur.liveText ? `: ${cur.liveText}` : ""}`;
+					live.usage = aggregateUsage(ph.map((p) => p.usage ?? emptyUsage()));
+				}
+				emitProgress();
+			},
 		});
-		return resultToPhaseState(phase.id, r, inputHash, parseJson);
+		const sp = Object.values(subState.phases);
+		return {
+			id: phase.id,
+			status: subResult.ok ? "done" : "failed",
+			output: subResult.finalOutput,
+			json: parseJson ? safeParse(subResult.finalOutput) : undefined,
+			usage: subResult.totalUsage,
+			subProgress: {
+				done: sp.filter((p) => p.status === "done").length,
+				total: subDef.phases.length,
+				running: 0,
+				failed: sp.filter((p) => p.status === "failed").length,
+			},
+			error: subResult.ok ? undefined : `sub-flow '${name}' ${subResult.state.status}`,
+			inputHash,
+			endedAt: Date.now(),
+		};
 	}
 
 	return {
@@ -330,6 +565,29 @@ function asReason(v: unknown): string | undefined {
  */
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	try {
+		return await runTaskflowLayers(state, deps);
+	} catch (e) {
+		// A thrown phase must not leave the run wedged in "running" (which breaks
+		// resume). Mark any in-flight phase + the run as failed, persist, and return.
+		const message = e instanceof Error ? e.message : String(e);
+		for (const p of Object.values(state.phases)) {
+			if (p.status === "running") {
+				p.status = "failed";
+				p.error = p.error ?? message;
+				p.endedAt = Date.now();
+			}
+		}
+		state.status = "failed";
+		deps.persist?.(state);
+		deps.onProgress?.(state);
+		const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
+		return { state, finalOutput: `Taskflow '${def.name}' crashed: ${message}`, ok: false, totalUsage };
+	}
+}
+
+async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
+	const def: Taskflow = state.def;
 	const layers = topoLayers(def.phases);
 
 	state.status = "running";
@@ -340,6 +598,14 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	let gateBlocked = false;
 	let gateReason = "";
 	let gateOutput = "";
+	// `budgetBlocked` gates the skipping of remaining phases once the cap is hit.
+	// `budgetSkipped` records that a phase was *actually* skipped/truncated for
+	// budget — only then is the run terminal-status "blocked" (a cap crossed by the
+	// very last phase, with nothing left to skip, must NOT mark a good run failed).
+	let budgetBlocked = false;
+	let budgetSkipped = false;
+	let budgetReason = "";
+	const byId = new Map(def.phases.map((p) => [p.id, p]));
 
 	for (const layer of layers) {
 		if (deps.signal?.aborted) {
@@ -351,13 +617,36 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 		await mapWithConcurrencyLimit(layer, layerConcurrency, async (phase) => {
 			// Snapshot prior state BEFORE marking running, so resume cache checks work.
 			const prior = state.phases[phase.id];
-			// Skip if a dependency failed, or an upstream gate blocked the flow.
-			const failedDep = dependenciesOf(phase).some((d) => state.phases[d]?.status === "failed");
-			if (gateBlocked || failedDep) {
+
+			// Determine whether this phase should run, or be skipped (and why).
+			const deps_ = dependenciesOf(phase);
+			const join = phase.join ?? "all";
+			// An `optional` dependency that failed still counts as satisfied.
+			const depOk = (d: string): boolean => {
+				const s = state.phases[d]?.status;
+				if (s === "done") return true;
+				if (s === "failed" && byId.get(d)?.optional) return true;
+				return false;
+			};
+			const depsSatisfied =
+				deps_.length === 0 ? true : join === "any" ? deps_.some(depOk) : deps_.every(depOk);
+
+			let skipReason: string | undefined;
+			if (gateBlocked) skipReason = `Gate blocked${gateReason ? `: ${gateReason}` : ""}`;
+			else if (budgetBlocked) skipReason = `Budget exceeded${budgetReason ? `: ${budgetReason}` : ""}`;
+			else if (!depsSatisfied)
+				skipReason = join === "any" ? "All dependencies failed or were skipped" : "Upstream dependency not satisfied";
+			else if (phase.when !== undefined) {
+				const condCtx = buildInterpolationContext(state, lastCompletedOutput(state, phase));
+				if (!evaluateCondition(phase.when, condCtx)) skipReason = `Condition not met: ${phase.when}`;
+			}
+
+			if (skipReason) {
+				if (skipReason.startsWith("Budget exceeded")) budgetSkipped = true;
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
-					error: gateBlocked ? `Gate blocked${gateReason ? `: ${gateReason}` : ""}` : "Upstream dependency failed",
+					error: skipReason,
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
@@ -379,10 +668,24 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			// Preserve the phase start time: executePhase returns a fresh PhaseState
 			// that omits startedAt (cached/resumed results carry their own).
 			state.phases[phase.id] = ps.startedAt ? ps : { ...ps, startedAt };
-			if ((phase.type ?? "agent") === "gate" && ps.gate?.verdict === "block") {
+			// A blocking verdict (gate phase OR a rejected approval) halts the flow.
+			const ptype = phase.type ?? "agent";
+			if (ps.gate?.verdict === "block" && (ptype === "gate" || ptype === "approval")) {
 				gateBlocked = true;
 				gateReason = ps.gate.reason ?? "";
 				gateOutput = ps.output ?? "";
+			}
+			// A fan-out cut short by the cap is itself a budget skip.
+			if (ps.budgetTruncated) {
+				budgetBlocked = true;
+				budgetSkipped = true;
+				if (!budgetReason) budgetReason = "fan-out truncated by budget";
+			}
+			// Budget ceiling: once exceeded, remaining phases are skipped.
+			const ob = overBudget(state);
+			if (ob.over && !budgetBlocked) {
+				budgetBlocked = true;
+				budgetReason = ob.reason;
 			}
 			deps.persist?.(state);
 			deps.onProgress?.(state);
@@ -390,16 +693,33 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	}
 
 	const fp = finalPhase(def.phases);
-	const finalState = state.phases[fp.id];
-	const anyFailed = Object.values(state.phases).some((p) => p.status === "failed");
+	let finalState = state.phases[fp.id];
+	// If the designated final phase produced no output (skipped/blocked), fall
+	// back to the last phase (in definition order) that actually completed.
+	if (!finalState || finalState.status !== "done") {
+		const doneInOrder = def.phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
+		if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
+	}
+	// A failed non-optional phase fails the run; optional failures are tolerated.
+	const anyFailed = Object.entries(state.phases).some(
+		([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
+	);
 
-	state.status = aborted ? "paused" : gateBlocked ? "blocked" : anyFailed ? "failed" : "completed";
+	state.status = aborted
+		? "paused"
+		: gateBlocked || budgetSkipped
+			? "blocked"
+			: anyFailed
+				? "failed"
+				: "completed";
 	deps.persist?.(state);
 	deps.onProgress?.(state);
 
 	let finalOutput = finalState?.output ?? "(no output)";
-	if (gateBlocked && (!finalState || finalState.status === "skipped")) {
+	if (gateBlocked) {
 		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${gateOutput ? `\n\n${gateOutput}` : ""}`;
+	} else if (budgetSkipped) {
+		finalOutput = `Budget exceeded — run halted.${budgetReason ? `\nReason: ${budgetReason}` : ""}${finalState?.output ? `\n\n${finalState.output}` : ""}`;
 	}
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));

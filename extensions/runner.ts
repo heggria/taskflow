@@ -11,20 +11,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
-
-export interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	contextTokens: number;
-	turns: number;
-}
-
-export function emptyUsage(): UsageStats {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
-}
+import { emptyUsage, type UsageStats } from "./usage.ts";
 
 export interface RunResult {
 	agent: string;
@@ -36,6 +23,8 @@ export interface RunResult {
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	/** Total subagent attempts incl. retries (set by the runtime's retry wrapper). */
+	attempts?: number;
 }
 
 export interface LiveUpdate {
@@ -69,6 +58,56 @@ function getFinalOutput(messages: Message[]): string {
 		}
 	}
 	return "";
+}
+
+/** Accumulated state folded from a subagent's NDJSON event stream. */
+export interface EventAccumulator {
+	messages: Message[];
+	usage: UsageStats;
+	model?: string;
+	stopReason?: string;
+	errorMessage?: string;
+	lastActivity: string;
+}
+
+export function newAccumulator(model?: string): EventAccumulator {
+	return { messages: [], usage: emptyUsage(), model, lastActivity: "" };
+}
+
+/**
+ * Fold one NDJSON line into the accumulator. Returns a LiveUpdate when an
+ * assistant message ended (for streaming), else null. Empty, malformed, and
+ * non-`message_end` lines are ignored — making the parser robust to partial
+ * buffers/noise and unit-testable without spawning a process.
+ */
+export function foldEventLine(acc: EventAccumulator, line: string): LiveUpdate | null {
+	if (!line.trim()) return null;
+	let event: any;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (event.type !== "message_end" || !event.message) return null;
+	const msg = event.message as Message;
+	acc.messages.push(msg);
+	if (msg.role !== "assistant") return null;
+	acc.usage.turns++;
+	const u = (msg as any).usage;
+	if (u) {
+		acc.usage.input += u.input || 0;
+		acc.usage.output += u.output || 0;
+		acc.usage.cacheRead += u.cacheRead || 0;
+		acc.usage.cacheWrite += u.cacheWrite || 0;
+		acc.usage.cost += u.cost?.total || 0;
+		acc.usage.contextTokens = u.totalTokens || 0;
+	}
+	if (!acc.model && (msg as any).model) acc.model = (msg as any).model;
+	if ((msg as any).stopReason) acc.stopReason = (msg as any).stopReason;
+	if ((msg as any).errorMessage) acc.errorMessage = (msg as any).errorMessage;
+	const activity = describeActivity(msg);
+	if (activity) acc.lastActivity = activity;
+	return { text: acc.lastActivity, usage: { ...acc.usage }, model: acc.model };
 }
 
 /** One-line description of the most recent assistant activity (text or tool call). */
@@ -177,8 +216,7 @@ export async function runAgentTask(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
-	const messages: Message[] = [];
-	let lastActivity = "";
+	const acc = newAccumulator(model);
 	const result: RunResult = {
 		agent: agentName,
 		task,
@@ -209,36 +247,8 @@ export async function runAgentTask(
 			let buffer = "";
 
 			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					return;
-				}
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					messages.push(msg);
-					if (msg.role === "assistant") {
-						result.usage.turns++;
-						const u = (msg as any).usage;
-						if (u) {
-							result.usage.input += u.input || 0;
-							result.usage.output += u.output || 0;
-							result.usage.cacheRead += u.cacheRead || 0;
-							result.usage.cacheWrite += u.cacheWrite || 0;
-							result.usage.cost += u.cost?.total || 0;
-							result.usage.contextTokens = u.totalTokens || 0;
-						}
-						if (!result.model && (msg as any).model) result.model = (msg as any).model;
-						if ((msg as any).stopReason) result.stopReason = (msg as any).stopReason;
-						if ((msg as any).errorMessage) result.errorMessage = (msg as any).errorMessage;
-						const activity = describeActivity(msg);
-						if (activity) lastActivity = activity;
-						if (opts.onLive)
-							opts.onLive({ text: lastActivity, usage: { ...result.usage }, model: result.model });
-					}
-				}
+				const live = foldEventLine(acc, line);
+				if (live && opts.onLive) opts.onLive(live);
 			};
 
 			proc.stdout.on("data", (data) => {
@@ -270,7 +280,11 @@ export async function runAgentTask(
 		});
 
 		result.exitCode = exitCode;
-		result.output = getFinalOutput(messages);
+		result.usage = acc.usage;
+		result.model = acc.model;
+		result.stopReason = acc.stopReason;
+		result.errorMessage = acc.errorMessage;
+		result.output = getFinalOutput(acc.messages);
 		if (wasAborted) {
 			result.stopReason = "aborted";
 			result.errorMessage = "Subagent was aborted";
@@ -316,35 +330,4 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 	});
 	await Promise.all(workers);
 	return results;
-}
-
-export function formatTokens(count: number): string {
-	if (count < 1000) return count.toString();
-	if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-	if (count < 1000000) return `${Math.round(count / 1000)}k`;
-	return `${(count / 1000000).toFixed(1)}M`;
-}
-
-export function formatUsage(usage: UsageStats, model?: string): string {
-	const parts: string[] = [];
-	if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
-	if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
-	if (usage.output) parts.push(`↓${formatTokens(usage.output)}`);
-	if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
-	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
-	if (model) parts.push(model);
-	return parts.join(" ");
-}
-
-export function aggregateUsage(usages: UsageStats[]): UsageStats {
-	const total = emptyUsage();
-	for (const u of usages) {
-		total.input += u.input;
-		total.output += u.output;
-		total.cacheRead += u.cacheRead;
-		total.cacheWrite += u.cacheWrite;
-		total.cost += u.cost;
-		total.turns += u.turns;
-	}
-	return total;
 }

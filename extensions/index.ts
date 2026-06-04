@@ -18,8 +18,8 @@ import { Type } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
-import { executeTaskflow, type RuntimeResult } from "./runtime.ts";
-import { finalPhase, type Taskflow, validateTaskflow, desugar, isShorthand } from "./schema.ts";
+import { executeTaskflow, type ApprovalDecision, type ApprovalRequest, type RuntimeResult } from "./runtime.ts";
+import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "./schema.ts";
 import {
 	getFlow,
 	listFlows,
@@ -86,17 +86,6 @@ const TaskflowParams = Type.Object({
 	),
 });
 
-function resolveArgs(def: Taskflow, provided: Record<string, unknown> | undefined): Record<string, unknown> {
-	const args: Record<string, unknown> = {};
-	for (const [key, spec] of Object.entries(def.args ?? {})) {
-		if (provided && key in provided) args[key] = provided[key];
-		else if (spec.default !== undefined) args[key] = spec.default;
-	}
-	// also pass through any extra provided args
-	if (provided) for (const [k, v] of Object.entries(provided)) if (!(k in args)) args[k] = v;
-	return args;
-}
-
 function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): RunState {
 	return {
 		runId: newRunId(def.name),
@@ -153,6 +142,29 @@ async function runFlow(
 		(heartbeat as { unref?: () => void }).unref?.();
 	}
 
+	// Human-in-the-loop approver — only when an interactive UI is available.
+	const requestApproval = ctx.hasUI
+		? async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+				if (req.upstream?.trim()) {
+					const snip = req.upstream.replace(/\s+/g, " ").trim();
+					ctx.ui.notify(`[${def.name}/${req.phaseId}] ${snip.length > 280 ? `${snip.slice(0, 280)}…` : snip}`, "info");
+				}
+				const choice = await ctx.ui.select(
+					`Taskflow approval — ${req.phaseId}: ${req.message}`,
+					["Approve", "Reject", "Edit / add guidance"],
+					{ signal },
+				);
+				if (!choice || choice === "Reject") return { decision: "reject" };
+				if (choice.startsWith("Edit")) {
+					const note = await ctx.ui.input("Guidance passed downstream as this phase's output", "type guidance…", {
+						signal,
+					});
+					return { decision: "edit", note: note ?? "" };
+				}
+				return { decision: "approve" };
+			}
+		: undefined;
+
 	try {
 		const result = await executeTaskflow(state, {
 			cwd: ctx.cwd,
@@ -160,6 +172,8 @@ async function runFlow(
 			globalThinking: settings.globalThinking,
 			signal,
 			persist: persistThrottled,
+			requestApproval,
+			loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
 		});
 		return result;
 	} finally {
@@ -199,11 +213,12 @@ export default function (pi: ExtensionAPI) {
 		label: "Taskflow",
 		description: [
 			"Orchestrate a multi-phase workflow of subagents from a declarative definition.",
-			"Phases (agent, parallel, map, gate, reduce) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
+			"Phases (agent, parallel, map, gate, reduce, approval, flow) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
 			"Use action=run with an inline `define` (you write the DSL) or a saved `name`.",
 			"For simple non-DAG delegations (like the subagent tool) skip the DSL: pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` to run in parallel, or `chain:[{task,agent?}]` to run sequentially (reference the prior step with {previous.output}).",
 			"Use action=save to persist a definition as a reusable /tf:<name> command. action=resume continues a paused run. action=list shows saved flows.",
-			"DSL: {name, args?, concurrency?, phases:[{id, type, agent, task, dependsOn?, over?(map), as?(map), branches?(parallel), from?(reduce), output?:'json', final?}]}.",
+			"DSL: {name, args?, concurrency?, budget?:{maxUSD,maxTokens}, phases:[{id, type, agent, task, dependsOn?, join?:'all'|'any', when?, retry?:{max,backoffMs,factor}, over?(map), as?(map), branches?(parallel), from?(reduce), use?(flow), with?(flow), output?:'json', final?}]}.",
+			"Phase types: agent (one subagent), parallel (static branches), map (dynamic fan-out over an array), gate (VERDICT: PASS/BLOCK quality gate), reduce (aggregate from N phases), approval (human-in-the-loop pause), flow (run a saved sub-flow). join:'any' is an OR-join; when is a conditional guard; retry adds backoff; budget caps run cost.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
 		].join(" "),
 		parameters: TaskflowParams,

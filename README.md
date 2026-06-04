@@ -178,9 +178,34 @@ writes and verifies its own test suites, caught here mid-block by a quality gate
 | `map` | fan out over an array — one subagent per item, `{item}` bound | `over`, `task` |
 | `gate` | quality/review step that can **halt the flow** | `task` |
 | `reduce` | aggregate `from[]` phase outputs into one | `from`, `task` |
+| `approval` | **human-in-the-loop** pause — approve / reject / edit before continuing | — |
+| `flow` | run a **saved sub-flow** as one phase (composition/reuse) | `use` |
 
 Every phase needs `id`. Optional fields: `agent`, `dependsOn`, `output`,
-`model`, `thinking`, `tools`, `cwd`, `concurrency`, `final`, `optional`.
+`model`, `thinking`, `tools`, `cwd`, `concurrency`, `final`, `optional`,
+`when` (conditional guard), `join` (`all`\|`any` dependency join), `retry`
+(`{max, backoffMs, factor}`), and `with` (args for a `flow` phase).
+Run-wide: `budget: {maxUSD, maxTokens}` halts the flow when exceeded.
+
+### Control flow & reliability
+
+- **`when`** — skip a phase unless an expression is truthy. Supports `{refs}`,
+  `== != < > <= >=`, `&& || !`, parentheses, and quoted strings/numbers, e.g.
+  `"when": "{steps.triage.json.route} == deep"`. Pair with `join: "any"` on the
+  merge phase to build real if/else routing. Parse errors **fail open**.
+- **`join: "any"`** — an OR-join: the phase runs as soon as *one* dependency
+  completes (default `"all"` waits for every dep).
+- **`retry`** — `{ "max": 2, "backoffMs": 500, "factor": 2 }` retries a failing
+  subagent with fixed (`factor:1`) or exponential backoff; usage is summed and
+  the attempt count shows as `↻N` in the TUI.
+- **`approval`** — pause for a human (`select`: Approve / Reject / Edit). Reject
+  halts the flow; Edit injects the typed note as the phase output for downstream
+  steps. Non-interactive runs auto-approve.
+- **`flow`** — `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }`
+  runs a saved flow as a phase (recursion is detected and rejected).
+- **`budget`** — a run-wide `{maxUSD, maxTokens}` ceiling; once exceeded, pending
+  phases are skipped (and in-flight fan-out stops spawning) and the run is
+  `blocked`.
 
 ### `output` format
 
@@ -271,7 +296,10 @@ are honored, letting you tweak model, thinking, or tools per agent across all fl
 
 ## Status & limits
 
-- **v0.0.4** — DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`),
+- **v0.0.6** — control flow & reliability: conditional `when` guards, `join: any`
+  OR-joins, declarative `retry`/backoff, `approval` (human-in-the-loop) phases,
+  `flow` (saved sub-flow composition), and run-wide `budget` caps — on top of the
+  DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`),
   inline + saved flows, cross-session resume, live progress, isolated context.
   Default `concurrency` is 8 (set on the flow; per-phase `concurrency` overrides
   for that phase).
@@ -285,7 +313,8 @@ are honored, letting you tweak model, thinking, or tools per agent across all fl
 ### What it doesn't do (yet)
 
 - **No detached background execution.** A run needs the pi session to stay open.
-  True background execution is on the roadmap.
+  True background execution (and event/cron triggers on top of it) is on the
+  roadmap.
 - **No `output: "file"`.** Outputs are text/JSON only. Write files via agent
   tool calls if needed.
 - **`map` requires a JSON array.** The `over` field must resolve to
@@ -299,9 +328,9 @@ are honored, letting you tweak model, thinking, or tools per agent across all fl
 npm install
 npm run typecheck
 node --experimental-strip-types --test test/interpolate.test.ts \
-  test/schema.test.ts test/runtime.test.ts test/runner.test.ts \
-  test/store.test.ts test/agents.test.ts test/render.test.ts \
-  test/desugar.test.ts
+  test/condition.test.ts test/schema.test.ts test/usage.test.ts \
+  test/runtime.test.ts test/features.test.ts test/runner.test.ts \
+  test/store.test.ts test/agents.test.ts test/render.test.ts test/desugar.test.ts
 
 # real end-to-end (spawns live subagents; needs model access)
 PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts
