@@ -1,8 +1,14 @@
-# pi-taskflow
+<div align="center">
 
-[![npm](https://img.shields.io/npm/v/pi-taskflow.svg)](https://www.npmjs.com/package/pi-taskflow)
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Pi coding agent](https://img.shields.io/badge/for-Pi%20coding%20agent-7c3aed.svg)](https://pi.dev)
+<img src="./assets/hero.png" alt="pi-taskflow — declarative, multi-phase subagent workflows" width="880">
+
+<p>
+  <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=B692FF&label=npm" alt="npm version"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-43D9AD?style=flat-square" alt="MIT license"></a>
+  <a href="https://pi.dev"><img src="https://img.shields.io/badge/for-Pi%20coding%20agent-6E8BFF?style=flat-square" alt="for the Pi coding agent"></a>
+</p>
+
+</div>
 
 > Lightweight workflow orchestration for the [Pi coding agent](https://pi.dev).
 
