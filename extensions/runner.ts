@@ -38,13 +38,21 @@ export interface RunResult {
 	errorMessage?: string;
 }
 
+export interface LiveUpdate {
+	/** Latest assistant text or tool activity (single-line, truncated upstream). */
+	text: string;
+	usage: UsageStats;
+	model?: string;
+}
+
 export interface RunOptions {
 	model?: string;
 	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 	signal?: AbortSignal;
-	onText?: (text: string) => void;
+	/** Fires on each assistant turn with the latest activity + accumulated usage. */
+	onLive?: (live: LiveUpdate) => void;
 }
 
 export function isFailed(r: RunResult): boolean {
@@ -61,6 +69,44 @@ function getFinalOutput(messages: Message[]): string {
 		}
 	}
 	return "";
+}
+
+/** One-line description of the most recent assistant activity (text or tool call). */
+function describeActivity(msg: Message): string {
+	if (msg.role !== "assistant") return "";
+	let lastText = "";
+	let lastTool = "";
+	for (const part of (msg as any).content ?? []) {
+		if (part.type === "text" && part.text?.trim()) lastText = part.text.trim();
+		else if (part.type === "toolCall") lastTool = summarizeToolCall(part.name, part.arguments ?? {});
+	}
+	const chosen = lastText || lastTool;
+	return chosen.replace(/\s+/g, " ").trim();
+}
+
+function summarizeToolCall(name: string, args: Record<string, unknown>): string {
+	const short = (p: unknown) => {
+		const s = String(p ?? "");
+		return s.length > 48 ? `${s.slice(0, 48)}…` : s;
+	};
+	switch (name) {
+		case "bash":
+			return `$ ${short(args.command)}`;
+		case "read":
+			return `read ${short(args.path ?? args.file_path)}`;
+		case "write":
+			return `write ${short(args.path ?? args.file_path)}`;
+		case "edit":
+			return `edit ${short(args.path ?? args.file_path)}`;
+		case "grep":
+			return `grep ${short(args.pattern)}`;
+		case "find":
+			return `find ${short(args.pattern)}`;
+		case "ls":
+			return `ls ${short(args.path)}`;
+		default:
+			return `${name}`;
+	}
 }
 
 async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
@@ -132,6 +178,7 @@ export async function runAgentTask(
 	let tmpPromptPath: string | null = null;
 
 	const messages: Message[] = [];
+	let lastActivity = "";
 	const result: RunResult = {
 		agent: agentName,
 		task,
@@ -186,8 +233,10 @@ export async function runAgentTask(
 						if (!result.model && (msg as any).model) result.model = (msg as any).model;
 						if ((msg as any).stopReason) result.stopReason = (msg as any).stopReason;
 						if ((msg as any).errorMessage) result.errorMessage = (msg as any).errorMessage;
-						const text = getFinalOutput([msg]);
-						if (text && opts.onText) opts.onText(text);
+						const activity = describeActivity(msg);
+						if (activity) lastActivity = activity;
+						if (opts.onLive)
+							opts.onLive({ text: lastActivity, usage: { ...result.usage }, model: result.model });
 					}
 				}
 			};

@@ -12,7 +12,7 @@
 
 import type { AgentConfig } from "./agents.ts";
 import { coerceArray, interpolate, type InterpolationContext, safeParse } from "./interpolate.ts";
-import { aggregateUsage, emptyUsage, isFailed, mapWithConcurrencyLimit, runAgentTask, type RunResult, type UsageStats } from "./runner.ts";
+import { aggregateUsage, emptyUsage, isFailed, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult, type UsageStats } from "./runner.ts";
 import { dependenciesOf, finalPhase, type Phase, type Taskflow, topoLayers } from "./schema.ts";
 import { hashInput, type PhaseState, type RunState } from "./store.ts";
 
@@ -103,7 +103,7 @@ async function executePhase(
 	const previousOutput = lastCompletedOutput(state, phase);
 	const run = deps.runTask ?? runAgentTask;
 
-	const runOne = (agentName: string, task: string, _locals?: Record<string, unknown>) =>
+	const runOne = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void) =>
 		run(
 			deps.cwd,
 			deps.agents,
@@ -115,33 +115,47 @@ async function executePhase(
 				tools: phase.tools,
 				cwd: phase.cwd,
 				signal: deps.signal,
+				onLive,
 			},
 			deps.globalThinking,
 		);
 
 	const parseJson = phase.output === "json";
 
-	// Runs a list of sub-tasks with live fan-out progress reported on the live phase state.
-	const runFanout = async (
-		items: Array<{ agent: string; task: string }>,
-	): Promise<RunResult[]> => {
+	// Runs a list of sub-tasks with live fan-out progress + aggregate live usage/activity.
+	const runFanout = async (items: Array<{ agent: string; task: string }>): Promise<RunResult[]> => {
 		let done = 0;
 		let running = 0;
 		let failed = 0;
 		const total = items.length;
 		const live = state.phases[phase.id];
-		if (live) live.subProgress = { done: 0, total, running: 0, failed: 0 };
-		emitProgress();
-		return mapWithConcurrencyLimit(items, concurrency, async (it) => {
-			running++;
-			if (live) live.subProgress = { done, total, running, failed };
+		const liveUsages: UsageStats[] = items.map(() => emptyUsage());
+		let latestText = "";
+		let latestModel: string | undefined;
+		const refresh = () => {
+			if (live) {
+				live.subProgress = { done, total, running, failed };
+				live.usage = aggregateUsage(liveUsages);
+				live.liveText = latestText;
+				live.model = latestModel;
+			}
 			emitProgress();
-			const r = await runOne(it.agent, it.task);
+		};
+		refresh();
+		return mapWithConcurrencyLimit(items, concurrency, async (it, idx) => {
+			running++;
+			refresh();
+			const r = await runOne(it.agent, it.task, (l) => {
+				liveUsages[idx] = l.usage;
+				if (l.text) latestText = l.text;
+				if (l.model) latestModel = l.model;
+				refresh();
+			});
 			running--;
 			done++;
 			if (isFailed(r)) failed++;
-			if (live) live.subProgress = { done, total, running, failed };
-			emitProgress();
+			liveUsages[idx] = r.usage;
+			refresh();
 			return r;
 		});
 	};
@@ -153,7 +167,15 @@ async function executePhase(
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
-		const r = await runOne(phase.agent ?? defaultAgent(deps), text);
+		const live = state.phases[phase.id];
+		const r = await runOne(phase.agent ?? defaultAgent(deps), text, (l) => {
+			if (live) {
+				live.liveText = l.text;
+				live.usage = l.usage;
+				live.model = l.model;
+			}
+			emitProgress();
+		});
 		return resultToPhaseState(phase.id, r, inputHash, parseJson);
 	}
 
@@ -210,7 +232,15 @@ async function executePhase(
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
-		const r = await runOne(phase.agent ?? defaultAgent(deps), text);
+		const live = state.phases[phase.id];
+		const r = await runOne(phase.agent ?? defaultAgent(deps), text, (l) => {
+			if (live) {
+				live.liveText = l.text;
+				live.usage = l.usage;
+				live.model = l.model;
+			}
+			emitProgress();
+		});
 		return resultToPhaseState(phase.id, r, inputHash, parseJson);
 	}
 

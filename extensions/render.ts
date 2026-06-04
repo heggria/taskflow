@@ -31,17 +31,24 @@ function shortModel(model?: string): string {
 	return model.split("/").pop() ?? model;
 }
 
-// Braille spinner; advances with wall-clock time so it animates on every render.
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// Clockwise half-circle spinner (left→up→right→down). Single-width, matches glyphs.
+const SPINNER = ["◐", "◓", "◑", "◒"];
 function spinnerFrame(): string {
 	return SPINNER[Math.floor(Date.now() / 120) % SPINNER.length];
 }
 
+// Elapsed as 5s / 3m30s / 1h05m
 function elapsed(ms: number): string {
-	if (ms < 1000) return "0s";
-	if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-	if (ms < 3_600_000) return `${(ms / 60_000).toFixed(1)}m`;
-	return `${(ms / 3_600_000).toFixed(1)}h`;
+	const s = Math.floor(ms / 1000);
+	if (s < 60) return `${s}s`;
+	if (s < 3600) {
+		const m = Math.floor(s / 60);
+		const ss = s % 60;
+		return `${m}m${ss.toString().padStart(2, "0")}s`;
+	}
+	const h = Math.floor(s / 3600);
+	const mm = Math.floor((s % 3600) / 60);
+	return `${h}h${mm.toString().padStart(2, "0")}m`;
 }
 
 function phaseElapsed(ps: PhaseState): number {
@@ -59,6 +66,15 @@ function compactUsage(usage: UsageStats | undefined, theme: Theme): string {
 	if (!usage) return "";
 	const parts: string[] = [];
 	if (usage.turns) parts.push(theme.fg("dim", `${usage.turns}t`));
+	if (usage.input) parts.push(theme.fg("dim", `↑${formatTokens(usage.input)}`));
+	if (usage.output) parts.push(theme.fg("dim", `↓${formatTokens(usage.output)}`));
+	if (usage.cost) parts.push(theme.fg("muted", `$${usage.cost.toFixed(3)}`));
+	return parts.join(" ");
+}
+
+function liveUsageStr(usage: UsageStats | undefined, theme: Theme): string {
+	if (!usage) return "";
+	const parts: string[] = [];
 	if (usage.input) parts.push(theme.fg("dim", `↑${formatTokens(usage.input)}`));
 	if (usage.output) parts.push(theme.fg("dim", `↓${formatTokens(usage.output)}`));
 	if (usage.cost) parts.push(theme.fg("muted", `$${usage.cost.toFixed(3)}`));
@@ -112,15 +128,21 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	const time = t ? theme.fg("dim", elapsed(t)) : "";
 
 	if (ps.status === "running") {
+		const model = shortModel(ps.model);
+		const tokens = liveUsageStr(ps.usage, theme);
 		if (isFanout && ps.subProgress) {
 			const { done, total, running, failed } = ps.subProgress;
 			let s = `${miniBar(done, total, theme)} ${theme.fg("toolOutput", `${done}/${total}`)}`;
 			if (running) s += theme.fg("dim", ` · ${running} run`);
 			if (failed) s += theme.fg("error", ` · ${failed}✗`);
+			if (tokens) s += `  ${tokens}`;
 			if (time) s += `  ${time}`;
 			return s;
 		}
-		return theme.fg("warning", "running…") + (time ? `  ${time}` : "");
+		let s = model ? theme.fg("accent", model) : theme.fg("warning", "running…");
+		if (tokens) s += `  ${tokens}`;
+		if (time) s += `  ${time}`;
+		return s;
 	}
 
 	// done
@@ -193,6 +215,14 @@ export function renderProgress(state: RunState, theme: Theme): string {
 			theme.fg("dim", type) +
 			"  " +
 			detail;
+
+		// Live activity sub-line (only while running, only if we have a message).
+		if (status === "running" && ps?.liveText) {
+			const indent = " ".repeat(2 + 2 + idW + 2);
+			const msg = ps.liveText.replace(/\s+/g, " ").trim();
+			const snip = msg.length > 88 ? `${msg.slice(0, 88)}…` : msg;
+			text += `\n${indent}${theme.fg("dim", "› ")}${theme.fg("muted", snip)}`;
+		}
 	}
 	return text;
 }

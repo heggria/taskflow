@@ -35,6 +35,8 @@ export interface PhaseState {
 	endedAt?: number;
 	/** Live fan-out progress for map/parallel phases. */
 	subProgress?: { done: number; total: number; running: number; failed: number };
+	/** Latest activity line from the running subagent(s). */
+	liveText?: string;
 }
 
 export interface RunState {

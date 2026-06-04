@@ -105,27 +105,40 @@ async function runFlow(
 		});
 	};
 
-	// 1Hz heartbeat: re-render even when no phase event fires, so elapsed timers
-	// and the spinner stay live during long-running single subagents.
+	// Throttled persistence: avoid disk writes on every sub-item event.
+	let lastPersist = 0;
+	const persistThrottled = (s: RunState) => {
+		const now = Date.now();
+		if (now - lastPersist >= 1000) {
+			lastPersist = now;
+			saveRun(s);
+		}
+	};
+
+	// ~8fps heartbeat drives all rendering: it naturally caps the frame rate
+	// (no event bursts) while keeping the spinner, elapsed timers, live tokens
+	// and the latest message current. Phase events only mutate `state`.
 	let heartbeat: ReturnType<typeof setInterval> | undefined;
 	if (onUpdate) {
 		heartbeat = setInterval(() => {
 			if (state.status === "running") emit(state);
-		}, 1000);
+		}, 120);
 		(heartbeat as { unref?: () => void }).unref?.();
 	}
 
 	try {
-		return await executeTaskflow(state, {
+		const result = await executeTaskflow(state, {
 			cwd: ctx.cwd,
 			agents,
 			globalThinking: settings.globalThinking,
 			signal,
-			persist: (s) => saveRun(s),
-			onProgress: (s) => emit(s),
+			persist: persistThrottled,
 		});
+		return result;
 	} finally {
 		if (heartbeat) clearInterval(heartbeat);
+		saveRun(state); // force-persist terminal state
+		emit(state); // final render reflecting terminal state
 	}
 }
 
