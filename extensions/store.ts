@@ -37,6 +37,8 @@ export interface PhaseState {
 	subProgress?: { done: number; total: number; running: number; failed: number };
 	/** Latest activity line from the running subagent(s). */
 	liveText?: string;
+	/** Gate verdict (gate phases only). */
+	gate?: { verdict: "pass" | "block"; reason?: string };
 }
 
 export interface RunState {
@@ -44,7 +46,7 @@ export interface RunState {
 	flowName: string;
 	def: Taskflow;
 	args: Record<string, unknown>;
-	status: "running" | "completed" | "failed" | "paused";
+	status: "running" | "completed" | "failed" | "paused" | "blocked";
 	phases: Record<string, PhaseState>;
 	createdAt: number;
 	updatedAt: number;

@@ -55,8 +55,28 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `agent` | one subagent runs `task` |
 | `parallel` | run `branches[]` concurrently |
 | `map` | fan out over `over` (an array) — one subagent per item, `{item}` bound |
-| `gate` | quality/review step (a focused agent pass) |
+| `gate` | quality/review step that can **halt the flow** (see below) |
 | `reduce` | aggregate `from[]` phases into one output |
+
+### Gate phases (quality control)
+
+A `gate` phase runs an agent to review upstream output and can **block the rest
+of the workflow**. End the gate task's instructions by asking the agent to emit a
+verdict the runtime can read:
+
+- a final line `VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT), or
+- JSON like `{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block", "reason": "..."}`
+
+On **BLOCK**, downstream phases are skipped and the run ends as `blocked` with the
+reason surfaced. Ambiguous output **fails open** (treated as PASS) so a gate never
+halts the flow by accident. Example gate task:
+
+```
+Review the audit results below. If any endpoint is missing auth, end with
+"VERDICT: BLOCK" and a one-line reason; otherwise end with "VERDICT: PASS".
+
+{steps.audit.output}
+```
 
 ### Interpolation
 

@@ -288,12 +288,12 @@ export async function runTaskflow(def, args, ctx): Promise<TaskflowResult>
 
 ## 5. 路线图
 
-| 版本 | 范围 |
-|------|------|
-| **v0.1** | DSL + schema + runtime（agent/parallel/map/reduce）+ `taskflow` 工具 + `/tf run` + 内存隔离 + 流式进度 |
-| **v0.2** | 保存/动态命令注册 + 跨 session 恢复 + `gate` 阶段 + run 历史 TUI |
-| **v0.3** | examples + SKILL.md（教 LLM 写定义）+ YAML 支持 + 发布 npm |
-| **v0.4** | 真·后台执行（detached + 轮询）+ 成本预估/上限 + 内置 `deep-research` 工作流 |
+| 版本 | 范围 | 状态 |
+|------|------|------|
+| **v0.1** | DSL + schema + runtime（agent/parallel/map/reduce）+ `taskflow` 工具 + `/tf run` + 内存隔离 + 流式进度 | ✅ 已发布 (npm 0.0.1) |
+| **v0.2** | 保存/动态命令注册 + 跨 session 恢复 + `gate` 真门控 + run 历史交互 TUI | ✅ 已完成 (npm 0.0.3) |
+| **v0.3** | examples + SKILL.md（教 LLM 写定义）+ YAML 支持 + 发布 npm | 🚧 examples/SKILL/npm 已做；YAML 待办 |
+| **v0.4** | 真·后台执行（detached + 轮询）+ 成本预估/上限 + 内置 `deep-research` 工作流 | ⏳ 待办 |
 
 ---
 

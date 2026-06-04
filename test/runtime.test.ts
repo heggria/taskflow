@@ -5,6 +5,7 @@ import { emptyUsage, type RunResult, type RunOptions } from "../extensions/runne
 import { executeTaskflow, type RuntimeDeps } from "../extensions/runtime.ts";
 import type { Taskflow } from "../extensions/schema.ts";
 import type { RunState } from "../extensions/store.ts";
+import { parseGateVerdict } from "../extensions/runtime.ts";
 
 const AGENTS: AgentConfig[] = [
 	{ name: "a", description: "test agent", systemPrompt: "", source: "user", filePath: "" },
@@ -240,4 +241,53 @@ test("runtime: concurrency cap is respected in map", async () => {
 	const res = await executeTaskflow(mkState(def), baseDeps(runner));
 	assert.equal(res.ok, true);
 	assert.ok(peak <= 2, `peak concurrency ${peak} exceeded cap 2`);
+});
+
+test("parseGateVerdict: text markers, JSON, and fail-open default", () => {
+	assert.equal(parseGateVerdict("looks good\nVERDICT: PASS").verdict, "pass");
+	assert.equal(parseGateVerdict("issues found\nVERDICT: BLOCK").verdict, "block");
+	assert.equal(parseGateVerdict("VERDICT: OK").verdict, "pass");
+	assert.equal(parseGateVerdict('{"continue": false, "reason": "missing auth"}').verdict, "block");
+	assert.equal(parseGateVerdict('{"continue": false, "reason": "missing auth"}').reason, "missing auth");
+	assert.equal(parseGateVerdict('{"pass": true}').verdict, "pass");
+	assert.equal(parseGateVerdict('{"verdict": "reject"}').verdict, "block");
+	// ambiguous output → fail-open (pass), never accidentally halt
+	assert.equal(parseGateVerdict("just some prose with no verdict").verdict, "pass");
+});
+
+test("runtime: gate BLOCK halts the flow and skips downstream", async () => {
+	const def: Taskflow = {
+		name: "gated",
+		phases: [
+			{ id: "work", type: "agent", agent: "a", task: "do work" },
+			{ id: "check", type: "gate", agent: "a", task: "review {steps.work.output}", dependsOn: ["work"] },
+			{ id: "ship", type: "agent", agent: "a", task: "ship {steps.check.output}", dependsOn: ["check"], final: true },
+		],
+	};
+	const deps = baseDeps(
+		mockRunner((t) => (t.startsWith("review") ? "found problems\nVERDICT: BLOCK" : `ok:${t}`)),
+	);
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, false);
+	assert.equal(res.state.status, "blocked");
+	assert.equal(res.state.phases.check.gate?.verdict, "block");
+	assert.equal(res.state.phases.ship.status, "skipped");
+	assert.match(res.finalOutput, /Gate blocked/);
+});
+
+test("runtime: gate PASS lets the flow continue", async () => {
+	const def: Taskflow = {
+		name: "gated-pass",
+		phases: [
+			{ id: "work", type: "agent", agent: "a", task: "do work" },
+			{ id: "check", type: "gate", agent: "a", task: "review {steps.work.output}", dependsOn: ["work"] },
+			{ id: "ship", type: "agent", agent: "a", task: "ship it", dependsOn: ["check"], final: true },
+		],
+	};
+	const deps = baseDeps(mockRunner((t) => (t.startsWith("review") ? "all good\nVERDICT: PASS" : `ok:${t}`)));
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, true);
+	assert.equal(res.state.status, "completed");
+	assert.equal(res.state.phases.check.gate?.verdict, "pass");
+	assert.equal(res.state.phases.ship.status, "done");
 });

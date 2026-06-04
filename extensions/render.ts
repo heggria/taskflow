@@ -115,7 +115,11 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	const type = phase.type ?? "agent";
 	if (!ps || ps.status === "pending") return theme.fg("dim", "—");
 
-	if (ps.status === "skipped") return theme.fg("muted", "skipped · upstream failed");
+	if (ps.status === "skipped") {
+		const reason = (ps.error ?? "upstream failed").replace(/\s+/g, " ");
+		const snip = reason.length > 52 ? `${reason.slice(0, 52)}…` : reason;
+		return theme.fg("muted", `skipped · ${snip}`);
+	}
 
 	const isFanout = type === "map" || type === "parallel";
 
@@ -167,6 +171,18 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	// single-agent done
 	const model = shortModel(ps.model);
 	const u = compactUsage(ps.usage, theme);
+	if (ps.gate) {
+		const badge =
+			ps.gate.verdict === "block" ? theme.fg("error", theme.bold("BLOCK")) : theme.fg("success", "PASS");
+		let g = badge;
+		if (ps.gate.reason) {
+			const r = ps.gate.reason.replace(/\s+/g, " ");
+			g += theme.fg("dim", ` ${r.length > 44 ? `${r.slice(0, 44)}…` : r}`);
+		}
+		if (model) g += `  ${theme.fg("dim", model)}`;
+		if (time) g += `  ${time}`;
+		return g;
+	}
 	let s = "";
 	if (model) s += theme.fg("accent", model);
 	if (u) s += (s ? "  " : "") + u;
@@ -187,9 +203,11 @@ function headerLine(state: RunState, theme: Theme): string {
 			? theme.fg("success", "✓")
 			: state.status === "failed"
 				? theme.fg("error", "✗")
-				: state.status === "paused"
-					? theme.fg("warning", "‖")
-					: theme.fg("warning", spinnerFrame());
+				: state.status === "blocked"
+					? theme.fg("error", "⊗")
+					: state.status === "paused"
+						? theme.fg("warning", "‖")
+						: theme.fg("warning", spinnerFrame());
 
 	let line =
 		`${head} ${theme.fg("toolTitle", theme.bold("taskflow"))} ` +
@@ -197,6 +215,7 @@ function headerLine(state: RunState, theme: Theme): string {
 		theme.fg("muted", `  ${done}/${total}`);
 	if (running) line += theme.fg("warning", ` · ${running}▸`);
 	if (failed) line += theme.fg("error", ` · ${failed}✗`);
+	if (state.status === "blocked") line += theme.fg("error", " · blocked");
 	const cost = aggregateCost(state);
 	if (cost) line += theme.fg("muted", ` · $${cost.toFixed(3)}`);
 	const el = runElapsed(state);

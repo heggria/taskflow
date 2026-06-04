@@ -17,6 +17,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { renderRunResult, summarizeRun } from "./render.ts";
+import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { executeTaskflow, type RuntimeResult } from "./runtime.ts";
 import { finalPhase, type Taskflow, validateTaskflow } from "./schema.ts";
 import {
@@ -306,15 +307,30 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (sub === "runs") {
-				const runs = listRuns(ctx.cwd);
+				const runs = listRuns(ctx.cwd, 50);
 				if (runs.length === 0) {
 					ctx.ui.notify("No taskflow runs yet.", "info");
 					return;
 				}
-				ctx.ui.notify(
-					runs.map((r) => `${r.runId} [${r.status}] ${r.flowName} — ${summarizeRun(r)}`).join("\n"),
-					"info",
-				);
+				if (!ctx.hasUI) {
+					ctx.ui.notify(
+						runs.map((r) => `${r.runId} [${r.status}] ${r.flowName} — ${summarizeRun(r)}`).join("\n"),
+						"info",
+					);
+					return;
+				}
+				const result = await ctx.ui.custom<RunHistoryResult | undefined>((_tui, theme, _kb, done) => {
+					return new RunHistoryComponent(runs, theme, (r) => done(r));
+				});
+				if (result?.action === "resume") {
+					if (ctx.isIdle()) {
+						pi.sendUserMessage(
+							`Resume the taskflow run "${result.runId}" using the taskflow tool with action="resume", runId="${result.runId}".`,
+						);
+					} else {
+						ctx.ui.notify("Agent is busy; try /tf resume when idle.", "warning");
+					}
+				}
 				return;
 			}
 

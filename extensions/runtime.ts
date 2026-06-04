@@ -178,7 +178,9 @@ async function executePhase(
 			}
 			emitProgress();
 		});
-		return resultToPhaseState(phase.id, r, inputHash, parseJson);
+		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
+		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
+		return ps;
 	}
 
 	if (type === "parallel") {
@@ -286,6 +288,36 @@ function defaultAgent(deps: RuntimeDeps): string {
 }
 
 /**
+ * Parse a gate phase's output into a verdict. Blocks the flow only on an
+ * explicit negative signal; ambiguous output passes (fail-open).
+ * Accepts JSON ({continue|pass: bool} or {verdict: "..."}) or a text marker
+ * `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT` (last occurrence wins).
+ */
+export function parseGateVerdict(output: string): { verdict: "pass" | "block"; reason?: string } {
+	const json = safeParse(output);
+	if (json && typeof json === "object") {
+		const o = json as Record<string, unknown>;
+		if (typeof o.continue === "boolean") return { verdict: o.continue ? "pass" : "block", reason: asReason(o.reason) };
+		if (typeof o.pass === "boolean") return { verdict: o.pass ? "pass" : "block", reason: asReason(o.reason) };
+		if (typeof o.verdict === "string") {
+			const block = /block|fail|stop|reject|halt|\bno\b/i.test(o.verdict);
+			return { verdict: block ? "block" : "pass", reason: asReason(o.reason) };
+		}
+	}
+	const matches = [...output.matchAll(/VERDICT\s*[:=]\s*(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)/gi)];
+	if (matches.length) {
+		const v = matches[matches.length - 1][1].toUpperCase();
+		const pass = v === "PASS" || v === "OK";
+		return { verdict: pass ? "pass" : "block" };
+	}
+	return { verdict: "pass" };
+}
+
+function asReason(v: unknown): string | undefined {
+	return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+/**
  * Execute a full taskflow. Mutates and persists `state` as it progresses.
  */
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
@@ -297,6 +329,9 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	deps.onProgress?.(state);
 
 	let aborted = false;
+	let gateBlocked = false;
+	let gateReason = "";
+	let gateOutput = "";
 
 	for (const layer of layers) {
 		if (deps.signal?.aborted) {
@@ -308,13 +343,13 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 		await mapWithConcurrencyLimit(layer, layerConcurrency, async (phase) => {
 			// Snapshot prior state BEFORE marking running, so resume cache checks work.
 			const prior = state.phases[phase.id];
-			// Skip if a dependency failed (unless this phase is optional).
+			// Skip if a dependency failed, or an upstream gate blocked the flow.
 			const failedDep = dependenciesOf(phase).some((d) => state.phases[d]?.status === "failed");
-			if (failedDep) {
+			if (gateBlocked || failedDep) {
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
-					error: "Upstream dependency failed",
+					error: gateBlocked ? `Gate blocked${gateReason ? `: ${gateReason}` : ""}` : "Upstream dependency failed",
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
@@ -333,6 +368,11 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 
 			const ps = await executePhase(phase, state, deps, prior, () => deps.onProgress?.(state));
 			state.phases[phase.id] = ps;
+			if ((phase.type ?? "agent") === "gate" && ps.gate?.verdict === "block") {
+				gateBlocked = true;
+				gateReason = ps.gate.reason ?? "";
+				gateOutput = ps.output ?? "";
+			}
 			deps.persist?.(state);
 			deps.onProgress?.(state);
 		});
@@ -342,14 +382,19 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	const finalState = state.phases[fp.id];
 	const anyFailed = Object.values(state.phases).some((p) => p.status === "failed");
 
-	state.status = aborted ? "paused" : anyFailed ? "failed" : "completed";
+	state.status = aborted ? "paused" : gateBlocked ? "blocked" : anyFailed ? "failed" : "completed";
 	deps.persist?.(state);
 	deps.onProgress?.(state);
+
+	let finalOutput = finalState?.output ?? "(no output)";
+	if (gateBlocked && (!finalState || finalState.status === "skipped")) {
+		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${gateOutput ? `\n\n${gateOutput}` : ""}`;
+	}
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	return {
 		state,
-		finalOutput: finalState?.output ?? "(no output)",
+		finalOutput,
 		ok: state.status === "completed",
 		totalUsage,
 	};
