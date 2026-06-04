@@ -22,9 +22,10 @@ saveable as a one-word `/tf:<name>` command.
 pi install npm:pi-taskflow
 ```
 
-Fan out one subagent per item, gate the results with an adversarial review, and
-get back only the final report — none of the intermediate transcripts ever touch
-your conversation.
+Fan out one subagent per item, route on results, retry the flaky ones, pause for
+human approval, cap the spend, and gate the output with an adversarial review —
+all from one declarative definition. Only the final report reaches your
+conversation; every intermediate transcript stays in the runtime.
 
 ## Why
 
@@ -45,6 +46,11 @@ only the final phase's output.
 | Scale | a few tasks | dynamic `map` fan-out |
 | Resumable | no | yes (cross-session, cached phases skip) |
 | Quality gates | no | `gate` phases with `VERDICT: BLOCK / PASS` |
+| Conditional routing | no | `when` guards + `join: any` OR-joins |
+| Fault tolerance | no | per-phase `retry` with backoff |
+| Human-in-the-loop | no | `approval` phases (approve / reject / edit) |
+| Cost control | no | run-wide `budget` (USD / token caps) |
+| Composition | no | `flow` phases run saved sub-flows |
 | Progress visibility | opaque while running | live DAG render with timing + cost |
 | Ergonomics | inline JSON each time | shorthand (`task`/`tasks`/`chain`) or DSL |
 
@@ -137,6 +143,36 @@ only the final report back.
 
 Save it once → `/tf:summarize-files` forever.
 
+### Route, gate, and guard
+
+Phases also **branch, retry, pause for a human, and respect a budget** — still
+declaratively, no scripting:
+
+```jsonc
+{
+  "name": "triage-and-fix",
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    { "id": "triage", "type": "agent", "agent": "analyst", "output": "json",
+      "task": "Classify the bug. Output ONLY {\"severity\":\"high\"} or {\"severity\":\"low\"}." },
+    { "id": "deep",  "when": "{steps.triage.json.severity} == high", "dependsOn": ["triage"],
+      "agent": "executor_code", "task": "Root-cause and patch it.",
+      "retry": { "max": 2, "backoffMs": 500 } },
+    { "id": "quick", "when": "{steps.triage.json.severity} == low",  "dependsOn": ["triage"],
+      "agent": "executor_fast", "task": "Apply the quick fix." },
+    { "id": "approve", "type": "approval", "join": "any", "dependsOn": ["deep", "quick"],
+      "task": "Review the fix before it ships." },
+    { "id": "ship", "type": "agent", "dependsOn": ["approve"],
+      "task": "Open a PR with the change.", "final": true }
+  ]
+}
+```
+
+- **`when`** routes to `deep` *or* `quick` from the triage JSON; the other branch is skipped.
+- **`join: "any"`** lets `approve` run as soon as whichever branch fired completes.
+- **`retry`** re-runs a flaky patch with backoff; **`budget`** halts the whole run if it gets too expensive.
+- **`approval`** pauses for a human (approve / reject / edit) before the final `ship`.
+
 ## Watch it run
 
 This is the live progress render for a real run — the `self-improve` flow that
@@ -181,11 +217,28 @@ writes and verifies its own test suites, caught here mid-block by a quality gate
 | `approval` | **human-in-the-loop** pause — approve / reject / edit before continuing | — |
 | `flow` | run a **saved sub-flow** as one phase (composition/reuse) | `use` |
 
-Every phase needs `id`. Optional fields: `agent`, `dependsOn`, `output`,
-`model`, `thinking`, `tools`, `cwd`, `concurrency`, `final`, `optional`,
-`when` (conditional guard), `join` (`all`\|`any` dependency join), `retry`
-(`{max, backoffMs, factor}`), and `with` (args for a `flow` phase).
-Run-wide: `budget: {maxUSD, maxTokens}` halts the flow when exceeded.
+### Common phase fields
+
+Every phase needs a unique `id` and a `type` (defaults to `agent`). On top of the
+per-type fields above:
+
+| Field | Meaning |
+|---|---|
+| `agent` | Agent to run (defaults to the first discovered agent) |
+| `dependsOn` | Phase ids this phase waits for — builds the DAG |
+| `join` | `"all"` (default) waits for every dep; `"any"` is an OR-join |
+| `when` | Conditional guard — skip unless the expression is truthy |
+| `retry` | `{ max, backoffMs?, factor? }` — retry a failing subagent |
+| `output` | `"text"` (default) or `"json"` (exposes `{steps.ID.json}`) |
+| `model` / `thinking` / `tools` | Per-phase overrides for the subagent |
+| `cwd` | Working directory for the subagent |
+| `concurrency` | Fan-out cap for `map` / `parallel` (overrides the flow default) |
+| `final` | Marks the result-bearing phase (else the last phase wins) |
+| `optional` | A failure here does **not** abort the run |
+| `use` / `with` | (`flow`) saved sub-flow name + its args |
+
+Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8),
+`agentScope`, and `budget: { maxUSD?, maxTokens? }`.
 
 ### Control flow & reliability
 
@@ -294,6 +347,20 @@ file). Phase-level overrides for `model`, `thinking`, and `tools` are passed as
 Settings from `~/.pi/agent/settings.json` (the `subagents.agentOverrides` map)
 are honored, letting you tweak model, thinking, or tools per agent across all flows.
 
+## Examples
+
+Ready-to-read definitions live in [`examples/`](./examples):
+
+| File | Demonstrates |
+|---|---|
+| [`summarize-files.json`](./examples/summarize-files.json) | discover → `map` fan-out → `reduce` |
+| [`conditional-research.json`](./examples/conditional-research.json) | `when` routing + `join: any` + `gate` + `budget` |
+| [`guarded-refactor.json`](./examples/guarded-refactor.json) | `approval` (human-in-the-loop) + `retry` + `gate` |
+
+To use one, copy it into `.pi/taskflows/<name>.json` (or
+`~/.pi/agent/taskflows/`) and it registers as `/tf:<name>` — or just point the
+model at the definition.
+
 ## Status & limits
 
 - **v0.0.6** — control flow & reliability: conditional `when` guards, `join: any`
@@ -327,13 +394,10 @@ are honored, letting you tweak model, thinking, or tools per agent across all fl
 ```bash
 npm install
 npm run typecheck
-node --experimental-strip-types --test test/interpolate.test.ts \
-  test/condition.test.ts test/schema.test.ts test/usage.test.ts \
-  test/runtime.test.ts test/features.test.ts test/runner.test.ts \
-  test/store.test.ts test/agents.test.ts test/render.test.ts test/desugar.test.ts
+npm test            # unit tests — no network, no process spawning
 
 # real end-to-end (spawns live subagents; needs model access)
-PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts
+npm run test:e2e
 ```
 
 ## Contributing
