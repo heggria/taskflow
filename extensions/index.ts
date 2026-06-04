@@ -105,14 +105,28 @@ async function runFlow(
 		});
 	};
 
-	return executeTaskflow(state, {
-		cwd: ctx.cwd,
-		agents,
-		globalThinking: settings.globalThinking,
-		signal,
-		persist: (s) => saveRun(s),
-		onProgress: (s) => emit(s),
-	});
+	// 1Hz heartbeat: re-render even when no phase event fires, so elapsed timers
+	// and the spinner stay live during long-running single subagents.
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
+	if (onUpdate) {
+		heartbeat = setInterval(() => {
+			if (state.status === "running") emit(state);
+		}, 1000);
+		(heartbeat as { unref?: () => void }).unref?.();
+	}
+
+	try {
+		return await executeTaskflow(state, {
+			cwd: ctx.cwd,
+			agents,
+			globalThinking: settings.globalThinking,
+			signal,
+			persist: (s) => saveRun(s),
+			onProgress: (s) => emit(s),
+		});
+	} finally {
+		if (heartbeat) clearInterval(heartbeat);
+	}
 }
 
 export default function (pi: ExtensionAPI) {

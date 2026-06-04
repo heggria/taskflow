@@ -21,6 +21,7 @@ const ICON: Record<PhaseState["status"], { ch: string; color: string }> = {
 };
 
 function icon(status: PhaseState["status"], theme: Theme): string {
+	if (status === "running") return theme.fg("warning", spinnerFrame());
 	const i = ICON[status] ?? ICON.pending;
 	return theme.fg(i.color as any, i.ch);
 }
@@ -28,6 +29,12 @@ function icon(status: PhaseState["status"], theme: Theme): string {
 function shortModel(model?: string): string {
 	if (!model) return "";
 	return model.split("/").pop() ?? model;
+}
+
+// Braille spinner; advances with wall-clock time so it animates on every render.
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+function spinnerFrame(): string {
+	return SPINNER[Math.floor(Date.now() / 120) % SPINNER.length];
 }
 
 function elapsed(ms: number): string {
@@ -151,7 +158,7 @@ function headerLine(state: RunState, theme: Theme): string {
 				? theme.fg("error", "✗")
 				: state.status === "paused"
 					? theme.fg("warning", "‖")
-					: theme.fg("warning", "◐");
+					: theme.fg("warning", spinnerFrame());
 
 	let line =
 		`${head} ${theme.fg("toolTitle", theme.bold("taskflow"))} ` +
