@@ -31,8 +31,8 @@ function shortModel(model?: string): string {
 	return model.split("/").pop() ?? model;
 }
 
-// Clockwise half-circle spinner (left→up→right→down). Single-width, matches glyphs.
-const SPINNER = ["◐", "◓", "◑", "◒"];
+// Braille dots spinner (ora classic) — smooth, clockwise, single-width.
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 function spinnerFrame(): string {
 	return SPINNER[Math.floor(Date.now() / 120) % SPINNER.length];
 }
