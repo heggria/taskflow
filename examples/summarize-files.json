@@ -1,0 +1,37 @@
+{
+  "name": "summarize-files",
+  "description": "Scan a directory, then summarize each file in parallel and produce a combined report.",
+  "version": 1,
+  "args": {
+    "dir": { "default": ".", "description": "Directory to scan" }
+  },
+  "concurrency": 4,
+  "agentScope": "user",
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files directly under {args.dir} (non-recursive). Output ONLY a JSON array of objects like [{\"file\": \"path\"}]. No prose.",
+      "output": "json"
+    },
+    {
+      "id": "summarize",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "item",
+      "agent": "scout",
+      "task": "Read the file {item.file} and give a one-sentence summary of what it does.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["summarize"],
+      "agent": "writer",
+      "task": "Combine these per-file summaries into a short markdown overview of the directory:\n\n{steps.summarize.output}",
+      "dependsOn": ["summarize"],
+      "final": true
+    }
+  ]
+}

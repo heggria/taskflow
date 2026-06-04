@@ -1,0 +1,65 @@
+{
+  "name": "pi-taskflow",
+  "version": "0.0.1",
+  "description": "Lightweight workflow orchestration for the Pi coding agent — declarative multi-phase taskflows with dynamic fan-out, isolated subagent context, resumable runs, and saveable commands.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "workflow",
+    "orchestration",
+    "subagents",
+    "agents",
+    "taskflow",
+    "ai",
+    "automation"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/pi-taskflow#readme",
+  "bugs": {
+    "url": "https://github.com/heggria/pi-taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/pi-taskflow.git"
+  },
+  "type": "module",
+  "files": [
+    "extensions",
+    "skills",
+    "examples",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/interpolate.test.ts test/schema.test.ts test/runtime.test.ts",
+    "test:e2e": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "^0.78.0",
+    "@earendil-works/pi-ai": "^0.78.0",
+    "@earendil-works/pi-coding-agent": "^0.78.0",
+    "@earendil-works/pi-tui": "^0.78.0",
+    "typebox": "^1.1.38",
+    "typescript": "^5.6.0"
+  }
+}

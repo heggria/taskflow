@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+.pi/taskflows/runs/
+
+# Lockfile omitted: generated against internal mirror locally; CI installs from public npm
+package-lock.json
