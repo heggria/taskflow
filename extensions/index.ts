@@ -50,8 +50,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, or list saved flows",
+	action: StringEnum(["run", "save", "resume", "list", "agents"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, or list available agents you can use in phases",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -219,7 +219,7 @@ export default function (pi: ExtensionAPI) {
 			"Phases (agent, parallel, map, gate, reduce, approval, flow) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
 			"Use action=run with an inline `define` (you write the DSL) or a saved `name`.",
 			"For simple non-DAG delegations (like the subagent tool) skip the DSL: pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` to run in parallel, or `chain:[{task,agent?}]` to run sequentially (reference the prior step with {previous.output}).",
-			"Use action=save to persist a definition as a reusable /tf:<name> command. action=resume continues a paused run. action=list shows saved flows.",
+			"Use action=save to persist a definition as a reusable /tf:<name> command. action=resume continues a paused run. action=list shows saved flows. Use action=agents to list available agents — do NOT invent agent names; either use an agent from that list or omit the 'agent' field to auto-select the default agent.",
 			"DSL: {name, args?, concurrency?, budget?:{maxUSD,maxTokens}, phases:[{id, type, agent, task, dependsOn?, join?:'all'|'any', when?, retry?:{max,backoffMs,factor}, over?(map), as?(map), branches?(parallel), from?(reduce), use?(flow), with?(flow), output?:'json', final?}]}.",
 			"Phase types: agent (one subagent), parallel (static branches), map (dynamic fan-out over an array), gate (VERDICT: PASS/BLOCK quality gate), reduce (aggregate from N phases), approval (human-in-the-loop pause), flow (run a saved sub-flow). join:'any' is an OR-join; when is a conditional guard; retry adds backoff; budget caps run cost.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
@@ -234,6 +234,21 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const action = params.action ?? "run";
+
+			// agents — list available agents the LLM can use in phase definitions
+			if (action === "agents") {
+				const scope = params.scope ?? "both";
+				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined);
+				const text = agents.length
+					? agents
+							.map(
+								(a) =>
+									`- ${a.name} (${a.source}): ${a.description}${a.model ? ` [model: ${a.model}]` : ""}${a.tools?.length ? ` [tools: ${a.tools.join(", ")}]` : ""}`,
+							)
+							.join("\n")
+					: "No agents found. Use the default agent by omitting the 'agent' field in phases.";
+				return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+			}
 
 			// list
 			if (action === "list") {

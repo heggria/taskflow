@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Lightweight workflow orchestration for the Pi coding agent — declarative multi-phase taskflows with dynamic fan-out, isolated subagent context, resumable runs, and saveable commands.",
   "keywords": [
     "pi-package",

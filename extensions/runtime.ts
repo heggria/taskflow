@@ -414,11 +414,12 @@ async function executePhase(
 	if (type === "agent" || type === "gate" || type === "reduce") {
 		const { text } = interpolate(phase.task ?? "", ctx);
 		const fullTask = preRead + text;
-		const inputHash = hashInput(phase.id, phase.agent ?? "", fullTask);
+		const agentName = resolveAgent(phase.agent, deps, state);
+		const inputHash = hashInput(phase.id, agentName, fullTask);
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
-		const r = await runOne(phase.agent ?? defaultAgent(deps), fullTask, liveSink(state, phase.id, emitProgress));
+		const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress));
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
 		return ps;
@@ -428,7 +429,7 @@ async function executePhase(
 		const branches = (phase.branches ?? []).map((b) => {
 			const r = interpolate(b.task, ctx);
 			return {
-				agent: b.agent ?? phase.agent ?? defaultAgent(deps),
+				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
 				task: preRead + r.text,
 			};
 		});
@@ -458,7 +459,7 @@ async function executePhase(
 		const tasks = arr.map((item) => {
 			const localCtx = buildInterpolationContext(state, previousOutput, { [loopVar]: item });
 			return {
-				agent: phase.agent ?? defaultAgent(deps),
+				agent: resolveAgent(phase.agent, deps, state),
 				task: preRead + interpolate(phase.task ?? "", localCtx).text,
 			};
 		});
@@ -639,6 +640,27 @@ function cachedPhase(prior: PhaseState | undefined, inputHash: string): PhaseSta
 		return { ...prior, status: "done" };
 	}
 	return null;
+}
+
+/**
+ * Resolve an agent name against available agents. Falls back to the default
+ * agent if the requested agent isn't found, logging a warning via safeEmit.
+ */
+function resolveAgent(name: string | undefined, deps: RuntimeDeps, state: RunState): string {
+	const resolved = name ?? defaultAgent(deps);
+	if (name && !deps.agents.some((a) => a.name === name)) {
+		const fallback = defaultAgent(deps);
+		// Log only once per run to avoid noise.
+		if (!(state as any).__unknownAgentWarned) {
+			(state as any).__unknownAgentWarned = new Set<string>();
+		}
+		if (!(state as any).__unknownAgentWarned.has(name)) {
+			(state as any).__unknownAgentWarned.add(name);
+			console.warn(`[taskflow] Unknown agent "${name}", falling back to "${fallback}". Use action=agents to list available agents.`);
+		}
+		return fallback;
+	}
+	return resolved;
 }
 
 function defaultAgent(deps: RuntimeDeps): string {
