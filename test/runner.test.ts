@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
 	type EventAccumulator,
 	foldEventLine,
@@ -7,10 +10,12 @@ import {
 	looksLikeHtmlOrJson,
 	mapWithConcurrencyLimit,
 	newAccumulator,
+	runAgentTask,
 	type RunResult,
 	sanitizeErrorMessage,
 	TRANSPORT_ERROR_PLACEHOLDER,
 } from "../extensions/runner.ts";
+import type { AgentConfig } from "../extensions/agents.ts";
 import { emptyUsage } from "../extensions/usage.ts";
 
 // ── isFailed ────────────────────────────────────────────────────────
@@ -285,4 +290,76 @@ test("looksLikeHtmlOrJson: detects document-like HTML", () => {
 
 test("TRANSPORT_ERROR_PLACEHOLDER: stable marker for failed output", () => {
 	assert.equal(TRANSPORT_ERROR_PLACEHOLDER, "(upstream error: subagent failed; see error)");
+});
+
+// ── runAgentTask: spawn error handling (F-003) ──────────────────────
+
+test("runAgentTask: captures spawn ENOENT into errorMessage and stderr (not silently swallowed)", async () => {
+	// Force spawn to fail by pointing PI_TASKFLOW_PI_BIN at a guaranteed-
+	// nonexistent path. The runner must surface the underlying errno/path
+	// so callers can diagnose "pi: command not found" instead of seeing
+	// an opaque exitCode: 1, stderr: "", errorMessage: undefined.
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = "/nonexistent/pi-taskflow-fixture-binary-xyz";
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "/dev/null" },
+		];
+		const result = await runAgentTask("/tmp", agents, "t", "do something", {});
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.output, TRANSPORT_ERROR_PLACEHOLDER);
+		assert.ok(result.errorMessage, "errorMessage must be set when spawn fails");
+		assert.match(result.errorMessage, /ENOENT|nonexistent/i, `expected ENOENT/nonexistent in errorMessage, got: ${result.errorMessage}`);
+		assert.ok(result.stderr.length > 0, "stderr must capture the spawn error message");
+		assert.match(result.stderr, /ENOENT|nonexistent/i, `expected ENOENT/nonexistent in stderr, got: ${result.stderr}`);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+	}
+});
+
+// ── runAgentTask: errorMessage sanitization (F-013) ────────────────
+
+test("runAgentTask: sanitizes errorMessage even when output is truthy (mid-stream failure)", async () => {
+	// Simulate a subagent that emitted a partial assistant message, then
+	// crashed with a raw HTML errorMessage (e.g. an upstream gateway returned
+	// a Cloudflare-style challenge page mid-stream). The errorMessage must be
+	// sanitized regardless of whether result.output is truthy, otherwise the
+	// raw HTML leaks into PhaseState and downstream interpolation contexts.
+	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-taskflow-f013-"));
+	const scriptPath = path.join(tmpDir, "fake-pi.sh");
+	// The script ignores the args the runner passes (--mode json -p ...) and
+	// instead emits a deterministic event stream: one good assistant turn,
+	// then a terminal error with an HTML errorMessage, then exit 1.
+	const scriptBody = `#!/bin/sh
+echo '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"partial work"}]}}'
+echo '{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"<html><head><title>Just a moment...</title></head><body>Unable to load site pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad pad</body></html>"}}'
+exit 1
+`;
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	try {
+		await fs.promises.writeFile(scriptPath, scriptBody, { mode: 0o755 });
+		process.env.PI_TASKFLOW_PI_BIN = scriptPath;
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "/dev/null" },
+		];
+		const result = await runAgentTask("/tmp", agents, "t", "do something", {});
+		assert.equal(result.exitCode, 1, "subagent must report failure");
+		assert.equal(result.stopReason, "error");
+		assert.equal(result.output, "partial work", "truthy output must be preserved (not replaced with placeholder)");
+		assert.ok(result.errorMessage, "errorMessage must be set on failure");
+		assert.ok(
+			!result.errorMessage.includes("<html>"),
+			`raw HTML must not leak through, got: ${result.errorMessage}`,
+		);
+		assert.ok(
+			!result.errorMessage.includes("Ray ID") && !result.errorMessage.includes("Unable to load site"),
+			`raw HTML body must not leak through, got: ${result.errorMessage}`,
+		);
+		assert.match(result.errorMessage, /non-JSON response/, "sanitization marker must be present");
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		await fs.promises.rm(tmpDir, { recursive: true, force: true });
+	}
 });

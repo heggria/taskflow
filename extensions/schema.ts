@@ -147,6 +147,12 @@ export const TaskflowSchema = Type.Object(
 			}),
 		),
 		phases: Type.Array(PhaseSchema, { minItems: 1, description: "Ordered phase definitions (DAG via dependsOn)" }),
+		implicitGate: Type.Optional(
+			Type.Boolean({
+				description: "When true (default), a reviewer gate is auto-injected after all phases if no explicit gate or approval exists",
+				default: true,
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -184,7 +190,11 @@ export function isShorthand(def: unknown): boolean {
 	if (typeof def !== "object" || def === null) return false;
 	const d = def as Record<string, unknown>;
 	if (Array.isArray(d.phases)) return false;
-	return Array.isArray(d.chain) || Array.isArray(d.tasks) || typeof d.task === "string";
+	return (
+		(Array.isArray(d.chain) && d.chain.length > 0) ||
+		(Array.isArray(d.tasks) && d.tasks.length > 0) ||
+		typeof d.task === "string"
+	);
 }
 
 function readStep(s: unknown): ShorthandStep {
@@ -355,20 +365,27 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	const finals = (flow.phases as Phase[]).filter((p) => p?.final);
 	if (finals.length > 1) errors.push(`Only one phase may be marked 'final' (found ${finals.length})`);
 
-	// --- Soft warnings: {steps.X.*} references that aren't declared deps -------
+	// --- Hard errors: {steps.X.*} references that aren't declared deps ------
 	// Catches the most common authoring mistake: the task talks about
 	// `{steps.review.output}` but `dependsOn: ["review"]` is missing, so the
 	// phase runs in parallel with `review` and the model sees the literal
-	// placeholder string. The runtime can't infer the intent.
+	// placeholder string. The runtime can't infer the intent — fail fast at
+	// validation time so the mistake is caught before the run starts.
+	//
+	// Phases with `join: "any"` are exempt: by design they only need ONE of
+	// their declared deps to complete, and may reference other phases as
+	// informational context (not as true dependencies).
 	if (errors.length === 0) {
 		const idToPhase = new Map((flow.phases as Phase[]).map((p) => [p.id, p]));
 		for (const p of flow.phases as Phase[]) {
 			if (!p?.id) continue;
+			const isJoinAny = p.join === "any";
+			if (isJoinAny) continue;
 			const deps = new Set(dependenciesOf(p));
 			const refs = collectRefs(p);
 			for (const ref of refs.steps) {
 				if (ref === p.id) {
-					warnings.push(`Phase '${p.id}': references its own output via {steps.${ref}.*}; this is almost always a bug.`);
+					errors.push(`Phase '${p.id}': references its own output via {steps.${ref}.*}; this is almost always a bug.`);
 					continue;
 				}
 				if (!idToPhase.has(ref)) {
@@ -378,7 +395,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 					continue;
 				}
 				if (!deps.has(ref)) {
-					warnings.push(
+					errors.push(
 						`Phase '${p.id}': task references {steps.${ref}.*} but '${ref}' is not in dependsOn. ` +
 							`The phase will run in parallel with '${ref}' and see the literal placeholder. ` +
 							`Add "dependsOn": ["${ref}"] (or include '${ref}' transitively).`,

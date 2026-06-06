@@ -344,6 +344,36 @@ test("saveRun: updates updatedAt timestamp", () => {
 	}
 });
 
+test("saveRun: does not mutate the caller's state.updatedAt (F-009 regression)", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const originalUpdatedAt = 1_700_000_000_000;
+		const state = mkRunState(cwd, { updatedAt: originalUpdatedAt });
+
+		saveRun(state);
+
+		// The caller's reference must be untouched — callers holding a reference
+		// after saveRun should not observe an unexpected updatedAt change.
+		assert.equal(
+			state.updatedAt,
+			originalUpdatedAt,
+			"saveRun must not mutate the caller's state.updatedAt",
+		);
+
+		// The persisted file should still carry the fresh timestamp.
+		const loaded = loadRun(cwd, state.runId);
+		assert.ok(loaded);
+		assert.notEqual(
+			loaded.updatedAt,
+			originalUpdatedAt,
+			"persisted run should have a fresh updatedAt",
+		);
+		assert.ok(loaded.updatedAt > originalUpdatedAt);
+	} finally {
+		cleanup(cwd);
+	}
+});
+
 test("saveRun: preserves phase state including nested objects", () => {
 	const cwd = makeTmpCwd();
 	try {
@@ -581,6 +611,81 @@ test("listRuns: ignores non-JSON files in runs directory", () => {
 	}
 });
 
+test("listRuns: drops records lacking a valid numeric updatedAt (NaN sort guard)", () => {
+	// Regression for F-010: an unvalidated JSON.parse may push records with no
+	// `updatedAt` (or a non-number one) into the array. Comparing such records
+	// produces NaN, which gives Array.prototype.sort implementation-defined
+	// order. The fix filters them out before sorting.
+	const cwd = makeTmpCwd();
+	try {
+		const runsDir = path.join(cwd, ".pi", "taskflows", "runs");
+		fs.mkdirSync(runsDir, { recursive: true });
+
+		// Valid run, newest.
+		const valid: RunState = {
+			runId: "valid",
+			flowName: "f",
+			def: minimalFlow("f"),
+			args: {},
+			status: "completed",
+			phases: {},
+			createdAt: 3000,
+			updatedAt: 3000,
+			cwd,
+		};
+		fs.writeFileSync(path.join(runsDir, "valid.json"), JSON.stringify(valid), "utf-8");
+
+		// Valid run, older.
+		const older: RunState = {
+			runId: "older",
+			flowName: "f",
+			def: minimalFlow("f"),
+			args: {},
+			status: "completed",
+			phases: {},
+			createdAt: 1000,
+			updatedAt: 1000,
+			cwd,
+		};
+		fs.writeFileSync(path.join(runsDir, "older.json"), JSON.stringify(older), "utf-8");
+
+		// Run missing updatedAt entirely.
+		fs.writeFileSync(
+			path.join(runsDir, "missing.json"),
+			JSON.stringify({ runId: "missing", flowName: "f", status: "completed" }),
+			"utf-8",
+		);
+
+		// Run with non-numeric updatedAt.
+		fs.writeFileSync(
+			path.join(runsDir, "stringy.json"),
+			JSON.stringify({
+				runId: "stringy",
+				flowName: "f",
+				status: "completed",
+				updatedAt: "2024-01-01T00:00:00Z",
+			}),
+			"utf-8",
+		);
+
+		// Run with explicit NaN.
+		fs.writeFileSync(
+			path.join(runsDir, "nan.json"),
+			JSON.stringify({ runId: "nan", flowName: "f", status: "completed", updatedAt: null }),
+			"utf-8",
+		);
+
+		const runs = listRuns(cwd);
+		// Only the two records with numeric updatedAt should remain, sorted desc.
+		assert.deepEqual(
+			runs.map((r) => r.runId),
+			["valid", "older"],
+		);
+	} finally {
+		cleanup(cwd);
+	}
+});
+
 // ---------------------------------------------------------------------------
 // findProjectFlowsDir (tested indirectly via saveFlow / listFlows)
 // ---------------------------------------------------------------------------
@@ -624,6 +729,43 @@ test("findProjectFlowsDir: nearest .pi wins over parent .pi", () => {
 		assert.ok(!childProjectNames.includes("parent-version"), "child .pi should shadow parent .pi");
 	} finally {
 		cleanup(cwd);
+	}
+});
+
+test("findProjectFlowsDir: stops at home dir (v0.0.8.1 boundary)", async () => {
+	// Regression test for dogfooding v0.0.8 §12.5: walk-up used to cross the
+	// home dir and mistake `~/.pi/` for a project flow dir, writing run state
+	// to the user's home instead of the project's `.pi/`.
+	//
+	// We verify two things:
+	// (1) when cwd is under the real home and no project .pi exists, the
+	//     walk-up must skip home and return null (not pick up `~/.pi/`).
+	// (2) when cwd is OUTSIDE home and walks past it, no error occurs.
+	const { findProjectFlowsDir } = await import("../extensions/store.ts");
+	const home = os.homedir();
+
+	// (1) cwd under home, with no .pi anywhere up to home.
+	const underHome = path.join(home, ".pi-taskflow-test-no-project");
+	fs.mkdirSync(underHome, { recursive: true });
+	try {
+		const r = findProjectFlowsDir(underHome, false);
+		assert.equal(
+			r,
+			null,
+			`walk-up must skip home and return null (got ${r}); ` +
+				`otherwise home's .pi/ is mistaken for a project flow dir`,
+		);
+	} finally {
+		fs.rmSync(underHome, { recursive: true, force: true });
+	}
+
+	// (2) cwd outside home, with no .pi anywhere.
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-taskflow-outside-"));
+	try {
+		const r = findProjectFlowsDir(outside, false);
+		assert.equal(r, null, "no .pi anywhere — should return null");
+	} finally {
+		fs.rmSync(outside, { recursive: true, force: true });
 	}
 });
 

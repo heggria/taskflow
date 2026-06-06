@@ -8,6 +8,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Taskflow } from "./schema.ts";
@@ -69,12 +70,20 @@ function userFlowsDir(): string {
 	return path.join(getAgentDir(), "taskflows");
 }
 
-function findProjectFlowsDir(cwd: string, create = false): string | null {
+function findProjectFlowsDirInternal(cwd: string, create = false): string | null {
 	// Prefer an existing .pi dir up the tree; else use cwd/.pi when creating.
+	// **Never treat `~/.pi/` as a project flow dir** — the home directory is
+	// the user-scope boundary, and the user's `~/.pi/` is the agent dir, not a
+	// project. We skip the home entry entirely during the walk-up, so even a
+	// deeply nested cwd under home will return null (create=false) when no
+	// project `.pi` exists on the path.
+	const home = os.homedir();
 	let dir = cwd;
 	while (true) {
-		const candidate = path.join(dir, ".pi");
-		if (fs.existsSync(candidate)) return path.join(candidate, "taskflows");
+		if (dir !== home) {
+			const candidate = path.join(dir, ".pi");
+			if (fs.existsSync(candidate)) return path.join(candidate, "taskflows");
+		}
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
 		dir = parent;
@@ -94,6 +103,11 @@ function readFlowFile(filePath: string, scope: "user" | "project"): SavedFlow | 
 }
 
 /** List all saved flows (project overrides user on name collision). */
+/** Internal-but-exported for tests: walk-up `.pi` finder with home-dir stop. */
+export function findProjectFlowsDir(cwd: string, create = false): string | null {
+	return findProjectFlowsDirInternal(cwd, create);
+}
+
 export function listFlows(cwd: string): SavedFlow[] {
 	const map = new Map<string, SavedFlow>();
 	const dirs: Array<{ dir: string; scope: "user" | "project" }> = [{ dir: userFlowsDir(), scope: "user" }];
@@ -149,8 +163,11 @@ export function newRunId(flowName: string): string {
 export function saveRun(state: RunState): void {
 	const dir = runsDir(state.cwd);
 	fs.mkdirSync(dir, { recursive: true });
-	state.updatedAt = Date.now();
-	writeFileAtomic(path.join(dir, `${state.runId}.json`), JSON.stringify(state, null, 2));
+	// Clone before stamping updatedAt so the caller's RunState reference is not
+	// mutated as a hidden side effect (v0.0.6 audit, F-009). Shallow clone is
+	// sufficient: saveRun only serializes; it does not mutate nested objects.
+	const toSave = { ...state, updatedAt: Date.now() };
+	writeFileAtomic(path.join(dir, `${state.runId}.json`), JSON.stringify(toSave, null, 2));
 }
 
 export function loadRun(cwd: string, runId: string): RunState | null {
@@ -219,7 +236,14 @@ export function listRuns(cwd: string, limit = 20): RunState[] {
 			/* ignore */
 		}
 	}
-	return runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
+	// Guard against records missing/with non-numeric `updatedAt` — a bare
+	// `JSON.parse` may yield an object without it, and `undefined - undefined`
+	// is NaN, which makes `Array.prototype.sort` produce implementation-defined
+	// order. Drop those before sorting. (v0.0.8 audit, F-010.)
+	return runs
+		.filter((r) => typeof r.updatedAt === "number" && !Number.isNaN(r.updatedAt))
+		.sort((a, b) => b.updatedAt - a.updatedAt)
+		.slice(0, limit);
 }
 
 /** Stable hash of a phase's resolved task + inputs, for resume caching. */

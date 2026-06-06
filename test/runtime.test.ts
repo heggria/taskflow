@@ -16,6 +16,8 @@ const AGENTS: AgentConfig[] = [
 ];
 
 function mkState(def: Taskflow, args: Record<string, unknown> = {}): RunState {
+	// Disable implicit gates in tests — they alter phase topology and break assertions.
+	(def as any).implicitGate = false;
 	return {
 		runId: "test-run",
 		flowName: def.name,
@@ -282,6 +284,13 @@ test("parseGateVerdict: text markers, JSON, and fail-open default", () => {
 	assert.equal(parseGateVerdict('{"continue": false, "reason": "missing auth"}').reason, "missing auth");
 	assert.equal(parseGateVerdict('{"pass": true}').verdict, "pass");
 	assert.equal(parseGateVerdict('{"verdict": "reject"}').verdict, "block");
+	// F-005 regression: standalone "no" / "No issues found" must NOT be classified as BLOCK.
+	// Natural-language verdicts like these are semantically PASS; the remaining
+	// block|fail|stop|reject|halt keywords cover genuine block signals, and
+	// fail-open handles anything ambiguous.
+	assert.equal(parseGateVerdict('{"verdict": "No issues found"}').verdict, "pass");
+	assert.equal(parseGateVerdict('{"verdict": "no errors detected"}').verdict, "pass");
+	assert.equal(parseGateVerdict('{"verdict": "No"}').verdict, "pass");
 	// ambiguous output → fail-open (pass), never accidentally halt
 	assert.equal(parseGateVerdict("just some prose with no verdict").verdict, "pass");
 });
@@ -637,4 +646,180 @@ test("runtime: reduce phase with from+depsOn has ctx steps populated by prior ag
 	assert.match(mergeTask, /FROM-A: I processed/, "merge received interpolated task");
 	assert.ok(!mergeTask.includes("{steps.a.output}"), "no literal placeholder");
 	assert.ok(!mergeTask.includes("{steps.b.output}"), "no literal placeholder");
+});
+
+test("F-006: throwing onProgress callback in catch block does not replace crash message", async () => {
+	const def: Taskflow = {
+		name: "crash-cb-progress",
+		phases: [{ id: "boom", type: "agent", agent: "a", task: "explode" }],
+	};
+	// Runner throws — the original root-cause error is the one we must preserve.
+	const runner: RuntimeDeps["runTask"] = async () => {
+		throw new Error("original root-cause failure");
+	};
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		runTask: runner,
+		persist: () => {},
+		// A misbehaving TUI / observer — must not be allowed to clobber the crash.
+		onProgress: () => {
+			throw new Error("onProgress callback blew up");
+		},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, false);
+	assert.equal(res.state.status, "failed");
+	// The original error message must reach the caller; the callback exception
+	// must not replace it.
+	assert.match(res.finalOutput, /original root-cause failure/);
+	assert.doesNotMatch(res.finalOutput, /onProgress callback blew up/);
+});
+
+test("F-006: throwing persist callback in catch block does not replace crash message", async () => {
+	const def: Taskflow = {
+		name: "crash-cb-persist",
+		phases: [{ id: "boom", type: "agent", agent: "a", task: "explode" }],
+	};
+	const runner: RuntimeDeps["runTask"] = async () => {
+		throw new Error("original root-cause failure");
+	};
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		runTask: runner,
+		// A misbehaving store — must not be allowed to clobber the crash.
+		persist: () => {
+			throw new Error("persist callback blew up");
+		},
+		onProgress: () => {},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, false);
+	assert.equal(res.state.status, "failed");
+	assert.match(res.finalOutput, /original root-cause failure/);
+	assert.doesNotMatch(res.finalOutput, /persist callback blew up/);
+});
+
+test("F-006: throwing onProgress during a successful run does not break the run", async () => {
+	const def: Taskflow = {
+		name: "live-cb-throws",
+		phases: [
+			{ id: "one", type: "agent", agent: "a", task: "start" },
+			{ id: "two", type: "agent", agent: "a", task: "use {steps.one.output}", dependsOn: ["one"], final: true },
+		],
+	};
+	const runner = mockRunner((t) => `out:${t}`);
+	// onProgress throws on EVERY emission (both checkpoint and live-update paths).
+	// A safe emit must swallow the throw so the run completes normally.
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		runTask: runner,
+		persist: () => {},
+		onProgress: () => {
+			throw new Error("onProgress callback blew up");
+		},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, true, "run must succeed despite throwing onProgress");
+	assert.equal(res.state.status, "completed");
+	assert.equal(res.state.phases.one.status, "done");
+	assert.equal(res.state.phases.two.status, "done");
+	assert.equal(res.finalOutput, "out:use out:start");
+});
+
+// ---------------------------------------------------------------------------
+// implicit gate
+// ---------------------------------------------------------------------------
+
+test("implicit-gate: auto-injected gate reviews phase outputs", async () => {
+	// Flow with NO gate/approval → _implicit-gate is injected.
+	const def: Taskflow = {
+		name: "auto-gate",
+		phases: [
+			{ id: "one", type: "agent", agent: "a", task: "step-one" },
+			{ id: "two", type: "agent", agent: "a", task: "use {steps.one.output}", dependsOn: ["one"], final: true },
+		],
+	};
+	// Override the default mkState behavior to test the implicit gate.
+	const state = mkState(def);
+	delete (state.def as any).implicitGate;
+	const deps = baseDeps(mockRunner((t) => {
+		if (t.startsWith("use")) return "final-result";
+		if (t.startsWith("step")) return "step1-out";
+		// Gate task — respond with PASS to let the flow complete
+		return "All outputs look fine. VERDICT: PASS";
+	}));
+	const res = await executeTaskflow(state, deps);
+	// The gate was injected and passed → flow completes.
+	assert.equal(res.ok, true);
+	assert.equal(res.state.status, "completed");
+	// The implicit gate should exist as a phase.
+	assert.ok(res.state.phases["_implicit-gate"], "implicit gate phase should exist");
+	assert.equal(res.state.phases["_implicit-gate"].status, "done");
+	// finalOutput comes from the last phase with final:true ("two"), not the gate.
+	assert.equal(res.finalOutput, "final-result");
+});
+
+test("implicit-gate: BLOCK verdict blocks the run", async () => {
+	const def: Taskflow = {
+		name: "auto-gate-block",
+		phases: [
+			{ id: "one", type: "agent", agent: "a", task: "step", final: true },
+		],
+	};
+	const state = mkState(def);
+	delete (state.def as any).implicitGate;
+	const deps = baseDeps(mockRunner((t) => {
+		if (t.startsWith("step")) return "step-out";
+		// Gate task — BLOCK due to issues
+		return "Found stale line numbers. VERDICT: BLOCK";
+	}));
+	const res = await executeTaskflow(state, deps);
+	assert.equal(res.ok, false);
+	assert.equal(res.state.status, "blocked");
+	assert.equal(res.state.phases["_implicit-gate"].status, "done");
+	assert.match(res.finalOutput, /Gate blocked/);
+});
+
+test("implicit-gate: skipped when flow has an explicit gate", async () => {
+	const def: Taskflow = {
+		name: "explicit-gate",
+		phases: [
+			{ id: "one", type: "agent", agent: "a", task: "step", final: true },
+			{ id: "check", type: "gate", agent: "a", task: "check it", dependsOn: ["one"] },
+		],
+	};
+	const state = mkState(def);
+	delete (state.def as any).implicitGate;
+	const deps = baseDeps(mockRunner((t) => {
+		if (t.startsWith("step")) return "step-out";
+		return "Looks good. VERDICT: PASS";
+	}));
+	const res = await executeTaskflow(state, deps);
+	assert.equal(res.ok, true);
+	// No implicit gate injected — only the explicit one.
+	assert.ok(res.state.phases["check"], "explicit gate should exist");
+	assert.equal(res.state.phases["_implicit-gate"], undefined, "no implicit gate when explicit exists");
+});
+
+test("implicit-gate: skipped when flow has an approval", async () => {
+	const def: Taskflow = {
+		name: "has-approval",
+		phases: [
+			{ id: "one", type: "agent", agent: "a", task: "step" },
+			{ id: "confirm", type: "approval", agent: "a", task: "ok?", dependsOn: ["one"] },
+		],
+	};
+	const state = mkState(def);
+	delete (state.def as any).implicitGate;
+	const deps: RuntimeDeps = {
+		...baseDeps(mockRunner((t) => t)),
+		// Auto-approve (no interactive approver)
+		requestApproval: async () => ({ decision: "approve" as const, note: "ok" }),
+	};
+	const res = await executeTaskflow(state, deps);
+	// No implicit gate — approval handles validation.
+	assert.equal(res.state.phases["_implicit-gate"], undefined);
 });

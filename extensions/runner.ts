@@ -203,14 +203,10 @@ function summarizeToolCall(name: string, args: Record<string, unknown>): string 
 	}
 }
 
-async function writePromptToTempFile(agentName: string, prompt: string): Promise<{ dir: string; filePath: string }> {
-	const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-taskflow-"));
-	const safeName = agentName.replace(/[^\w.-]+/g, "_");
-	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
+async function writePromptToTempFile(filePath: string, prompt: string): Promise<void> {
 	await withFileMutationQueue(filePath, async () => {
 		await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
 	});
-	return { dir: tmpDir, filePath };
 }
 
 function getPiInvocation(args: string[]): { command: string; args: string[] } {
@@ -284,9 +280,13 @@ export async function runAgentTask(
 
 	try {
 		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
-			tmpPromptDir = tmp.dir;
-			tmpPromptPath = tmp.filePath;
+			// Allocate the temp dir + path BEFORE any fallible I/O so that if
+			// writeFile throws, tmpPromptDir/tmpPromptPath are already set and
+			// the finally block can clean up the directory (F-004).
+			tmpPromptDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-taskflow-"));
+			const safeName = agent.name.replace(/[^\w.-]+/g, "_");
+			tmpPromptPath = path.join(tmpPromptDir, `prompt-${safeName}.md`);
+			await writePromptToTempFile(tmpPromptPath, agent.systemPrompt);
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
 		args.push(`Task: ${task}`);
@@ -319,15 +319,25 @@ export async function runAgentTask(
 				if (buffer.trim()) processLine(buffer);
 				resolve(code ?? 0);
 			});
-			proc.on("error", () => resolve(1));
+			proc.on("error", (err) => {
+				if (!result.stderr) result.stderr = err.message;
+				if (!result.errorMessage) result.errorMessage = err.message;
+				resolve(1);
+			});
 
 			if (opts.signal) {
 				const kill = () => {
 					wasAborted = true;
 					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
+					// Force-kill fallback. proc.kill("SIGKILL") is idempotent if
+					// the process already exited, and `proc.killed` is set true
+					// synchronously by the SIGTERM above — so the previous
+					// `if (!proc.killed)` guard would skip SIGKILL entirely,
+					// hanging forever on a child that ignores SIGTERM.
+					// .unref() keeps the timer from holding the event loop open
+					// after the process is gone.
+					const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
+					forceKill.unref();
 				};
 				if (opts.signal.aborted) kill();
 				else opts.signal.addEventListener("abort", kill, { once: true });
@@ -349,12 +359,20 @@ export async function runAgentTask(
 		// `output`: upstream providers (e.g. a Cloudflare challenge page) can
 		// surface huge HTML/JSON in errorMessage, and that garbage would
 		// otherwise flow into downstream phase interpolations.
-		if (isFailed(result) && !result.output) {
-			result.output = TRANSPORT_ERROR_PLACEHOLDER;
-			if (!result.errorMessage) {
-				result.errorMessage = result.stderr || `Subagent exited with code ${result.exitCode} (stopReason: ${result.stopReason ?? "unknown"})`;
+		// Sanitization must run whenever the run failed, even if some output
+		// was already emitted (e.g. crash mid-stream with a partial result):
+		// an unsanitized errorMessage would still leak into PhaseState and
+		// downstream interpolation contexts. (F-013)
+		if (isFailed(result)) {
+			if (!result.output) {
+				result.output = TRANSPORT_ERROR_PLACEHOLDER;
+				if (!result.errorMessage) {
+					result.errorMessage = result.stderr || `Subagent exited with code ${result.exitCode} (stopReason: ${result.stopReason ?? "unknown"})`;
+				}
 			}
-			result.errorMessage = sanitizeErrorMessage(result.errorMessage);
+			if (result.errorMessage) {
+				result.errorMessage = sanitizeErrorMessage(result.errorMessage);
+			}
 		}
 		return result;
 	} finally {

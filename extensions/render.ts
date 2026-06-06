@@ -71,7 +71,10 @@ function agentRole(phase: Phase, ps: PhaseState | undefined, theme: Theme): stri
 
 function costStr(usage: UsageStats | undefined, theme: Theme): string {
 	if (!usage?.cost) return "";
-	return theme.fg("muted", `$${usage.cost.toFixed(3)}`);
+	const c = usage.cost;
+	return c >= 0.01
+		? theme.fg("muted", `$${c.toFixed(2)}`)
+		: theme.fg("muted", `$${c.toFixed(4)}`);
 }
 
 function aggregateCost(state: RunState): number {
@@ -174,6 +177,7 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 		const color = d === "reject" ? "error" : d === "edit" ? "warning" : "success";
 		let a = theme.fg("warning", "⚠") + " " + theme.fg(color as Parameters<typeof theme.fg>[0], theme.bold(d.toUpperCase()));
 		if (ps.approval.auto) a += theme.fg("dim", " auto");
+		if (cost) a += `  ${cost}`;
 		if (time) a += `  ${time}`;
 		if (ps.warnings?.length) a += theme.fg("warning", `  ⚠${ps.warnings.length}`);
 		return a;
@@ -228,8 +232,8 @@ function headerLine(state: RunState, theme: Theme): string {
 	if (state.status === "blocked") line += theme.fg("error", " · blocked");
 	const cost = aggregateCost(state);
 	const budget = state.def.budget;
-	if (budget?.maxUSD !== undefined) line += theme.fg("muted", ` · $${cost.toFixed(3)}/$${budget.maxUSD}`);
-	else if (cost) line += theme.fg("muted", ` · $${cost.toFixed(3)}`);
+	if (budget?.maxUSD !== undefined) line += theme.fg("muted", ` · $${cost >= 0.01 ? cost.toFixed(2) : cost.toFixed(4)}/$${budget.maxUSD}`);
+	else if (cost) line += theme.fg("muted", ` · $${cost >= 0.01 ? cost.toFixed(2) : cost.toFixed(4)}`);
 	const el = runElapsed(state);
 	if (el) line += theme.fg("dim", ` · ${elapsed(el)}`);
 	return line;

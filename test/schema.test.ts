@@ -140,10 +140,12 @@ test("finalPhase: explicit final, else last", () => {
 	assert.equal(finalPhase(noFinal).id, "b");
 });
 
-test("validateTaskflow: warns when {steps.X} is referenced but X is not in dependsOn", () => {
-	// This is the jiuyang-full-pipeline anti-pattern: the task talks about
+test("validateTaskflow: errors when {steps.X} is referenced but X is not in dependsOn", () => {
+	// The jiuyang-full-pipeline anti-pattern: the task talks about
 	// {steps.code-review-1.output} but the phase has no dependsOn, so it runs
 	// in parallel with code-review-1 and the model sees the literal placeholder.
+	// As of v0.0.8.1 this is a hard validation error (was a soft warning
+	// pre-v0.0.8.1) — the runtime can't infer the intent, so fail fast.
 	const def = {
 		name: "no-deps",
 		phases: [
@@ -153,21 +155,36 @@ test("validateTaskflow: warns when {steps.X} is referenced but X is not in depen
 		],
 	};
 	const r = validateTaskflow(def);
-	assert.equal(r.ok, true, "missing dependsOn is a warning, not an error");
-	assert.equal(r.warnings.length, 2, "two undeclared refs");
-	assert.match(r.warnings[0], /Phase 'fix-issues'.*'code-review-1'.*not in dependsOn/);
-	assert.match(r.warnings[1], /Phase 'code-review-2'.*'fix-issues'.*not in dependsOn/);
+	assert.equal(r.ok, false, "missing dependsOn is now a hard validation error");
+	assert.equal(r.errors.length, 2, "two undeclared refs");
+	assert.match(r.errors[0], /Phase 'fix-issues'.*'code-review-1'.*not in dependsOn/);
+	assert.match(r.errors[1], /Phase 'code-review-2'.*'fix-issues'.*not in dependsOn/);
 });
 
-test("validateTaskflow: warns about a phase referencing its own output", () => {
+test("validateTaskflow: join:'any' is exempt from dependsOn-ref check", () => {
+	// join:"any" phases may reference non-dep steps as informational context.
+	const def = {
+		name: "join-any",
+		phases: [
+			{ id: "a", type: "agent", task: "produce A" },
+			{ id: "b", type: "agent", task: "produce B" },
+			{ id: "merge", type: "agent", join: "any", task: "merge {steps.a.output} or {steps.b.output}" },
+		],
+	};
+	const r = validateTaskflow(def);
+	assert.equal(r.ok, true, "join:'any' exempt from undeclared-step-ref check");
+	assert.equal(r.errors.length, 0);
+});
+
+test("validateTaskflow: errors about a phase referencing its own output", () => {
 	const def = {
 		name: "self-ref",
 		phases: [{ id: "loop", type: "agent", task: "use {steps.loop.output} again" }],
 	};
 	const r = validateTaskflow(def);
-	assert.equal(r.ok, true);
-	assert.equal(r.warnings.length, 1);
-	assert.match(r.warnings[0], /references its own output/);
+	assert.equal(r.ok, false, "self-ref is a hard error");
+	assert.equal(r.errors.length, 1);
+	assert.match(r.errors[0], /Phase 'loop'.*references its own output/);
 });
 
 test("validateTaskflow: no warning when {steps.X} is properly declared in dependsOn", () => {
@@ -183,7 +200,7 @@ test("validateTaskflow: no warning when {steps.X} is properly declared in depend
 	assert.equal(r.warnings.length, 0);
 });
 
-test("validateTaskflow: warning also catches refs in map/parallel branches and over", () => {
+test("validateTaskflow: errors also catch refs in map/parallel branches and over", () => {
 	const def = {
 		name: "fanout-ref",
 		phases: [
@@ -193,17 +210,17 @@ test("validateTaskflow: warning also catches refs in map/parallel branches and o
 				type: "map",
 				over: "{steps.list.output}",
 				task: "do {item}",
-				// no dependsOn — should warn
+				// no dependsOn — should error
 			},
 		],
 	};
 	const r = validateTaskflow(def);
-	assert.equal(r.ok, true);
-	assert.equal(r.warnings.length, 1);
-	assert.match(r.warnings[0], /'work'.*'list'/);
+	assert.equal(r.ok, false, "missing dependsOn for {steps.X} in `over` is a hard error");
+	assert.equal(r.errors.length, 1);
+	assert.match(r.errors[0], /'work'.*'list'/);
 });
 
-test("validateTaskflow: warning also catches refs in when and flow.with", () => {
+test("validateTaskflow: errors also catch refs in when and flow.with", () => {
 	const def = {
 		name: "when-and-flow-with",
 		phases: [
@@ -213,10 +230,10 @@ test("validateTaskflow: warning also catches refs in when and flow.with", () => 
 		],
 	};
 	const r = validateTaskflow(def);
-	assert.equal(r.ok, true);
-	assert.equal(r.warnings.length, 2);
-	assert.match(r.warnings[0], /'ship'.*'plan'/);
-	assert.match(r.warnings[1], /'sub'.*'plan'/);
+	assert.equal(r.ok, false, "missing dependsOn for {steps.X} in `when`/`flow.with` is a hard error");
+	assert.equal(r.errors.length, 2);
+	assert.match(r.errors[0], /'ship'.*'plan'/);
+	assert.match(r.errors[1], /'sub'.*'plan'/);
 });
 
 test("validateTaskflow: invocation warnings catch missing args and cwd/codebase mismatch", () => {
@@ -264,18 +281,25 @@ test("validateTaskflow: no cwd warning when cwd is inside codebase", () => {
 	assert.equal(r.warnings.length, 0);
 });
 
-test("validateTaskflow: strictInterpolation upgrades warnings to errors", () => {
+test("validateTaskflow: strictInterpolation still upgrades other warnings to errors", () => {
+	// As of v0.0.8.1, the {steps.X}-without-dependsOn check is ALWAYS a hard
+	// error (no longer opt-in via strictInterpolation). This test now confirms
+	// that strictInterpolation still upgrades the *remaining* soft warnings
+	// (e.g. missing args, cwd/codebase mismatch) to hard errors.
 	const def = {
 		name: "strict",
 		strictInterpolation: true,
+		args: { codebase: { required: true } },
 		phases: [
-			{ id: "review", type: "agent", task: "review" },
-			{ id: "fix", type: "agent", task: "fix {steps.review.output}" },
+			{ id: "scan", type: "agent", task: "scan {args.codebase} for {args.branch}", final: true },
 		],
 	};
-	const r = validateTaskflow(def);
+	const r = validateTaskflow(def, { args: { codebase: "/repo" }, cwd: "/tmp/other" });
 	assert.equal(r.ok, false);
-	assert.ok(r.errors.some((e) => /Strict interpolation: Phase 'fix'/.test(e)));
+	assert.ok(
+		r.errors.some((e) => /\{args\.branch\}/.test(e)),
+		"missing arg becomes error under strictInterpolation",
+	);
 });
 
 test("validateTaskflow: accepts context field on any phase type", () => {

@@ -12,6 +12,8 @@ const AGENTS: AgentConfig[] = [
 ];
 
 function mkState(def: Taskflow, args: Record<string, unknown> = {}): RunState {
+	// Disable implicit gates in tests — they alter phase topology and break assertions.
+	(def as any).implicitGate = false;
 	return {
 		runId: "test-run",
 		flowName: def.name,
@@ -289,6 +291,7 @@ test("approval: edit injects guidance passed downstream", async () => {
 test("flow: runs a saved sub-flow and bubbles up its final output", async () => {
 	const subDef: Taskflow = {
 		name: "sub",
+		implicitGate: false,
 		phases: [{ id: "s1", type: "agent", agent: "a", task: "sub {args.x}", final: true }],
 	};
 	const mainDef: Taskflow = {
@@ -304,6 +307,82 @@ test("flow: runs a saved sub-flow and bubbles up its final output", async () => 
 	assert.equal(res.ok, true);
 	assert.equal(res.state.phases.f.status, "done");
 	assert.match(res.finalOutput, /out:sub world/);
+});
+
+test("flow: propagates cwd to sub-flow phases (v0.0.8.1)", async () => {
+	// Regression for dogfooding v0.0.8 §12.3: a flow phase with `cwd: "/custom"`
+	// was not propagating to its sub-flow's phases — they still used the parent
+	// flow's cwd, causing subagents to run in the wrong directory.
+	const subDef: Taskflow = {
+		name: "sub-cwd",
+		implicitGate: false,
+		phases: [{ id: "s1", type: "agent", agent: "a", task: "do", final: true }],
+	};
+	const mainDef: Taskflow = {
+		name: "main-cwd",
+		phases: [{ id: "f", type: "flow", use: "sub-cwd", cwd: "/custom", final: true }],
+	};
+	const loadFlow = (n: string) => (n === "sub-cwd" ? subDef : undefined);
+
+	// Record the EFFECTIVE cwd the subagent would run in (`opts.cwd ?? defaultCwd`).
+	const recordedCwds: string[] = [];
+	const runTask: RuntimeDeps["runTask"] = async (defaultCwd, _a, agent, task, opts) => {
+		recordedCwds.push(opts.cwd ?? defaultCwd);
+		return {
+			agent,
+			task,
+			exitCode: 0,
+			output: `cwd=${opts.cwd ?? defaultCwd}`,
+			stderr: "",
+			usage: { ...emptyUsage(), output: 1, cost: 0, turns: 1 },
+			stopReason: "end",
+		};
+	};
+
+	// Main flow cwd is "/parent" — but the flow phase overrides to "/custom".
+	const res = await executeTaskflow(
+		mkState(mainDef),
+		baseDeps(runTask, { loadFlow, cwd: "/parent" }),
+	);
+	assert.equal(res.ok, true, "flow should succeed");
+	assert.deepEqual(
+		recordedCwds,
+		["/custom"],
+		"sub-flow phase must derive cwd from flow.cwd, not the parent",
+	);
+});
+
+test("flow: sub-flow phase with its own cwd overrides the flow.cwd", async () => {
+	// Sub-flow phases that set their own `cwd` must still win over `flow.cwd`.
+	const subDef: Taskflow = {
+		name: "sub-per-phase",
+		implicitGate: false,
+		phases: [{ id: "s1", type: "agent", agent: "a", task: "do", cwd: "/per-phase", final: true }],
+	};
+	const mainDef: Taskflow = {
+		name: "main",
+		phases: [{ id: "f", type: "flow", use: "sub-per-phase", cwd: "/flow-cwd", final: true }],
+	};
+	const loadFlow = (n: string) => (n === "sub-per-phase" ? subDef : undefined);
+	const recordedCwds: Array<string | undefined> = [];
+	const runTask: RuntimeDeps["runTask"] = async (_cw, _a, agent, task, opts) => {
+		recordedCwds.push(opts.cwd);
+		return {
+			agent,
+			task,
+			exitCode: 0,
+			output: `cwd=${opts.cwd ?? "(default)"}`,
+			stderr: "",
+			usage: { ...emptyUsage(), output: 1, cost: 0, turns: 1 },
+			stopReason: "end",
+		};
+	};
+	const res = await executeTaskflow(
+		mkState(mainDef),
+		baseDeps(runTask, { loadFlow, cwd: "/parent" }),
+	);
+	assert.equal(res.ok, true);
+	assert.deepEqual(recordedCwds, ["/per-phase"], "phase.cwd must beat flow.cwd");
 });
 
 test("flow: detects direct recursion", async () => {
@@ -326,6 +405,38 @@ test("flow: missing sub-flow fails the phase cleanly", async () => {
 	const res = await executeTaskflow(mkState(mainDef), baseDeps(mockRunner((t) => t), { loadFlow: () => undefined }));
 	assert.equal(res.ok, false);
 	assert.match(res.state.phases.f.error ?? "", /not found/);
+});
+
+test("flow: subProgress counts done+failed so renderer's success count is correct (B-F015)", async () => {
+	// Sub-flow with two sequential phases: s1 succeeds, s2 fails. The parent's
+	// subProgress must report `done` to include the failed phase, matching the
+	// map/parallel runner's overlapping-counter convention. Otherwise the
+	// renderer's `done - failed` formula undercounts successes.
+	const subDef: Taskflow = {
+		name: "sub",
+		implicitGate: false,
+		phases: [
+			{ id: "s1", type: "agent", agent: "a", task: "ok-phase" },
+			{ id: "s2", type: "agent", agent: "a", task: "boom-phase", final: true },
+		],
+	};
+	const mainDef: Taskflow = {
+		name: "main",
+		phases: [{ id: "f", type: "flow", use: "sub", final: true }],
+	};
+	const loadFlow = (n: string) => (n === "sub" ? subDef : undefined);
+	const res = await executeTaskflow(
+		mkState(mainDef),
+		baseDeps(
+			mockRunner((t) => `r:${t}`, { fail: (t) => t === "boom-phase" }),
+			{ loadFlow },
+		),
+	);
+	assert.equal(res.ok, false);
+	assert.equal(res.state.phases.f.status, "failed");
+	// Both phases terminated: 1 success, 1 failure. `done` must include failed
+	// (overlapping with `failed`) so the renderer can compute `done - failed = 1`.
+	assert.deepEqual(res.state.phases.f.subProgress, { done: 2, total: 2, running: 0, failed: 1 });
 });
 
 // ---------------------------------------------------------------------------

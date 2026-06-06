@@ -172,6 +172,36 @@ Review the audit results below. If any endpoint is missing auth, end with
 {steps.audit.output}
 ```
 
+### Structured-verify phases (v0.0.8.1)
+
+A "verify" phase typically runs `npx tsc --noEmit && npm test && git diff --stat`
+and reports whether everything is green. **Don't** delegate this to a generic
+verifier subagent that summarizes the output in prose — LLMs commonly misread
+shell output (e.g., 234 tests reported as 230, 745 insertions as 599, "1 type
+error" reported as "clean"). Instead, **use a dedicated agent whose task is a
+structured shell pipeline** that echoes structured key/value lines the next
+phase can parse directly. Recommended pattern:
+
+```jsonc
+{
+  "id": "verify",
+  "type": "agent",
+  "agent": "verifier",
+  "dependsOn": ["apply-fixes"],
+  "task": "Run the verification pipeline and report structured results.\n\nExecute:\n```bash\ncd $REPO && npx tsc --noEmit 2>&1 | tee /tmp/tsc.log\ncd $REPO && npm test 2>&1 | tee /tmp/test.log | tail -10\ncd $REPO && git diff --shortstat HEAD | tee /tmp/diff.log\n```\n\nReport EXACTLY in this format (one key=value pair per line, no prose):\ntypecheck=PASS|FAIL\ntests_total=N\ntests_pass=N\ntests_fail=N\ninsertions=N\ndeletions=N\nfiles_changed=N\n\nIf any field is missing, you failed the task — re-run the command and re-read the output.",
+  "tools": ["read", "edit", "write", "bash"]
+}
+```
+
+The key insight: **LLMs are bad at summarizing shell output, good at copying
+structured data**. Asking for `key=value` pairs with explicit fields and "if
+missing, you failed" forces the agent to read each field carefully. Downstream
+phases that consume `{steps.verify.output}` can then `safeParse`-it into a
+JSON object and assert against expected values.
+
+For audits where the upstream is LLM-generated prose (not shell output), use a
+plain `gate` phase with `VERDICT:` instead.
+
 ### Interpolation
 
 - `{args.X}` — invocation argument
@@ -188,12 +218,11 @@ Review the audit results below. If any endpoint is missing auth, end with
 3. Reference upstream results explicitly with `{steps.ID...}` and set `dependsOn`.
 4. Mark the result-bearing phase with `"final": true` (else the last phase wins).
 
-## Common mistakes (the runtime will warn you, but don't trip them)
+## Common mistakes (the runtime will reject these at validation time)
 
-The runtime validates your flow at startup and at each phase's interpolation.
-Two patterns account for ~all the broken runs in the wild — avoid them. If you
-want warnings like these to become hard failures, set `"strictInterpolation": true`
-on the flow.
+The runtime validates your flow at startup. As of v0.0.8.1, the two most
+common authoring mistakes below are **hard validation errors** (the flow
+refuses to start). Fix the flow before running it.
 
 ### 1. Referencing `{steps.X}` without `dependsOn: ["X"]`
 
@@ -209,10 +238,9 @@ on the flow.
 }
 ```
 
-The runtime logs a warning at run start (`Phase 'fix-issues': task references
-{steps.code-review-1.*} but 'code-review-1' is not in dependsOn`) and the phase
-itself gets a `warnings` field with a non-fatal `unresolved placeholders` line.
-The TUI shows a `⚠N` badge. **Always declare the chain:**
+Validation now rejects this with: `Phase 'fix-issues': task references
+{steps.code-review-1.*} but 'code-review-1' is not in dependsOn. ...`
+**Always declare the chain:**
 
 ```jsonc
 // ✅ RIGHT
@@ -233,7 +261,11 @@ The TUI shows a `⚠N` badge. **Always declare the chain:**
 
 Tip: write the `task` first (it tells you what each phase needs), then scan for
 `{steps.*}` references and add the matching `dependsOn`. If a phase truly does
-not depend on anything in its task, you can ignore the warning.
+not depend on anything in its task, you can omit the reference.
+
+Exception: phases with `join: "any"` are exempt from this check, since they
+deliberately wait for only one of their declared deps to complete and may
+reference others as informational context.
 
 ### 2. Assuming the runtime knows "this is a chain"
 

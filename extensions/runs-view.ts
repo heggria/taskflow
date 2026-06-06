@@ -50,6 +50,9 @@ export class RunHistoryComponent {
 	private cachedLines?: string[];
 
 	constructor(runs: RunState[], theme: Theme, onDone: (result?: RunHistoryResult) => void) {
+		if (!runs.length) {
+			throw new Error("RunHistoryComponent requires at least one run");
+		}
 		this.runs = runs;
 		this.theme = theme;
 		this.onDone = onDone;

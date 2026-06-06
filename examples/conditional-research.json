@@ -47,7 +47,7 @@
       "id": "report",
       "type": "reduce",
       "from": ["review"],
-      "dependsOn": ["review"],
+      "dependsOn": ["review", "deep", "quick"],
       "agent": "doc-writer",
       "task": "Write a clean markdown brief on \"{args.topic}\" from the validated research:\n\n{steps.deep.output}{steps.quick.output}",
       "final": true

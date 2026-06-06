@@ -108,10 +108,6 @@ async function runFlow(
 	onUpdate: ((p: AgentToolResult<TaskflowDetails>) => void) | undefined,
 	existing?: RunState,
 ): Promise<RuntimeResult> {
-	const settings = readSubagentSettings();
-	const scope: AgentScope = def.agentScope ?? "user";
-	const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides);
-
 	const state = existing ?? makeRunState(def, args, ctx.cwd);
 
 	const emit = (s: RunState, finalOutput?: string) => {
@@ -166,6 +162,13 @@ async function runFlow(
 		: undefined;
 
 	try {
+		// Discover settings/agents inside try so a YAML/IO crash in
+		// discoverAgents or readSubagentSettings (F-001) is caught and
+		// the heartbeat timer is cleared by the finally block below.
+		const settings = readSubagentSettings();
+		const scope: AgentScope = def.agentScope ?? "user";
+		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides);
+
 		const result = await executeTaskflow(state, {
 			cwd: ctx.cwd,
 			agents,

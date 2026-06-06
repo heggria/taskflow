@@ -44,42 +44,56 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 	}
 
 	for (const entry of entries) {
-		if (!entry.name.endsWith(".md")) continue;
-		if (!entry.isFile() && !entry.isSymbolicLink()) continue;
-
-		const filePath = path.join(dir, entry.name);
-		let content: string;
 		try {
-			content = fs.readFileSync(filePath, "utf-8");
+			if (!entry.name.endsWith(".md")) continue;
+			if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+
+			const filePath = path.join(dir, entry.name);
+			let content: string;
+			try {
+				content = fs.readFileSync(filePath, "utf-8");
+			} catch {
+				continue;
+			}
+
+			const { frontmatter, body } = (() => {
+				try {
+					return parseFrontmatter<Record<string, unknown>>(content);
+				} catch {
+					// A single malformed agent file must not break discovery for every flow.
+					return { frontmatter: {} as Record<string, unknown>, body: "" };
+				}
+			})();
+			if (!frontmatter.name || !frontmatter.description) continue;
+
+			// frontmatter is YAML-parsed: tools may be a comma-separated string ("a, b")
+			// OR a YAML sequence ([a, b]). Handle both forms.
+			const rawTools = frontmatter.tools;
+			const tools: string[] | undefined = Array.isArray(rawTools)
+				? rawTools.map((t) => String(t).trim()).filter(Boolean)
+				: rawTools !== undefined && rawTools !== null
+					? String(rawTools)
+							.split(",")
+							.map((t) => t.trim())
+							.filter(Boolean)
+					: undefined;
+
+			agents.push({
+				name: String(frontmatter.name),
+				description: String(frontmatter.description),
+				tools: tools && tools.length > 0 ? tools : undefined,
+				model: frontmatter.model === undefined ? undefined : String(frontmatter.model),
+				thinking: frontmatter.thinking === undefined ? undefined : String(frontmatter.thinking),
+				systemPrompt: body,
+				source,
+				filePath,
+			});
 		} catch {
+			// Defense-in-depth: a single bad agent file must not break discovery
+			// for the entire flow (e.g. exotic YAML shapes, runtime errors in
+			// field access, symlink races, etc.).
 			continue;
 		}
-
-		const { frontmatter, body } = (() => {
-			try {
-				return parseFrontmatter<Record<string, string>>(content);
-			} catch {
-				// A single malformed agent file must not break discovery for every flow.
-				return { frontmatter: {} as Record<string, string>, body: "" };
-			}
-		})();
-		if (!frontmatter.name || !frontmatter.description) continue;
-
-		const tools = frontmatter.tools
-			?.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
-
-		agents.push({
-			name: frontmatter.name,
-			description: frontmatter.description,
-			tools: tools && tools.length > 0 ? tools : undefined,
-			model: frontmatter.model,
-			thinking: frontmatter.thinking,
-			systemPrompt: body,
-			source,
-			filePath,
-		});
 	}
 	return agents;
 }
@@ -128,9 +142,15 @@ export function discoverAgents(
 		for (const [name, override] of Object.entries(overrides)) {
 			const agent = agentMap.get(name);
 			if (agent) {
-				if (override.model !== undefined) agent.model = override.model;
-				if (override.thinking !== undefined) agent.thinking = override.thinking;
-				if (override.tools !== undefined) agent.tools = override.tools;
+				// Clone before mutating: agentMap owns the original AgentConfig
+				// (loaded from disk in loadAgentsFromDir). Mutating it in place
+				// would cause cross-contamination for any caller that retains a
+				// reference and invokes discoverAgents again with different overrides.
+				const mutated: AgentConfig = { ...agent };
+				if (override.model !== undefined) mutated.model = override.model;
+				if (override.thinking !== undefined) mutated.thinking = override.thinking;
+				if (override.tools !== undefined) mutated.tools = override.tools;
+				agentMap.set(name, mutated);
 			}
 		}
 	}

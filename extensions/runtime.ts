@@ -551,14 +551,20 @@ async function executePhase(
 			baseRunTask(cwd, agents, agentName, preRead + subTask, opts, globalThinking);
 		const subResult = await executeTaskflow(subState, {
 			...deps,
+			// Override deps.cwd with the flow phase's own cwd so that sub-flow
+			// phases without an explicit cwd derive their subagents from the
+			// flow's cwd (not the caller's cwd).
+			cwd: phase.cwd ?? deps.cwd,
 			runTask: subRunTask,
 			_stack: [...stack, state.flowName],
 			persist: undefined,
 			onProgress: () => {
 				if (live) {
 					const ph = Object.values(subState.phases);
+					// B-F015: `done` must include both success and failure so the
+					// renderer's `done - failed` shows the true success count.
 					live.subProgress = {
-						done: ph.filter((p) => p.status === "done").length,
+						done: ph.filter((p) => p.status === "done" || p.status === "failed").length,
 						total: subDef.phases.length,
 						running: ph.filter((p) => p.status === "running").length,
 						failed: ph.filter((p) => p.status === "failed").length,
@@ -577,8 +583,11 @@ async function executePhase(
 			output: subResult.finalOutput,
 			json: parseJson ? safeParse(subResult.finalOutput) : undefined,
 			usage: subResult.totalUsage,
+			// B-F015: include failed in `done` so the renderer's
+			// `done - failed` formula gives the success count (matches the
+			// map/parallel runner's overlapping-counter convention).
 			subProgress: {
-				done: sp.filter((p) => p.status === "done").length,
+				done: sp.filter((p) => p.status === "done" || p.status === "failed").length,
 				total: subDef.phases.length,
 				running: 0,
 				failed: sp.filter((p) => p.status === "failed").length,
@@ -649,7 +658,10 @@ export function parseGateVerdict(output: string): { verdict: "pass" | "block"; r
 		if (typeof o.continue === "boolean") return { verdict: o.continue ? "pass" : "block", reason: asReason(o.reason) };
 		if (typeof o.pass === "boolean") return { verdict: o.pass ? "pass" : "block", reason: asReason(o.reason) };
 		if (typeof o.verdict === "string") {
-			const block = /block|fail|stop|reject|halt|\bno\b/i.test(o.verdict);
+			// Note: do NOT include standalone "no" — natural-language verdicts like
+			// "No issues found" / "no errors" would otherwise be false-positive BLOCK.
+			// Fail-open covers any ambiguous text.
+			const block = /block|fail|stop|reject|halt/i.test(o.verdict);
 			return { verdict: block ? "block" : "pass", reason: asReason(o.reason) };
 		}
 	}
@@ -667,10 +679,85 @@ function asReason(v: unknown): string | undefined {
 }
 
 /**
+ * Best-effort invocation of the user-provided `persist` + `onProgress` callbacks.
+ *
+ * A throw from a host-supplied callback must NEVER replace the runtime's
+ * outcome — neither the original crash message in `executeTaskflow`'s catch
+ * block, nor the final output of a successful run. Callbacks are observability
+ * hooks; the run survives their failure.
+ *
+ * Used at every "checkpoint" call site (phase start, phase end, terminal state).
+ * For high-frequency live updates inside a phase, see `safeProgress` below.
+ */
+function safeEmit(deps: RuntimeDeps, state: RunState): void {
+	try {
+		deps.persist?.(state);
+	} catch {
+		// user callback — must not break the run
+	}
+	try {
+		deps.onProgress?.(state);
+	} catch {
+		// user callback — must not break the run
+	}
+}
+
+/**
+ * Like `safeEmit` but for the high-frequency live-update channel only.
+ * Skips `persist` (which is intentionally checkpoint-only) and swallows any
+ * throw from the user-supplied `onProgress` so a misbehaving TUI sink cannot
+ * disrupt an in-flight phase.
+ */
+function safeProgress(deps: RuntimeDeps, state: RunState): void {
+	try {
+		deps.onProgress?.(state);
+	} catch {
+		// user callback — must not break the run
+	}
+}
+
+/**
  * Execute a full taskflow. Mutates and persists `state` as it progresses.
  */
+function ensureImplicitGate(def: Taskflow): void {
+	// Respect explicit opt-out
+	if ((def as any).implicitGate === false) return;
+
+	const hasGate = def.phases.some(
+		(p) => p.type === "gate" || p.type === "approval" || p.id === "_implicit-gate",
+	);
+	if (hasGate || def.phases.length === 0) return;
+
+	// The last existing phase is the effective "final" phase — pin it so the
+	// injected gate doesn't become the finalOutput.
+	const lastPhase = def.phases[def.phases.length - 1];
+	if (!lastPhase.final && !def.phases.some((p) => p.final)) {
+		lastPhase.final = true;
+	}
+
+	const allIds = def.phases.map((p) => p.id);
+	def.phases.push({
+		id: "_implicit-gate",
+		type: "gate",
+		dependsOn: allIds,
+		agent: "reviewer",
+		task: `Review all phase outputs from this taskflow for accuracy and consistency.
+
+For each upstream phase, scan its output for:
+1. **Factual accuracy**: Any file paths, line numbers, or code snippets that are wrong?
+2. **Internal contradictions**: Do any phases contradict each other?
+3. **Completeness**: Is any output truncated, empty, or anomalously short?
+4. **Hallucination markers**: Wrong file names, impossible line ranges, circular logic, information not in the given context.
+
+Output:
+- If ALL outputs look consistent and plausible: output **VERDICT: PASS** with a one-line summary.
+- If ANY issues found: output **VERDICT: BLOCK** listing each issue with the phase ID and specific concern.`,
+	});
+}
+
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	ensureImplicitGate(def);
 	try {
 		return await runTaskflowLayers(state, deps);
 	} catch (e) {
@@ -685,8 +772,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			}
 		}
 		state.status = "failed";
-		deps.persist?.(state);
-		deps.onProgress?.(state);
+		safeEmit(deps, state);
 		const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 		return { state, finalOutput: `Taskflow '${def.name}' crashed: ${message}`, ok: false, totalUsage };
 	}
@@ -697,8 +783,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	const layers = topoLayers(def.phases);
 
 	state.status = "running";
-	deps.persist?.(state);
-	deps.onProgress?.(state);
+	safeEmit(deps, state);
 
 	let aborted = false;
 	let gateBlocked = false;
@@ -756,8 +841,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
-				deps.persist?.(state);
-				deps.onProgress?.(state);
+				safeEmit(deps, state);
 				return;
 			}
 
@@ -768,9 +852,9 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				status: "running",
 				startedAt,
 			};
-			deps.onProgress?.(state);
+			safeProgress(deps, state);
 
-			const ps = await executePhase(phase, state, deps, prior, () => deps.onProgress?.(state));
+			const ps = await executePhase(phase, state, deps, prior, () => safeProgress(deps, state));
 			// Preserve the phase start time: executePhase returns a fresh PhaseState
 			// that omits startedAt (cached/resumed results carry their own).
 			state.phases[phase.id] = ps.startedAt ? ps : { ...ps, startedAt };
@@ -793,8 +877,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				budgetBlocked = true;
 				budgetReason = ob.reason;
 			}
-			deps.persist?.(state);
-			deps.onProgress?.(state);
+			safeEmit(deps, state);
 		});
 	}
 
@@ -818,8 +901,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			: anyFailed
 				? "failed"
 				: "completed";
-	deps.persist?.(state);
-	deps.onProgress?.(state);
+	safeEmit(deps, state);
 
 	let finalOutput = finalState?.output ?? "(no output)";
 	if (gateBlocked) {

@@ -296,24 +296,33 @@ test("discoverAgents: override with undefined model does not change existing mod
 });
 
 // ===========================================================================
-// discoverAgents — bug: in-place mutation of agent objects (regression gate)
+// F-014 regression: overrides must not mutate agentMap-owned AgentConfig
 // ===========================================================================
 
-test("discoverAgents: overrides mutate agent objects in-place (documents known side-effect)", () => {
-	// This test documents the mutation side-effect bug described in the analysis.
-	// If discoverAgents is called twice with different overrides, the second call
-	// re-reads from disk so the mutation doesn't persist — but if a caller retains
-	// a reference to agents[0] from the first call, it IS mutated.
+test("F-014: overrides do not mutate the original AgentConfig (retained reference is stable across calls)", () => {
+	// Regression gate: discoverAgents must clone the agent before applying
+	// overrides. Otherwise a caller that retains a reference to agents[0] from
+	// one call would observe cross-contamination when a subsequent call uses
+	// different overrides.
 	const agentsDir = path.join(userAgentDir, "agents");
 	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout", model: "original" });
 
-	const result1 = discoverAgents(projectCwd, "user", { scout: { model: "mutated" } });
-	// The returned agent has the overridden model
-	assert.equal(result1.agents[0].model, "mutated");
+	const result1 = discoverAgents(projectCwd, "user", { scout: { model: "mutated-A" } });
+	const retainedRef = result1.agents[0];
 
-	// A second call re-reads from disk, so original model is back
-	const result2 = discoverAgents(projectCwd, "user");
-	assert.equal(result2.agents[0].model, "original");
+	// The first call's returned agent has the override applied.
+	assert.equal(retainedRef.model, "mutated-A");
+
+	// A second call with a different override must not affect the retained
+	// reference from the first call — this is the core F-014 guarantee.
+	const result2 = discoverAgents(projectCwd, "user", { scout: { model: "mutated-B" } });
+	assert.equal(result2.agents[0].model, "mutated-B");
+	assert.equal(retainedRef.model, "mutated-A", "retained reference from first call must be stable");
+
+	// A third call with no overrides returns the on-disk model.
+	const result3 = discoverAgents(projectCwd, "user");
+	assert.equal(result3.agents[0].model, "original");
+	assert.equal(retainedRef.model, "mutated-A", "retained reference must still be stable");
 });
 
 // ===========================================================================
@@ -547,4 +556,79 @@ test("discoverAgents: follows symlinked .md files", () => {
 	assert.equal(agents.length, 1);
 	assert.equal(agents[0].name, "linked");
 	assert.equal(agents[0].systemPrompt, "linked body");
+});
+
+// ===========================================================================
+// F-001 regression: YAML array frontmatter.tools must not crash discovery
+// ===========================================================================
+
+/** Write a raw .md file (needed when we need YAML that the typed helper can't express). */
+function writeRawAgent(dir: string, filename: string, frontmatterYaml: string, body = ""): string {
+	fs.mkdirSync(dir, { recursive: true });
+	const filePath = path.join(dir, filename);
+	const content = `---\n${frontmatterYaml}\n---\n${body}`;
+	fs.writeFileSync(filePath, content, "utf-8");
+	return filePath;
+}
+
+test("F-001: tools: [read, write] YAML array is parsed (no TypeError on .split)", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeRawAgent(agentsDir, "array-tools.md", "name: array-tools\ndescription: yaml array\ntools:\n  - read\n  - write\n  - bash\n");
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.equal(agents.length, 1);
+	assert.deepEqual(agents[0].tools, ["read", "write", "bash"]);
+});
+
+test("F-001: inline-flow YAML sequence [read, write] is parsed", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeRawAgent(agentsDir, "inline-array.md", 'name: inline-array\ndescription: inline yaml\ntools: [read, write]\n');
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.equal(agents.length, 1);
+	assert.deepEqual(agents[0].tools, ["read", "write"]);
+});
+
+test("F-001: tools YAML array with extra whitespace per item is trimmed", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeRawAgent(agentsDir, "padded-array.md", 'name: padded\ndescription: padded array\ntools: [" read ", "  write  "]\n');
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.deepEqual(agents[0].tools, ["read", "write"]);
+});
+
+test("F-001: empty YAML array tools becomes undefined tools", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeRawAgent(agentsDir, "empty-array.md", "name: empty-array\ndescription: empty array\ntools: []\n");
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.equal(agents.length, 1);
+	assert.equal(agents[0].tools, undefined);
+});
+
+test("F-001: array tools coexists with sibling agents using string tools", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	// Mix of array and string tools in the same dir
+	writeAgent(agentsDir, "csv.md", { name: "csv", description: "csv tools", tools: "read, write" });
+	writeRawAgent(agentsDir, "arr.md", "name: arr\ndescription: array tools\ntools:\n  - bash\n  - edit\n");
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.equal(agents.length, 2);
+	const byName = new Map(agents.map((a) => [a.name, a]));
+	assert.deepEqual(byName.get("csv")?.tools, ["read", "write"]);
+	assert.deepEqual(byName.get("arr")?.tools, ["bash", "edit"]);
+});
+
+test("F-001: defense-in-depth — exotic frontmatter shapes do not abort discovery", () => {
+	// tools as a YAML number — pre-fix would have crashed on .split.
+	// Post-fix: parsed as a single-element array via String(t), or coerced to string and split.
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeRawAgent(agentsDir, "num-tools.md", "name: num\ndescription: numeric\ntools: 42\n");
+	writeAgent(agentsDir, "ok.md", { name: "ok", description: "fine" });
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	// Both files must load — the bad one must not poison the whole loop.
+	assert.equal(agents.length, 2);
+	const names = agents.map((a) => a.name).sort();
+	assert.deepEqual(names, ["num", "ok"]);
 });

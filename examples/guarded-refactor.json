@@ -26,7 +26,7 @@
       "id": "implement",
       "type": "agent",
       "agent": "executor_code",
-      "dependsOn": ["approve"],
+      "dependsOn": ["approve", "plan"],
       "task": "Implement the approved plan for {args.target}.\nPlan:\n{steps.plan.output}\nExtra human guidance (if any):\n{steps.approve.output}",
       "retry": { "max": 1, "backoffMs": 1000 }
     },
@@ -41,7 +41,7 @@
       "id": "summary",
       "type": "reduce",
       "from": ["review"],
-      "dependsOn": ["review"],
+      "dependsOn": ["review", "implement"],
       "agent": "doc-writer",
       "task": "Write a short changelog entry summarizing what was done:\n\n{steps.implement.output}",
       "final": true

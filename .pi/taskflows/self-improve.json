@@ -1,0 +1,111 @@
+{
+  "name": "self-improve",
+  "description": "pi-taskflow 自迭代：分析代码库 → 编写测试 → 修复稳定性",
+  "concurrency": 2,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "explorer",
+      "task": "Audit the pi-taskflow project at /Users/beta/work/personal-projects/pi-taskflow.\n\nRead these files thoroughly:\n- extensions/runner.ts\n- extensions/store.ts\n- extensions/render.ts\n- extensions/agents.ts\n- extensions/runs-view.ts\n- extensions/runtime.ts\n- test/interpolate.test.ts\n- test/schema.test.ts\n- test/runtime.test.ts\n\nFor each source file in extensions/, identify:\n1. All exported public functions\n2. Which are covered by existing tests\n3. Potential stability bugs (error handling gaps, edge cases, race conditions, unsafe casts, cleanup issues)\n\nOutput ONLY a JSON array with this exact structure:\n[{\"file\": \"extensions/runner.ts\", \"exports\": [\"runAgentTask\",\"mapWithConcurrencyLimit\",...], \"untested\": [...], \"bugs\": [{\"desc\":\"Short description\",\"severity\":\"high|medium|low\",\"file\":\"runner.ts\",\"line\":123}], \"needsTestFile\": false}]\n\nDo NOT include any text before or after the JSON array.",
+      "output": "json"
+    },
+    {
+      "id": "write-runner-tests",
+      "type": "agent",
+      "agent": "test-engineer",
+      "dependsOn": [
+        "discover"
+      ],
+      "task": "Write comprehensive tests for extensions/runner.ts at test/runner.test.ts.\nFunctions to test: emptyUsage, isFailed, aggregateUsage, formatTokens, formatUsage, mapWithConcurrencyLimit, getPiInvocation\n\nUse: import assert from \"node:assert/strict\"; import { test } from \"node:test\".\nMock deps where needed.",
+      "tools": [
+        "read",
+        "write",
+        "bash"
+      ]
+    },
+    {
+      "id": "write-store-tests",
+      "type": "agent",
+      "agent": "test-engineer",
+      "dependsOn": [
+        "discover"
+      ],
+      "task": "Write comprehensive tests for extensions/store.ts at test/store.test.ts.\nUse tmp dirs for hermetic file ops.",
+      "tools": [
+        "read",
+        "write",
+        "bash"
+      ]
+    },
+    {
+      "id": "write-agents-tests",
+      "type": "agent",
+      "agent": "test-engineer",
+      "dependsOn": [
+        "discover"
+      ],
+      "task": "Write comprehensive tests for extensions/agents.ts at test/agents.test.ts.\nUse tmp dirs with mock .md agent files.",
+      "tools": [
+        "read",
+        "write",
+        "bash"
+      ]
+    },
+    {
+      "id": "write-interpolate-extras",
+      "type": "agent",
+      "agent": "test-engineer",
+      "dependsOn": [
+        "discover"
+      ],
+      "task": "Add edge case tests to test/interpolate.test.ts for safeParse and coerceArray.\nAlready has basic tests — add: safeParse empty string, whitespace-only, deeply nested JSON, malformed fence, multiple JSON blocks, coerceArray null/undefined, array-like objects.",
+      "tools": [
+        "read",
+        "write",
+        "bash"
+      ]
+    },
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "verifier",
+      "dependsOn": [
+        "write-runner-tests",
+        "write-store-tests",
+        "write-agents-tests",
+        "write-interpolate-extras"
+      ],
+      "task": "Run tests and typecheck:\n\ncd /Users/beta/work/personal-projects/pi-taskflow && npm test\nnpx tsc --noEmit\n\nIf all pass: VERDICT: PASS\nIf failures: VERDICT: BLOCK <details>"
+    },
+    {
+      "id": "fix-stability",
+      "type": "agent",
+      "agent": "executor",
+      "dependsOn": [
+        "discover"
+      ],
+      "task": "Apply targeted fixes:\n1. runner.ts: safer tmp dir cleanup\n2. store.ts: guard non-null assertions\n3. runtime.ts: fix directRef for nested json paths",
+      "tools": [
+        "read",
+        "edit",
+        "bash"
+      ]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": [
+        "verify",
+        "fix-stability"
+      ],
+      "agent": "doc-writer",
+      "dependsOn": [
+        "verify",
+        "fix-stability"
+      ],
+      "task": "Summarize the iteration results.",
+      "final": true
+    }
+  ]
+}

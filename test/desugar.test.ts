@@ -22,6 +22,16 @@ test("isShorthand: detects task / tasks / chain, rejects phases and non-objects"
 	assert.equal(isShorthand("string"), false);
 });
 
+test("isShorthand: empty chain / tasks are not shorthand (no misleading desugar error)", () => {
+	// Empty array fields should NOT count as shorthand — desugar's gates require
+	// length > 0, so an isShorthand=true would mislead callers into a
+	// "Shorthand spec needs one of..." error for { chain: [] } / { tasks: [] }.
+	assert.equal(isShorthand({ chain: [] }), false);
+	assert.equal(isShorthand({ tasks: [] }), false);
+	assert.equal(isShorthand({ chain: [], task: "ok" }), true); // task still wins
+	assert.equal(isShorthand({ tasks: [], task: "ok" }), true); // task still wins
+});
+
 // ---------------------------------------------------------------------------
 // desugar — structure
 // ---------------------------------------------------------------------------
@@ -110,6 +120,8 @@ test("desugar: precedence chain > tasks > task", () => {
 const AGENTS: AgentConfig[] = [{ name: "a", description: "test", systemPrompt: "", source: "user", filePath: "" }];
 
 function mkState(def: ReturnType<typeof desugar>): RunState {
+	// Disable implicit gates in tests — they alter phase topology and break assertions.
+	(def as any).implicitGate = false;
 	return {
 		runId: "t",
 		flowName: def.name,

@@ -27,10 +27,13 @@ export interface InterpolationResult {
 	missing: string[];
 }
 
-export function interpolate(template: string, ctx: InterpolationContext): InterpolationResult {
+export function interpolate(
+	template: string | null | undefined,
+	ctx: InterpolationContext,
+): InterpolationResult {
 	const missing: string[] = [];
 
-	const text = template.replace(PLACEHOLDER, (whole, path: string) => {
+	const text = String(template ?? "").replace(PLACEHOLDER, (whole, path: string) => {
 		const value = resolvePath(path, ctx);
 		if (value === undefined) {
 			missing.push(path);
@@ -134,6 +137,24 @@ export function safeParse(text: string): unknown {
 			}
 		}
 	}
+	// Anti-pattern detection (v0.0.8.1): array followed by a stray top-level
+	// "key": value. A common LLM mistake — the model appends
+	// `"deferred": [...]` after a JSON array, producing a non-JSON hybrid that
+	// none of the above strategies can recover. We surface a diagnostic hint
+	// so flow authors can spot the bug fast.
+	//
+	// We check the original (trimmed) input rather than the slice tail,
+	// because `lastIndexOf(close)` lands on the *last* bracket — for the
+	// anti-pattern the stray key is between the array's `]` and the trailing
+	// `]`, not after the last one.
+	if (/]\s*[\},]?\s*"[^"\n]+"\s*:/.test(trimmed)) {
+		console.warn(
+			"[pi-taskflow safeParse] input looks like a JSON array followed by a stray top-level key " +
+				`(pattern: [{...}], "key": ...). This is not valid JSON. ` +
+				`Hint: put extra data as array members (e.g. {"id":"D-001","status":"deferred",...}) ` +
+				`or split into a separate phase.`,
+		);
+	}
 	return undefined;
 }
 
@@ -142,7 +163,7 @@ export function coerceArray(value: unknown): unknown[] | null {
 	if (Array.isArray(value)) return value;
 	if (value && typeof value === "object") {
 		// {items: [...]} or {results: [...]} convenience
-		for (const key of ["items", "results", "list", "data"]) {
+		for (const key of ["items", "results", "list", "data", "findings"]) {
 			const v = (value as Record<string, unknown>)[key];
 			if (Array.isArray(v)) return v;
 		}
