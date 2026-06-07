@@ -53,7 +53,12 @@ function elapsed(ms: number): string {
 
 function phaseElapsed(ps: PhaseState): number {
 	if (!ps.startedAt) return 0;
-	return (ps.endedAt ?? Date.now()) - ps.startedAt;
+	// Guard against a stale/clock-skewed endedAt that precedes startedAt (e.g. a
+	// resumed phase that still carries a previous attempt's endedAt): treat such
+	// an end time as absent and fall back to now. Finally clamp to >= 0 so the
+	// TUI never shows a negative (and frozen) elapsed time.
+	const end = ps.endedAt && ps.endedAt >= ps.startedAt ? ps.endedAt : Date.now();
+	return Math.max(0, end - ps.startedAt);
 }
 
 function miniBar(done: number, total: number, theme: Theme, width = 8): string {
@@ -91,7 +96,7 @@ function runElapsed(state: RunState): number {
 	const min = Math.min(...starts);
 	const ends = Object.values(state.phases).map((p) => p.endedAt ?? Date.now());
 	const max = ends.length ? Math.max(...ends) : Date.now();
-	return max - min;
+	return Math.max(0, max - min);
 }
 
 export function summarizeRun(state: RunState): string {

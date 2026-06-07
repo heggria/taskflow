@@ -342,9 +342,9 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			errors.push(`Phase '${p.id}': agent name '${p.agent}' uses underscores — use hyphens (e.g. 'executor-code' not 'executor_code')`);
 		}
 
-		// Phase id convention: hyphens only (consistent with agent naming)
+		// Phase id convention: hyphens only (consistent with interpolation placeholders like {steps.audit-each.output})
 		if (p.id && p.id.includes("_")) {
-			errors.push(`Phase '${p.id}': id uses underscores — use hyphens for consistency with agent naming convention`);
+			errors.push(`Phase '${p.id}': id uses underscores — use hyphens for consistency with interpolation placeholders (e.g. {steps.audit-each.output})`);
 		}
 	}
 
@@ -363,7 +363,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	const VALID_AGENT_RE = /^[a-z][a-z0-9-]*$/;
 	for (const p of flow.phases) {
 		if (!p?.id) continue;
-		if (p.agent && !VALID_AGENT_RE.test(p.agent)) {
+		if (p.agent && !p.agent.includes("_") && !VALID_AGENT_RE.test(p.agent)) {
 			errors.push(`Phase '${p.id}': agent '${p.agent}' has invalid name format (expected lowercase alphanumeric with hyphens)`);
 		}
 	}

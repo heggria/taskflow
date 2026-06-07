@@ -437,7 +437,7 @@ async function executePhase(
 		const { text } = interpolate(phase.task ?? "", ctx);
 		const fullTask = preRead + text;
 		const agentName = resolveAgent(phase.agent, deps, state);
-		const inputHash = hashInput(phase.id, agentName, fullTask);
+		const inputHash = hashInput(phase.id, agentName, phase.model ?? "", fullTask);
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
@@ -455,7 +455,7 @@ async function executePhase(
 				task: preRead + r.text,
 			};
 		});
-		const inputHash = hashInput(phase.id, JSON.stringify(branches));
+		const inputHash = hashInput(phase.id, phase.model ?? "", JSON.stringify(branches));
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
@@ -485,7 +485,7 @@ async function executePhase(
 				task: preRead + interpolate(phase.task ?? "", localCtx).text,
 			};
 		});
-		const inputHash = hashInput(phase.id, JSON.stringify(tasks));
+		const inputHash = hashInput(phase.id, phase.model ?? "", JSON.stringify(tasks));
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
@@ -496,7 +496,7 @@ async function executePhase(
 	if (type === "approval") {
 		const ctx = buildInterpolationContext(state, previousOutput);
 		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
-		const inputHash = hashInput(phase.id, "approval", message);
+		const inputHash = hashInput(phase.id, phase.model ?? "", "approval", message);
 		const cached = cachedPhase(prior, inputHash);
 		if (cached) return cached;
 
@@ -853,11 +853,19 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			}
 
 			const startedAt = Date.now();
+			// Re-running a phase (resume after a previous failed/done attempt) must
+			// start from a clean "running" state. Spreading the prior PhaseState
+			// would carry over its terminal `endedAt` (and `error`/`gate`/`output`),
+			// leaving a running phase with an old endedAt < new startedAt — which
+			// renders as a frozen NEGATIVE elapsed time in the TUI. Keep only the
+			// fields that are still meaningful across attempts (model, attempts).
+			const priorPs = state.phases[phase.id];
 			state.phases[phase.id] = {
-				...(state.phases[phase.id] ?? { id: phase.id }),
 				id: phase.id,
 				status: "running",
 				startedAt,
+				...(priorPs?.model ? { model: priorPs.model } : {}),
+				...(priorPs?.attempts ? { attempts: priorPs.attempts } : {}),
 			};
 			safeProgress(deps, state);
 

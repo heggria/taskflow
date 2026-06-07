@@ -169,6 +169,14 @@ async function runFlow(
 		const scope: AgentScope = def.agentScope ?? "user";
 		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides);
 
+		// Pre-flight: warn if any phase references an agent not in the registry
+		const agentNames = new Set(agents.map(a => a.name));
+		for (const p of def.phases ?? []) {
+			if (p.agent && !agentNames.has(p.agent)) {
+				console.warn(`[taskflow] Warning: phase '${p.id}' references agent '${p.agent}' which was not found. Available: ${[...agentNames].join(", ")}`);
+			}
+		}
+
 		const result = await executeTaskflow(state, {
 			cwd: ctx.cwd,
 			agents,

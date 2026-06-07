@@ -363,3 +363,48 @@ exit 1
 		await fs.promises.rm(tmpDir, { recursive: true, force: true });
 	}
 });
+
+// ── idle watchdog (subagent stall) ──────────────────────────────────
+
+test("runAgentTask: idle watchdog kills a silent (stalled) subagent", async () => {
+	// A fake "pi" binary that produces NO stdout and just sleeps forever
+	// simulates a wedged subagent (hung stream / provider stall / tool deadlock).
+	// The idle watchdog must kill it and surface a stall error instead of
+	// hanging the whole flow indefinitely.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-idle-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		// Sleep 60s with no output. Keep the event loop alive.
+		`setTimeout(() => process.exit(0), 60000);\n`,
+	);
+
+	const agents: AgentConfig[] = [
+		{ name: "stall", description: "d", systemPrompt: "", source: "user", filePath: "" },
+	];
+
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = `${process.execPath}`;
+	// getPiInvocation returns { command: override, args }, so prepend the script
+	// via a wrapper: easier to point the override at a node that runs our script.
+	// We instead set the override to a tiny shim that execs node fake-pi.mjs.
+	const shim = path.join(dir, "shim.sh");
+	fs.writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${fakePi}"\n`);
+	fs.chmodSync(shim, 0o755);
+	process.env.PI_TASKFLOW_PI_BIN = shim;
+
+	try {
+		const start = Date.now();
+		const res = await runAgentTask(dir, agents, "stall", "do work", {
+			idleTimeoutMs: 300, // 300ms idle → kill
+		});
+		const elapsed = Date.now() - start;
+		assert.ok(elapsed < 10_000, `should be killed quickly, took ${elapsed}ms`);
+		assert.equal(isFailed(res), true, "stalled subagent must be a failure");
+		assert.match(res.errorMessage ?? "", /stalled|idle timeout/i);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});

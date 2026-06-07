@@ -323,3 +323,36 @@ test("validateTaskflow: missing context field is accepted (backward compatible)"
 	assert.equal(r.ok, true);
 	assert.equal(r.warnings.length, 0);
 });
+
+test("validateTaskflow: rejects agent name with underscores (friendly message, no double error)", () => {
+	const r = validateTaskflow({ name: "x", phases: [{ id: "a", type: "agent", agent: "executor_code", task: "t" }] });
+	assert.equal(r.ok, false);
+	const underscoreErrors = r.errors.filter(e => e.includes("underscore"));
+	const formatErrors = r.errors.filter(e => e.includes("invalid name format"));
+	assert.equal(underscoreErrors.length, 1, `expected 1 underscore error, got ${underscoreErrors.length}: ${underscoreErrors}`);
+	assert.equal(formatErrors.length, 0, `expected 0 format errors (deduped), got ${formatErrors.length}: ${formatErrors}`);
+});
+
+test("validateTaskflow: rejects agent name with uppercase letters", () => {
+	const r = validateTaskflow({ name: "x", phases: [{ id: "a", type: "agent", agent: "Executor-Code", task: "t" }] });
+	assert.equal(r.ok, false);
+	assert.ok(r.errors.some(e => e.includes("invalid name format")), `expected format error, got: ${r.errors}`);
+});
+
+test("validateTaskflow: rejects agent name starting with digit", () => {
+	const r = validateTaskflow({ name: "x", phases: [{ id: "a", type: "agent", agent: "1executor", task: "t" }] });
+	assert.equal(r.ok, false);
+	assert.ok(r.errors.some(e => e.includes("invalid name format")), `expected format error, got: ${r.errors}`);
+});
+
+test("validateTaskflow: accepts valid agent name with hyphens", () => {
+	const r = validateTaskflow({ name: "x", phases: [{ id: "a", type: "agent", agent: "executor-code", task: "t" }] });
+	assert.equal(r.ok, true, `unexpected errors: ${r.errors}`);
+});
+
+test("validateTaskflow: phase id with underscores gets interpolation message", () => {
+	const r = validateTaskflow({ name: "x", phases: [{ id: "my_phase", type: "agent", task: "t" }] });
+	assert.equal(r.ok, false);
+	const idError = r.errors.find(e => e.includes("my_phase") && e.includes("interpolation"));
+	assert.ok(idError, `expected interpolation message in error, got: ${r.errors}`);
+});

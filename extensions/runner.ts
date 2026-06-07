@@ -42,7 +42,23 @@ export interface RunOptions {
 	signal?: AbortSignal;
 	/** Fires on each assistant turn with the latest activity + accumulated usage. */
 	onLive?: (live: LiveUpdate) => void;
+	/**
+	 * Idle watchdog: if the subagent produces no stdout for this many ms, it is
+	 * considered stalled (hung stream / provider stall / tool deadlock) and is
+	 * killed (SIGTERM → SIGKILL). Resets on every stdout chunk. 0/undefined keeps
+	 * the prior behaviour (no idle timeout). Defaults to DEFAULT_IDLE_TIMEOUT_MS.
+	 */
+	idleTimeoutMs?: number;
 }
+
+/**
+ * Default idle-watchdog window. A subagent that emits nothing on stdout for this
+ * long is treated as wedged and killed so a single stalled child cannot hang the
+ * entire taskflow forever (the only previous escape was a manual user abort).
+ * 5 minutes is generous enough for slow reasoning/long tool calls while still
+ * bounding a true hang.
+ */
+export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 export function isFailed(r: RunResult): boolean {
 	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
@@ -306,6 +322,7 @@ export async function runAgentTask(
 		args.push(`Task: ${task}`);
 
 		let wasAborted = false;
+		let idleTimedOut = false;
 		const exitCode = await new Promise<number>((resolve) => {
 			const invocation = getPiInvocation(args);
 			const proc = spawn(invocation.command, invocation.args, {
@@ -315,12 +332,40 @@ export async function runAgentTask(
 			});
 			let buffer = "";
 
+			// Idle watchdog: a subagent that goes silent on stdout for too long is
+			// treated as wedged and killed, so one stalled child cannot hang the
+			// whole taskflow forever. The timer is reset on every stdout chunk and
+			// torn down on close/error.
+			const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+			let idleTimer: ReturnType<typeof setTimeout> | undefined;
+			let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+			const clearTimers = () => {
+				if (idleTimer) clearTimeout(idleTimer);
+				if (forceKillTimer) clearTimeout(forceKillTimer);
+			};
+			const hardKill = () => {
+				proc.kill("SIGTERM");
+				forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+				forceKillTimer.unref();
+			};
+			const armIdle = () => {
+				if (idleTimer) clearTimeout(idleTimer);
+				if (idleMs <= 0) return; // disabled
+				idleTimer = setTimeout(() => {
+					idleTimedOut = true;
+					hardKill();
+				}, idleMs);
+				idleTimer.unref();
+			};
+			armIdle();
+
 			const processLine = (line: string) => {
 				const live = foldEventLine(acc, line);
 				if (live && opts.onLive) opts.onLive(live);
 			};
 
 			proc.stdout.on("data", (data) => {
+				armIdle(); // progress observed — reset the idle watchdog
 				buffer += data.toString();
 				const lines = buffer.split("\n");
 				buffer = lines.pop() || "";
@@ -330,10 +375,12 @@ export async function runAgentTask(
 				result.stderr += data.toString();
 			});
 			proc.on("close", (code) => {
+				clearTimers();
 				if (buffer.trim()) processLine(buffer);
 				resolve(code ?? 0);
 			});
 			proc.on("error", (err) => {
+				clearTimers();
 				if (!result.stderr) result.stderr = err.message;
 				if (!result.errorMessage) result.errorMessage = err.message;
 				resolve(1);
@@ -364,7 +411,13 @@ export async function runAgentTask(
 		result.stopReason = acc.stopReason;
 		result.errorMessage = acc.errorMessage;
 		result.output = getFinalOutput(acc.messages);
-		if (wasAborted) {
+		if (idleTimedOut) {
+			// Distinct, actionable signal: the child was killed for being idle, not
+			// a user abort. stopReason "error" keeps it in the failed bucket so the
+			// runtime's retry/fail handling treats it as a real failure.
+			result.stopReason = "error";
+			result.errorMessage = `Subagent stalled: no output for ${Math.round((opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS) / 1000)}s (idle timeout) — killed`;
+		} else if (wasAborted) {
 			result.stopReason = "aborted";
 			result.errorMessage = "Subagent was aborted";
 		}

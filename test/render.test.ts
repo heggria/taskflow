@@ -163,3 +163,18 @@ test("summarizeRun: reports done / running / failed counts", () => {
 	assert.match(s, /1 running/);
 	assert.match(s, /1 failed/);
 });
+
+test("renderProgress: never shows negative elapsed for a running phase with stale endedAt", () => {
+	// Regression: a resumed running phase that still carried a previous attempt's
+	// endedAt (endedAt < startedAt) rendered as a frozen negative time, e.g. "-44s".
+	const def: Taskflow = { name: "x", phases: [{ id: "p", type: "agent", task: "t", final: true }] };
+	const ps: PhaseState = {
+		id: "p",
+		status: "running",
+		startedAt: 1_000_000, // started "now"
+		endedAt: 950_000,     // stale: from a previous attempt, BEFORE startedAt
+		usage: emptyUsage(),
+	};
+	const out = renderProgress(mkState(def, { p: ps }), theme);
+	assert.ok(!/-\d+s/.test(out), `output must not contain a negative elapsed time:\n${out}`);
+});

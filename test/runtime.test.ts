@@ -204,7 +204,7 @@ test("runtime: resume skips cached completed phases", async () => {
 		id: "one",
 		status: "done",
 		output: "out:start",
-		inputHash: hashInput("one", "a", "start"),
+		inputHash: hashInput("one", "a", "", "start"),
 		usage: emptyUsage(),
 	};
 
@@ -226,13 +226,13 @@ test("runtime: resume caches a completed reduce phase (unified inputHash)", asyn
 	const runner = mockRunner((t) => `o:${t}`, { record });
 	const { hashInput } = await import("../extensions/store.ts");
 	const state = mkState(def);
-	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput("x", "a", "tx"), usage: emptyUsage() };
-	// reduce cache key is hashInput(id, agent, interpolatedText) — same shape as agent/gate.
+	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput("x", "a", "", "tx"), usage: emptyUsage() };
+	// reduce cache key is hashInput(id, model, agent, interpolatedText) — same shape as agent/gate.
 	state.phases.sum = {
 		id: "sum",
 		status: "done",
 		output: "o:combine o:tx",
-		inputHash: hashInput("sum", "a", "combine o:tx"),
+		inputHash: hashInput("sum", "a", "", "combine o:tx"),
 		usage: emptyUsage(),
 	};
 	const res = await executeTaskflow(state, baseDeps(runner));
@@ -725,4 +725,60 @@ test("F-006: throwing onProgress during a successful run does not break the run"
 	assert.equal(res.state.phases.one.status, "done");
 	assert.equal(res.state.phases.two.status, "done");
 	assert.equal(res.finalOutput, "out:use out:start");
+});
+
+test("runtime resume: re-running a previously failed phase clears stale endedAt (no negative elapsed)", async () => {
+	// Regression: resuming a flow whose phase had failed left the spread prior
+	// PhaseState's terminal `endedAt` in place while flipping status→running and
+	// setting a fresh `startedAt`. The running phase then had endedAt < startedAt,
+	// rendering as a frozen NEGATIVE elapsed time in the TUI.
+	const def: Taskflow = {
+		name: "resume-clean",
+		phases: [{ id: "p", type: "agent", agent: "a", task: "go", final: true }],
+	};
+
+	const state = mkState(def);
+	const staleStart = 1_000_000;
+	const staleEnd = 1_050_000; // a previous attempt's end time
+	state.phases.p = {
+		id: "p",
+		status: "failed",
+		startedAt: staleStart,
+		endedAt: staleEnd,
+		error: "previous boom",
+		usage: emptyUsage(),
+	};
+
+	// Capture the in-flight "running" snapshot of phase p.
+	let runningSnapshot: typeof state.phases.p | undefined;
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		runTask: mockRunner((t) => `out:${t}`),
+		persist: () => {},
+		onProgress: (s) => {
+			const ps = s.phases.p;
+			if (ps?.status === "running" && !runningSnapshot) runningSnapshot = { ...ps };
+		},
+	};
+
+	const res = await executeTaskflow(state, deps);
+	assert.equal(res.state.status, "completed");
+
+	// While running, the stale terminal fields must be gone.
+	assert.ok(runningSnapshot, "should have observed a running snapshot");
+	assert.equal(runningSnapshot!.endedAt, undefined, "stale endedAt must be cleared on re-run");
+	assert.equal(runningSnapshot!.error, undefined, "stale error must be cleared on re-run");
+	assert.ok(
+		runningSnapshot!.startedAt! > staleStart,
+		"startedAt must be refreshed to the resume time",
+	);
+	// Elapsed must never be negative.
+	const elapsedWhileRunning = (runningSnapshot!.endedAt ?? Date.now()) - runningSnapshot!.startedAt!;
+	assert.ok(elapsedWhileRunning >= 0, `running elapsed must be >= 0, got ${elapsedWhileRunning}`);
+
+	// Final state is a clean done with endedAt >= startedAt.
+	const final = res.state.phases.p;
+	assert.equal(final.status, "done");
+	assert.ok(final.endedAt! >= final.startedAt!, "final endedAt must be >= startedAt");
 });
