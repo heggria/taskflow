@@ -34,6 +34,10 @@ Here's the wall you hit with raw subagents: you describe a multi-step plan in pr
 
 `pi-taskflow` moves the plan **out of the prompt and into a declarative definition.** The runtime owns the DAG, the loops, the retries, and the intermediate state. You declare a pipeline once and run it a hundred times — by name.
 
+<div align="center">
+<img src="./assets/context-isolation.png" alt="With raw subagents every transcript floods your context; with pi-taskflow transcripts stay in the runtime and only the final result returns" width="900">
+</div>
+
 > When a job needs twelve steps with branching fan-out and a review gate, you want orchestration — not lucky prompting.
 
 | | subagent (built-in) | **pi-taskflow** |
@@ -291,6 +295,16 @@ Saved flows become CLI shortcuts. All commands run in the Pi session:
 
 Tool actions (used by the model): `run` (inline `define` or saved `name`), `save`, `resume`, `list`.
 
+## Resume across sessions
+
+A taskflow run isn't tied to your session. Every completed phase is written to disk, so a run that fails (or that you stop) can be continued later with `/tf resume <runId>` — **cached phases skip automatically** and only the remaining work spends tokens.
+
+<div align="center">
+<img src="./assets/resume.png" alt="A run fails midway in session 1; in session 2 /tf resume skips the cached phases and only re-runs the failed phase and what follows" width="900">
+</div>
+
+Resume is keyed on each phase's input hash — if an upstream output changed, dependent phases re-run; if nothing changed, they're reused. No competing Pi extension does this across sessions.
+
 ## Storage
 
 ```
@@ -342,7 +356,7 @@ If this saves you a context window, **drop a ⭐ on [GitHub](https://github.com/
 
 ## Status & limits
 
-**v0.0.10** — full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`), inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
+**v0.0.11** — full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`), inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
 
 Known boundaries (tracked, bounded — no surprises mid-flow):
 

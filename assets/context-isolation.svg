@@ -1,0 +1,52 @@
+<svg width="1000" height="300" viewBox="0 0 1000 300" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Context isolation: with raw subagents every transcript floods your context; with pi-taskflow only the final result returns">
+  <defs>
+    <linearGradient id="cbg" x1="0" y1="0" x2="1000" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B0E16"/><stop offset="1" stop-color="#0E1322"/>
+    </linearGradient>
+    <pattern id="cdots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.3" cy="1.3" r="1.3" fill="#9FB0FF" fill-opacity="0.045"/></pattern>
+  </defs>
+  <rect x="1" y="1" width="998" height="298" rx="18" fill="url(#cbg)"/>
+  <rect x="1" y="1" width="998" height="298" rx="18" fill="url(#cdots)"/>
+  <rect x="1.5" y="1.5" width="997" height="297" rx="17.5" stroke="#283357" stroke-opacity="0.6"/>
+
+  <!-- divider -->
+  <line x1="500" y1="40" x2="500" y2="262" stroke="#26314f" stroke-dasharray="4 6"/>
+
+  <!-- LEFT: raw subagents -->
+  <text x="250" y="46" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" letter-spacing="1" fill="#E07A7A">RAW SUBAGENTS</text>
+  <text x="250" y="66" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#8A93AE">every transcript lands in your context</text>
+  <!-- your context box (cluttered) -->
+  <rect x="70" y="86" width="360" height="170" rx="13" fill="#1A1320" stroke="#7A3B3B"/>
+  <text x="86" y="108" font-family="ui-monospace, Menlo, monospace" font-size="11" letter-spacing="0.8" fill="#C98A8A">YOUR CONTEXT</text>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="9.5" fill="#9A8A92">
+    <rect x="86" y="120" width="328" height="16" rx="4" fill="#2A1C24"/><text x="94" y="131">▸ subagent 1 transcript … 6.6k tokens</text>
+    <rect x="86" y="140" width="328" height="16" rx="4" fill="#2A1C24"/><text x="94" y="151">▸ subagent 2 transcript … 4.1k tokens</text>
+    <rect x="86" y="160" width="328" height="16" rx="4" fill="#2A1C24"/><text x="94" y="171">▸ subagent 3 transcript … 9.2k tokens</text>
+    <rect x="86" y="180" width="328" height="16" rx="4" fill="#2A1C24"/><text x="94" y="191">▸ tool calls, retries, dead ends …</text>
+    <rect x="86" y="200" width="328" height="16" rx="4" fill="#2A1C24"/><text x="94" y="211">▸ … 20k more tokens of noise</text>
+    <rect x="86" y="220" width="328" height="16" rx="4" fill="#3A2630"/><text x="94" y="231" fill="#D6A0A0">✓ the answer (buried)</text>
+  </g>
+
+  <!-- RIGHT: pi-taskflow -->
+  <text x="750" y="46" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="13" letter-spacing="1" fill="#5FCBAC">pi-taskflow</text>
+  <text x="750" y="66" text-anchor="middle" font-family="system-ui, sans-serif" font-size="12" fill="#8A93AE">transcripts stay in the runtime</text>
+  <!-- runtime sandbox -->
+  <rect x="540" y="86" width="190" height="170" rx="13" fill="#0E1626" stroke="#2A3a66" stroke-dasharray="5 5"/>
+  <text x="556" y="108" font-family="ui-monospace, Menlo, monospace" font-size="10" letter-spacing="0.6" fill="#8FA0C8">RUNTIME</text>
+  <g font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#5C6A92">
+    <rect x="556" y="118" width="158" height="14" rx="4" fill="#16203a"/><text x="563" y="128">transcript · 6.6k</text>
+    <rect x="556" y="136" width="158" height="14" rx="4" fill="#16203a"/><text x="563" y="146">transcript · 4.1k</text>
+    <rect x="556" y="154" width="158" height="14" rx="4" fill="#16203a"/><text x="563" y="164">transcript · 9.2k</text>
+    <rect x="556" y="172" width="158" height="14" rx="4" fill="#16203a"/><text x="563" y="182">retries · dead ends</text>
+    <rect x="556" y="190" width="158" height="14" rx="4" fill="#16203a"/><text x="563" y="200">… all held here</text>
+  </g>
+  <!-- arrow: only final crosses -->
+  <path d="M732 171 C770 171, 780 171, 812 171" stroke="#43D9AD" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M812 171 l-11 -6 v12 z" fill="#9FE9D4"/>
+  <!-- your context (clean) -->
+  <rect x="816" y="120" width="120" height="100" rx="13" fill="#10231C" stroke="#43D9AD"/>
+  <text x="876" y="142" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" letter-spacing="0.6" fill="#7FD8BC">YOUR CONTEXT</text>
+  <rect x="830" y="156" width="92" height="48" rx="8" fill="#16352B"/>
+  <text x="876" y="178" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="11" font-weight="700" fill="#EAFBF4">report</text>
+  <text x="876" y="194" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="8.5" fill="#6FD6B6">just the answer</text>
+</svg>
