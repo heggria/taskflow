@@ -23,7 +23,7 @@ export interface AgentConfig {
 	model?: string;
 	thinking?: string;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: "user" | "project" | "built-in";
 	filePath: string;
 }
 
@@ -32,7 +32,7 @@ export interface AgentDiscoveryResult {
 	projectAgentsDir: string | null;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: "user" | "project" | "built-in"): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 	if (!fs.existsSync(dir)) return agents;
 
@@ -121,14 +121,23 @@ export function discoverAgents(
 	cwd: string,
 	scope: AgentScope,
 	overrides?: Record<string, AgentOverride>,
+	modelRoles?: Record<string, string>,
 ): AgentDiscoveryResult {
+	// Built-in agents ship with the package (extensions/agents/*.md)
+	// PI_TASKFLOW_BUILTIN_AGENTS_DIR allows tests to override or disable (empty = skip)
+	const builtInDirEnv = process.env.PI_TASKFLOW_BUILTIN_AGENTS_DIR;
+	const builtInDir = builtInDirEnv ? builtInDirEnv : builtInDirEnv === undefined ? path.resolve(import.meta.dirname, "agents") : "";
+	const builtInAgents = builtInDir ? loadAgentsFromDir(builtInDir, "built-in") : [];
+
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
+	// Layer order: built-in → user → project (later layers override earlier)
 	const agentMap = new Map<string, AgentConfig>();
+	for (const a of builtInAgents) agentMap.set(a.name, a);
 	if (scope === "both") {
 		for (const a of userAgents) agentMap.set(a.name, a);
 		for (const a of projectAgents) agentMap.set(a.name, a);
@@ -155,12 +164,33 @@ export function discoverAgents(
 		}
 	}
 
+	// Resolve {{role}} model references (e.g. {{fast}} → openrouter/deepseek/v4-flash)
+	if (modelRoles) {
+		for (const agent of agentMap.values()) {
+			const resolved = resolveModelRole(agent.model, modelRoles);
+			if (resolved !== agent.model) agent.model = resolved;
+		}
+	}
+
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
 }
 
 export interface SubagentSettings {
 	agentOverrides?: Record<string, AgentOverride>;
 	globalThinking?: string;
+	modelRoles?: Record<string, string>;
+}
+
+/**
+ * Resolve `{{roleName}}` model references against a role→model mapping.
+ * E.g. `{{fast}}` → `openrouter/deepseek/deepseek-v4-flash` if modelRoles.fast is set.
+ * Returns undefined if the value is not a role reference or the role is unmapped.
+ */
+export function resolveModelRole(model: string | undefined, roles?: Record<string, string>): string | undefined {
+	if (!model || !roles) return model;
+	const match = model.match(/^\{\{(\w+)\}\}$/);
+	if (!match) return model;
+	return roles[match[1]] ?? undefined;
 }
 
 /** Read subagent overrides from ~/.pi/agent/settings.json (shared with the subagent extension). */
@@ -172,6 +202,7 @@ export function readSubagentSettings(): SubagentSettings {
 		return {
 			agentOverrides: raw.subagents?.agentOverrides,
 			globalThinking: raw.subagents?.globalThinking ?? raw.defaultThinkingLevel,
+			modelRoles: raw.modelRoles,
 		};
 	} catch {
 		return {};

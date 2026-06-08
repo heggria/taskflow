@@ -10,9 +10,12 @@
  * host conversation context — only the final phase output is returned.
  */
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
@@ -50,8 +53,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, or list available agents you can use in phases",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, or init model role configuration",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -167,7 +170,20 @@ async function runFlow(
 		// the heartbeat timer is cleared by the finally block below.
 		const settings = readSubagentSettings();
 		const scope: AgentScope = def.agentScope ?? "user";
-		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides);
+		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides, settings.modelRoles);
+
+		// Hint: if any agent still has unresolved {{role}} references, suggest configuring modelRoles
+		const unresolvedRoles = agents
+			.filter(a => a.model && /^\{\{\w+\}\}$/.test(a.model))
+			.map(a => a.model!.match(/^\{\{(\w+)\}\}$/)![1]);
+		if (unresolvedRoles.length > 0) {
+			const unique = [...new Set(unresolvedRoles)];
+			console.warn(
+				`[taskflow] Hint: ${unique.length} model role(s) not configured: ${unique.join(", ")}. ` +
+				`Agents will use the default model (slower / less optimal). ` +
+				`Run /tf init to auto-generate modelRoles config.`
+			);
+		}
 
 		// Pre-flight: warn if any phase references an agent not in the registry
 		const agentNames = new Set(agents.map(a => a.name));
@@ -216,7 +232,20 @@ export default function (pi: ExtensionAPI) {
 		}
 	};
 
-	pi.on("session_start", async (_e, ctx) => registerSavedFlowCommands(ctx));
+	pi.on("session_start", async (_e, ctx) => {
+		registerSavedFlowCommands(ctx);
+
+		// Hint: prompt to configure model roles if not set
+		try {
+			const settings = readSubagentSettings();
+			if (!settings.modelRoles) {
+				console.warn(
+					`[taskflow] Model roles not configured — agents will use the default model. ` +
+					`Run /tf init to generate a recommended modelRoles config.`
+				);
+			}
+		} catch {}
+	});
 
 	// ---- The LLM-callable tool ----
 	pi.registerTool({
@@ -243,10 +272,59 @@ export default function (pi: ExtensionAPI) {
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const action = params.action ?? "run";
 
-			// agents — list available agents the LLM can use in phase definitions
+			// init — configure model roles
+	if (action === "init") {
+		const settingsPath = path.join(getAgentDir(), "settings.json");
+		let existing: Record<string, unknown> = {};
+		try { existing = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
+
+		const roleDescs: Record<string, string> = {
+			fast: "cheap & quick (executor, scout, recover, verifier, doc-writer, test-engineer)",
+			strong: "balanced (planner, reviewer, executor-code)",
+			thinker: "deep analysis (analyst, critic)",
+			arbiter: "final judgment (plan-arbiter, final-arbiter)",
+			vision: "multimodal (executor-ui, visual-explorer)",
+			reasoner: "cautious reasoning (risk-reviewer, security-reviewer)",
+		};
+
+		if (existing.modelRoles) {
+			const roles = existing.modelRoles as Record<string, string>;
+			const text = [
+				`Model roles already configured in ${settingsPath}:`,
+				...Object.entries(roles).map(([k, v]) => `  ${k.padEnd(10)} → ${v}  (${roleDescs[k] ?? ""})`),
+				``,
+				`To reconfigure, run /tf init interactively or edit settings.json directly.`,
+			].join("\n");
+			return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+		}
+
+		const defaults: Record<string, string> = {
+			fast: "openrouter/deepseek/deepseek-v4-flash",
+			strong: "openrouter/xiaomi/mimo-v2.5-pro",
+			thinker: "openrouter/deepseek/deepseek-v4-pro",
+			arbiter: "openrouter/qwen/qwen3.7-max",
+			vision: "minimax/MiniMax-M3",
+			reasoner: "z-ai/glm-5.1",
+		};
+
+		const newSettings = { ...existing, modelRoles: defaults };
+		fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify(newSettings, null, 2) + "\n", "utf-8");
+
+		const text = [
+			`Wrote default model roles to ${settingsPath}:`,
+			...Object.entries(defaults).map(([k, v]) => `  ${k.padEnd(10)} → ${v}  (${roleDescs[k]})`),
+			``,
+			`These models require provider-specific API keys. Edit settings.json or run /tf init interactively.`,
+		].join("\n");
+		return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+	}
+
+	// agents — list available agents the LLM can use in phase definitions
 			if (action === "agents") {
 				const scope = params.scope ?? "both";
-				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined);
+				const settings2 = readSubagentSettings();
+				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined, settings2.modelRoles);
 				const text = agents.length
 					? agents
 							.map(
@@ -386,9 +464,9 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- The /tf user command ----
 	pi.registerCommand("tf", {
-		description: "Taskflow: list | run <name> | show <name> | runs",
+		description: "Taskflow: list | run <name> | show <name> | runs | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "resume"];
+			const subs = ["list", "run", "show", "runs", "resume", "init"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -477,6 +555,90 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				pi.sendUserMessage(`Resume the taskflow run "${arg}" using the taskflow tool with action="resume", runId="${arg}".`);
+				return;
+			}
+
+			if (sub === "init") {
+				const settingsPath = path.join(getAgentDir(), "settings.json");
+				let existing: Record<string, unknown> = {};
+				try { existing = JSON.parse(fs.readFileSync(settingsPath, "utf-8")); } catch {}
+				const currentRoles = (existing.modelRoles ?? {}) as Record<string, string>;
+
+				// Role definitions: name → { description, recommended models }
+				// Role definitions: name → description (no per-role filtering)
+				const roleDefs: Array<{ role: string; desc: string }> = [
+					{ role: "fast",     desc: "Cheap & quick — high-volume, low-stakes tasks (executor, scout, recover, verifier, doc-writer, test-engineer)" },
+					{ role: "strong",   desc: "Balanced — planning, review, moderate complexity (planner, reviewer, executor-code)" },
+					{ role: "thinker",  desc: "Deep analysis — requirements, ambiguity detection, critique (analyst, critic)" },
+					{ role: "arbiter",  desc: "Final judgment — tiebreak, plan quality gates (plan-arbiter, final-arbiter)" },
+					{ role: "vision",   desc: "Multimodal — UI work, design reading, Figma analysis (executor-ui, visual-explorer)" },
+					{ role: "reasoner", desc: "Cautious reasoning — security, risk review, sensitive changes (risk-reviewer, security-reviewer)" },
+				];
+
+				if (!ctx.hasUI) {
+					if (Object.keys(currentRoles).length > 0) {
+						ctx.ui.notify(
+							`Current model roles:\n` +
+							Object.entries(currentRoles).map(([k, v]) => `  ${k.padEnd(10)} → ${v}`).join("\n"),
+						"info"
+						);
+					} else {
+						ctx.ui.notify(
+							`No modelRoles configured. Run /tf init in an interactive session to select models.`,
+						"warning"
+						);
+					}
+					return;
+				}
+
+				// Use the user's scoped/enabled models (same list as /model command).
+				// Fall back to all auth-configured models if none are scoped.
+				const enabledModels = (existing.enabledModels as string[] | undefined) ?? [];
+				const modelList = enabledModels.length > 0
+					? enabledModels
+					: ctx.modelRegistry.getAvailable().map(m => `${m.provider}/${m.id}`);
+
+				// Interactive: walk through each role using the same model list
+				const chosen: Record<string, string> = {};
+				for (const rd of roleDefs) {
+					const current = currentRoles[rd.role];
+
+					const seen = new Set<string>();
+					const options: string[] = [];
+					for (const m of modelList) {
+						if (seen.has(m)) continue;
+						seen.add(m);
+						options.push(m === current ? `${m} (current)` : m);
+					}
+					options.push("───────────────");
+					options.push("Custom (type your own)");
+
+					const title = `Model for '${rd.role}' — ${rd.desc}` + (current ? `\nCurrent: ${current}` : "");
+					const pick = await ctx.ui.select(title, options, { signal: ctx.signal });
+
+					if (!pick || pick.startsWith("───")) {
+						chosen[rd.role] = current ?? modelList[0] ?? "";
+						continue;
+					}
+
+					if (pick === "Custom (type your own)") {
+						const custom = await ctx.ui.input(`Enter model identifier for '${rd.role}'`, "provider/model-id", { signal: ctx.signal });
+						chosen[rd.role] = custom?.trim() || current || "";
+					} else {
+						chosen[rd.role] = pick.replace(" (current)", "");
+					}
+				}
+
+				// Save
+				const newSettings = { ...existing, modelRoles: chosen };
+				fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+				fs.writeFileSync(settingsPath, JSON.stringify(newSettings, null, 2) + "\n", "utf-8");
+
+				ctx.ui.notify(
+					`Saved model roles to ${settingsPath}:\n` +
+					Object.entries(chosen).map(([k, v]) => `  ${k.padEnd(10)} → ${v}`).join("\n"),
+				"info"
+				);
 				return;
 			}
 

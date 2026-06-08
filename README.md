@@ -7,7 +7,7 @@
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/dm/pi-taskflow?style=flat-square&color=6E8BFF&label=downloads" alt="npm downloads"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-43D9AD?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-43D9AD?style=flat-square" alt="zero runtime dependencies"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-265-6E8BFF?style=flat-square" alt="265 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-269-6E8BFF?style=flat-square" alt="269 tests"></a>
   <a href="https://pi.dev"><img src="https://img.shields.io/badge/for-Pi%20coding%20agent-B692FF?style=flat-square" alt="for the Pi coding agent"></a>
 </p>
 
@@ -291,6 +291,7 @@ Saved flows become CLI shortcuts. All commands run in the Pi session:
 | `/tf show <name>` | Print a flow's definition |
 | `/tf runs` | Browse recent run history (interactive TUI) |
 | `/tf resume <runId>` | Continue a paused/failed run — cached phases skip automatically |
+| `/tf init` | Generate default modelRoles config in `~/.pi/agent/settings.json` |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
 Tool actions (used by the model): `run` (inline `define` or saved `name`), `save`, `resume`, `list`.
@@ -325,7 +326,104 @@ Agent discovery scope (via `agentScope` in the flow definition):
 
 ## Agents
 
-Taskflow reuses your existing Pi agent files (`~/.pi/agent/agents/*.md`, `.pi/agents/*.md`) — reference them by `name` in any phase or shorthand. The runtime extracts each agent's `systemPrompt` from its `.md` frontmatter and passes it via `--append-system-prompt`; phase-level `model` / `thinking` / `tools` overrides map to the matching subagent flags. Settings from `~/.pi/agent/settings.json` (`subagents.agentOverrides`) are honored across all flows.
+Taskflow ships **18 built-in agents** — each a `.md` file with a tuned system prompt, thinking level, and tool set. You can reference them by `name` in any phase or shorthand, right after install. No setup required.
+
+### Built-in agent roster
+
+| Agent | Role | Thinking | Default role |
+|---|---|---:|---|
+| `executor` | Implement planned code changes | high | `{{fast}}` |
+| `executor-fast` | Trivial fixes (≤2 files, ≤50 lines) | off | `{{fast}}` |
+| `executor-code` | Complex multi-file implementation | high | `{{strong}}` |
+| `executor-ui` | Frontend / styling / visual changes | high | `{{vision}}` |
+| `scout` | Fast codebase recon & file mapping | off | `{{fast}}` |
+| `planner` | Implementation plan creation | high | `{{strong}}` |
+| `analyst` | Requirements analysis, ambiguity detection | high | `{{thinker}}` |
+| `critic` | Inline self-doubt during reasoning | xhigh | `{{thinker}}` |
+| `reviewer` | General code / architecture review | high | `{{strong}}` |
+| `risk-reviewer` | Backend / infra / DB / API risk | high | `{{reasoner}}` |
+| `security-reviewer` | Security vulns, auth/crypto | xhigh | `{{reasoner}}` |
+| `plan-arbiter` | Plan quality gate (complex tasks) | high | `{{arbiter}}` |
+| `final-arbiter` | Tiebreaker when critics disagree | xhigh | `{{arbiter}}` |
+| `test-engineer` | Design & implement tests | high | `{{fast}}` |
+| `doc-writer` | Documentation authoring | off | `{{fast}}` |
+| `recover` | Session recovery after compaction | low | `{{fast}}` |
+| `verifier` | Run tests, validate outcomes | off | `{{fast}}` |
+| `visual-explorer` | Figma design metadata analysis | high | `{{vision}}` |
+
+Agents are layered: **built-in → user (`~/.pi/agent/agents/`) → project (`.pi/agents/`)**. A user or project agent with the same `name` overrides the built-in — so you can customize any agent without touching the package.
+
+### Model roles
+
+Each built-in agent's `model` field uses a **role placeholder** (e.g. `{{fast}}`) instead of a hardcoded provider string. This decouples *intent* from *implementation* — you map roles to models once, and every agent adapts.
+
+| Role | Intent | Typical model |
+|---|---|---|
+| `{{fast}}` | Cheap & quick — high-volume, low-stakes | DeepSeek V4 Flash |
+| `{{strong}}` | Balanced — planning, review, moderate complexity | MiMo v2.5 Pro |
+| `{{thinker}}` | Deep analysis — requirements, critique | DeepSeek V4 Pro |
+| `{{arbiter}}` | Final judgment — tiebreak, plan quality gates | Qwen 3.7 Max |
+| `{{vision}}` | Multimodal — UI work, design reading | MiniMax M3 |
+| `{{reasoner}}` | Cautious reasoning — security, risk | GLM 5.1 |
+
+Without configuration, agents fall back to Pi's default model. To assign specific models:
+
+```bash
+# Auto-generate ~/.pi/agent/settings.json with default role mappings
+/tf init
+```
+
+This writes:
+
+```json
+{
+  "modelRoles": {
+    "fast":     "openrouter/deepseek/deepseek-v4-flash",
+    "strong":   "openrouter/xiaomi/mimo-v2.5-pro",
+    "thinker":  "openrouter/deepseek/deepseek-v4-pro",
+    "arbiter":  "openrouter/qwen/qwen3.7-max",
+    "vision":   "minimax/MiniMax-M3",
+    "reasoner": "z-ai/glm-5.1"
+  }
+}
+```
+
+Edit the values to match your available providers. You can also override individual agents via `subagents.agentOverrides` in the same file:
+
+```json
+{
+  "modelRoles": { ... },
+  "subagents": {
+    "agentOverrides": {
+      "executor": { "model": "anthropic/claude-sonnet-4-20250514" },
+      "reviewer": { "thinking": "xhigh" }
+    }
+  }
+}
+```
+
+### Custom agents
+
+Drop a `.md` file into `~/.pi/agent/agents/` (user-level) or `.pi/agents/` (project-level, commit it) to add your own:
+
+```markdown
+---
+name: my-linter
+
+description: Run ESLint and report violations
+
+tools: read, bash
+
+model: "{{fast}}"
+
+thinking: off
+---
+
+You are a linting agent. Run `npx eslint --format json` on the
+provided files. Report violations grouped by file. No fixes.
+```
+
+Then reference it in any phase: `{ "agent": "my-linter", "task": "Lint src/" }`.
 
 ## Examples
 
@@ -343,12 +441,12 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 
 <div align="center">
 
-**0 runtime dependencies** · **265 tests** · **7 phase types** · **cross-session resume** · **~4.4k LOC runtime**
+**0 runtime dependencies** · **269 tests** · **7 phase types** · **cross-session resume** · **~4.4k LOC runtime**
 
 </div>
 
 - **Zero runtime dependencies.** No `dependencies` field — the runtime is built entirely on Node built-ins (`fs` / `path` / `os` / `child_process` / `crypto`). The file lock is `fs.openSync("wx")`, not a third-party library.
-- **265 tests across 11 suites** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, gate verdicts, budget caps, retry/backoff, approval flows, sub-flow composition, callback isolation, and the idle watchdog — plus a live end-to-end test that spawns real subagents.
+- **269 tests across 11 suites** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, gate verdicts, budget caps, retry/backoff, approval flows, sub-flow composition, callback isolation, and the idle watchdog — plus a live end-to-end test that spawns real subagents.
 - **Hardened by design.** Path-traversal defense (lexical + `realpath`), runId validation, HTML/error sanitization, atomic writes, stale-lock stealing via `rename`, and an idle watchdog that kills wedged subagents.
 - **Dogfooded.** Every new feature has to survive the project's own `self-improve` taskflow before it ships.
 

@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow",
-  "version": "0.0.11",
+  "version": "0.0.12",
   "description": "Lightweight workflow orchestration for the Pi coding agent — declarative multi-phase taskflows with dynamic fan-out, isolated subagent context, resumable runs, and saveable commands.",
   "keywords": [
     "pi-package",
@@ -36,7 +36,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test test/interpolate.test.ts test/condition.test.ts test/schema.test.ts test/usage.test.ts test/runtime.test.ts test/features.test.ts test/runner.test.ts test/store.test.ts test/agents.test.ts test/render.test.ts test/desugar.test.ts",
+    "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test test/interpolate.test.ts test/condition.test.ts test/schema.test.ts test/usage.test.ts test/runtime.test.ts test/features.test.ts test/runner.test.ts test/store.test.ts test/agents.test.ts test/render.test.ts test/desugar.test.ts",
     "test:e2e": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts"
   },
   "pi": {

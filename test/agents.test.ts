@@ -27,7 +27,11 @@ function writeAgent(
 	fs.mkdirSync(dir, { recursive: true });
 	const lines: string[] = ["---"];
 	for (const [k, v] of Object.entries(fields)) {
-		if (v !== undefined) lines.push(`${k}: ${v}`);
+		if (v !== undefined) {
+			// Quote values containing {{ to prevent YAML flow-mapping interpretation
+			const val = v.includes("{{") ? `"${v}"` : v;
+			lines.push(`${k}: ${val}`);
+		}
 	}
 	lines.push("---");
 	if (body) lines.push(body);
@@ -631,4 +635,48 @@ test("F-001: defense-in-depth — exotic frontmatter shapes do not abort discove
 	assert.equal(agents.length, 2);
 	const names = agents.map((a) => a.name).sort();
 	assert.deepEqual(names, ["num", "ok"]);
+});
+
+test("modelRoles: resolves {{role}} references from settings", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeAgent(agentsDir, "fast.md", { name: "fast-agent", description: "fast", model: "{{fast}}" });
+	writeAgent(agentsDir, "strong.md", { name: "strong-agent", description: "strong", model: "{{strong}}" });
+	writeAgent(agentsDir, "literal.md", { name: "literal-agent", description: "literal", model: "openai/gpt-4o" });
+	writeAgent(agentsDir, "nomodel.md", { name: "nomodel-agent", description: "no model" });
+
+	const roles = { fast: "openrouter/deepseek/v4-flash", strong: "anthropic/claude-sonnet-4-20250514" };
+	const { agents } = discoverAgents(projectCwd, "user", undefined, roles);
+
+	const byName = Object.fromEntries(agents.map(a => [a.name, a.model]));
+	assert.equal(byName["fast-agent"], "openrouter/deepseek/v4-flash");
+	assert.equal(byName["strong-agent"], "anthropic/claude-sonnet-4-20250514");
+	assert.equal(byName["literal-agent"], "openai/gpt-4o");
+	assert.equal(byName["nomodel-agent"], undefined);
+});
+
+test("modelRoles: unmapped role resolves to undefined", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeAgent(agentsDir, "unknown.md", { name: "unk", description: "unknown", model: "{{nonexistent}}" });
+
+	const { agents } = discoverAgents(projectCwd, "user", undefined, { fast: "openrouter/deepseek/v4-flash" });
+	assert.equal(agents[0].model, undefined);
+});
+
+test("modelRoles: no roles configured leaves {{role}} as-is", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeAgent(agentsDir, "role.md", { name: "role-agent", description: "role", model: "{{fast}}" });
+
+	const { agents } = discoverAgents(projectCwd, "user");
+	assert.equal(agents[0].model, "{{fast}}");
+});
+
+test("readSubagentSettings: reads modelRoles from settings.json", () => {
+	const agentDir = path.join(userAgentDir);
+	const settingsPath = path.join(agentDir, "settings.json");
+	fs.writeFileSync(settingsPath, JSON.stringify({
+		modelRoles: { fast: "openai/gpt-4o-mini", strong: "anthropic/claude-sonnet-4-20250514" },
+	}), "utf-8");
+
+	const settings = readSubagentSettings();
+	assert.deepEqual(settings.modelRoles, { fast: "openai/gpt-4o-mini", strong: "anthropic/claude-sonnet-4-20250514" });
 });
