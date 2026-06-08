@@ -3,7 +3,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test, beforeEach, afterEach } from "node:test";
-import { discoverAgents, readSubagentSettings, type AgentOverride } from "../extensions/agents.ts";
+import {
+	DEFAULT_TASKFLOW_SETTINGS,
+	discoverAgents,
+	normalizeTaskflowSettings,
+	readSubagentSettings,
+	shouldLoadBuiltinAgents,
+	shouldSyncBuiltinAgentsToProject,
+	type AgentOverride,
+} from "../extensions/agents.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -11,6 +19,7 @@ import { discoverAgents, readSubagentSettings, type AgentOverride } from "../ext
 
 /** The env var that controls `getAgentDir()` inside @earendil-works/pi-coding-agent. */
 const AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
+const BUILTIN_DIR_ENV = "PI_TASKFLOW_BUILTIN_AGENTS_DIR";
 
 /** Create a temp directory rooted in os.tmpdir(). */
 function makeTmpDir(prefix = "agents-test-"): string {
@@ -45,6 +54,7 @@ function writeAgent(
 // ---------------------------------------------------------------------------
 
 let savedAgentDir: string | undefined;
+let savedBuiltinDir: string | undefined;
 let tmpRoot: string;
 /** Simulated ~/.pi/agent directory */
 let userAgentDir: string;
@@ -53,6 +63,7 @@ let projectCwd: string;
 
 beforeEach(() => {
 	savedAgentDir = process.env[AGENT_DIR_ENV];
+	savedBuiltinDir = process.env[BUILTIN_DIR_ENV];
 	tmpRoot = makeTmpDir();
 	userAgentDir = path.join(tmpRoot, "user-agent");
 	projectCwd = path.join(tmpRoot, "project");
@@ -67,7 +78,40 @@ afterEach(() => {
 	} else {
 		process.env[AGENT_DIR_ENV] = savedAgentDir;
 	}
+	if (savedBuiltinDir === undefined) {
+		delete process.env[BUILTIN_DIR_ENV];
+	} else {
+		process.env[BUILTIN_DIR_ENV] = savedBuiltinDir;
+	}
 	fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+// ===========================================================================
+// Built-in agent project sync opt-in
+// ===========================================================================
+
+test("normalizeTaskflowSettings: defaults to built-ins enabled and project sync disabled", () => {
+	assert.deepEqual(normalizeTaskflowSettings(undefined), DEFAULT_TASKFLOW_SETTINGS);
+	assert.deepEqual(normalizeTaskflowSettings({}), DEFAULT_TASKFLOW_SETTINGS);
+});
+
+test("normalizeTaskflowSettings: accepts only boolean preference values", () => {
+	assert.deepEqual(normalizeTaskflowSettings({ builtInAgents: false, syncBuiltinAgentsToProject: true }), {
+		builtInAgents: false,
+		syncBuiltinAgentsToProject: true,
+	});
+	assert.deepEqual(normalizeTaskflowSettings({ builtInAgents: "false", syncBuiltinAgentsToProject: "true" }), DEFAULT_TASKFLOW_SETTINGS);
+});
+
+test("shouldLoadBuiltinAgents: follows taskflow builtInAgents setting", () => {
+	assert.equal(shouldLoadBuiltinAgents(DEFAULT_TASKFLOW_SETTINGS), true);
+	assert.equal(shouldLoadBuiltinAgents({ ...DEFAULT_TASKFLOW_SETTINGS, builtInAgents: false }), false);
+});
+
+test("shouldSyncBuiltinAgentsToProject: disabled by default and requires built-ins to be enabled", () => {
+	assert.equal(shouldSyncBuiltinAgentsToProject(DEFAULT_TASKFLOW_SETTINGS), false);
+	assert.equal(shouldSyncBuiltinAgentsToProject({ builtInAgents: true, syncBuiltinAgentsToProject: true }), true);
+	assert.equal(shouldSyncBuiltinAgentsToProject({ builtInAgents: false, syncBuiltinAgentsToProject: true }), false);
 });
 
 // ===========================================================================
@@ -101,6 +145,29 @@ test("discoverAgents: discovers project agents from <cwd>/.pi/agents/", () => {
 test("discoverAgents: returns empty agents when no agent dirs exist", () => {
 	const { agents } = discoverAgents(projectCwd, "both");
 	assert.equal(agents.length, 0);
+});
+
+test("discoverAgents: loads built-in agents by default", () => {
+	const builtInDir = path.join(tmpRoot, "built-ins");
+	writeAgent(builtInDir, "builtin.md", { name: "builtin", description: "package agent" }, "Built in.");
+	process.env[BUILTIN_DIR_ENV] = builtInDir;
+
+	const { agents } = discoverAgents(projectCwd, "both");
+	assert.equal(agents.length, 1);
+	assert.equal(agents[0].name, "builtin");
+	assert.equal(agents[0].source, "built-in");
+});
+
+test("discoverAgents: skips built-in agents when taskflow.builtInAgents is false", () => {
+	const builtInDir = path.join(tmpRoot, "built-ins");
+	writeAgent(builtInDir, "builtin.md", { name: "builtin", description: "package agent" }, "Built in.");
+	process.env[BUILTIN_DIR_ENV] = builtInDir;
+
+	const { agents } = discoverAgents(projectCwd, "both", undefined, undefined, {
+		builtInAgents: false,
+		syncBuiltinAgentsToProject: false,
+	});
+	assert.deepEqual(agents.map((a) => a.name), []);
 });
 
 // ===========================================================================
@@ -425,9 +492,9 @@ test("discoverAgents: empty tools string results in undefined tools", () => {
 // readSubagentSettings
 // ===========================================================================
 
-test("readSubagentSettings: returns empty object when settings.json missing", () => {
+test("readSubagentSettings: returns defaults when settings.json missing", () => {
 	const settings = readSubagentSettings();
-	assert.deepEqual(settings, {});
+	assert.deepEqual(settings, { taskflow: DEFAULT_TASKFLOW_SETTINGS });
 });
 
 test("readSubagentSettings: parses agentOverrides from settings.json", () => {
@@ -490,12 +557,12 @@ test("readSubagentSettings: subagents.globalThinking takes precedence over defau
 	assert.equal(settings.globalThinking, "high");
 });
 
-test("readSubagentSettings: returns empty object for malformed JSON", () => {
+test("readSubagentSettings: returns defaults for malformed JSON", () => {
 	const settingsPath = path.join(userAgentDir, "settings.json");
 	fs.writeFileSync(settingsPath, "NOT VALID JSON {{{");
 
 	const settings = readSubagentSettings();
-	assert.deepEqual(settings, {});
+	assert.deepEqual(settings, { taskflow: DEFAULT_TASKFLOW_SETTINGS });
 });
 
 test("readSubagentSettings: returns empty agentOverrides when subagents key is missing", () => {
@@ -515,6 +582,28 @@ test("readSubagentSettings: returns empty agentOverrides when subagents is null"
 	// subagents?.globalThinking is undefined, ?? raw.defaultThinkingLevel
 	const settings = readSubagentSettings();
 	assert.equal(settings.agentOverrides, undefined);
+});
+
+test("readSubagentSettings: parses taskflow preferences from settings.json", () => {
+	const settingsPath = path.join(userAgentDir, "settings.json");
+	fs.writeFileSync(
+		settingsPath,
+		JSON.stringify({ taskflow: { builtInAgents: false, syncBuiltinAgentsToProject: false } }),
+	);
+
+	const settings = readSubagentSettings();
+	assert.deepEqual(settings.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false });
+});
+
+test("readSubagentSettings: malformed taskflow preferences fall back to defaults", () => {
+	const settingsPath = path.join(userAgentDir, "settings.json");
+	fs.writeFileSync(
+		settingsPath,
+		JSON.stringify({ taskflow: { builtInAgents: "false", syncBuiltinAgentsToProject: "true" } }),
+	);
+
+	const settings = readSubagentSettings();
+	assert.deepEqual(settings.taskflow, DEFAULT_TASKFLOW_SETTINGS);
 });
 
 // ===========================================================================

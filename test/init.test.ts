@@ -23,8 +23,10 @@ import {
 	formatRolesReport,
 	formatDiffReport,
 	formatFlowResult,
+	formatTaskflowSettingsReport,
 	runInteractiveInit,
 } from "../extensions/init.ts";
+import { DEFAULT_TASKFLOW_SETTINGS } from "../extensions/agents.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,6 +150,24 @@ test("RECOMMENDED_DEFAULTS: derived from INIT_ROLES, not stored separately", () 
 		expected[r.role] = r.defaultModel;
 	}
 	assert.deepEqual(RECOMMENDED_DEFAULTS, expected);
+});
+
+// ---------------------------------------------------------------------------
+// Taskflow preferences
+// ---------------------------------------------------------------------------
+
+test("formatTaskflowSettingsReport: formats default settings", () => {
+	const report = formatTaskflowSettingsReport(DEFAULT_TASKFLOW_SETTINGS);
+	assert.ok(report.includes("Built-in agents: enabled"));
+	assert.ok(report.includes("Sync built-ins to project .pi/agents: disabled"));
+});
+
+test("formatTaskflowSettingsReport: formats disabled settings", () => {
+	const report = formatTaskflowSettingsReport({
+		builtInAgents: false,
+		syncBuiltinAgentsToProject: false,
+	});
+	assert.ok(report.includes("Built-in agents: disabled"));
 });
 
 // ---------------------------------------------------------------------------
@@ -564,7 +584,7 @@ test("formatDiffReport: shows all diff statuses", () => {
 // runInteractiveInit (mocked UI)
 // ---------------------------------------------------------------------------
 
-test("runInteractiveInit: empty currentRoles → 2-option action menu", async () => {
+test("runInteractiveInit: empty currentRoles → 3-option action menu", async () => {
 	const ui = createMockUI(["Configure each role", ...INIT_ROLES.map(() => "Keep current"), "Save these changes"]);
 	const modelList = sampleModels;
 	await runInteractiveInit({
@@ -578,10 +598,11 @@ test("runInteractiveInit: empty currentRoles → 2-option action menu", async ()
 	// First select call should be the action menu
 	const firstSelect = ui.selectCalls[0];
 	assert.ok(firstSelect.title.includes("What do you want to do"));
-	// Should only have 2 options (no "Edit one role", "Show current roles", "Cancel")
-	assert.equal(firstSelect.options.length, 2);
+	// Should have 3 options (recommended defaults, configure each role, taskflow preferences)
+	assert.equal(firstSelect.options.length, 3);
 	assert.ok(firstSelect.options.includes("Use recommended defaults"));
 	assert.ok(firstSelect.options.includes("Configure each role"));
+	assert.ok(firstSelect.options.includes("Configure taskflow preferences"));
 });
 
 test("runInteractiveInit: 'Use recommended defaults' → saves RECOMMENDED_DEFAULTS", async () => {

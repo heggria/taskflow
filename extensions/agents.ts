@@ -10,6 +10,43 @@ import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
 
+export interface TaskflowSettings {
+	/** Whether taskflow's package-local built-in agents are available to flows. */
+	builtInAgents: boolean;
+	/** Whether package-local built-ins are copied into the current project's .pi/agents/. */
+	syncBuiltinAgentsToProject: boolean;
+}
+
+export const DEFAULT_TASKFLOW_SETTINGS: TaskflowSettings = {
+	builtInAgents: true,
+	syncBuiltinAgentsToProject: false,
+};
+
+export function normalizeTaskflowSettings(raw: unknown): TaskflowSettings {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return { ...DEFAULT_TASKFLOW_SETTINGS };
+	}
+	const rec = raw as Record<string, unknown>;
+	return {
+		builtInAgents:
+			typeof rec.builtInAgents === "boolean"
+				? rec.builtInAgents
+				: DEFAULT_TASKFLOW_SETTINGS.builtInAgents,
+		syncBuiltinAgentsToProject:
+			typeof rec.syncBuiltinAgentsToProject === "boolean"
+				? rec.syncBuiltinAgentsToProject
+				: DEFAULT_TASKFLOW_SETTINGS.syncBuiltinAgentsToProject,
+	};
+}
+
+export function shouldLoadBuiltinAgents(settings: TaskflowSettings = DEFAULT_TASKFLOW_SETTINGS): boolean {
+	return settings.builtInAgents;
+}
+
+export function shouldSyncBuiltinAgentsToProject(settings: TaskflowSettings = DEFAULT_TASKFLOW_SETTINGS): boolean {
+	return settings.builtInAgents && settings.syncBuiltinAgentsToProject;
+}
+
 export interface AgentOverride {
 	model?: string;
 	thinking?: string;
@@ -122,12 +159,14 @@ export function discoverAgents(
 	scope: AgentScope,
 	overrides?: Record<string, AgentOverride>,
 	modelRoles?: Record<string, string>,
+	taskflowSettings: TaskflowSettings = DEFAULT_TASKFLOW_SETTINGS,
 ): AgentDiscoveryResult {
-	// Built-in agents ship with the package (extensions/agents/*.md)
-	// PI_TASKFLOW_BUILTIN_AGENTS_DIR allows tests to override or disable (empty = skip)
+	// Built-in agents ship with the package (extensions/agents/*.md).
+	// PI_TASKFLOW_BUILTIN_AGENTS_DIR is kept as a test hook only; user-facing
+	// enable/disable lives in settings.json under `taskflow.builtInAgents`.
 	const builtInDirEnv = process.env.PI_TASKFLOW_BUILTIN_AGENTS_DIR;
 	const builtInDir = builtInDirEnv ? builtInDirEnv : builtInDirEnv === undefined ? path.resolve(import.meta.dirname, "agents") : "";
-	const builtInAgents = builtInDir ? loadAgentsFromDir(builtInDir, "built-in") : [];
+	const builtInAgents = shouldLoadBuiltinAgents(taskflowSettings) && builtInDir ? loadAgentsFromDir(builtInDir, "built-in") : [];
 
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
@@ -179,6 +218,7 @@ export interface SubagentSettings {
 	agentOverrides?: Record<string, AgentOverride>;
 	globalThinking?: string;
 	modelRoles?: Record<string, string>;
+	taskflow: TaskflowSettings;
 }
 
 /**
@@ -197,15 +237,16 @@ export function resolveModelRole(model: string | undefined, roles?: Record<strin
 export function readSubagentSettings(): SubagentSettings {
 	try {
 		const settingsPath = path.join(getAgentDir(), "settings.json");
-		if (!fs.existsSync(settingsPath)) return {};
+		if (!fs.existsSync(settingsPath)) return { taskflow: { ...DEFAULT_TASKFLOW_SETTINGS } };
 		const raw = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
 		return {
 			agentOverrides: raw.subagents?.agentOverrides,
 			globalThinking: raw.subagents?.globalThinking ?? raw.defaultThinkingLevel,
 			modelRoles: raw.modelRoles,
+			taskflow: normalizeTaskflowSettings(raw.taskflow),
 		};
 	} catch {
-		return {};
+		return { taskflow: { ...DEFAULT_TASKFLOW_SETTINGS } };
 	}
 }
 

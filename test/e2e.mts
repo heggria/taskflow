@@ -52,7 +52,7 @@ async function main() {
 	console.log("valid ✓");
 
 	const settings = readSubagentSettings();
-	const { agents } = discoverAgents(process.cwd(), "user", settings.agentOverrides);
+	const { agents } = discoverAgents(process.cwd(), "user", settings.agentOverrides, settings.modelRoles, settings.taskflow);
 	console.log(`discovered ${agents.length} agents; has scout: ${agents.some((a) => a.name === "scout")}`);
 
 	const state: RunState = {

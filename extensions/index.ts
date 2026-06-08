@@ -24,7 +24,7 @@ import {
 	runInteractiveInit,
 } from "./init.ts";
 import { Type } from "typebox";
-import { type AgentScope, discoverAgents, readSubagentSettings, syncBuiltinAgentsToProject } from "./agents.ts";
+import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "./agents.ts";
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { executeTaskflow, type ApprovalDecision, type ApprovalRequest, type RuntimeResult } from "./runtime.ts";
@@ -190,7 +190,7 @@ async function runFlow(
 		// the heartbeat timer is cleared by the finally block below.
 		const settings = readSubagentSettings();
 		const scope: AgentScope = def.agentScope ?? "user";
-		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides, settings.modelRoles);
+		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides, settings.modelRoles, settings.taskflow);
 
 		// Hint: if any agent still has unresolved {{role}} references, suggest configuring modelRoles
 		const unresolvedRoles = agents
@@ -255,11 +255,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_e, ctx) => {
 		registerSavedFlowCommands(ctx);
 
-		// Sync built-in agents into .pi/agents/ so Pi's native subagent tool
-		// (and any other extension) can discover them — taskflow's
-		// extensions/agents/ directory is invisible to the rest of Pi.
+		// Optional: copy built-in agents into .pi/agents/ so Pi's native
+		// subagent tool (and other extensions) can discover them. This is
+		// disabled by default to avoid surprising project file creation.
 		try {
-			syncBuiltinAgentsToProject(ctx.cwd);
+			const settings = readSubagentSettings();
+			if (shouldSyncBuiltinAgentsToProject(settings.taskflow)) {
+				syncBuiltinAgentsToProject(ctx.cwd);
+			}
 		} catch {
 			// Best-effort: a locked or readonly .pi/ directory must not block
 			// session startup.
@@ -370,6 +373,7 @@ export default function (pi: ExtensionAPI) {
 						modelRegistry: ctx.modelRegistry,
 						modelList,
 						currentRoles: current,
+					currentTaskflowSettings: readSubagentSettings().taskflow,
 					});
 					const text = formatFlowResult(result);
 					return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
@@ -382,7 +386,7 @@ export default function (pi: ExtensionAPI) {
 			if (action === "agents") {
 				const scope = params.scope ?? "both";
 				const settings2 = readSubagentSettings();
-				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined, settings2.modelRoles);
+				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined, settings2.modelRoles, settings2.taskflow);
 				const text = agents.length
 					? agents
 							.map(

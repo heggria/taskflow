@@ -17,6 +17,7 @@ import * as path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_TASKFLOW_SETTINGS, normalizeTaskflowSettings, type TaskflowSettings } from "./agents.ts";
 import { writeFileAtomic } from "./store.ts";
 
 // ---------------------------------------------------------------------------
@@ -330,8 +331,23 @@ export function formatDiffReport(
 	return lines.join("\n");
 }
 
+export function formatTaskflowSettingsReport(settings: TaskflowSettings): string {
+	return [
+		"Taskflow preferences:",
+		`  Built-in agents: ${settings.builtInAgents ? "enabled" : "disabled"}`,
+		`  Sync built-ins to project .pi/agents: ${settings.syncBuiltinAgentsToProject ? "enabled" : "disabled"}`,
+	].join("\n");
+}
+
 export function formatFlowResult(result: InitFlowResult): string {
 	if (result.kind === "cancelled") return "Init cancelled.";
+	if (result.kind === "preferences-no-change") {
+		return "No changes.\n" + formatTaskflowSettingsReport(result.settings);
+	}
+	if (result.kind === "preferences-saved") {
+		const savedPath = formatSettingsPath(result.savedPath);
+		return `Saved taskflow preferences to ${savedPath}:\n` + formatTaskflowSettingsReport(result.settings);
+	}
 	if (result.kind === "no-change") {
 		return (
 			"No changes.\n" +
@@ -357,6 +373,8 @@ export function formatFlowResult(result: InitFlowResult): string {
 export type InitFlowResult =
 	| { kind: "saved"; chosen: Record<string, string>; savedPath: string }
 	| { kind: "no-change"; chosen: Record<string, string> }
+	| { kind: "preferences-saved"; settings: TaskflowSettings; savedPath: string }
+	| { kind: "preferences-no-change"; settings: TaskflowSettings }
 	| { kind: "cancelled" };
 
 export async function runInteractiveInit(ctx: {
@@ -366,6 +384,7 @@ export async function runInteractiveInit(ctx: {
 	modelRegistry: ExtensionContext["modelRegistry"];
 	modelList: Model<Api>[];
 	currentRoles: Record<string, string>;
+	currentTaskflowSettings?: TaskflowSettings;
 }): Promise<InitFlowResult> {
 	if (!ctx.hasUI) {
 		throw new Error("runInteractiveInit requires an interactive session (hasUI=true).");
@@ -373,6 +392,7 @@ export async function runInteractiveInit(ctx: {
 
 	const recommended = RECOMMENDED_DEFAULTS;
 	const current = ctx.currentRoles;
+	const currentTaskflowSettings = ctx.currentTaskflowSettings ?? normalizeTaskflowSettings(readSettings().taskflow);
 	const hasCurrent = Object.keys(current).length > 0;
 
 	// ---- Action menu ----
@@ -381,10 +401,11 @@ export async function runInteractiveInit(ctx: {
 				"Use recommended defaults",
 				"Configure each role",
 				"Edit one role",
+				"Configure taskflow preferences",
 				"Show current roles",
 				"Cancel",
 			]
-		: ["Use recommended defaults", "Configure each role"];
+		: ["Use recommended defaults", "Configure each role", "Configure taskflow preferences"];
 
 	const action = await ctx.ui.select(
 		"What do you want to do with model roles?",
@@ -416,6 +437,11 @@ export async function runInteractiveInit(ctx: {
 	// ---- Cancel ----
 	if (action === "Cancel") return { kind: "cancelled" };
 
+	// ---- Configure taskflow preferences ----
+	if (action === "Configure taskflow preferences") {
+		return configureTaskflowPreferences(ctx, currentTaskflowSettings);
+	}
+
 	// ---- Configure each role ----
 	if (action === "Configure each role") {
 		const chosen = await collectRolePicks(ctx, current, recommended, undefined);
@@ -436,6 +462,59 @@ export async function runInteractiveInit(ctx: {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+function taskflowSettingsIdentical(a: TaskflowSettings, b: TaskflowSettings): boolean {
+	return a.builtInAgents === b.builtInAgents && a.syncBuiltinAgentsToProject === b.syncBuiltinAgentsToProject;
+}
+
+async function configureTaskflowPreferences(
+	ctx: { signal: AbortSignal; ui: ExtensionUIContext },
+	current: TaskflowSettings,
+): Promise<InitFlowResult> {
+	const builtInPick = await ctx.ui.select(
+		"Taskflow built-in agents",
+		[
+			`Enable built-in agents${current.builtInAgents ? " (current)" : ""}`,
+			`Disable built-in agents${!current.builtInAgents ? " (current)" : ""}`,
+			"Back to action menu",
+		],
+		{ signal: ctx.signal },
+	);
+	if (builtInPick === undefined || builtInPick === "Back to action menu") return { kind: "cancelled" };
+
+	const chosen: TaskflowSettings = {
+		...DEFAULT_TASKFLOW_SETTINGS,
+		builtInAgents: builtInPick.startsWith("Enable"),
+	};
+
+	if (chosen.builtInAgents) {
+		const syncPick = await ctx.ui.select(
+			"Expose built-in agents to native Pi/project discovery?",
+			[
+				`Do not copy to project .pi/agents${!current.syncBuiltinAgentsToProject ? " (current)" : ""}`,
+				`Copy to project .pi/agents on session start${current.syncBuiltinAgentsToProject ? " (current)" : ""}`,
+				"Back to action menu",
+			],
+			{ signal: ctx.signal },
+		);
+		if (syncPick === undefined || syncPick === "Back to action menu") return { kind: "cancelled" };
+		chosen.syncBuiltinAgentsToProject = syncPick.startsWith("Copy");
+	}
+
+	if (taskflowSettingsIdentical(current, chosen)) {
+		return { kind: "preferences-no-change", settings: chosen };
+	}
+
+	const preview = await ctx.ui.select(
+		`Review taskflow preferences:\n\n${formatTaskflowSettingsReport(chosen)}`,
+		["Save these preferences", "Cancel"],
+		{ signal: ctx.signal },
+	);
+	if (preview !== "Save these preferences") return { kind: "cancelled" };
+
+	const savedPath = writeSettings({ ...readSettings(), taskflow: chosen });
+	return { kind: "preferences-saved", settings: chosen, savedPath };
+}
 
 /** Collect picks for all roles. Returns undefined if user escapes to action menu. */
 async function collectRolePicks(
