@@ -286,6 +286,7 @@ async function executePhase(
 	deps: RuntimeDeps,
 	prior: PhaseState | undefined,
 	emitProgress: () => void,
+	_retryDepth = 0,
 ): Promise<PhaseState> {
 	const type = phase.type ?? "agent";
 	const concurrency = phase.concurrency ?? state.def.concurrency ?? 8;
@@ -508,16 +509,23 @@ async function executePhase(
 
 		// onBlock:retry — re-execute upstream + gate until pass or max attempts.
 		if (type === "gate" && ps.gate?.verdict === "block") {
-			const onBlockV: string = (phase as any).onBlock ?? "halt";
+			const onBlockV: string = phase.onBlock ?? "halt";
+			const MAX_RETRY_DEPTH = 3;
 			let attempt = 0;
 			let gatePs = ps;
 			while (onBlockV === "retry" && attempt < (phase.retry?.max ?? 1)) {
+				// H1: guard against unbounded spend and user abort
+				if (deps.signal?.aborted || overBudget(state).over) break;
 				attempt++;
-				for (const depId of phase.dependsOn ?? []) {
-					const d = new Map((state.def.phases as any[]).map((p: any) => [p.id, p])).get(depId);
-					if (!d) continue;
-					const dPs = await executePhase(d, state, deps, prior, emitProgress);
-					state.phases[depId] = dPs;
+				// H2: cap nested retry depth to prevent exponential re-execution
+				// when a gate's upstream dependency is itself a gate with onBlock:retry
+				if (_retryDepth < MAX_RETRY_DEPTH) {
+					for (const depId of phase.dependsOn ?? []) {
+						const d = state.def.phases.find((p) => p.id === depId);
+						if (!d) continue;
+						const dPs = await executePhase(d, state, deps, prior, emitProgress, _retryDepth + 1);
+						state.phases[depId] = dPs;
+					}
 				}
 				const retryCtx = buildInterpolationContext(state, lastCompletedOutput(state, phase));
 				const retryText = interpolate(phase.task ?? "", retryCtx).text;
@@ -526,7 +534,7 @@ async function executePhase(
 				const retryR = await runOne(agentName, retryTask, liveSink(state, phase.id, emitProgress));
 				gatePs = resultToPhaseState(phase.id, retryR, retryIH, parseJson);
 				if (gatePs.status === "done") gatePs.gate = parseGateVerdict(retryR.output);
-				if (gatePs.gate?.verdict !== "block") break;
+				if (gatePs.gate?.verdict !== "block" || overBudget(state).over) break;
 			}
 			gatePs.attempts = (ps.attempts ?? 0) + attempt;
 			recordCache(cc, gatePs);
