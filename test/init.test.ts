@@ -17,9 +17,11 @@ import {
 	formatModelOption,
 	buildRoleOptions,
 	parseCustomModel,
+	modelExists,
 	diffRoles,
 	formatRolesReport,
 	formatDiffReport,
+	formatFlowResult,
 	runInteractiveInit,
 } from "../extensions/init.ts";
 
@@ -59,16 +61,24 @@ interface MockUI {
 	selectCalls: Array<{ title: string; options: string[] }>;
 	inputCalls: Array<{ title: string; placeholder?: string }>;
 	notifyCalls: Array<{ message: string; type?: string }>;
+	confirmCalls: Array<{ title: string; message: string }>;
 	/** Queue of canned responses. Undefined simulates Esc. */
 	answers: Array<string | undefined>;
+	/** Queue of canned confirm() answers. Defaults to `true` when empty. */
+	confirmAnswers: boolean[];
 }
 
-function createMockUI(answers: Array<string | undefined> = []): MockUI & ExtensionUIContext {
+function createMockUI(
+	answers: Array<string | undefined> = [],
+	confirmAnswers: boolean[] = [],
+): MockUI & ExtensionUIContext {
 	const ui: MockUI = {
 		selectCalls: [],
 		inputCalls: [],
 		notifyCalls: [],
+		confirmCalls: [],
 		answers: [...answers],
+		confirmAnswers: [...confirmAnswers],
 	};
 	return Object.assign(ui as unknown as ExtensionUIContext, {
 		async select(title: string, options: string[], _opts?: unknown) {
@@ -78,6 +88,11 @@ function createMockUI(answers: Array<string | undefined> = []): MockUI & Extensi
 		async input(title: string, placeholder?: string, _opts?: unknown) {
 			ui.inputCalls.push({ title, placeholder });
 			return ui.answers.shift();
+		},
+		async confirm(title: string, message: string, _opts?: unknown) {
+			ui.confirmCalls.push({ title, message });
+			const next = ui.confirmAnswers.shift();
+			return next === undefined ? true : next;
 		},
 		notify(message: string, type?: "info" | "warning" | "error") {
 			ui.notifyCalls.push({ message, type });
@@ -260,6 +275,26 @@ test("parseCustomModel: rejects 'provider/' (empty id)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// modelExists
+// ---------------------------------------------------------------------------
+
+test("modelExists: true when provider+id match a registry entry", () => {
+	assert.equal(modelExists("openrouter", "deepseek/v4-flash", sampleModels), true);
+	assert.equal(modelExists("minimax", "MiniMax-M3", sampleModels), true);
+});
+
+test("modelExists: false for unknown id, unknown provider, and example placeholder", () => {
+	assert.equal(modelExists("openrouter", "does/not-exist", sampleModels), false);
+	assert.equal(modelExists("nope", "deepseek/v4-flash", sampleModels), false);
+	// The exact string that polluted real settings.json and broke every flow.
+	assert.equal(modelExists("myprovider", "my-custom-model", sampleModels), false);
+});
+
+test("modelExists: false against an empty registry", () => {
+	assert.equal(modelExists("openrouter", "deepseek/v4-flash", []), false);
+});
+
+// ---------------------------------------------------------------------------
 // diffRoles
 // ---------------------------------------------------------------------------
 
@@ -348,11 +383,11 @@ test("readSettings: modelRoles: '' (string) returns {} for modelRoles", () => {
 	assert.deepEqual(result.modelRoles, {});
 });
 
-test("readSettings: modelRoles: 'string' returns {} for modelRoles", () => {
+test("readSettings: modelRoles: null returns {} for modelRoles", () => {
 	const sp = getSettingsPath();
 	fs.writeFileSync(
 		sp,
-		JSON.stringify({ modelRoles: "string" }),
+		JSON.stringify({ modelRoles: null }),
 		"utf-8",
 	);
 	const result = readSettings();
@@ -511,17 +546,114 @@ test("runInteractiveInit: Esc on action menu (undefined return) → cancelled", 
 	assert.equal(result.kind, "cancelled");
 });
 
-test("runInteractiveInit: custom model not in registry → still saves, warns", async () => {
+test("runInteractiveInit: custom model not in registry → confirm yes → saves", async () => {
 	const current: Record<string, string> = {};
 	for (const r of INIT_ROLES) current[r.role] = r.defaultModel;
-	// Select "Edit one role", pick the first role, choose Custom, type a custom model, then save
+	// Select "Edit one role", pick the first role, choose Custom, type a custom
+	// model, then save. The custom model is NOT in the registry, so a confirm
+	// dialog appears; answer yes (default).
+	const ui = createMockUI(
+		[
+			"Edit one role",
+			INIT_ROLES[0].role + " — " + INIT_ROLES[0].description,
+			"Custom (type your own)",
+			"myprovider/my-custom-model",
+			"Save these changes",
+		],
+		[true],
+	);
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: current,
+	});
+	assert.equal(ui.confirmCalls.length, 1, "should warn via confirm for unknown model");
+	assert.equal(result.kind, "saved");
+	if (result.kind === "saved") {
+		assert.equal(result.chosen[INIT_ROLES[0].role], "myprovider/my-custom-model");
+	}
+});
+
+test("runInteractiveInit: custom model not in registry → confirm no → keeps current, no-change", async () => {
+	const current: Record<string, string> = {};
+	for (const r of INIT_ROLES) current[r.role] = r.defaultModel;
+	const ui = createMockUI(
+		[
+			"Edit one role",
+			INIT_ROLES[0].role + " — " + INIT_ROLES[0].description,
+			"Custom (type your own)",
+			"myprovider/my-custom-model",
+			"Save these changes",
+		],
+		[false],
+	);
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: current,
+	});
+	assert.equal(ui.confirmCalls.length, 1, "should warn via confirm for unknown model");
+	// Declining the unknown model falls back to the current value → no change.
+	assert.equal(result.kind, "no-change");
+});
+
+test("runInteractiveInit: hasUI=false → throws", async () => {
+	await assert.rejects(
+		() =>
+			runInteractiveInit({
+				hasUI: false,
+				signal: new AbortController().signal,
+				ui: createMockUI([]),
+				modelRegistry: undefined as never,
+				modelList: sampleModels,
+				currentRoles: {},
+			}),
+		/hasUI/,
+	);
+});
+
+test("runInteractiveInit: Esc on custom input → falls back to current, not cancelled", async () => {
+	const current: Record<string, string> = {};
+	for (const r of INIT_ROLES) current[r.role] = r.defaultModel;
+	// Action menu: Configure each role.
+	// Role 1 picker: "Custom (type your own)" → custom input: undefined (Esc) → falls back to current[role1].
+	// Roles 2..N picker: "Keep current".
+	// Expected: result is saved OR no-change (never cancelled), and chosen equals current.
+	// The flow short-circuits to no-change when picks match current exactly.
 	const ui = createMockUI([
-		"Edit one role",
-		INIT_ROLES[0].role + " — " + INIT_ROLES[0].description,
-		"Custom (type your own)",
-		"myprovider/my-custom-model",
-		"Save these changes",
+		"Configure each role",
+		"Custom (type your own)",  // role 1 picker
+		undefined,                  // custom input Esc
+		...INIT_ROLES.slice(1).map(() => "Keep current"),  // roles 2..N
 	]);
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: current,
+	});
+	// The key invariant: Esc on custom input does NOT cancel the whole flow.
+	// (If Esc on custom input were conflated with action-menu Esc, this would be 'cancelled'.)
+	assert.notEqual(result.kind, "cancelled");
+	// All roles fell back to their current values.
+	const chosen = result.kind === "saved" ? result.chosen : result.kind === "no-change" ? result.chosen : {};
+	assert.deepEqual(chosen, current);
+});
+
+test("runInteractiveInit: 'Use recommended defaults' with stale keys → preserves stale keys", async () => {
+	const current: Record<string, string> = {
+		fast: "openrouter/anthropic/claude-sonnet-4-6",
+		"old-role-1": "openrouter/x/y", // stale (not in INIT_ROLES)
+	};
+	const ui = createMockUI(["Use recommended defaults"]);
 	const result = await runInteractiveInit({
 		hasUI: true,
 		signal: new AbortController().signal,
@@ -532,6 +664,59 @@ test("runInteractiveInit: custom model not in registry → still saves, warns", 
 	});
 	assert.equal(result.kind, "saved");
 	if (result.kind === "saved") {
-		assert.equal(result.chosen[INIT_ROLES[0].role], "myprovider/my-custom-model");
+		// Stale key preserved
+		assert.equal(result.chosen["old-role-1"], "openrouter/x/y");
+		// Existing role overridden by recommended default
+		assert.equal(result.chosen.fast, RECOMMENDED_DEFAULTS.fast);
 	}
+});
+
+test("runInteractiveInit: 'Show current roles' → notifies and returns cancelled", async () => {
+	const current: Record<string, string> = { fast: "openrouter/x/y" };
+	const ui = createMockUI(["Show current roles"]);
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: current,
+	});
+	assert.equal(result.kind, "cancelled");
+	assert.equal(ui.notifyCalls.length, 1);
+	assert.equal(ui.notifyCalls[0].type, "info");
+	assert.match(ui.notifyCalls[0].message, /fast/);
+});
+
+test("getSettingsPath: returns a path ending in settings.json", () => {
+	const p = getSettingsPath();
+	assert.match(p, /settings\.json$/);
+});
+
+test("formatFlowResult: cancelled returns a cancellation message", () => {
+	const result: { kind: "cancelled" } = { kind: "cancelled" };
+	const text = formatFlowResult(result);
+	assert.match(text, /cancel/i);
+});
+
+test("formatFlowResult: no-change shows the unchanged roles", () => {
+	const chosen: Record<string, string> = { fast: "openrouter/x/y" };
+	const result: { kind: "no-change"; chosen: Record<string, string> } = {
+		kind: "no-change",
+		chosen,
+	};
+	const text = formatFlowResult(result);
+	assert.match(text, /no change|unchanged/i);
+	assert.match(text, /fast/);
+});
+
+test("formatFlowResult: saved includes the path", () => {
+	const result = {
+		kind: "saved" as const,
+		chosen: { fast: "openrouter/x/y" },
+		savedPath: "/tmp/settings.json",
+	};
+	const text = formatFlowResult(result);
+	assert.match(text, /saved/i);
+	assert.match(text, /\/tmp\/settings\.json/);
 });

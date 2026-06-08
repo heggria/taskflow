@@ -6,6 +6,7 @@
  *   readSettings, writeSettings                – settings.json I/O (atomic writes)
  *   formatModelOption, buildRoleOptions        – picker UI helpers
  *   parseCustomModel                           – custom model string validator
+ *   modelExists                                – registry membership check (guards typos)
  *   diffRoles                                  – diff engine for preview screen
  *   formatRolesReport, formatDiffReport        – read-only report formatters
  *   runInteractiveInit                         – full interactive UX flow
@@ -94,9 +95,6 @@ export function getSettingsPath(): string {
 	return path.join(getAgentDir(), "settings.json");
 }
 
-/** Compat: static value at load time. Prefer getSettingsPath() for tests. */
-export const SETTINGS_PATH: string = getSettingsPath();
-
 // ---------------------------------------------------------------------------
 // Settings I/O
 // ---------------------------------------------------------------------------
@@ -181,6 +179,19 @@ export function parseCustomModel(input: string): { provider: string; id: string 
 	const id = trimmed.slice(slashIdx + 1).trim();
 	if (!provider || !id) return null;
 	return { provider, id };
+}
+
+/**
+ * Returns true if `provider/id` exists in the available model registry.
+ * Used to warn before persisting a hand-typed model that would never resolve
+ * at runtime (e.g. a typo or a copy-pasted example string).
+ */
+export function modelExists(
+	provider: string,
+	id: string,
+	available: ReadonlyArray<Model<Api>>,
+): boolean {
+	return available.some((m) => m.provider === provider && m.id === id);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +481,20 @@ async function pickOneRole(
 		if (custom === undefined) return cur ?? recommended[role.role];
 		const parsed = parseCustomModel(custom);
 		if (!parsed) return cur ?? recommended[role.role];
-		return `${parsed.provider}/${parsed.id}`;
+		const full = `${parsed.provider}/${parsed.id}`;
+		// Guard: a hand-typed model that isn't in the registry will fail at
+		// runtime with "Model not found" and silently break every flow that
+		// uses this role. Require explicit confirmation before accepting it.
+		if (!modelExists(parsed.provider, parsed.id, ctx.modelList)) {
+			const keep = await ctx.ui.confirm(
+				`'${full}' is not in the model registry`,
+				`This model was not found and may fail at runtime with "Model not found".\n` +
+					`Use it anyway?`,
+				{ signal: ctx.signal },
+			);
+			if (!keep) return cur ?? recommended[role.role];
+		}
+		return full;
 	}
 	if (pick === "Keep current") return undefined;
 	// Parse model from display label: "Name (provider/id) · tags..."

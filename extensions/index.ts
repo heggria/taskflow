@@ -294,7 +294,16 @@ export default function (pi: ExtensionAPI) {
 
 			// init — configure model roles
 			if (action === "init") {
-				const settings = readSettings();
+				let settings: Record<string, unknown>;
+				try {
+					settings = readSettings();
+				} catch (e) {
+					return errorResult(
+						action,
+						`Failed to read settings.json: ${e instanceof Error ? e.message : String(e)}. ` +
+							`Fix the file or remove it.`,
+					);
+				}
 				const current = (settings.modelRoles ?? {}) as Record<string, string>;
 				const mode = params.mode;
 
@@ -607,8 +616,17 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (sub === "init") {
-				const settings = readSettings();
-				const currentRoles = (settings.modelRoles ?? {}) as Record<string, string>;
+				let settings: Record<string, unknown>;
+				try {
+					settings = readSettings();
+				} catch (e) {
+					ctx.ui.notify(
+						`Failed to read settings.json: ${e instanceof Error ? e.message : String(e)}`,
+						"error",
+					);
+					return;
+				}
+				const currentRoles = settings.modelRoles as Record<string, string>;
 
 				if (!ctx.hasUI) {
 					if (Object.keys(currentRoles).length > 0) {
