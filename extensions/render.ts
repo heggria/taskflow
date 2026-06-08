@@ -209,6 +209,22 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 		if (ps.warnings?.length) g += theme.fg("warning", `  ⚠${ps.warnings.length}`);
 		return g;
 	}
+	if (ps.loop) {
+		const stopLabel =
+			ps.loop.stop === "until"
+				? theme.fg("success", "done")
+				: ps.loop.stop === "converged"
+					? theme.fg("toolOutput", "converged")
+					: ps.loop.stop === "maxIterations"
+						? theme.fg("warning", "max")
+						: theme.fg("error", "failed");
+		let l = theme.fg("toolTitle", `↻${ps.loop.iterations}`) + " " + stopLabel;
+		const cost = costStr(ps.usage, theme);
+		if (cost) l += `  ${cost}`;
+		if (time) l += `  ${time}`;
+		if (ps.warnings?.length) l += theme.fg("warning", `  ⚠${ps.warnings.length}`);
+		return l;
+	}
 	let s = roleLabel;
 	if (cost) s += `  ${cost}`;
 	if (ps.attempts && ps.attempts > 1) s += theme.fg("warning", `  ↻${ps.attempts - 1}`);

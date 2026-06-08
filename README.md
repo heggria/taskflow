@@ -229,6 +229,7 @@ No scripting. No `eval`. Just data the runtime executes — safe enough to run L
 | `reduce` | aggregate `from[]` phase outputs into one | `from`, `task` |
 | `approval` | **human-in-the-loop** pause — approve / reject / edit | — |
 | `flow` | run a **saved sub-flow** as one phase (composition) | `use` |
+| `loop` | **iterate a task until done** — re-run a body until a condition, convergence, or a cap | `task`, `until` |
 
 ### Common phase fields
 
@@ -259,6 +260,27 @@ Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agen
 - **`retry`** — `{ "max": 2, "backoffMs": 500, "factor": 2 }` retries a failing subagent with fixed or exponential backoff; usage is summed and the attempt count shows as `↻N` in the TUI. Transient provider errors (rate-limit / 5xx / timeout) **auto-retry even without an explicit policy**; hard errors don't.
 - **`approval`** — pause for a human (Approve / Reject / Edit). Reject halts the flow; Edit injects the typed note as the phase output for downstream steps. Non-interactive runs auto-approve.
 - **`flow`** — `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }` runs a saved flow as a phase (recursion is detected and rejected).
+
+### Loop-until-done (`loop`)
+
+Some work is inherently iterative — refine a draft until a reviewer is satisfied, retry-and-improve until tests pass, converge on an answer. A `loop` phase re-runs one task body until a stop condition holds:
+
+```jsonc
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft (iteration {loop.iteration}). Previous attempt:\n{loop.lastOutput}\n\nReturn JSON {\"draft\":\"…\",\"done\":true|false}.",
+  "until": "{steps.refine.json.done} == true",   // the iteration's own output is exposed here
+  "output": "json",
+  "maxIterations": 6,        // default 10, hard cap 100 — the loop ALWAYS terminates
+  "convergence": true        // default: stop early if an iteration's output is identical to the last
+}
+```
+
+- **Body locals** — the task can read `{loop.iteration}` (1-based) and `{loop.lastOutput}` (the prior iteration's output) to build on its own previous work.
+- **`until`** — evaluated after each iteration with the iteration's output exposed as `{steps.<thisId>.output}` / `.json`. Same operators as `when`. The loop stops the moment it's truthy.
+- **Always terminates.** Three independent stops: `until` truthy, **convergence** (a fixed point — output identical to the previous iteration), or **`maxIterations`** (hard-capped at 100). A malformed `until` **stops** the loop rather than spinning forever (fail-safe), and a failing iteration fails the phase with the partial output preserved.
+- The TUI shows `↻N` with the stop reason (`done` / `converged` / `max` / `failed`); usage is summed across iterations. Like `gate`/`approval`, `loop` is **excluded from `cross-run` cache** (each run must iterate fresh).
 - **`budget`** — a run-wide `{maxUSD, maxTokens}` ceiling; once exceeded, pending phases skip and in-flight fan-out stops spawning, ending the run as `blocked`.
 - **idle watchdog** — a subagent that goes silent for 5 minutes is treated as wedged and killed (SIGTERM → SIGKILL), so one hung child can never freeze the whole flow.
 

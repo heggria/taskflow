@@ -13,10 +13,10 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { AgentConfig } from "./agents.ts";
-import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse } from "./interpolate.ts";
+import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { isFailed, isTransientError, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult } from "./runner.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers } from "./schema.ts";
+import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers } from "./schema.ts";
 import { hashInput, newRunId, type PhaseState, type RunState } from "./store.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 
@@ -644,6 +644,91 @@ async function executePhase(
 		};
 		recordCache(cc, flowPs);
 		return flowPs;
+	}
+
+	// loop-until-done: run the body repeatedly until `until` is truthy, the output
+	// converges to a fixed point, or maxIterations is hit (always terminates).
+	if (type === "loop") {
+		const agentName = resolveAgent(phase.agent, deps, state);
+		const rawMax = phase.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS;
+		const maxIters = Math.max(1, Math.min(LOOP_HARD_MAX_ITERATIONS, Math.floor(rawMax)));
+		const convergence = phase.convergence ?? true;
+
+		const usages: UsageStats[] = [];
+		let lastOutput = "";
+		let prevOutput: string | undefined;
+		let iterations = 0;
+		let stop: NonNullable<PhaseState["loop"]>["stop"] = "maxIterations";
+		let failedResult: RunResult | undefined;
+
+		for (let i = 1; i <= maxIters; i++) {
+			if (deps.signal?.aborted) {
+				stop = "failed";
+				break;
+			}
+			iterations = i;
+			// The body sees its iteration number and the prior iteration's output.
+			const bodyCtx = buildInterpolationContext(state, previousOutput, {
+				loop: { iteration: i, lastOutput, maxIterations: maxIters },
+			});
+			const body = preRead + interpolate(phase.task ?? "", bodyCtx).text;
+			const r = await runOne(agentName, body, liveSink(state, phase.id, emitProgress));
+			usages.push(r.usage);
+			if (isFailed(r)) {
+				failedResult = r;
+				stop = "failed";
+				break;
+			}
+			prevOutput = lastOutput;
+			lastOutput = r.output;
+
+			// Expose this iteration's output as {steps.<thisId>.output|json} so the
+			// `until` condition can inspect it (e.g. "{steps.refine.json.done}==true").
+			// Loop locals ({loop.iteration} etc.) are available to the condition too.
+			const untilCtx = buildInterpolationContext(state, previousOutput, {
+				loop: { iteration: i, lastOutput, maxIterations: maxIters },
+			});
+			untilCtx.steps[phase.id] = { output: lastOutput, json: safeParse(lastOutput) };
+			const { value: done, error: condErr } = tryEvaluateCondition(phase.until ?? "", untilCtx);
+			// A malformed condition must not spin forever: stop and surface a warning.
+			if (condErr) {
+				stop = "until";
+				break;
+			}
+			if (done) {
+				stop = "until";
+				break;
+			}
+			// Fixed-point convergence: identical consecutive output ⇒ further work is wasted.
+			if (convergence && prevOutput !== undefined && prevOutput === lastOutput) {
+				stop = "converged";
+				break;
+			}
+		}
+
+		const aggUsage = usages.length ? aggregateUsage(usages) : emptyUsage();
+		if (failedResult) {
+			return {
+				id: phase.id,
+				status: "failed",
+				output: lastOutput || undefined,
+				usage: aggUsage,
+				error: failedResult.errorMessage || failedResult.stderr || `loop '${phase.id}' iteration ${iterations} failed`,
+				loop: { iterations, stop: "failed" },
+				inputHash: hashInput(phase.id, "loop", phase.until ?? ""),
+				endedAt: Date.now(),
+			};
+		}
+		return {
+			id: phase.id,
+			status: "done",
+			output: lastOutput,
+			json: parseJson ? safeParse(lastOutput) : undefined,
+			usage: aggUsage,
+			loop: { iterations, stop },
+			inputHash: hashInput(phase.id, "loop", phase.until ?? "", String(iterations)),
+			endedAt: Date.now(),
+		};
 	}
 
 	return {

@@ -13,8 +13,12 @@ import { Type, type Static } from "typebox";
 // Phase types
 // ---------------------------------------------------------------------------
 
-export const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow"] as const;
+export const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop"] as const;
 export type PhaseType = (typeof PHASE_TYPES)[number];
+
+/** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
+export const LOOP_DEFAULT_MAX_ITERATIONS = 10;
+export const LOOP_HARD_MAX_ITERATIONS = 100;
 
 export const OUTPUT_FORMATS = ["text", "json"] as const;
 export const JOIN_MODES = ["all", "any"] as const;
@@ -23,7 +27,7 @@ export type CacheScope = (typeof CACHE_SCOPES)[number];
 /** Allowed fingerprint entry prefixes. `glob!:` = content-hash variant of `glob:`. */
 export const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
 /** Phase types that must NOT be cached across runs (a fresh result is required each run). */
-export const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval"] as const;
+export const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop"] as const;
 
 const ParallelTaskSchema = Type.Object(
 	{
@@ -112,6 +116,27 @@ const PhaseSchema = Type.Object(
 		with: Type.Optional(
 			Type.Record(Type.String(), Type.Unknown(), {
 				description: "[flow] Args passed to the sub-flow (string values support interpolation)",
+			}),
+		),
+
+		// loop-until-done
+		until: Type.Optional(
+			Type.String({
+				description:
+					"[loop] Stop condition evaluated after each iteration. The iteration's output is exposed as {steps.<thisId>.output}/.json. Supports the same operators as `when`. The loop stops when this is truthy, on convergence, or at maxIterations. A parse error stops the loop (fail-safe).",
+			}),
+		),
+		maxIterations: Type.Optional(
+			Type.Number({
+				description: `[loop] Hard cap on iterations (default ${LOOP_DEFAULT_MAX_ITERATIONS}, max ${LOOP_HARD_MAX_ITERATIONS}). The loop always terminates within this bound even if 'until' never becomes truthy.`,
+				default: LOOP_DEFAULT_MAX_ITERATIONS,
+			}),
+		),
+		convergence: Type.Optional(
+			Type.Boolean({
+				description:
+					"[loop] When true (default), stop early if an iteration's output is identical to the previous one (a fixed point — further iterations would not change anything).",
+				default: true,
 			}),
 		),
 
@@ -372,6 +397,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		if (type === "flow") {
 			if (!p.use) errors.push(`Phase '${p.id}' (flow) requires 'use' (a saved flow name)`);
+		}
+		if (type === "loop") {
+			if (!p.task) errors.push(`Phase '${p.id}' (loop) requires 'task' (the iteration body)`);
+			if (!p.until) errors.push(`Phase '${p.id}' (loop) requires 'until' (the stop condition)`);
+			if (p.maxIterations !== undefined) {
+				if (typeof p.maxIterations !== "number" || !Number.isFinite(p.maxIterations) || p.maxIterations < 1) {
+					errors.push(`Phase '${p.id}' (loop): maxIterations must be a number >= 1`);
+				} else if (p.maxIterations > LOOP_HARD_MAX_ITERATIONS) {
+					errors.push(`Phase '${p.id}' (loop): maxIterations must be <= ${LOOP_HARD_MAX_ITERATIONS}`);
+				}
+			}
 		}
 		if (p.retry) {
 			if (typeof p.retry.max !== "number" || p.retry.max < 0) {

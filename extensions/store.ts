@@ -58,6 +58,8 @@ export interface PhaseState {
 	budgetTruncated?: boolean;
 	/** Human-in-the-loop outcome (approval phases only). */
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
+	/** Loop iteration accounting (loop phases only). */
+	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" };
 	/** Non-fatal diagnostic warnings accumulated during this phase (e.g.
 	 *  unresolved interpolation placeholders, suspicious templates). */
 	warnings?: string[];
