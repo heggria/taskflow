@@ -40,6 +40,10 @@ export interface PhaseState {
 	model?: string;
 	error?: string;
 	inputHash?: string;
+	/** When this result was served from cache: 'cross-run' for the persistent
+	 *  cross-run store. (Within-run resume reuses prior state verbatim and is not
+	 *  flagged here.) */
+	cacheHit?: "cross-run";
 	startedAt?: number;
 	endedAt?: number;
 	/** Live fan-out progress for map/parallel phases. */
@@ -249,7 +253,7 @@ function releaseLock(lockPath: string): void {
 /**
  * Execute `fn` while holding a file lock.  Guarantees release even on throw.
  */
-function withLock<T>(lockPath: string, fn: () => T): T {
+export function withLock<T>(lockPath: string, fn: () => T): T {
 	acquireLock(lockPath);
 	try {
 		return fn();
@@ -560,6 +564,12 @@ function runsDir(cwd: string): string {
 	return path.join(projDir, "runs");
 }
 
+/** Root dir for the cross-run memoization cache (sibling of `runs`). */
+export function cacheDir(cwd: string): string {
+	const projDir = findProjectFlowsDir(cwd, true)!;
+	return path.join(projDir, "cache");
+}
+
 export function newRunId(flowName: string): string {
 	const safe = flowName.replace(/[^\w.-]+/g, "_").slice(0, 24);
 	return `${safe}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
@@ -743,7 +753,7 @@ export function hashInput(...parts: string[]): string {
  * then rename over the target (rename is atomic on the same filesystem). Prevents
  * a crash or concurrent write from leaving a half-written, corrupt JSON file.
  */
-function writeFileAtomic(filePath: string, data: string): void {
+export function writeFileAtomic(filePath: string, data: string): void {
 	// Ensure parent directory exists.
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;

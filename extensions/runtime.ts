@@ -16,8 +16,9 @@ import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse } from "./interpolate.ts";
 import { isFailed, isTransientError, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult } from "./runner.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, dependenciesOf, finalPhase, type Phase, resolveArgs, type Taskflow, topoLayers } from "./schema.ts";
+import { type Budget, type CacheScope, dependenciesOf, finalPhase, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers } from "./schema.ts";
 import { hashInput, newRunId, type PhaseState, type RunState } from "./store.ts";
+import { CacheStore, resolveFingerprint } from "./cache.ts";
 
 /** A human-in-the-loop approval request raised by an `approval` phase. */
 export interface ApprovalRequest {
@@ -49,6 +50,8 @@ export interface RuntimeDeps {
 	requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
 	/** Resolve a saved taskflow by name for `flow` (sub-workflow) phases. */
 	loadFlow?: (name: string) => Taskflow | undefined;
+	/** Cross-run memoization store. Omit to construct a default one for `deps.cwd`. */
+	cacheStore?: CacheStore;
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 }
@@ -295,6 +298,21 @@ async function executePhase(
 	const ctx = buildInterpolationContext(state, previousOutput);
 	const preRead = await resolvePhaseContext(phase, ctx);
 
+	// Resolve this phase's cache policy once. Default scope is "run-only" (the
+	// historical within-run resume behavior). Only "cross-run" phases resolve a
+	// fingerprint and consult the persistent store.
+	const cacheScope: CacheScope = (phase.cache?.scope ?? "run-only") as CacheScope;
+	const cc: PhaseCacheCtx = {
+		scope: cacheScope,
+		ttlMs: phase.cache?.ttl ? (parseTtlMs(phase.cache.ttl) ?? undefined) : undefined,
+		fingerprint: cacheScope === "cross-run" ? resolveFingerprint(phase.cache?.fingerprint, phase.cwd ?? deps.cwd) : "",
+		store: deps.cacheStore ?? new CacheStore(deps.cwd),
+		prior,
+		phaseId: phase.id,
+		flowName: state.flowName,
+		runId: state.runId,
+	};
+
 	const baseRun = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void) =>
 		run(
 			deps.cwd,
@@ -437,13 +455,14 @@ async function executePhase(
 		const { text } = interpolate(phase.task ?? "", ctx);
 		const fullTask = preRead + text;
 		const agentName = resolveAgent(phase.agent, deps, state);
-		const inputHash = hashInput(phase.id, agentName, phase.model ?? "", fullTask);
-		const cached = cachedPhase(prior, inputHash);
+		const inputHash = cacheKey(cc, [phase.id, agentName, phase.model ?? "", fullTask]);
+		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
 		const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress));
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
+		recordCache(cc, ps);
 		return ps;
 	}
 
@@ -455,12 +474,14 @@ async function executePhase(
 				task: preRead + r.text,
 			};
 		});
-		const inputHash = hashInput(phase.id, phase.model ?? "", JSON.stringify(branches));
-		const cached = cachedPhase(prior, inputHash);
+		const inputHash = cacheKey(cc, [phase.id, phase.model ?? "", JSON.stringify(branches)]);
+		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
 		const results = await runFanout(branches);
-		return mergePhaseState(phase.id, results, inputHash, parseJson);
+		const ps = mergePhaseState(phase.id, results, inputHash, parseJson);
+		recordCache(cc, ps);
+		return ps;
 	}
 
 	if (type === "map") {
@@ -485,19 +506,21 @@ async function executePhase(
 				task: preRead + interpolate(phase.task ?? "", localCtx).text,
 			};
 		});
-		const inputHash = hashInput(phase.id, phase.model ?? "", JSON.stringify(tasks));
-		const cached = cachedPhase(prior, inputHash);
+		const inputHash = cacheKey(cc, [phase.id, phase.model ?? "", JSON.stringify(tasks)]);
+		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
 		const results = await runFanout(tasks);
-		return mergePhaseState(phase.id, results, inputHash, parseJson);
+		const ps = mergePhaseState(phase.id, results, inputHash, parseJson);
+		recordCache(cc, ps);
+		return ps;
 	}
 
 	if (type === "approval") {
 		const ctx = buildInterpolationContext(state, previousOutput);
 		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
 		const inputHash = hashInput(phase.id, phase.model ?? "", "approval", message);
-		const cached = cachedPhase(prior, inputHash);
+		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
 		// Non-interactive (headless/CI/tests): auto-approve, fail-open, but record it.
@@ -547,8 +570,8 @@ async function executePhase(
 			provided[k] = typeof v === "string" ? interpolate(v, ctx).text : v;
 		}
 		const subArgs = resolveArgs(subDef, provided);
-		const inputHash = hashInput(phase.id, `flow:${name}`, preRead, JSON.stringify(subArgs));
-		const cached = cachedPhase(prior, inputHash);
+		const inputHash = cacheKey(cc, [phase.id, `flow:${name}`, preRead, JSON.stringify(subArgs)]);
+		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
 		const live = state.phases[phase.id];
@@ -600,7 +623,7 @@ async function executePhase(
 			},
 		});
 		const sp = Object.values(subState.phases);
-		return {
+		const flowPs: PhaseState = {
 			id: phase.id,
 			status: subResult.ok ? "done" : "failed",
 			output: subResult.finalOutput,
@@ -619,6 +642,8 @@ async function executePhase(
 			inputHash,
 			endedAt: Date.now(),
 		};
+		recordCache(cc, flowPs);
+		return flowPs;
 	}
 
 	return {
@@ -657,11 +682,77 @@ function lastCompletedOutput(state: RunState, phase: Phase): string | undefined 
 	return undefined;
 }
 
-function cachedPhase(prior: PhaseState | undefined, inputHash: string): PhaseState | null {
-	if (prior && prior.status === "done" && prior.inputHash === inputHash) {
-		return { ...prior, status: "done" };
+/**
+ * Per-phase cache policy resolved once at the top of executePhase. Carries the
+ * scope, optional TTL, and a pre-resolved fingerprint string so each phase-type
+ * branch can fold it into its inputHash and consult the cross-run store uniformly.
+ */
+interface PhaseCacheCtx {
+	scope: CacheScope;
+	ttlMs?: number;
+	fingerprint: string;
+	store: CacheStore;
+	prior: PhaseState | undefined;
+	phaseId: string;
+	flowName: string;
+	runId: string;
+}
+
+/** Fold the phase fingerprint into the base hash parts to form the final cache key. */
+function cacheKey(cc: PhaseCacheCtx, baseParts: string[]): string {
+	return cc.fingerprint ? hashInput(...baseParts, cc.fingerprint) : hashInput(...baseParts);
+}
+
+/**
+ * Resume/memoization lookup. Honors scope:
+ *   - "off":      never reuse (even within-run).
+ *   - "run-only": within-run resume only (historical behavior).
+ *   - "cross-run": within-run first, then the persistent cross-run store.
+ * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
+ */
+function cachedPhase(cc: PhaseCacheCtx, inputHash: string): PhaseState | null {
+	if (cc.scope === "off") return null;
+
+	// 1. within-run resume (fastest; always allowed unless scope is off)
+	if (cc.prior && cc.prior.status === "done" && cc.prior.inputHash === inputHash) {
+		return { ...cc.prior, status: "done" };
+	}
+
+	// 2. cross-run memoization (opt-in)
+	if (cc.scope === "cross-run") {
+		const e = cc.store.get(inputHash, cc.ttlMs);
+		if (e) {
+			return {
+				id: cc.phaseId,
+				status: "done",
+				inputHash,
+				output: e.output,
+				json: e.json,
+				model: e.model,
+				usage: emptyUsage(),
+				cacheHit: "cross-run",
+				endedAt: Date.now(),
+			};
+		}
 	}
 	return null;
+}
+
+/** Persist a freshly-computed phase result to the cross-run store (best-effort). */
+function recordCache(cc: PhaseCacheCtx, ps: PhaseState): void {
+	if (cc.scope !== "cross-run") return;
+	if (ps.status !== "done" || !ps.inputHash) return;
+	if (ps.cacheHit) return; // don't re-store a value we just read from cache
+	cc.store.put({
+		key: ps.inputHash,
+		createdAt: Date.now(),
+		output: ps.output,
+		json: ps.json,
+		model: ps.model,
+		flowName: cc.flowName,
+		phaseId: cc.phaseId,
+		runId: cc.runId,
+	});
 }
 
 /**

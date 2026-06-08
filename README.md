@@ -248,6 +248,7 @@ Every phase needs a unique `id` and a `type` (defaults to `agent`). On top of th
 | `final` | Marks the result-bearing phase (else the last phase wins) |
 | `optional` | A failure here does **not** abort the run |
 | `use` / `with` | (`flow`) saved sub-flow name + its args |
+| `cache` | `{ scope, ttl?, fingerprint? }` — cross-run memoization (see below) |
 
 Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agentScope`, and `budget: { maxUSD?, maxTokens? }`.
 
@@ -260,6 +261,28 @@ Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agen
 - **`flow`** — `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }` runs a saved flow as a phase (recursion is detected and rejected).
 - **`budget`** — a run-wide `{maxUSD, maxTokens}` ceiling; once exceeded, pending phases skip and in-flight fan-out stops spawning, ending the run as `blocked`.
 - **idle watchdog** — a subagent that goes silent for 5 minutes is treated as wedged and killed (SIGTERM → SIGKILL), so one hung child can never freeze the whole flow.
+
+### Cross-run memoization (`cache`)
+
+Every phase is already content-addressed: within a single run's **resume**, a phase whose resolved inputs are unchanged is skipped. `cache` extends that reuse **across independent runs** — if any prior run computed a phase with an identical input hash, its result is reused for **$0.00**.
+
+```jsonc
+{
+  "id": "analyze-auth",
+  "task": "Summarize how the auth module works.",
+  "context": ["src/auth/**/*.ts"],
+  "cache": {
+    "scope": "cross-run",                 // "run-only" (default) | "cross-run" | "off"
+    "ttl": "6h",                          // optional max age before a hit is treated as a miss
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]  // fold world-state into the key
+  }
+}
+```
+
+- **`scope`** — `"run-only"` (default) is exactly the historical behavior (within-run resume only). `"cross-run"` opts the phase into the persistent store. `"off"` disables reuse entirely (even within a run), for debugging.
+- **Freshness is the whole game.** The cache key already includes the prompt, the `over` items, and any `context` files (pre-read into the task). `fingerprint` folds *implicit* inputs into the key so "the world changed" becomes a cache miss: `git:HEAD`, `glob:<pat>` (size+mtime), `glob!:<pat>` (content hash), `file:<path>`, `env:<NAME>`. `ttl` (`30m`/`6h`/`7d`) is a time backstop.
+- **Honest limit:** a subagent that reads a file it didn't declare in `context`/`fingerprint` can still serve a stale `cross-run` hit. That's why the default is `run-only` and why `gate`/`approval` phases are **forbidden** from `cross-run` (they must produce a fresh result each run). Opt in only for phases whose output is a function of declared inputs.
+- Cache lives in `.pi/taskflows/cache/` (gitignored). Clear it with `action: "cache-clear"`. Full rationale: [`docs/rfc-cross-run-memoization.md`](./docs/rfc-cross-run-memoization.md).
 
 ### Gate phases (quality control)
 

@@ -33,6 +33,7 @@ import {
 	saveFlow,
 	saveRun,
 } from "./store.ts";
+import { CacheStore } from "./cache.ts";
 
 interface TaskflowDetails {
 	state?: RunState;
@@ -53,8 +54,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, or init model role configuration",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "cache-clear"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, or clear the cross-run memoization cache",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -343,6 +344,14 @@ export default function (pi: ExtensionAPI) {
 					? flows.map((f) => `- ${f.name} (${f.scope}): ${f.def.description ?? ""}`).join("\n")
 					: "No saved taskflows.";
 				return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+			}
+
+			if (action === "cache-clear") {
+				const removed = new CacheStore(ctx.cwd).clear();
+				return {
+					content: [{ type: "text", text: `Cleared ${removed} cross-run cache entr${removed === 1 ? "y" : "ies"}.` }],
+					details: { action } satisfies TaskflowDetails,
+				};
 			}
 
 			// resume

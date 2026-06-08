@@ -18,6 +18,12 @@ export type PhaseType = (typeof PHASE_TYPES)[number];
 
 export const OUTPUT_FORMATS = ["text", "json"] as const;
 export const JOIN_MODES = ["all", "any"] as const;
+export const CACHE_SCOPES = ["run-only", "cross-run", "off"] as const;
+export type CacheScope = (typeof CACHE_SCOPES)[number];
+/** Allowed fingerprint entry prefixes. `glob!:` = content-hash variant of `glob:`. */
+export const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
+/** Phase types that must NOT be cached across runs (a fresh result is required each run). */
+export const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval"] as const;
 
 const ParallelTaskSchema = Type.Object(
 	{
@@ -34,6 +40,36 @@ const RetrySchema = Type.Object(
 		backoffMs: Type.Optional(Type.Number({ description: "Base delay between attempts, in ms", default: 0 })),
 		factor: Type.Optional(
 			Type.Number({ description: "Backoff multiplier per attempt (1 = fixed, 2 = exponential)", default: 1 }),
+		),
+	},
+	{ additionalProperties: false },
+);
+
+/**
+ * Per-phase cache policy. Defaults to `run-only` which is exactly the historical
+ * behavior (within-run resume only). `cross-run` opts a phase into the persistent
+ * cross-run memoization store; see docs/rfc-cross-run-memoization.md.
+ */
+const CacheSchema = Type.Object(
+	{
+		scope: Type.Optional(
+			StringEnum(CACHE_SCOPES, {
+				description:
+					"Cache reuse scope. 'run-only' (default) = within-run resume only (historical behavior); 'cross-run' = reuse identical-input results from any prior run; 'off' = never reuse (even within-run).",
+				default: "run-only",
+			}),
+		),
+		ttl: Type.Optional(
+			Type.String({
+				description:
+					"Max cache age before a cross-run hit is treated as a miss, e.g. '30m', '6h', '7d'. Omit for no time bound.",
+			}),
+		),
+		fingerprint: Type.Optional(
+			Type.Array(Type.String(), {
+				description:
+					"Extra freshness inputs folded into the cache key so 'the world changed' becomes a cache miss. Each entry: 'git:HEAD' | 'glob:<pattern>' | 'glob!:<pattern>' (content-hash) | 'file:<path>' | 'env:<NAME>'.",
+			}),
 		),
 	},
 	{ additionalProperties: false },
@@ -115,6 +151,7 @@ const PhaseSchema = Type.Object(
 				default: 8000,
 			}),
 		),
+		cache: Type.Optional(CacheSchema),
 	},
 	{ additionalProperties: false },
 );
@@ -157,6 +194,7 @@ export type Taskflow = Static<typeof TaskflowSchema>;
 export type ArgSpec = Static<typeof ArgSpecSchema>;
 export type RetryPolicy = Static<typeof RetrySchema>;
 export type Budget = Static<typeof BudgetSchema>;
+export type CachePolicy = Static<typeof CacheSchema>;
 export type JoinMode = (typeof JOIN_MODES)[number];
 
 // ---------------------------------------------------------------------------
@@ -260,6 +298,21 @@ export interface ValidationResult {
 	warnings: string[];
 }
 
+/**
+ * Parse a TTL string like '30m', '6h', '7d', '500ms', '90s' into milliseconds.
+ * Returns null for malformed or non-positive values. Plain integers = ms.
+ */
+export function parseTtlMs(ttl: string): number | null {
+	if (typeof ttl !== "string") return null;
+	const m = ttl.trim().match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i);
+	if (!m) return null;
+	const n = Number(m[1]);
+	if (!Number.isFinite(n) || n <= 0) return null;
+	const unit = (m[2] ?? "ms").toLowerCase();
+	const mult: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+	return n * mult[unit];
+}
+
 export interface ValidationOptions {
 	/** Resolved invocation args, used for runtime checks like missing `{args.X}`. */
 	args?: Record<string, unknown>;
@@ -335,6 +388,33 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		if (p.join && !JOIN_MODES.includes(p.join as JoinMode)) {
 			errors.push(`Phase '${p.id}': unknown join mode '${p.join}'`);
+		}
+
+		// Cache policy validation (cross-run memoization).
+		if (p.cache) {
+			const scope = p.cache.scope ?? "run-only";
+			if (!CACHE_SCOPES.includes(scope as CacheScope)) {
+				errors.push(`Phase '${p.id}': unknown cache.scope '${scope}' (expected one of ${CACHE_SCOPES.join(", ")})`);
+			}
+			// Gate B: gate/approval phases must produce a fresh result every run.
+			if (scope === "cross-run" && (CACHE_CROSS_RUN_BLOCKED_TYPES as readonly string[]).includes(type)) {
+				errors.push(
+					`Phase '${p.id}' (${type}): cache.scope 'cross-run' is not allowed for ${CACHE_CROSS_RUN_BLOCKED_TYPES.join("/")} phases — they must produce a fresh result each run. Use 'run-only'.`,
+				);
+			}
+			// Gate C: every fingerprint entry must use a known prefix (fail closed).
+			for (const fp of p.cache.fingerprint ?? []) {
+				const ok = CACHE_FINGERPRINT_PREFIXES.some((pre) => fp.startsWith(pre) && fp.length > pre.length);
+				if (!ok) {
+					errors.push(
+						`Phase '${p.id}': invalid cache.fingerprint entry '${fp}' (expected '<prefix><value>' with prefix one of ${CACHE_FINGERPRINT_PREFIXES.join(", ")})`,
+					);
+				}
+			}
+			// Gate D: TTL must parse to a positive duration when present.
+			if (p.cache.ttl !== undefined && parseTtlMs(p.cache.ttl) === null) {
+				errors.push(`Phase '${p.id}': invalid cache.ttl '${p.cache.ttl}' (expected e.g. '30m', '6h', '7d')`);
+			}
 		}
 
 		// Agent name convention: hyphens only (per AGENTS.md naming convention)

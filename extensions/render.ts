@@ -164,6 +164,14 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 	}
 
 	// done
+	// Cross-run cache hit: show a compact badge with age and the $0 cost.
+	if (ps.cacheHit === "cross-run") {
+		const ageMs = ps.endedAt ? Date.now() - ps.endedAt : 0;
+		let c = theme.fg("success", "✓") + " " + theme.fg("toolOutput", theme.bold("CACHED")) + theme.fg("dim", " cross-run");
+		if (ageMs > 1500) c += theme.fg("dim", ` · ${elapsed(ageMs)} ago`);
+		if (ps.warnings?.length) c += theme.fg("warning", `  ⚠${ps.warnings.length}`);
+		return c;
+	}
 	if (isFanout) {
 		const { done = 0, total = 0, failed = 0 } = ps.subProgress ?? {};
 		let s = theme.fg("success", `${total}✓`);
