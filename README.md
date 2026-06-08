@@ -14,11 +14,14 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> ·
+  <b>English</b> ·
   <a href="./README.zh-CN.md">简体中文</a> ·
   <a href="./README.hi.md">हिन्दी</a> ·
   <a href="./README.es.md">Español</a> ·
-  <a href="./README.ar.md">العربية</a>
+  <a href="./README.ar.md">العربية</a> ·
+  <a href="./README.bn.md">বাংলা</a> ·
+  <a href="./README.pt.md">Português</a> ·
+  <a href="./README.ru.md">Русский</a>
 </p>
 
 <p><strong>Declarative DAG orchestration for <a href="https://pi.dev">Pi</a> subagents.</strong><br/>
