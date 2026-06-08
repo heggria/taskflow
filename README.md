@@ -61,26 +61,33 @@ It doesn't replace the subagent tool. It gives your subagents a DAG, a memory, a
 
 ## Compared to other Pi extensions
 
-The Pi ecosystem has a healthy crowd of delegation and orchestration extensions — each great at what it's for. Here's an honest map of where `pi-taskflow` sits (verified against each package's latest npm release, June 2026).
+The Pi ecosystem now has **20+ delegation, workflow, and orchestration extensions** — each great at what it's for. Here's an honest map of where `pi-taskflow` sits (verified against each package's latest npm release, June 2026). For the full breakdown — every package, strengths *and* weaknesses — see [`PI-ECOSYSTEM.md`](./PI-ECOSYSTEM.md). For the broader, non-Pi landscape (LangGraph, Temporal, CrewAI, Mastra…) see [`COMPETITORS.md`](./COMPETITORS.md).
 
 | Extension | Model | Custom DSL | DAG | Dynamic fan-out | Cross-session resume | Quality gate | Human approval | Save as command | Zero deps |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **pi-taskflow** | **declarative multi-phase taskflows** | **✓** | **✓** | **✓ `map`** | **✓** | **✓** | **✓** | **✓ `/tf:<name>`** | **✓** |
-| [`pi-agents`](https://www.npmjs.com/package/pi-agents) | JSON workflow graph (`spawn`/`fork`/`join`/`loop`) | ✓ | ✓ | ✕ (static `fork`) | ✕ | ✕ | ✕ | ✕ | ✕ (1) |
-| [`pi-subagents`](https://www.npmjs.com/package/pi-subagents) | single / parallel / chain delegation | ✕ | ✕ | ✕ | ✕ | ✕ | clarify only | named workflows | ✕ (3) |
-| [`pi-crew`](https://www.npmjs.com/package/pi-crew) | multi-agent teams + git worktrees + async | partial | ✕ | ✕ | durable state | ✕ | ✕ | ✕ | ✕ (7) |
-| [`pi-orchestrator`](https://www.npmjs.com/package/pi-orchestrator) | fixed plan→build→review→fix→test pipeline | ✕ | fixed | ✕ | ✕ | ✓ verdict | ✓ | ✕ | ✓ |
-| [`pi-pipeline`](https://www.npmjs.com/package/pi-pipeline) | fixed SPEC→PLAN→TASKS→VERIFY | ✕ | dep graph | ✕ | session planning | ✓ | clarify | ✕ | – |
-| [`pi-agent-flow`](https://www.npmjs.com/package/pi-agent-flow) | one-shot parallel specialist `fork` | ✕ | ✕ | ✕ | ✕ | ✕ | ✕ | ✕ | – |
+| **pi-taskflow** | **declarative multi-phase taskflows** | **✓** | **✓** | **✓ `map`** | **✓ phase-hash** | **✓** | **✓** | **✓ `/tf:<name>`** | **✓** |
+| [`@pi-agents/orchid`](https://www.npmjs.com/package/@pi-agents/orchid) | opinionated 9-phase pipeline + Ralph loop | fixed | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✕ (2) |
+| [`pi-crew`](https://www.npmjs.com/package/pi-crew) | role teams + git worktrees + async | partial | ✓ | ✓ | ✓ | ✓ | ✓ | – | ✕ (7) |
+| [`ultimate-pi`](https://www.npmjs.com/package/ultimate-pi) | governed plan→execute→review harness | YAML contracts | ✓ (plan-time) | ✕ | ✓ | ✓ (3-tier) | ✓ | ✓ | ✕ (16) |
+| [`@zhushanwen/pi-workflow`](https://www.npmjs.com/package/@zhushanwen/pi-workflow) | JS scripts (`agent`/`parallel`/`pipeline`) | yes (JS) | ✕ (linear) | ✓ | ✓ | ✕ | ✕ | ✓ (call cache) | ✓ |
+| [`@fiale-plus/pi-rogue-orchestration`](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | timer loop + goal resolution | ✕ | ✕ | ✕ | ✓ | ✓ (goal-check) | ✕ | ✕ | ✓ |
+| [`pi-subagents`](https://www.npmjs.com/package/pi-subagents) | single / parallel / chain delegation | ✕ | ✕ | static | – | ✕ | clarify | named workflows | ✕ (3) |
+| [`@gotgenes/pi-subagents`](https://www.npmjs.com/package/@gotgenes/pi-subagents) | Claude-Code-style subagents + worktrees | ✕ | ✕ | ✕ | ✓ (by id) | ✕ | per-agent | ✕ | ✕ (1) |
+| [`pi-pipeline`](https://www.npmjs.com/package/pi-pipeline) | fixed SPEC→PLAN→TASKS→VERIFY | ✕ | fixed | ✕ | session planning | ✓ | clarify | ✕ | ✕ (2) |
+| [`pi-agent-flow`](https://www.npmjs.com/package/pi-agent-flow) | one-shot parallel specialist `fork` | yes | ✕ | ✕ | – | ✕ | ✕ | – | ✕ (2) |
+
+*(Representative slice of the 20+ — see [`PI-ECOSYSTEM.md`](./PI-ECOSYSTEM.md) for all of them, plus `@0xkobold/pi-orchestration`, `@melihmucuk/pi-crew`, `@mediadatafusion/pi-workflow-suite`, `gentle-pi`, `@dreki-gg/pi-subagent`, and more.)*
 
 **How to choose:**
 
-- **`pi-agents`** is the closest cousin — also a JSON graph with isolated agents, budgets, and `fork`/`loop`/`join`. Reach for `pi-taskflow` when you need what its graph doesn't have: **dynamic `map` fan-out over a discovered list**, **cross-session resume** (continue a half-finished run hours later, cached phases skipped), **quality `gate`s** that halt on a verdict, **human `approval`** steps, and **saving the whole pipeline as a `/tf:<name>` command**.
-- **`pi-subagents`** is the right tool for ad-hoc “use reviewer on this diff” delegation and background jobs. `pi-taskflow` is for when those delegations need to become a *repeatable, resumable pipeline*.
-- **`pi-crew`** goes heavier — worktree isolation and durable async teams. If you want lightweight, declarative, and zero-dependency, that's this project.
-- **`pi-orchestrator` / `pi-pipeline`** ship *opinionated, fixed* workflows (plan→build→… / spec-driven). `pi-taskflow` ships an *empty canvas*: you (or the model) declare the graph that fits the job.
+- **`@pi-agents/orchid`** is the most feature-complete orchestrator in the ecosystem (DAG + worktrees + Ralph loop + agent mailbox) — but its DSL is a *fixed* 9-phase pipeline, it carries runtime deps + jiti, and it's beta. Reach for `pi-taskflow` when you want to **define your own graph** (not adopt an opinionated one) with **zero dependencies** and a one-command install.
+- **`pi-crew` / `ultimate-pi`** go heavier — worktree isolation, durable async teams, multi-tier governance. If you want lightweight, declarative, and zero-dependency, that's this project.
+- **`@zhushanwen/pi-workflow`** is the closest in spirit and also zero-dep, but you author workflows as **JavaScript scripts**. `pi-taskflow`'s **declarative JSON DSL** is safer and more auditable, and its **phase-level input-hash resume** is more granular than call-cache dedup.
+- **`@fiale-plus/pi-rogue-orchestration`** has a real **loop-until-done** (a feature `pi-taskflow` doesn't yet have). If your job is "keep going until the goal is met," it's worth a look; `pi-taskflow` is for *structured, branching* pipelines instead.
+- **`pi-subagents` / `@gotgenes/pi-subagents`** are the mature picks for ad-hoc "use reviewer on this diff" delegation and background jobs. `pi-taskflow` is for when those delegations need to become a *repeatable, resumable pipeline*.
+- **`pi-pipeline` / `pi-agent-flow`** ship *opinionated, fixed* flows. `pi-taskflow` ships an *empty canvas*: you (or the model) declare the graph that fits the job.
 
-> The honest one-liner: **nothing else in the ecosystem combines a declarative DAG, `map` fan-out, cross-session resume, gates, approvals, and save-as-command — with zero runtime dependencies.**
+> The honest one-liner: **`pi-taskflow` is the only Pi extension that gives you a declarative, resumable, DAG-shaped subagent pipeline you save as a one-word command — with zero runtime dependencies and context isolation by design.** The known gaps it's closing next: loop-until-done, worktree isolation, and non-blocking background runs (see [`STRATEGY.md`](./STRATEGY.md)).
 
 ## 30-second start
 
