@@ -43,7 +43,7 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test test/interpolate.test.ts test/condition.test.ts test/schema.test.ts test/usage.test.ts test/runtime.test.ts test/features.test.ts test/runner.test.ts test/store.test.ts test/agents.test.ts test/init.test.ts test/render.test.ts test/desugar.test.ts test/cache.test.ts test/loop.test.ts test/tournament.test.ts test/verify.test.ts test/gate-eval.test.ts",
+    "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test test/interpolate.test.ts test/condition.test.ts test/schema.test.ts test/usage.test.ts test/runtime.test.ts test/features.test.ts test/runner.test.ts test/store.test.ts test/agents.test.ts test/init.test.ts test/render.test.ts test/desugar.test.ts test/cache.test.ts test/loop.test.ts test/tournament.test.ts test/verify.test.ts test/gate-eval.test.ts test/transient-error.test.ts test/runtime-branches.test.ts test/interpolate-extended.test.ts test/store-extended.test.ts",
     "test:e2e": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts",
     "test:dogfood-cache": "node --experimental-strip-types test/dogfood-cache.mts"
   },
