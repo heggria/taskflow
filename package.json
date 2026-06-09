@@ -1,7 +1,7 @@
 {
   "name": "pi-taskflow",
   "version": "0.0.17",
-  "description": "Lightweight workflow orchestration for the Pi coding agent — declarative multi-phase taskflows with dynamic fan-out, isolated subagent context, resumable runs, and saveable commands.",
+  "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — not a workflow you script, but a DAG you declare: statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
   "keywords": [
     "pi-package",
     "pi",
