@@ -204,10 +204,15 @@ export function discoverAgents(
 	}
 
 	// Resolve {{role}} model references (e.g. {{fast}} → openrouter/deepseek/v4-flash)
+	// Clone before mutating, consistent with the overrides block above.
 	if (modelRoles) {
-		for (const agent of agentMap.values()) {
+		for (const [name, agent] of agentMap.entries()) {
 			const resolved = resolveModelRole(agent.model, modelRoles);
-			if (resolved !== agent.model) agent.model = resolved;
+			if (resolved !== agent.model) {
+				const mutated: AgentConfig = { ...agent };
+				mutated.model = resolved;
+				agentMap.set(name, mutated);
+			}
 		}
 	}
 

@@ -268,6 +268,31 @@ export default function (pi: ExtensionAPI) {
 			// session startup.
 		}
 
+		// Upgrade hint: if the project already has .pi/agents/ with agent
+		// files but no explicit taskflow settings, the user is upgrading
+		// from the old default (sync=true) and may be surprised that sync
+		// is now disabled by default.
+		try {
+			const raw = readSettings();
+			if (!("taskflow" in raw)) {
+				const fs = await import("node:fs");
+				const path = await import("node:path");
+				const projectAgentsDir = path.join(ctx.cwd, ".pi", "agents");
+				try {
+					const entries = fs.readdirSync(projectAgentsDir).filter((e: string) => e.endsWith(".md"));
+					if (entries.length > 0) {
+						console.warn(
+							`[taskflow] Note: built-in agents are no longer synced to .pi/agents/ by default. ` +
+							`If you rely on this, run /tf init → 'Configure taskflow preferences' to re-enable. ` +
+							`(This is a one-time upgrade hint.)`,
+						);
+					}
+				} catch { /* .pi/agents/ doesn't exist — no hint needed */ }
+			}
+		} catch {
+			// Best-effort: settings.json missing or unreadable is not an error.
+		}
+
 		// Hint: prompt to configure model roles if not set
 		try {
 			const settings = readSubagentSettings();
@@ -373,7 +398,7 @@ export default function (pi: ExtensionAPI) {
 						modelRegistry: ctx.modelRegistry,
 						modelList,
 						currentRoles: current,
-					currentTaskflowSettings: readSubagentSettings().taskflow,
+						currentTaskflowSettings: readSubagentSettings().taskflow,
 					});
 					const text = formatFlowResult(result);
 					return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
@@ -717,17 +742,13 @@ export default function (pi: ExtensionAPI) {
 					modelRegistry: ctx.modelRegistry,
 					modelList,
 					currentRoles,
+					currentTaskflowSettings: readSubagentSettings().taskflow,
 				});
-				ctx.ui.notify(
-					result.kind === "saved"
-						? `Saved model roles to ${result.savedPath}:\n${Object.entries(result.chosen)
-								.map(([k, v]) => `  ${k.padEnd(10)} → ${v}`)
-								.join("\n")}`
-						: result.kind === "no-change"
-							? "No changes made."
-							: "Init cancelled.",
-					result.kind === "saved" ? "info" : "info",
-				);
+				if (result.kind === "cancelled") {
+					ctx.ui.notify("Init cancelled.", "info");
+				} else {
+					ctx.ui.notify(formatFlowResult(result), "info");
+				}
 				return;
 			}
 

@@ -843,3 +843,122 @@ test("formatFlowResult: saved includes the path", () => {
 	assert.match(text, /saved/i);
 	assert.match(text, /\/tmp\/settings\.json/);
 });
+
+// ===========================================================================
+// configureTaskflowPreferences (via runInteractiveInit)
+// ===========================================================================
+
+test("runInteractiveInit: 'Configure taskflow preferences' → disable built-ins → preferences-saved", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",       // action menu
+		"Disable built-in agents",               // built-in picker
+		"Save these preferences",                 // preview
+	]);
+
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: DEFAULT_TASKFLOW_SETTINGS,
+	});
+
+	assert.equal(result.kind, "preferences-saved");
+	assert.equal(result.settings.builtInAgents, false);
+	assert.equal(result.settings.syncBuiltinAgentsToProject, false);
+	assert.ok(result.savedPath.endsWith("settings.json"));
+
+	// Verify the settings were actually written to disk
+	const saved = readSettings();
+	assert.deepEqual(saved.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false });
+});
+
+test("runInteractiveInit: 'Configure taskflow preferences' → enable + sync → preferences-saved", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",       // action menu
+		"Enable built-in agents",                // built-in picker
+		"Copy to project .pi/agents on session start", // sync picker
+		"Save these preferences",                 // preview
+	]);
+
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: DEFAULT_TASKFLOW_SETTINGS,
+	});
+
+	assert.equal(result.kind, "preferences-saved");
+	assert.equal(result.settings.builtInAgents, true);
+	assert.equal(result.settings.syncBuiltinAgentsToProject, true);
+});
+
+test("runInteractiveInit: 'Configure taskflow preferences' → no change → preferences-no-change", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",       // action menu
+		"Enable built-in agents (current)",      // built-in picker (same as default)
+		// sync picker shows because builtInAgents=true with defaults
+		"Do not copy to project .pi/agents (current)", // sync picker (same as default)
+	]);
+
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: DEFAULT_TASKFLOW_SETTINGS,
+	});
+
+	assert.equal(result.kind, "preferences-no-change");
+	assert.equal(result.settings.builtInAgents, true);
+	assert.equal(result.settings.syncBuiltinAgentsToProject, false);
+});
+
+test("runInteractiveInit: 'Configure taskflow preferences' → Back to action menu → cancelled", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",       // action menu
+		"Back to action menu",                   // built-in picker
+	]);
+
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: DEFAULT_TASKFLOW_SETTINGS,
+	});
+
+	assert.equal(result.kind, "cancelled");
+});
+
+test("runInteractiveInit: 'Configure taskflow preferences' → disable built-ins skips sync picker", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",       // action menu
+		"Disable built-in agents",               // built-in picker
+		"Save these preferences",                 // preview
+	]);
+
+	await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: DEFAULT_TASKFLOW_SETTINGS,
+	});
+
+	// Should only have 3 select calls: action menu, built-in picker, preview
+	// (no sync picker because built-in is disabled)
+	assert.equal(ui.selectCalls.length, 3);
+	assert.ok(!ui.selectCalls[1].title.includes("Sync"));
+});
