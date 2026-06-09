@@ -46,11 +46,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish to GitHub Packages
+      - name: Publish to GitHub Packages (best-effort)
+        # Best-effort: the canonical registry is npmjs.com (published above). The
+        # package name is unscoped, so GitHub Packages publish is optional and must
+        # never block the npm release or the GitHub Release step below.
+        continue-on-error: true
         run: |
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
-          echo "registry=https://npm.pkg.github.com/heggria" >> ~/.npmrc
-          npm publish
+          echo "@heggria:registry=https://npm.pkg.github.com" >> ~/.npmrc
+          npm publish --registry https://npm.pkg.github.com || true
 
       - name: Create GitHub Release
         run: |
