@@ -75,6 +75,19 @@ npm run test:e2e      # End-to-end tests (needs live pi + model access)
 
 ## Coding Conventions
 
+### Git
+- **Commit messages must be in English** using [Conventional Commits](https://www.conventionalcommits.org/) format: `type(scope): description`.
+- Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`.
+- Scope is optional (e.g. `feat(runtime):`, `fix(schema):`, `docs:`).
+- Keep the subject line under 72 characters. Add a body for non-trivial changes.
+- Examples:
+  ```
+  feat(runtime): add loop phase convergence detection
+  fix(runner): sanitize HTML error messages from upstream providers
+  test: add coverage for transient error retry heuristic
+  docs: add AGENTS.md project guide for AI coding agents
+  ```
+
 ### TypeScript
 - **ESM only** (`"type": "module"` in package.json). Use `import`/`export`, never `require`.
 - **Import extensions required**: `import { foo } from "./bar.ts"` (TypeScript verbatim module syntax).
