@@ -1,0 +1,30 @@
+{
+  "name": "iterative-replan",
+  "description": "Data-dependent iterative replanning: a loop where each iteration's plan depends on the PREVIOUS iteration's RESULT (not a one-shot fan-out). Each round the planner reads the prior round's findings and decides either to emit more work or to signal done. This is the declarative equivalent of an imperative `for` loop that reads a result and decides the next step. Each round's generated plan is validated before it runs.",
+  "version": 1,
+  "args": {
+    "goal": { "description": "The investigation / refinement objective" }
+  },
+  "concurrency": 4,
+  "agentScope": "user",
+  "budget": { "maxUSD": 2.0 },
+  "phases": [
+    {
+      "id": "investigate",
+      "type": "loop",
+      "agent": "explorer",
+      "maxIterations": 5,
+      "until": "{steps.investigate.json.done} == true",
+      "output": "json",
+      "task": "Goal: {args.goal}\n\nPrevious round's result (empty on the first round):\n{previous.output}\n\nDecide the next step. If the goal is satisfied, output ONLY {\"done\": true, \"summary\": \"<what you concluded>\"}. Otherwise output ONLY {\"done\": false, \"findings\": \"<what you learned this round>\", \"next\": \"<what to investigate next round>\"}. Each round's plan must build on the previous round's findings. JSON only — no prose."
+    },
+    {
+      "id": "final-report",
+      "type": "agent",
+      "agent": "reviewer",
+      "dependsOn": ["investigate"],
+      "task": "Write the final report for goal \"{args.goal}\" based on the converged investigation:\n\n{steps.investigate.output}",
+      "final": true
+    }
+  ]
+}

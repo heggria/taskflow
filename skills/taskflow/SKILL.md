@@ -87,7 +87,7 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `gate` | quality/review step that can **halt the flow** (see below) |
 | `reduce` | aggregate `from[]` phases into one output |
 | `approval` | **human-in-the-loop** pause: ask a person to approve / reject / edit before continuing |
-| `flow` | run a **saved sub-flow** (by `use`) as a single phase — composition/reuse |
+| `flow` | run a **sub-flow** as one phase — **saved** (`use`) or **runtime-generated** (`def`) |
 
 ### Control-flow fields (any phase)
 
@@ -133,14 +133,48 @@ deciding. The (interpolated) `task` is the prompt shown.
 
 ### Sub-flows (composition)
 
-A `flow` phase runs another **saved** taskflow by name and bubbles up its final
-output. Pass args via `with` (string values interpolate). Recursion is detected
-and rejected.
+A `flow` phase runs another taskflow as a single phase and bubbles up its final
+output. Two sources, **mutually exclusive**:
+
+**Saved** (`use`) — run a previously saved flow by name. Pass args via `with`
+(string values interpolate). Recursion is detected and rejected.
 
 ```jsonc
 { "id": "research", "type": "flow", "use": "deep-research",
   "with": { "topic": "{item}" }, "dependsOn": ["plan"] }
 ```
+
+**Runtime-generated** (`def`) — resolve a sub-flow *at runtime*, usually from an
+upstream phase's JSON output. The runtime interpolates + JSON-parses the `def`,
+**validates it** (cycles / dangling refs / duplicate ids), then runs it as a
+nested sub-flow. This is how a planner decides *at runtime* what work to spawn —
+the declarative answer to a code-mode `for`/`if` loop, with each generated plan
+checked before it spends a token.
+
+```jsonc
+// 1) A planner emits a plan as JSON. 2) flow{def} runs it.
+{ "id": "plan", "type": "agent", "agent": "planner", "output": "json",
+  "task": "Scan the repo. Output ONLY JSON {\"name\":\"audit\",\"phases\":[...]} — one audit phase per file." },
+{ "id": "run", "type": "flow", "def": "{steps.plan.json}", "dependsOn": ["plan"], "final": true }
+```
+
+**LLM output contract for `def`:** the upstream phase must output a *full*
+Taskflow `{"name":"...","phases":[...]}`, a bare `phases` array, or
+`{"phases":[...]}` — pure JSON (a ```json fence is tolerated and stripped).
+Use hyphens in ids, never underscores. Sub-flow phases reference each other in
+their **own** `{steps.x.output}` namespace (no parent-id prefixing needed).
+
+**Fail-open & limits:** if the `def` doesn't parse, has the wrong shape, or fails
+validation, the phase fails *open* — it's marked failed with a `defError`, the
+upstream output is preserved, and the run continues (use `optional: true` on the
+flow phase so a bad plan never aborts the run). An **empty** `phases` array is a
+valid no-op (the planner decided there's nothing to do). Inline nesting is capped
+at `MAX_DYNAMIC_NESTING` (5) to bound runaway self-spawning.
+
+**Iterative replanning** — pair `flow{def}` (or a JSON-emitting body) with `loop`
+so round N's plan depends on round N-1's **result** (not a one-shot fan-out):
+the declarative equivalent of `for (...) { read result; decide next }`. See
+`examples/dynamic-plan-execute.json` and `examples/iterative-replan.json`.
 
 ### Budget (cost / token caps)
 

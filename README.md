@@ -98,8 +98,8 @@ The closest thing to `pi-taskflow` in spirit is the **dynamic / code-mode workfl
 | **Verify before running** | ✗ Turing-complete; can't prove it terminates | **✓ static checks: no cycles, dead-ends, budget overflow, dangling refs** |
 | **See it** | ✗ the graph only exists as the code runs | **✓ the live progress render *is* the DAG** |
 | **Resume** | coarse (call-cache dedup) | **✓ phase-by-phase input-hash resume, cross-session** |
-| **Safe to LLM-generate** | risky — it's executable code | **✓ it's just data — no `eval`, no arbitrary execution** |
-| **Expressivity ceiling** | **higher** — arbitrary control flow | bounded by the DSL (but `map`/`when`/`loop`/`gate` cover most jobs) |
+| **Safe to LLM-generate** | risky — it's executable code | **✓ it's just data — no `eval`; and a runtime-generated sub-flow is *structurally validated* (cycles / dangling refs / duplicate ids) before it runs** |
+| **Expressivity ceiling** | **higher** — arbitrary control flow | bounded by the DSL, but `map`/`when`/`loop`/`gate` — plus **runtime-generated sub-flows (`flow {def}`)** for plan-then-execute and iterative replanning — cover most jobs |
 
 We chose the **verifiable** side on purpose. The expressivity you give up is real; what you get back — a plan you can check, watch, replay, and safely let a model author — is what turns one-off prompting into durable orchestration.
 
@@ -272,7 +272,7 @@ No scripting. No `eval`. Just data the runtime executes — safe enough to run L
 | `gate` | quality/review step that can **halt the flow** | `task` |
 | `reduce` | aggregate `from[]` phase outputs into one | `from`, `task` |
 | `approval` | **human-in-the-loop** pause — approve / reject / edit | — |
-| `flow` | run a **saved sub-flow** as one phase (composition) | `use` |
+| `flow` | run a **sub-flow** as one phase — a **saved** flow (`use`) or a **runtime-generated** one (`def`) | `use` \| `def` |
 | `loop` | **iterate a task until done** — re-run a body until a condition, convergence, or a cap | `task`, `until` |
 | `tournament` | **N variants compete**, a judge picks the best (or aggregates) | `task` \| `branches` |
 
@@ -294,6 +294,7 @@ Every phase needs a unique `id` and a `type` (defaults to `agent`). On top of th
 | `final` | Marks the result-bearing phase (else the last phase wins) |
 | `optional` | A failure here does **not** abort the run |
 | `use` / `with` | (`flow`) saved sub-flow name + its args |
+| `def` | (`flow`) inline sub-flow **generated at runtime** — usually `"{steps.plan.json}"` (mutually exclusive with `use`) |
 | `cache` | `{ scope, ttl?, fingerprint? }` — cross-run memoization (see below) |
 
 Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agentScope`, and `budget: { maxUSD?, maxTokens? }`.
@@ -304,7 +305,7 @@ Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agen
 - **`join: "any"`** — an OR-join: the phase runs as soon as *one* dependency completes (default `"all"` waits for all).
 - **`retry`** — `{ "max": 2, "backoffMs": 500, "factor": 2 }` retries a failing subagent with fixed or exponential backoff; usage is summed and the attempt count shows as `↻N` in the TUI. Transient provider errors (rate-limit / 5xx / timeout) **auto-retry even without an explicit policy**; hard errors don't.
 - **`approval`** — pause for a human (Approve / Reject / Edit). Reject halts the flow; Edit injects the typed note as the phase output for downstream steps. Non-interactive runs auto-approve.
-- **`flow`** — `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }` runs a saved flow as a phase (recursion is detected and rejected).
+- **`flow`** — `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }` runs a **saved** flow as a phase (recursion is detected and rejected). Or **generate the sub-flow at runtime**: `{ "type": "flow", "def": "{steps.plan.json}" }` resolves an upstream phase's JSON output into a sub-flow, **validates it (cycles / dangling refs / duplicate ids), then runs it** — the number and shape of the generated phases is decided at runtime, not authored in advance. A malformed plan fails *open* (the phase is skipped with a `defError`, the run continues). This is how a planner decides *at runtime* what work to spawn — the declarative answer to a code-mode `for` loop, with each generated plan checked before it spends a token. Pair it with `loop` for **data-dependent iterative replanning** (round N's plan depends on round N-1's result). See [`examples/dynamic-plan-execute.json`](./examples/dynamic-plan-execute.json) and [`examples/iterative-replan.json`](./examples/iterative-replan.json).
 
 ### Loop-until-done (`loop`)
 

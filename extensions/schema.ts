@@ -20,6 +20,19 @@ export type PhaseType = (typeof PHASE_TYPES)[number];
 export const LOOP_DEFAULT_MAX_ITERATIONS = 10;
 export const LOOP_HARD_MAX_ITERATIONS = 100;
 
+/** Max depth of runtime `flow { def }` sub-flow nesting (runaway guard for
+ *  LLM-generated sub-flows that themselves spawn more sub-flows). The existing
+ *  `_stack` recursion check guards saved-flow cycles; this bounds inline depth. */
+export const MAX_DYNAMIC_NESTING = 5;
+
+/** Breadth caps applied ONLY to runtime-generated (`flow { def }`) sub-flows,
+ *  whose content is LLM-authored and therefore untrusted. Authored/saved flows
+ *  are not subject to these (a human reviewed them). They bound DoS blast radius
+ *  from a model emitting a graph with thousands of phases / a giant fan-out. */
+export const MAX_DYNAMIC_PHASES = 100;
+export const MAX_DYNAMIC_MAP_ITEMS = 200;
+export const MAX_DYNAMIC_CONCURRENCY = 16;
+
 /** Tournament competitor bounds. */
 export const TOURNAMENT_DEFAULT_VARIANTS = 3;
 export const TOURNAMENT_HARD_MAX_VARIANTS = 20;
@@ -119,6 +132,12 @@ const PhaseSchema = Type.Object(
 
 		// sub-workflow (flow)
 		use: Type.Optional(Type.String({ description: "[flow] Name of a saved taskflow to run as this phase" })),
+		def: Type.Optional(
+			Type.Unknown({
+				description:
+					"[flow] Inline sub-flow definition, resolved at runtime. Mutually exclusive with 'use'. A string is interpolated (e.g. '{steps.plan.json}') then JSON-parsed; an object is used directly. The result must be a Taskflow ({name,phases}) or a bare phases array / {phases:[...]} (auto-wrapped). Validated + verified before execution; on any failure the phase fails-open (defError) without aborting the run.",
+			}),
+		),
 		with: Type.Optional(
 			Type.Record(Type.String(), Type.Unknown(), {
 				description: "[flow] Args passed to the sub-flow (string values support interpolation)",
@@ -388,6 +407,10 @@ export interface ValidationOptions {
 	cwd?: string;
 	/** Override the flow's own `strictInterpolation` flag for this validation call. */
 	strict?: boolean;
+	/** When true, this flow is a runtime-generated (`flow { def }`) sub-flow whose
+	 *  content is LLM-authored / untrusted. Enables hardening checks: breadth caps
+	 *  (phase count, map items, concurrency) and cwd containment under `cwd`. */
+	dynamic?: boolean;
 }
 
 export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): ValidationResult {
@@ -404,6 +427,32 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	if (!Array.isArray(flow.phases) || flow.phases.length === 0) {
 		errors.push("Taskflow must have at least one phase");
 		return { ok: false, errors, warnings };
+	}
+
+	// Hardening for runtime-generated (untrusted) sub-flows: bound breadth and
+	// contain filesystem access. These do NOT apply to authored/saved flows.
+	if (opts.dynamic) {
+		if (flow.phases.length > MAX_DYNAMIC_PHASES) {
+			errors.push(`Dynamic sub-flow has too many phases (${flow.phases.length}, max ${MAX_DYNAMIC_PHASES})`);
+		}
+		if (typeof flow.concurrency === "number" && flow.concurrency > MAX_DYNAMIC_CONCURRENCY) {
+			errors.push(`Dynamic sub-flow concurrency too high (${flow.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
+		}
+		const root = opts.cwd ? path.resolve(opts.cwd) : undefined;
+		for (const p of flow.phases) {
+			if (!p || typeof p !== "object") continue;
+			// Per-phase concurrency override is also capped.
+			if (typeof p.concurrency === "number" && p.concurrency > MAX_DYNAMIC_CONCURRENCY) {
+				errors.push(`Dynamic sub-flow phase '${p.id}': concurrency too high (${p.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
+			}
+			// cwd containment: a generated phase may not escape the run's cwd.
+			if (typeof p.cwd === "string" && root) {
+				const resolved = path.resolve(root, p.cwd);
+				if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+					errors.push(`Dynamic sub-flow phase '${p.id}': cwd '${p.cwd}' escapes the run directory`);
+				}
+			}
+		}
 	}
 
 	const ids = new Set<string>();
@@ -439,7 +488,13 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (!p.task) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
 		}
 		if (type === "flow") {
-			if (!p.use) errors.push(`Phase '${p.id}' (flow) requires 'use' (a saved flow name)`);
+			const hasUse = typeof p.use === "string" && p.use.length > 0;
+			const hasDef = (p as { def?: unknown }).def !== undefined;
+			if (!hasUse && !hasDef) {
+				errors.push(`Phase '${p.id}' (flow) requires 'use' (a saved flow name) or 'def' (an inline definition)`);
+			} else if (hasUse && hasDef) {
+				errors.push(`Phase '${p.id}' (flow): 'use' and 'def' are mutually exclusive — provide exactly one`);
+			}
 		}
 		if (type === "loop") {
 			if (!p.task) errors.push(`Phase '${p.id}' (loop) requires 'task' (the iteration body)`);

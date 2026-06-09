@@ -16,7 +16,8 @@ import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { isFailed, isTransientError, type LiveUpdate, mapWithConcurrencyLimit, runAgentTask, type RunResult } from "./runner.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode } from "./schema.ts";
+import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
+import { verifyTaskflow } from "./verify.ts";
 import { hashInput, newRunId, type PhaseState, type RunState } from "./store.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 
@@ -140,6 +141,63 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 
 function failPhase(id: string, error: string): PhaseState {
 	return { id, status: "failed", error, inputHash: hashInput(id, error), endedAt: Date.now(), usage: emptyUsage() };
+}
+
+/**
+ * Normalize an inline `flow.def` payload into a full Taskflow shape.
+ * Accepts: a full Taskflow ({name?,phases:[...]}), a bare phases array, or
+ * {phases:[...]}. Returns undefined if the shape is unrecognized. A recognized
+ * shape with ZERO phases is returned as-is (caller treats it as a no-op) so the
+ * empty-plan case is distinguishable from a malformed one.
+ *
+ * The payload is deep-cloned so the runtime never shares references with (or
+ * mutates) the upstream phase's parsed JSON. Cloning also drops any non-own /
+ * prototype-shadowing `__proto__` own-property that a crafted JSON could carry.
+ */
+function normalizeInlineDef(parsed: unknown, phaseId: string): Taskflow | undefined {
+	let shaped: Taskflow | undefined;
+	if (Array.isArray(parsed)) {
+		shaped = { name: `${phaseId}-inline`, phases: parsed as Taskflow["phases"] };
+	} else if (parsed && typeof parsed === "object") {
+		const o = parsed as Record<string, unknown>;
+		if (Array.isArray(o.phases)) {
+			const name = typeof o.name === "string" && o.name.length > 0 ? (o.name as string) : `${phaseId}-inline`;
+			shaped = { ...(o as object), name, phases: o.phases as Taskflow["phases"] } as Taskflow;
+		}
+	}
+	if (!shaped) return undefined;
+	// Deep clone via JSON round-trip: severs shared references with upstream output
+	// and drops any own "__proto__" key (JSON.stringify omits it). As belt-and-
+	// suspenders, also delete inert `constructor`/`prototype` own-keys a crafted
+	// payload could carry, so the returned object is clean of pollution vectors.
+	try {
+		const clone = JSON.parse(JSON.stringify(shaped)) as Record<string, unknown>;
+		for (const k of ["__proto__", "constructor", "prototype"]) {
+			if (Object.prototype.hasOwnProperty.call(clone, k)) delete clone[k];
+		}
+		return clone as unknown as Taskflow;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Clamp a runtime-generated sub-flow's budget so it can only ever be TIGHTER
+ * than the parent's, never looser. A generated def cannot raise the spend cap by
+ * declaring its own large budget. Each dimension becomes min(child, parent).
+ */
+function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefined): Taskflow {
+	if (!parentBudget) return sub;
+	const child = sub.budget;
+	const clamped: Budget = {
+		maxUSD: Math.min(child?.maxUSD ?? Infinity, parentBudget.maxUSD ?? Infinity),
+		maxTokens: Math.min(child?.maxTokens ?? Infinity, parentBudget.maxTokens ?? Infinity),
+	};
+	// Drop Infinity dimensions (no cap on that axis).
+	const budget: Budget = {};
+	if (Number.isFinite(clamped.maxUSD)) budget.maxUSD = clamped.maxUSD;
+	if (Number.isFinite(clamped.maxTokens)) budget.maxTokens = clamped.maxTokens;
+	return { ...sub, budget: budget.maxUSD === undefined && budget.maxTokens === undefined ? undefined : budget };
 }
 
 /** Aggregate run cost/tokens so far and test against the budget. */
@@ -592,7 +650,15 @@ async function executePhase(
 	if (type === "map") {
 		const overResolved = interpolate(phase.over ?? "", ctx).text;
 		// `over` may itself be a placeholder that resolved to a JSON string.
-		const arr = coerceArray(safeParse(overResolved)) ?? coerceArray(directRef(phase.over ?? "", state));
+		let arr = coerceArray(safeParse(overResolved)) ?? coerceArray(directRef(phase.over ?? "", state));
+		// Breadth cap for untrusted dynamic sub-flows: a `def:` frame in the stack
+		// means we are inside a runtime-generated flow. Truncate giant fan-outs to
+		// bound subprocess blast radius (fail-open: keep the first N rather than abort).
+		let mapTruncated = false;
+		if (arr && (deps._stack ?? []).some((s) => s.startsWith("def:")) && arr.length > MAX_DYNAMIC_MAP_ITEMS) {
+			arr = arr.slice(0, MAX_DYNAMIC_MAP_ITEMS);
+			mapTruncated = true;
+		}
 		if (!arr) {
 			return {
 				id: phase.id,
@@ -617,6 +683,12 @@ async function executePhase(
 
 		const results = await runFanout(tasks);
 		const ps = mergePhaseState(phase.id, results, inputHash, parseJson);
+		if (mapTruncated) {
+			ps.warnings = [...(ps.warnings ?? []), `map fan-out truncated to MAX_DYNAMIC_MAP_ITEMS (${MAX_DYNAMIC_MAP_ITEMS}) inside a dynamic sub-flow`];
+			// NB: do NOT set ps.budgetTruncated — that field drives the run-level
+			// budget-blocked path and would mislabel the run as "budget exceeded".
+			// This is a safety fan-out cap, not a cost overrun; a warning is enough.
+		}
 		recordCache(cc, ps);
 		return ps;
 	}
@@ -660,14 +732,96 @@ async function executePhase(
 
 	if (type === "flow") {
 		const ctx = buildInterpolationContext(state, previousOutput);
-		const name = phase.use;
-		if (!name) return failPhase(phase.id, `flow phase '${phase.id}' requires 'use'`);
-		if (!deps.loadFlow) return failPhase(phase.id, `flow phase '${phase.id}': no sub-flow loader available`);
-		const subDef = deps.loadFlow(name);
-		if (!subDef) return failPhase(phase.id, `flow phase '${phase.id}': saved flow not found: '${name}'`);
+		const hasDef = (phase as { def?: unknown }).def !== undefined;
 		const stack = deps._stack ?? [];
-		if (name === state.flowName || stack.includes(name)) {
-			return failPhase(phase.id, `flow phase '${phase.id}': recursive sub-flow ${[...stack, state.flowName, name].join(" -> ")}`);
+
+		let subDef: Taskflow | undefined;
+		let name: string;
+		let recursionKey: string; // identity used for cache key + recursion guard
+
+		if (hasDef) {
+			// --- Inline `def`: resolve at runtime, validate, fail-OPEN on any error. ---
+			// Fail-open contract: a bad def NEVER aborts the run. The phase resolves
+			// as `done` with empty output and a `defError` diagnostic, and the
+			// upstream output is preserved for downstream phases. (Authors who want
+			// a bad plan to be a hard failure can add their own gate downstream.)
+			const defFailOpen = (diag: string): PhaseState => ({
+				id: phase.id,
+				status: "done",
+				output: "",
+				json: parseJson ? safeParse("") : undefined,
+				usage: emptyUsage(),
+				inputHash: hashInput(phase.id, `flow-def-error:${diag}`),
+				endedAt: Date.now(),
+				defError: diag,
+			});
+			// Nesting guard: each `flow{def}` adds a frame to _stack; cap inline depth.
+			const inlineDepth = stack.filter((s) => s.startsWith("def:")).length;
+			if (inlineDepth >= MAX_DYNAMIC_NESTING) {
+				return defFailOpen(`inline sub-flow nesting exceeded MAX_DYNAMIC_NESTING (${MAX_DYNAMIC_NESTING}): depth ${inlineDepth}`);
+			}
+			const rawDef = (phase as { def?: unknown }).def;
+			// String defs are interpolated then JSON-parsed; objects are used directly.
+			let parsed: unknown;
+			if (typeof rawDef === "string") {
+				const resolved = interpolate(rawDef, ctx).text;
+				parsed = safeParse(resolved);
+				if (parsed === undefined) {
+					return defFailOpen("inline def string did not parse as JSON");
+				}
+			} else {
+				parsed = rawDef;
+			}
+			// Accept a full Taskflow, a bare phases array, or {phases:[...]}; wrap the latter two.
+			const wrapped = normalizeInlineDef(parsed, phase.id);
+			if (!wrapped) {
+				return defFailOpen("inline def is not a Taskflow, phases array, or {phases:[...]}");
+			}
+			// Empty plan is a valid no-op (a planner deciding there is nothing to do):
+			// succeed with empty output instead of failing validation on zero phases.
+			if (wrapped.phases.length === 0) {
+				return {
+					id: phase.id,
+					status: "done",
+					output: "",
+					json: parseJson ? safeParse("") : undefined,
+					usage: emptyUsage(),
+					inputHash: hashInput(phase.id, "flow-def-empty"),
+					endedAt: Date.now(),
+				};
+			}
+			// Validate with `dynamic` hardening (breadth caps + cwd containment) since
+			// this content is LLM-authored / untrusted. cwd anchors containment checks.
+			const dynCwd = phase.cwd ?? deps.cwd;
+			const v = validateTaskflow(wrapped, { dynamic: true, cwd: dynCwd });
+			if (!v.ok) {
+				return defFailOpen(`inline def failed validation: ${v.errors.join("; ")}`);
+			}
+			// Static verification (dead-ends, unreachable, gate-exhaustion, budget,
+			// concurrency). Only error-severity issues block; warnings are advisory.
+			const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency });
+			if (!ver.ok) {
+				const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
+				return defFailOpen(`inline def failed verification: ${errs.join("; ")}`);
+			}
+			// Budget containment: a generated def may not raise the parent's cap. Clamp
+			// each dimension to min(child, parent) so it can only ever be tighter.
+			subDef = clampSubFlowBudget(wrapped, state.def.budget);
+			name = subDef.name;
+			recursionKey = `def:${name}`;
+		} else {
+			// --- Saved flow via `use` (unchanged behavior). ---
+			const useName = phase.use;
+			if (!useName) return failPhase(phase.id, `flow phase '${phase.id}' requires 'use' or 'def'`);
+			if (!deps.loadFlow) return failPhase(phase.id, `flow phase '${phase.id}': no sub-flow loader available`);
+			subDef = deps.loadFlow(useName);
+			if (!subDef) return failPhase(phase.id, `flow phase '${phase.id}': saved flow not found: '${useName}'`);
+			name = useName;
+			recursionKey = useName;
+		}
+
+		if (recursionKey === state.flowName || stack.includes(recursionKey)) {
+			return failPhase(phase.id, `flow phase '${phase.id}': recursive sub-flow ${[...stack, state.flowName, recursionKey].join(" -> ")}`);
 		}
 		// Resolve sub-flow args (interpolate string values), then apply declared defaults.
 		const provided: Record<string, unknown> = {};
@@ -675,7 +829,11 @@ async function executePhase(
 			provided[k] = typeof v === "string" ? interpolate(v, ctx).text : v;
 		}
 		const subArgs = resolveArgs(subDef, provided);
-		const inputHash = cacheKey(cc, [phase.id, `flow:${name}`, preRead, JSON.stringify(subArgs)]);
+		// For inline defs the cache identity must include the resolved def content so
+		// that a different generated plan yields a different key (and an identical plan
+		// hits cache). For saved flows the name is the identity (historical behavior).
+		const flowIdentity = hasDef ? `def:${JSON.stringify(subDef)}` : `flow:${name}`;
+		const inputHash = cacheKey(cc, [phase.id, flowIdentity, preRead, JSON.stringify(subArgs)]);
 		const cached = cachedPhase(cc, inputHash);
 		if (cached) return cached;
 
@@ -707,7 +865,7 @@ async function executePhase(
 			// flow's cwd (not the caller's cwd).
 			cwd: phase.cwd ?? deps.cwd,
 			runTask: subRunTask,
-			_stack: [...stack, state.flowName],
+			_stack: hasDef ? [...stack, state.flowName, recursionKey] : [...stack, state.flowName],
 			persist: undefined,
 			onProgress: () => {
 				if (live) {

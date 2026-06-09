@@ -54,7 +54,8 @@ export interface PhaseState {
 	gate?: { verdict: "pass" | "block"; reason?: string };
 	/** Total subagent attempts incl. retries (when > calls, a retry happened). */
 	attempts?: number;
-	/** True when a map/parallel fan-out was cut short by the budget cap. */
+	/** True when a map/parallel fan-out was cut short by the budget cap, or by the
+	 *  dynamic sub-flow fan-out safety limit (MAX_DYNAMIC_MAP_ITEMS). */
 	budgetTruncated?: boolean;
 	/** Human-in-the-loop outcome (approval phases only). */
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
@@ -62,6 +63,9 @@ export interface PhaseState {
 	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" | "aborted" };
 	/** Tournament outcome (tournament phases only). */
 	tournament?: { variants: number; winner: number; mode: "best" | "aggregate"; reason?: string };
+	/** Set when a `flow { def }` inline sub-flow definition could not be resolved,
+	 *  parsed, validated, or verified. The phase fails-open: this records why. */
+	defError?: string;
 	/** Non-fatal diagnostic warnings accumulated during this phase (e.g.
 	 *  unresolved interpolation placeholders, suspicious templates). */
 	warnings?: string[];

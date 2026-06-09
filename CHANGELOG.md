@@ -2,6 +2,27 @@
 
 All notable changes to pi-taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.0.18] — 2026-06-09
+
+### Added
+- **Runtime dynamic sub-flows — `flow { def }`.** A `flow` phase may now carry an inline `def` (mutually exclusive with `use`) that is resolved at runtime — typically from an upstream phase's JSON output (`"def": "{steps.plan.json}"`) — validated, verified, and executed as a nested sub-flow. This is the declarative answer to code-mode `for`/`if`: a planner decides *at runtime* what work to spawn, and every generated plan is structurally checked (cycles / dangling refs / duplicate ids / dead-ends) before it spends a token.
+  - Accepts a full Taskflow `{name,phases}`, a bare `phases` array, or `{phases:[...]}` (markdown ```json fences tolerated). Pure data — no `eval`.
+  - **Iterative replanning**: pair with `loop` so round N's plan depends on round N-1's *result* (not a one-shot fan-out).
+  - **Fail-open**: a malformed/invalid/unverifiable def never aborts the run — the phase resolves as a no-op with a `defError` diagnostic and upstream output is preserved. An empty `phases` array is a valid no-op.
+  - New examples: `examples/dynamic-plan-execute.json`, `examples/iterative-replan.json`.
+
+### Security
+- **Hardening for runtime-generated (untrusted) sub-flows**, enforced only when content is LLM-authored:
+  - Breadth caps: `MAX_DYNAMIC_PHASES` (100), `MAX_DYNAMIC_CONCURRENCY` (16, flow- and phase-level), `MAX_DYNAMIC_MAP_ITEMS` (200, fan-out truncated not blocked).
+  - `cwd` containment: a generated phase cannot escape the run directory.
+  - Budget clamp: a generated def's budget is clamped to `min(child, parent)` per dimension — it can only ever be tighter, never looser.
+  - Nesting cap: `MAX_DYNAMIC_NESTING` (5) bounds inline self-spawning depth.
+  - Prototype-pollution defense: inline defs are deep-cloned and `__proto__`/`constructor`/`prototype` own-keys are stripped.
+- Authored/saved flows (`use`) are unchanged and not subject to these dynamic caps.
+
+### Notes
+- 25 new tests (`test/flow-def.test.ts`); 560 total, zero regression. Design + two-round cross-adversarial review (engineering-risk / design-critic / architecture / security) recorded under `docs/internal/`.
+
 ## [0.0.17] — 2026-06-09
 
 ### Fixed

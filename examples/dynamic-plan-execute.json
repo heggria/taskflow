@@ -1,0 +1,34 @@
+{
+  "name": "dynamic-plan-execute",
+  "description": "Runtime plan-then-execute: a planner scans the codebase and EMITS a sub-flow (one audit phase per file). The flow phase resolves that JSON at runtime, validates it, and runs it as a nested sub-flow — the number and shape of audit phases is decided at runtime, not authored in advance. A gate then reports.",
+  "version": 1,
+  "args": {
+    "target": { "default": ".", "description": "Directory to scan and audit" }
+  },
+  "concurrency": 4,
+  "agentScope": "user",
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "task": "Scan \"{args.target}\" and produce an audit plan. Output ONLY a JSON object of the form {\"name\":\"audit\",\"phases\":[ ... ]}. Emit ONE phase per source file worth auditing. Each phase must look like {\"id\":\"audit-<safe-name>\",\"type\":\"agent\",\"agent\":\"reviewer\",\"task\":\"Audit <path> for correctness, security, and dead code. Report findings.\"}. Give the LAST phase a \"final\": true and make it a reduce-style summary that depends on the others (\"type\":\"reduce\",\"from\":[<all audit ids>],\"agent\":\"reviewer\",\"task\":\"Summarize all audit findings into one report.\"). Use hyphens in ids, never underscores. Output JSON only — no prose, no markdown fence.",
+      "output": "json"
+    },
+    {
+      "id": "execute-plan",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"]
+    },
+    {
+      "id": "report-gate",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["execute-plan"],
+      "task": "Here is the audit report:\n\n{steps.execute-plan.output}\n\nDecide whether the codebase is in acceptable shape. End with 'VERDICT: PASS' or 'VERDICT: BLOCK' and a one-line reason.",
+      "final": true
+    }
+  ]
+}
