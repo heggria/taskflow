@@ -2,6 +2,21 @@
 
 All notable changes to pi-taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.0.17] — 2026-06-09
+
+### Fixed
+- **28 fixes from 3-round adversarial dogfooding across 11 files.**
+- **store.ts**: validateRunId path-traversal guard in saveRun, cleanupTerminalRuns race condition mtime guard, saveFlow file locking (prevents concurrent write loss), saveFlow unified sanitization via safeFlowDirName, SharedArrayBuffer hoisted to module scope, empty flow name rejection, conditional .pi/ creation hint.
+- **runner.ts**: signal kill detection (killedBySignal), idle timeout excluded from transient error retry, message cap (500) with truncation notice, stderr cap (64KB) with truncation notice.
+- **runtime.ts**: loop abort semantics (stop: "aborted"), failed phase interpolation (sensible placeholder instead of raw template), tournament judge budget/abort guard, retry factor asymmetry documentation.
+- **interpolate.ts**: tokenizer escaped quote handling (character-by-character loop), graceful dig() trailing path segment resolution.
+- **index.ts**: /tf save and /tf verify tab completion, JSON string define parsing in renderCall label, escaped quote handling in parseArgsString.
+- **agents.ts**: YAML tools type validation (reject non-string/array), atomic writeFileAtomic in syncBuiltinAgentsToProject.
+- **cache.ts**: 30s timeout on execFileSync git calls.
+- **verify.ts**: budget maxUSD overflow detection.
+- **render.ts**: consistent numerator/denominator in summarizeRun.
+- **runs-view.ts**: timeAgo negative timestamp guard, blocked status removed from isResumable.
+
 ## [0.0.16] — 2026-06-09
 
 ### Added
