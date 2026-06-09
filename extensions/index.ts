@@ -195,7 +195,7 @@ async function runFlow(
 		cleanupConfig.maxKeep = settings.taskflow.maxKeptRuns;
 		cleanupConfig.maxAgeDays = settings.taskflow.maxRunAgeDays;
 		const scope: AgentScope = def.agentScope ?? "user";
-		const { agents } = discoverAgents(ctx.cwd, scope, settings.agentOverrides, settings.modelRoles, settings.taskflow);
+		const { agents } = discoverAgents(ctx.cwd, scope, settings.modelRoles, settings.taskflow);
 
 		// Hint: if any agent still has unresolved {{role}} references, suggest configuring modelRoles
 		const unresolvedRoles = agents
@@ -416,7 +416,7 @@ export default function (pi: ExtensionAPI) {
 			if (action === "agents") {
 				const scope = params.scope ?? "both";
 				const settings2 = readSubagentSettings();
-				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, undefined, settings2.modelRoles, settings2.taskflow);
+				const { agents } = discoverAgents(ctx.cwd, scope as AgentScope, settings2.modelRoles, settings2.taskflow);
 				const text = agents.length
 					? agents
 							.map(

@@ -10,7 +10,6 @@ import {
 	readSubagentSettings,
 	shouldLoadBuiltinAgents,
 	shouldSyncBuiltinAgentsToProject,
-	type AgentOverride,
 } from "../extensions/agents.ts";
 
 // ---------------------------------------------------------------------------
@@ -165,7 +164,7 @@ test("discoverAgents: skips built-in agents when taskflow.builtInAgents is false
 	writeAgent(builtInDir, "builtin.md", { name: "builtin", description: "package agent" }, "Built in.");
 	process.env[BUILTIN_DIR_ENV] = builtInDir;
 
-	const { agents } = discoverAgents(projectCwd, "both", undefined, undefined, {
+	const { agents } = discoverAgents(projectCwd, "both", undefined, {
 		...DEFAULT_TASKFLOW_SETTINGS,
 		builtInAgents: false,
 	});
@@ -308,97 +307,6 @@ test("discoverAgents: multiple agents discovered and ordered by directory listin
 });
 
 // ===========================================================================
-// discoverAgents — overrides
-// ===========================================================================
-
-test("discoverAgents: overrides apply model to matching agent", () => {
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout", model: "default-model" });
-
-	const overrides: Record<string, AgentOverride> = {
-		scout: { model: "override-model" },
-	};
-	const { agents } = discoverAgents(projectCwd, "user", overrides);
-	assert.equal(agents[0].model, "override-model");
-});
-
-test("discoverAgents: overrides apply thinking to matching agent", () => {
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout" });
-
-	const overrides: Record<string, AgentOverride> = {
-		scout: { thinking: "high" },
-	};
-	const { agents } = discoverAgents(projectCwd, "user", overrides);
-	assert.equal(agents[0].thinking, "high");
-});
-
-test("discoverAgents: overrides apply tools to matching agent", () => {
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout", tools: "read" });
-
-	const overrides: Record<string, AgentOverride> = {
-		scout: { tools: ["read", "write", "bash"] },
-	};
-	const { agents } = discoverAgents(projectCwd, "user", overrides);
-	assert.deepEqual(agents[0].tools, ["read", "write", "bash"]);
-});
-
-test("discoverAgents: overrides for non-existent agent are silently ignored", () => {
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout" });
-
-	const overrides: Record<string, AgentOverride> = {
-		ghost: { model: "phantom-model" },
-	};
-	const { agents } = discoverAgents(projectCwd, "user", overrides);
-	assert.equal(agents.length, 1);
-	assert.equal(agents[0].name, "scout");
-	assert.equal(agents[0].model, undefined);
-});
-
-test("discoverAgents: override with undefined model does not change existing model", () => {
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout", model: "original" });
-
-	const overrides: Record<string, AgentOverride> = {
-		scout: { model: undefined },
-	};
-	const { agents } = discoverAgents(projectCwd, "user", overrides);
-	assert.equal(agents[0].model, "original");
-});
-
-// ===========================================================================
-// F-014 regression: overrides must not mutate agentMap-owned AgentConfig
-// ===========================================================================
-
-test("F-014: overrides do not mutate the original AgentConfig (retained reference is stable across calls)", () => {
-	// Regression gate: discoverAgents must clone the agent before applying
-	// overrides. Otherwise a caller that retains a reference to agents[0] from
-	// one call would observe cross-contamination when a subsequent call uses
-	// different overrides.
-	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout", model: "original" });
-
-	const result1 = discoverAgents(projectCwd, "user", { scout: { model: "mutated-A" } });
-	const retainedRef = result1.agents[0];
-
-	// The first call's returned agent has the override applied.
-	assert.equal(retainedRef.model, "mutated-A");
-
-	// A second call with a different override must not affect the retained
-	// reference from the first call — this is the core F-014 guarantee.
-	const result2 = discoverAgents(projectCwd, "user", { scout: { model: "mutated-B" } });
-	assert.equal(result2.agents[0].model, "mutated-B");
-	assert.equal(retainedRef.model, "mutated-A", "retained reference from first call must be stable");
-
-	// A third call with no overrides returns the on-disk model.
-	const result3 = discoverAgents(projectCwd, "user");
-	assert.equal(result3.agents[0].model, "original");
-	assert.equal(retainedRef.model, "mutated-A", "retained reference must still be stable");
-});
-
-// ===========================================================================
 // discoverAgents — findNearestProjectAgentsDir (tested indirectly)
 // ===========================================================================
 
@@ -499,24 +407,6 @@ test("readSubagentSettings: returns defaults when settings.json missing", () => 
 	assert.deepEqual(settings, { taskflow: DEFAULT_TASKFLOW_SETTINGS });
 });
 
-test("readSubagentSettings: parses agentOverrides from settings.json", () => {
-	const settingsPath = path.join(userAgentDir, "settings.json");
-	fs.writeFileSync(
-		settingsPath,
-		JSON.stringify({
-			subagents: {
-				agentOverrides: {
-					scout: { model: "claude-sonnet-4-20250514", thinking: "high" },
-				},
-			},
-		}),
-	);
-
-	const settings = readSubagentSettings();
-	assert.deepEqual(settings.agentOverrides, {
-		scout: { model: "claude-sonnet-4-20250514", thinking: "high" },
-	});
-});
 
 test("readSubagentSettings: parses globalThinking from subagents.globalThinking", () => {
 	const settingsPath = path.join(userAgentDir, "settings.json");
@@ -567,23 +457,20 @@ test("readSubagentSettings: returns defaults for malformed JSON", () => {
 	assert.deepEqual(settings, { taskflow: DEFAULT_TASKFLOW_SETTINGS });
 });
 
-test("readSubagentSettings: returns empty agentOverrides when subagents key is missing", () => {
+test("readSubagentSettings: returns empty globalThinking when subagents key is missing", () => {
 	const settingsPath = path.join(userAgentDir, "settings.json");
 	fs.writeFileSync(settingsPath, JSON.stringify({ someOtherKey: true }));
 
 	const settings = readSubagentSettings();
-	assert.equal(settings.agentOverrides, undefined);
 	assert.equal(settings.globalThinking, undefined);
 });
 
-test("readSubagentSettings: returns empty agentOverrides when subagents is null", () => {
+test("readSubagentSettings: returns empty globalThinking when subagents is null", () => {
 	const settingsPath = path.join(userAgentDir, "settings.json");
 	fs.writeFileSync(settingsPath, JSON.stringify({ subagents: null }));
 
-	// subagents is null, so subagents?.agentOverrides is undefined
-	// subagents?.globalThinking is undefined, ?? raw.defaultThinkingLevel
 	const settings = readSubagentSettings();
-	assert.equal(settings.agentOverrides, undefined);
+	assert.equal(settings.globalThinking, undefined);
 });
 
 test("readSubagentSettings: parses taskflow preferences from settings.json", () => {
@@ -612,27 +499,22 @@ test("readSubagentSettings: malformed taskflow preferences fall back to defaults
 // Integration: discoverAgents + readSubagentSettings
 // ===========================================================================
 
-test("integration: readSubagentSettings overrides flow into discoverAgents", () => {
+test("integration: readSubagentSettings modelRoles flow into discoverAgents", () => {
 	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout agent", model: "default-model" });
+	writeAgent(agentsDir, "scout.md", { name: "scout", description: "scout agent", model: "{{fast}}" });
 
 	const settingsPath = path.join(userAgentDir, "settings.json");
 	fs.writeFileSync(
 		settingsPath,
 		JSON.stringify({
-			subagents: {
-				agentOverrides: {
-					scout: { model: "settings-model", thinking: "high" },
-				},
-			},
+			modelRoles: { fast: "openrouter/deepseek/deepseek-v4-flash" },
 		}),
 	);
 
 	const settings = readSubagentSettings();
-	const { agents } = discoverAgents(projectCwd, "user", settings.agentOverrides);
+	const { agents } = discoverAgents(projectCwd, "user", settings.modelRoles);
 
-	assert.equal(agents[0].model, "settings-model");
-	assert.equal(agents[0].thinking, "high");
+	assert.equal(agents[0].model, "openrouter/deepseek/deepseek-v4-flash");
 });
 
 // ===========================================================================
@@ -736,7 +618,7 @@ test("modelRoles: resolves {{role}} references from settings", () => {
 	writeAgent(agentsDir, "nomodel.md", { name: "nomodel-agent", description: "no model" });
 
 	const roles = { fast: "openrouter/deepseek/v4-flash", strong: "anthropic/claude-sonnet-4-20250514" };
-	const { agents } = discoverAgents(projectCwd, "user", undefined, roles);
+	const { agents } = discoverAgents(projectCwd, "user", roles);
 
 	const byName = Object.fromEntries(agents.map(a => [a.name, a.model]));
 	assert.equal(byName["fast-agent"], "openrouter/deepseek/v4-flash");
@@ -749,7 +631,7 @@ test("modelRoles: unmapped role resolves to undefined", () => {
 	const agentsDir = path.join(userAgentDir, "agents");
 	writeAgent(agentsDir, "unknown.md", { name: "unk", description: "unknown", model: "{{nonexistent}}" });
 
-	const { agents } = discoverAgents(projectCwd, "user", undefined, { fast: "openrouter/deepseek/v4-flash" });
+	const { agents } = discoverAgents(projectCwd, "user", { fast: "openrouter/deepseek/v4-flash" });
 	assert.equal(agents[0].model, undefined);
 });
 

@@ -446,12 +446,12 @@ test("readSettings: a settings file WITHOUT a modelRoles key leaves it undefined
 test("readSettings/writeSettings: round-trip preserves non-modelRoles keys", () => {
 	const settings = {
 		modelRoles: { fast: "a/b" },
-		subagents: { agentOverrides: { executor: { model: "x/y" } } },
+		subagents: { globalThinking: "high" },
 		enabledModels: ["a/b", "c/d"],
 	};
 	writeSettings(settings);
 	const result = readSettings();
-	assert.deepEqual(result.subagents, { agentOverrides: { executor: { model: "x/y" } } });
+	assert.deepEqual(result.subagents, { globalThinking: "high" });
 	assert.deepEqual(result.enabledModels, ["a/b", "c/d"]);
 });
 
@@ -463,7 +463,7 @@ test("writeSettings: merge preserves on-disk keys NOT in incoming (the F5 clobbe
 		hideThinkingBlock: true,
 		quietStartup: true,
 		packages: ["npm:pi-crew", "npm:pi-mcp-adapter"],
-		subagents: { agentOverrides: { planner: { model: "gpt-5.5" } } },
+		subagents: { globalThinking: "high" },
 		enabledModels: ["deepseek-v4-flash"],
 		warnings: { anthropicExtraUsage: false },
 	};
@@ -483,7 +483,7 @@ test("writeSettings: merge preserves on-disk keys NOT in incoming (the F5 clobbe
 	assert.equal(result.hideThinkingBlock, true);
 	assert.equal(result.quietStartup, true);
 	assert.deepEqual(result.packages, ["npm:pi-crew", "npm:pi-mcp-adapter"]);
-	assert.deepEqual(result.subagents, { agentOverrides: { planner: { model: "gpt-5.5" } } });
+	assert.deepEqual(result.subagents, { globalThinking: "high" });
 	assert.deepEqual(result.enabledModels, ["deepseek-v4-flash"]);
 	assert.deepEqual(result.warnings, { anthropicExtraUsage: false });
 });

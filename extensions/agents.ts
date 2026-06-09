@@ -63,12 +63,6 @@ export function shouldSyncBuiltinAgentsToProject(settings: TaskflowSettings = DE
 	return settings.builtInAgents && settings.syncBuiltinAgentsToProject;
 }
 
-export interface AgentOverride {
-	model?: string;
-	thinking?: string;
-	tools?: string[];
-}
-
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -173,7 +167,6 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 export function discoverAgents(
 	cwd: string,
 	scope: AgentScope,
-	overrides?: Record<string, AgentOverride>,
 	modelRoles?: Record<string, string>,
 	taskflowSettings: TaskflowSettings = DEFAULT_TASKFLOW_SETTINGS,
 ): AgentDiscoveryResult {
@@ -202,23 +195,6 @@ export function discoverAgents(
 		for (const a of projectAgents) agentMap.set(a.name, a);
 	}
 
-	if (overrides) {
-		for (const [name, override] of Object.entries(overrides)) {
-			const agent = agentMap.get(name);
-			if (agent) {
-				// Clone before mutating: agentMap owns the original AgentConfig
-				// (loaded from disk in loadAgentsFromDir). Mutating it in place
-				// would cause cross-contamination for any caller that retains a
-				// reference and invokes discoverAgents again with different overrides.
-				const mutated: AgentConfig = { ...agent };
-				if (override.model !== undefined) mutated.model = override.model;
-				if (override.thinking !== undefined) mutated.thinking = override.thinking;
-				if (override.tools !== undefined) mutated.tools = override.tools;
-				agentMap.set(name, mutated);
-			}
-		}
-	}
-
 	// Resolve {{role}} model references (e.g. {{fast}} → openrouter/deepseek/v4-flash)
 	// Clone before mutating, consistent with the overrides block above.
 	if (modelRoles) {
@@ -236,7 +212,6 @@ export function discoverAgents(
 }
 
 export interface SubagentSettings {
-	agentOverrides?: Record<string, AgentOverride>;
 	globalThinking?: string;
 	modelRoles?: Record<string, string>;
 	taskflow: TaskflowSettings;
@@ -261,7 +236,6 @@ export function readSubagentSettings(): SubagentSettings {
 		if (!fs.existsSync(settingsPath)) return { taskflow: { ...DEFAULT_TASKFLOW_SETTINGS } };
 		const raw = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
 		return {
-			agentOverrides: raw.subagents?.agentOverrides,
 			globalThinking: raw.subagents?.globalThinking ?? raw.defaultThinkingLevel,
 			modelRoles: raw.modelRoles,
 			taskflow: normalizeTaskflowSettings(raw.taskflow),
