@@ -8,8 +8,11 @@
  *   {previous.output}   alias for the immediately-preceding completed phase output
  *   {item} / {item.f}   map loop variable (or custom name via phase.as)
  *
- * Unknown placeholders are left intact (with a recorded warning) rather than
- * throwing, so a partially-specified task still runs.
+ * Unknown placeholders are left intact rather than throwing, so a
+ * partially-specified task still runs. The unresolved refs are returned in
+ * `missing[]`; the runtime surfaces them as a phase warning (see
+ * `warnUnresolvedRefs` in runtime.ts) — logged and persisted to
+ * `PhaseState.warnings`.
  */
 
 export interface InterpolationContext {

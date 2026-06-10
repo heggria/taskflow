@@ -87,8 +87,7 @@ function buildInterpolationContext(
 	return { args: state.args, steps, previousOutput, locals };
 }
 
-function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJson: boolean): PhaseState {
-	const failed = isFailed(r);
+function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJson: boolean): PhaseState {	const failed = isFailed(r);
 	const attempts = attemptsOf(r);
 	// For failed phases, embed the error info in the output so downstream
 	// phases (and the user) can see what went wrong. The raw r.output is
@@ -108,6 +107,22 @@ function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJs
 		inputHash,
 		endedAt: Date.now(),
 	};
+}
+
+/**
+ * Surface unresolved interpolation placeholders (the `missing[]` from
+ * `interpolate()`). Without this they are silently left intact in the task —
+ * the doc comment in interpolate.ts promises "a recorded warning". We both
+ * log to the console and return a string to attach to PhaseState.warnings so
+ * the warning is persisted in the run record and visible in `/tf runs`.
+ * Returns undefined when nothing is missing.
+ */
+function warnUnresolvedRefs(phaseId: string, missing: string[]): string | undefined {
+	if (!missing.length) return undefined;
+	const unique = Array.from(new Set(missing));
+	const msg = `unresolved refs in task: ${unique.map((m) => `{${m}}`).join(", ")} — left intact (check dependsOn / placeholder spelling)`;
+	console.warn(`[taskflow] phase '${phaseId}': ${msg}`);
+	return msg;
 }
 
 /** Attempts recorded by the retry wrapper (defaults to 1). */
@@ -582,7 +597,9 @@ async function executePhase(
 				return ps;
 			}
 		}
-		const { text } = interpolate(phase.task ?? "", ctx);
+		const interp = interpolate(phase.task ?? "", ctx);
+		const text = interp.text;
+		const refWarning = warnUnresolvedRefs(phase.id, interp.missing);
 		const fullTask = preRead + text;
 		const agentName = resolveAgent(phase.agent, deps, state);
 		const inputHash = cacheKey(cc, [phase.id, agentName, phase.model ?? "", fullTask]);
@@ -591,6 +608,7 @@ async function executePhase(
 
 		const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress));
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
+		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
 		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
 
 		// onBlock:retry — re-execute upstream + gate until pass or max attempts.

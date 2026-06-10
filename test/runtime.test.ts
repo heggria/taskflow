@@ -896,3 +896,46 @@ test("fix-8: budgetReason updates after fan-out truncation when later phase also
 	// the fan-out truncation message.
 	assert.ok(res.finalOutput.includes("Budget exceeded"), "finalOutput must mention budget exceeded");
 });
+
+test("runtime: unresolved interpolation refs are surfaced as a phase warning", async () => {
+	const def: Taskflow = {
+		name: "missing-ref",
+		phases: [
+			{
+				id: "solo",
+				type: "agent",
+				agent: "a",
+				// {args.nope} and {steps.ghost.output} have no source — must be left intact + warned.
+				task: "do {args.nope} then {steps.ghost.output}",
+				final: true,
+			},
+		],
+	};
+	const record: string[] = [];
+	const origWarn = console.warn;
+	const warned: string[] = [];
+	console.warn = (...a: unknown[]) => {
+		warned.push(a.join(" "));
+	};
+	try {
+		const deps = baseDeps(mockRunner((t) => `out:${t}`, { record }));
+		const res = await executeTaskflow(mkState(def), deps);
+		assert.equal(res.ok, true);
+		// Placeholders left intact in the dispatched task (not throwing).
+		assert.match(record[0], /\{args\.nope\}/);
+		assert.match(record[0], /\{steps\.ghost\.output\}/);
+		// Warning recorded on PhaseState.warnings.
+		const w = res.state.phases.solo.warnings ?? [];
+		assert.ok(
+			w.some((m) => m.includes("unresolved refs") && m.includes("{args.nope}")),
+			`expected unresolved-ref warning, got: ${JSON.stringify(w)}`,
+		);
+		// Also logged to console.
+		assert.ok(
+			warned.some((m) => m.includes("[taskflow]") && m.includes("solo")),
+			"expected a console.warn for the phase",
+		);
+	} finally {
+		console.warn = origWarn;
+	}
+});
