@@ -2,6 +2,20 @@
 
 All notable changes to pi-taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.0.22] — 2026-06-10
+
+> Dogfooding release. The `dogfood-full` self-audit taskflow (which itself
+> exercises all 9 phase types + when/join/retry/budget/cache/eval/flow-def/
+> loop/tournament/approval) ran against the codebase and surfaced these fixes.
+
+### Added
+- **Live auto-refresh for the `/tf runs` panel.** The run-history panel was a static snapshot taken when opened, so a background (detached) run's progress never updated while watching. It now polls run state on a 1s interval and re-renders only when a run's status/`updatedAt` actually changes — phase progress (including `map`/`parallel` `subProgress` like `24/24`) updates live. The user's selection follows the same `runId` across refreshes, a green `● live` tag shows while any run is running, and the refresh timer is cleared on close (`dispose()`) and `unref`'d so it never keeps the event loop alive. Fully backward-compatible: without live hooks the panel renders statically as before.
+  - 5 new tests (`test/runs-view.test.ts`): refresh-on-change, no-render-when-unchanged, dispose-stops-timer, selection-follows-runId, back-compat-no-hooks.
+
+### Fixed
+- **`safeParse` now prefers a `json`-tagged fence in multi-fence output.** When an LLM phase emitted an evidence block (e.g. ```` ```typescript ````) *before* the ```` ```json ```` payload, the old single-match regex grabbed the first fence, failed to parse, and the balanced-bracket fallback was misled by braces in the prose — `safeParse` returned `undefined` and any downstream `map` phase failed with `'over' did not resolve to an array`. It now scans every fenced block and tries `json`-tagged ones first, then untagged. (3 new multi-fence tests.)
+- **Unresolved interpolation refs are surfaced as phase warnings.** `interpolate()` returns `missing[]` (placeholders with no source), but the runtime discarded it on the main task path — so `{args.typo}` or a `{steps.x.output}` without `dependsOn` was silently left intact in the dispatched task. The `interpolate.ts` doc comment promised "a recorded warning" that no code produced. The runtime now logs `[taskflow] phase X: unresolved refs ...` and attaches the message to `PhaseState.warnings` (persisted in the run record, visible in `/tf runs`). Doc comment corrected to match.
+
 ## [0.0.21] — 2026-06-10
 
 ### Added

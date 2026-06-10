@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — not a workflow you script, but a DAG you declare: statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
   "keywords": [
     "pi-package",

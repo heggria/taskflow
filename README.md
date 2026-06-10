@@ -8,7 +8,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-43D9AD?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-43D9AD?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/pi-taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/pi-taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-601-6E8BFF?style=flat-square" alt="601 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-608-6E8BFF?style=flat-square" alt="608 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-43D9AD?style=flat-square" alt="dogfooded"></a>
   <a href="https://pi.dev"><img src="https://img.shields.io/badge/for-Pi%20coding%20agent-B692FF?style=flat-square" alt="for the Pi coding agent"></a>
 </p>
@@ -608,12 +608,12 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 
 <div align="center">
 
-**0 runtime dependencies** · **601 tests** · **9 phase types** · **cross-session resume** · **cross-run memoization** · **~7.7k LOC runtime**
+**0 runtime dependencies** · **608 tests** · **9 phase types** · **cross-session resume** · **cross-run memoization** · **~7.7k LOC runtime**
 
 </div>
 
 - **Zero runtime dependencies.** No `dependencies` field — the runtime is built entirely on Node built-ins (`fs` / `path` / `os` / `child_process` / `crypto`). The file lock is `fs.openSync("wx")`, not a third-party library.
-- **601 tests across 25 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, callback isolation, the idle watchdog, model-role init config, and parseModelFromLabel with parenthesized-model-name regression.
+- **608 tests across 26 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, live run-history refresh, callback isolation, the idle watchdog, model-role init config, and parseModelFromLabel with parenthesized-model-name regression.
 - **Hardened by design.** Path-traversal defense (lexical + `realpath`), runId validation, HTML/error sanitization, atomic writes, stale-lock stealing via `rename`, and an idle watchdog that kills wedged subagents.
 - **Dogfooded.** Every new feature has to survive the project's own `self-improve` taskflow before it ships.
 
