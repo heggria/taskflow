@@ -1,6 +1,6 @@
 name: Publish & Release
 
-# Publishes to npmjs.com + GitHub Packages, and creates a GitHub Release,
+# Publishes to npmjs.com and creates a GitHub Release,
 # when a v* tag is pushed (e.g. `git tag v0.0.16 && git push --tags`).
 
 on:
@@ -14,11 +14,10 @@ jobs:
     permissions:
       contents: write    # create GitHub Release
       id-token: write    # npm provenance
-      packages: write    # GitHub Packages
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -45,16 +44,6 @@ jobs:
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to GitHub Packages (best-effort)
-        # Best-effort: the canonical registry is npmjs.com (published above). The
-        # package name is unscoped, so GitHub Packages publish is optional and must
-        # never block the npm release or the GitHub Release step below.
-        continue-on-error: true
-        run: |
-          echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" > ~/.npmrc
-          echo "@heggria:registry=https://npm.pkg.github.com" >> ~/.npmrc
-          npm publish --registry https://npm.pkg.github.com || true
 
       - name: Create GitHub Release
         run: |
