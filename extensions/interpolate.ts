@@ -260,7 +260,7 @@ function tokenize(input: string): Tok[] {
 			continue;
 		}
 		// number
-		const numMatch = /^-?\d+(?:\.\d+)?/.exec(input.slice(i));
+		const numMatch = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(input.slice(i));
 		if (numMatch) {
 			toks.push({ t: "num", v: Number(numMatch[0]) });
 			i += numMatch[0].length;

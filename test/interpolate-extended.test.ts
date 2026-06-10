@@ -428,3 +428,21 @@ test("interpolate: steps.X.output without trailing segments works", () => {
 	assert.equal(r.text, "hello");
 	assert.deepEqual(r.missing, []);
 });
+
+// ── fix-6: scientific notation in conditions ───────────────────────
+
+test("fix-6: scientific notation (1e5 > 1000) evaluates correctly", () => {
+	const ctx = { args: {}, steps: {} };
+	assert.equal(evaluateCondition("1e5 > 1000", ctx), true, "1e5 > 1000 should be true");
+	assert.equal(evaluateCondition("1e3 < 500", ctx), false, "1e3 < 500 should be false");
+	assert.equal(evaluateCondition("2.5E-3 == 0.0025", ctx), true, "2.5E-3 == 0.0025 should be true");
+});
+
+test("fix-6: non-scientific bareword '1e' still fail-opens correctly", () => {
+	const ctx = { args: {}, steps: {} };
+	// '1e' is not valid scientific notation — the 'e' is a separate token.
+	// Fail-open: parse errors return true (phase still runs).
+	const result = evaluateCondition("1e > 5", ctx);
+	// The condition parser fails-open: parse error → true.
+	assert.equal(result, true, "fail-open must return true");
+});

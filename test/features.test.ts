@@ -223,9 +223,10 @@ test("budget: halts the run once cost cap is exceeded", async () => {
 	assert.match(res.finalOutput, /Budget exceeded/);
 });
 
-test("budget: a cap crossed by the FINAL phase still completes ok (no phantom block)", async () => {
-	// Regression: budget tipped on the last phase (nothing left to skip) must not
-	// mark a fully-successful run as blocked / ok:false.
+test("budget: a cap crossed by the FINAL phase marks the run blocked (safety contract)", async () => {
+	// fix-1: budget exceeded on the last phase now correctly marks the run as
+	// 'blocked' — a maxUSD ceiling that silently does nothing violates the
+	// financial safety contract.
 	const def: Taskflow = {
 		name: "budget-final",
 		concurrency: 1,
@@ -236,11 +237,10 @@ test("budget: a cap crossed by the FINAL phase still completes ok (no phantom bl
 		],
 	};
 	const res = await executeTaskflow(mkState(def), baseDeps(mockRunner((t) => `ok:${t}`, { cost: 0.001 })));
-	assert.equal(res.ok, true);
-	assert.equal(res.state.status, "completed");
+	assert.equal(res.ok, false, "budget exceeded must not silently pass");
+	assert.equal(res.state.status, "blocked");
 	assert.equal(res.state.phases.p2.status, "done");
-	assert.match(res.finalOutput, /ok:p2/);
-	assert.doesNotMatch(res.finalOutput, /Budget exceeded/);
+	assert.match(res.finalOutput, /Budget exceeded/);
 });
 
 test("budget: caps a runaway map fan-out and marks the run blocked", async () => {

@@ -1025,6 +1025,7 @@ async function executePhase(
 		// Using indexOf on the stable `ran` array is reference-based and correct even
 		// when two variants produce byte-identical output.
 		const ranIdx = (r: RunResult) => ran.indexOf(r) + 1;
+		const budgetSkipCount = results.filter((r) => r.stopReason === "budget-skipped").length;
 
 		// All competitors failed → the tournament fails (nothing to judge).
 		if (ok.length === 0) {
@@ -1033,6 +1034,7 @@ async function executePhase(
 				status: "failed",
 				usage: variantUsage,
 				error: `tournament '${phase.id}': all ${competitors.length} variants failed`,
+				budgetTruncated: budgetSkipCount > 0 || undefined,
 				tournament: { variants: competitors.length, winner: 0, mode },
 				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
 				endedAt: Date.now(),
@@ -1047,6 +1049,7 @@ async function executePhase(
 				json: parseJson ? safeParse(ok[0].output) : undefined,
 				usage: variantUsage,
 				model: ok[0].model,
+				budgetTruncated: budgetSkipCount > 0 || undefined,
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "only surviving variant" },
 				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
 				endedAt: Date.now(),
@@ -1062,6 +1065,7 @@ async function executePhase(
 				json: parseJson ? safeParse(ok[0].output) : undefined,
 				usage: variantUsage,
 				model: ok[0].model,
+				budgetTruncated: budgetSkipCount > 0 || undefined,
 				warnings: ["judge skipped: run aborted or budget exceeded"],
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "judge skipped" },
 				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
@@ -1095,6 +1099,7 @@ async function executePhase(
 				json: parseJson ? safeParse(ok[0].output) : undefined,
 				usage: judgeUsage,
 				model: ok[0].model,
+				budgetTruncated: budgetSkipCount > 0 || undefined,
 				warnings: [`judge failed (${judgeRes.errorMessage ?? "error"}); used variant ${ranIdx(ok[0])}`],
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "judge failed" },
 				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
@@ -1117,6 +1122,7 @@ async function executePhase(
 			json: parseJson ? safeParse(output) : undefined,
 			usage: judgeUsage,
 			model: mode === "aggregate" ? judgeRes.model : chosen.model,
+			budgetTruncated: budgetSkipCount > 0 || undefined,
 			warnings: winnerIneligible ? [`judge picked an ineligible variant; used variant ${winnerIdx}`] : undefined,
 			tournament: { variants: competitors.length, winner: winnerIdx, mode, reason },
 			inputHash: hashInput(phase.id, "tournament", String(competitors.length), mode),
@@ -1398,12 +1404,10 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	let gateBlocked = false;
 	let gateReason = "";
 	let gateOutput = "";
-	// `budgetBlocked` gates the skipping of remaining phases once the cap is hit.
-	// `budgetSkipped` records that a phase was *actually* skipped/truncated for
-	// budget — only then is the run terminal-status "blocked" (a cap crossed by the
-	// very last phase, with nothing left to skip, must NOT mark a good run failed).
+	// `budgetBlocked` gates the skipping of remaining phases once the cap is hit
+	// and also drives the terminal "blocked" status — a maxUSD ceiling must never
+	// silently do nothing.
 	let budgetBlocked = false;
-	let budgetSkipped = false;
 	let budgetReason = "";
 	const byId = new Map(def.phases.map((p) => [p.id, p]));
 
@@ -1442,7 +1446,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			}
 
 			if (skipReason) {
-				if (skipReason.startsWith("Budget exceeded")) budgetSkipped = true;
+				if (skipReason.startsWith("Budget exceeded")) budgetBlocked = true;
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
@@ -1485,7 +1489,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			// A fan-out cut short by the cap is itself a budget skip.
 			if (ps.budgetTruncated) {
 				budgetBlocked = true;
-				budgetSkipped = true;
 				if (!budgetReason) budgetReason = "fan-out truncated by budget";
 			}
 			// Budget ceiling: once exceeded, remaining phases are skipped.
@@ -1494,7 +1497,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			// the budget is detected as exceeded. This bounded overshoot is
 			// acceptable: budgetBlocked prevents cascading into subsequent layers.
 			const ob = overBudget(state);
-			if (ob.over && !budgetBlocked) {
+			if (ob.over) {
 				budgetBlocked = true;
 				budgetReason = ob.reason;
 			}
@@ -1517,7 +1520,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 
 	state.status = aborted
 		? "paused"
-		: gateBlocked || budgetSkipped
+		: gateBlocked || budgetBlocked
 			? "blocked"
 			: anyFailed
 				? "failed"
@@ -1527,7 +1530,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	let finalOutput = finalState?.output ?? "(no output)";
 	if (gateBlocked) {
 		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${gateOutput ? `\n\n${gateOutput}` : ""}`;
-	} else if (budgetSkipped) {
+	} else if (budgetBlocked) {
 		finalOutput = `Budget exceeded — run halted.${budgetReason ? `\nReason: ${budgetReason}` : ""}${finalState?.output ? `\n\n${finalState.output}` : ""}`;
 	}
 

@@ -458,10 +458,21 @@ function cleanupTerminalRuns(
 		}
 
 		// Sort terminal by updatedAt desc (newest first).
-		terminal.sort((a, b) => b.updatedAt - a.updatedAt);
+		// Filter out entries with corrupt updatedAt (non-numeric/NaN) BEFORE sorting
+		// to prevent NaN from corrupting sort order. Corrupt entries cannot be
+		// reliably aged, so they are always moved to toRemove.
+		const cleanTerminal: RunIndexEntry[] = [];
+		for (const e of terminal) {
+			if (typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt)) {
+				cleanTerminal.push(e);
+			} else {
+				toRemove.push(e);
+			}
+		}
+		cleanTerminal.sort((a, b) => b.updatedAt - a.updatedAt);
 
-		for (let i = 0; i < terminal.length; i++) {
-			const e = terminal[i]!;
+		for (let i = 0; i < cleanTerminal.length; i++) {
+			const e = cleanTerminal[i]!;
 			const expiredByAge = now - e.updatedAt > maxAgeMs;
 			const excessByCount = i >= maxKeep;
 			if (expiredByAge || excessByCount) {
@@ -473,7 +484,7 @@ function cleanupTerminalRuns(
 
 		// Commit the pruned index while holding the lock so a concurrent
 		// updateIndexEntry cannot interleave and lose entries.
-		const remaining = terminal.filter((e) => !toRemove.includes(e));
+		const remaining = cleanTerminal.filter((e) => !toRemove.includes(e));
 		writeIndex(runsRoot, [...active, ...remaining]);
 	});
 
@@ -783,8 +794,12 @@ export function listRuns(cwd: string, limit = 20): RunState[] {
 	}
 
 	// Sort by updatedAt desc, slice to limit.
-	entries.sort((a, b) => b.updatedAt - a.updatedAt);
-	const sliced = entries.slice(0, limit);
+	// Filter out entries with non-numeric/NaN updatedAt BEFORE sorting to
+	// prevent NaN from corrupting V8's sort order (which can displace valid
+	// entries when a limit is applied).
+	const valid = entries.filter((e) => typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt));
+	valid.sort((a, b) => b.updatedAt - a.updatedAt);
+	const sliced = valid.slice(0, limit);
 
 	// Read full RunState for each entry.
 	const runs: RunState[] = [];

@@ -13,6 +13,15 @@ import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "./agents.ts";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 
+const activeChildren = new Set<number>();
+const killAll = () => {
+	for (const pid of activeChildren) {
+		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+	}
+};
+process.on("exit", killAll);
+process.on("SIGTERM", () => { killAll(); process.exit(143); });
+
 export interface RunResult {
 	agent: string;
 	task: string;
@@ -345,6 +354,7 @@ export async function runAgentTask(
 				shell: false,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
+			if (proc.pid) activeChildren.add(proc.pid);
 			let buffer = "";
 
 			// Idle watchdog: a subagent that goes silent on stdout for too long is
@@ -389,13 +399,18 @@ export async function runAgentTask(
 			// Cap prevents OOM from verbose tool output (e.g., npm install). 64 KB is
 			// generous for error diagnosis while preventing memory exhaustion.
 			const STDERR_MAX_LEN = 64 * 1024;
+			let stderrCapped = false;
 			proc.stderr.on("data", (data) => {
-				result.stderr += data.toString();
-				if (result.stderr.length >= STDERR_MAX_LEN) {
-					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
+				if (!stderrCapped) {
+					result.stderr += data.toString();
+					if (result.stderr.length >= STDERR_MAX_LEN) {
+						result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
+						stderrCapped = true;
+					}
 				}
 			});
 			proc.on("close", (code, signal) => {
+				if (proc.pid) activeChildren.delete(proc.pid);
 				clearTimers();
 				if (buffer.trim()) processLine(buffer);
 				if (code === null && signal) killedBySignal = signal;

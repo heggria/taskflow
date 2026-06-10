@@ -842,3 +842,57 @@ test("runtime resume: re-running a previously failed phase clears stale endedAt 
 	assert.equal(final.status, "done");
 	assert.ok(final.endedAt! >= final.startedAt!, "final endedAt must be >= startedAt");
 });
+
+// ── fix-1: budgetBlocked drives status + final output ──────────────
+
+test("fix-1: single-phase over-budget sets status 'blocked' and budget exceeded message", async () => {
+	const def: Taskflow = {
+		name: "budget-single",
+		phases: [{ id: "p", type: "agent", agent: "a", task: "do work", final: true }],
+		budget: { maxUSD: 0.000001 },
+	};
+	// Each call costs $0.001, exceeding the $0.000001 cap.
+	const deps = baseDeps(mockRunner(() => "ok"));
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.state.status, "blocked", "status must be blocked when budget exceeded");
+	assert.match(res.finalOutput, /Budget exceeded/, "finalOutput must mention budget exceeded");
+	assert.equal(res.ok, false, "ok must be false for blocked run");
+});
+
+// ── fix-8: budgetReason reflects actual over-budget cause ──────────
+
+test("fix-8: budgetReason updates after fan-out truncation when later phase also exceeds", async () => {
+	// Phase 1: map fan-out that will be truncated (costly items).
+	// Phase 2: agent that also exceeds the remaining budget.
+	const def: Taskflow = {
+		name: "budget-reason",
+		phases: [
+			{ id: "discover", type: "agent", agent: "a", task: "list", output: "json" },
+			{
+				id: "work",
+				type: "map",
+				over: "{steps.discover.json}",
+				as: "item",
+				agent: "a",
+				task: "process {item.name}",
+				dependsOn: ["discover"],
+			},
+			{ id: "final", type: "agent", agent: "a", task: "summarize {steps.work.output}", dependsOn: ["work"], final: true },
+		],
+		budget: { maxUSD: 0.002 }, // enough for discover + partial fan-out, but not final
+	};
+	let callCount = 0;
+	const deps = baseDeps(
+		mockRunner((t) => {
+			callCount++;
+			if (t === "list") return '[{"name":"x"},{"name":"y"},{"name":"z"}]';
+			return `done:${t}`;
+		}),
+	);
+	const res = await executeTaskflow(mkState(def), deps);
+	// The run should be blocked.
+	assert.equal(res.state.status, "blocked", "status must be blocked");
+	// budgetReason should reflect the actual over-budget detection, not just
+	// the fan-out truncation message.
+	assert.ok(res.finalOutput.includes("Budget exceeded"), "finalOutput must mention budget exceeded");
+});
