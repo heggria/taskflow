@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ApprovalViewComponent, type ApprovalChoice } from "../extensions/approval-view.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 /** Identity theme — strips styling so assertions see plain structure. */
 const theme: any = { fg: (_c: string, s: string) => s, bold: (s: string) => s };
 
-function mk(upstream?: string, rows = 24) {
+function mk(upstream?: string, rows = 24, term?: { write(data: string): void }) {
 	let result: ApprovalChoice | undefined;
 	const view = new ApprovalViewComponent(
 		theme,
@@ -14,21 +15,34 @@ function mk(upstream?: string, rows = 24) {
 			result = c;
 		},
 		() => rows,
+		term,
 	);
 	return { view, result: () => result };
 }
 
-test("approval-view: renders title, message and hints", () => {
+test("approval-view: renders title, message and hints inside a bordered dialog", () => {
 	const { view } = mk("a plan");
-	const out = view.render(80).join("\n");
-	assert.match(out, /Taskflow approval — flow\/checkpoint/);
-	assert.match(out, /Approve the plan\?/);
-	assert.match(out, /a\/Enter approve · e edit · r\/Esc reject/);
+	const out = view.render(80);
+	const text = out.join("\n");
+	assert.match(text, /Taskflow approval — flow\/checkpoint/);
+	assert.match(text, /Approve the plan\?/);
+	assert.match(text, /a\/Enter approve · e edit · r\/Esc reject/);
+	assert.match(out[0], /^╭/, "top border");
+	assert.match(out[out.length - 1], /^╰/, "bottom border");
+});
+
+test("approval-view: every rendered line is exactly the dialog width (no see-through)", () => {
+	const upstream = Array.from({ length: 40 }, (_, i) => `line-${i}`).join("\n");
+	const { view } = mk(upstream, 30);
+	const out = view.render(72);
+	for (const l of out) {
+		assert.equal(visibleWidth(l), 72, `line padded to full width: ${JSON.stringify(l)}`);
+	}
 });
 
 test("approval-view: long upstream is windowed with scroll indicator", () => {
 	const upstream = Array.from({ length: 100 }, (_, i) => `line-${i}`).join("\n");
-	const { view } = mk(upstream, 24); // 24 rows → 12 visible body lines
+	const { view } = mk(upstream, 24);
 	const out = view.render(80);
 	const text = out.join("\n");
 	assert.match(text, /line-0/, "top of content visible initially");
@@ -43,7 +57,7 @@ test("approval-view: down/pageDown/end scroll the viewport", () => {
 	view.render(80); // establish wrapped body cache
 	view.handleInput("\u001b[B"); // down arrow
 	let text = view.render(80).join("\n");
-	assert.doesNotMatch(text, /line-0\n/, "first line scrolled out");
+	assert.doesNotMatch(text, /line-0 /, "first line scrolled out");
 	assert.match(text, /↑1 more/, "indicator counts lines above");
 
 	view.handleInput("\u001b[F"); // end
@@ -52,7 +66,27 @@ test("approval-view: down/pageDown/end scroll the viewport", () => {
 
 	view.handleInput("\u001b[H"); // home
 	text = view.render(80).join("\n");
-	assert.match(text, /line-0/, "Home jumps back to the top");
+	assert.match(text, /line-0 /, "Home jumps back to the top");
+});
+
+test("approval-view: SGR mouse wheel scrolls the viewport", () => {
+	const upstream = Array.from({ length: 100 }, (_, i) => `line-${i}`).join("\n");
+	const { view } = mk(upstream, 24);
+	view.render(80);
+	view.handleInput("\u001b[<65;10;5M"); // wheel down
+	let text = view.render(80).join("\n");
+	assert.match(text, /↑3 more/, "wheel down scrolls 3 lines");
+	view.handleInput("\u001b[<64;10;5M"); // wheel up
+	text = view.render(80).join("\n");
+	assert.match(text, /line-0 /, "wheel up scrolls back to top");
+});
+
+test("approval-view: mouse clicks are swallowed (no accidental decision)", () => {
+	const { view, result } = mk("x");
+	view.render(80);
+	view.handleInput("\u001b[<0;10;5M"); // left button press
+	view.handleInput("\u001b[<0;10;5m"); // left button release
+	assert.equal(result(), undefined, "clicks do not trigger a decision");
 });
 
 test("approval-view: decisions — enter approves, e edits, esc rejects", () => {
@@ -83,7 +117,65 @@ test("approval-view: decisions — enter approves, e edits, esc rejects", () => 
 	}
 });
 
-test("approval-view: no upstream → no scroll hint, no body separator", () => {
+test("approval-view: decision fires only once", () => {
+	let calls = 0;
+	const view = new ApprovalViewComponent(theme, { title: "t", message: "m" }, () => {
+		calls++;
+	});
+	view.handleInput("\r");
+	view.handleInput("\u001b");
+	view.handleInput("e");
+	assert.equal(calls, 1, "subsequent inputs after a decision are ignored");
+});
+
+test("approval-view: enables mouse reporting on create and restores on dispose", () => {
+	const writes: string[] = [];
+	const term = { write: (d: string) => writes.push(d) };
+	const { view } = mk("x", 24, term);
+	assert.ok(
+		writes.some((w) => w.includes("\u001b[?1000h") && w.includes("\u001b[?1006h")),
+		"mouse tracking enabled",
+	);
+	view.dispose();
+	assert.ok(
+		writes.some((w) => w.includes("\u001b[?1000l") && w.includes("\u001b[?1006l")),
+		"mouse tracking restored",
+	);
+	view.dispose();
+	const offs = writes.filter((w) => w.includes("\u001b[?1000l"));
+	assert.equal(offs.length, 1, "dispose is idempotent");
+});
+
+test("approval-view: deciding restores mouse state before the callback fires", () => {
+	const writes: string[] = [];
+	const term = { write: (d: string) => writes.push(d) };
+	let mouseOffBeforeDone = false;
+	const view = new ApprovalViewComponent(
+		theme,
+		{ title: "t", message: "m" },
+		() => {
+			mouseOffBeforeDone = writes.some((w) => w.includes("\u001b[?1000l"));
+		},
+		() => 24,
+		term,
+	);
+	view.handleInput("\r");
+	assert.ok(mouseOffBeforeDone, "mouse reporting disabled before onDone runs");
+});
+
+test("approval-view: throwing terminal writer is tolerated", () => {
+	const term = {
+		write: () => {
+			throw new Error("closed stream");
+		},
+	};
+	const { view, result } = mk("x", 24, term);
+	view.render(80);
+	view.handleInput("\r");
+	assert.equal(result(), "approve");
+});
+
+test("approval-view: no upstream → no scroll hint, no scroll indicator", () => {
 	const { view } = mk(undefined);
 	const text = view.render(80).join("\n");
 	assert.doesNotMatch(text, /more/, "no scroll indicator without body");
