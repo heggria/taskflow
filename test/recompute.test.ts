@@ -158,3 +158,71 @@ test("recompute: a non-existent seed is fail-open (empty frontier, no crash)", a
 	// reads it), and the loop skips it (no matching phase). No crash, no rerun.
 	assert.equal(report.rerun.length, 0);
 });
+
+test("recompute: loop inputHash folds upstream so changed seed re-runs loop", async () => {
+	const record: string[] = [];
+	let scoutVersion = "V1";
+	const def: Taskflow = {
+		name: "loop-cascade",
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{
+				id: "refine",
+				type: "loop",
+				agent: "a",
+				maxIterations: 2,
+				until: "{steps.refine.output} == done",
+				task: "refine {steps.scout.output}",
+				dependsOn: ["scout"],
+			},
+		],
+	} as Taskflow;
+	const deps = baseDeps(
+		mockRunner((t) => (t.includes("scan") ? `out:${scoutVersion}` : "done"), record),
+	);
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+	const executedBefore = record.length;
+
+	scoutVersion = "V2";
+	const { report } = await recomputeTaskflow(state, deps, ["scout"]);
+
+	assert.ok(report.rerun.includes("scout"), "seed re-ran");
+	assert.ok(report.rerun.includes("refine"), "loop re-ran because its upstream changed");
+	assert.equal(record.length, executedBefore + 2, "scout + loop re-executed");
+});
+
+test("recompute: tournament inputHash folds upstream so changed seed re-runs tournament", async () => {
+	const record: string[] = [];
+	let scoutVersion = "V1";
+	const def: Taskflow = {
+		name: "tourney-cascade",
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{
+				id: "pick",
+				type: "tournament",
+				agent: "a",
+				variants: 2,
+				mode: "best",
+				judge: "Pick the variant that mentions {steps.scout.output}",
+				task: "answer about {steps.scout.output}",
+				dependsOn: ["scout"],
+			},
+		],
+	} as Taskflow;
+	const deps = baseDeps(
+		mockRunner((t) => (t.includes("scan") ? `out:${scoutVersion}` : `out:${t}`), record),
+	);
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+	const executedBefore = record.length;
+
+	scoutVersion = "V2";
+	const { report } = await recomputeTaskflow(state, deps, ["scout"]);
+
+	assert.ok(report.rerun.includes("scout"), "seed re-ran");
+	assert.ok(report.rerun.includes("pick"), "tournament re-ran because its upstream changed");
+	assert.equal(report.cutoff.length, 0, "tournament is not wrongly cut off");
+	assert.ok(record.length > executedBefore + 1, "tournament spawned competitors again");
+});

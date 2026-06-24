@@ -102,7 +102,7 @@ export interface RunState {
 	 *  to the flow always invalidates cross-run cache hits — and an identical
 	 *  re-run always reuses them. Filled once at run start; persisted for
 	 *  audit/resume consistency. */
-	flowDefHash?: string;
+	flowDefHash?: string | "failed";
 }
 
 // ---------------------------------------------------------------------------

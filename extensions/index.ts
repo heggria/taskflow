@@ -1294,11 +1294,12 @@ function errorResult(action: string, message: string): ToolResult {
 function formatCacheReport(state: RunState, totalUsage: UsageStats): string {
 	const cached = Object.values(state.phases).filter((p) => p.cacheHit === "cross-run");
 	if (cached.length === 0) return "";
-	const executed = Object.values(state.phases).filter((p) => p.status === "done" && !p.cacheHit).length;
-	const avgTokens = executed > 0 ? Math.round((totalUsage.input + totalUsage.output) / executed) : 0;
-	const savedTokens = avgTokens * cached.length;
-	const savedUSD = executed > 0 ? Math.round((cached.length * (totalUsage.cost ?? 0)) / executed * 1000) / 1000 : 0;
-	return `💾 ${cached.length} phase(s) reused from cross-run cache (~${savedTokens.toLocaleString()} tokens, $${savedUSD.toLocaleString()} saved)`;
+	// Honest reporting: we know these phases spent 0 tokens *this run* because
+	// they were served from cache. We do NOT estimate dollars/tokens "saved" —
+	// that requires guessing what a re-execution would have cost, and the mix of
+	// cheap vs expensive phases (tournament/loop) makes such a guess misleading.
+	const cachedTokens = cached.reduce((sum, p) => sum + ((p.usage?.input ?? 0) + (p.usage?.output ?? 0)), 0);
+	return `💾 ${cached.length} phase(s) reused from cross-run cache (${cachedTokens.toLocaleString()} tokens spent on them this run)`;
 }
 
 function finalResult(action: string, result: RuntimeResult): ToolResult {

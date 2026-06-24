@@ -680,8 +680,13 @@ async function executePhaseInner(
 
 	// Resolve this phase's cache policy once. Default scope is "run-only" (the
 	// historical within-run resume behavior). Only "cross-run" phases resolve a
-	// fingerprint and consult the persistent store.
-	const cacheScope: CacheScope = (phase.cache?.scope ?? deps.cacheScopeDefault ?? "run-only") as CacheScope;
+	// fingerprint and consult the persistent store. If flowDefHash failed we
+	// force run-only: using a degraded flowName-only key would reopen the
+	// cross-flow collision hole.
+	let cacheScope: CacheScope = (phase.cache?.scope ?? deps.cacheScopeDefault ?? "run-only") as CacheScope;
+	if (state.flowDefHash === "failed" && cacheScope === "cross-run") {
+		cacheScope = "run-only";
+	}
 	const cc: PhaseCacheCtx = {
 		scope: cacheScope,
 		ttlMs: phase.cache?.ttl ? (parseTtlMs(phase.cache.ttl) ?? undefined) : undefined,
@@ -691,7 +696,7 @@ async function executePhaseInner(
 		phaseId: phase.id,
 		flowName: state.flowName,
 		runId: state.runId,
-		flowDefHash: state.flowDefHash,
+		flowDefHash: state.flowDefHash === "failed" ? undefined : state.flowDefHash,
 		forceRerun: opts?.forceRerun,
 		thinking: phase.thinking,
 		tools: phase.tools,
@@ -1293,6 +1298,15 @@ async function executePhaseInner(
 		const maxIters = Math.max(1, Math.min(LOOP_HARD_MAX_ITERATIONS, Math.floor(rawMax)));
 		const convergence = phase.convergence ?? true;
 
+		// Canonical first-iteration body for the cache key. It must fold in the
+		// interpolated task/upstream refs so that a changed upstream changes the
+		// key and recompute no longer silently reuses a stale loop (critic finding).
+		const firstBodyCtx = buildInterpolationContext(state, previousOutput, {
+			loop: { iteration: 1, lastOutput: "", maxIterations: maxIters },
+		}, (ref) => readRefs.push(ref));
+		const firstBody = preRead + interpolate(phase.task ?? "", firstBodyCtx).text;
+		const inputHash = hashInput(phase.id, "loop", phase.until ?? "", firstBody, String(maxIters));
+
 		const usages: UsageStats[] = [];
 		const loopWarnings: string[] = [];
 		let lastOutput = "";
@@ -1358,7 +1372,7 @@ async function executePhaseInner(
 				error: failedResult?.errorMessage || failedResult?.stderr || (stop === "aborted" ? "Aborted" : `loop '${phase.id}' iteration ${iterations} failed`),
 				loop: { iterations, stop },
 				warnings: loopWarnings.length ? loopWarnings : undefined,
-				inputHash: hashInput(phase.id, "loop", phase.until ?? ""),
+				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
 			};
@@ -1371,7 +1385,7 @@ async function executePhaseInner(
 			usage: aggUsage,
 			loop: { iterations, stop },
 			warnings: loopWarnings.length ? loopWarnings : undefined,
-			inputHash: hashInput(phase.id, "loop", phase.until ?? "", String(iterations)),
+			inputHash,
 			reads: readRefsToReads(readRefs, state),
 			endedAt: Date.now(),
 		};
@@ -1395,6 +1409,20 @@ async function executePhaseInner(
 			competitors = Array.from({ length: n }, () => ({ agent: resolveAgent(phase.agent, deps, state), task: body }));
 		}
 
+		// The inputHash must fold in the resolved competitors (which embed the
+		// interpolated task/upstream refs) and the judge rubric, otherwise a changed
+		// upstream produces the same key and recompute silently reuses a stale
+		// tournament (critic finding: unsound for cross-run/recompute).
+		const rubric = interpolate(phase.judge ?? "", ctx).text.trim();
+		const inputHash = hashInput(
+			phase.id,
+			"tournament",
+			mode,
+			String(competitors.length),
+			JSON.stringify(competitors.map((c) => ({ agent: c.agent, task: c.task }))),
+			rubric,
+		);
+
 		const results = await runFanout(competitors);
 		const ran = results.filter((r) => r.stopReason !== "budget-skipped");
 		const ok = ran.filter((r) => !isFailed(r));
@@ -1414,7 +1442,7 @@ async function executePhaseInner(
 				error: `tournament '${phase.id}': all ${competitors.length} variants failed`,
 				budgetTruncated: budgetSkipCount > 0 || undefined,
 				tournament: { variants: competitors.length, winner: 0, mode },
-				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
+				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
 			};
@@ -1430,7 +1458,7 @@ async function executePhaseInner(
 				model: ok[0].model,
 				budgetTruncated: budgetSkipCount > 0 || undefined,
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "only surviving variant" },
-				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
+				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
 			};
@@ -1448,7 +1476,7 @@ async function executePhaseInner(
 				budgetTruncated: budgetSkipCount > 0 || undefined,
 				warnings: ["judge skipped: run aborted or budget exceeded"],
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "judge skipped" },
-				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
+				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
 			};
@@ -1458,14 +1486,14 @@ async function executePhaseInner(
 		const labelled = ran
 			.map((r, i) => `### Variant ${i + 1}${isFailed(r) ? " (failed — ineligible)" : ""}\n\n${r.output}`)
 			.join("\n\n---\n\n");
-		const rubric =
-			interpolate(phase.judge ?? "", ctx).text.trim() ||
+		const finalRubric =
+			rubric ||
 			"You are judging competing answers to the same task. Pick the single best variant on correctness, completeness, and clarity.";
 		const directive =
 			mode === "best"
 				? `End your reply with a line exactly: WINNER: <number> (1–${ran.length}), choosing the strongest eligible variant.`
 				: `Synthesize the strongest possible answer by combining the best parts of the eligible variants. Then end with a line: WINNER: <number> indicating which variant contributed most.`;
-		const judgeTask = `${rubric}\n\nThe candidate variants:\n\n${labelled}\n\n${directive}`;
+		const judgeTask = `${finalRubric}\n\nThe candidate variants:\n\n${labelled}\n\n${directive}`;
 		const judgeAgent = resolveAgent(phase.judgeAgent ?? phase.agent, deps, state);
 		const judgeRes = await runOne(judgeAgent, judgeTask, liveSink(state, phase.id, emitProgress));
 		const judgeUsage = aggregateUsage([variantUsage, judgeRes.usage]);
@@ -1483,7 +1511,7 @@ async function executePhaseInner(
 				budgetTruncated: budgetSkipCount > 0 || undefined,
 				warnings: [`judge failed (${judgeRes.errorMessage ?? "error"}); used variant ${ranIdx(ok[0])}`],
 				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "judge failed" },
-				inputHash: hashInput(phase.id, "tournament", String(competitors.length)),
+				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
 			};
@@ -1507,7 +1535,7 @@ async function executePhaseInner(
 			budgetTruncated: budgetSkipCount > 0 || undefined,
 			warnings: winnerIneligible ? [`judge picked an ineligible variant; used variant ${winnerIdx}`] : undefined,
 			tournament: { variants: competitors.length, winner: winnerIdx, mode, reason },
-			inputHash: hashInput(phase.id, "tournament", String(competitors.length), mode),
+			inputHash,
 			reads: readRefsToReads(readRefs, state),
 			endedAt: Date.now(),
 		};
@@ -1576,7 +1604,7 @@ interface PhaseCacheCtx {
 	/** Content fingerprint of the desugared flow definition — folded into the
 	 *  key so two structurally-different flows that share a name can never
 	 *  collide, and a changed flow never serves a stale cross-run hit. */
-	flowDefHash?: string;
+	flowDefHash?: string | "failed";
 	/** Force this phase to re-execute, ignoring the within-run prior AND the
 	 *  cross-run store (M5 recompute seed). Downstream phases are NOT forced —
 	 *  they re-evaluate naturally: if the seed's new output changed their
@@ -1904,8 +1932,14 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	if (state.flowDefHash === undefined) {
 		try {
 			state.flowDefHash = await flowDefHash(def);
-		} catch {
-			/* leave undefined → cache key degrades to legacy flowName-only shape */
+		} catch (e) {
+			// Fail-safe: warn loudly rather than silently degrading to the legacy
+			// flowName-only key, which would reopen the cross-flow collision hole.
+			console.warn(
+				`[taskflow] flowDefHash failed for '${def.name}': ${e instanceof Error ? e.message : String(e)}. ` +
+				"Cross-run cache is disabled for this run to prevent stale cross-flow hits.",
+			);
+			state.flowDefHash = "failed";
 		}
 	}
 
