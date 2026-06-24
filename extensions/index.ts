@@ -44,6 +44,7 @@ import {
 } from "./store.ts";
 import { CacheStore } from "./cache.ts";
 import { safeParse } from "./interpolate.ts";
+import { formatWhyStale, readMapOf } from "./stale.ts";
 import {
 	isValidKey,
 	queueSpawn,
@@ -83,7 +84,7 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "provenance", "cache-clear"] as const, {
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "provenance", "why-stale", "cache-clear"] as const, {
 		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, or clear the cross-run memoization cache",
 		default: "run",
 	}),
@@ -123,6 +124,7 @@ const TaskflowParams = Type.Object({
 	),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Invocation arguments for the flow" })),
 	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume)" })),
+	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale" })),
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
 	),
@@ -666,6 +668,19 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			if (action === "why-stale") {
+				if (!params.runId)
+					return errorResult(action, "action=why-stale requires 'runId'");
+				const run = loadRun(ctx.cwd, params.runId);
+				if (!run) return errorResult(action, `Run not found: ${params.runId}`);
+				const reads = readMapOf(run.phases);
+				const seeds = params.phaseId ? [String(params.phaseId)] : [];
+				return {
+					content: [{ type: "text", text: formatWhyStale(run.runId, run.flowName, reads, seeds) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
 			// resolve the definition: inline `define` / shorthand (single|parallel|chain), else saved `name`.
 			let def: Taskflow | undefined;
 
@@ -859,7 +874,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "resume", "init", "save", "verify", "compile", "provenance"];
+			const subs = ["list", "run", "show", "runs", "resume", "init", "save", "verify", "compile", "provenance", "why-stale"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -926,6 +941,22 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				ctx.ui.notify(formatProvenance(run), "info");
+				return;
+			}
+
+			if (sub === "why-stale") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf why-stale <runId> [phaseId]", "warning");
+					return;
+				}
+				const [rid, ...rest] = arg.trim().split(/\s+/);
+				const run = loadRun(ctx.cwd, rid);
+				if (!run) {
+					ctx.ui.notify(`Run not found: ${rid}`, "error");
+					return;
+				}
+				const reads = readMapOf(run.phases);
+				ctx.ui.notify(formatWhyStale(run.runId, run.flowName, reads, rest), "info");
 				return;
 			}
 
