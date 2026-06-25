@@ -49,11 +49,14 @@ function countingRunner(counter: { n: number }): RuntimeDeps["runTask"] {
 }
 
 /** Build a minimal PhaseCacheCtx matching what executeTaskflow constructs for
- *  a cross-run agent phase, so we can compute the exact legacy/bare keys to
- *  pre-seed. Derives flowDefHash by running compileTaskflowToIR once. */
+ *  a cross-run agent phase, so we can compute the exact legacy/bare/v2 keys to
+ *  pre-seed. Derives flowDefHash + per-phase sub-fingerprint by running
+ *  compileTaskflowToIR + phaseFingerprint once (mirrors the runtime). */
 async function ccFor(def: Taskflow, cwd: string, store: CacheStore, phaseId: string): Promise<PhaseCacheCtx> {
-	const { compileTaskflowToIR } = await import("../extensions/flowir/index.ts");
+	const { compileTaskflowToIR, phaseFingerprint } = await import("../extensions/flowir/index.ts");
 	const ir = await compileTaskflowToIR(def);
+	const fdh = ir.hash;
+	const subfp = (await phaseFingerprint(def, phaseId)) ?? fdh ?? "";
 	return {
 		scope: "cross-run",
 		fingerprint: "",
@@ -62,7 +65,8 @@ async function ccFor(def: Taskflow, cwd: string, store: CacheStore, phaseId: str
 		phaseId,
 		flowName: def.name,
 		runId: "seed",
-		flowDefHash: ir.hash,
+		flowDefHash: fdh,
+		phaseFp: subfp,
 	};
 }
 
@@ -70,7 +74,7 @@ async function ccFor(def: Taskflow, cwd: string, store: CacheStore, phaseId: str
 // Key shape: new key uses v2:flowdef prefix; legacy/bare differ.
 // ---------------------------------------------------------------------------
 
-test("cacheKeys: key, legacyKey, bareKey are all distinct", async () => {
+test("cacheKeys: key, v2Key, bareKey, legacyKey are all distinct (M6 4-tier)", async () => {
 	const dir = tmpDir();
 	const store = new CacheStore(dir);
 	const def: Taskflow = {
@@ -80,10 +84,13 @@ test("cacheKeys: key, legacyKey, bareKey are all distinct", async () => {
 	const cc = await ccFor(def, dir, store, "p");
 	// baseParts must match what the agent branch uses: [phase.id, agentName, model, fullTask]
 	const ck = cacheKeys(cc, ["p", "a", "", "fixed"]);
-	assert.ok(ck.key !== ck.legacyKey, "v2 key differs from legacy (no-flowdef)");
-	assert.ok(ck.key !== ck.bareKey, "v2 key differs from bare (unversioned flowdef)");
-	assert.ok(ck.legacyKey !== ck.bareKey, "legacy differs from bare");
-	assert.match(ck.key, /^[0-9a-f]+$/);
+	assert.ok(ck.key !== ck.v2Key, "v3 key differs from v2 (per-phase subfp vs whole-flow)");
+	assert.ok(ck.key !== ck.bareKey, "v3 key differs from bare (unversioned flowdef)");
+	assert.ok(ck.key !== ck.legacyKey, "v3 key differs from legacy (no-flowdef)");
+	assert.ok(ck.v2Key !== ck.bareKey, "v2 differs from bare");
+	assert.ok(ck.v2Key !== ck.legacyKey, "v2 differs from legacy");
+	assert.ok(ck.bareKey !== ck.legacyKey, "bare differs from legacy");
+	assert.match(ck.key, /^[0-9a-f]+$/); // all four are hashInput hex digests
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -221,11 +228,14 @@ test("cache migration: identical re-run is free (v2 write round-trips)", async (
 test("cache migration: structural change invalidates (flowdef hash differs)", async () => {
 	const dir = tmpDir();
 	const store = new CacheStore(dir);
+	// M6: only a structural change WITHIN a phase's transitive closure
+	// invalidates it. Adding an unrelated independent phase must NOT. So `q`
+	// is made a dependency of `p` — adding it moves p's sub-fingerprint.
 	const mk = (extra: boolean): Taskflow => ({
 		name: "struct-change",
 		phases: extra
 			? [
-					{ id: "p", type: "agent", agent: "a", task: "fixed", cache: { scope: "cross-run" }, final: true },
+					{ id: "p", type: "agent", agent: "a", task: "fixed", cache: { scope: "cross-run" }, dependsOn: ["q"], final: true },
 					{ id: "q", type: "agent", agent: "a", task: "extra" },
 				]
 			: [{ id: "p", type: "agent", agent: "a", task: "fixed", cache: { scope: "cross-run" }, final: true }],
@@ -235,10 +245,10 @@ test("cache migration: structural change invalidates (flowdef hash differs)", as
 
 	await executeTaskflow(mkState(mk(false), dir), deps);
 	assert.equal(counter.n, 1);
-	// Different structure (extra phase) → different flowDefHash → different v2 key → miss.
-	// (q also runs, so counter increments by 2.)
+	// Adding `q` (now in p's closure) → p's sub-fingerprint changes → v3 key
+	// differs → miss. (q also runs, so counter increments by 2.)
 	await executeTaskflow(mkState(mk(true), dir), deps);
-	assert.equal(counter.n, 3, "structural change → miss on p (and q runs)");
+	assert.equal(counter.n, 3, "structural change in p's closure → miss on p (and q runs)");
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 

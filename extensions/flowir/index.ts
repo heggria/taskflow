@@ -71,3 +71,5 @@ export type {
 	TaskflowIR,
 	TaskflowIRMeta,
 } from "./meta.ts";
+
+export { phaseFingerprint } from "./phasefp.ts";

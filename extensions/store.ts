@@ -42,10 +42,11 @@ export interface PhaseState {
 	model?: string;
 	error?: string;
 	inputHash?: string;
-	/** When this result was served from cache: 'cross-run' for the persistent
-	 *  cross-run store. (Within-run resume reuses prior state verbatim and is not
-	 *  flagged here.) */
-	cacheHit?: "cross-run";
+	/** When this result was served from cache instead of executed:
+	 *  'cross-run' = restored from the persistent cross-run store;
+	 *  'run-only'  = within-run resume (a prior attempt with the same inputHash).
+	 *  A phase with this set spent no new tokens this run. */
+	cacheHit?: "cross-run" | "run-only";
 	startedAt?: number;
 	endedAt?: number;
 	/** Live fan-out progress for map/parallel phases. */
@@ -114,6 +115,13 @@ export interface RunState {
 	 *  recompute derives this fresh from `def` so old runs (pre-H1) also get
 	 *  union semantics. */
 	declaredDeps?: Record<string, DeclaredDeps>;
+	/** Per-phase structural sub-fingerprints (M6). Computed once per run
+	 *  alongside `flowDefHash`. Each value is either a precise per-phase hash
+	 *  (when sound) or the whole-flow `flowDefHash` (fallback for
+	 *  shareContext / `flow` phases). Folded into the cross-run cache key as
+	 *  `v3:phasefp:<subfp>` so editing phase B invalidates only B + its
+	 *  transitive dependents. Audit/resume only — recompute derives fresh. */
+	phaseFingerprints?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------

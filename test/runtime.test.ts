@@ -259,14 +259,14 @@ test("runtime: resume skips cached completed phases", async () => {
 	const state = mkState(def);
 	// Pre-seed phase one as already done with the matching input hash.
 	const { hashInput } = await import("../extensions/store.ts");
-	const { flowDefHash } = await import("../extensions/flowir/hash.ts");
-	const fh = await flowDefHash(def);
+	const { phaseFingerprint } = await import("../extensions/flowir/index.ts");
+	const subfpOne = (await phaseFingerprint(def, "one")) ?? "";
 	state.phases.one = {
 		id: "one",
 		status: "done",
 		output: "out:start",
-		// Must match runtime cacheKey(): flow name + flowDefHash + base parts + thinking + tools + ctx.
-		inputHash: hashInput(`flow:${def.name}`, `v2:flowdef:${fh}`, "one", "a", "", "start", "think:", "tools:[]", "ctx:"),
+		// Must match runtime cacheKey(): flow name + v3:phasefp sub-fingerprint + base parts + thinking + tools + ctx.
+		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpOne}`, "one", "a", "", "start", "think:", "tools:[]", "ctx:"),
 		usage: emptyUsage(),
 	};
 
@@ -287,16 +287,17 @@ test("runtime: resume caches a completed reduce phase (unified inputHash)", asyn
 	const record: string[] = [];
 	const runner = mockRunner((t) => `o:${t}`, { record });
 	const { hashInput } = await import("../extensions/store.ts");
-	const { flowDefHash } = await import("../extensions/flowir/hash.ts");
-	const fh = await flowDefHash(def);
+	const { phaseFingerprint } = await import("../extensions/flowir/index.ts");
+	const subfpX = (await phaseFingerprint(def, "x")) ?? "";
+	const subfpSum = (await phaseFingerprint(def, "sum")) ?? "";
 	const state = mkState(def);
-	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput(`flow:${def.name}`, `v2:flowdef:${fh}`, "x", "a", "", "tx", "think:", "tools:[]", "ctx:"), usage: emptyUsage() };
-	// reduce cache key has the same shape as agent/gate (flow + flowDefHash + base parts + thinking + tools).
+	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpX}`, "x", "a", "", "tx", "think:", "tools:[]", "ctx:"), usage: emptyUsage() };
+	// reduce cache key has the same shape as agent/gate (flow + v3:phasefp + base parts + thinking + tools).
 	state.phases.sum = {
 		id: "sum",
 		status: "done",
 		output: "o:combine o:tx",
-		inputHash: hashInput(`flow:${def.name}`, `v2:flowdef:${fh}`, "sum", "a", "", "combine o:tx", "think:", "tools:[]", "ctx:"),
+		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpSum}`, "sum", "a", "", "combine o:tx", "think:", "tools:[]", "ctx:"),
 		usage: emptyUsage(),
 	};
 	const res = await executeTaskflow(state, baseDeps(runner));

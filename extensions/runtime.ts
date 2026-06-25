@@ -20,7 +20,7 @@ import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_
 import { verifyTaskflow } from "./verify.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
-import { compileTaskflowToIR } from "./flowir/index.ts";
+import { compileTaskflowToIR, phaseFingerprint } from "./flowir/index.ts";
 import { computeStaleFrontier, declaredReadMapOfDef, readMapOf } from "./stale.ts";
 import { ctxDirFor, drainPendingSpawns, initCtxDir, registerNode, setNodeStatus, type SpawnAssignment } from "./context-store.ts";
 import { allocateWorkspace, isWorkspaceKeyword, type Workspace } from "./workspace.ts";
@@ -72,6 +72,55 @@ export interface RuntimeResult {
 	finalOutput: string;
 	ok: boolean;
 	totalUsage: UsageStats;
+	/** Incremental-reuse summary: how many phases were reused from cache vs.
+	 *  freshly executed this run, and the cost the reused work would otherwise
+	 *  have incurred (known only for within-run resume; cross-run hits zero
+	 *  their usage so their original cost is not recoverable). Optional &
+	 *  additive — callers that ignore it are unaffected. */
+	reuse?: ReuseSummary;
+}
+
+/** A run's incremental-reuse accounting (see RuntimeResult.reuse). */
+export interface ReuseSummary {
+	/** Phases that completed by executing a subagent this run. */
+	executed: number;
+	/** Phases served from the within-run resume cache (no new tokens). */
+	reusedRunOnly: number;
+	/** Phases restored from the cross-run store (no new tokens). */
+	reusedCrossRun: number;
+	/** Total phases that reached `done` (executed + reused). */
+	done: number;
+	/** USD the within-run-reused phases would have cost if re-executed (their
+	 *  preserved prior usage). Cross-run hits are excluded (cost not recoverable). */
+	savedUSD: number;
+}
+
+/** Compute the incremental-reuse summary from a run's terminal phase states.
+ *  Pure, total, never throws. A phase is "reused" iff it carries a `cacheHit`
+ *  marker (set by `cachedPhase` for both within-run resume and cross-run hits). */
+export function summarizeReuse(state: RunState): ReuseSummary {
+	let executed = 0;
+	let reusedRunOnly = 0;
+	let reusedCrossRun = 0;
+	let savedUSD = 0;
+	for (const ps of Object.values(state.phases)) {
+		if (ps.status !== "done") continue;
+		if (ps.cacheHit === "run-only") {
+			reusedRunOnly++;
+			savedUSD += ps.usage?.cost ?? 0; // within-run resume preserves prior usage
+		} else if (ps.cacheHit === "cross-run") {
+			reusedCrossRun++; // cross-run hits zero their usage — cost not recoverable
+		} else {
+			executed++;
+		}
+	}
+	return {
+		executed,
+		reusedRunOnly,
+		reusedCrossRun,
+		done: executed + reusedRunOnly + reusedCrossRun,
+		savedUSD,
+	};
 }
 
 function buildInterpolationContext(
@@ -721,6 +770,7 @@ async function executePhaseInner(
 		flowName: state.flowName,
 		runId: state.runId,
 		flowDefHash: state.flowDefHash === "failed" ? undefined : state.flowDefHash,
+		phaseFp: state.phaseFingerprints?.[phase.id],
 		forceRerun: opts?.forceRerun,
 		thinking: phase.thinking,
 		tools: phase.tools,
@@ -1635,6 +1685,12 @@ export interface PhaseCacheCtx {
 	 *  key so two structurally-different flows that share a name can never
 	 *  collide, and a changed flow never serves a stale cross-run hit. */
 	flowDefHash?: string | "failed";
+	/** Per-phase structural sub-fingerprint (M6). When present, folds into the
+	 *  key as `v3:phasefp:<subfp>` so editing phase B invalidates only B + its
+	 *  transitive dependents. When absent (sub-flow inner states, or a phase
+	 *  for which per-phase soundness couldn't be guaranteed), `cacheKeys`
+	 *  falls back to `flowDefHash` — preserving pre-M6 whole-flow behavior. */
+	phaseFp?: string;
 	/** Force this phase to re-execute, ignoring the within-run prior AND the
 	 *  cross-run store (M5 recompute seed). Downstream phases are NOT forced —
 	 *  they re-evaluate naturally: if the seed's new output changed their
@@ -1646,27 +1702,34 @@ export interface PhaseCacheCtx {
 /** A computed cache identity: the new (versioned) key plus the read-only
  *  fallback keys used to honor entries written by older releases. The `key`
  *  is what we WRITE under and what `PhaseState.inputHash` carries; the
- *  `legacyKey`/`bareKey` are consulted READ-ONLY on a miss so an upgrade
- *  never produces a miss-storm. See docs/internal/cache-migration.md. */
+ *  `v2Key`/`bareKey`/`legacyKey` are consulted READ-ONLY on a miss so an
+ *  upgrade never produces a miss-storm. See docs/internal/cache-migration.md. */
 export interface CacheKeys {
-	/** Current key: folds `v2:flowdef:<hash>` (the overstory content fingerprint). */
+	/** Current key: folds `v3:phasefp:<subfp>` (the per-phase structural
+	 *  sub-fingerprint; degrades to the whole-flow hash when per-phase
+	 *  soundness couldn't be guaranteed). */
 	key: string;
-	/** Pre-flowDefHash-era key: the flowdef line OMITTED entirely. Read-only. */
-	legacyKey: string;
+	/** Pre-M6 key: `v2:flowdef:<flowDefHash>` (whole-flow fingerprint).
+	 *  Read-only. */
+	v2Key: string;
 	/** Bare (unversioned) `flowdef:` key — written by pre-H1 code that folded
 	 *  the hash without a `v2:` prefix. Read-only. Removed in v0.1.0. */
 	bareKey: string;
+	/** Pre-flowDefHash-era key: the flowdef line OMITTED entirely. Read-only. */
+	legacyKey: string;
 }
 
 /** Fold the phase fingerprint into the base hash parts to form the cache keys.
  *
- *  Three keys are produced for backward compatibility (see
+ *  Four keys are produced for backward compatibility (see
  *  docs/internal/cache-migration.md):
- *    - `key`      : `v2:flowdef:<hash>` — the current write key.
+ *    - `key`      : `v3:phasefp:<subfp>` — the current write key (per-phase
+ *      structural sub-fingerprint; falls back to the whole-flow hash when
+ *      `cc.phaseFp` is absent).
+ *    - `v2Key`    : `v2:flowdef:<flowDefHash>` — pre-M6 whole-flow key.
+ *    - `bareKey`  : bare `flowdef:<flowDefHash>` (unversioned) — pre-H1 entries.
  *    - `legacyKey`: the flowdef line omitted — pre-flowDefHash entries.
- *    - `bareKey`  : bare `flowdef:<hash>` (unversioned) — pre-H1 entries that
- *      folded the hash without the `v2:` prefix.
- *  `cachedPhase` consults all three READ-ONLY on a miss; `recordCache` writes
+ *  `cachedPhase` consults all four READ-ONLY on a miss; `recordCache` writes
  *  only `key`. This means an upgrade never produces a miss-storm: existing
  *  entries (whichever shape) still hit, and new writes converge on `key`. */
 export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
@@ -1682,10 +1745,15 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
 	];
 	const fold = (parts: string[]): string =>
 		cc.fingerprint ? hashInput(...parts, cc.fingerprint) : hashInput(...parts);
+	// Per-phase sub-fingerprint; falls back to the whole-flow hash when absent
+	// (sub-flow inner states, or soundness fallback) — preserving pre-M6 behavior.
+	const fp = cc.phaseFp ?? cc.flowDefHash ?? "";
+	const fdh = cc.flowDefHash ?? "";
 	return {
-		key: fold([`flow:${cc.flowName}`, `v2:flowdef:${cc.flowDefHash ?? ""}`, ...tail]),
+		key: fold([`flow:${cc.flowName}`, `v3:phasefp:${fp}`, ...tail]),
+		v2Key: fold([`flow:${cc.flowName}`, `v2:flowdef:${fdh}`, ...tail]),
+		bareKey: fold([`flow:${cc.flowName}`, `flowdef:${fdh}`, ...tail]),
 		legacyKey: fold([`flow:${cc.flowName}`, ...tail]),
-		bareKey: fold([`flow:${cc.flowName}`, `flowdef:${cc.flowDefHash ?? ""}`, ...tail]),
 	};
 }
 
@@ -1696,9 +1764,10 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
  *   - "cross-run": within-run first, then the persistent cross-run store.
  * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
  *
- * The cross-run read is THREE-TIER and READ-ONLY for fallback keys: it tries
- * `keys.key` (current `v2:flowdef:` shape) first, then `keys.bareKey` (pre-H1
- * bare `flowdef:`), then `keys.legacyKey` (pre-flowDefHash, no flowdef line).
+ * The cross-run read is FOUR-TIER and READ-ONLY for fallback keys: it tries
+ * `keys.key` (current `v3:phasefp:` shape) first, then `keys.v2Key` (pre-M6
+ * `v2:flowdef:`), then `keys.bareKey` (pre-H1 bare `flowdef:`), then
+ * `keys.legacyKey` (pre-flowDefHash, no flowdef line).
  * A hit on ANY tier is restored as a cache hit; we do NOT write-through (no
  * re-store under the new key) so the cache size stays stable and the legacy
  * entry ages out naturally. See docs/internal/cache-migration.md.
@@ -1707,14 +1776,17 @@ function cachedPhase(cc: PhaseCacheCtx, keys: CacheKeys): PhaseState | null {
 	if (cc.scope === "off") return null;
 	if (cc.forceRerun) return null;
 
-	// 1. within-run resume (fastest; always allowed unless scope is off)
+	// 1. within-run resume (fastest; always allowed unless scope is off). Flag
+	// it as a `run-only` cache hit so the run summary can count it as reused
+	// work (it spent no new tokens). The prior usage is preserved verbatim so
+	// the summary can report what the reuse would otherwise have cost.
 	if (cc.prior && cc.prior.status === "done" && cc.prior.inputHash === keys.key) {
-		return { ...cc.prior, status: "done" };
+		return { ...cc.prior, status: "done", cacheHit: "run-only" };
 	}
 
-	// 2. cross-run memoization (opt-in) — three-tier read-only fallback.
+	// 2. cross-run memoization (opt-in) — four-tier read-only fallback.
 	if (cc.scope === "cross-run") {
-		for (const k of [keys.key, keys.bareKey, keys.legacyKey]) {
+		for (const k of [keys.key, keys.v2Key, keys.bareKey, keys.legacyKey]) {
 			const e = cc.store.get(k, cc.ttlMs);
 			if (!e) continue;
 			// If we stored the full PhaseState, restore it (preserving gate,
@@ -1895,6 +1967,22 @@ export interface RecomputeReport {
 	/** Phases in the frontier whose inputHash did NOT move → cached result
 	 *  reused, no re-execution (early cutoff). Empty in dry-run (unknowable). */
 	readonly cutoff: readonly string[];
+	/** Per-phase decision trace: WHY each phase was rerun / cut off / reused.
+	 *  The "explainable reactivity" layer — like React DevTools telling you why
+	 *  a component re-rendered. Additive; callers that ignore it are unaffected. */
+	readonly decisions: readonly RecomputeDecision[];
+}
+
+/** Why a single phase landed in its recompute outcome. */
+export interface RecomputeDecision {
+	readonly phaseId: string;
+	/** What happened (real run) or would happen (dry-run). */
+	readonly outcome: "rerun" | "cutoff" | "reused" | "failed";
+	/** Human-readable cause. */
+	readonly reason: string;
+	/** The upstream phase(s) that caused this outcome, when applicable
+	 *  (e.g. the changed upstreams that forced a rerun). */
+	readonly causedBy?: readonly string[];
 }
 
 /** Scan a flow for dependencies that cannot be observed through the readSet.
@@ -1946,6 +2034,30 @@ export async function recomputeTaskflow(
 	const allIds = Object.keys(newState.phases);
 
 	if (opts.dryRun) {
+		// Explain each phase WITHOUT executing: a frontier phase "may rerun"
+		// because it (transitively) reads a changed seed; everything else is
+		// reused as unreachable. We name the in-frontier upstream(s) as the cause.
+		const seedSet0 = new Set(seeds);
+		const upstreamsOf = (id: string): string[] => {
+			const observed = (newState.phases[id]?.reads ?? []).map((r) => r.stepId).filter((u) => u !== id);
+			const decl = (declared.get(id) ?? []).filter((u) => u !== id);
+			return [...new Set([...observed, ...decl])];
+		};
+		const decisions: RecomputeDecision[] = allIds.map((id) => {
+			if (!frontier.has(id)) {
+				return { phaseId: id, outcome: "reused", reason: "not reachable from any changed seed" };
+			}
+			if (seedSet0.has(id)) {
+				return { phaseId: id, outcome: "rerun", reason: "forced by recompute request (seed)" };
+			}
+			const causes = upstreamsOf(id).filter((u) => frontier.has(u));
+			return {
+				phaseId: id,
+				outcome: "rerun",
+				reason: "reads a phase in the stale frontier; may re-run if that upstream's output moves",
+				causedBy: causes.length ? causes : undefined,
+			};
+		});
 		return {
 			report: {
 				dryRun: true,
@@ -1954,6 +2066,7 @@ export async function recomputeTaskflow(
 				rerun: [...frontier],
 				reused: allIds.filter((id) => !frontier.has(id)),
 				cutoff: [],
+				decisions,
 			},
 			state: newState,
 		};
@@ -2003,6 +2116,11 @@ export async function recomputeTaskflow(
 		.filter((id) => frontier.has(id));
 	const rerun: string[] = [];
 	const cutoff: string[] = [];
+	const decisions: RecomputeDecision[] = [];
+	// Phases whose OUTPUT actually moved this recompute (seed forced, or result
+	// changed). Used to attribute a downstream rerun to the specific upstream(s)
+	// that changed — the "why" of the decision trace.
+	const outputMoved = new Set<string>();
 	const noop = () => {};
 	let aborted = false;
 	for (const id of order) {
@@ -2015,17 +2133,50 @@ export async function recomputeTaskflow(
 		const phase = newState.def.phases.find((p) => p.id === id);
 		if (!phase) continue;
 		const before = newState.phases[id]?.inputHash;
-		const execOpts = seedSet.has(id) ? { forceRerun: true } : undefined;
+		const isSeed = seedSet.has(id);
+		const execOpts = isSeed ? { forceRerun: true } : undefined;
+		// The upstream(s) of this phase whose output moved — the cause of a rerun.
+		const changedUpstreams = depsFor(id).filter((u) => outputMoved.has(u));
 		try {
 			const ps = await executePhase(phase, newState, deps, newState.phases[id], noop, 0, execOpts);
 			newState.phases[id] = ps;
 			// A phase counts as "rerun" if it was a forced seed OR its result moved;
 			// otherwise it hit its cache (inputHash unchanged) → early cutoff.
-			if (seedSet.has(id) || ps.inputHash !== before) rerun.push(id);
-			else cutoff.push(id);
+			if (isSeed || ps.inputHash !== before) {
+				rerun.push(id);
+				outputMoved.add(id);
+				decisions.push(
+					isSeed
+						? { phaseId: id, outcome: "rerun", reason: "forced by recompute request (seed)" }
+						: {
+								phaseId: id,
+								outcome: "rerun",
+								reason: "input changed — an upstream's output moved",
+								causedBy: changedUpstreams.length ? changedUpstreams : undefined,
+							},
+				);
+			} else {
+				cutoff.push(id);
+				decisions.push({
+					phaseId: id,
+					outcome: "cutoff",
+					reason: "input unchanged — upstream(s) re-ran but produced identical output (early cutoff)",
+					causedBy: depsFor(id).filter((u) => frontier.has(u)).length
+						? depsFor(id).filter((u) => frontier.has(u))
+						: undefined,
+				});
+			}
 		} catch {
 			// A failing recompute phase is recorded as rerun (it was attempted).
 			rerun.push(id);
+			outputMoved.add(id);
+			decisions.push({ phaseId: id, outcome: "failed", reason: "re-execution attempted but the phase failed" });
+		}
+	}
+	// Frontier-external phases were never touched — record them as reused.
+	for (const id of allIds) {
+		if (!frontier.has(id)) {
+			decisions.push({ phaseId: id, outcome: "reused", reason: "not reachable from any changed seed" });
 		}
 	}
 	return {
@@ -2036,6 +2187,7 @@ export async function recomputeTaskflow(
 			rerun,
 			reused: allIds.filter((id) => !frontier.has(id)),
 			cutoff,
+			decisions,
 		},
 		state: newState,
 	};
@@ -2097,6 +2249,27 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			);
 			state.flowDefHash = "failed";
 		}
+	}
+
+	// M6: per-phase structural sub-fingerprints. Computed once per run (when
+	// cross-run is potentially active) so editing phase B invalidates only B +
+	// its transitive dependents, not independent siblings. Each value is either
+	// a precise per-phase hash or the whole-flow `flowDefHash` (soundness
+	// fallback for shareContext / `flow` phases). Skipped entirely when
+	// `flowDefHash === "failed"` (cross-run is disabled for the run anyway).
+	// Never throws into the run — a per-phase error degrades that phase to the
+	// whole-flow hash (safe, = pre-M6 behavior).
+	if (state.flowDefHash !== "failed" && state.phaseFingerprints === undefined) {
+		const whole = state.flowDefHash ?? "";
+		const map: Record<string, string> = {};
+		for (const p of def.phases) {
+			try {
+				map[p.id] = (await phaseFingerprint(def, p.id)) ?? whole;
+			} catch {
+				map[p.id] = whole; // fail-open → whole-flow scope
+			}
+		}
+		state.phaseFingerprints = map;
 	}
 
 	state.status = "running";
@@ -2238,5 +2411,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		finalOutput,
 		ok: state.status === "completed",
 		totalUsage,
+		reuse: summarizeReuse(state),
 	};
 }

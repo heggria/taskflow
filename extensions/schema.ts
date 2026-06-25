@@ -855,6 +855,37 @@ export function dependenciesOf(phase: Phase): string[] {
 	return Array.from(set);
 }
 
+/**
+ * Transitive upstream dependency closure of a phase: every id reachable via
+ * `dependsOn ∪ from`, including indirect ancestors. Cycle-safe (visited set).
+ * Returns the closure EXCLUDING `phaseId` itself. Sorted for deterministic
+ * hashing. Shares the exact edge semantics with `topoLayers`/`detectCycle` so
+ * the closure is complete for every valid flow (validation already rejects
+ * `{steps.X}` refs that aren't reachable via these edges, except for
+ * `join: "any"` phases — handled by callers as needed).
+ *
+ * Hoisted out of `validateTaskflow` so `phaseFingerprint` (M6) and validation
+ * share one source of truth for "what does this phase structurally depend on".
+ */
+export function transitiveDependencies(phases: Phase[], phaseId: string): string[] {
+	const byId = new Map(phases.map((p) => [p.id, p]));
+	const seen = new Set<string>();
+	const queue: string[] = [];
+	const seed = byId.get(phaseId);
+	if (seed) for (const d of dependenciesOf(seed)) queue.push(d);
+	while (queue.length) {
+		const id = queue.shift()!;
+		if (seen.has(id)) continue;
+		if (!byId.has(id)) continue; // unknown dep — validation reports elsewhere
+		seen.add(id);
+		const dep = byId.get(id)!;
+		for (const d of dependenciesOf(dep)) {
+			if (!seen.has(d)) queue.push(d);
+		}
+	}
+	return Array.from(seen).sort();
+}
+
 /** Topologically ordered layers; phases in the same layer can run concurrently. */
 export function topoLayers(phases: Phase[]): Phase[][] {
 	const byId = new Map(phases.map((p) => [p.id, p]));
