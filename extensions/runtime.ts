@@ -1911,6 +1911,7 @@ function hasUnobservedDependencies(state: RunState): boolean {
 		if (p.context && p.context.length > 0) return true;
 		if (scan(p.task ?? "")) return true;
 		if (p.when && scan(p.when)) return true;
+		if (p.until && scan(p.until)) return true;
 		if (Array.isArray(p.eval) && p.eval.some(scan)) return true;
 	}
 	return false;

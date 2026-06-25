@@ -795,6 +795,8 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.task);
 	scan(phase.over);
 	scan(phase.when);
+	scan(phase.until);
+	for (const e of phase.eval ?? []) scan(e);
 	for (const b of phase.branches ?? []) scan(b.task);
 	for (const v of Object.values(phase.with ?? {})) if (typeof v === "string") scan(v);
 	for (const c of phase.context ?? []) scan(c);

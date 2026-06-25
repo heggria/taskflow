@@ -171,3 +171,38 @@ test("DeclaredDeps: a {steps.X} ref to a non-existent phase is an advisory warni
 	// The ghost ref is still recorded in declaredDeps (it's what the author wrote).
 	assert.deepEqual(ir.meta.declaredDeps.a.reads, ["ghost"]);
 });
+
+test("DeclaredDeps: loop `until` refs are captured in the declared plane", async () => {
+	const f = flow([
+		{ id: "scout", type: "agent", task: "scan" } as Phase,
+		{
+			id: "refine",
+			type: "loop",
+			task: "refine",
+			maxIterations: 3,
+			until: "{steps.scout.output} == done",
+			dependsOn: ["scout"],
+			final: true,
+		} as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	// The `until` condition depends on scout — it must appear in declared reads,
+	// otherwise a /tf recompute seeded on scout would miss the loop phase.
+	assert.deepEqual(ir.meta.declaredDeps.refine.reads, ["scout"]);
+});
+
+test("DeclaredDeps: gate `eval` refs are captured in the declared plane", async () => {
+	const f = flow([
+		{ id: "build", type: "agent", task: "build" } as Phase,
+		{
+			id: "quality",
+			type: "gate",
+			eval: ["{steps.build.output} contains SUCCESS"],
+			task: "review {steps.build.output}",
+			dependsOn: ["build"],
+			final: true,
+		} as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	assert.deepEqual(ir.meta.declaredDeps.quality.reads, ["build"]);
+});
