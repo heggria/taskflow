@@ -2,6 +2,40 @@
 
 All notable changes to pi-taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.0.27] — 2026-06-25
+
+> Evidence release: **the incremental-recompute cost win is now proven, not
+> asserted.** v0.0.25 made `/tf recompute` trustworthy and v0.0.26 made the
+> dependency contract under it real — but the only cascade test re-ran *every*
+> phase, so "rerun only what changed" had no regression proof. This release pins
+> the two ways recompute actually saves money, closing the flagship's open
+> acceptance criterion (the prerequisite for ever flipping recompute on by
+> default).
+
+### Added
+- **Flagship cost-win tests** (`test/recompute.test.ts`):
+  - **Partial cascade — `rerun < full`.** A diamond where one branch shares no
+    edge with the changed seed proves the unrelated phase is *reused* (0 tokens),
+    never re-run, and the rerun set is strictly smaller than the full flow.
+  - **Early-cutoff propagation.** Re-seeding a phase whose output is unchanged
+    cuts off its entire transitive downstream — only the seed spends a token,
+    every descendant hits its cache. This is the "changed a file that didn't
+    actually affect the result ⇒ near-zero rerun" guarantee.
+- Tests: 802 → 804 (+2).
+
+### Changed
+- **README test count and feature line refreshed** (was stale at 702/34 files):
+  now 804 tests across 42 files, with `incremental recompute` and
+  `FlowIR compile seam` listed among the headline capabilities.
+
+### Notes
+- **Scope held deliberately.** Two further H2 ideas — flipping `run` to
+  auto-recompute by default, and precise `ir-changed` / map item-level reuse —
+  are *not* in this release. The first changes every user's `run` behavior
+  (a kernel-level, post-M5 decision); the latter two are scoped-out in the
+  roadmap (§6) as later RFCs. Shipping the proof first keeps each step
+  independently releasable.
+
 ## [0.0.26] — 2026-06-25
 
 > Foundation release: **the convergence roadmap's H1 lands** — a real FlowIR

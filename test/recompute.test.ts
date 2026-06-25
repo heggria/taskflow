@@ -337,3 +337,81 @@ test("recompute: does not mutate the caller's RunState", async () => {
 	assert.equal(state.phases.scout.output, scoutBefore.output, "original output unchanged");
 	assert.equal(newState.phases.scout.output, "out:V2", "new state reflects recompute");
 });
+
+// ---------------------------------------------------------------------------
+// Flagship: prove the cost win — "rerun set is strictly smaller than full".
+// v0.0.25 made recompute trustworthy but the only cascade test re-ran every
+// phase (= full). These two pin the two ways recompute saves money:
+//   (1) partial cascade — a phase outside the change's reach is never touched;
+//   (2) early-cutoff propagation — a re-seeded phase whose OUTPUT is unchanged
+//       does not invalidate its downstream (the transitive cutoff).
+// ---------------------------------------------------------------------------
+
+test("recompute: flagship — a phase the change cannot reach is reused, never re-run (rerun < full)", async () => {
+	const record: string[] = [];
+	let scoutVersion = "V1";
+	// scout → audit → report ← independent.  `independent` shares no edge with
+	// scout, so changing scout must leave it untouched: rerun = {scout, audit,
+	// report} = 3, strictly less than the full 4 phases.
+	const def: Taskflow = {
+		name: "partial-cascade",
+		concurrency: 1,
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{ id: "independent", type: "agent", agent: "a", task: "expensive independent analysis" },
+			{ id: "audit", type: "agent", agent: "a", task: "audit {steps.scout.output}", dependsOn: ["scout"] },
+			{
+				id: "report",
+				type: "agent",
+				agent: "a",
+				task: "report {steps.audit.output} + {steps.independent.output}",
+				dependsOn: ["audit", "independent"],
+				final: true,
+			},
+		],
+	} as Taskflow;
+	const deps = baseDeps(
+		mockRunner((t) => (t === "scan" ? `out:${scoutVersion}` : `out:${t}`), record),
+	);
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+	const executedBefore = record.length;
+
+	scoutVersion = "V2";
+	const { report } = await recomputeTaskflow(state, deps, ["scout"], { dryRun: false });
+
+	assert.ok(report.reused.includes("independent"), "the unrelated phase is reused (0 tokens)");
+	assert.ok(!report.rerun.includes("independent"), "the unrelated phase is never re-run");
+	assert.deepEqual([...report.rerun].sort(), ["audit", "report", "scout"], "only the reachable closure re-ran");
+	assert.ok(report.rerun.length < def.phases.length, "rerun set is strictly smaller than the full flow");
+	assert.equal(record.length, executedBefore + 3, "exactly the 3 reachable phases re-executed");
+});
+
+test("recompute: flagship — re-seed with an unchanged output cuts off the whole downstream", async () => {
+	const record: string[] = [];
+	// scout always emits the same output. Re-seeding scout force-re-runs it, but
+	// its output is identical → audit's interpolated inputHash does not move →
+	// audit hits its cache (cutoff) → report likewise. Only the seed spends a
+	// token; the transitive downstream is cut off for free.
+	const def: Taskflow = {
+		name: "early-cutoff",
+		concurrency: 1,
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{ id: "audit", type: "agent", agent: "a", task: "audit {steps.scout.output}", dependsOn: ["scout"] },
+			{ id: "report", type: "agent", agent: "a", task: "report {steps.audit.output}", dependsOn: ["audit"], final: true },
+		],
+	} as Taskflow;
+	const deps = baseDeps(
+		mockRunner((t) => (t === "scan" ? "out:STABLE" : `out:${t}`), record),
+	);
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+	const executedBefore = record.length;
+
+	const { report } = await recomputeTaskflow(state, deps, ["scout"], { dryRun: false });
+
+	assert.deepEqual(report.rerun, ["scout"], "only the seed re-ran");
+	assert.deepEqual([...report.cutoff].sort(), ["audit", "report"], "the downstream is cut off transitively");
+	assert.equal(record.length, executedBefore + 1, "exactly one re-execution (the seed); downstream hit cache");
+});
