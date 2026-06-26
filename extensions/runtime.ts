@@ -909,7 +909,7 @@ async function executePhaseInner(
 	// `perItem` is undefined (parallel, or non-cacheable maps) the path is inert.
 	const runFanout = async (
 		items: Array<{ agent: string; task: string }>,
-		perItem?: { keyOf: (idx: number) => CacheKeys | null },
+		perItem?: { keyOf: (idx: number) => CacheKeys | null; cc: PhaseCacheCtx },
 	): Promise<RunResult[]> => {
 		let done = 0;
 		let running = 0;
@@ -952,7 +952,7 @@ async function executePhaseInner(
 				try {
 					const ckItem = perItem.keyOf(idx);
 					if (ckItem) {
-						const hit = cachedPhase(cc, ckItem);
+						const hit = cachedPhase(perItem.cc, ckItem);
 						if (hit) {
 							done++;
 							const synth = phaseStateToRunResult(hit, it);
@@ -990,7 +990,7 @@ async function executePhaseInner(
 				try {
 					const ckItem = perItem.keyOf(idx);
 					if (ckItem) {
-						const ccItem: PhaseCacheCtx = { ...cc, phaseId: `${phase.id}#item${idx}` };
+						const ccItem: PhaseCacheCtx = { ...perItem.cc, phaseId: `${phase.id}#item${idx}` };
 						const itemPs = resultToPhaseState(`${phase.id}#item${idx}`, r, ckItem.key, parseJson);
 						recordCache(ccItem, itemPs);
 					}
@@ -1207,26 +1207,43 @@ async function executePhaseInner(
 		//  - not inside a runtime-generated sub-flow (`def:` frame in the stack):
 		//    such flows are untrusted / possibly non-deterministic, so per-item reuse
 		//    is unsafe. Fall back to whole-map (which still applies breadth caps).
-		// `undefined phaseFingerprint` is NOT a blocker: `cacheKeys` falls back to
-		// the whole-flow `flowDefHash`, which is stable across runs for a fixed def,
-		// so per-item keys for unchanged items remain stable.
+		// `undefined phaseFingerprint` is NOT a blocker for soundness — it is a
+		// DELIBERATE design choice: per-item keys omit BOTH phaseFp and flowDefHash
+		// (via ccPerItem below) so a changing `over` cannot move unchanged items'
+		// keys. See ccPerItem for the full soundness argument.
 		const perItemCacheable =
 			cc.scope === "cross-run" &&
 			!sharing &&
 			!(deps._stack ?? []).some((s) => s.startsWith("def:"));
+		// Per-item cache context: structural fingerprints (phaseFp + flowDefHash)
+		// are OMITTED so a changing `over` cannot move unchanged items' keys. Both
+		// fingerprints hash `over` (the array source); folding either into a
+		// per-item key means editing one item invalidates EVERY per-item key at
+		// once (no partial reuse) — the bug fixed here. A single item's output is
+		// fully specified by `it.task` (template + {item}/{as} value + any
+		// upstream-output refs + args) + `it.agent` + model + thinking/tools/preRead
+		// + the world-state `fingerprint`; `over` only determines WHICH items
+		// exist, not WHAT any item computes. `flowName` is retained for cross-flow
+		// collision prevention. Soundness: docs/internal/cache-migration.md.
+		// NB: perItemCacheable already gates on scope === "cross-run", which is
+		// blocked upstream when flowDefHash === "failed", so ccPerItem is only
+		// built when flowDefHash is a real hash (or already undefined) — setting
+		// it to undefined here is a safe no-op for the failed case.
+		const ccPerItem: PhaseCacheCtx = { ...cc, phaseFp: undefined, flowDefHash: undefined };
 		// Pre-compute per-item CacheKeys once so the lookup and the record path use
-		// the IDENTICAL key (and share cacheKeys' v3:phasefp + flow-name +
-		// fingerprint + thinking/tools/preRead contract). The per-item key folds
-		// `it.agent` (Arbiter fix): a different agent means different output, so a
-		// per-item key WITHOUT the agent could serve a stale cross-agent hit when
-		// only `phase.agent` changed (the whole-map key would correctly miss via
-		// JSON.stringify(tasks), but per-item keys would not).
+		// the IDENTICAL key (built from ccPerItem, NOT the whole-phase cc). The
+		// per-item key folds `it.agent` (Arbiter fix): a different agent means
+		// different output, so a per-item key WITHOUT the agent could serve a stale
+		// cross-agent hit when only `phase.agent` changed (the whole-map key would
+		// correctly miss via JSON.stringify(tasks), but per-item keys would not).
 		const perItemKeys: (CacheKeys | null)[] = perItemCacheable
-			? tasks.map((it) => cacheKeys(cc, [phase.id, it.agent, phase.model ?? "", it.task]))
+			? tasks.map((it) => cacheKeys(ccPerItem, [phase.id, it.agent, phase.model ?? "", it.task]))
 			: tasks.map(() => null);
 		const perItem = perItemCacheable
-			? { keyOf: (idx: number): CacheKeys | null => perItemKeys[idx] ?? null }
+			? { keyOf: (idx: number): CacheKeys | null => perItemKeys[idx] ?? null, cc: ccPerItem }
 			: undefined;
+		// Whole-map key keeps the FULL cc (phaseFp + flowDefHash) so its fast path
+		// and any pre-existing whole-map entries are unchanged (backward compat).
 		const ck = cacheKeys(cc, [phase.id, phase.model ?? "", JSON.stringify(tasks)]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);

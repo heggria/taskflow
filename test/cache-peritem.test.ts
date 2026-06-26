@@ -23,7 +23,6 @@ import * as path from "node:path";
 import { test } from "node:test";
 import type { AgentConfig } from "../extensions/agents.ts";
 import { CacheStore } from "../extensions/cache.ts";
-import { phaseFingerprint, compileTaskflowToIR } from "../extensions/flowir/index.ts";
 import { cacheKeys, executeTaskflow, summarizeReuse, type PhaseCacheCtx, type RuntimeDeps } from "../extensions/runtime.ts";
 import type { RunOptions, RunResult } from "../extensions/runner.ts";
 import type { Taskflow } from "../extensions/schema.ts";
@@ -365,12 +364,11 @@ test("per-item: a budget-skipped item is never recorded as a per-item cache entr
 	assert.equal(r1.state.phases.m.budgetTruncated, true, "map was cut short by the budget cap");
 
 	// Reconstruct the runtime's per-item CacheKeys to inspect the store.
-	// cc matches what executePhaseInner builds: scope cross-run, no fingerprint,
-	// empty preRead, and phaseFp = phaseFingerprint(def,"m") ?? flowDefHash.
-	const ir = await compileTaskflowToIR(def);
-	const flowDefHash = ir.hash ?? "failed";
-	const phaseFp = (await phaseFingerprint(def, "m")) ?? flowDefHash;
-	const cc: PhaseCacheCtx = {
+	// Per-item keys are built from ccPerItem — the whole-phase cc with BOTH
+	// phaseFp and flowDefHash set to undefined (so a changing `over` cannot move
+	// unchanged items' keys). So the reconstructed cc must ALSO omit both
+	// fingerprints to match what the runtime writes under.
+	const ccPerItem: PhaseCacheCtx = {
 		scope: "cross-run",
 		fingerprint: "",
 		store,
@@ -378,14 +376,15 @@ test("per-item: a budget-skipped item is never recorded as a per-item cache entr
 		phaseId: "m",
 		flowName: def.name,
 		runId: r1.state.runId,
-		flowDefHash,
-		phaseFp,
+		flowDefHash: undefined,
+		phaseFp: undefined,
 		thinking: undefined,
 		tools: undefined,
 		preRead: "",
 	};
 	// Per-item key folds [phase.id, it.agent, model, it.task] (Arbiter fix).
-	const keyFor = (task: string) => cacheKeys(cc, ["m", "a", "", task]).key;
+	// (phaseFp/flowDefHash are intentionally absent — see ccPerItem above.)
+	const keyFor = (task: string) => cacheKeys(ccPerItem, ["m", "a", "", task]).key;
 	const keyA = keyFor("process a"); // item[0]: executed → cached
 	const keyB = keyFor("process b"); // item[1]: executed → cached
 	const keyC = keyFor("process c"); // item[2]: budget-skipped → NOT cached
@@ -487,5 +486,258 @@ test("per-item: changing phase.agent invalidates every per-item key (no stale cr
 	const r3 = await executeTaskflow(mkState(mk("b"), dir, { items: ["a", "b", "c"] }), deps);
 	assert.equal(counter.n, 6, "agent b now cached → 0 new calls");
 	assert.equal(r3.state.phases.m.cacheHit, "cross-run");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L0) BUG REPRODUCTION: literal `over` — change 1 of N items re-executes only that item.
+//
+// Unlike the {args.items} tests above (whose phase DEFINITION is stable across
+// runs), a literal `over: '["a","b","c"]'` bakes the array into the def. Changing
+// one item CHANGES the def → flowDefHash AND phaseFp both move (neither strips
+// `over`). Before the fix, ALL per-item keys moved at once → every item
+// re-executed (counter 3 → 6). After the fix, per-item keys omit BOTH
+// phaseFp and flowDefHash (via ccPerItem), so an unchanged item's key is stable
+// (it depends only on it.task + agent + model + thinking/tools/preRead +
+// world-state fingerprint) → only the changed item re-runs (3 → 4).
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — change 1 of N items re-executes only that item (bug repro)", async () => {
+	const dir = tmpDir();
+	const mk = (items: string[]): Taskflow => ({
+		name: "peritem-literal-repro",
+		phases: [
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(items), task: "process {item}", cache: { scope: "cross-run" }, final: true },
+		],
+	}) as Taskflow;
+	const counter = { n: 0 };
+	const store = new CacheStore(dir);
+	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
+
+	const r1 = await executeTaskflow(mkState(mk(["a", "b", "c"]), dir), deps);
+	assert.equal(counter.n, 3, "run1 executes all 3 items");
+	assert.match(r1.finalOutput, /out:process a#1\b/);
+	assert.match(r1.finalOutput, /out:process b#2\b/);
+	assert.match(r1.finalOutput, /out:process c#3\b/);
+
+	// Change ONLY item[1] (b -> b2). The literal `over` changes, so flowDefHash/
+	// phaseFp move — but per-item keys must be invariant to `over` changes.
+	const r2 = await executeTaskflow(mkState(mk(["a", "b2", "c"]), dir), deps);
+	assert.equal(counter.n, 4, "run2 re-executes only item[1] (3 + 1)");
+	assert.equal(r2.state.phases.m.cacheHit, undefined, "phase executed (partial hit, not whole-map)");
+	// item[0] and item[2] reused verbatim from per-item cache (same call index).
+	assert.match(r2.finalOutput, /out:process a#1\b/, "item[0] reused from per-item cache (call #1)");
+	assert.match(r2.finalOutput, /out:process c#3\b/, "item[2] reused from per-item cache (call #3)");
+	// item[1] re-executed → fresh call index #4.
+	assert.match(r2.finalOutput, /out:process b2#4\b/, "item[1] re-executed (call #4)");
+	// Sanity: run1's item[1] output is NOT present in run2.
+	assert.doesNotMatch(r2.finalOutput, /out:process b#2\b/);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L1) Soundness: task template change invalidates ALL items (literal over).
+// `it.task` is the per-item identity — changing the template changes every
+// item's task, so every per-item key must move (full re-exec).
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — task template change re-executes all items", async () => {
+	const dir = tmpDir();
+	const mk = (task: string, items: string[]): Taskflow => ({
+		name: "peritem-literal-task",
+		phases: [
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(items), task, cache: { scope: "cross-run" }, final: true },
+		],
+	}) as Taskflow;
+	const counter = { n: 0 };
+	const store = new CacheStore(dir);
+	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
+
+	await executeTaskflow(mkState(mk("process {item}", ["a", "b", "c"]), dir), deps);
+	assert.equal(counter.n, 3, "run1 executes all 3");
+	// Same items, but task template changed → every it.task differs → all re-exec.
+	const r2 = await executeTaskflow(mkState(mk("analyze {item}", ["a", "b", "c"]), dir), deps);
+	assert.equal(counter.n, 6, "run2 re-executes ALL items (task template changed → every key moved)");
+	assert.equal(r2.state.phases.m.cacheHit, undefined, "whole-map also missed (tasks JSON differs)");
+	assert.match(r2.finalOutput, /out:analyze a#4\b/);
+	assert.match(r2.finalOutput, /out:analyze b#5\b/);
+	assert.match(r2.finalOutput, /out:analyze c#6\b/);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L2) Soundness: agent change invalidates ALL items (literal over).
+// The per-item key folds `it.agent`, so changing phase.agent moves every key.
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — agent change re-executes all items", async () => {
+	const dir = tmpDir();
+	const mk = (agent: string): Taskflow => ({
+		name: "peritem-literal-agent",
+		phases: [
+			{ id: "m", type: "map", agent, over: JSON.stringify(["a", "b", "c"]), task: "process {item}", cache: { scope: "cross-run" }, final: true },
+		],
+	}) as Taskflow;
+	const counter = { n: 0 };
+	const store = new CacheStore(dir);
+	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
+
+	await executeTaskflow(mkState(mk("a"), dir), deps);
+	assert.equal(counter.n, 3);
+	// Same items + same task, but agent changed → every per-item key moves.
+	const r2 = await executeTaskflow(mkState(mk("b"), dir), deps);
+	assert.equal(counter.n, 6, "agent change invalidates all per-item keys (3 + 3)");
+	assert.equal(r2.state.phases.m.cacheHit, undefined);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L3) Soundness: `as` field interaction is implicitly covered.
+// `as` only renames the loop variable; the resolved `it.task` text is what
+// flows into the per-item key. If the author keeps the template consistent
+// with `as`, the interpolated text is unchanged → no spurious invalidation
+// (correct). If they desync them, `it.task` differs → invalidation (correct,
+// covered by L1's task-template principle). No separate test needed.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// (L4) Soundness: upstream output referenced in task re-executes all items.
+// A map task that interpolates {steps.discover.output} folds the upstream
+// output into it.task — when the upstream output changes, every per-item key
+// moves (correct: the map's input genuinely changed).
+// ---------------------------------------------------------------------------
+
+test("per-item: upstream output referenced in task invalidates all items when it changes", async () => {
+	const dir = tmpDir();
+	const mk = (discoverOut: string): Taskflow => ({
+		name: "peritem-upstream",
+		phases: [
+			{ id: "discover", type: "agent", agent: "a", task: "discover" },
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(["x", "y"]), task: `do {item} with {steps.discover.output}`, dependsOn: ["discover"], cache: { scope: "cross-run" }, final: true },
+		],
+	}) as Taskflow;
+	let counter = { n: 0 };
+	const store = new CacheStore(dir);
+	// Runner that emits a configurable discover output + counting map calls.
+	const mkDeps = (discoverOut: string): RuntimeDeps => ({
+		cwd: dir, agents: AGENTS, cacheStore: store,
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => {
+			counter.n++;
+			const out = task === "discover" ? discoverOut : `out:${task}#${counter.n}`;
+			return { agent: agentName, task, exitCode: 0, output: out, stderr: "", usage: { ...emptyUsage(), output: 10, cost: 0.001, turns: 1 }, stopReason: "end" };
+		},
+	});
+
+	await executeTaskflow(mkState(mk("CTX1"), dir), mkDeps("CTX1"));
+	const mapCalls1 = counter.n;
+	assert.ok(mapCalls1 >= 3, "run1: discover + 2 map items execute");
+	// discover output changes → it.task for EVERY map item changes → all re-exec.
+	counter = { n: 0 };
+	const r2 = await executeTaskflow(mkState(mk("CTX2"), dir), mkDeps("CTX2"));
+	// discover re-runs (its task changed too — same literal, but flowDefHash/phaseFp
+	// move because the map phase's over-or-task is the SAME literal here... actually
+	// discover's task literal is unchanged so it hits cross-run). Either way, both
+	// map items must re-execute because {steps.discover.output} differs.
+	assert.match(r2.finalOutput, /do x with CTX2/, "map item x re-executed with new upstream output");
+	assert.match(r2.finalOutput, /do y with CTX2/, "map item y re-executed with new upstream output");
+	assert.doesNotMatch(r2.finalOutput, /do x with CTX1/, "stale upstream-coupled output not served");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L5) Whole-map fast path still hits on identical re-run (literal over).
+// The whole-map key keeps the FULL cc (phaseFp + flowDefHash), so an identical
+// re-run hits the whole-map fast path — per-item path never engages.
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — whole-map fast path hits on identical re-run", async () => {
+	const dir = tmpDir();
+	const def: Taskflow = {
+		name: "peritem-literal-fastpath",
+		phases: [
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(["a", "b", "c"]), task: "process {item}", cache: { scope: "cross-run" }, final: true },
+		],
+	} as Taskflow;
+	const counter = { n: 0 };
+	const store = new CacheStore(dir);
+	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
+
+	await executeTaskflow(mkState(def, dir), deps);
+	assert.equal(counter.n, 3, "run1 executes all 3");
+	// Identical re-run: whole-map key matches → 1 hit, runFanout never engages.
+	const r2 = await executeTaskflow(mkState(def, dir), deps);
+	assert.equal(counter.n, 3, "run2 hits whole-map fast path (0 new calls)");
+	assert.equal(r2.state.phases.m.cacheHit, "cross-run", "whole-map hit sets phase-level cacheHit");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L6) De-mask: partial hit charges only the re-executed item (literal over).
+// Literal-`over` variant of test (g). Before the fix this was impossible
+// (all items re-executed); now only item[1] re-runs → cost is exactly one item.
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — partial hit charges only the re-executed item", async () => {
+	const dir = tmpDir();
+	const mk = (items: string[]): Taskflow => ({
+		name: "peritem-literal-usage",
+		phases: [
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(items), task: "process {item}", cache: { scope: "cross-run" }, final: true },
+		],
+	}) as Taskflow;
+	const counter = { n: 0 };
+	const store = new CacheStore(dir);
+	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
+
+	await executeTaskflow(mkState(mk(["a", "b", "c"]), dir), deps);
+	assert.equal(counter.n, 3);
+	// Change item[1] only → 1 re-exec (cost 0.001); items 0+2 are 0-token cache hits.
+	const r2 = await executeTaskflow(mkState(mk(["a", "b2", "c"]), dir), deps);
+	assert.equal(counter.n, 4);
+	const m = r2.state.phases.m;
+	assert.equal(m.cacheHit, undefined, "phase executed (partial hit, not whole-map)");
+	assert.equal(m.usage?.cost ?? 0, 0.001, "only the re-executed item is charged");
+	assert.equal(m.subProgress?.done, 3, "all 3 items done");
+	assert.equal(m.subProgress?.failed, 0);
+	assert.equal(m.subProgress?.total, 3);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// (L7) De-mask: a failed item is never cached (literal over).
+// Literal-`over` variant of test (h). A failing item must not be recorded,
+// so a later run with the SAME literal `over` (same def!) re-executes only it.
+// Note: because the def is identical across runs here, flowDefHash/phaseFp are
+// stable — so this test would have PASSED even before the fix. It's included
+// to lock the behavior for the literal-`over` shape (de-masking the suite).
+// ---------------------------------------------------------------------------
+
+test("per-item: LITERAL over — a failed item is never cached (re-executes next run)", async () => {
+	const dir = tmpDir();
+	const def: Taskflow = {
+		name: "peritem-literal-nofail",
+		phases: [
+			{ id: "m", type: "map", agent: "a", over: JSON.stringify(["a", "b", "c"]), task: "process {item}", cache: { scope: "cross-run" }, final: true },
+		],
+	} as Taskflow;
+	const store = new CacheStore(dir);
+
+	// run1: item[1] ("process b") fails. Items 0+2 succeed and are cached per-item.
+	let counter = { n: 0 };
+	const deps1: RuntimeDeps = {
+		cwd: dir, agents: AGENTS, cacheStore: store,
+		runTask: countingRunner(counter, (t) => (t.includes("process b") ? "boom" : null)),
+	};
+	await executeTaskflow(mkState(def, dir), deps1);
+	assert.equal(counter.n, 3, "run1 attempts all 3 (item[1] fails)");
+
+	// run2: SAME def (same literal over), no failures. item[0]/[2] hit per-item;
+	// item[1] must RE-EXECUTE (its failure was not cached) and now succeeds.
+	counter = { n: 0 };
+	const deps2: RuntimeDeps = { cwd: dir, agents: AGENTS, cacheStore: store, runTask: countingRunner(counter) };
+	const r2 = await executeTaskflow(mkState(def, dir), deps2);
+	assert.equal(counter.n, 1, "run2: only the previously-failed item[1] re-executes; 0+2 hit per-item");
+	assert.equal(r2.state.phases.m.status, "done", "all items succeed on run2");
+	assert.match(r2.finalOutput, /out:process b#\d/, "item[1] now has a fresh successful output");
 	fs.rmSync(dir, { recursive: true, force: true });
 });
