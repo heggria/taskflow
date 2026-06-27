@@ -272,3 +272,41 @@ test("phasefp: shareContext falls back to whole-flow invalidation", async () => 
 	assert.equal(r2.state.phases.B.cacheHit, undefined, "B missed (its task changed)");
 	fs.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---------------------------------------------------------------------------
+// Hardening (risk review M-1 / L-1 / L-2): join:"any" soundness fallback, and
+// operational/result-selection fields stripped to avoid false invalidation.
+// ---------------------------------------------------------------------------
+
+test("phaseFingerprint: a join:any phase falls back to whole-flow (soundness)", async () => {
+	// C declares dependsOn [B] with join:any but interpolates {steps.A.output}.
+	// Its real reads escape the static closure, so per-phase diffing is unsound →
+	// fingerprint must be undefined (caller uses whole-flow flowDefHash).
+	const def: Taskflow = {
+		name: "join-any",
+		phases: [
+			{ id: "A", type: "agent", agent: "a", task: "produce" },
+			{ id: "B", type: "agent", agent: "a", task: "fast" },
+			{ id: "C", type: "agent", agent: "a", task: "use {steps.A.output}", dependsOn: ["B"], join: "any", final: true },
+		],
+	} as Taskflow;
+	assert.equal(await phaseFingerprint(def, "C"), undefined, "join:any → fallback");
+	// A and B are ordinary phases → still get a precise fingerprint.
+	assert.ok(await phaseFingerprint(def, "A"));
+	assert.ok(await phaseFingerprint(def, "B"));
+});
+
+test("phaseFingerprint: retry / concurrency / final do NOT move the sub-fingerprint", async () => {
+	const mk = (extra: Record<string, unknown>): Taskflow => ({
+		name: "ops-inv",
+		phases: [
+			{ id: "p", type: "agent", agent: "a", task: "t", cache: { scope: "cross-run" }, ...extra },
+			{ id: "q", type: "agent", agent: "a", task: "u {steps.p.output}", dependsOn: ["p"], final: true },
+		],
+	}) as Taskflow;
+	const base = await phaseFingerprint(mk({ final: true }), "p");
+	// Adding retry/concurrency, or moving `final`, must not perturb p's output hash.
+	assert.equal(await phaseFingerprint(mk({ final: true, retry: { max: 3 } }), "p"), base, "retry stripped");
+	assert.equal(await phaseFingerprint(mk({ final: true, concurrency: 4 }), "p"), base, "concurrency stripped");
+	assert.equal(await phaseFingerprint(mk({}), "p"), base, "final marker stripped");
+});

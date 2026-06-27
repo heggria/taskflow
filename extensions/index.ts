@@ -28,7 +28,7 @@ import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuilti
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
-import { executeTaskflow, recomputeTaskflow, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "./runtime.ts";
+import { executeTaskflow, recomputeTaskflow, summarizeReuse, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "./runtime.ts";
 import { type UsageStats } from "./usage.ts";
 import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "./schema.ts";
 import {
@@ -150,6 +150,12 @@ const TaskflowParams = Type.Object({
 			description: "Run in background (detached child process); return runId immediately. Status polled via store.",
 		}),
 	),
+	incremental: Type.Optional(
+		Type.Boolean({
+			description:
+				"For action=run: default every phase to cross-run caching so re-running the flow reuses unchanged phases across runs/sessions (incremental recompute). Overrides the flow's own `incremental` field. Per-phase cache settings and cross-run-blocked types (gate/approval/loop/tournament) still take precedence. Omit to use the flow's setting (default: run-only — fresh each run).",
+		}),
+	),
 });
 
 function formatFlowIR(ir: TaskflowIR): string {
@@ -225,6 +231,17 @@ function formatRecompute(r: RecomputeReport): string {
 		if (r.cutoff.length > 0) lines.push(`   → saved ${r.cutoff.length} re-execution(s).`);
 	}
 	lines.push(`✓ reused (outside frontier): ${r.reused.join(", ") || "—"}`);
+	// Per-phase "why" — the explainable-reactivity trace (like React DevTools
+	// telling you why each component re-rendered). Only shown when present.
+	if (r.decisions && r.decisions.length > 0) {
+		const glyph: Record<string, string> = { rerun: "▲", cutoff: "✂", reused: "✓", failed: "✗" };
+		lines.push("");
+		lines.push("Why:");
+		for (const d of r.decisions) {
+			const cause = d.causedBy && d.causedBy.length ? `  ← ${d.causedBy.join(", ")}` : "";
+			lines.push(`  ${glyph[d.outcome] ?? "•"} ${d.phaseId}: ${d.reason}${cause}`);
+		}
+	}
 	return lines.join("\n");
 }
 
@@ -242,6 +259,18 @@ function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string)
 	};
 }
 
+/** Resolve the run-wide default cache scope from the incremental flags. The
+ *  invocation-level override (the `incremental` tool arg) wins; otherwise the
+ *  flow's own `incremental` field; otherwise the safe `run-only` default
+ *  (each run starts fresh — cross-run reuse is opt-in). Exported for testing. */
+export function resolveCacheScope(
+	incrementalOverride: boolean | undefined,
+	flowIncremental: boolean | undefined,
+): "cross-run" | "run-only" {
+	const on = typeof incrementalOverride === "boolean" ? incrementalOverride : flowIncremental;
+	return on === true ? "cross-run" : "run-only";
+}
+
 async function runFlow(
 	def: Taskflow,
 	args: Record<string, unknown>,
@@ -249,6 +278,9 @@ async function runFlow(
 	signal: AbortSignal | undefined,
 	onUpdate: ((p: AgentToolResult<TaskflowDetails>) => void) | undefined,
 	existing?: RunState,
+	// Invocation-level incremental override: when set, wins over def.incremental.
+	// undefined → fall back to the flow's own `incremental` field (default off).
+	incrementalOverride?: boolean,
 ): Promise<RuntimeResult> {
 	const state = existing ?? makeRunState(def, args, ctx.cwd);
 
@@ -374,11 +406,15 @@ async function runFlow(
 			persist: persistThrottled,
 			requestApproval,
 			loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
-			// Cross-run cache is opt-in per phase (cache:{scope:"cross-run"}).
-			// Defaulting every real run to cross-run was reviewed out: it silently
-			// persists phase outputs and can serve stale results for phases whose
-			// agents read files at runtime (those files are not in the cache key).
-			cacheScopeDefault: "run-only",
+			// Cross-run cache is opt-in. By default a real run is `run-only` (fresh
+			// each run): defaulting every phase to cross-run silently persists
+			// outputs and can serve stale results for phases whose agents read files
+			// at runtime (those files are not in the cache key). A user opts in
+			// explicitly — the invocation `incremental` arg wins, else the flow's
+			// own `incremental` field, else the safe run-only default. All the
+			// soundness fallbacks (blocked types, per-phase fingerprint, shareContext)
+			// still apply per phase inside executePhase.
+			cacheScopeDefault: resolveCacheScope(incrementalOverride, def.incremental),
 		});
 		// Auto-report cache savings at the end of a real run so the user sees the
 		// M1-M5 effect without running a separate /tf command.
@@ -958,7 +994,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const result = await runFlow(def, args, ctx, signal, onUpdate as any);
+			const result = await runFlow(def, args, ctx, signal, onUpdate as any, undefined, params.incremental as boolean | undefined);
 			// Surface the validation warnings in the tool result so the model
 			// can acknowledge or fix them, and the user sees them in the chat.
 			if (v.warnings.length) {
@@ -1399,15 +1435,18 @@ function errorResult(action: string, message: string): ToolResult {
 	};
 }
 
-function formatCacheReport(state: RunState, totalUsage: UsageStats): string {
-	const cached = Object.values(state.phases).filter((p) => p.cacheHit === "cross-run");
-	if (cached.length === 0) return "";
-	// Honest reporting: we know these phases spent 0 tokens *this run* because
-	// they were served from cache. We do NOT estimate dollars/tokens "saved" —
-	// that requires guessing what a re-execution would have cost, and the mix of
-	// cheap vs expensive phases (tournament/loop) makes such a guess misleading.
-	const cachedTokens = cached.reduce((sum, p) => sum + ((p.usage?.input ?? 0) + (p.usage?.output ?? 0)), 0);
-	return `💾 ${cached.length} phase(s) reused from cross-run cache (${cachedTokens.toLocaleString()} tokens spent on them this run)`;
+function formatCacheReport(state: RunState, _totalUsage: UsageStats): string {
+	const r = summarizeReuse(state);
+	const reused = r.reusedRunOnly + r.reusedCrossRun;
+	if (reused === 0) return ""; // nothing reused — no incremental story to tell
+	// Honest framing: report reused-vs-executed counts, and a dollar figure only
+	// for within-run reuse (where the prior usage is preserved). Cross-run hits
+	// zero their usage, so their original cost is genuinely unknown — we say
+	// "reused" without inventing a savings number for them.
+	const parts: string[] = [`♻️ ${reused}/${r.done} phase(s) reused (${r.executed} executed this run)`];
+	if (r.savedUSD > 0) parts.push(`~$${r.savedUSD.toFixed(4)} of re-execution avoided`);
+	if (r.reusedCrossRun > 0) parts.push(`${r.reusedCrossRun} from cross-run cache`);
+	return parts.join(" · ");
 }
 
 function finalResult(action: string, result: RuntimeResult): ToolResult {

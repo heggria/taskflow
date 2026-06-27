@@ -284,6 +284,12 @@ export const TaskflowSchema = Type.Object(
 					"Enable the Shared Context Tree for ALL phases in this flow (shorthand for setting shareContext on every phase). Default false.",
 			}),
 		),
+		incremental: Type.Optional(
+			Type.Boolean({
+				description:
+					"Default every phase to cross-run caching (scope:'cross-run') so re-running this flow reuses unchanged phases across runs/sessions. Equivalent to setting cache:{scope:'cross-run'} on every phase; per-phase cache settings and the cross-run-blocked types (gate/approval/loop/tournament) still take precedence. Default false (run-only — each run starts fresh unless a phase opts in). A run-time `incremental` argument overrides this.",
+			}),
+		),
 		phases: Type.Array(PhaseSchema, { minItems: 1, description: "Ordered phase definitions (DAG via dependsOn)" }),
 	},
 	{ additionalProperties: false },

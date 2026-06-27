@@ -415,3 +415,91 @@ test("recompute: flagship — re-seed with an unchanged output cuts off the whol
 	assert.deepEqual([...report.cutoff].sort(), ["audit", "report"], "the downstream is cut off transitively");
 	assert.equal(record.length, executedBefore + 1, "exactly one re-execution (the seed); downstream hit cache");
 });
+
+// ---------------------------------------------------------------------------
+// Per-phase decision trace (the "explainable reactivity" AC): every phase in
+// the report carries a reason, and a rerun/cutoff is attributed to the
+// upstream(s) that caused it.
+// ---------------------------------------------------------------------------
+
+test("recompute: decision trace attributes each rerun to the changed upstream", async () => {
+	const record: string[] = [];
+	let scoutVersion = "V1";
+	const def: Taskflow = {
+		name: "trace-cascade",
+		concurrency: 1,
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{ id: "independent", type: "agent", agent: "a", task: "unrelated" },
+			{ id: "audit", type: "agent", agent: "a", task: "audit {steps.scout.output}", dependsOn: ["scout"] },
+			{
+				id: "report",
+				type: "agent",
+				agent: "a",
+				task: "report {steps.audit.output} {steps.independent.output}",
+				dependsOn: ["audit", "independent"],
+				final: true,
+			},
+		],
+	} as Taskflow;
+	const deps = baseDeps(mockRunner((t) => (t === "scan" ? `out:${scoutVersion}` : `out:${t}`), record));
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+
+	scoutVersion = "V2";
+	const { report } = await recomputeTaskflow(state, deps, ["scout"], { dryRun: false });
+	const byId = Object.fromEntries(report.decisions.map((d) => [d.phaseId, d]));
+
+	assert.equal(byId.scout.outcome, "rerun");
+	assert.match(byId.scout.reason, /seed/);
+	assert.equal(byId.audit.outcome, "rerun");
+	assert.deepEqual(byId.audit.causedBy, ["scout"], "audit's rerun is attributed to scout");
+	assert.deepEqual(byId.report.causedBy, ["audit"], "report's rerun is attributed to audit, not scout");
+	assert.equal(byId.independent.outcome, "reused");
+	assert.match(byId.independent.reason, /not reachable/);
+	// Every phase is explained.
+	assert.equal(report.decisions.length, 4);
+});
+
+test("recompute: decision trace marks early-cutoff with its (unchanged) upstream cause", async () => {
+	const record: string[] = [];
+	const def: Taskflow = {
+		name: "trace-cutoff",
+		concurrency: 1,
+		phases: [
+			{ id: "scout", type: "agent", agent: "a", task: "scan" },
+			{ id: "audit", type: "agent", agent: "a", task: "audit {steps.scout.output}", dependsOn: ["scout"] },
+			{ id: "report", type: "agent", agent: "a", task: "report {steps.audit.output}", dependsOn: ["audit"], final: true },
+		],
+	} as Taskflow;
+	// scout's output is stable across re-seeds → downstream cuts off.
+	const deps = baseDeps(mockRunner((t) => (t === "scan" ? "out:STABLE" : `out:${t}`), record));
+	const state = mkState(def);
+	await executeTaskflow(state, deps);
+
+	const { report } = await recomputeTaskflow(state, deps, ["scout"], { dryRun: false });
+	const byId = Object.fromEntries(report.decisions.map((d) => [d.phaseId, d]));
+
+	assert.equal(byId.scout.outcome, "rerun", "seed always re-runs");
+	assert.equal(byId.audit.outcome, "cutoff");
+	assert.match(byId.audit.reason, /identical output|unchanged/);
+	assert.deepEqual(byId.audit.causedBy, ["scout"]);
+	assert.equal(byId.report.outcome, "cutoff");
+});
+
+test("recompute: dry-run decision trace explains the worst-case frontier", async () => {
+	const record: string[] = [];
+	const deps = baseDeps(mockRunner((t) => `out:${t}`, record));
+	const state = mkState(DEF);
+	await executeTaskflow(state, deps);
+
+	const { report } = await recomputeTaskflow(state, deps, ["scout"], { dryRun: true });
+	const byId = Object.fromEntries(report.decisions.map((d) => [d.phaseId, d]));
+
+	assert.equal(byId.scout.outcome, "rerun");
+	assert.match(byId.scout.reason, /seed/);
+	// audit + report are in the frontier → "may re-run", attributed upstream.
+	assert.equal(byId.audit.outcome, "rerun");
+	assert.match(byId.audit.reason, /may re-run|stale frontier/);
+	assert.equal(record.length, 3, "dry-run did not execute anything beyond the initial run");
+});
