@@ -549,7 +549,7 @@ Quick reference:
 
 - **Flow:** `name`, `description`, `concurrency` (default 8), `budget` (`maxUSD`/`maxTokens`), `agentScope` (user|project|both), `args`, `strictInterpolation`.
 - **Phase:** `model`, `thinking`, `tools` (whitelist), `cwd`, `output:"json"`, `concurrency` (map/parallel fan-out), `when`, `join` (all|any), `retry`, `use`/`with` (flow), `optional` (fail-soft — a failed/blocked phase won't abort the run), `final`.
-- **Cross-run caching:** add `cache: { "scope": "cross-run" }` to a phase to memoize its output across runs (same input → instant reuse, zero tokens). See `configuration.md` for `ttl`, `fingerprint` (git/glob/file/env invalidation), and scope options.
+- **Cross-run caching:** add `cache: { "scope": "cross-run" }` to a phase to memoize its output across runs (same input → instant reuse, zero tokens), or set `incremental: true` at the flow level (or pass `incremental: true` to `run`) to default every phase to cross-run reuse. See `configuration.md` for `ttl`, `fingerprint` (git/glob/file/env invalidation), scope options, and the `incremental` precedence rules.
 - **Precedence (model/thinking/tools):** phase value → agent frontmatter (resolved via `modelRoles`) → global/default.
 - **Concurrency:** same-layer phases use `flow.concurrency`; a `map`/`parallel` phase uses `phase.concurrency ?? flow.concurrency ?? 8`.
 

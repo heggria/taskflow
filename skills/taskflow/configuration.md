@@ -283,6 +283,28 @@ for the design.
 | `cross-run` | Reuse an identical-input result from **any** prior run (the persistent store). |
 | `off` | Never reuse, even within a run (force re-execution every time). |
 
+### Flow-wide opt-in: `incremental`
+
+Rather than annotating every phase with `cache: { "scope": "cross-run" }`, set
+`incremental: true` at the **flow** level (or pass `incremental: true` as the
+`run` tool argument) to default *every* phase to cross-run reuse:
+
+```jsonc
+{
+  "name": "audit",
+  "incremental": true,          // ← every phase defaults to scope:"cross-run"
+  "phases": [ /* ... */ ]
+}
+```
+
+Precedence: the invocation `incremental` argument wins over the flow's
+`incremental` field, which is in turn overridden by any **per-phase** `cache`
+setting. The cross-run-blocked phase types (`gate`/`approval`/`loop`/
+`tournament`) and all per-phase soundness fallbacks still apply. The default
+remains `run-only` (each run starts fresh unless something opts in), because
+cross-run reuse silently persists outputs and can serve stale results for phases
+whose agents read files at runtime.
+
 ### `ttl` (cross-run only)
 
 Max age before a cross-run hit is treated as a miss: e.g. `"30m"`, `"6h"`, `"7d"`.
