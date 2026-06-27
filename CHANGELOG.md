@@ -2,6 +2,60 @@
 
 All notable changes to pi-taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.0.28] — 2026-06-27
+
+> Granular-reuse release: **incremental recompute goes from whole-flow to
+> per-phase and per-item.** v0.0.27 *proved* the recompute cost win; this
+> release makes that win far larger and easier to opt into. Editing one phase
+> now invalidates only that phase and its transitive dependents (a sibling keeps
+> its cache hit), a `map` phase re-executes only the items that actually changed,
+> and a single `incremental` flag flips a whole flow into cross-run reuse without
+> annotating every phase.
+
+### Added
+- **Per-phase structural sub-fingerprint (`v3:phasefp`).** The cache key now
+  folds a per-phase fingerprint — the phase plus its transitive `dependsOn ∪ from`
+  closure — instead of the whole-flow `v2:flowdef` hash. Editing phase B
+  invalidates only B and its dependents; an independent sibling A keeps its hit.
+  `cacheKeys` emits a 4-tier read ladder (`v3:phasefp` write → `v2:flowdef` →
+  bare flowdef → legacy, all read-only) so the upgrade is additive — no
+  miss-storm for unchanged flows. Fail-open: any per-phase error degrades that
+  phase to the whole-flow hash. Soundness fallback to whole-flow when per-phase
+  invalidation can't be statically guaranteed (flow-wide `contextSharing`, any
+  `shareContext` phase in the closure, `join: "any"`, or sub-flow inner phases).
+  (`extensions/flowir/phasefp.ts`, `test/cache-phasefp.test.ts` — 11 tests.)
+- **Per-item cross-run caching for `map` phases.** When one of N items changes
+  between runs, only that item re-executes (N−1 cache hits) while the whole-map
+  fast path and every soundness fallback stay intact. Per-item keys omit the
+  structural fingerprint (which hashes the whole `over` source) so changing one
+  item no longer moves every key at once; they fold `[phase.id, it.agent, model,
+  it.task]` + the world-state tail, so task/agent/upstream/world changes still
+  invalidate the right items. Disabled (whole-map only) under run-only/off scope,
+  `shareContext`/flow-wide `contextSharing`, or inside a runtime-generated
+  sub-flow. (`test/cache-peritem.test.ts` — 11 tests.)
+- **`incremental` flag** — flow-level (`TaskflowSchema.incremental`) and
+  invocation-level (`run` tool arg). Defaults every phase to `scope:"cross-run"`
+  so re-running a flow reuses unchanged phases across runs/sessions, without
+  annotating each phase. The invocation arg wins over the flow field; per-phase
+  cache settings and the cross-run-blocked types (gate/approval/loop/tournament)
+  still take precedence; default remains the safe `run-only` (fresh each run).
+  (`resolveCacheScope` in `extensions/index.ts`, `test/incremental-flag.test.ts`.)
+- **Reuse reporting.** The end-of-run cache report and `/tf recompute` now show
+  reused-vs-executed counts and a per-phase "Why" trace (the explainable-
+  reactivity view: `▲ rerun / ✂ cutoff / ✓ reused / ✗ failed`, with `← causedBy`).
+  Dollar figures are reported only for within-run reuse, where the prior usage is
+  preserved; cross-run hits are counted but never attributed an invented saving.
+  (`summarizeReuse` / `RecomputeDecision` in `extensions/runtime.ts`,
+  `test/reuse-summary.test.ts`.)
+- Tests: 804 → 846 (+42).
+
+### Changed
+- **`phaseFingerprint` strips more policy fields** (`cache`, `retry`,
+  `concurrency`, `final`): none changes a phase's subagent *output*, so a no-op
+  config tweak no longer causes false cache invalidation.
+- **README** test count and feature line refreshed (804 → 846 across 46 files);
+  `per-item map caching` added to the headline capabilities.
+
 ## [0.0.27] — 2026-06-25
 
 > Evidence release: **the incremental-recompute cost win is now proven, not
