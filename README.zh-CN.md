@@ -8,7 +8,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-43D9AD?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-43D9AD?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/pi-taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/pi-taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-702-6E8BFF?style=flat-square" alt="702 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-864-6E8BFF?style=flat-square" alt="864 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-43D9AD?style=flat-square" alt="dogfooded"></a>
   <a href="https://pi.dev"><img src="https://img.shields.io/badge/for-Pi%20coding%20agent-B692FF?style=flat-square" alt="for the Pi coding agent"></a>
 </p>
@@ -133,7 +133,7 @@ Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在
 - **`pi-subagents` / `@gotgenes/pi-subagents`** 是即席"用 reviewer 审查这个 diff"委托和后台作业的成熟选择。`pi-taskflow` 则适用于当这些委托需要变成*可重复、可恢复的流水线*时。
 - **`pi-pipeline` / `pi-agent-flow`** 提供的是*固定观点、固定结构*的流程。`pi-taskflow` 提供的是*一张空白画布*：你（或模型）声明适合任务的图结构。
 
-> 诚实的一句话总结：**`pi-taskflow` 是唯一一个给你一张*声明式、可验证、可恢复*的任务节点 DAG 的 Pi 扩展——保存为一条单词命令，零运行时依赖，且从设计上就上下文隔离。** code-mode 的 workflow 让模型去*写脚本*跳动工作，`pi-taskflow` 则让它*声明一张运行时能在执行前证明其正确的图。* 已知正在弥补的缺口：循环至完成、worktree 隔离、非阻塞后台运行（详见 [`STRATEGY.md`](./STRATEGY.md)）。
+> 诚实的一句话总结：**`pi-taskflow` 是唯一一个给你一张*声明式、可验证、可恢复*的任务节点 DAG 的 Pi 扩展——保存为一条单词命令，零运行时依赖，且从设计上就上下文隔离。** code-mode 的 workflow 让模型去*写脚本*跳动工作，`pi-taskflow` 则让它*声明一张运行时能在执行前证明其正确的图。*
 
 ## 30 秒快速开始
 
@@ -372,7 +372,7 @@ pi install npm:pi-taskflow
 - **`scope`**——`"run-only"`（默认）即历史行为（仅运行内恢复）。`"cross-run"` 将阶段选择加入持久化存储。`"off"` 完全禁用复用（甚至运行内），用于调试。
 - **新鲜度是关键。** 缓存键已包含提示词、`over` 项目和任何 `context` 文件（预读到任务中）。`fingerprint` 将*隐式*输入折叠到键中，使得"世界变了"成为缓存未命中：`git:HEAD`、`glob:<pat>`（大小+修改时间）、`glob!:<pat>`（内容哈希）、`file:<path>`、`env:<NAME>`。`ttl`（`30m`/`6h`/`7d`）是时间安全网。
 - **诚实的限制：**一个子代理读取了未在 `context`/`fingerprint` 中声明的文件，仍可能返回过时的 `cross-run` 命中。这就是为什么默认值是 `run-only`，以及为什么 `gate`/`approval` 阶段**禁止**使用 `cross-run`（它们必须在每次运行中产生新鲜的结果）。只对输出是声明输入函数的那类阶段选择加入。
-- 缓存位于 `.pi/taskflows/cache/`（被 gitignore 忽略）。使用 `action: "cache-clear"` 清除。完整理由参见 [`docs/rfc-cross-run-memoization.md`](./docs/rfc-cross-run-memoization.md)。
+- 缓存位于 `.pi/taskflows/cache/`（被 gitignore 忽略）。使用 `action: "cache-clear"` 清除。完整理由参见 [`docs/rfc-cross-run-memoization.md`](./docs/internal/rfc-cross-run-memoization.md)。
 
 ### 门控阶段（质量控制）
 
@@ -610,12 +610,12 @@ provided files. Report violations grouped by file. No fixes.
 
 <div align="center">
 
-**0 个运行时依赖** · **535 个测试** · **9 种阶段类型** · **跨会话恢复** · **跨运行记忆化** · **~5.4k LOC 运行时**
+**0 个运行时依赖** · **864 个测试** · **9 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
 
 </div>
 
 - **零运行时依赖。** 没有 `dependencies` 字段——运行时完全基于 Node 内置模块（`fs` / `path` / `os` / `child_process` / `crypto`）。文件锁是 `fs.openSync("wx")`，不是第三方库。
-- **535 个测试分布在 21 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、回调隔离、空闲看门狗、模型角色 init 配置，以及带括号模型名称回归的 parseModelFromLabel。
+- **864 个测试分布在 49 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
 - **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
 - **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
 
@@ -627,11 +627,11 @@ provided files. Report violations grouped by file. No fixes.
 
 | 活动 | 规模 | 阶段数 | 结果 |
 |----------|-------|--------|---------|
-| [v0.0.8 dogfood](./docs/dogfooding-v0.0.8-report.md) | 全代码库审计 → 分类 → 修复 → 验证 | 10 阶段，234 个测试 | 13 个修复，全部通过 |
-| [v0.0.6 自审计](./docs/self-audit-report.md) | 盘点 → 映射审计 → 门控 → 审批 → 映射修复 → 归约 | 9 阶段 | 修复 11 个关键缺陷 |
-| [跨运行缓存 dogfood](./docs/rfc-cross-run-memoization.md) | 真实运行时 + 磁盘存储 | 专用测试框架 | 在对抗性指纹下验证缓存正确性 |
-| [对抗性交叉审查](./docs/brainstorm-adversarial-review-report.md) | 多代理对抗性审查 | `tournament` + `gate` | 修复 P0 缓存键问题并发布 |
-| [Init 重设计审查](./docs/issue-necessity-review-report.md) | 必要性审计 → 并行检查 → 判决 | 7 阶段 | 完整重设计方案已验证 |
+| [v0.0.8 dogfood](./docs/internal/dogfooding-v0.0.8-report.md) | 全代码库审计 → 分类 → 修复 → 验证 | 10 阶段，234 个测试 | 13 个修复，全部通过 |
+| [v0.0.6 自审计](./docs/internal/self-audit-report.md) | 盘点 → 映射审计 → 门控 → 审批 → 映射修复 → 归约 | 9 阶段 | 修复 11 个关键缺陷 |
+| [跨运行缓存 dogfood](./docs/internal/rfc-cross-run-memoization.md) | 真实运行时 + 磁盘存储 | 专用测试框架 | 在对抗性指纹下验证缓存正确性 |
+| [对抗性交叉审查](./docs/internal/brainstorm-adversarial-review-report.md) | 多代理对抗性审查 | `tournament` + `gate` | 修复 P0 缓存键问题并发布 |
+| [Init 重设计审查](./docs/internal/issue-necessity-review-report.md) | 必要性审计 → 并行检查 → 判决 | 7 阶段 | 完整重设计方案已验证 |
 | [第 2 轮对抗性审计](./docs/internal/dogfooding-report.md) | 逐阶段 DAG 执行——12 个发现覆盖 runner/runtime/interpolate/verify | 14 阶段 | 已修复 10 项，0 退化 |
 | [第 3 轮对抗性审计](./docs/internal/dogfooding-report.md) | 集成层 + 跨模块——10 个发现覆盖 index/agents/cache/render/runs-view | 9 阶段 | 已修复 10 项，0 退化 |
 
@@ -639,25 +639,45 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
-**v0.0.17**——循环至完成（`loop` 阶段：迭代至条件满足、收敛或上限）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`（带角色感知模型选择器 + 差异预览 + 原子合并写入）、18 个内置代理及 6 个模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+**v0.1.0**——**多宿主 monorepo**：引擎拆分为宿主无关的 `taskflow-core`，加上 `pi-taskflow`（Pi 适配器）与 `codex-taskflow`（Codex 运行器 + MCP 服务器）两个适配器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离 Pi 会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 
-- **无后台执行。** 运行需要 Pi 会话保持打开。真正的后台执行（以及基于它的事件/定时触发）已在路线图中。
+- **共享上下文需显式开启。** 除非阶段设置 `shareContext`（或流程设置 `contextSharing`），子代理不共享任何内容。黑板为每次运行独立、基于文件、大小受限，并随运行清理。派生嵌套上限为 `MAX_DYNAMIC_NESTING`（5）。
+- **工作区隔离是 fail-open 的。** `cwd: "worktree"` 要求基底 cwd 是一个 git 工作树；否则降级为 `temp` 目录（带警告）。保留关键字仅在作者编写的流程中生效。
 - **无 `output: "file"`。** 输出只能是文本/JSON——通过代理的 `write` 工具调用写入文件。
 - **`map` 需要一个 JSON 数组。** `over` 字段必须解析为 `{steps.ID.json}` 数组。先用一个单代理 `output: "json"` 阶段包装文本列表。
 - **DAG 必须是无环的。** 循环会在验证时被拒绝。
+- **跨运行缓存不包含 `gate`、`approval`、`loop` 和 `tournament`。** 这些阶段每次运行必须产生新结果。
+- **审批在后台模式下自动拒绝。** 这是一项安全不变量——审批门控绝不会被静默绕过。
 
 ## 开发
 
+`pi-taskflow` 是一个 npm-workspaces monorepo，包含三个发布包：
+
+| 包 | 角色 |
+|----|------|
+| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`） |
+| [`pi-taskflow`](./packages/pi-taskflow) | Pi 扩展适配器——`taskflow` 工具 + `/tf` 命令（即 `pi install npm:pi-taskflow` 安装的内容） |
+| [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + 零依赖 MCP 服务器（[指南](./docs/codex-mcp.md)） |
+
 ```bash
 npm install
-npm run typecheck
-npm test            # 单元测试——无网络，无进程派生
-npm run test:e2e    # 真实端到端测试（派生真实子代理；需要模型访问权限）
+npm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
+npm test              # 单元测试——无网络，无进程派生
+npm run test:core     # 仅引擎测试（另有 test:pi、test:codex）
+npm run build         # 为三个包生成 dist/*.js + .d.ts
+npm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
+npm run test:e2e-codex-mcp  # codex MCP 服务器端到端
 ```
 
-运行时位于 `extensions/`，测试位于 `test/`，可运行示例位于 `examples/`。
+Pi 的端到端套件会派生真实 `pi` 子代理，直接运行（使用 `.mts` 扩展名，单元测试 glob 会跳过），例如：
+
+```bash
+node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
+```
+
+引擎代码位于 `packages/taskflow-core/src/`，Pi 适配器位于 `packages/pi-taskflow/src/`，测试位于各包的 `test/`，可运行示例位于 `examples/`。发布包内含编译后的 `dist/`；开发时通过 `development` 导出条件直接解析 TypeScript 源码——typecheck 与 test 都无需构建步骤。
 
 ## 贡献
 

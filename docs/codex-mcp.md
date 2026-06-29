@@ -1,23 +1,34 @@
 # Using pi-taskflow from Codex (MCP)
 
 pi-taskflow runs on [Codex](https://github.com/openai/codex) in two directions,
-both built on the host-neutral `SubagentRunner` seam (`extensions/host/runner-types.ts`):
+both built on the host-neutral `SubagentRunner` seam
+(`packages/taskflow-core/src/host/runner-types.ts`):
 
 1. **Codex as the executor** — a taskflow's subagents run as `codex exec`
-   sessions (`extensions/codex-runner.ts`).
+   sessions (`packages/codex-taskflow/src/codex-runner.ts`).
 2. **Codex as the caller** — taskflow is exposed to a Codex user as an **MCP
    server**, so the `taskflow_*` tools appear inside codex
-   (`extensions/mcp/`). This is the direction described here.
+   (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
 The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`extensions/mcp/jsonrpc.ts`), so pi-taskflow keeps its **zero runtime
-dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+built-ins (`packages/codex-taskflow/src/mcp/jsonrpc.ts`), so pi-taskflow keeps its
+**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
 
 ## Register with Codex
 
+Install the package, then register its `codex-taskflow-mcp` bin:
+
 ```sh
+npm install -g codex-taskflow
+codex mcp add taskflow -- codex-taskflow-mcp
+```
+
+From a checkout of this repo (no install), point Codex at the built bin instead:
+
+```sh
+npm run build
 codex mcp add taskflow -- \
-  node --experimental-strip-types /abs/path/to/pi-taskflow/extensions/mcp/bin.ts
+  node /abs/path/to/pi-taskflow/packages/codex-taskflow/dist/mcp/bin.js
 ```
 
 Verify it registered:
