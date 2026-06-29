@@ -1,0 +1,49 @@
+{
+  "name": "pi-taskflow",
+  "version": "0.0.28",
+  "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "workflow",
+    "orchestration",
+    "subagents",
+    "agents",
+    "taskflow",
+    "ai",
+    "automation"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/pi-taskflow#readme",
+  "bugs": {
+    "url": "https://github.com/heggria/pi-taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/pi-taskflow.git",
+    "directory": "packages/pi-taskflow"
+  },
+  "type": "module",
+  "files": ["src", "skills"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"],
+    "skills": ["./skills"],
+    "image": "https://raw.githubusercontent.com/heggria/pi-taskflow/main/assets/social-preview.png"
+  },
+  "dependencies": {
+    "taskflow-core": "0.0.28"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

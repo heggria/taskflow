@@ -1,0 +1,26 @@
+{
+  "name": "taskflow-core",
+  "version": "0.0.28",
+  "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow and codex-taskflow.",
+  "keywords": ["taskflow", "dag", "orchestration", "subagents", "workflow"],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/pi-taskflow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/pi-taskflow.git",
+    "directory": "packages/taskflow-core"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "files": ["src"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "typebox": "*"
+  }
+}

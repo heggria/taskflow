@@ -1,67 +1,22 @@
 {
-  "name": "pi-taskflow",
+  "name": "pi-taskflow-monorepo",
   "version": "0.0.28",
-  "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — not a workflow you script, but a DAG you declare: statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
-  "keywords": [
-    "pi-package",
-    "pi",
-    "pi-coding-agent",
-    "pi-extension",
-    "workflow",
-    "orchestration",
-    "subagents",
-    "agents",
-    "taskflow",
-    "ai",
-    "automation"
-  ],
-  "license": "MIT",
-  "author": "heggria <bshengtao@gmail.com>",
-  "homepage": "https://github.com/heggria/pi-taskflow#readme",
-  "bugs": {
-    "url": "https://github.com/heggria/pi-taskflow/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/heggria/pi-taskflow.git"
-  },
+  "private": true,
+  "description": "Monorepo for taskflow-core, pi-taskflow, and codex-taskflow.",
   "type": "module",
-  "files": [
-    "extensions",
-    "skills",
-    "examples",
-    "README.md",
-    "README.zh-CN.md",
-    "CHANGELOG.md",
-    "LICENSE"
+  "workspaces": [
+    "packages/taskflow-core",
+    "packages/pi-taskflow",
+    "packages/codex-taskflow"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test 'test/*.test.ts'",
-    "test:e2e": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e.mts",
-    "test:e2e-context": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e-context.mts",
-    "test:e2e-context-value": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e-context-value.mts",
-    "test:e2e-team": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e-team.mts",
-    "test:e2e-spawn-subflow": "PI_TASKFLOW_PI_BIN=pi node --experimental-strip-types test/e2e-spawn-subflow.mts",
-    "test:e2e-codex": "node --experimental-strip-types test/e2e-codex.mts",
-    "test:e2e-codex-mcp": "node --experimental-strip-types test/e2e-codex-mcp.mts",
-    "test:dogfood-cache": "node --experimental-strip-types test/dogfood-cache.mts"
-  },
-  "pi": {
-    "extensions": [
-      "./extensions/index.ts"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "image": "https://raw.githubusercontent.com/heggria/pi-taskflow/main/assets/social-preview.png"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
+    "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test 'packages/*/test/*.test.ts'",
+    "test:core": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test 'packages/taskflow-core/test/*.test.ts'",
+    "test:pi": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test 'packages/pi-taskflow/test/*.test.ts'",
+    "test:codex": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --experimental-strip-types --test 'packages/codex-taskflow/test/*.test.ts'",
+    "test:e2e-codex": "node --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
+    "test:e2e-codex-mcp": "node --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.78.0",

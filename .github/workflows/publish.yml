@@ -31,17 +31,23 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Verify tag matches package version
+      - name: Verify tag matches workspace versions
         run: |
-          PKG_VERSION="v$(node -p "require('./package.json').version")"
           TAG="${GITHUB_REF_NAME}"
-          if [ "$PKG_VERSION" != "$TAG" ]; then
-            echo "::error::Tag $TAG does not match package.json version $PKG_VERSION"
-            exit 1
-          fi
+          for pkg in taskflow-core pi-taskflow codex-taskflow; do
+            V="v$(node -p "require('./packages/$pkg/package.json').version")"
+            if [ "$V" != "$TAG" ]; then
+              echo "::error::Tag $TAG does not match $pkg version $V"
+              exit 1
+            fi
+          done
 
-      - name: Publish to npmjs.com
-        run: npm publish --access public --provenance
+      - name: Publish workspaces to npmjs.com
+        # Order matters: taskflow-core first (the adapters depend on it).
+        run: |
+          npm publish -w taskflow-core --provenance
+          npm publish -w pi-taskflow --provenance
+          npm publish -w codex-taskflow --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

@@ -1,0 +1,222 @@
+/**
+ * Host-neutral subagent-result helpers: failure classification, transient-error
+ * detection, error sanitization, and the NDJSON event accumulator/parser.
+ *
+ * This is the pure, host-SDK-free half of the original runner. The pi spawn
+ * machinery lives in the pi adapter (`pi-taskflow`); the codex spawn machinery
+ * in the codex adapter (`codex-taskflow`). Both reuse everything here so failure
+ * semantics, retry heuristics, and usage folding are identical across hosts.
+ */
+
+import { emptyUsage, type UsageStats } from "./usage.ts";
+import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
+
+// Re-export the host-neutral execution contract types so importers of the
+// runner surface get them from one place.
+export type { CoreMessage, LiveUpdate, RunOptions, RunResult, SubagentRunner } from "./host/runner-types.ts";
+
+export function isFailed(r: RunResult): boolean {
+	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+}
+
+/**
+ * Heuristic: did this failure look like a transient/retryable provider error
+ * (rate limit, overload, timeout, 5xx)? Such errors should be retried inside
+ * the taskflow run with backoff rather than bubbled up — otherwise the calling
+ * agent tends to re-invoke the whole tool, producing duplicate progress blocks.
+ */
+const TRANSIENT_ERROR_RE =
+	/rate[_\s-]?limit|too\s+many\s+requests|overloaded|\b429\b|\b503\b|\b502\b|\b504\b|service\s+unavailable|temporarily\s+unavailable|timeout|timed?\s+out|econnreset|etimedout|socket\s+hang\s*up/i;
+export function isTransientError(r: RunResult): boolean {
+	if (r.stopReason === "aborted") return false;
+	// Idle timeout is a deterministic stall — retrying won't help.
+	if (r.stopReason === "error" && r.idleTimeout) return false;
+	const hay = `${r.errorMessage ?? ""} ${r.stderr ?? ""} ${r.output ?? ""}`;
+	return TRANSIENT_ERROR_RE.test(hay);
+}
+
+/** Placeholder written to a failed phase's `output` so downstream interpolation
+ *  can detect "upstream failed" without being polluted by raw HTML/JSON. */
+export const TRANSPORT_ERROR_PLACEHOLDER = "(upstream error: subagent failed; see error)";
+
+/** Hard cap on the errorMessage field stored in PhaseState (≈ 4 KB). */
+export const ERROR_MESSAGE_MAX_LEN = 4096;
+
+/** Cheap HTML/JSON detector so we can summarize upstream garbage. */
+export function looksLikeHtmlOrJson(s: string): boolean {
+	const t = s.trimStart();
+	if (!t) return false;
+	if (t.startsWith("<")) {
+		// HTML/XML/Cloudflare challenge pages
+		return /^<(?:!doctype\s+html|html|head|body|script|svg|div|iframe|span|p)\b/i.test(t);
+	}
+	if (t.startsWith("{")) {
+		// Truncated JSON. A genuine JSON envelope is fine to keep; an unwrapped
+		// {error: "..."} from an SDK is short. We only treat it as "garbage" if
+		// it parses and is huge — but that's caught by the size cap below.
+		return false;
+	}
+	return false;
+}
+
+/**
+ * Truncate and (when obviously HTML) summarize an errorMessage before it is
+ * persisted. Returns the cleaned string. Empty input returns empty.
+ */
+export function sanitizeErrorMessage(raw: string | undefined): string {
+	if (!raw) return "";
+	const cleaned = raw.replace(/\s+/g, " ").trim();
+	if (!cleaned) return "";
+	// Decide the sanitization branch on the RAW length, not the whitespace-
+	// collapsed length — otherwise an HTML page padded with spaces would slip
+	// through the "looks like HTML" branch and be persisted as-is.
+	const rawLen = raw.length;
+	if (rawLen > ERROR_MESSAGE_MAX_LEN) {
+		const head = cleaned.slice(0, 200);
+		const tail = cleaned.slice(-200);
+		return `${head} ... [truncated ${rawLen - 400} chars] ... ${tail}`;
+	}
+	if (looksLikeHtmlOrJson(cleaned)) {
+		// Any document-like HTML (Cloudflare challenge pages, proxy error pages,
+		// gateway error pages) is a strong signal the upstream returned a page
+		// instead of JSON. Summarize it instead of letting HTML pollute the
+		// phase's error and downstream interpolation contexts.
+		const title = cleaned.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+		const stripped = cleaned.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+		const m = stripped.match(/(?:Unable to load site|Ray ID[: ]+([A-Za-z0-9]+)|[A-Z][a-z]+Error[: ]+(.{0,200}))/i);
+		const hint = title || (m ? (m[1] || m[0]).trim() : stripped.slice(0, 200));
+		return `Upstream returned non-JSON response (${rawLen} chars). Hint: ${hint}`;
+	}
+	return cleaned;
+}
+
+export function getFinalOutput(messages: CoreMessage[]): string {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (msg.role === "assistant") {
+			for (const part of msg.content) {
+				if (part.type === "text" && part.text?.trim()) return part.text;
+			}
+		}
+	}
+	return "";
+}
+
+/** Accumulated state folded from a subagent's NDJSON event stream. */
+export interface EventAccumulator {
+	messages: CoreMessage[];
+	usage: UsageStats;
+	model?: string;
+	stopReason?: string;
+	errorMessage?: string;
+	lastActivity: string;
+	/** Set when message cap was hit — output gets a truncation notice. */
+	truncated?: boolean;
+}
+
+export function newAccumulator(model?: string): EventAccumulator {
+	return { messages: [], usage: emptyUsage(), model, lastActivity: "" };
+}
+
+/**
+ * Fold one NDJSON line into the accumulator. Returns a LiveUpdate when an
+ * assistant message ended (for streaming), else null. Empty, malformed, and
+ * non-`message_end` lines are ignored — making the parser robust to partial
+ * buffers/noise and unit-testable without spawning a process.
+ */
+export function foldEventLine(acc: EventAccumulator, line: string): LiveUpdate | null {
+	if (!line.trim()) return null;
+	let event: any;
+	try {
+		event = JSON.parse(line);
+	} catch {
+		return null;
+	}
+	if (event.type !== "message_end" || !event.message) return null;
+	const msg = event.message as CoreMessage;
+	// Cap prevents OOM from misconfigured loops. 500 messages is generous for
+	// normal subagent tasks (50 turns × 10 messages each). Messages beyond the
+	// cap are still parsed for usage/model/stopReason extraction.
+	const MAX_MESSAGES = 500;
+	if (acc.messages.length < MAX_MESSAGES) {
+		acc.messages.push(msg);
+	} else {
+		acc.truncated = true;
+	}
+	if (msg.role !== "assistant") return null;
+	acc.usage.turns++;
+	const u = (msg as any).usage;
+	if (u) {
+		acc.usage.input += u.input || 0;
+		acc.usage.output += u.output || 0;
+		acc.usage.cacheRead += u.cacheRead || 0;
+		acc.usage.cacheWrite += u.cacheWrite || 0;
+		acc.usage.cost += u.cost?.total || 0;
+		acc.usage.contextTokens = u.totalTokens || 0;
+	}
+	if (!acc.model && (msg as any).model) acc.model = (msg as any).model;
+	if ((msg as any).stopReason) acc.stopReason = (msg as any).stopReason;
+	if ((msg as any).errorMessage) acc.errorMessage = (msg as any).errorMessage;
+	const activity = describeActivity(msg);
+	if (activity) acc.lastActivity = activity;
+	return { text: acc.lastActivity, usage: { ...acc.usage }, model: acc.model };
+}
+
+/** One-line description of the most recent assistant activity (text or tool call). */
+function describeActivity(msg: CoreMessage): string {
+	if (msg.role !== "assistant") return "";
+	let lastText = "";
+	let lastTool = "";
+	for (const part of (msg as any).content ?? []) {
+		if (part.type === "text" && part.text?.trim()) lastText = part.text.trim();
+		else if (part.type === "toolCall") lastTool = summarizeToolCall(part.name, part.arguments ?? {});
+	}
+	const chosen = lastText || lastTool;
+	return chosen.replace(/\s+/g, " ").trim();
+}
+
+function summarizeToolCall(name: string, args: Record<string, unknown>): string {
+	const short = (p: unknown) => {
+		const s = String(p ?? "");
+		return s.length > 48 ? `${s.slice(0, 48)}…` : s;
+	};
+	switch (name) {
+		case "bash":
+			return `$ ${short(args.command)}`;
+		case "read":
+			return `read ${short(args.path ?? args.file_path)}`;
+		case "write":
+			return `write ${short(args.path ?? args.file_path)}`;
+		case "edit":
+			return `edit ${short(args.path ?? args.file_path)}`;
+		case "grep":
+			return `grep ${short(args.pattern)}`;
+		case "find":
+			return `find ${short(args.pattern)}`;
+		case "ls":
+			return `ls ${short(args.path)}`;
+		default:
+			return `${name}`;
+	}
+}
+
+/** Run an array of items through `fn` with a bounded concurrency pool. */
+export async function mapWithConcurrencyLimit<TIn, TOut>(
+	items: TIn[],
+	concurrency: number,
+	fn: (item: TIn, index: number) => Promise<TOut>,
+): Promise<TOut[]> {
+	if (items.length === 0) return [];
+	const limit = Math.max(1, Math.min(concurrency, items.length));
+	const results: TOut[] = new Array(items.length);
+	let nextIndex = 0;
+	const workers = new Array(limit).fill(null).map(async () => {
+		while (true) {
+			const current = nextIndex++;
+			if (current >= items.length) return;
+			results[current] = await fn(items[current], current);
+		}
+	});
+	await Promise.all(workers);
+	return results;
+}

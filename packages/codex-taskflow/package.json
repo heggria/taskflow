@@ -1,0 +1,36 @@
+{
+  "name": "codex-taskflow",
+  "version": "0.0.28",
+  "description": "Run pi-taskflow on OpenAI Codex: a Codex subagent runner plus an MCP server that exposes taskflow_* tools to Codex users.",
+  "keywords": [
+    "codex",
+    "codex-cli",
+    "mcp",
+    "taskflow",
+    "orchestration",
+    "subagents",
+    "workflow"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/pi-taskflow#readme",
+  "bugs": {
+    "url": "https://github.com/heggria/pi-taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/pi-taskflow.git",
+    "directory": "packages/codex-taskflow"
+  },
+  "type": "module",
+  "bin": {
+    "codex-taskflow-mcp": "./src/mcp/bin.ts"
+  },
+  "files": ["src"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "taskflow-core": "0.0.28"
+  }
+}
