@@ -14,7 +14,7 @@ import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 // Phase types
 // ---------------------------------------------------------------------------
 
-const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament"] as const;
+const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script"] as const;
 type PhaseType = (typeof PHASE_TYPES)[number];
 
 /** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
@@ -48,7 +48,7 @@ export type CacheScope = (typeof CACHE_SCOPES)[number];
 /** Allowed fingerprint entry prefixes. `glob!:` = content-hash variant of `glob:`. */
 const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
 /** Phase types that must NOT be cached across runs (a fresh result is required each run). */
-const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament"] as const;
+const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script"] as const;
 
 const ParallelTaskSchema = Type.Object(
 	{
@@ -143,6 +143,26 @@ const PhaseSchema = Type.Object(
 		with: Type.Optional(
 			Type.Record(Type.String(), Type.Unknown(), {
 				description: "[flow] Args passed to the sub-flow (string values support interpolation)",
+			}),
+		),
+
+		// script — zero-token shell command
+		run: Type.Optional(
+			Type.Union([Type.String(), Type.Array(Type.String())], {
+				description:
+					"[script] Shell command. String form is passed to shell (no interpolation — use array form or 'input' for dynamic values). Array form is execvp-style direct spawn (supports {steps.X}/{args.X} interpolation, safe from injection).",
+			}),
+		),
+		input: Type.Optional(
+			Type.String({
+				description:
+					"[script] Text piped to the command's stdin. Supports interpolation. If omitted, stdin is closed.",
+			}),
+		),
+		timeout: Type.Optional(
+			Type.Number({
+				description:
+					"[script] Max execution time in milliseconds (default 60000). Must be >= 1000 and <= 300000.",
 			}),
 		),
 
@@ -599,6 +619,23 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (p.mode && !TOURNAMENT_MODES.includes(p.mode as TournamentMode)) {
 				errors.push(`Phase '${p.id}' (tournament): unknown mode '${p.mode}'`);
 			}
+		}
+		if (type === "script") {
+			if (!p.run) errors.push(`Phase '${p.id}' (script) requires 'run' (the shell command)`);
+			if (Array.isArray(p.run) && (p.run.length === 0 || !p.run[0]))
+				errors.push(`Phase '${p.id}' (script): 'run' array must be non-empty with a valid first element`);
+			if (typeof p.run === "string" && /\{[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\}/.test(p.run))
+				errors.push(`Phase '${p.id}' (script): string 'run' must not contain interpolation placeholders (use array form or pipe through 'input')`);
+			if (p.retry) errors.push(`Phase '${p.id}' (script): 'retry' is not supported for script phases`);
+			if (p.output === "json")
+				errors.push(`Phase '${p.id}' (script): 'output:"json"' is not supported for script phases`);
+			if (p.timeout !== undefined && (typeof p.timeout !== "number" || p.timeout < 1000 || p.timeout > 300000))
+				errors.push(`Phase '${p.id}' (script): 'timeout' must be a number between 1000 and 300000 ms`);
+		}
+		if (type !== "script") {
+			if (p.run !== undefined) errors.push(`Phase '${p.id}' (${type}): 'run' is only valid for script phases`);
+			if (p.input !== undefined) errors.push(`Phase '${p.id}' (${type}): 'input' is only valid for script phases`);
+			if (p.timeout !== undefined) errors.push(`Phase '${p.id}' (${type}): 'timeout' is only valid for script phases`);
 		}
 		if (p.retry) {
 			if (typeof p.retry.max !== "number" || p.retry.max < 0) {
