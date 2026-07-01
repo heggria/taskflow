@@ -16,13 +16,13 @@
 <p align="center">
   <a href="./README.md">English</a> ·
   <b>简体中文</b> ·
-  <a href="./README.hi.md">हिन्दी</a> ·
-  <a href="./README.es.md">Español</a> ·
-  <a href="./README.ar.md">العربية</a>
+  <a href="./docs/i18n/README.hi.md">हिन्दी</a> ·
+  <a href="./docs/i18n/README.es.md">Español</a> ·
+  <a href="./docs/i18n/README.ar.md">العربية</a>
   <!-- 其余翻译版本文档创建后可添加链接:
-  · <a href="./README.bn.md">বাংলা</a>
-  · <a href="./README.pt.md">Português</a>
-  · <a href="./README.ru.md">Русский</a>
+  · <a href="./docs/i18n/README.bn.md">বাংলা</a>
+  · <a href="./docs/i18n/README.pt.md">Português</a>
+  · <a href="./docs/i18n/README.ru.md">Русский</a>
   -->
 </p>
 
@@ -113,7 +113,7 @@ codex plugin add taskflow@taskflow
 
 ## 与其他 Pi 扩展的对比
 
-Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在各自领域都很出色。以下是一份诚实的定位图（已对照每个包截至 2026 年 6 月的最新 npm 发布版核实）。完整的对比——每个包的优缺点——请参见 [`PI-ECOSYSTEM.md`](./PI-ECOSYSTEM.md)。更广泛的非 Pi 生态对比（LangGraph、Temporal、CrewAI、Mastra……）请参见 [`COMPETITORS.md`](./COMPETITORS.md)。
+Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在各自领域都很出色。以下是一份诚实的定位图（已对照每个包截至 2026 年 6 月的最新 npm 发布版核实）。完整的对比——每个包的优缺点——请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。更广泛的非 Pi 生态对比（LangGraph、Temporal、CrewAI、Mastra……）请参见 [`COMPETITORS.md`](./docs/internal/COMPETITORS.md)。
 
 | 扩展 | 模型 | 自定义 DSL | DAG | 动态并发分发 | 跨会话恢复 | 质量门控 | 人工审批 | 保存为命令 | 零依赖 |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -128,7 +128,7 @@ Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在
 | [`pi-pipeline`](https://www.npmjs.com/package/pi-pipeline) | 固定 SPEC→PLAN→TASKS→VERIFY | ✕ | 固定 | ✕ | 会话内规划 | ✓ | clarify | ✕ | ✕ (2) |
 | [`pi-agent-flow`](https://www.npmjs.com/package/pi-agent-flow) | 一次性并行专业 `fork` | 是 | ✕ | ✕ | – | ✕ | ✕ | – | ✕ (2) |
 
-*（20 多个扩展的代表性切片——完整列表及 `@0xkobold/pi-orchestration`、`@melihmucuk/pi-crew`、`@mediadatafusion/pi-workflow-suite`、`gentle-pi`、`@dreki-gg/pi-subagent` 等请参见 [`PI-ECOSYSTEM.md`](./PI-ECOSYSTEM.md)。）*
+*（20 多个扩展的代表性切片——完整列表及 `@0xkobold/pi-orchestration`、`@melihmucuk/pi-crew`、`@mediadatafusion/pi-workflow-suite`、`gentle-pi`、`@dreki-gg/pi-subagent` 等请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。）*
 
 **如何选择：**
 
