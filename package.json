@@ -20,7 +20,8 @@
     "test:pi": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/pi-taskflow/test/*.test.ts'",
     "test:codex": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/codex-taskflow/test/*.test.ts'",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
-    "test:e2e-codex-mcp": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts"
+    "test:e2e-codex-mcp": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts",
+    "test:e2e-codex-mcp-full": "npm run build -w codex-taskflow && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.78.0",
