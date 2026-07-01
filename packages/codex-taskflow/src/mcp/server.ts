@@ -300,13 +300,25 @@ export function makeToolHandlers(cwd: string): Record<string, (args: Record<stri
 
 		taskflow_compile: async (args) => {
 			const def = resolveFlow(cwd, args);
-			// Merge structural validation into the compile report. compileTaskflow's
-			// own verification.ok is true even for a structurally-invalid flow (it
-			// normalizes a missing `phases` to []), so a validate-clean check is what
-			// stops a false ✓ PASS. We still render the diagram + outline so an invalid
-			// flow can be inspected visually; renderFlowSvg is total (truncate coerces
-			// non-string fields), so it won't throw on malformed input.
 			const val = validateTaskflow(def);
+			// compileTaskflow / verifyTaskflow / renderFlowSvg all assume phases is an
+			// array of objects that each have a string id (they iterate it and index
+			// id.replace(...)). A hard-malformed def (non-array phases, a phase missing
+			// its id) would throw, so when the shape isn't renderable we return the
+			// structured validation errors as text instead of rendering.
+			const phases = (def as { phases?: unknown }).phases;
+			const renderable =
+				Array.isArray(phases) && phases.every((p) => p != null && typeof (p as { id?: unknown }).id === "string");
+			if (!renderable) {
+				const { errorCount, warningCount, text } = issueBlocks([], val.errors, val.warnings);
+				const caption = `${def.name ?? "taskflow"} — ${count(errorCount, "error")} · ${count(warningCount, "warning")} · ✗ FAIL`;
+				return textContent(`${caption}${text}`, true);
+			}
+			// Merge structural validation into the compile report. compileTaskflow's
+			// own verification.ok is true even for a structurally-invalid (but
+			// renderable) flow, so a validate-clean check is what stops a false ✓ PASS.
+			// We still render the diagram + outline so such a flow can be inspected
+			// visually; truncate coerces non-string fields so the renderer won't throw.
 			const result = compileTaskflow(def);
 			const v = result.verification;
 			const { errorCount, warningCount, text } = issueBlocks(v.issues, val.errors, val.warnings);

@@ -120,12 +120,13 @@ function detectDeadEnds(phases: Phase[], succ: Map<string, string[]>): Verificat
 function detectUnreachable(phases: Phase[], succ: Map<string, string[]>): VerificationIssue[] {
 	const issues: VerificationIssue[] = [];
 
-	// Build undirected adjacency (dependsOn edges are bidirectional for
-	// connectivity analysis).
+	// Build undirected adjacency (dependency edges are bidirectional for
+	// connectivity analysis). dependenciesOf = dependsOn ∪ from, so a reduce's
+	// `from`-only upstream stays connected and isn't falsely unreachable.
 	const adj = new Map<string, Set<string>>();
 	for (const p of phases) adj.set(p.id, new Set());
 	for (const p of phases) {
-		for (const d of p.dependsOn ?? []) {
+		for (const d of dependenciesOf(p)) {
 			if (!adj.has(d)) continue; // ref to non-existent phase (schema catches)
 			adj.get(p.id)!.add(d);
 			adj.get(d)!.add(p.id);

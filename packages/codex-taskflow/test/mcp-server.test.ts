@@ -230,6 +230,26 @@ test("mcp: taskflow_compile reports a non-string map `over` as FAIL without thro
 	assert.match(text, /✗ FAIL/);
 });
 
+test("mcp: taskflow_compile handles hard-malformed defs without throwing", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	// Non-array phases and a phase missing its id both crash the compiler/renderer
+	// if they reach it; the handler must short-circuit to a structured FAIL.
+	for (const define of [
+		{ name: "x", phases: {} } as unknown,
+		{ name: "x", phases: [{ type: "agent", task: "t" }] } as unknown,
+	]) {
+		const res = (await tools.taskflow_compile({ define })) as {
+			content: { type: string; text?: string }[];
+			isError: boolean;
+		};
+		assert.equal(res.isError, true);
+		const text = res.content.find((c) => c.type === "text")?.text ?? "";
+		assert.match(text, /✗ FAIL/);
+		// No SVG image for an unrenderable flow.
+		assert.ok(!res.content.some((c) => c.type === "image"), "no diagram for an unrenderable flow");
+	}
+});
+
 test("mcp: taskflow_show returns raw JSON with no code fence", async () => {
 	const tools = makeToolHandlers(process.cwd());
 	const res = (await tools.taskflow_show({ name: "definitely-not-a-real-saved-flow" })) as {

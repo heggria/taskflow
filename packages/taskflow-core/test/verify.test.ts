@@ -60,6 +60,22 @@ test("verify: reduce `from` counts as a real edge — upstream isn't terminal", 
 	assert.equal(unreachable.length, 0, "sum is reachable via its `from` edge");
 });
 
+test("verify: reduce `from` keeps upstream connected in a 3-phase chain", () => {
+	// scan -> reduce(from) -> ship. The connectivity walk (detectUnreachable) must
+	// also follow `from`, or `scan` is reported unreachable/disconnected even
+	// though it feeds the reduce that feeds the final phase.
+	const flow = vf([
+		agent("scan"),
+		{ id: "sum", type: "reduce", from: ["scan"], task: "summarize" } as Phase,
+		agent("ship", ["sum"], { final: true }),
+	]);
+	const r = verifyTaskflow(flow);
+	const unreachable = r.issues.filter((i) => i.category === "unreachable");
+	assert.equal(unreachable.length, 0, "scan is connected via its reduce `from` edge");
+	const dead = r.issues.filter((i) => i.category === "dead-end");
+	assert.equal(dead.length, 0, "no dead-ends: scan->sum->ship all feed forward");
+});
+
 // ---------------------------------------------------------------------------
 // Unreachable detection
 // ---------------------------------------------------------------------------
