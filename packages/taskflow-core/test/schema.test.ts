@@ -395,3 +395,21 @@ test("validateTaskflow: phase id with underscores gets interpolation message", (
 	const idError = r.errors.find(e => e.includes("my_phase") && e.includes("interpolation"));
 	assert.ok(idError, `expected interpolation message in error, got: ${r.errors}`);
 });
+
+test("validateTaskflow: non-array array-fields error instead of throwing", () => {
+	// dependsOn/from/branches/eval/context are iterated with for..of downstream;
+	// a non-array value must yield a structured error, never a TypeError.
+	for (const key of ["dependsOn", "from", "branches", "eval", "context"]) {
+		const phase: Record<string, unknown> = { id: "a", type: "agent", task: "t", [key]: 1 };
+		let r: ReturnType<typeof validateTaskflow>;
+		assert.doesNotThrow(() => {
+			r = validateTaskflow({ name: "x", phases: [phase] });
+		}, `${key} non-array must not throw`);
+		r = validateTaskflow({ name: "x", phases: [phase] });
+		assert.equal(r.ok, false, `${key} non-array is invalid`);
+		assert.ok(
+			r.errors.some((e) => e.includes(`'${key}'`) && e.includes("must be an array")),
+			`expected an array-type error for ${key}, got: ${r.errors}`,
+		);
+	}
+});

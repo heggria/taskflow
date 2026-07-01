@@ -534,6 +534,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (ids.has(p.id)) errors.push(`Duplicate phase id: ${p.id}`);
 		ids.add(p.id);
 
+		// Array-shaped fields must actually be arrays. Several passes below (and
+		// verify/compile/collectRefs downstream) iterate these; a non-array is
+		// reported as a structured error here. The iteration sites use asArray() so
+		// a bad value degrades to [] instead of throwing "not iterable".
+		for (const key of ["dependsOn", "from", "branches", "eval", "context"] as const) {
+			const v = (p as Record<string, unknown>)[key];
+			if (v !== undefined && !Array.isArray(v)) {
+				errors.push(`Phase '${p.id}': '${key}' must be an array, got ${typeof v}`);
+			}
+		}
+
 		// When a phase opts into the Shared Context Tree, its id becomes a filesystem
 		// node id; restrict the charset so two ids can't sanitize to the same node
 		// (which would silently merge their blackboards). Non-sharing phases are
@@ -662,10 +673,10 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	// dependsOn / from references must exist
 	for (const p of flow.phases) {
 		if (!p?.id) continue;
-		for (const dep of p.dependsOn ?? []) {
+		for (const dep of asArray<string>(p.dependsOn)) {
 			if (!ids.has(dep)) errors.push(`Phase '${p.id}': dependsOn unknown phase '${dep}'`);
 		}
-		for (const f of p.from ?? []) {
+		for (const f of asArray<string>(p.from)) {
 			if (!ids.has(f)) errors.push(`Phase '${p.id}': from unknown phase '${f}'`);
 		}
 	}
@@ -718,7 +729,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				result.add(id);
 				const dep = idToPhase.get(id);
 				if (dep) {
-					for (const d of [...(dep.dependsOn ?? []), ...(dep.from ?? [])]) {
+					for (const d of [...asArray<string>(dep.dependsOn), ...asArray<string>(dep.from)]) {
 						if (!result.has(d)) queue.push(d);
 					}
 				}
@@ -806,10 +817,10 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.over);
 	scan(phase.when);
 	scan(phase.until);
-	for (const e of phase.eval ?? []) scan(e);
-	for (const b of phase.branches ?? []) scan(b.task);
+	for (const e of asArray<string>(phase.eval)) scan(e);
+	for (const b of asArray<{ task?: string }>(phase.branches)) scan(b.task);
 	for (const v of Object.values(phase.with ?? {})) if (typeof v === "string") scan(v);
-	for (const c of phase.context ?? []) scan(c);
+	for (const c of asArray<string>(phase.context)) scan(c);
 	return { steps: Array.from(steps), args: Array.from(args) };
 }
 
@@ -859,9 +870,16 @@ function detectCycle(phases: Phase[]): string[] | null {
 	return null;
 }
 
+/** Coerce a possibly-non-array field to an array so iteration never throws
+ *  "not iterable". validateTaskflow reports the non-array as a structured error;
+ *  every for..of over an array-shaped phase field routes through here. */
+export function asArray<T>(v: unknown): T[] {
+	return Array.isArray(v) ? (v as T[]) : [];
+}
+
 /** Effective dependency ids of a phase (dependsOn ∪ from). */
 export function dependenciesOf(phase: Phase): string[] {
-	const set = new Set<string>([...(phase.dependsOn ?? []), ...(phase.from ?? [])]);
+	const set = new Set<string>([...asArray<string>(phase.dependsOn), ...asArray<string>(phase.from)]);
 	return Array.from(set);
 }
 

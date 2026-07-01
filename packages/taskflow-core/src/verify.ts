@@ -7,7 +7,7 @@
  */
 
 import type { Phase } from "./schema.ts";
-import { dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS } from "./schema.ts";
+import { asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS } from "./schema.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -303,7 +303,7 @@ function detectConcurrencyWarnings(flow: VerifiableFlow, _succ: Map<string, stri
 
 	// Self-dependency
 	for (const p of flow.phases) {
-		if ((p.dependsOn ?? []).includes(p.id)) {
+		if (asArray<string>(p.dependsOn).includes(p.id)) {
 			issues.push({
 				phaseId: p.id,
 				message: `Phase '${p.id}' depends on itself — remove self-reference from 'dependsOn'.`,
@@ -323,7 +323,7 @@ function detectGuardContradictions(phases: Phase[]): VerificationIssue[] {
 	const groups = new Map<string, Phase[]>();
 	for (const p of phases) {
 		if (!p.when) continue;
-		const key = (p.dependsOn ?? []).sort().join(",");
+		const key = asArray<string>(p.dependsOn).slice().sort().join(",");
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(p);
 	}

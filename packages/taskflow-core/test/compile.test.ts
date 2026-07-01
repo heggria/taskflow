@@ -42,6 +42,29 @@ test("compile: dangling dependsOn produces no edge", () => {
 	assert.doesNotMatch(r.mermaid, /ghost --> a/);
 });
 
+test("compile: reduce `from` renders as an edge (parity with runtime + verify)", () => {
+	// `sum` depends on `scan` only via reduce `from`. The Mermaid diagram must draw
+	// that edge — dependenciesOf = dependsOn ∪ from, matching runtime/verify/SVG.
+	const r = compileTaskflow(
+		flow([
+			agent("scan"),
+			{ id: "sum", type: "reduce", from: ["scan"], task: "merge", final: true } as Phase,
+		]),
+	);
+	assert.match(r.mermaid, /scan --> sum/);
+});
+
+test("compile: a dep in both dependsOn and from is drawn once", () => {
+	const r = compileTaskflow(
+		flow([
+			agent("scan"),
+			{ id: "sum", type: "reduce", from: ["scan"], dependsOn: ["scan"], task: "merge", final: true } as Phase,
+		]),
+	);
+	const edges = r.mermaid.split("\n").filter((l) => /scan\s*-.?->\s*sum/.test(l));
+	assert.equal(edges.length, 1, "no double edge when a dep is in both dependsOn and from");
+});
+
 // ---------------------------------------------------------------------------
 // Per-type shapes
 // ---------------------------------------------------------------------------

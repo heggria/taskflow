@@ -16,6 +16,7 @@
 
 import type { Phase, Taskflow } from "./schema.ts";
 import {
+	asArray,
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	TOURNAMENT_DEFAULT_VARIANTS,
 } from "./schema.ts";
@@ -72,7 +73,7 @@ function buildNodeIds(phases: Phase[]): Map<string, string> {
 		ordered.push(p.id);
 	}
 	for (const p of phases) {
-		for (const d of p.dependsOn ?? []) {
+		for (const d of asArray<string>(p.dependsOn)) {
 			if (!seen.has(d)) {
 				seen.add(d);
 				ordered.push(d);
@@ -214,13 +215,14 @@ function nodeShape(p: Phase, idMap: Map<string, string>): string {
 // Edge rendering
 // ---------------------------------------------------------------------------
 
-/** Build the directed edges from `dependsOn`. A `when` guard becomes an edge
- *  label; a `join: "any"` dependency is drawn dotted (races, not waits-all). */
+/** Build the directed edges. `dependsOn` edges carry `when`-guard labels and
+ *  dotted `join: "any"` races; `reduce.from` edges are plain aggregation edges
+ *  (same set the runtime + verifier use via dependenciesOf = dependsOn ∪ from). */
 function edges(phases: Phase[], idMap: Map<string, string>): string[] {
 	const known = new Set(phases.map((p) => p.id));
 	const out: string[] = [];
 	for (const p of phases) {
-		const deps = p.dependsOn ?? [];
+		const deps = asArray<string>(p.dependsOn);
 		for (const d of deps) {
 			if (!known.has(d)) continue; // dangling ref — schema/verify reports it
 			const from = idMap.get(d) ?? d;
@@ -230,6 +232,15 @@ function edges(phases: Phase[], idMap: Map<string, string>): string[] {
 			// race semantics are visible.
 			const arrow = p.join === "any" ? "-.->" : "-->";
 			out.push(`${from} ${arrow}${guard} ${to}`);
+		}
+		// reduce `from`: real dependency edges the runtime waits on. Skip any that
+		// are also in dependsOn (already drawn above) to avoid a double edge.
+		const dependsSet = new Set(deps);
+		for (const d of asArray<string>(p.from)) {
+			if (!known.has(d) || dependsSet.has(d)) continue;
+			const from = idMap.get(d) ?? d;
+			const to = idMap.get(p.id) ?? p.id;
+			out.push(`${from} --> ${to}`);
 		}
 	}
 	return out;
