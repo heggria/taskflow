@@ -17,7 +17,7 @@ In Codex you drive Taskflow through its **MCP tools**:
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
-| `taskflow_compile` | Render a flow as a Mermaid diagram + verification report — no execution. |
+| `taskflow_compile` | Render a flow's DAG as a diagram (an inline SVG image) + a verification report — no execution. |
 
 ## When to use
 

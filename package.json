@@ -5,7 +5,7 @@
   "description": "Monorepo for taskflow-core, pi-taskflow, and codex-taskflow.",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "workspaces": [
     "packages/taskflow-core",

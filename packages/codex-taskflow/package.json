@@ -24,7 +24,7 @@
   },
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.19.0"
   },
   "main": "./dist/codex-runner.js",
   "types": "./dist/codex-runner.d.ts",

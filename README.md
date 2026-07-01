@@ -84,7 +84,7 @@ Here's the wall you hit with raw subagents: you describe a multi-step plan in pr
 | **Composition** | ✗ | **`flow` phases run saved *or runtime-generated* sub-flows** |
 | **Iterative loops** | ✗ | **`loop` phases — repeat until condition, convergence, or cap** |
 | **Competitive selection** | ✗ | **`tournament` phases — N variants + judge** |
-| **Live progress** | opaque while running | **live DAG render with timing + cost** |
+| **Live progress** | opaque while running | **live DAG render with timing + cost (Pi `/tf`); one streaming tool call on Codex** |
 | **Ergonomics** | inline JSON each time | **shorthand (`task`/`tasks`/`chain`) *or* DSL** |
 
 It doesn't replace the subagent tool. It gives your subagents a **graph**, a memory, and a name.
@@ -171,7 +171,7 @@ codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
 
-The plugin's MCP server runs via `npx` (`codex-taskflow`), so there's nothing else to install globally. Then just ask Codex to run a multi-phase or fan-out job and it calls the tools. See the [Codex guide](./docs/codex-mcp.md).
+The plugin's MCP server runs via `npx` (a version-pinned `codex-taskflow`), so there's nothing else to install globally and the plugin version binds the exact code that runs. Then just ask Codex to run a multi-phase or fan-out job and it calls the tools. See the [Codex guide](./docs/codex-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 

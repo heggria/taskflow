@@ -51,6 +51,19 @@ jobs:
               exit 1
             fi
           done
+          # The Codex plugin pins the exact MCP package version it launches
+          # (codex-taskflow@X.Y.Z in .mcp.json) so the plugin version binds the
+          # executed code. That pin must equal the release tag.
+          PLUGIN_V="v$(node -p "require('./packages/codex-taskflow/plugin/.codex-plugin/plugin.json').version")"
+          if [ "$PLUGIN_V" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match plugin.json version $PLUGIN_V"
+            exit 1
+          fi
+          PINNED="v$(node -p "require('./packages/codex-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('codex-taskflow@')).split('@')[1]")"
+          if [ "$PINNED" != "$TAG" ]; then
+            echo "::error::.mcp.json pins codex-taskflow@${PINNED#v} but tag is $TAG"
+            exit 1
+          fi
 
       - name: Publish workspaces to npmjs.com
         # Order matters: taskflow-core first (the adapters depend on it).
