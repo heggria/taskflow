@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-06
 **Campaign ID:** `dogfood-v0.0.8-2-mq1wq3kf-a079f2`
-**Run state:** `/Users/beta/work/work-projects/open-hailuo-video-web/.pi/taskflows/runs/dogfood-v0.0.8-2-mq1wq3kf-a079f2.json`
+**Run state:** `<workspace>/.pi/taskflows/runs/dogfood-v0.0.8-2-mq1wq3kf-a079f2.json`
 **Scope:** Post v0.0.7 audit + fix + verify; 10 extension modules (~3,617 LoC) + 7 test files
 **Total cost:** $0.34 (budget cap $10.00; used 3.4%)
 
@@ -294,7 +294,7 @@ Reviewer subagent 验证 triage 输出的:
 **建议:** 在 phase 启动前,若 `over` / `when` / `task` 引用了 `{steps.X.*}` 且 `X` 不在 `dependsOn` 中(或传递闭包),应将该 phase 推迟到 X 完成后才启动。当前 warning 只在 run start 时打印一次,容易被忽略。
 
 ### 12.3 subflow `cwd` propagation 边界 (MED)
-**现象:** `subflow-summary` phase 调用 `summarize-files` flow,该 flow 的 scout agent 拿到的是**调用方的 cwd**(`open-hailuo-video-web`),而不是 `args.dir` 指定的目标目录,导致 scout 误读项目结构。
+**现象:** `subflow-summary` phase 调用 `summarize-files` flow，该 flow 的 scout agent 拿到的是**调用方的 cwd**（一个外部项目），而不是 `args.dir` 指定的目标目录，导致 scout 误读项目结构。
 
 **建议:** subflow 应该有显式的 `cwd` 字段(从 `args.dir` 推导或单独传),或者 summarize-files 这样的 subflow 应该支持 `cwd` arg 覆盖。**这是一个**对 `flow` phase 的 DX 改进项,值得做。
 
