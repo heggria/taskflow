@@ -30,9 +30,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           registry-url: "https://registry.npmjs.org"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install --registry https://registry.npmjs.org/
+        run: npm ci --registry https://registry.npmjs.org/
 
       - name: Typecheck
         run: npm run typecheck
@@ -50,9 +51,10 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install --registry https://registry.npmjs.org/
+        run: npm ci --registry https://registry.npmjs.org/
 
       # server.ts imports `taskflow-core` by package name, which resolves to
       # node_modules/taskflow-core/dist — so the workspace dist must exist first.
@@ -75,9 +77,10 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+          cache: "npm"
 
       - name: Install dependencies
-        run: npm install --registry https://registry.npmjs.org/
+        run: npm ci --registry https://registry.npmjs.org/
 
       # Published packages ship compiled dist/. Proving the build emits on every
       # PR catches type-strip-only breakages that `tsc --noEmit` can miss.
