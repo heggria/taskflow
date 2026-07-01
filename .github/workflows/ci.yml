@@ -54,6 +54,11 @@ jobs:
       - name: Install dependencies
         run: npm install --registry https://registry.npmjs.org/
 
+      # server.ts imports `taskflow-core` by package name, which resolves to
+      # node_modules/taskflow-core/dist — so the workspace dist must exist first.
+      - name: Build all packages
+        run: npm run build
+
       # The codex MCP e2e spawns the real bin over stdio and drives the full
       # handshake + tool calls — no live model / no network. The other e2e
       # (test:e2e-codex) needs a live codex session, so it stays manual.
@@ -87,7 +92,7 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@v5
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
