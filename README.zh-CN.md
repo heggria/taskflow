@@ -434,7 +434,7 @@ Review the audit below. If any endpoint is missing auth, end with
 | `/tf run <name> [args]` | 运行已保存的流程（例如 `/tf run summarize-files dir=src`） |
 | `/tf show <name>` | 打印流程的定义 |
 | `/tf compile <name> [lr\|td]` | **将流程渲染为 Mermaid 图 + 验证报告** —— 0 token、无 LLM；可粘贴到 README/issue/PR |
-| `/tf runs` | 浏览近期运行历史（交互式 TUI） |
+| `/tf runs` | 浏览近期运行历史（交互式 TUI——有运行活跃时**实时自动刷新**） |
 | `/tf resume <runId>` | 继续一个暂停/失败的运行——已缓存的阶段自动跳过 |
 | `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
 | `/tf:<name> [args]` | 快捷方式——一键运行流程 |
