@@ -6,18 +6,88 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege by default; jobs opt into more if they need it.
+permissions:
+  contents: read
+
 jobs:
   test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install --registry https://registry.npmjs.org/
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+  e2e:
+    name: e2e (codex MCP, network-free)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
       - name: Install dependencies
         run: npm install --registry https://registry.npmjs.org/
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Unit tests
-        run: npm test
+
+      # The codex MCP e2e spawns the real bin over stdio and drives the full
+      # handshake + tool calls — no live model / no network. The other e2e
+      # (test:e2e-codex) needs a live codex session, so it stays manual.
+      - name: Codex MCP e2e
+        run: npm run test:e2e-codex-mcp
+
+  build:
+    name: build (dist emit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm install --registry https://registry.npmjs.org/
+
+      # Published packages ship compiled dist/. Proving the build emits on every
+      # PR catches type-strip-only breakages that `tsc --noEmit` can miss.
+      - name: Build all packages
+        run: npm run build
+
+  codeql:
+    name: CodeQL (JS/TS)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3

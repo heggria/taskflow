@@ -4,6 +4,9 @@
   "private": true,
   "description": "Monorepo for taskflow-core, pi-taskflow, and codex-taskflow.",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "workspaces": [
     "packages/taskflow-core",
     "packages/pi-taskflow",
