@@ -94,8 +94,12 @@ function xml(text: string): string {
 		.replace(/'/g, "&#39;");
 }
 
-function truncate(text: string, max = MAX_LABEL): string {
-	const t = text.replace(/\s+/g, " ").trim();
+function truncate(text: unknown, max = MAX_LABEL): string {
+	// Defensive: callers may pass a non-string field (e.g. a malformed `over` /
+	// `use` that is an array or object). Coerce so the renderer can never throw
+	// — the MCP tools validate first, but this keeps the pure renderer total.
+	const s = typeof text === "string" ? text : text == null ? "" : String(text);
+	const t = s.replace(/\s+/g, " ").trim();
 	return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 

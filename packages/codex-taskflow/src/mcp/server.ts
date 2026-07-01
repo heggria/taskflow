@@ -277,17 +277,15 @@ export function makeToolHandlers(cwd: string): Record<string, (args: Record<stri
 
 		taskflow_verify: async (args) => {
 			const def = resolveFlow(cwd, args);
-			// Structural validation FIRST — verifyTaskflow assumes a well-formed flow
-			// (it iterates flow.phases) and throws on malformed input like a missing
-			// `phases`. Return the structured errors instead of crashing.
 			const val = validateTaskflow(def);
-			if (!val.ok) {
-				const { errorCount, warningCount, text } = issueBlocks([], val.errors, val.warnings);
-				return textContent(`✗ verification FAILED — ${count(errorCount, "error")}, ${count(warningCount, "warning")}${text}`, true);
-			}
-			// verifyTaskflow adds deeper static-quality issues on top of the
-			// structural guarantees validateTaskflow just confirmed.
-			const result = verifyTaskflow(def as Parameters<typeof verifyTaskflow>[0]);
+			// verifyTaskflow iterates flow.phases and throws if it isn't an array
+			// (e.g. a missing `phases`). Only skip it in that unsafe case; otherwise
+			// run it so its static-quality warnings (e.g. terminal-not-final) still
+			// surface alongside validateTaskflow's structural errors.
+			const phasesIterable = Array.isArray((def as { phases?: unknown }).phases);
+			const result = phasesIterable
+				? verifyTaskflow(def as Parameters<typeof verifyTaskflow>[0])
+				: { ok: false, issues: [] as ReturnType<typeof verifyTaskflow>["issues"] };
 			const { errorCount, warningCount, text } = issueBlocks(result.issues, val.errors, val.warnings);
 			const passed = val.ok && result.ok && errorCount === 0;
 			// Conclusion-first (the plaintext box is short + scrolls): verdict + counts
@@ -302,33 +300,30 @@ export function makeToolHandlers(cwd: string): Record<string, (args: Record<stri
 
 		taskflow_compile: async (args) => {
 			const def = resolveFlow(cwd, args);
-			// Validate FIRST: compileTaskflow / renderFlowSvg normalize a missing
-			// `phases` to [] (false-passing an invalid flow) and crash on a non-string
-			// map `over` (truncate assumes a string). Reject structurally-bad flows
-			// with their errors instead of rendering a misleading or broken diagram.
+			// Merge structural validation into the compile report. compileTaskflow's
+			// own verification.ok is true even for a structurally-invalid flow (it
+			// normalizes a missing `phases` to []), so a validate-clean check is what
+			// stops a false ✓ PASS. We still render the diagram + outline so an invalid
+			// flow can be inspected visually; renderFlowSvg is total (truncate coerces
+			// non-string fields), so it won't throw on malformed input.
 			const val = validateTaskflow(def);
-			if (!val.ok) {
-				const { errorCount, warningCount, text } = issueBlocks([], val.errors, val.warnings);
-				const caption = `${def.name ?? "taskflow"} — ${count(errorCount, "error")}, ${count(warningCount, "warning")} · ✗ FAIL`;
-				return textContent(`${caption}${text}`, true);
-			}
 			const result = compileTaskflow(def);
 			const v = result.verification;
-			const errs = v.issues.filter((i) => i.severity === "error").length;
-			const warns = v.issues.filter((i) => i.severity === "warning").length;
-			const status = v.ok ? "✓ PASS" : "✗ FAIL";
-			const caption = `${def.name ?? "taskflow"} — ${count(def.phases?.length ?? 0, "phase")} · ${count(errs, "error")} · ${count(warns, "warning")} · ${status}`;
+			const { errorCount, warningCount, text } = issueBlocks(v.issues, val.errors, val.warnings);
+			const passed = val.ok && v.ok && errorCount === 0;
+			const status = passed ? "✓ PASS" : "✗ FAIL";
+			const caption = `${def.name ?? "taskflow"} — ${count(def.phases?.length ?? 0, "phase")} · ${count(errorCount, "error")} · ${count(warningCount, "warning")} · ${status}`;
 			// A text outline that stands on its own — the CLI/TUI can't render images
 			// (it shows a bare `<image content>` placeholder), and a vision-less model
 			// would otherwise see nothing. Includes the layered DAG + deduped issues.
 			const outline = renderFlowOutline(def, v);
-			const textReport = `${caption}\n\n${outline}${issueBlocks(v.issues).text}`;
+			const textReport = `${caption}\n\n${outline}${text}`;
 			// Desktop app: the SVG image renders as a real diagram; the outline rides
 			// along as its caption/fallback. Oversized graphs skip the image and rely
 			// on the text report alone.
 			const svg = renderFlowSvg(def, v);
-			if (svg) return imageContent(svgToBase64(svg), "image/svg+xml", [textReport], !v.ok);
-			return textContent(textReport, !v.ok);
+			if (svg) return imageContent(svgToBase64(svg), "image/svg+xml", [textReport], !passed);
+			return textContent(textReport, !passed);
 		},
 	};
 }

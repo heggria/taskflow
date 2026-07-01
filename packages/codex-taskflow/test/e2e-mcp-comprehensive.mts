@@ -209,6 +209,8 @@ assert.match(huge.result.content[0].text, /Layer 1:/);
 ok("taskflow_compile oversized → text-only fallback with outline");
 
 // === 6. input safety: XML/quote injection can't break the SVG =============
+// compile still renders a structurally-invalid flow (with a ✗ FAIL status) so it
+// can be debugged visually; escaping is what keeps that render safe.
 const nastyFlow = {
 	name: 'x"><script>alert(1)</script>',
 	phases: [

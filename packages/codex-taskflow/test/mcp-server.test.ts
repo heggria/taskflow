@@ -216,11 +216,9 @@ test("mcp: taskflow_compile rejects an empty flow instead of false-passing", asy
 	assert.equal(res.isError, true);
 	const text = res.content.find((c) => c.type === "text")?.text ?? "";
 	assert.match(text, /✗ FAIL/);
-	// Must NOT emit an SVG image for a structurally-invalid flow.
-	assert.ok(!res.content.some((c) => c.type === "image"), "no diagram for an invalid flow");
 });
 
-test("mcp: taskflow_compile rejects a non-string map `over` without throwing", async () => {
+test("mcp: taskflow_compile reports a non-string map `over` as FAIL without throwing", async () => {
 	const tools = makeToolHandlers(process.cwd());
 	const define = { name: "m", phases: [{ id: "a", type: "map", over: ["x"], task: "t" }] };
 	const res = (await tools.taskflow_compile({ define })) as {
