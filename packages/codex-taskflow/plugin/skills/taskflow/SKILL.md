@@ -26,8 +26,11 @@ In Codex you drive Taskflow through its **MCP tools**:
 - You want **cross-checked / adversarial review** before reporting.
 - You want a **repeatable** orchestration you can save and rerun by name.
 
-For a single quick delegation, use the **shorthand** `taskflow_run` forms below —
-you still get progress, persistence, resume, and save.
+For a single quick delegation, use the **shorthand** `taskflow_run` forms below
+— you still get the DAG runtime (layered concurrency, retries) and context
+isolation (only the final output returns). To rerun a flow by `name`, it must
+already be saved on disk and discoverable from the working directory
+(`taskflow_list` shows what's available).
 
 ## Shorthand (non-DAG)
 

@@ -5,14 +5,14 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ## [Unreleased]
 
 ### Added
-- **Codex MCP output renders as an inline SVG diagram.** `taskflow_compile` (and
-  the run/verify status surfaces) now emit a hand-rendered SVG of the flow DAG so
-  the Codex desktop app shows a real diagram instead of a bare `<image content>`
-  placeholder; a layered text outline rides along as the caption/fallback for the
-  CLI/TUI and vision-less models. Oversized graphs skip the image and fall back
-  to text. Injection-safe: all rendered text is XML-escaped and the renderer is
-  total (never throws on malformed input). Isolated to the `codex-taskflow`
-  adapter — core's Mermaid `compile` artifact is unchanged.
+- **Codex MCP `taskflow_compile` renders an inline SVG diagram.** It now emits a
+  hand-rendered SVG of the flow DAG so the Codex desktop app shows a real diagram
+  instead of a bare `<image content>` placeholder; a layered text outline rides
+  along as the caption/fallback for the CLI/TUI and vision-less models. Oversized
+  graphs skip the image and fall back to text. Injection-safe: all rendered text
+  is XML-escaped and the renderer is total (never throws on malformed input).
+  Isolated to the `codex-taskflow` adapter — core's Mermaid `compile` artifact is
+  unchanged (`taskflow_run` / `taskflow_verify` return text only).
 
 ### Fixed
 - **A `map` phase with a literal-array `over` crashed the whole run** with
