@@ -84,6 +84,17 @@ test("verify: tolerates null / non-object phase elements without throwing", () =
 	assert.doesNotThrow(() => verifyTaskflow(vf(["nope" as unknown as Phase, agent("a", undefined, { final: true })])));
 });
 
+test("verify: non-string `when` doesn't crash guard-contradiction analysis", () => {
+	// detectGuardContradictions calls .match()/.includes() on `when`; a non-string
+	// value (validateTaskflow reports it) must be skipped, not throw.
+	const flow = vf([
+		agent("src"),
+		{ ...agent("a", ["src"]), when: 1 } as unknown as Phase,
+		{ ...agent("b", ["src"]), when: 2 } as unknown as Phase,
+	]);
+	assert.doesNotThrow(() => verifyTaskflow(flow));
+});
+
 // ---------------------------------------------------------------------------
 // Unreachable detection
 // ---------------------------------------------------------------------------

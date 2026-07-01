@@ -434,4 +434,7 @@ test("validateTaskflow: non-string id / null phase don't throw", () => {
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: ["nope"] }));
 	const r = validateTaskflow({ name: "x", phases: [null] });
 	assert.equal(r.ok, false, "a null phase is invalid");
+	const r2 = validateTaskflow({ name: "x", phases: [{ id: 1, type: "agent", task: "t" }] });
+	assert.equal(r2.ok, false, "a non-string id is invalid");
+	assert.ok(r2.errors.some((e) => e.includes("id must be a string")), `got: ${r2.errors}`);
 });

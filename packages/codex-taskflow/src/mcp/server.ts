@@ -330,10 +330,24 @@ export function makeToolHandlers(cwd: string): Record<string, (args: Record<stri
 			// would otherwise see nothing. Includes the layered DAG + deduped issues.
 			const outline = renderFlowOutline(def, v);
 			const textReport = `${caption}\n\n${outline}${text}`;
+			// Fold validation errors into the issue set the SVG colors by, so node
+			// coloring matches the text report (a phase with only a validation error
+			// still shows red). Validation messages start with `Phase '<id>':`.
+			const mergedVerification = {
+				...v,
+				ok: passed,
+				issues: [
+					...v.issues,
+					...val.errors.map((message) => {
+						const m = /^Phase '([^']+)'/.exec(message);
+						return { phaseId: m?.[1], message, severity: "error" as const, category: "ref-integrity" as const };
+					}),
+				],
+			};
 			// Desktop app: the SVG image renders as a real diagram; the outline rides
 			// along as its caption/fallback. Oversized graphs skip the image and rely
 			// on the text report alone.
-			const svg = renderFlowSvg(def, v);
+			const svg = renderFlowSvg(def, mergedVerification);
 			if (svg) return imageContent(svgToBase64(svg), "image/svg+xml", [textReport], !passed);
 			return textContent(textReport, !passed);
 		},

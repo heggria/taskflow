@@ -531,6 +531,10 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			errors.push("Each phase requires an 'id'");
 			continue;
 		}
+		if (typeof p.id !== "string") {
+			errors.push(`Phase id must be a string, got ${typeof p.id}`);
+			continue;
+		}
 		if (ids.has(p.id)) errors.push(`Duplicate phase id: ${p.id}`);
 		ids.add(p.id);
 

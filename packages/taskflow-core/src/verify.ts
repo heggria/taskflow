@@ -322,7 +322,7 @@ function detectGuardContradictions(phases: Phase[]): VerificationIssue[] {
 
 	const groups = new Map<string, Phase[]>();
 	for (const p of phases) {
-		if (!p.when) continue;
+		if (typeof p.when !== "string" || !p.when) continue;
 		const key = asArray<string>(p.dependsOn).slice().sort().join(",");
 		if (!groups.has(key)) groups.set(key, []);
 		groups.get(key)!.push(p);
