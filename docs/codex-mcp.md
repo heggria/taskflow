@@ -105,7 +105,41 @@ subagent a flow spawns is itself a `codex exec` process — no pi process needed
 | `taskflow_list` | List saved flows discoverable from the cwd. |
 | `taskflow_show` | Show a saved flow's definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
-| `taskflow_compile` | Render a flow as a Mermaid diagram + verification report. |
+| `taskflow_compile` | Render a flow's DAG as a **diagram** (an inline SVG image, shown by the desktop app) **plus a text outline** (shown by the CLI/TUI, which can't render images) + a compact status line. Very large graphs return the text outline alone. |
+
+## How output is rendered (Codex desktop app)
+
+The Codex desktop app renders an MCP tool result's `text` content blocks as a
+fixed **plaintext `<pre>` box**: no markdown parsing, no syntax highlighting,
+wrapped on whitespace, capped at ~192px tall with an inner scrollbar and
+labeled *plaintext*. Rich rendering (`structuredContent` / `_meta`) is reserved
+for Codex's first-party "Apps" server, so a third-party MCP server can't opt in.
+
+The taskflow tools are written for that box:
+
+- **Plain text, not markdown.** No ```` ``` ```` fences, no tables, no `###`
+  headings — they'd show as literal characters. `taskflow_show` returns raw JSON
+  (already monospaced), not a fenced block.
+- **Conclusion-first.** `taskflow_verify` puts the verdict + issue counts on
+  line 1 (`✗ verification FAILED — 5 errors, 4 warnings`), details below, so the
+  short box leads with what matters.
+- **Deduped issues.** N phases tripping the same rule collapse to one line with
+  a phase list (`… (5 phases: a, b, c, d +1 more)`) instead of N near-identical
+  lines. Counts stay honest (the raw total, not the collapsed line count).
+- **Diagrams as images, with a text fallback.** Codex's **desktop app** renders
+  an `image` block (`<img src="data:…">`), so `taskflow_compile` hand-renders
+  the DAG to a dependency-free **SVG** and returns it as an image — an actual
+  picture, not Mermaid source. Node color mirrors the static audit (red = error,
+  amber = warning, green border = final); a dotted edge is `join:any`. The
+  **CLI/TUI** can't render images (it prints a bare `<image content>`
+  placeholder), so the same result also carries a self-sufficient **text
+  outline** — the DAG grouped into topological layers, with deps, agents, `★`
+  final and issue markers — which the terminal shows and a vision-less model can
+  read. Oversized graphs skip the image and return the text outline alone.
+
+The portable Mermaid + markdown artifact still exists in core
+(`compileTaskflow`) for GitHub/PR use; the SVG is a codex-only presentation
+layer (`packages/codex-taskflow/src/mcp/svg.ts`).
 
 ## Use it
 

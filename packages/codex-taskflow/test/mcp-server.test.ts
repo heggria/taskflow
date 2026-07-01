@@ -152,3 +152,105 @@ test("mcp: makeToolHandlers exposes the five tools", () => {
 		["taskflow_compile", "taskflow_list", "taskflow_run", "taskflow_show", "taskflow_verify"],
 	);
 });
+
+// --- Codex-rendering ergonomics (see docs/codex-mcp.md) -------------------
+// Codex shows a `text` block as a fixed grey plaintext <pre> (no markdown, ~192px
+// tall). These pin the output shape that keeps that box readable.
+
+test("mcp: taskflow_verify is conclusion-first and dedupes same-rule hits", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	// Five underscore ids + four terminal-not-final phases: without dedupe this is
+	// ~9 near-identical lines (the exact screenshot ugliness).
+	const define = {
+		name: "code_review",
+		phases: [
+			{ id: "scope", type: "agent", agent: "scout", task: "scope" },
+			{ id: "logic_review", type: "agent", agent: "critic", task: "logic", dependsOn: ["scope"] },
+			{ id: "cross_end_review", type: "agent", agent: "critic", task: "cross", dependsOn: ["scope"] },
+			{ id: "security_review", type: "agent", agent: "critic", task: "sec", dependsOn: ["scope"] },
+			{ id: "test_review", type: "agent", agent: "critic", task: "test", dependsOn: ["scope"] },
+		],
+	};
+	const res = (await tools.taskflow_verify({ define })) as {
+		content: { text: string }[];
+		isError: boolean;
+	};
+	const text = res.content[0].text;
+	// Line 1 is the verdict + honest raw counts.
+	assert.match(text.split("\n")[0], /^✗ verification FAILED — \d+ errors?, \d+ warnings?$/);
+	assert.equal(res.isError, true);
+	// The underscore rule collapses to ONE line listing the phases, not four.
+	const underscoreLines = text.split("\n").filter((l) => l.includes("id uses underscores"));
+	assert.equal(underscoreLines.length, 1, "same-rule errors collapse to one line");
+	assert.match(underscoreLines[0], /\d+ phases:/);
+	// No markdown fences / headers leak into the plaintext box.
+	assert.ok(!text.includes("```"), "no code fences");
+	assert.ok(!text.includes("###"), "no markdown headings");
+});
+
+test("mcp: taskflow_verify passes cleanly with a single line for a good flow", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	const define = { name: "ok", phases: [{ id: "a", type: "agent", agent: "executor", task: "do", final: true }] };
+	const res = (await tools.taskflow_verify({ define })) as { content: { text: string }[]; isError: boolean };
+	assert.equal(res.content[0].text, "✓ verification PASSED");
+	assert.equal(res.isError, false);
+});
+
+test("mcp: taskflow_show returns raw JSON with no code fence", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	const res = (await tools.taskflow_show({ name: "definitely-not-a-real-saved-flow" })) as {
+		content: { text: string }[];
+		isError: boolean;
+	};
+	// Missing flow -> error text (exercises the handler without needing a saved flow).
+	assert.equal(res.isError, true);
+	assert.ok(!res.content[0].text.includes("```"));
+});
+
+test("mcp: taskflow_compile returns an SVG image block for a small flow", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	const define = {
+		name: "tiny",
+		phases: [
+			{ id: "a", type: "agent", agent: "executor", task: "one" },
+			{ id: "b", type: "agent", agent: "executor", task: "two", dependsOn: ["a"], final: true },
+		],
+	};
+	const res = (await tools.taskflow_compile({ define })) as {
+		content: { type: string; data?: string; mimeType?: string; text?: string }[];
+	};
+	const img = res.content.find((c) => c.type === "image");
+	assert.ok(img, "emits an image content block");
+	assert.equal(img!.mimeType, "image/svg+xml");
+	const svg = Buffer.from(img!.data!, "base64").toString("utf8");
+	assert.match(svg, /^<svg /);
+	assert.ok(svg.includes("</svg>"));
+	// A text block rides along so the CLI/TUI (which can't render images) and
+	// vision-less models still get the graph: caption + a layered DAG outline.
+	const text = res.content.find((c) => c.type === "text");
+	assert.ok(text, "emits a text fallback block alongside the image");
+	assert.match(text!.text!, /2 phases/);
+	assert.match(text!.text!, /Layer 1:/);
+	assert.match(text!.text!, /b ★/); // final marker in the outline
+	assert.match(text!.text!, /← a/); // dependency edge rendered as text
+});
+
+test("mcp: taskflow_compile falls back to text-only (with outline) for a huge flow", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	// Past the SVG legibility limit -> no image, but the text outline must remain.
+	const phases = Array.from({ length: 80 }, (_, i) => ({
+		id: `p${i}`,
+		type: "agent",
+		agent: "executor",
+		task: "x",
+		...(i ? { dependsOn: [`p${i - 1}`] } : {}),
+		...(i === 79 ? { final: true } : {}),
+	}));
+	const res = (await tools.taskflow_compile({ define: { name: "huge", phases } })) as {
+		content: { type: string; text?: string }[];
+	};
+	assert.ok(!res.content.some((c) => c.type === "image"), "no image for an oversized graph");
+	const text = res.content.find((c) => c.type === "text");
+	assert.match(text!.text!, /80 phases/);
+	assert.match(text!.text!, /Layer 1:/);
+});
