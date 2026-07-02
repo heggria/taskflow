@@ -6,10 +6,10 @@
 
 taskflow is a **declarative DAG orchestration runtime** for coding agents — it runs on the [Pi coding agent](https://pi.dev) and on [OpenAI Codex](https://github.com/openai/codex). It lets users define multi-phase workflows (fan-out, gate, loop, tournament, approval, sub-flow composition) as JSON DSL, executes them via isolated subagent processes, and returns only the final result — intermediate transcripts never enter the host context window.
 
-**Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)  
-**Runtime:** Node.js ≥ 22 (uses `fs.globSync`, `Atomics.wait`)  
-**Dependencies:** Zero runtime deps. The pi/codex adapters peer-depend on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; everything depends on `typebox`.  
-**Layout:** npm-workspaces monorepo of three published packages — `taskflow-core` (host-neutral engine), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), and `codex-taskflow` (Codex subagent runner + MCP server + a `plugin/` scaffold installable via `codex plugin add`).  
+**Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
+**Runtime:** Node.js ≥ 22 (uses `fs.globSync`, `Atomics.wait`)\
+**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the Codex adapter (`codex-taskflow`) depends only on `taskflow-core`. Everything depends on `typebox`.\
+**Layout:** npm-workspaces monorepo of three published packages — `taskflow-core` (host-neutral engine), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), and `codex-taskflow` (Codex subagent runner + MCP server + a `plugin/` scaffold installable via `codex plugin add`).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
 
 ## Architecture

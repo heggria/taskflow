@@ -180,7 +180,11 @@ function severityByPhase(issues: VerificationIssue[]): Map<string, "error" | "wa
  * URI). Returns `null` when the flow is too large to render legibly.
  */
 export function renderFlowSvg(flow: Taskflow, verification: VerificationResult): string | null {
-	const phases = flow.phases ?? [];
+	// Total renderer: tolerate a malformed non-array `phases` (raw JSON can bypass
+	// schema validation) by coercing to an empty list rather than throwing.
+	const phases = (Array.isArray(flow.phases) ? flow.phases : []).filter(
+		(p): p is (typeof flow.phases)[number] => !!p && typeof p === "object",
+	);
 	if (phases.length === 0 || phases.length > SVG_PHASE_LIMIT) return null;
 
 	const layers = topoLayers(phases);
@@ -324,7 +328,9 @@ function sevMark(sev: Map<string, "error" | "warning">, id: string): string {
  * of the graph. Deterministic; issue markers mirror the SVG overlay.
  */
 export function renderFlowOutline(flow: Taskflow, verification: VerificationResult): string {
-	const phases = flow.phases ?? [];
+	const phases = (Array.isArray(flow.phases) ? flow.phases : []).filter(
+		(p): p is (typeof flow.phases)[number] => !!p && typeof p === "object",
+	);
 	if (phases.length === 0) return "(empty flow — no phases)";
 
 	const sev = severityByPhase(verification.issues);

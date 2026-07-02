@@ -438,3 +438,17 @@ test("validateTaskflow: non-string id / null phase don't throw", () => {
 	assert.equal(r2.ok, false, "a non-string id is invalid");
 	assert.ok(r2.errors.some((e) => e.includes("id must be a string")), `got: ${r2.errors}`);
 });
+
+test("validateTaskflow: gate eval entries must be strings", () => {
+	// eval entries are interpolated + parsed at runtime (expr.indexOf); a non-string
+	// entry must be a structured error, not a runtime crash.
+	const r = validateTaskflow({ name: "x", phases: [{ id: "a", type: "gate", task: "t", eval: [1] }] });
+	assert.equal(r.ok, false, "non-string eval entry is invalid");
+	assert.ok(r.errors.some((e) => e.includes("eval[0]") && e.includes("must be a string")), `got: ${r.errors}`);
+	// A well-formed string eval stays valid.
+	const ok = validateTaskflow({
+		name: "x",
+		phases: [{ id: "a", type: "gate", task: "t", eval: ["{steps.a.output} contains PASS"] }],
+	});
+	assert.ok(ok.errors.every((e) => !e.includes("eval")), `string eval should be accepted, got: ${ok.errors}`);
+});

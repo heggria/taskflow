@@ -775,6 +775,12 @@ test("findProjectFlowsDir: stops at home dir (v0.0.8.1 boundary)", async () => {
 	//     walk-up must skip home and return null (not pick up `~/.pi/`).
 	// (2) when cwd is OUTSIDE home and walks past it, no error occurs.
 	const { findProjectFlowsDir } = await import("../src/store.ts");
+	// Hermetic: point $HOME at a throwaway dir so the walk-up's home boundary is a
+	// temp path we own — never the real home (which may be unwritable in CI, and
+	// which we should not pollute). os.homedir() honors $HOME on POSIX.
+	const realHome = process.env.HOME;
+	const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-taskflow-home-"));
+	process.env.HOME = fakeHome;
 	const home = os.homedir();
 
 	// (1) cwd under home, with no .pi anywhere up to home.
@@ -799,6 +805,9 @@ test("findProjectFlowsDir: stops at home dir (v0.0.8.1 boundary)", async () => {
 		assert.equal(r, null, "no .pi anywhere — should return null");
 	} finally {
 		fs.rmSync(outside, { recursive: true, force: true });
+		fs.rmSync(fakeHome, { recursive: true, force: true });
+		if (realHome === undefined) delete process.env.HOME;
+		else process.env.HOME = realHome;
 	}
 });
 

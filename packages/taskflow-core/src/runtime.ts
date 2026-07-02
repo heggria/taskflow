@@ -1048,6 +1048,12 @@ async function executePhaseInner(
 			const evalCtx = buildInterpolationContext(state, previousOutput, undefined, onRead);
 			let allPassed = true;
 			for (const check of phase.eval) {
+				// Defensive: a non-string check (validation reports it) must not crash the
+				// gate. Treat it as a failed check so the LLM gate runs (fail-safe).
+				if (typeof check !== "string") {
+					allPassed = false;
+					break;
+				}
 				let expr = check;
 				// Pre-process `contains` expressions: "{steps.x.output} contains PASS"
 				// Convert to: interpolate LHS, check RHS substring inclusion.

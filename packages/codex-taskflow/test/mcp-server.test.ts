@@ -232,11 +232,16 @@ test("mcp: taskflow_compile reports a non-string map `over` as FAIL without thro
 
 test("mcp: taskflow_compile handles hard-malformed defs without throwing", async () => {
 	const tools = makeToolHandlers(process.cwd());
-	// Non-array phases and a phase missing its id both crash the compiler/renderer
-	// if they reach it; the handler must short-circuit to a structured FAIL.
-	for (const define of [
-		{ name: "x", phases: {} } as unknown,
-		{ name: "x", phases: [{ type: "agent", task: "t" }] } as unknown,
+	// Every malformed def must short-circuit to a structured FAIL, never throw.
+	// `unrenderable` marks defs with no well-formed phase to draw (no SVG image);
+	// the rest are renderable-but-invalid (diagram shown with an error overlay).
+	for (const { define, unrenderable } of [
+		{ define: { name: "x", phases: {} } as unknown, unrenderable: true },
+		{ define: { name: "x", phases: [{ type: "agent", task: "t" }] } as unknown, unrenderable: true },
+		{ define: { name: "x", phases: [null] } as unknown, unrenderable: true },
+		{ define: { name: 1, phases: [{ id: "a", type: "agent", task: "t" }] } as unknown, unrenderable: false },
+		{ define: { name: "x", phases: [{ id: 1, type: "agent", task: "t" }] } as unknown, unrenderable: false },
+		{ define: { name: "x", phases: [{ id: "a", type: "gate", task: "t", eval: [1] }] } as unknown, unrenderable: false },
 	]) {
 		const res = (await tools.taskflow_compile({ define })) as {
 			content: { type: string; text?: string }[];
@@ -245,8 +250,9 @@ test("mcp: taskflow_compile handles hard-malformed defs without throwing", async
 		assert.equal(res.isError, true);
 		const text = res.content.find((c) => c.type === "text")?.text ?? "";
 		assert.match(text, /✗ FAIL/);
-		// No SVG image for an unrenderable flow.
-		assert.ok(!res.content.some((c) => c.type === "image"), "no diagram for an unrenderable flow");
+		if (unrenderable) {
+			assert.ok(!res.content.some((c) => c.type === "image"), "no diagram for an unrenderable flow");
+		}
 	}
 });
 

@@ -573,6 +573,14 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (type === "agent" || type === "gate") {
 			if (!p.task) errors.push(`Phase '${p.id}' (${type}) requires 'task'`);
 		}
+		if (type === "gate" && Array.isArray(p.eval)) {
+			// eval entries are interpolated + parsed at runtime (expr.indexOf/.slice);
+			// a non-string entry would crash the gate, so reject it up front.
+			p.eval.forEach((e, i) => {
+				if (typeof e !== "string")
+					errors.push(`Phase '${p.id}' (gate): eval[${i}] must be a string condition, got ${typeof e}`);
+			});
+		}
 		if (type === "map") {
 			if (!p.over) errors.push(`Phase '${p.id}' (map) requires 'over'`);
 			else if (typeof p.over !== "string")

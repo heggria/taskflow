@@ -123,9 +123,10 @@ function summarize(text: unknown, max = 48): string {
  *  neutralizes characters that start markdown constructs: backticks (code
  *  spans), brackets (links/images), angle brackets (raw HTML), and backslashes
  *  (escape sequences). */
-function mdInline(text: string | undefined): string {
-	if (!text) return "";
-	return text
+function mdInline(text: unknown): string {
+	if (text == null || text === "") return "";
+	const s = typeof text === "string" ? text : String(text);
+	return s
 		.replace(/\s+/g, " ")
 		.trim()
 		.replace(/\\/g, "\\\\")
@@ -273,7 +274,9 @@ function severityByPhase(issues: VerificationIssue[]): Map<string, "error" | "wa
 // ---------------------------------------------------------------------------
 
 function buildMermaid(flow: Taskflow, verification: VerificationResult, opts: CompileOptions): string {
-	const phases = flow.phases ?? [];
+	const phases = (Array.isArray(flow.phases) ? flow.phases : []).filter(
+		(p): p is (typeof flow.phases)[number] => !!p && typeof p === "object",
+	);
 	const dir = opts.direction ?? "TD";
 	const idMap = buildNodeIds(phases);
 	const sev = severityByPhase(verification.issues);
