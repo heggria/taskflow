@@ -7,7 +7,7 @@
 taskflow is a **declarative DAG orchestration runtime** for coding agents — it runs on the [Pi coding agent](https://pi.dev) and on [OpenAI Codex](https://github.com/openai/codex). It lets users define multi-phase workflows (fan-out, gate, loop, tournament, approval, sub-flow composition) as JSON DSL, executes them via isolated subagent processes, and returns only the final result — intermediate transcripts never enter the host context window.
 
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
-**Runtime:** Node.js ≥ 22 (uses `fs.globSync`, `Atomics.wait`)\
+**Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
 **Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the Codex adapter (`codex-taskflow`) depends only on `taskflow-core`. Everything depends on `typebox`.\
 **Layout:** npm-workspaces monorepo of three published packages — `taskflow-core` (host-neutral engine), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), and `codex-taskflow` (Codex subagent runner + MCP server + a `plugin/` scaffold installable via `codex plugin add`).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
@@ -66,7 +66,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 
 ## Key Concepts
 
-### Phase Types (9 total)
+### Phase Types (10 total)
 | Type | Purpose |
 |------|---------|
 | `agent` | Single subagent call |
@@ -78,6 +78,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 | `flow` | Run a saved sub-taskflow as a single phase |
 | `loop` | Repeat body until condition, convergence, or max iterations |
 | `tournament` | N competing variants + judge picks best or aggregates |
+| `script` | Run a shell command (no LLM, zero tokens) — captures stdout; fields `run`/`input`/`timeout` |
 
 ### Control Flow Fields
 - `when` — conditional guard (expression must be truthy)
@@ -105,7 +106,9 @@ npm run test:core     # engine tests only
 npm run test:pi       # pi-adapter tests only
 npm run test:codex    # codex-adapter tests only
 npm run build         # emit dist/*.js + .d.ts for all three packages
-npm run test:e2e-codex      # codex executor + MCP e2e (needs live codex + model access)
+npm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
+npm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
+npm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)
 # pi e2e suites are run directly (they use .mts so the unit glob skips them):
 #   node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
 ```
@@ -209,7 +212,7 @@ All engine files live in `packages/taskflow-core/src/`; the pi entry lives in `p
 
 | File | Responsibility |
 |------|----------------|
-| `runtime.ts` | Core orchestration: `executeTaskflow()`, `executePhase()`, all 9 phase types |
+| `runtime.ts` | Core orchestration: `executeTaskflow()`, `executePhase()`, all 10 phase types |
 | `schema.ts` | DSL types, validation, desugar, topo sort, cycle detection |
 | `runner-core.ts` | Host-neutral runner helpers: failure classification, NDJSON accumulator, error sanitization, `mapWithConcurrencyLimit` |
 | `pi-taskflow/src/runner.ts` | Pi subagent spawn (`pi --mode json`), idle watchdog; re-exports the core helpers |

@@ -37,7 +37,7 @@
     "skills"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs pi-taskflow",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

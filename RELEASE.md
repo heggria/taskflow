@@ -1,6 +1,6 @@
 # Release Guide (monorepo)
 
-pi-taskflow is a monorepo of three independently published packages:
+taskflow is a monorepo of three independently published packages:
 
 | Package | npm name | What it is |
 |---------|----------|------------|
@@ -29,7 +29,7 @@ npm whoami --registry=https://registry.npmjs.org/   # expect: heggria (or the ow
 ```sh
 npm install            # links the workspaces
 npm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
-npm test               # 864/864 green
+npm test               # 918/918 green
 npm run build          # emit dist/ for all three packages (tsc → .js + .d.ts)
 ```
 
@@ -50,7 +50,7 @@ npm publish -w codex-taskflow  --registry=https://registry.npmjs.org/ --provenan
 `publishConfig.access: public` is set on each package, so scoped/unscoped both publish publicly.
 
 > **Note on `taskflow-core` as a dependency.** `pi-taskflow` / `codex-taskflow`
-> declare `"taskflow-core": "0.1.0"` (an exact version, not `workspace:*`),
+> declare `"taskflow-core": "0.1.3"` (an exact version, not `workspace:*`),
 > so the published tarballs resolve the real npm package once it exists. Always
 > publish `taskflow-core` first and bump all three in lockstep.
 
@@ -61,7 +61,7 @@ three package versions match the tag, publishes them in order, and cuts a GitHub
 Release from the matching `CHANGELOG.md` section.
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.3 && git push origin v0.1.3
 ```
 
 ## Verify after publish

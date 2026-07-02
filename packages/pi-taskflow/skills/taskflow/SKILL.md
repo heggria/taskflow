@@ -105,6 +105,7 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `flow` | run a **sub-flow** as one phase — **saved** (`use`) or **runtime-generated** (`def`) | Sub-flows |
 | `loop` | repeat a body until a condition / convergence / `maxIterations` | Loop phases |
 | `tournament` | run N competing `variants`, a `judge` picks the best or aggregates | Tournament phases |
+| `script` | run a **shell command** (no LLM, zero tokens) — captures stdout as the output | Script phases |
 
 ### Control-flow fields (any phase)
 
@@ -253,6 +254,30 @@ of several drafts, or a synthesis of diverse approaches.
   "dependsOn": ["draft"],
   "final": true
 }
+```
+
+### Script phases (shell commands, zero tokens)
+
+A `script` phase runs a **shell command** directly — no subagent, no tokens — and
+captures its stdout as the phase output. Use it to glue LLM phases to real tools:
+run a build/test/format, `git`, a webhook, or pipe an upstream phase through a
+script.
+
+- `run` — **required**. A **string** runs through a shell; an **array** is
+  spawned directly (execvp, no shell). A string `run` that contains an
+  interpolation placeholder is **rejected at validation** (shell-injection
+  guard) — use the array form or `input` for dynamic values.
+- `input` — optional text piped to stdin (supports interpolation).
+- `timeout` — optional ms cap (1000–300000, default 60000); on timeout the child
+  is SIGTERM'd then SIGKILL'd and the phase fails.
+- A non-zero exit fails the phase (stderr captured); stdout is capped at 1 MB.
+  No `retry`, no `output: "json"`; **excluded from `cross-run` cache** (may have
+  side effects). Compiles to a `⚡ script` node.
+
+```jsonc
+{ "id": "build", "type": "script", "run": "npm run build", "timeout": 120000 },
+{ "id": "score", "type": "script", "run": ["python", "score.py"],
+  "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```
 
 ### Workspace isolation (`cwd` keywords)

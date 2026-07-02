@@ -50,7 +50,7 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 ```jsonc
 {
   "id": "audit",            // required, unique — referenced via {steps.audit.output}
-  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament (default: agent)
+  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script (default: agent)
   "agent": "analyst",       // agent name to run this phase
   "task": "Audit {item.route}…",
   "dependsOn": ["discover"],// DAG edges
@@ -71,13 +71,16 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | Key | Applies to | Default | Notes |
 |-----|-----------|---------|-------|
 | `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
-| `type` | all | `agent` | One of the 9 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament). |
+| `type` | all | `agent` | One of the 10 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script). |
 | `agent` | all | first available | Agent name; resolved from the scoped pool. |
 | `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types. |
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
 | `branches` | parallel | — | **Required for parallel.** `[{task, agent?}]`. |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
+| `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
+| `input` | script | — | Text piped to the command's stdin; supports interpolation. |
+| `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. |
 | `dependsOn` | all | `[]` | DAG edges. `from` also implies a dependency. |
 | `output` | all | `text` | `json` parses output so `{steps.id.json}` / map `over` work. |
 | `model` | all | agent/global | Per-phase model override. See §5. |
@@ -90,8 +93,9 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `cache` | all | `run-only` | Per-phase cache policy (`scope`/`ttl`/`fingerprint`). See §11. |
 | `final` | all | last phase | Exactly one phase may be `final`; its output is returned. |
 
-> Gate-only control fields (`eval`, `onBlock`) and the loop/tournament control
-> fields (`until`/`maxIterations`/`convergence`, `variants`/`judge`/`judgeAgent`/`mode`)
+> Gate-only control fields (`eval`, `onBlock`), the loop/tournament control
+> fields (`until`/`maxIterations`/`convergence`, `variants`/`judge`/`judgeAgent`/`mode`),
+> and the script fields (`run`/`input`/`timeout`)
 > are documented in `SKILL.md` next to their phase types.
 
 ---
@@ -300,7 +304,7 @@ Rather than annotating every phase with `cache: { "scope": "cross-run" }`, set
 Precedence: the invocation `incremental` argument wins over the flow's
 `incremental` field, which is in turn overridden by any **per-phase** `cache`
 setting. The cross-run-blocked phase types (`gate`/`approval`/`loop`/
-`tournament`) and all per-phase soundness fallbacks still apply. The default
+`tournament`/`script`) and all per-phase soundness fallbacks still apply. The default
 remains `run-only` (each run starts fresh unless something opts in), because
 cross-run reuse silently persists outputs and can serve stale results for phases
 whose agents read files at runtime.

@@ -527,6 +527,14 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		const root = opts.cwd ? path.resolve(opts.cwd) : undefined;
 		for (const p of flow.phases) {
 			if (!p || typeof p !== "object") continue;
+			// A generated phase may not execute shell commands. `script` runs an
+			// arbitrary command — a strictly larger capability than the reserved
+			// cwd keywords blocked below — so an LLM-authored plan (flow{def} /
+			// ctx_spawn) that emits a script phase is rejected. Only author-written
+			// flows may use `script`.
+			if (p.type === "script") {
+				errors.push(`Dynamic sub-flow phase '${p.id}': 'script' phases (shell execution) are not allowed in generated flows`);
+			}
 			// Per-phase concurrency override is also capped.
 			if (typeof p.concurrency === "number" && p.concurrency > MAX_DYNAMIC_CONCURRENCY) {
 				errors.push(`Dynamic sub-flow phase '${p.id}': concurrency too high (${p.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
