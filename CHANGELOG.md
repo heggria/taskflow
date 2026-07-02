@@ -4,6 +4,17 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-07-02
+
+### Security
+- **Dynamic sub-flows can no longer smuggle `script` phases (RCE guard).**
+  `validateTaskflow` rejects `script` phases in LLM-authored dynamic flow
+  definitions (`flow` phases with an inline definition produced at runtime),
+  closing the path where a subagent's output could inject arbitrary shell
+  commands into the host.
+- **Dependency audit clean.** `npm audit fix` bumps transitive `protobufjs`
+  to 7.6.4 (GHSA schema-derived name shadowing, moderate) — 0 open alerts.
+
 ### Fixed (adversarial review of the features below)
 - **Peek `--item` now keys by positional label, not section order.** A
   budget-skipped map item has no section in the merged output, so section-order
@@ -63,6 +74,15 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   absent from X's declared contract — catching ref typos before a single
   token is spent. Zero new dependencies (hand-rolled total validator in
   `taskflow-core/src/contract.ts`).
+- **Script phase test coverage** — validation, execution, security, and
+  robustness suites for the `script` phase type (952 tests total).
+
+### Changed
+- **Each published package now ships its README** (`scripts/copy-readme.mjs`),
+  fixing the empty npm package pages.
+- **Docs sync:** README/README.zh-CN/AGENTS/CONTRIBUTING/SECURITY refreshed for
+  the script phase, brand/version drift fixed; CI actions bumped
+  (checkout v7, setup-node v6) and dev-dependencies updated.
 
 ## [0.1.3] — 2026-07-02
 

@@ -1,6 +1,6 @@
 {
   "name": "codex-taskflow",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Run taskflow on OpenAI Codex: a Codex subagent runner plus an MCP server (and a plug-and-play Codex plugin) that exposes the taskflow_* tools to Codex users.",
   "keywords": [
     "codex",
@@ -42,6 +42,6 @@
     "access": "public"
   },
   "dependencies": {
-    "taskflow-core": "0.1.3"
+    "taskflow-core": "0.1.4"
   }
 }
