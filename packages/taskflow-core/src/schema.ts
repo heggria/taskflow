@@ -557,6 +557,16 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				errors.push(`Phase '${p.id}': '${key}' must be a string, got ${typeof v}`);
 			}
 		}
+		// Branch entries become competitors at runtime (b.task is interpolated); a
+		// non-object / non-string-task entry would crash the runtime, so reject it.
+		if (Array.isArray(p.branches)) {
+			p.branches.forEach((b, i) => {
+				if (!b || typeof b !== "object" || Array.isArray(b))
+					errors.push(`Phase '${p.id}': branches[${i}] must be an object with a 'task', got ${b === null ? "null" : typeof b}`);
+				else if (typeof (b as { task?: unknown }).task !== "string")
+					errors.push(`Phase '${p.id}': branches[${i}].task must be a string`);
+			});
+		}
 
 		// When a phase opts into the Shared Context Tree, its id becomes a filesystem
 		// node id; restrict the charset so two ids can't sanitize to the same node
@@ -655,6 +665,9 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 
 		// Cache policy validation (cross-run memoization).
 		if (p.cache) {
+			if (typeof p.cache !== "object" || Array.isArray(p.cache)) {
+				errors.push(`Phase '${p.id}': 'cache' must be an object`);
+			} else {
 			const scope = p.cache.scope ?? "run-only";
 			if (!CACHE_SCOPES.includes(scope as CacheScope)) {
 				errors.push(`Phase '${p.id}': unknown cache.scope '${scope}' (expected one of ${CACHE_SCOPES.join(", ")})`);
@@ -666,17 +679,25 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				);
 			}
 			// Gate C: every fingerprint entry must use a known prefix (fail closed).
-			for (const fp of p.cache.fingerprint ?? []) {
-				const ok = CACHE_FINGERPRINT_PREFIXES.some((pre) => fp.startsWith(pre) && fp.length > pre.length);
-				if (!ok) {
-					errors.push(
-						`Phase '${p.id}': invalid cache.fingerprint entry '${fp}' (expected '<prefix><value>' with prefix one of ${CACHE_FINGERPRINT_PREFIXES.join(", ")})`,
-					);
+			if (p.cache.fingerprint !== undefined && !Array.isArray(p.cache.fingerprint)) {
+				errors.push(`Phase '${p.id}': 'cache.fingerprint' must be an array of strings`);
+			} else
+				for (const fp of p.cache.fingerprint ?? []) {
+					if (typeof fp !== "string") {
+						errors.push(`Phase '${p.id}': cache.fingerprint entries must be strings, got ${typeof fp}`);
+						continue;
+					}
+					const ok = CACHE_FINGERPRINT_PREFIXES.some((pre) => fp.startsWith(pre) && fp.length > pre.length);
+					if (!ok) {
+						errors.push(
+							`Phase '${p.id}': invalid cache.fingerprint entry '${fp}' (expected '<prefix><value>' with prefix one of ${CACHE_FINGERPRINT_PREFIXES.join(", ")})`,
+						);
+					}
 				}
-			}
 			// Gate D: TTL must parse to a positive duration when present.
 			if (p.cache.ttl !== undefined && parseTtlMs(p.cache.ttl) === null) {
 				errors.push(`Phase '${p.id}': invalid cache.ttl '${p.cache.ttl}' (expected e.g. '30m', '6h', '7d')`);
+			}
 			}
 		}
 
@@ -838,10 +859,10 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.over);
 	scan(phase.when);
 	scan(phase.until);
-	for (const e of asArray<string>(phase.eval)) scan(e);
-	for (const b of asArray<{ task?: string }>(phase.branches)) scan(b.task);
+	for (const e of asArray<string>(phase.eval)) if (typeof e === "string") scan(e);
+	for (const b of asArray<{ task?: string }>(phase.branches)) if (b && typeof b === "object") scan(b.task);
 	for (const v of Object.values(phase.with ?? {})) if (typeof v === "string") scan(v);
-	for (const c of asArray<string>(phase.context)) scan(c);
+	for (const c of asArray<string>(phase.context)) if (typeof c === "string") scan(c);
 	return { steps: Array.from(steps), args: Array.from(args) };
 }
 

@@ -452,3 +452,24 @@ test("validateTaskflow: gate eval entries must be strings", () => {
 	});
 	assert.ok(ok.errors.every((e) => !e.includes("eval")), `string eval should be accepted, got: ${ok.errors}`);
 });
+
+test("validateTaskflow: malformed cache / branches error instead of throwing", () => {
+	// Round-9 crashers: cache.fingerprint iterated as strings, branches iterated
+	// as objects at runtime — both must be structured errors, never a TypeError.
+	const cases: Array<[string, unknown]> = [
+		["cache non-object", { id: "a", type: "agent", task: "t", cache: 1 }],
+		["cache.fingerprint non-array", { id: "a", type: "agent", task: "t", cache: { fingerprint: 1 } }],
+		["cache.fingerprint entry non-string", { id: "a", type: "agent", task: "t", cache: { fingerprint: [1] } }],
+		["branches null entry", { id: "a", type: "parallel", branches: [null] }],
+		["branches scalar entry", { id: "a", type: "parallel", branches: [1] }],
+		["branches entry task non-string", { id: "a", type: "parallel", branches: [{ task: 1 }] }],
+	];
+	for (const [label, phase] of cases) {
+		let r: ReturnType<typeof validateTaskflow>;
+		assert.doesNotThrow(() => {
+			r = validateTaskflow({ name: "x", phases: [phase] });
+		}, `${label} must not throw`);
+		r = validateTaskflow({ name: "x", phases: [phase] });
+		assert.equal(r.ok, false, `${label} is invalid`);
+	}
+});
