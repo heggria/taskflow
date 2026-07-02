@@ -116,15 +116,20 @@ test("script validate: retry, output:json, and out-of-range timeout are rejected
 	assert.equal(ok.ok, true, ok.errors.join("; "));
 });
 
-test("script validate: run/input/timeout are rejected on non-script phases", () => {
+test("script validate: run/input are rejected on non-script phases; timeout is allowed on agent phases", () => {
 	const run = validateTaskflow({ name: "s", phases: [{ id: "a", type: "agent", agent: "a", task: "t", run: "echo x", final: true }] });
 	assert.match(run.errors.join("\n"), /'run' is only valid for script phases/);
 
 	const input = validateTaskflow({ name: "s", phases: [{ id: "a", type: "agent", agent: "a", task: "t", input: "hi", final: true }] });
 	assert.match(input.errors.join("\n"), /'input' is only valid for script phases/);
 
+	// timeout is now valid on agent-running phases (feat: per-phase timeout)
 	const timeout = validateTaskflow({ name: "s", phases: [{ id: "a", type: "agent", agent: "a", task: "t", timeout: 5000, final: true }] });
-	assert.match(timeout.errors.join("\n"), /'timeout' is only valid for script phases/);
+	assert.equal(timeout.ok, true, timeout.errors.join("; "));
+
+	// but rejected on approval/flow phases
+	const approval = validateTaskflow({ name: "s", phases: [{ id: "a", type: "approval", prompt: "ok?", timeout: 5000, final: true }] });
+	assert.match(approval.errors.join("\n"), /'timeout' is not supported for approval phases/);
 });
 
 // ---------------------------------------------------------------------------
