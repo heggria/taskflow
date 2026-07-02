@@ -3,6 +3,9 @@ dist/
 *.log
 .DS_Store
 
+# Generated at build time from the root README (single source of truth)
+packages/*/README.md
+
 # Runtime state (never commit)
 .pi/taskflows/
 .pi/teams/

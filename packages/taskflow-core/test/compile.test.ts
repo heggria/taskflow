@@ -77,8 +77,9 @@ test("compile: each phase type gets its distinct Mermaid shape", () => {
 		{ id: "r", type: "reduce", from: ["m"], task: "merge" },
 		{ id: "ap", type: "approval", task: "ok?", dependsOn: ["g"] },
 		{ id: "lp", type: "loop", task: "iter", until: "{steps.lp.output} contains DONE" },
-		{ id: "tn", type: "tournament", task: "compete", variants: 3, final: true, dependsOn: ["r"] },
+		{ id: "tn", type: "tournament", task: "compete", variants: 3, dependsOn: ["r"] },
 		{ id: "fl", type: "flow", use: "sub", dependsOn: ["p"] },
+		{ id: "sc", type: "script", run: ["echo", "x"], final: true, dependsOn: ["tn"] },
 	];
 	const r = compileTaskflow(flow(phases));
 	assert.match(r.mermaid, /\bg\{"/, "gate → rhombus");
@@ -89,6 +90,7 @@ test("compile: each phase type gets its distinct Mermaid shape", () => {
 	assert.match(r.mermaid, /\blp\(\["/, "loop → stadium");
 	assert.match(r.mermaid, /\btn\{\{"/, "tournament → hexagon");
 	assert.match(r.mermaid, /\bfl\[\["/, "flow → subroutine");
+	assert.match(r.mermaid, /\bsc\[\("/, "script → cylinder");
 });
 
 test("compile: type tags appear in node bodies", () => {
@@ -98,6 +100,12 @@ test("compile: type tags appear in node bodies", () => {
 	]));
 	assert.match(r.mermaid, /map over/);
 	assert.match(r.mermaid, /tournament ×4/);
+});
+
+test("compile: script node shows the ⚡ tag and legend entry", () => {
+	const r = compileTaskflow(flow([{ id: "sc", type: "script", run: "echo hi", final: true }]));
+	assert.match(r.mermaid, /⚡ script/);
+	assert.match(r.markdown, /⚡ script/);
 });
 
 // ---------------------------------------------------------------------------
