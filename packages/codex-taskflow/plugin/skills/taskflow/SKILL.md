@@ -55,7 +55,9 @@ When you outgrow the shorthand, define a DAG of phases. Phase types:
 `agent`, `parallel`, `map` (dynamic fan-out over an array), `gate`
 (VERDICT: PASS/BLOCK), `reduce`, `approval` (human-in-the-loop), `flow`
 (run a saved sub-flow), `loop` (iterate until a condition/convergence/cap),
-`tournament` (N variants, a judge picks best / aggregates).
+`tournament` (N variants, a judge picks best / aggregates),
+`script` (run a shell command — no LLM, zero tokens — capturing stdout;
+fields `run`/`input`/`timeout`).
 
 ```jsonc
 {
