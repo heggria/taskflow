@@ -66,11 +66,25 @@ function listPhases(state: RunState): string {
 	return `Run ${state.runId} (${state.flowName}) — ${state.status}\n\nPhases:\n${lines.join("\n")}\n\nPeek one with: peek ${state.runId} <phaseId>`;
 }
 
-/** Split a merged map/parallel output back into its labelled item sections. */
-function splitItems(merged: string): string[] {
+/** Split a merged map/parallel output back into its labelled item sections,
+ *  keyed by the 1-based position parsed from each "### [k/N]" label — NOT by
+ *  section order. mergePhaseState labels positionally but omits budget-skipped
+ *  items entirely, so section order can have gaps; keying by label keeps
+ *  `--item k` aligned with the original `over[k-1]`. */
+function splitItems(merged: string): Map<number, string> {
 	// mergePhaseState labels sections "### [k/N] <agent>" joined by "\n\n---\n\n".
+	const out = new Map<number, string>();
 	const parts = merged.split(/\n\n---\n\n(?=### \[\d+\/\d+\])/);
-	return parts.length > 1 || /^### \[\d+\/\d+\]/.test(parts[0] ?? "") ? parts : [];
+	for (const part of parts) {
+		const m = part.match(/^### \[(\d+)\/\d+\]/);
+		// First label wins on duplicates. Known limitation: an item whose CONTENT
+		// embeds the separator + a fake label can shadow a later genuine section —
+		// unambiguous splitting needs a collision-free separator in mergePhaseState
+		// (tracked as follow-up). Labels keyed positionally so budget-skip gaps
+		// never shift indices.
+		if (m && !out.has(Number(m[1]))) out.set(Number(m[1]), part);
+	}
+	return out;
 }
 
 /**
@@ -96,11 +110,14 @@ export function peekRun(cwd: string, runId: string, opts: PeekOptions = {}): Pee
 	let body: string;
 	if (opts.item !== undefined) {
 		const items = splitItems(ps.output ?? "");
-		if (items.length === 0) return { ok: false, text: `Phase '${ps.id}' has no item sections (not a map/parallel output).` };
+		if (items.size === 0) return { ok: false, text: `Phase '${ps.id}' has no item sections (not a map/parallel output).` };
 		const idx = Math.floor(opts.item);
-		if (idx < 1 || idx > items.length)
-			return { ok: false, text: `Item ${opts.item} out of range for phase '${ps.id}' (1..${items.length}).` };
-		body = items[idx - 1];
+		const section = items.get(idx);
+		if (section === undefined) {
+			const available = [...items.keys()].sort((a, b) => a - b).join(", ");
+			return { ok: false, text: `Item ${opts.item} not found for phase '${ps.id}' (available: ${available}; budget-skipped items have no section).` };
+		}
+		body = section;
 	} else if (opts.json) {
 		if (ps.json === undefined) return { ok: false, text: `Phase '${ps.id}' has no parsed JSON (set output:"json" on the phase, or peek the text output).` };
 		try {

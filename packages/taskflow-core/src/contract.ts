@@ -71,6 +71,22 @@ function typeOf(value: unknown): string {
 	return typeof value; // object | string | number | boolean | undefined
 }
 
+/** Structural equality for enum literals — key-order-insensitive for objects
+ *  (unlike JSON.stringify comparison). Total on JSON-shaped values. */
+function deepEqual(a: unknown, b: unknown): boolean {
+	if (Object.is(a, b)) return true;
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+	if (Array.isArray(a) !== Array.isArray(b)) return false;
+	if (Array.isArray(a) && Array.isArray(b)) {
+		if (a.length !== b.length) return false;
+		return a.every((v, i) => deepEqual(v, b[i]));
+	}
+	const ka = Object.keys(a as Record<string, unknown>);
+	const kb = Object.keys(b as Record<string, unknown>);
+	if (ka.length !== kb.length) return false;
+	return ka.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
 /**
  * Validate a parsed JSON value against a contract. Returns violation messages
  * with JSON-path-ish locations ([] = the value satisfies the contract). Total:
@@ -108,7 +124,7 @@ export function contractViolations(value: unknown, schema: unknown, path = "$"):
 	}
 
 	if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-		const hit = schema.enum.some((e) => JSON.stringify(e) === JSON.stringify(value));
+		const hit = schema.enum.some((e) => deepEqual(e, value));
 		if (!hit) push(`${path}: value is not one of the allowed enum literals`);
 	}
 

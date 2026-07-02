@@ -147,7 +147,7 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_run",
 		title: "Run a taskflow",
 		description:
-			"Run a taskflow DAG and return its final output. Provide EITHER `name` (a saved flow) OR `define` (an inline flow definition: {name, phases:[…]} or a shorthand {task} / {tasks} / {chain}). Subagents execute as codex sessions. Intermediate phase outputs stay in the runtime; only the final phase output is returned.",
+			"Run a taskflow DAG and return its final output. Provide EITHER `name` (a saved flow) OR `define` (an inline flow definition: {name, phases:[…]} or a shorthand {task} / {tasks} / {chain}). Subagents execute as codex sessions. Intermediate phase outputs stay in the runtime; only the final phase output is returned — the reported runId can be passed to taskflow_peek to inspect intermediate phase outputs afterwards.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
@@ -206,7 +206,7 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_peek",
 		title: "Peek at a run's phase output",
 		description:
-			"Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list the run's phases. Output is hard-truncated (default 4000 chars) so a peek never floods the context window. Read-only.",
+			"Inspect one phase's intermediate output from a stored run (post-hoc debugging). Use the runId reported by taskflow_run. Omit `phaseId` to list the run's phases. Output is hard-truncated (default 4000 chars) so a peek never floods the context window. Read-only.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
@@ -287,12 +287,15 @@ export function makeToolHandlers(cwd: string): Record<string, (args: Record<stri
 				}
 			};
 
-			const res = await executeTaskflow(state, deps);
-			try {
-				saveRun(state, cleanupConfig); // force-persist terminal state
-			} catch {
-				/* fail-open: persistence must never sink a completed run */
-			}
+			const res = await executeTaskflow(state, deps).finally(() => {
+				// Terminal persist must survive a throwing runtime ("never lose work") —
+				// and persistence itself must never sink a completed run.
+				try {
+					saveRun(state, cleanupConfig);
+				} catch {
+					/* fail-open */
+				}
+			});
 			const header = res.ok ? "✓ taskflow complete" : "✗ taskflow did not fully succeed";
 			const u = res.totalUsage;
 			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;

@@ -4,6 +4,27 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Fixed (adversarial review of the features below)
+- **Peek `--item` now keys by positional label, not section order.** A
+  budget-skipped map item has no section in the merged output, so section-order
+  indexing silently returned the WRONG item's content for every position after
+  the gap. `splitItems` now parses each `### [k/N]` label and keys by `k`; a
+  missing item returns "not found (budget-skipped items have no section)" with
+  the available indices.
+- **`/tf peek` rejects non-numeric `--item`/`--limit`** with a usage message
+  instead of passing `NaN` through ("Item NaN out of range").
+- **Contract `enum` comparison is now key-order-insensitive** for object
+  literals (structural `deepEqual` instead of `JSON.stringify` equality).
+- **Tournament phases propagate `timedOut`** when all variants fail by
+  phase-timeout (the custom all-failed return path missed the marker).
+- **Codex MCP `taskflow_run` persists terminal run state even if the runtime
+  throws** (`finally`-wrapped saveRun), and both `taskflow_run` /
+  `taskflow_peek` descriptions cross-reference the runId so LLM callers chain
+  them.
+- **`verifyTaskflow`'s contract pass scans more ref sources** — `context`,
+  `input`, `judge`, `with` values, and array-form `run` — closing false-negative
+  gaps for `{steps.X.json.field}` typos.
+
 ### Added
 - **Peek — post-hoc inspection of intermediate phase outputs.** `/tf peek
   <runId> [phaseId]` (pi) and the `taskflow_peek` MCP tool (Codex) read one

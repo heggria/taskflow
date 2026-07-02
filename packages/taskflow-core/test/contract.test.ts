@@ -84,6 +84,12 @@ test("contract violations: integer distinguishes from float; enum matches litera
 	assert.match(contractViolations("wat", { enum: ["deep", "quick"] })[0], /enum/);
 });
 
+test("contract violations: enum object literals match regardless of key order", () => {
+	const schema = { enum: [{ a: 1, b: [2, { c: 3 }] }] };
+	assert.deepEqual(contractViolations({ b: [2, { c: 3 }], a: 1 }, schema), []);
+	assert.match(contractViolations({ a: 1, b: [2, { c: 4 }] }, schema)[0], /enum/);
+});
+
 test("contract violations: implicit object/array type from properties/items", () => {
 	// No explicit `type`, but `required` implies an object contract.
 	const v = contractViolations([1, 2], { required: ["x"] });

@@ -113,7 +113,7 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `when` | conditional guard — skip the phase unless the expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& \|\| !`, parentheses, quoted strings/numbers. Parse errors fail **open** (phase runs). |
 | `join` | dependency join: `"all"` (default — wait for every dep) or `"any"` (OR-join — run as soon as one dep completes). |
 | `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
-| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Valid on any agent-running phase (agent/gate/reduce/map/parallel/loop/tournament; script has its own 60s-default cap). Not supported on approval/flow. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
+| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Valid on any agent-running phase; note it caps EACH call, so a map/parallel/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
 | `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with a precise diagnostic (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
 
 ### Conditional routing (when + gate/branches)
@@ -596,9 +596,9 @@ Notes & limitations:
   content-addressable, not positional.
 - Failed items and **budget-skipped** items are never cached, so they always
   re-execute on the next run.
-- `{steps.<map>.json[k]}` indexes the k-th **successful** item (not the k-th
-  position in `over`); the merged `output` text, however, IS positionally
-  aligned with `over` (labels read `[k/N]`).
+- `{steps.<map>.json.k}` (dot-index) indexes the k-th **successful** item (not
+  the k-th position in `over`); the merged `output` text, however, IS
+  positionally aligned with `over` (labels read `[k/N]`).
 - Within-run resume of a partially-completed map is not supported (only
   fully-completed maps resume within a run); cross-run per-item reuse covers the
   common case.

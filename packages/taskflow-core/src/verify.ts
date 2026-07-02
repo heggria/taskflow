@@ -375,12 +375,18 @@ function detectContractRefMismatches(phases: Phase[]): VerificationIssue[] {
 
 	const REF = /\{steps\.([a-zA-Z0-9_-]+)\.json\.([a-zA-Z0-9_-]+)/g;
 	for (const p of phases) {
+		const withValues = p.with && typeof p.with === "object" ? Object.values(p.with).filter((v): v is string => typeof v === "string") : [];
 		const sources: Array<string | undefined> = [
 			p.task,
 			p.when,
 			p.until,
 			p.over,
+			p.input,
+			p.judge,
 			...asArray<string>(p.eval as string[] | undefined),
+			...asArray<string>(p.context as string[] | undefined),
+			...withValues,
+			...(Array.isArray(p.run) ? p.run : []),
 			...(Array.isArray(p.branches) ? p.branches.map((b) => b?.task) : []),
 		];
 		for (const src of sources) {

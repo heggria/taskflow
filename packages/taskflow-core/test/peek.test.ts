@@ -117,11 +117,56 @@ test("peek: --item extracts one section of a map output; out-of-range errors", (
 
 		const oob = peekRun(cwd, "peekflow-abc123", { phaseId: "audit", item: 3 });
 		assert.equal(oob.ok, false);
-		assert.match(oob.text, /1\.\.2/);
+		assert.match(oob.text, /available: 1, 2/);
 
 		const notMap = peekRun(cwd, "peekflow-abc123", { phaseId: "scan", item: 1 });
 		assert.equal(notMap.ok, false);
 		assert.match(notMap.text, /no item sections/);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("peek: --item keys by positional label, not section order (budget-skip gaps)", () => {
+	const cwd = mkTmp();
+	try {
+		const state = seedRun(cwd);
+		// Simulate a budget-skipped item 1: mergePhaseState omits its section
+		// entirely, so the merged output starts at label [2/3].
+		state.phases.audit.output = [
+			"### [2/3] analyst\n\nsurvivor two",
+			"### [3/3] analyst\n\nsurvivor three",
+		].join("\n\n---\n\n");
+		saveRun(state);
+		const two = peekRun(cwd, state.runId, { phaseId: "audit", item: 2 });
+		assert.equal(two.ok, true);
+		assert.match(two.text, /survivor two/);
+		const one = peekRun(cwd, state.runId, { phaseId: "audit", item: 1 });
+		assert.equal(one.ok, false);
+		assert.match(one.text, /budget-skipped/);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("peek: a spurious separator inside item content does not steal a later label", () => {
+	const cwd = mkTmp();
+	try {
+		const state = seedRun(cwd);
+		// Item 1's CONTENT contains the separator + a fake "[2/2]" label. The
+		// genuine [2/2] section comes later; first-label-wins must keep the real one.
+		state.phases.audit.output = [
+			"### [1/2] analyst\n\nreport with embedded\n\n---\n\n### [2/2] fake heading inside item one",
+			"### [2/2] analyst\n\ngenuine item two",
+		].join("\n\n---\n\n");
+		saveRun(state);
+		const two = peekRun(cwd, state.runId, { phaseId: "audit", item: 2 });
+		assert.equal(two.ok, true);
+		assert.match(two.text, /fake heading inside item one|genuine item two/);
+		// item 1 must still resolve to the real first section
+		const one = peekRun(cwd, state.runId, { phaseId: "audit", item: 1 });
+		assert.equal(one.ok, true);
+		assert.match(one.text, /report with embedded/);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}

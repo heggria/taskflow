@@ -1905,6 +1905,7 @@ async function executePhaseInner(
 				status: "failed",
 				usage: variantUsage,
 				error: `tournament '${phase.id}': all ${competitors.length} variants failed`,
+				timedOut: ran.some((r) => r.phaseTimeout) || undefined,
 				budgetTruncated: budgetSkipCount > 0 || undefined,
 				tournament: { variants: competitors.length, winner: 0, mode },
 				inputHash,
