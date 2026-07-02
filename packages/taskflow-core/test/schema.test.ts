@@ -428,6 +428,24 @@ test("validateTaskflow: non-string scalar fields error instead of throwing", () 
 	}
 });
 
+test("validateTaskflow: the full set of string scalars + dependsOn/from entries reject non-strings", () => {
+	// Complete coverage of every string-typed phase field (they reach renderers
+	// via .replace / the runtime via spawn cwd / agent config) so a non-string is
+	// a structured error, never a runtime crash or a silently-misused value.
+	for (const key of ["as", "model", "thinking", "cwd", "judge", "judgeAgent", "output"]) {
+		const phase: Record<string, unknown> = { id: "a", type: "agent", task: "t", [key]: 1 };
+		const r = validateTaskflow({ name: "x", phases: [phase] });
+		assert.equal(r.ok, false, `${key} non-string is invalid`);
+		assert.ok(r.errors.some((e) => e.includes(`'${key}'`)), `expected a ${key} error, got: ${r.errors}`);
+	}
+	for (const key of ["dependsOn", "from"]) {
+		const phase: Record<string, unknown> = { id: "a", type: "reduce", task: "t", [key]: [1] };
+		const r = validateTaskflow({ name: "x", phases: [phase] });
+		assert.equal(r.ok, false, `${key} with a non-string entry is invalid`);
+		assert.ok(r.errors.some((e) => e.includes(`${key}[0]`)), `expected a ${key}[0] error, got: ${r.errors}`);
+	}
+});
+
 test("validateTaskflow: non-string id / null phase don't throw", () => {
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [{ id: 1, type: "agent", task: "t" }] }));
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [null] }));

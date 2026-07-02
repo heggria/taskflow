@@ -48,8 +48,9 @@ export interface CompileOptions {
 
 /** Mermaid node ids must be free of spaces and syntax chars. Phase ids are
  *  already `[A-Za-z0-9_-]`-ish, but we defensively map anything else to `_`. */
-function nodeId(phaseId: string): string {
-	const cleaned = phaseId.replace(/[^A-Za-z0-9_]/g, "_");
+function nodeId(phaseId: unknown): string {
+	const s = typeof phaseId === "string" ? phaseId : String(phaseId);
+	const cleaned = s.replace(/[^A-Za-z0-9_]/g, "_");
 	// A leading digit is legal in Mermaid ids, but prefix to avoid edge-case
 	// parsers and keep ids stable/unique.
 	return /^[A-Za-z_]/.test(cleaned) ? cleaned : `p_${cleaned}`;

@@ -548,14 +548,39 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				errors.push(`Phase '${p.id}': '${key}' must be an array, got ${typeof v}`);
 			}
 		}
-		// String-shaped fields must be strings when present. They flow into the
-		// diagram/outline renderers (label/summarize), which call `.replace` and
-		// would otherwise throw on a number/object. Report a structured error.
-		for (const key of ["task", "agent", "use", "when", "until"] as const) {
+		// String-shaped scalar fields must be strings when present. They flow into
+		// renderers (label/summarize/nodeId call `.replace`) and the runtime
+		// (cwd -> spawn, model/thinking -> agent config); a non-string would throw
+		// or be silently misused. This is the COMPLETE set of string scalars in
+		// PhaseSchema except `id`/`type`/`over`, which have dedicated checks above.
+		for (const key of [
+			"task",
+			"agent",
+			"use",
+			"when",
+			"until",
+			"as",
+			"model",
+			"thinking",
+			"cwd",
+			"judge",
+			"judgeAgent",
+			"output",
+		] as const) {
 			const v = (p as Record<string, unknown>)[key];
 			if (v !== undefined && typeof v !== "string") {
 				errors.push(`Phase '${p.id}': '${key}' must be a string, got ${typeof v}`);
 			}
+		}
+		// dependsOn / from entries are string phase-id refs that flow into the graph
+		// helpers and nodeId(); a non-string entry would crash the renderer.
+		for (const key of ["dependsOn", "from"] as const) {
+			const v = (p as Record<string, unknown>)[key];
+			if (Array.isArray(v))
+				v.forEach((e, i) => {
+					if (typeof e !== "string")
+						errors.push(`Phase '${p.id}': ${key}[${i}] must be a string phase id, got ${typeof e}`);
+				});
 		}
 		// Branch entries become competitors at runtime (b.task is interpolated); a
 		// non-object / non-string-task entry would crash the runtime, so reject it.
