@@ -357,6 +357,7 @@ See [Tournament phases](#tournament-tournament) for the full reference.
 | `flow` | run a **sub-flow** as one phase — a **saved** flow (`use`) or a **runtime-generated** one (`def`) | `use` \| `def` |
 | `loop` | **iterate a task until done** — re-run a body until a condition, convergence, or a cap | `task`, `until` |
 | `tournament` | **N variants compete**, a judge picks the best (or aggregates) | `task` \| `branches` |
+| `script` | run a **shell command** — no LLM, zero tokens — capturing stdout as the phase output | `run` |
 
 ### Common phase fields
 
@@ -463,6 +464,31 @@ For open-ended work, the best result often comes from generating several candida
 - **Judge** — after the fan-out, one judge agent sees every variant (numbered) plus your `judge` rubric and picks a winner via a `WINNER: <n>` line or `{"winner": n}`. An unreadable verdict **fails open** to variant 1; a failed judge falls back too — the work is never lost.
 - **`mode`** — `best` returns the winning variant **verbatim**; `aggregate` returns the judge's **synthesized** answer combining the strongest parts.
 - **Short-circuits:** if only one competitor survives, it wins with no judge call; if all fail, the phase fails. The TUI shows `⚑ N→#k`; usage sums variants + judge. Like `gate`, it's **excluded from `cross-run` cache**.
+
+### Shell steps (`script`)
+
+Not every step needs a model. A `script` phase runs a **shell command** directly — zero tokens, no subagent — and captures its stdout as the phase output. Use it to glue LLM work to real tools: run a build or test suite, a formatter, `git`, `curl` a webhook, or pipe a previous phase's output through a script.
+
+```jsonc
+{
+  "id": "build",
+  "type": "script",
+  "run": "npm run build",              // string → runs in a shell
+  "timeout": 120000                     // optional ms cap (1000–300000, default 60000)
+},
+{
+  "id": "score",
+  "type": "script",
+  "run": ["python", "score.py"],        // array → direct exec, no shell (injection-safe)
+  "input": "{steps.analyze.output}",    // optional — piped to stdin (interpolation-enabled)
+  "dependsOn": ["analyze"]
+}
+```
+
+- **`run`** — the command. A **string** runs through a shell (`sh -c` / `cmd`); an **array** is spawned directly (execvp-style, no shell). Prefer the array form for anything containing interpolated values: a string `run` that contains an interpolation placeholder is **rejected at validation** (a shell-injection guard) — pass dynamic values via the array form or `input` instead.
+- **`input`** — optional text piped to the command's stdin; supports interpolation (`{steps.X.output}`, `{args.X}`). If omitted, stdin is closed.
+- **`timeout`** — optional millisecond cap (1000–300000, default 60000). On timeout the child gets `SIGTERM`, then `SIGKILL` after a grace period, and the phase fails.
+- A non-zero exit **fails** the phase (stderr is captured); stdout is capped at 1 MB. `script` phases spend **zero tokens**, do not support `retry` or `output: "json"`, and are **excluded from `cross-run` cache** (a shell step may have side effects). The `compile` diagram renders them as `⚡ script`.
 
 ### Cross-run memoization (`cache`)
 
@@ -750,7 +776,7 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 
 <div align="center">
 
-**0 runtime dependencies** · **897 tests** · **9 phase types** · **shared context tree** · **cross-session resume** · **cross-run memoization** · **per-item map caching** · **incremental recompute** · **FlowIR compile seam** · **detached execution** · **`compile` Mermaid renderer** · **~9k LOC runtime**
+**0 runtime dependencies** · **897 tests** · **10 phase types** · **shared context tree** · **cross-session resume** · **cross-run memoization** · **per-item map caching** · **incremental recompute** · **FlowIR compile seam** · **detached execution** · **`compile` Mermaid renderer** · **~9k LOC runtime**
 
 </div>
 
@@ -789,7 +815,7 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 - **No `output: "file"`.** Outputs are text/JSON only — write files via an agent's `write` tool call.
 - **`map` fans out over a JSON array from a string `over`.** The `over` field is a string that either interpolates to a JSON array (e.g. `{steps.ID.json}`) or is a literal JSON-array string. Wrap a plain text list in a single-agent `output: "json"` phase first, or pass `JSON.stringify([...])` for a fixed list. (A raw literal array is rejected — emit it from a phase and reference that.)
 - **The DAG must be acyclic.** Cycles are rejected at validation.
-- **Cross-run cache excludes `gate`, `approval`, `loop`, and `tournament`.** These must produce a fresh result each run.
+- **Cross-run cache excludes `gate`, `approval`, `loop`, `tournament`, and `script`.** These must produce a fresh result each run (a `script` phase may also have side effects).
 - **Approval auto-rejects in detached mode.** This is a safety invariant — approval gates are never silently bypassed.
 
 ## Development
