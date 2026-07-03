@@ -706,7 +706,17 @@ async function executePhase(
 	// every type branch inside executePhaseInner is covered. A skipped phase ran
 	// nothing — no side effect to record.
 	const stamp = (ps: PhaseState): PhaseState => {
-		if (phase.idempotent === false && ps.status !== "skipped") ps.sideEffect = true;
+		if (phase.idempotent === false && ps.status !== "skipped") {
+			ps.sideEffect = true;
+			// Resume double-fire warning (issue #20): a non-idempotent phase is never
+			// cached, so on resume it RE-EXECUTES even though a prior attempt already
+			// completed — re-firing its side effect. Surface it so operators aren't
+			// surprised by a second webhook/deploy. Only when a prior DONE state
+			// existed (the resume signal) and this run actually re-ran (status done).
+			if (prior?.status === "done" && ps.status === "done" && !ps.cacheHit) {
+				ps.warnings = [...(ps.warnings ?? []), "idempotent:false phase re-executed on resume (a prior attempt had completed) — its side effect fired again"];
+			}
+		}
 		return ps;
 	};
 	// Non-keyword cwd (or none): no workspace lifecycle — run directly.
@@ -1233,7 +1243,7 @@ async function executePhaseInner(
 							const s = sc.scorers[i];
 							results.push(
 								s.type === "code-compiles"
-									? await runCodeCompilesScorer(s, i, target, effCwd)
+									? await runCodeCompilesScorer(s, i, target)
 									: evaluatePureScorer(s, i, target),
 							);
 						}
@@ -2017,6 +2027,18 @@ async function executePhaseInner(
 		let iterations = 0;
 		let stop: NonNullable<PhaseState["loop"]>["stop"] = "maxIterations";
 		let failedResult: RunResult | undefined;
+		// Bounded history of failed iterations (issue #17): when a reflexion loop
+		// continues past failures, only the terminal one survives in `error` — keep
+		// the rest for post-hoc debugging. Capped to avoid unbounded state growth.
+		const LOOP_FAILURE_HISTORY_CAP = 20;
+		const loopFailures: Array<{ iteration: number; error: string }> = [];
+		const recordLoopFailure = (iteration: number, r: RunResult): void => {
+			const err = isContractViolation(r.errorMessage)
+				? r.errorMessage!
+				: sanitizeErrorMessage(r.errorMessage || r.stderr || "") || `iteration ${iteration} failed`;
+			loopFailures.push({ iteration, error: err });
+			if (loopFailures.length > LOOP_FAILURE_HISTORY_CAP) loopFailures.shift();
+		};
 		// Reflexion state: what the NEXT iteration should be told about THIS one.
 		let reflexionNext: ReflexionInput | undefined;
 		let lastReflexion: string | undefined;
@@ -2080,10 +2102,12 @@ async function executePhaseInner(
 				if (hardStop) {
 					failedResult = r;
 					stop = "failed";
+					recordLoopFailure(i, r);
 					break;
 				}
 				failedResult = r;
 				lastIterationFailed = true;
+				recordLoopFailure(i, r);
 				// Sanitize before injecting into the next prompt: raw provider errors
 				// can carry HTML/transport noise (same policy as the transcript path).
 				const rawErr = r.errorMessage || r.stderr || undefined;
@@ -2146,7 +2170,7 @@ async function executePhaseInner(
 				usage: aggUsage,
 				timedOut: failedResult?.phaseTimeout || undefined,
 				error: failedResult?.errorMessage || failedResult?.stderr || (stop === "aborted" ? "Aborted" : `loop '${phase.id}' iteration ${iterations} failed`),
-				loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}) },
+				loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}), ...(loopFailures.length ? { failures: [...loopFailures] } : {}) },
 				warnings: loopWarnings.length ? loopWarnings : undefined,
 				inputHash,
 				reads: readRefsToReads(readRefs, state),
@@ -2159,7 +2183,7 @@ async function executePhaseInner(
 			output: lastOutput,
 			json: parseJson ? safeParse(lastOutput) : undefined,
 			usage: aggUsage,
-			loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}) },
+			loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}), ...(loopFailures.length ? { failures: [...loopFailures] } : {}) },
 			warnings: loopWarnings.length ? loopWarnings : undefined,
 			inputHash,
 			reads: readRefsToReads(readRefs, state),

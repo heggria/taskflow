@@ -243,3 +243,32 @@ test("sideEffect marker: set on done AND failed, not on skipped, absent by defau
 	assert.equal(state.phases["eff-skip"]?.sideEffect, undefined, "a skipped phase ran nothing — no marker");
 	assert.equal(state.phases["plain"]?.sideEffect, undefined, "default phases carry no marker");
 });
+
+test("idempotent:false warns on resume re-execution (issue #20)", async () => {
+	let calls = 0;
+	const def = { name: "resume-warn", phases: [{ id: "a", task: "deploy", idempotent: false }] };
+	const state = mkState(def, "idem-m2");
+	const deps: RuntimeDeps = {
+		cwd: tmpRoot, agents: [dummyAgent],
+		runTask: async () => { calls++; return ok("deployed " + calls); },
+	};
+	await executeTaskflow(state, deps);
+	assert.equal(state.phases["a"]?.warnings?.some((w) => w.includes("re-executed on resume")) ?? false, false, "no resume warning on the first run");
+	// Resume: the phase re-executes (idempotent:false is never cached) and must warn.
+	state.status = "running";
+	await executeTaskflow(state, deps);
+	assert.equal(calls, 2, "the side-effect phase re-ran on resume");
+	assert.ok(state.phases["a"]?.warnings?.some((w) => w.includes("re-executed on resume")), "resume double-fire warning must be surfaced");
+});
+
+test("idempotent:false on approval/flow is a validation no-op warning (issue #20)", () => {
+	const appr = validateTaskflow({
+		name: "x",
+		phases: [
+			{ id: "a", task: "t" },
+			{ id: "ap", type: "approval", task: "ok?", idempotent: false, dependsOn: ["a"] },
+		],
+	});
+	assert.equal(appr.ok, true);
+	assert.ok(appr.warnings.some((w) => w.includes("no-op") && w.includes("approval")));
+});

@@ -80,8 +80,11 @@ export interface PhaseState {
 	/** Human-in-the-loop outcome (approval phases only). */
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
 	/** Loop iteration accounting (loop phases only). `reflexion` is the last
-	 *  failure summary injected into an iteration (audit trail for reflexion loops). */
-	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" | "aborted"; reflexion?: string };
+	 *  failure summary injected into an iteration (audit trail for reflexion loops).
+	 *  `failures` records each failed iteration's (sanitized) error — useful when a
+	 *  reflexion loop continues past failures and only the terminal one would
+	 *  otherwise survive in `error`. Bounded (most-recent kept). */
+	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" | "aborted"; reflexion?: string; failures?: Array<{ iteration: number; error: string }> };
 	/** Tournament outcome (tournament phases only). */
 	tournament?: { variants: number; winner: number; mode: "best" | "aggregate"; reason?: string };
 	/** Set when a `flow { def }` inline sub-flow definition could not be resolved,

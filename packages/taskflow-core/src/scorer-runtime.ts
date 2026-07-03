@@ -29,12 +29,14 @@ export const CODE_COMPILES_TIMEOUT_MS = 30_000;
  *
  * If the target contains a single fenced code block, its body is compiled
  * (model outputs usually wrap code in fences); otherwise the raw target is.
+ *
+ * The compiler runs inside an isolated temp dir (not the phase's cwd) so it
+ * cannot resolve a repo-planted `node_modules/.bin/tsc` — hence no `cwd` arg.
  */
 export async function runCodeCompilesScorer(
 	scorer: Scorer,
 	index: number,
 	target: string,
-	cwd: string,
 ): Promise<ScorerResult> {
 	const name = scorerName(scorer, index);
 	const mk = (passed: boolean, detail?: string): ScorerResult => ({
@@ -52,14 +54,21 @@ export async function runCodeCompilesScorer(
 
 	const code = extractCode(target);
 	const ext = lang === "typescript" ? ".ts" : ".mjs";
-	const file = path.join(os.tmpdir(), `taskflow-scorer-${process.pid}-${Date.now()}-${index}${ext}`);
+	// Isolated temp DIR (not a bare temp file): mkdtempSync creates a fresh
+	// 0700 directory atomically, closing the predictable-name symlink/TOCTOU race
+	// on shared /tmp (issue #18). The compiler is also run WITH THIS DIR AS CWD
+	// (not the phase's effCwd) so `npx --no-install tsc` cannot resolve a
+	// repo-planted `node_modules/.bin/tsc` from the working directory —
+	// defense-in-depth beyond the dynamic-flow scorer block.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-scorer-"));
+	const file = path.join(dir, `snippet${ext}`);
 	try {
 		fs.writeFileSync(file, code, "utf-8");
 		const [cmd, args] =
 			lang === "typescript"
 				? ["npx", ["--no-install", "tsc", "--noEmit", "--skipLibCheck", file]]
 				: [process.execPath, ["--check", file]];
-		const r = await runProcess(cmd, args as string[], cwd);
+		const r = await runProcess(cmd, args as string[], dir);
 		if (r.timedOut) return mk(false, `compiler timed out after ${CODE_COMPILES_TIMEOUT_MS}ms`);
 		if (r.spawnError) return mk(false, `compiler unavailable: ${r.spawnError}`);
 		if (r.code === 0) return mk(true);
@@ -69,7 +78,7 @@ export async function runCodeCompilesScorer(
 		return mk(false, `scorer error: ${e instanceof Error ? e.message : String(e)}`);
 	} finally {
 		try {
-			fs.unlinkSync(file);
+			fs.rmSync(dir, { recursive: true, force: true });
 		} catch {
 			/* best-effort cleanup */
 		}

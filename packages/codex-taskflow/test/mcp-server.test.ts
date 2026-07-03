@@ -317,38 +317,42 @@ test("mcp: taskflow_compile falls back to text-only (with outline) for a huge fl
 
 // The bundled skill is the plugin's primary authoring surface — a flow example
 // that fails taskflow_verify would teach Codex to emit rejected flows. Extract
-// every self-contained JSON(c) flow block from SKILL.md and assert it validates.
-test("skill: every complete flow example in SKILL.md passes taskflow_verify", async () => {
-	const { readFileSync } = await import("node:fs");
+// every self-contained JSON(c) flow block from every bundled skill file and
+// assert it validates.
+test("skill: every complete flow example in the bundled skill files passes taskflow_verify", async () => {
+	const { readFileSync, readdirSync } = await import("node:fs");
 	const { fileURLToPath } = await import("node:url");
-	const skillPath = fileURLToPath(new URL("../plugin/skills/taskflow/SKILL.md", import.meta.url));
-	const src = readFileSync(skillPath, "utf8");
+	const path = await import("node:path");
+	const skillDir = fileURLToPath(new URL("../plugin/skills/taskflow/", import.meta.url));
 	const tools = makeToolHandlers(process.cwd());
 
-	const re = /```jsonc?\n([\s\S]*?)```/g;
-	let m: RegExpExecArray | null;
 	let checked = 0;
-	while ((m = re.exec(src)) !== null) {
-		const body = m[1];
-		if (!body.includes('"phases"')) continue;
-		// Strip // comments + trailing commas so the jsonc example parses as JSON.
-		const cleaned = body
-			.replace(/(^|[^:])\/\/.*$/gm, "$1")
-			.replace(/,(\s*[}\]])/g, "$1");
-		let obj: { phases?: unknown[] };
-		try {
-			obj = JSON.parse(cleaned);
-		} catch {
-			continue; // fragment / placeholder block, not a full flow
+	for (const file of readdirSync(skillDir).filter((f) => f.endsWith(".md"))) {
+		const src = readFileSync(path.join(skillDir, file), "utf8");
+		const re = /```jsonc?\n([\s\S]*?)```/g;
+		let m: RegExpExecArray | null;
+		while ((m = re.exec(src)) !== null) {
+			const body = m[1];
+			if (!body.includes('"phases"')) continue;
+			// Strip // comments + trailing commas so the jsonc example parses as JSON.
+			const cleaned = body
+				.replace(/(^|[^:])\/\/.*$/gm, "$1")
+				.replace(/,(\s*[}\]])/g, "$1");
+			let obj: { phases?: unknown[]; name?: unknown };
+			try {
+				obj = JSON.parse(cleaned);
+			} catch {
+				continue; // fragment / placeholder block, not a full flow
+			}
+			if (!obj || !Array.isArray(obj.phases) || !obj.name) continue;
+			checked++;
+			const res = (await tools.taskflow_verify({ define: obj })) as {
+				content: { type: string; text?: string }[];
+				isError: boolean;
+			};
+			const text = res.content.find((c) => c.type === "text")?.text ?? "";
+			assert.equal(res.isError, false, `${file} flow example "${obj.name}" must verify cleanly, got: ${text}`);
 		}
-		if (!obj || !Array.isArray(obj.phases)) continue;
-		checked++;
-		const res = (await tools.taskflow_verify({ define: obj })) as {
-			content: { type: string; text?: string }[];
-			isError: boolean;
-		};
-		const text = res.content.find((c) => c.type === "text")?.text ?? "";
-		assert.equal(res.isError, false, `SKILL.md flow example must verify cleanly, got: ${text}`);
 	}
-	assert.ok(checked >= 1, "expected at least one complete flow example in SKILL.md");
+	assert.ok(checked >= 5, `expected at least 5 complete flow examples across the skill files, found ${checked}`);
 });

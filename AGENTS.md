@@ -44,7 +44,7 @@ packages/
 │  │  ├─ render.ts / runs-view.ts / approval-view.ts  ← pi-tui rendering + interactive views
 │  │  └─ init.ts           ← /tf init command: scaffolds a taskflow / model roles interactively
 │  ├─ test/              ← pi-adapter unit tests + .mts e2e scripts
-│  └─ skills/            ← SKILL.md files that teach the LLM how to write taskflows
+│  └─ skills/            ← GENERATED per-host skill files (do not edit; see skills-src/)
 └─ codex-taskflow/         ← Codex adapter (depends on taskflow-core)
    ├─ src/
    │  ├─ codex-runner.ts   ← codex subagent runner (`codex exec --json`) + CodexSubagentRunner
@@ -52,13 +52,18 @@ packages/
    ├─ plugin/            ← Codex plugin scaffold (`codex plugin add taskflow@taskflow`)
    │  ├─ .codex-plugin/plugin.json  ← plugin manifest (skills + mcpServers pointers)
    │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx codex-taskflow`
-   │  ├─ skills/taskflow/  ← SKILL.md (trigger) + agents/openai.yaml (Codex interface)
+   │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← plugin icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← codex-adapter unit tests + .mts e2e scripts
 
 .claude-plugin/           ← marketplace.json (repo-root; `codex plugin marketplace add heggria/taskflow`)
 
-scripts/                  ← build helpers (copy-agents.mjs copies agent .md into dist)
+skills-src/taskflow/      ← SINGLE SOURCE for both hosts' skills: entry.pi.md + entry.codex.md
+                            (frontmatter + host binding) + core.md/patterns.md/advanced.md/
+                            configuration.md (shared body with <!-- host:pi/codex --> blocks).
+                            Compiled by scripts/build-skills.mjs (npm run build:skills);
+                            drift-guarded by packages/pi-taskflow/test/skills-build.test.ts.
+scripts/                  ← build helpers (copy-agents.mjs, build-skills.mjs)
 examples/                 ← runnable flow definitions (.json)
 docs/                     ← design docs, RFCs, dogfooding reports, codex-mcp guide
 tsconfig.base.json        ← shared compiler options; per-package tsconfig.build.json emits dist
@@ -174,7 +179,7 @@ npm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built
 2. Add per-type validation in `validateTaskflow()`.
 3. Add the execution branch in `executePhase()` in `runtime.ts`.
 4. Add tests in `packages/taskflow-core/test/runtime-branches.test.ts` (or a new file).
-5. Update `SKILL.md` with usage guidance.
+5. Update the skill sources in `skills-src/taskflow/` (never the generated files) and run `node scripts/build-skills.mjs`.
 
 ### Adding a New Condition Operator
 1. Add the token to `OPS` in `interpolate.ts`.
@@ -192,7 +197,7 @@ npm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built
 2. Update `validateTaskflow()` if new constraints are needed.
 3. Update `desugar()` if the shorthand needs to emit the new field.
 4. Update `interpolate.ts` if new placeholder paths are introduced.
-5. Update `SKILL.md` and `README.md`.
+5. Update the skill sources in `skills-src/taskflow/` and `README.md`, then run `node scripts/build-skills.mjs`.
 
 > All of `schema.ts`, `runtime.ts`, `interpolate.ts`, `cache.ts`, `agents.ts` live in `packages/taskflow-core/src/`.
 

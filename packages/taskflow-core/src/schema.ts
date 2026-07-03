@@ -751,6 +751,11 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (typeof v !== "boolean") {
 				errors.push(`Phase '${p.id}': 'idempotent' must be a boolean, got ${typeof v}`);
 			} else if (v === false) {
+				if (type === "approval" || type === "flow") {
+					warnings.push(
+						`Phase '${p.id}' (${type}): 'idempotent: false' is a no-op here — ${type} phases run no subagent (no transient retry) and are already excluded from cross-run cache. The flag has no effect.`,
+					);
+				}
 				if (p.cache?.scope === "cross-run") {
 					warnings.push(
 						`Phase '${p.id}': idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached (it will re-run every time).`,

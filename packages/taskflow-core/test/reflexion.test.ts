@@ -349,8 +349,7 @@ test("reflexion on: phase timeout still hard-stops the loop", async () => {
 	assert.equal(state.phases["l"]?.timedOut, true);
 });
 
-test("reflexion on: audit trail — the last summary is persisted on ps.loop.reflexion", async () => {
-	let calls = 0;
+test("reflexion on: audit trail — the last summary is persisted on ps.loop.reflexion", async () => {	let calls = 0;
 	const def = {
 		name: "audit",
 		phases: [{
@@ -369,6 +368,33 @@ test("reflexion on: audit trail — the last summary is persisted on ps.loop.ref
 	};
 	await executeTaskflow(state, deps);
 	assert.ok(state.phases["l"]?.loop?.reflexion?.includes("first crash"), "the injected summary must be inspectable post-run");
+});
+
+test("reflexion on: loop.failures records every failed iteration (issue #17)", async () => {
+	let calls = 0;
+	const def = {
+		name: "failure-history",
+		phases: [{
+			id: "l", type: "loop", task: "try\n{reflexion}",
+			until: "{steps.l.output} == done", maxIterations: 4, reflexion: true,
+		}],
+	};
+	const state = mkState(def, "rfx-17");
+	const deps: RuntimeDeps = {
+		cwd: "/tmp", agents: [dummyAgent],
+		runTask: async () => {
+			calls++;
+			if (calls <= 2) return hardFail(`crash number ${calls}`);
+			return ok("done");
+		},
+	};
+	const result = await executeTaskflow(state, deps);
+	assert.equal(result.ok, true, "loop recovers on iteration 3");
+	const failures = state.phases["l"]?.loop?.failures;
+	assert.ok(Array.isArray(failures) && failures.length === 2, `both failed iterations recorded (got ${failures?.length})`);
+	assert.deepEqual(failures?.map((f) => f.iteration), [1, 2]);
+	assert.ok(failures?.[0].error.includes("crash number 1"));
+	assert.ok(failures?.[1].error.includes("crash number 2"), "the intermediate failure survives even though the loop succeeded");
 });
 
 test("reflexion on: convergence check still uses successful outputs only", async () => {	let calls = 0;

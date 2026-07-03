@@ -81,6 +81,24 @@ try {
 		console.error("[detached-runner] No runnerModule in context — phases will fail with 'No subagent runner injected'");
 	}
 
+	// FAIL FAST when a runner was promised but could not be loaded. Limping on
+	// would fail EVERY phase with the generic "No subagent runner injected"
+	// stub — burying the real cause (a bad module path, a compile-time specifier
+	// bug, a missing export). Exiting non-zero here routes the real stderr
+	// message into the host's early-exit crash guard, which persists it on the
+	// run's synthetic __detach__ phase where it is pollable and debuggable.
+	if (ctx.runnerModule && !runTask) {
+		state.status = "failed";
+		state.phases["__detach__"] = {
+			id: "__detach__",
+			status: "failed",
+			endedAt: Date.now(),
+			error: `Runner module failed to load: '${ctx.runnerModule}' (export '${ctx.runnerExport ?? "piSubagentRunner"}'). See detached-runner stderr for the import error.`,
+		};
+		saveRun(state, cleanupConfig);
+		process.exit(1);
+	}
+
 	const result = await executeTaskflow(state, {
 		cwd: ctx.cwd,
 		agents,

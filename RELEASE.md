@@ -33,6 +33,28 @@ npm test               # 918/918 green
 npm run build          # emit dist/ for all three packages (tsc → .js + .d.ts)
 ```
 
+### Skill coverage check (before every release)
+
+The skills are the LLM-facing API surface — an engine feature the skill doesn't
+teach effectively does not exist. **Skills are authored ONCE in
+`skills-src/taskflow/` and compiled per host** by `scripts/build-skills.mjs`
+(pi → `packages/pi-taskflow/skills/taskflow/`, codex →
+`packages/codex-taskflow/plugin/skills/taskflow/`). Never edit the generated
+files — `skills-build.test.ts` fails CI on drift. For every feature/change in
+this release's CHANGELOG section, verify:
+
+- [ ] New DSL fields, phase types, actions, and commands appear in the right
+      **source** layer: `core.md` (core DSL + actions), `patterns.md` (if it
+      changes best practice), `advanced.md` (context sharing / dynamic flows /
+      isolation / recompute), `configuration.md` (knobs), or the per-host
+      entry files (`entry.pi.md` / `entry.codex.md`) for host bindings.
+- [ ] Host-only capabilities are wrapped in `<!-- host:pi -->` /
+      `<!-- host:codex -->` blocks — never teach a host a tool it can't reach.
+- [ ] `node scripts/build-skills.mjs` ran and the generated files are committed.
+- [ ] The `taskflow` tool description in the pi adapter (`src/index.ts`) lists
+      any new `action` values.
+- [ ] Removed/renamed fields are purged from `skills-src/` (grep the old name).
+
 > **Why a build step.** Node refuses to type-strip `.ts` files under
 > `node_modules`, so the published packages ship compiled `dist/*.js` + `.d.ts`.
 > `prepublishOnly` runs `npm run build` automatically, so `npm publish` always
