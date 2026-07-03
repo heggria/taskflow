@@ -159,11 +159,14 @@ export function safeParse(text: string): unknown {
 	// Extract from fenced blocks. Outputs often contain multiple fences
 	// (e.g. a ```typescript evidence block before the ```json payload), so try
 	// every fence — json-tagged blocks first, then untagged/other blocks.
-	const fenceRe = /```(\w*)[ \t]*\r?\n?([\s\S]*?)```/g;
+	// Linear-time by construction: the info string `[^\n`]*` stops at the first
+	// newline (no overlap with the body's `[\s\S]*?`), so there is no ambiguous
+	// whitespace backtracking (js/polynomial-redos safe).
+	const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
 	const fenced: { lang: string; body: string }[] = [];
 	let fm: RegExpExecArray | null;
 	while ((fm = fenceRe.exec(trimmed)) !== null) {
-		fenced.push({ lang: fm[1].toLowerCase(), body: fm[2].trim() });
+		fenced.push({ lang: fm[1].trim().toLowerCase(), body: fm[2].trim() });
 	}
 	const ordered = [...fenced.filter((b) => b.lang === "json"), ...fenced.filter((b) => b.lang !== "json")];
 	for (const block of ordered) {
@@ -200,7 +203,7 @@ export function safeParse(text: string): unknown {
 	// because `lastIndexOf(close)` lands on the *last* bracket — for the
 	// anti-pattern the stray key is between the array's `]` and the trailing
 	// `]`, not after the last one.
-	if (/]\s*[\},]?\s*"[^"\n]+"\s*:/.test(trimmed)) {
+	if (/][\s\},]*"[^"\n]+"\s*:/.test(trimmed)) {
 		console.warn(
 			"[pi-taskflow safeParse] input looks like a JSON array followed by a stray top-level key " +
 				`(pattern: [{...}], "key": ...). This is not valid JSON. ` +

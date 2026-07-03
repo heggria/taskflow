@@ -65,6 +65,20 @@ test("safeParse: array + stray top-level key triggers diagnostic hint (v0.0.8.1)
 	}
 });
 
+test("safeParse: ReDoS-safe on pathological fence/stray-key inputs (linear time)", () => {
+	// The fence + stray-key regexes were made linear (js/polynomial-redos). A
+	// pathological input (fence opener + a long whitespace run, no closing fence)
+	// must return promptly, not backtrack super-linearly. A generous wall-clock
+	// bound catches a regression without being flaky.
+	const pathologicalFence = "```" + " \t".repeat(100_000);
+	const pathologicalKey = "]" + " ".repeat(100_000);
+	const t0 = Date.now();
+	assert.equal(safeParse(pathologicalFence), undefined);
+	assert.equal(safeParse(pathologicalKey), undefined);
+	const elapsed = Date.now() - t0;
+	assert.ok(elapsed < 1000, `safeParse must stay linear on adversarial input (took ${elapsed}ms)`);
+});
+
 test("safeParse: malformed JSON inside array does NOT trigger the hint (no false positive)", () => {
 	// Only the specific "syntactically valid array prefix + stray top-level key"
 	// pattern should fire the hint. A genuinely malformed array (e.g. truncated
