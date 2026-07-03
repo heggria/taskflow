@@ -84,11 +84,38 @@ tokens.
 
 Useful per-phase fields beyond the basics: `retry` (`{max, backoffMs, factor}`),
 `timeout` (ms cap per subagent call — aborts and fails the phase with a
-`timedOut` marker, never retried; >= 1000, not on approval/flow), and `expect`
+`timedOut` marker, never retried; >= 1000, not on approval/flow), `expect`
 (an output contract for `output: "json"` phases — `{type, properties, required,
 items, enum}` — a violation fails the phase with per-path diagnostics and is
 retryable under `retry`; `taskflow_verify` also warns when a
-`{steps.X.json.field}` ref names a field absent from X's contract).
+`{steps.X.json.field}` ref names a field absent from X's contract), and
+`idempotent: false` (side-effect classification — for phases with irreversible
+effects like webhook POSTs or deploys: transient errors are NOT auto-retried
+(explicit `retry{}` still honored) and the result is never cached in any scope,
+so the phase re-runs every time).
+
+### Scoring gates (`score`)
+
+A `gate` may declare `score`: deterministic scorers that run at **zero tokens**
+and only escalate to an LLM when they can't decide. Scorer types:
+`exact-match` (`value`), `contains` (`value`), `regex` (`pattern`, `negate?`),
+`json-schema` (`schema` — an `expect`-style contract), `length-range`
+(`min`/`max`), `code-compiles` (`language`: javascript|typescript). Combine
+with `all` (default) / `any` / `weighted` (+ `weights`, `threshold`; with a
+`judge` the last weight is the judge's). Deterministic pass → auto-PASS, no LLM
+call; fail → optional `judge: {agent?, task}` decides (fail-open on unparseable
+output) or the gate `task` runs with the scorer report appended; fail with no
+fallback → explicit BLOCK. The structured result is the gate's `.json`:
+`{steps.<gate>.json.combined}`, `.json.results`, `.json.verdict`.
+
+### Reflexion loops (`reflexion: true`)
+
+A `loop` phase with `reflexion: true` gives every iteration after the first a
+structured failure summary of the prior one (contract diagnostics, error, or
+the unmet `until`, + a truncated output snippet) via the `{reflexion}`
+placeholder (auto-appended if absent; iteration 1 sees a sentinel). Body
+failures become feedback instead of terminating the loop — timeout/abort still
+hard-stop, and exhausting `maxIterations` on a failure still fails the phase.
 
 ## Interpolation
 

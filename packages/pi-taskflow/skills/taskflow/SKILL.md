@@ -116,6 +116,7 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 | `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
 | `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Valid on any agent-running phase; note it caps EACH call, so a map/parallel/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
 | `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with a precise diagnostic (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
+| `idempotent` | side-effect classification. Default `true` (safe to cache + auto-retry). Set `false` on phases with **irreversible side effects** (webhook POSTs, deploys, DB writes, file mutations): transient provider errors are **not** auto-retried (an explicit `retry{}` IS still honored — it's your declaration that repeats are acceptable) and the result is **never cached** in any scope (within-run resume, cross-run, `incremental` — the phase re-runs every time). The phase state records `sideEffect: true` (rendered as ⚡). |
 
 ### Conditional routing (when + gate/branches)
 
@@ -211,6 +212,7 @@ enough" — the runtime always terminates (the cap is mandatory).
 - `until` — stop condition, same operators as `when` (a parse error stops the loop, fail-safe).
 - `maxIterations` — hard iteration cap (required to bound the loop).
 - `convergence` — `true` to stop early when an iteration's output equals the previous one.
+- `reflexion` — `true` to give each iteration structured feedback about the prior one (see below).
 
 ```jsonc
 {
@@ -225,6 +227,33 @@ enough" — the runtime always terminates (the cap is mandatory).
   "final": true
 }
 ```
+
+**Reflexion memory (`reflexion: true`).** By default each iteration only sees
+the prior output — the *reason* the loop isn't done yet (a contract violation,
+an error, the unmet `until`) is discarded, so models tend to repeat the same
+mistake. With `reflexion: true`, every iteration after the first receives a
+structured failure summary of the prior one: `expect`-contract diagnostics
+(the strongest signal), the error message, or the unmet stop condition, plus a
+truncated output snippet (capped at 2000 chars). Put `{reflexion}` in the task
+where you want it; if absent it is auto-appended (with a one-time warning).
+Iteration 1 sees a sentinel (`_(first iteration — no prior feedback yet)_`).
+
+Semantics shift to enable self-correction: **body failures become feedback
+instead of terminating the loop** — a failed iteration's diagnostics feed the
+next attempt. Timeout/abort still hard-stop, and if `maxIterations` exhausts
+with the last iteration failed, the phase fails (reflexion defers failure, it
+never erases it). Costs are bounded by `maxIterations` + the run `budget`.
+
+```jsonc
+{
+  "id": "emit-plan", "type": "loop", "reflexion": true, "maxIterations": 4,
+  "output": "json", "expect": { "type": "object", "required": ["steps", "done"] },
+  "until": "{steps.emit-plan.json.done} == true",
+  "task": "Emit the migration plan as JSON {steps:[...], done:bool}.\n{reflexion}"
+}
+```
+// iteration 2 sees e.g.: "## Reflexion: iteration 1 (prior) — FAILED — output
+// contract violated — $.done: required key is missing — Fix the issues above…"
 
 For data-dependent **replanning** each round, pair a `loop` body that emits a
 plan with `flow{def}` (see Sub-flows above). See `examples/iterative-replan.json`.
@@ -360,6 +389,47 @@ until PASS / budget / abort) — a generate→critique→regenerate rework loop.
 { "id": "spec-gate", "type": "gate", "onBlock": "retry", "retry": { "max": 3 },
   "dependsOn": ["implement"],
   "task": "Does the implementation satisfy ALL acceptance criteria? VERDICT: PASS or BLOCK with reasons." }
+```
+
+**Scoring gates (`score`).** Where `eval` gives boolean assertions, `score`
+gives **graded, composable, auditable** quality checks: deterministic scorers
+run against a target string at zero tokens, combine into a [0,1] score, and
+only fall back to an LLM when they can't decide. The structured result is the
+gate's `.json` — downstream phases can read `{steps.<gate>.json.combined}` /
+`.json.results.0.passed` and route on quality.
+
+| field | meaning |
+|-------|---------|
+| `target` | interpolation ref for the scored string (default `{previous.output}`) |
+| `scorers` | array of checks: `exact-match` (`value`), `contains` (`value`), `regex` (`pattern`, optional `negate`), `json-schema` (`schema`, an `expect`-style contract), `length-range` (`min`/`max`), `code-compiles` (`language`: javascript\|typescript) |
+| `combine` | `all` (default) / `any` / `weighted` |
+| `weights` | weighted only — one entry per scorer, **+1 trailing entry for the judge** when present |
+| `threshold` | weighted only — combined-score cutoff in (0,1], default 0.5 |
+| `judge` | optional LLM-as-judge fallback `{agent?, task}` — runs ONLY when the deterministics fail; sees the target + scorer report; returns `{"score": 0-1, "verdict": "pass"\|"block", "reason"}` |
+
+Decision order: (1) deterministic scorers pass → **auto-PASS, zero LLM tokens**
+(with `weighted`+judge, the deterministic score is a lower bound — if it already
+clears the threshold the judge is skipped); (2) fail + `judge` → judge decides
+(weighted folds its score in; all/any takes its verdict); (3) fail + `task` →
+the gate task runs with the scorer report appended; (4) fail + no fallback →
+**explicit BLOCK** (a deterministic failure is not ambiguity). Fail-open cases:
+unparseable judge output → PASS; unresolved `target` with no fallback → PASS
+with a warning; malformed `score` → degrades to the plain LLM gate.
+
+```jsonc
+// zero-token quality bar with LLM escalation:
+{ "id": "quality", "type": "gate", "dependsOn": ["gen"],
+  "score": {
+    "target": "{steps.gen.output}",
+    "scorers": [
+      { "type": "json-schema", "name": "shape", "schema": { "type": "object", "required": ["summary", "risks"] } },
+      { "type": "regex", "name": "no-placeholders", "pattern": "TODO|TBD", "negate": true },
+      { "type": "length-range", "name": "substantive", "min": 200 }
+    ],
+    "combine": "weighted", "weights": [3, 2, 1, 2], "threshold": 0.8,
+    "judge": { "agent": "reviewer", "task": "Score the analysis quality 0-1: depth, evidence, actionability." }
+  } }
+// downstream: { "when": "{steps.quality.json.combined} >= 0.9", ... }
 ```
 
 ### Structured-verify phases (v0.0.8.1)

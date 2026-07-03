@@ -8,6 +8,7 @@
 import * as path from "node:path";
 import { StringEnum } from "./typebox-helpers.ts";
 import { contractShapeErrors } from "./contract.ts";
+import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 
@@ -187,6 +188,13 @@ const PhaseSchema = Type.Object(
 				default: true,
 			}),
 		),
+		reflexion: Type.Optional(
+			Type.Boolean({
+				description:
+					"[loop] When true, each iteration after the first receives a {reflexion} placeholder (auto-appended if the task lacks it) carrying a structured failure summary of the prior iteration — output snippet, expect-contract diagnostics, error, or the unmet 'until' condition. Body failures become feedback for the next iteration instead of terminating the loop (timeout/abort still hard-stop; if maxIterations exhausts with the last iteration failed, the phase fails). Default false — existing loops are unchanged.",
+				default: false,
+			}),
+		),
 
 		// tournament: N variants compete, a judge picks the best (or aggregates)
 		variants: Type.Optional(
@@ -241,6 +249,13 @@ const PhaseSchema = Type.Object(
 		optional: Type.Optional(
 			Type.Boolean({ description: "If true, a failure does not abort the run", default: false }),
 		),
+		idempotent: Type.Optional(
+			Type.Boolean({
+				description:
+					"Marks whether this phase is safe to auto-retry and cache. Defaults to true (safe). Set to false for phases with irreversible side effects (webhook POSTs, deploys, DB writes): transient provider errors are NOT auto-retried, and the result is never served from or written to any cache (within-run resume or cross-run — including under a flow-level 'incremental'). Explicit 'retry{}' is still honored — it is the author's declaration that a repeat is acceptable. The phase state records sideEffect: true for audit.",
+				default: true,
+			}),
+		),
 		concurrency: Type.Optional(Type.Number({ description: "Override max concurrency for map/parallel" })),
 		context: Type.Optional(
 			Type.Array(Type.String(), {
@@ -265,6 +280,12 @@ const PhaseSchema = Type.Object(
 			Type.Array(Type.String(), {
 				description:
 					"[gate] Zero-token machine checks that run BEFORE the LLM gate. If ALL pass, the gate is skipped (PASS). If ANY fail, the LLM gate runs as normal. Each entry is a condition expression like '{steps.x.output} contains PASS' or '{steps.x.json.score} >= 0.8'. Supports same operators as 'when' plus 'contains' for substring checks.",
+			}),
+		),
+		score: Type.Optional(
+			Type.Unknown({
+				description:
+					'[gate] Deterministic output scorers with optional LLM-judge fallback: {target?, scorers: [{type: "exact-match"|"contains"|"regex"|"json-schema"|"length-range"|"code-compiles", ...}], combine?: "all"|"any"|"weighted", weights?, threshold?, judge?: {agent?, task}}. Scorers run against \'target\' (default {previous.output}) at zero tokens; if the combination passes, the gate auto-passes with NO LLM call. If it fails, the judge (when present) or the gate \'task\' decides. The structured result is this phase\'s .json ({steps.<id>.json.combined}, .json.results). With combine:"weighted" and a judge, \'weights\' has one trailing entry for the judge.',
 			}),
 		),
 		cache: Type.Optional(CacheSchema),
@@ -648,8 +669,14 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (!PHASE_TYPES.includes(type)) errors.push(`Phase '${p.id}': unknown type '${type}'`);
 
 		// Per-type requirements
-		if (type === "agent" || type === "gate") {
-			if (!p.task) errors.push(`Phase '${p.id}' (${type}) requires 'task'`);
+		if (type === "agent") {
+			if (!p.task) errors.push(`Phase '${p.id}' (agent) requires 'task'`);
+		}
+		if (type === "gate") {
+			// A scoring gate can decide without an LLM task: deterministic pass →
+			// auto-pass; deterministic fail → judge (when present) or explicit BLOCK.
+			const hasScore = (p as { score?: unknown }).score !== undefined;
+			if (!p.task && !hasScore) errors.push(`Phase '${p.id}' (gate) requires 'task' (or 'score')`);
 		}
 		if (type === "gate" && Array.isArray(p.eval)) {
 			// eval entries are interpolated + parsed at runtime (expr.indexOf/.slice);
@@ -658,6 +685,51 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				if (typeof e !== "string")
 					errors.push(`Phase '${p.id}' (gate): eval[${i}] must be a string condition, got ${typeof e}`);
 			});
+		}
+		// Scoring gates (`score`) — deterministic scorers + optional LLM judge.
+		const scoreVal = (p as { score?: unknown }).score;
+		if (scoreVal !== undefined) {
+			if (type !== "gate") {
+				errors.push(`Phase '${p.id}' (${type}): 'score' is only valid for gate phases`);
+			} else {
+				for (const e of scorerShapeErrors(scoreVal)) errors.push(`Phase '${p.id}': ${e}`);
+				if (Array.isArray(p.eval) && p.eval.length > 0) {
+					warnings.push(
+						`Phase '${p.id}' (gate): both 'eval' and 'score' are set — eval runs first (all-pass skips the gate entirely), then score. This is valid but usually one of the two suffices.`,
+					);
+				}
+				// Judge agent naming convention (mirrors the phase-agent check below).
+				const judgeAgent = (scoreVal as { judge?: { agent?: unknown } }).judge?.agent;
+				if (typeof judgeAgent === "string" && judgeAgent.includes("_")) {
+					errors.push(`Phase '${p.id}': score.judge.agent '${judgeAgent}' uses underscores — use hyphens`);
+				}
+			}
+		}
+		// Reflexion memory — loop-only.
+		if ((p as { reflexion?: unknown }).reflexion !== undefined) {
+			const r = (p as { reflexion?: unknown }).reflexion;
+			if (typeof r !== "boolean") {
+				errors.push(`Phase '${p.id}': 'reflexion' must be a boolean, got ${typeof r}`);
+			} else if (r === true && type !== "loop") {
+				errors.push(`Phase '${p.id}' (${type}): 'reflexion' is only valid for loop phases`);
+			}
+		}
+		// Side-effect classification (`idempotent: false`).
+		if ((p as { idempotent?: unknown }).idempotent !== undefined) {
+			const v = (p as { idempotent?: unknown }).idempotent;
+			if (typeof v !== "boolean") {
+				errors.push(`Phase '${p.id}': 'idempotent' must be a boolean, got ${typeof v}`);
+			} else if (v === false) {
+				if (p.cache?.scope === "cross-run") {
+					warnings.push(
+						`Phase '${p.id}': idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached (it will re-run every time).`,
+					);
+				} else if (flow.incremental === true && p.cache?.scope === undefined) {
+					warnings.push(
+						`Phase '${p.id}': idempotent:false under an incremental flow — this phase is excluded from caching and will re-run every invocation (this is the safe behavior for side effects).`,
+					);
+				}
+			}
 		}
 		if (type === "map") {
 			if (!p.over) errors.push(`Phase '${p.id}' (map) requires 'over'`);
@@ -889,6 +961,10 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			const refs = collectRefs(p);
 			for (const ref of refs.steps) {
 				if (ref === p.id) {
+					// Loop phases legitimately reference their own output: `until` (and
+					// the body) inspect the current iteration via {steps.<thisId>.output|json}
+					// — that is the documented stop-condition pattern, not a bug.
+					if ((p.type ?? "agent") === "loop") continue;
 					errors.push(`Phase '${p.id}': references its own output via {steps.${ref}.*}; this is almost always a bug.`);
 					continue;
 				}
@@ -962,6 +1038,12 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.when);
 	scan(phase.until);
 	for (const e of asArray<string>(phase.eval)) if (typeof e === "string") scan(e);
+	// Scoring gates: the target ref and judge prompt are interpolated at runtime.
+	const score = (phase as { score?: { target?: unknown; judge?: { task?: unknown } } }).score;
+	if (score && typeof score === "object") {
+		if (typeof score.target === "string") scan(score.target);
+		if (score.judge && typeof score.judge === "object" && typeof score.judge.task === "string") scan(score.judge.task);
+	}
 	for (const b of asArray<{ task?: string }>(phase.branches)) if (b && typeof b === "object") scan(b.task);
 	for (const v of Object.values(phase.with ?? {})) if (typeof v === "string") scan(v);
 	for (const c of asArray<string>(phase.context)) if (typeof c === "string") scan(c);

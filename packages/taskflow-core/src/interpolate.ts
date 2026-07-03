@@ -21,6 +21,11 @@ export interface InterpolationContext {
 	previousOutput?: string;
 	/** loop variable bindings, e.g. { item: {...} } */
 	locals?: Record<string, unknown>;
+	/** Reflexion summary for loop iterations (loop phases with reflexion: true).
+	 *  Resolved by the bare `{reflexion}` placeholder — a single string, no
+	 *  sub-path traversal (mirrors {previous.output}). Undefined → the
+	 *  placeholder stays intact (a missing warning), like any unknown ref. */
+	reflexion?: string;
 	/** Observed-read hook (M3): invoked once per successfully-resolved
 	 *  placeholder path, so the runtime can capture which upstream phases a
 	 *  phase actually consumed (its observed readSet). Unresolved refs do NOT
@@ -73,6 +78,14 @@ function _resolvePath(path: string, ctx: InterpolationContext): unknown {
 	if (head === "previous") {
 		if (parts[1] === "output") return ctx.previousOutput ?? undefined;
 		return undefined;
+	}
+
+	// reflexion — the loop's prior-iteration failure summary (single string,
+	// no sub-paths). Only resolves when the runtime supplied one (reflexion
+	// loops); otherwise falls through to undefined → missing warning.
+	if (head === "reflexion") {
+		if (parts.length > 1) return undefined;
+		return ctx.reflexion ?? undefined;
 	}
 
 	// args.*

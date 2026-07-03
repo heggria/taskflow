@@ -37,6 +37,9 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
+import { runCodeCompilesScorer } from "./scorer-runtime.ts";
+import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 import { compileTaskflowToIR, phaseFingerprint } from "./flowir/index.ts";
@@ -147,6 +150,7 @@ function buildInterpolationContext(
 	previousOutput: string | undefined,
 	locals?: Record<string, unknown>,
 	onRead?: (ref: string) => void,
+	reflexion?: string,
 ): InterpolationContext {
 	const steps: Record<string, { output: string; json?: unknown }> = {};
 	for (const [id, ps] of Object.entries(state.phases)) {
@@ -163,7 +167,7 @@ function buildInterpolationContext(
 			}
 		}
 	}
-	return { args: state.args, steps, previousOutput, locals, onRead };
+	return { args: state.args, steps, previousOutput, locals, onRead, reflexion };
 }
 
 function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJson: boolean): PhaseState {	const failed = isFailed(r);
@@ -698,9 +702,16 @@ async function executePhase(
 	_retryDepth = 0,
 	opts?: PhaseExecOpts,
 ): Promise<PhaseState> {
+	// Side-effect classification: stamp the marker at the single exit point so
+	// every type branch inside executePhaseInner is covered. A skipped phase ran
+	// nothing — no side effect to record.
+	const stamp = (ps: PhaseState): PhaseState => {
+		if (phase.idempotent === false && ps.status !== "skipped") ps.sideEffect = true;
+		return ps;
+	};
 	// Non-keyword cwd (or none): no workspace lifecycle — run directly.
 	if (!isWorkspaceKeyword(phase.cwd)) {
-		return executePhaseInner(phase, state, deps, prior, emitProgress, _retryDepth, opts);
+		return stamp(await executePhaseInner(phase, state, deps, prior, emitProgress, _retryDepth, opts));
 	}
 	let ws: Workspace | undefined;
 	try {
@@ -721,7 +732,7 @@ async function executePhase(
 			const msg = ws.note ? `${tag} — ${ws.note}` : `${tag} at ${ws.dir}`;
 			ps.warnings = [...(ps.warnings ?? []), msg];
 		}
-		return ps;
+		return stamp(ps);
 	} finally {
 		try {
 			ws?.teardown();
@@ -813,6 +824,14 @@ async function executePhaseInner(
 	}
 	if (state.flowDefHash === "failed" && cacheScope === "cross-run") {
 		cacheScope = "run-only";
+	}
+	// Side-effect classification: a non-idempotent phase is NEVER cached — not
+	// served from within-run resume, not served from or written to the cross-run
+	// store (cachedPhase and recordCache both gate on scope). One assignment
+	// covers every cache path, including the map per-item path (perItemCacheable
+	// requires scope === "cross-run").
+	if (phase.idempotent === false) {
+		cacheScope = "off";
 	}
 	const cc: PhaseCacheCtx = {
 		scope: cacheScope,
@@ -944,7 +963,13 @@ async function executePhaseInner(
 			// policy stops immediately (no point burning attempts on a hard error).
 			const withinExplicit = attempt < explicitMax - 1;
 			const transient = isTransientError(last);
-			const withinTransient = transient && attempt < DEFAULT_TRANSIENT_RETRIES;
+			// Side-effect classification: the implicit transient retry is a runtime
+			// safety net the author did not ask for — repeating a side-effecting
+			// call behind the author's back is exactly the hazard idempotent:false
+			// exists to prevent. Explicit retry{} (withinExplicit) stays honored:
+			// it is the author's declaration that a repeat is acceptable.
+			const allowTransient = phase.idempotent !== false;
+			const withinTransient = transient && allowTransient && attempt < DEFAULT_TRANSIENT_RETRIES;
 			if (!withinExplicit && !withinTransient) break;
 			// Backoff: prefer the explicit policy's curve when the phase defines one
 			// (covers transient retries too, and keeps tests fast with backoffMs:0),
@@ -1175,6 +1200,206 @@ async function executePhaseInner(
 				recordCache(cc, ps);
 				return ps;
 			}
+		}
+
+		// Scoring gate (`score`): deterministic scorers → zero-token auto-pass /
+		// LLM judge / task fallback. Self-contained (including its own onBlock:retry
+		// mirror) so the non-score gate path below stays byte-identical.
+		const scoreRaw = type === "gate" ? (phase as { score?: unknown }).score : undefined;
+		if (scoreRaw !== undefined) {
+			const shapeErrs = scorerShapeErrors(scoreRaw);
+			if (shapeErrs.length === 0) {
+				const sc = scoreRaw as ScoreConfig;
+				const combine = sc.combine ?? "all";
+				const threshold = combine === "weighted" ? (sc.threshold ?? SCORE_DEFAULT_THRESHOLD) : undefined;
+				const scoreId = JSON.stringify(scoreRaw);
+
+				// One full score evaluation (deterministics → auto-pass | judge | task |
+				// deterministic BLOCK). Re-invoked by the onBlock:retry loop, so it
+				// rebuilds its interpolation context from the CURRENT state each call.
+				const evaluateScore = async (): Promise<PhaseState> => {
+					const freshPrev = lastCompletedOutput(state, phase);
+					const freshCtx = buildInterpolationContext(state, freshPrev, undefined, onRead);
+					const tInterp = interpolate(sc.target ?? "{previous.output}", freshCtx);
+					const targetResolved = tInterp.missing.length === 0;
+					const target = tInterp.text;
+
+					// Deterministic scorers — pure ones inline, code-compiles via the
+					// impure runtime module. Skipped entirely when the target ref did not
+					// resolve (scoring a literal placeholder would be noise).
+					const results: ScorerResult[] = [];
+					if (targetResolved) {
+						for (let i = 0; i < sc.scorers.length; i++) {
+							const s = sc.scorers[i];
+							results.push(
+								s.type === "code-compiles"
+									? await runCodeCompilesScorer(s, i, target, effCwd)
+									: evaluatePureScorer(s, i, target),
+							);
+						}
+					}
+					// Weighted + judge: the judge's weight enlarges the denominator so the
+					// deterministic combination is a LOWER BOUND — clearing the threshold
+					// without the judge means the judge could not change the outcome.
+					const judgeWeight =
+						combine === "weighted" && sc.judge ? (sc.weights?.[sc.scorers.length] ?? 1) : 0;
+					const det = combineScores(results, combine, sc.weights, threshold ?? SCORE_DEFAULT_THRESHOLD, judgeWeight);
+
+					if (targetResolved && det.passed) {
+						// AUTO-PASS — zero LLM tokens (mirrors the eval-skip fast-path).
+						const inputHash = cacheKeys(cc, [phase.id, "score-skip", scoreId, target]).key;
+						const scores = { results, combined: det.combined, threshold };
+						const ps: PhaseState = {
+							id: phase.id,
+							status: "done",
+							output: "PASS (scorers passed — no LLM call)",
+							gate: { verdict: "pass", scores },
+							json: scoreResultJSON(results, det.combined, "pass", threshold),
+							usage: emptyUsage(),
+							inputHash,
+							endedAt: Date.now(),
+						};
+						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+						return ps;
+					}
+
+					const report = targetResolved
+						? formatScorerReport(results, det.combined, threshold)
+						: `## Deterministic scorer report\n(scorers skipped — score.target did not resolve: ${tInterp.missing.join(", ")})`;
+
+					// Judge fallback — the LLM-as-judge decides, with the target and the
+					// deterministic report in evidence. Fail-open on unparseable output.
+					if (sc.judge) {
+						const judgeAgent = resolveAgent(sc.judge.agent ?? phase.agent, deps, state);
+						const judgeText = interpolate(sc.judge.task, freshCtx).text;
+						const fullJudgeTask =
+							`${preRead}${judgeText}\n\n---\n\n## Target under evaluation\n\`\`\`\n${target}\n\`\`\`\n\n${report}\n\n` +
+							`Return JSON {"score": 0.0-1.0, "verdict": "pass"|"block", "reason": "..."} (or end with VERDICT: PASS|BLOCK).`;
+						const ckJ = cacheKeys(cc, [phase.id, judgeAgent, phase.model ?? "", fullJudgeTask, scoreId]);
+						const inputHash = ckJ.key;
+						const cachedJ = cachedPhase(cc, ckJ);
+						if (cachedJ) return cachedJ;
+						const r = await runOne(judgeAgent, fullJudgeTask, liveSink(state, phase.id, emitProgress), nodeIdFor("judge"));
+						const ps = resultToPhaseState(phase.id, r, inputHash, false);
+						if (ps.status === "done") {
+							const judged = parseJudgeOutput(r.output);
+							// Weighted: the judge's score folds into the combination and the
+							// threshold decides. all/any: the judge's verdict is authoritative.
+							const final =
+								combine === "weighted"
+									? combineWithJudge(results, sc.weights, threshold ?? SCORE_DEFAULT_THRESHOLD, judged.score)
+									: { combined: judged.score, passed: judged.verdict === "pass" };
+							const verdict: "pass" | "block" = final.passed ? "pass" : "block";
+							ps.gate = { verdict, reason: judged.reason, scores: { results, combined: final.combined, threshold } };
+							ps.json = scoreResultJSON(results, final.combined, verdict, threshold, { score: judged.score, reason: judged.reason });
+						}
+						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+						return ps;
+					}
+
+					// Task fallback — the gate's own LLM task runs with the scorer report
+					// appended, verdict parsed as usual.
+					if (phase.task) {
+						const agentName = resolveAgent(phase.agent, deps, state);
+						const text = interpolate(phase.task, freshCtx).text;
+						const fullTask = `${preRead}${text}\n\n---\n\n${report}`;
+						const ckT = cacheKeys(cc, [phase.id, agentName, phase.model ?? "", fullTask, scoreId]);
+						const inputHash = ckT.key;
+						const cachedT = cachedPhase(cc, ckT);
+						if (cachedT) return cachedT;
+						const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
+						const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
+						if (ps.status === "done") {
+							const v = parseGateVerdict(r.output);
+							ps.gate = { ...v, scores: { results, combined: det.combined, threshold } };
+							ps.json = scoreResultJSON(results, det.combined, v.verdict, threshold);
+						}
+						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+						return ps;
+					}
+
+					// No LLM fallback configured.
+					if (!targetResolved) {
+						// Unresolved target with no judge/task is AMBIGUITY, not an explicit
+						// failure — fail-open PASS with a warning (project invariant).
+						const inputHash = cacheKeys(cc, [phase.id, "score-unresolved", scoreId]).key;
+						return {
+							id: phase.id,
+							status: "done",
+							output: "PASS (score.target did not resolve — fail-open)",
+							gate: { verdict: "pass", reason: `score.target unresolved: ${tInterp.missing.join(", ")}` },
+							json: scoreResultJSON([], 0, "pass", threshold),
+							warnings: [`gate score.target did not resolve (${tInterp.missing.join(", ")}) — fail-open PASS`],
+							usage: emptyUsage(),
+							inputHash,
+							endedAt: Date.now(),
+						};
+					}
+					// Deterministic explicit failure is NOT ambiguity: BLOCK.
+					const inputHash = cacheKeys(cc, [phase.id, "score-block", scoreId, target]).key;
+					const scores = { results, combined: det.combined, threshold };
+					const ps: PhaseState = {
+						id: phase.id,
+						status: "done",
+						output: `BLOCK (deterministic scorers failed — no LLM fallback)\n\n${report}`,
+						gate: { verdict: "block", reason: "deterministic scorers below threshold", scores },
+						json: scoreResultJSON(results, det.combined, "block", threshold),
+						usage: emptyUsage(),
+						inputHash,
+						endedAt: Date.now(),
+					};
+					if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+					return ps;
+				};
+
+				let ps = await evaluateScore();
+				// onBlock:retry — mirrors the non-score gate loop below (re-run upstream
+				// deps, then RE-SCORE), sharing its depth cap and budget/abort guards.
+				if (ps.gate?.verdict === "block") {
+					const onBlockV: string = phase.onBlock ?? "halt";
+					const MAX_RETRY_DEPTH = 3;
+					let attempt = 0;
+					while (onBlockV === "retry" && attempt < (phase.retry?.max ?? 1)) {
+						if (deps.signal?.aborted || overBudget(state).over) break;
+						attempt++;
+						if (_retryDepth < MAX_RETRY_DEPTH) {
+							const { _cwdOverride: _dropGateWs, ...depsForUpstream } = deps;
+							for (const depId of phase.dependsOn ?? []) {
+								const d = state.def.phases.find((p) => p.id === depId);
+								if (!d) continue;
+								const dPs = await executePhase(d, state, depsForUpstream, prior, emitProgress, _retryDepth + 1, undefined);
+								state.phases[depId] = dPs;
+							}
+						}
+						const prevAttempts = ps.attempts ?? 0;
+						ps = await evaluateScore();
+						ps.attempts = prevAttempts + (ps.attempts ?? 0);
+						if (ps.gate?.verdict !== "block" || overBudget(state).over) break;
+					}
+					if (attempt > 0) ps.attempts = Math.max(ps.attempts ?? 0, attempt);
+				}
+				recordCache(cc, ps);
+				return ps;
+			}
+			// Malformed score (validation reports it) — fail-open: fall through to
+			// the plain LLM gate with a warning so an authoring slip degrades to the
+			// historical behavior instead of crashing the phase.
+			const scoreWarning = `gate 'score' is malformed and was ignored: ${shapeErrs[0]}`;
+			const interpM = interpolate(phase.task ?? "", ctx);
+			const textM = interpM.text;
+			const refWarningM = warnUnresolvedRefs(phase.id, interpM.missing);
+			const fullTaskM = preRead + textM;
+			const agentNameM = resolveAgent(phase.agent, deps, state);
+			const ckM = cacheKeys(cc, [phase.id, agentNameM, phase.model ?? "", fullTaskM]);
+			const cachedM = cachedPhase(cc, ckM);
+			if (cachedM) return cachedM;
+			const rM = await runOne(agentNameM, fullTaskM, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
+			const psM = resultToPhaseState(phase.id, rM, ckM.key, parseJson);
+			if (readRefs.length) psM.reads = readRefsToReads(readRefs, state);
+			psM.warnings = [...(psM.warnings ?? []), scoreWarning, ...(refWarningM ? [refWarningM] : [])];
+			if (psM.status === "done") psM.gate = parseGateVerdict(rM.output);
+			recordCache(cc, psM);
+			return psM;
 		}
 		const interp = interpolate(phase.task ?? "", ctx);
 		const text = interp.text;
@@ -1761,15 +1986,18 @@ async function executePhaseInner(
 		const rawMax = phase.maxIterations ?? LOOP_DEFAULT_MAX_ITERATIONS;
 		const maxIters = Math.max(1, Math.min(LOOP_HARD_MAX_ITERATIONS, Math.floor(rawMax)));
 		const convergence = phase.convergence ?? true;
+		const reflexionOn = phase.reflexion === true;
 
 		// Canonical first-iteration body for the cache key. It must fold in the
 		// interpolated task/upstream refs so that a changed upstream changes the
 		// key and recompute no longer silently reuses a stale loop (critic finding).
+		// Reflexion loops resolve {reflexion} to the SENTINEL here so the key
+		// reflects the true first prompt (not a literal placeholder).
 		const firstBodyCtx = buildInterpolationContext(state, previousOutput, {
 			loop: { iteration: 1, lastOutput: "", maxIterations: maxIters },
-		}, (ref) => readRefs.push(ref));
+		}, (ref) => readRefs.push(ref), reflexionOn ? REFLEXION_SENTINEL : undefined);
 		const firstBody = preRead + interpolate(phase.task ?? "", firstBodyCtx).text;
-		const inputHash = hashInput(phase.id, "loop", phase.until ?? "", firstBody, String(maxIters));
+		const inputHash = hashInput(phase.id, "loop", phase.until ?? "", firstBody, String(maxIters), reflexionOn ? "reflexion" : "");
 
 		const usages: UsageStats[] = [];
 		const loopWarnings: string[] = [];
@@ -1778,6 +2006,14 @@ async function executePhaseInner(
 		let iterations = 0;
 		let stop: NonNullable<PhaseState["loop"]>["stop"] = "maxIterations";
 		let failedResult: RunResult | undefined;
+		// Reflexion state: what the NEXT iteration should be told about THIS one.
+		let reflexionNext: ReflexionInput | undefined;
+		let lastReflexion: string | undefined;
+		let reflexionAppendWarned = false;
+		// With reflexion on, a failed iteration continues (as feedback) instead of
+		// terminating — track whether the LAST iteration failed so an exhausted
+		// loop still fails (reflexion defers failure, it does not erase it).
+		let lastIterationFailed = false;
 
 		for (let i = 1; i <= maxIters; i++) {
 			if (deps.signal?.aborted) {
@@ -1785,18 +2021,62 @@ async function executePhaseInner(
 				break;
 			}
 			iterations = i;
+			// Assemble the reflexion summary for this iteration (fail-open: a
+			// reflexion assembly bug must never sink the phase).
+			let reflexionStr: string | undefined;
+			if (reflexionOn) {
+				if (i === 1 || !reflexionNext) {
+					reflexionStr = REFLEXION_SENTINEL;
+				} else {
+					try {
+						reflexionStr = buildReflexionSummary(reflexionNext);
+					} catch (e) {
+						reflexionStr = REFLEXION_SENTINEL;
+						loopWarnings.push(`reflexion summary failed to assemble (iteration ${i}): ${e instanceof Error ? e.message : String(e)}`);
+					}
+					lastReflexion = reflexionStr;
+				}
+			}
 			// The body sees its iteration number and the prior iteration's output.
 			const bodyCtx = buildInterpolationContext(state, previousOutput, {
 				loop: { iteration: i, lastOutput, maxIterations: maxIters },
-			}, (ref) => readRefs.push(ref));
-			const body = preRead + interpolate(phase.task ?? "", bodyCtx).text;
+			}, (ref) => readRefs.push(ref), reflexionStr);
+			let body = preRead + interpolate(phase.task ?? "", bodyCtx).text;
+			// Auto-append: reflexion is on but the task never mentions {reflexion} —
+			// inject the summary anyway (opt-in via the flag IS the author's intent)
+			// and tell them once how to control placement.
+			if (reflexionOn && reflexionStr && reflexionStr !== REFLEXION_SENTINEL && !(phase.task ?? "").includes("{reflexion}")) {
+				body = `${body}\n\n---\n\n${reflexionStr}`;
+				if (!reflexionAppendWarned) {
+					reflexionAppendWarned = true;
+					loopWarnings.push("reflexion: true but the task has no {reflexion} placeholder — the summary was auto-appended; add {reflexion} to control placement");
+				}
+			}
 			const r = await runOne(agentName, body, liveSink(state, phase.id, emitProgress), undefined, contractCheck);
 			usages.push(r.usage);
 			if (isFailed(r)) {
+				// Reflexion mode: a body failure becomes feedback for the next
+				// iteration instead of terminating the loop. Timeout and abort still
+				// hard-stop (consistent with "timedOut is never retried"); budget is
+				// enforced by the runOne loop + the run-level guard.
+				const hardStop = !reflexionOn || r.phaseTimeout === true || deps.signal?.aborted === true;
+				if (hardStop) {
+					failedResult = r;
+					stop = "failed";
+					break;
+				}
 				failedResult = r;
-				stop = "failed";
-				break;
+				lastIterationFailed = true;
+				reflexionNext = {
+					iteration: i,
+					outcome: isContractViolation(r.errorMessage) ? "contract-violation" : "subagent-error",
+					output: r.output,
+					errorMessage: r.errorMessage || r.stderr || undefined,
+				};
+				continue;
 			}
+			lastIterationFailed = false;
+			failedResult = undefined;
 			prevOutput = lastOutput;
 			lastOutput = r.output;
 
@@ -1824,10 +2104,21 @@ async function executePhaseInner(
 				stop = "converged";
 				break;
 			}
+			// Succeeded but not done — the next iteration reflects on the unmet
+			// stop condition (until-not-met is a signal too, not just failures).
+			if (reflexionOn) {
+				reflexionNext = { iteration: i, outcome: "until-not-met", output: lastOutput, until: phase.until };
+			}
 		}
 
 		const aggUsage = usages.length ? aggregateUsage(usages) : emptyUsage();
-		if (failedResult || stop === "failed" || stop === "aborted") {
+		// Reflexion: an exhausted loop whose LAST iteration failed is a failure —
+		// reflexion defers termination for feedback, it does not convert a failing
+		// loop into a success.
+		if (reflexionOn && stop === "maxIterations" && lastIterationFailed) {
+			stop = "failed";
+		}
+		if (stop === "failed" || stop === "aborted") {
 			return {
 				id: phase.id,
 				status: "failed",
@@ -1835,7 +2126,7 @@ async function executePhaseInner(
 				usage: aggUsage,
 				timedOut: failedResult?.phaseTimeout || undefined,
 				error: failedResult?.errorMessage || failedResult?.stderr || (stop === "aborted" ? "Aborted" : `loop '${phase.id}' iteration ${iterations} failed`),
-				loop: { iterations, stop },
+				loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}) },
 				warnings: loopWarnings.length ? loopWarnings : undefined,
 				inputHash,
 				reads: readRefsToReads(readRefs, state),
@@ -1848,7 +2139,7 @@ async function executePhaseInner(
 			output: lastOutput,
 			json: parseJson ? safeParse(lastOutput) : undefined,
 			usage: aggUsage,
-			loop: { iterations, stop },
+			loop: { iterations, stop, ...(lastReflexion ? { reflexion: lastReflexion } : {}) },
 			warnings: loopWarnings.length ? loopWarnings : undefined,
 			inputHash,
 			reads: readRefsToReads(readRefs, state),
