@@ -1,5 +1,3 @@
-<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/configuration.md (npm run build:skills) -->
-
 # Taskflow Configuration Reference
 
 Every knob you can set on a taskflow, where it lives, and how the values are
@@ -169,6 +167,7 @@ still reach `{args.X}`).
 
 **Passing args:**
 
+<!-- host:pi -->
 ```
 /tf run audit-endpoints {"dir":"packages/api"}     # JSON
 /tf run audit-endpoints dir=packages/api depth=3   # key=value pairs
@@ -176,6 +175,10 @@ still reach `{args.X}`).
 ```
 
 Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
+<!-- /host:pi -->
+<!-- host:codex -->
+Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
+<!-- /host:codex -->
 
 ---
 
@@ -218,8 +221,15 @@ For any phase, the effective value is resolved in this **precedence order**
 
 Notes:
 - `tools` is a **whitelist**. Omit it to allow all.
+<!-- host:pi -->
 - Each phase runs as an isolated process:
   `pi --mode json -p --no-session [--model …] [--thinking …] [--tools …] [--append-system-prompt <agent>] "Task: …"`.
+<!-- /host:pi -->
+<!-- host:codex -->
+- Each phase runs as an isolated `codex exec --json` session. A model id that
+  still looks like a pi-provider path (contains `/`) or an unresolved
+  `{{placeholder}}` is dropped so codex falls back to its configured default.
+<!-- /host:codex -->
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -370,8 +380,10 @@ Each entry is one of:
 | Run state (resume) | `<project .pi>/taskflows/runs/<flowName>/<runId>.json` | ❌ gitignore |
 
 - `action: "save"` takes `scope: "project"` (default) or `"user"`.
+<!-- host:pi -->
 - Saved flows auto-register as `/tf:<name>` (immediately for the current session,
   and on future `session_start`).
+<!-- /host:pi -->
 - Project flows override user flows on a name collision.
 - Add `.pi/taskflows/runs/` to `.gitignore`.
 

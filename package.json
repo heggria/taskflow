@@ -13,7 +13,8 @@
     "packages/codex-taskflow"
   ],
   "scripts": {
-    "build": "npm run build -w taskflow-core && npm run build -w pi-taskflow && npm run build -w codex-taskflow",
+    "build": "npm run build:skills && npm run build -w taskflow-core && npm run build -w pi-taskflow && npm run build -w codex-taskflow",
+    "build:skills": "node scripts/build-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",
     "test:core": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-core/test/*.test.ts'",

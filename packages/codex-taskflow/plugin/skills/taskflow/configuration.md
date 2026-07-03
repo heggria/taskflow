@@ -169,13 +169,7 @@ still reach `{args.X}`).
 
 **Passing args:**
 
-```
-/tf run audit-endpoints {"dir":"packages/api"}     # JSON
-/tf run audit-endpoints dir=packages/api depth=3   # key=value pairs
-/tf run audit-endpoints packages/api               # single positional → first declared arg
-```
-
-Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
+Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 
 ---
 
@@ -218,8 +212,9 @@ For any phase, the effective value is resolved in this **precedence order**
 
 Notes:
 - `tools` is a **whitelist**. Omit it to allow all.
-- Each phase runs as an isolated process:
-  `pi --mode json -p --no-session [--model …] [--thinking …] [--tools …] [--append-system-prompt <agent>] "Task: …"`.
+- Each phase runs as an isolated `codex exec --json` session. A model id that
+  still looks like a pi-provider path (contains `/`) or an unresolved
+  `{{placeholder}}` is dropped so codex falls back to its configured default.
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -370,8 +365,6 @@ Each entry is one of:
 | Run state (resume) | `<project .pi>/taskflows/runs/<flowName>/<runId>.json` | ❌ gitignore |
 
 - `action: "save"` takes `scope: "project"` (default) or `"user"`.
-- Saved flows auto-register as `/tf:<name>` (immediately for the current session,
-  and on future `session_start`).
 - Project flows override user flows on a name collision.
 - Add `.pi/taskflows/runs/` to `.gitignore`.
 
