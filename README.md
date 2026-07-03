@@ -22,6 +22,8 @@
 Not a workflow you script — a DAG you declare. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.<br/>
 Runs on the <a href="https://pi.dev">Pi</a> coding agent and on <a href="https://github.com/openai/codex">OpenAI Codex</a>.</p>
 
+</div>
+
 ```bash
 # Pi
 pi install npm:pi-taskflow
@@ -30,8 +32,6 @@ pi install npm:pi-taskflow
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
-
-</div>
 
 ---
 

@@ -28,6 +28,8 @@
 不是你要去「写脚本」的 workflow——而是你去「声明」的一张 DAG。并发分发（fan out）· 门控（gate）· 恢复（resume）· 保存为命令——中间结果始终远离你的上下文窗口（context window）。<br/>
 可运行于 <a href="https://pi.dev">Pi</a> 编码智能体与 <a href="https://github.com/openai/codex">OpenAI Codex</a>。</p>
 
+</div>
+
 ```bash
 # Pi
 pi install npm:pi-taskflow
@@ -36,8 +38,6 @@ pi install npm:pi-taskflow
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
-
-</div>
 
 ---
 
