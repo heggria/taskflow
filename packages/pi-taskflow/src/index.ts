@@ -26,7 +26,7 @@ import {
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "taskflow-core";
 import { renderRunResult, summarizeRun } from "./render.ts";
-import { piSubagentRunner } from "./runner.ts";
+import { piSubagentRunner, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
 import { executeTaskflow, recomputeTaskflow, summarizeReuse, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
@@ -979,13 +979,15 @@ export default function (pi: ExtensionAPI) {
 				const os = await import("node:os");
 				const path = await import("node:path");
 				const tmpFile = path.join(os.tmpdir(), `taskflow-detach-${state.runId}.json`);
-				// Resolve the host adapter's runner module from THIS package so it
-				// works under both workspaces (dev -> src/.ts) and npm installs (->
-				// dist/.js). Core is host-neutral and cannot spawn pi itself, so the
-				// detached process needs to dynamically import a runTask from here.
-				const runnerModule = (await import("node:url")).fileURLToPath(
-					import.meta.resolve("./runner.ts"),
-				);
+				// The runner module path is SELF-REPORTED by runner.ts (import.meta.url):
+				// src/runner.ts in dev, dist/runner.js in the compiled package. Do NOT
+				// switch this to resolving the relative "./runner" specifier with a .ts
+				// suffix at this call site — tsc's `rewriteRelativeImportExtensions`
+				// only rewrites static import statements, not string args of
+				// import.meta.resolve, so the compiled build would point at a
+				// non-existent dist .ts file and every detached phase would fail with
+				// "No subagent runner injected" (regression: detached-spawn.test.ts).
+				const runnerModule = runnerModulePath();
 				writeFileSync(tmpFile, JSON.stringify({
 					runId: state.runId,
 					defName: def.name,

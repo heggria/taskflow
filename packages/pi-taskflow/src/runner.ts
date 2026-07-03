@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
 	emptyUsage,
@@ -413,3 +414,22 @@ export async function runAgentTask(
 export const piSubagentRunner: SubagentRunner<AgentConfig> = {
 	runTask: runAgentTask,
 };
+
+/**
+ * Absolute filesystem path of THIS module — what the host serializes into the
+ * detached-run context file as `runnerModule` so the detached-runner child can
+ * dynamically import `piSubagentRunner`.
+ *
+ * Why self-reporting instead of `import.meta.resolve("./runner.ts")` from the
+ * caller: `rewriteRelativeImportExtensions` rewrites STATIC import specifiers
+ * at compile time but does NOT touch string arguments of
+ * `import.meta.resolve()`, so a compiled caller would resolve `dist/runner.ts`
+ * — a file that does not exist (the build emits `dist/runner.js`) — and every
+ * detached phase would fail with "No subagent runner injected".
+ * `import.meta.url` is always the executing file's real path (src/runner.ts in
+ * dev, dist/runner.js in prod), so this is correct under both conditions with
+ * no extension guessing.
+ */
+export function runnerModulePath(): string {
+	return fileURLToPath(import.meta.url);
+}
