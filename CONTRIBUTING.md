@@ -35,14 +35,16 @@ I review issues and PRs ~weekly. If you need a faster turnaround, mention why in
 
 ## Architecture
 
-See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is an npm-workspaces monorepo of three published packages:
+See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is an npm-workspaces monorepo of five published packages:
 
 | Package / directory | What |
 |---------------------|------|
-| `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store (zero host-SDK deps) |
+| `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store, MCP server (zero host-SDK deps) |
 | `packages/taskflow-core/src/agents/` | 18 built-in agent definitions (`.md` with YAML frontmatter) |
 | `packages/pi-taskflow/` | Pi extension adapter (`taskflow` tool + `/tf` commands, TUI) + `skills/` |
-| `packages/codex-taskflow/` | Codex subagent runner + dependency-free MCP server |
+| `packages/codex-taskflow/` | Codex subagent runner + MCP bin + Codex plugin |
+| `packages/claude-taskflow/` | Claude Code subagent runner + MCP bin + Claude Code plugin |
+| `packages/opencode-taskflow/` | OpenCode subagent runner + MCP bin + opencode.json scaffold |
 | `examples/` | Runnable flow definitions (`.json`) |
 | `docs/` | Design docs, RFCs, dogfooding reports |
 
