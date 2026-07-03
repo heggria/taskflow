@@ -556,6 +556,27 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (p.type === "script") {
 				errors.push(`Dynamic sub-flow phase '${p.id}': 'script' phases (shell execution) are not allowed in generated flows`);
 			}
+			// Scoring-gate hardening for generated flows. Two scorer types are
+			// blocked when the flow is LLM-authored:
+			//  - code-compiles: the typescript path runs `npx --no-install tsc`,
+			//    which resolves node_modules/.bin from the working directory — a
+			//    repo-planted fake `tsc` becomes arbitrary code execution (same
+			//    capability class as `script`, blocked above).
+			//  - regex: `new RegExp(pattern).test(target)` runs synchronously with
+			//    no timeout — an LLM-authored catastrophic-backtracking pattern
+			//    (ReDoS) hangs the event loop. Author-written flows keep both
+			//    (a human reviewed the pattern / trusts the toolchain).
+			const dynScore = (p as { score?: { scorers?: unknown[] } }).score;
+			if (dynScore && typeof dynScore === "object" && Array.isArray(dynScore.scorers)) {
+				for (const s of dynScore.scorers) {
+					const st = s && typeof s === "object" ? (s as { type?: unknown }).type : undefined;
+					if (st === "code-compiles") {
+						errors.push(`Dynamic sub-flow phase '${p.id}': 'code-compiles' scorers (compiler execution) are not allowed in generated flows`);
+					} else if (st === "regex") {
+						errors.push(`Dynamic sub-flow phase '${p.id}': 'regex' scorers (ReDoS risk) are not allowed in generated flows — use contains/exact-match/json-schema/length-range`);
+					}
+				}
+			}
 			// Per-phase concurrency override is also capped.
 			if (typeof p.concurrency === "number" && p.concurrency > MAX_DYNAMIC_CONCURRENCY) {
 				errors.push(`Dynamic sub-flow phase '${p.id}': concurrency too high (${p.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
@@ -712,6 +733,16 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				errors.push(`Phase '${p.id}': 'reflexion' must be a boolean, got ${typeof r}`);
 			} else if (r === true && type !== "loop") {
 				errors.push(`Phase '${p.id}' (${type}): 'reflexion' is only valid for loop phases`);
+			}
+		}
+		// Other loop-only fields on non-loop phases are silently ignored by the
+		// runtime — warn so the author learns the field does nothing (a warning,
+		// not an error, to avoid breaking pre-existing flows that carry them).
+		if (type !== "loop") {
+			for (const key of ["until", "maxIterations", "convergence"] as const) {
+				if ((p as Record<string, unknown>)[key] !== undefined) {
+					warnings.push(`Phase '${p.id}' (${type}): '${key}' is only meaningful on loop phases and is ignored here`);
+				}
 			}
 		}
 		// Side-effect classification (`idempotent: false`).

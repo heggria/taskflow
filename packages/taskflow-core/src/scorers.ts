@@ -73,6 +73,20 @@ export interface ScoreConfig {
 	judge?: { agent?: string; task: string };
 }
 
+/** Fields every scorer may carry, plus the per-type applicable ones. A field
+ *  set on a scorer whose type ignores it is a shape error — silently dropping
+ *  `{type:"contains", negate:true}` would let the author believe negation
+ *  happened. */
+const SCORER_COMMON_KEYS = ["type", "name"] as const;
+const SCORER_TYPE_KEYS: Record<ScorerType, readonly string[]> = {
+	"exact-match": ["value"],
+	contains: ["value"],
+	regex: ["pattern", "negate"],
+	"json-schema": ["schema"],
+	"length-range": ["min", "max"],
+	"code-compiles": ["language"],
+};
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -103,6 +117,11 @@ export function scorerShapeErrors(score: unknown, path = "score"): string[] {
 		if (typeof t !== "string" || !(SCORER_TYPES as readonly string[]).includes(t)) {
 			errors.push(`${p}.type: must be one of ${SCORER_TYPES.join("|")}`);
 			return;
+		}
+		// Reject fields the scorer's type ignores (and unknown fields outright).
+		const allowed = new Set<string>([...SCORER_COMMON_KEYS, ...SCORER_TYPE_KEYS[t as ScorerType]]);
+		for (const k of Object.keys(s)) {
+			if (!allowed.has(k)) errors.push(`${p}.${k}: not applicable to '${t}' scorers (allowed: ${[...allowed].join(", ")})`);
 		}
 		if (s.name !== undefined && typeof s.name !== "string") errors.push(`${p}.name: must be a string`);
 		if ((t === "exact-match" || t === "contains") && typeof s.value !== "string")

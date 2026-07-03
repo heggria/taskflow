@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { contractViolations } from "./contract.ts";
-import { isFailed, isTransientError, mapWithConcurrencyLimit } from "./runner-core.ts";
+import { isFailed, isTransientError, mapWithConcurrencyLimit, sanitizeErrorMessage } from "./runner-core.ts";
 import type { LiveUpdate, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 /** The host-neutral subagent runner signature the engine drives. A host adapter
@@ -1245,7 +1245,15 @@ async function executePhaseInner(
 						combine === "weighted" && sc.judge ? (sc.weights?.[sc.scorers.length] ?? 1) : 0;
 					const det = combineScores(results, combine, sc.weights, threshold ?? SCORE_DEFAULT_THRESHOLD, judgeWeight);
 
-					if (targetResolved && det.passed) {
+					// Auto-pass is only sound when the judge could not veto it:
+					//  - no judge configured → the deterministics ARE the decision;
+					//  - weighted + judge → det.passed used the judge-inflated denominator
+					//    (lower bound), so the judge's score cannot drop it below threshold.
+					// all/any WITH a judge must NOT auto-skip: there the judge's verdict is
+					// authoritative (it may check what scorers cannot — e.g. factuality) and
+					// skipping it would silently bypass a configured quality check.
+					const judgeCannotVeto = !sc.judge || combine === "weighted";
+					if (targetResolved && det.passed && judgeCannotVeto) {
 						// AUTO-PASS — zero LLM tokens (mirrors the eval-skip fast-path).
 						const inputHash = cacheKeys(cc, [phase.id, "score-skip", scoreId, target]).key;
 						const scores = { results, combined: det.combined, threshold };
@@ -1272,8 +1280,11 @@ async function executePhaseInner(
 					if (sc.judge) {
 						const judgeAgent = resolveAgent(sc.judge.agent ?? phase.agent, deps, state);
 						const judgeText = interpolate(sc.judge.task, freshCtx).text;
+						// Neutralize fences in the (model-produced) target so it cannot
+						// close the evidence block and inject instructions at prompt level.
+						const safeTarget = target.replace(/```/g, "`\u200b``");
 						const fullJudgeTask =
-							`${preRead}${judgeText}\n\n---\n\n## Target under evaluation\n\`\`\`\n${target}\n\`\`\`\n\n${report}\n\n` +
+							`${preRead}${judgeText}\n\n---\n\n## Target under evaluation\n\`\`\`\n${safeTarget}\n\`\`\`\n\n${report}\n\n` +
 							`Return JSON {"score": 0.0-1.0, "verdict": "pass"|"block", "reason": "..."} (or end with VERDICT: PASS|BLOCK).`;
 						const ckJ = cacheKeys(cc, [phase.id, judgeAgent, phase.model ?? "", fullJudgeTask, scoreId]);
 						const inputHash = ckJ.key;
@@ -2054,12 +2065,18 @@ async function executePhaseInner(
 			}
 			const r = await runOne(agentName, body, liveSink(state, phase.id, emitProgress), undefined, contractCheck);
 			usages.push(r.usage);
+			// Fold cumulative loop spend into the live phase state so the run-level
+			// budget guard (overBudget reads state.phases[*].usage) sees the loop's
+			// accrual mid-phase — otherwise each iteration would overwrite the last
+			// and a reflexion loop could spend past the ceiling unnoticed.
+			const livePs = state.phases[phase.id];
+			if (livePs) livePs.usage = aggregateUsage(usages);
 			if (isFailed(r)) {
 				// Reflexion mode: a body failure becomes feedback for the next
-				// iteration instead of terminating the loop. Timeout and abort still
-				// hard-stop (consistent with "timedOut is never retried"); budget is
-				// enforced by the runOne loop + the run-level guard.
-				const hardStop = !reflexionOn || r.phaseTimeout === true || deps.signal?.aborted === true;
+				// iteration instead of terminating the loop. Timeout, abort, and an
+				// exhausted budget still hard-stop (consistent with "timedOut is never
+				// retried"; continuing past the budget would spend past the ceiling).
+				const hardStop = !reflexionOn || r.phaseTimeout === true || deps.signal?.aborted === true || overBudget(state).over;
 				if (hardStop) {
 					failedResult = r;
 					stop = "failed";
@@ -2067,11 +2084,14 @@ async function executePhaseInner(
 				}
 				failedResult = r;
 				lastIterationFailed = true;
+				// Sanitize before injecting into the next prompt: raw provider errors
+				// can carry HTML/transport noise (same policy as the transcript path).
+				const rawErr = r.errorMessage || r.stderr || undefined;
 				reflexionNext = {
 					iteration: i,
 					outcome: isContractViolation(r.errorMessage) ? "contract-violation" : "subagent-error",
 					output: r.output,
-					errorMessage: r.errorMessage || r.stderr || undefined,
+					errorMessage: isContractViolation(r.errorMessage) ? r.errorMessage : rawErr ? sanitizeErrorMessage(rawErr) : undefined,
 				};
 				continue;
 			}

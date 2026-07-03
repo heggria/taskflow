@@ -102,11 +102,15 @@ and only escalate to an LLM when they can't decide. Scorer types:
 `json-schema` (`schema` — an `expect`-style contract), `length-range`
 (`min`/`max`), `code-compiles` (`language`: javascript|typescript). Combine
 with `all` (default) / `any` / `weighted` (+ `weights`, `threshold`; with a
-`judge` the last weight is the judge's). Deterministic pass → auto-PASS, no LLM
-call; fail → optional `judge: {agent?, task}` decides (fail-open on unparseable
-output) or the gate `task` runs with the scorer report appended; fail with no
-fallback → explicit BLOCK. The structured result is the gate's `.json`:
-`{steps.<gate>.json.combined}`, `.json.results`, `.json.verdict`.
+`judge` the last weight is the judge's). Deterministic pass → auto-PASS with no
+LLM call when the judge cannot veto (no judge, or `weighted` clearing the
+threshold via the lower bound); with `all`/`any` + judge the judge always runs
+and its verdict is authoritative. Deterministic fail → `judge: {agent?, task}`
+decides (fail-open on unparseable output) or the gate `task` runs with the
+scorer report appended; fail with no fallback → explicit BLOCK. The structured
+result is the gate's `.json`: `{steps.<gate>.json.combined}`, `.json.results`,
+`.json.verdict`. Note: LLM-generated dynamic sub-flows (`flow{def}`) may not
+use `code-compiles` (compiler execution) or `regex` (ReDoS) scorers.
 
 ### Reflexion loops (`reflexion: true`)
 

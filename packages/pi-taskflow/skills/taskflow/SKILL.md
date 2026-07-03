@@ -407,9 +407,12 @@ gate's `.json` — downstream phases can read `{steps.<gate>.json.combined}` /
 | `threshold` | weighted only — combined-score cutoff in (0,1], default 0.5 |
 | `judge` | optional LLM-as-judge fallback `{agent?, task}` — runs ONLY when the deterministics fail; sees the target + scorer report; returns `{"score": 0-1, "verdict": "pass"\|"block", "reason"}` |
 
-Decision order: (1) deterministic scorers pass → **auto-PASS, zero LLM tokens**
-(with `weighted`+judge, the deterministic score is a lower bound — if it already
-clears the threshold the judge is skipped); (2) fail + `judge` → judge decides
+Decision order: (1) deterministic scorers pass AND the judge cannot veto →
+**auto-PASS, zero LLM tokens** — that is: no judge configured, or `weighted`
+where the deterministic score is a lower bound that already clears the
+threshold (the judge's score could not drop it). With `all`/`any` + a judge,
+the judge **always runs** — its verdict is authoritative (it may check what
+scorers cannot, e.g. factuality); (2) fail + `judge` → judge decides
 (weighted folds its score in; all/any takes its verdict); (3) fail + `task` →
 the gate task runs with the scorer report appended; (4) fail + no fallback →
 **explicit BLOCK** (a deterministic failure is not ambiguity). Fail-open cases:

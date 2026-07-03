@@ -371,8 +371,7 @@ test("reflexion on: audit trail — the last summary is persisted on ps.loop.ref
 	assert.ok(state.phases["l"]?.loop?.reflexion?.includes("first crash"), "the injected summary must be inspectable post-run");
 });
 
-test("reflexion on: convergence check still uses successful outputs only", async () => {
-	let calls = 0;
+test("reflexion on: convergence check still uses successful outputs only", async () => {	let calls = 0;
 	const def = {
 		name: "converge",
 		phases: [{
@@ -393,4 +392,56 @@ test("reflexion on: convergence check still uses successful outputs only", async
 	assert.equal(result.ok, true);
 	assert.equal(state.phases["l"]?.loop?.stop, "converged", "identical consecutive SUCCESSFUL outputs converge (the failure in between does not reset)");
 	assert.equal(calls, 3);
+});
+
+test("reflexion on: over-budget hard-stops the loop (no feedback continuation past the ceiling)", async () => {
+	let calls = 0;
+	const def = {
+		name: "budget-stops",
+		budget: { maxUSD: 0.05 },
+		phases: [{
+			id: "l", type: "loop", task: "try\n{reflexion}",
+			until: "{steps.l.output} == done", maxIterations: 10, reflexion: true,
+		}],
+	};
+	const state = mkState(def, "rfx-13");
+	const deps: RuntimeDeps = {
+		cwd: "/tmp", agents: [dummyAgent],
+		runTask: async () => {
+			calls++;
+			// Each failing attempt costs $0.04 — the second failure exceeds maxUSD.
+			return { ...hardFail(`attempt ${calls}`), usage: { ...emptyUsage(), cost: 0.04 } };
+		},
+	};
+	const result = await executeTaskflow(state, deps);
+	assert.equal(result.ok, false);
+	assert.ok(calls < 10, `budget must stop the reflexion loop early (got ${calls} of 10 iterations)`);
+});
+
+test("reflexion on: provider error noise is sanitized before prompt injection", async () => {
+	const tasks: string[] = [];
+	let calls = 0;
+	const def = {
+		name: "sanitize",
+		phases: [{
+			id: "l", type: "loop", task: "try\n{reflexion}",
+			until: "{steps.l.output} == done", maxIterations: 3, reflexion: true,
+		}],
+	};
+	const state = mkState(def, "rfx-14");
+	const html = "<html><head><title>Access denied by upstream proxy</title></head><body>blocked</body></html>";
+	const deps: RuntimeDeps = {
+		cwd: "/tmp", agents: [dummyAgent],
+		runTask: async (_c, _a, _n, task) => {
+			tasks.push(task);
+			calls++;
+			if (calls === 1) return hardFail(html); // non-transient (no 5xx/429 marker) → no auto-retry
+			return ok("done");
+		},
+	};
+	await executeTaskflow(state, deps);
+	assert.equal(calls, 2);
+	assert.ok(tasks[1].includes("Reflexion: iteration 1"), "the failure signal must arrive in iteration 2");
+	assert.ok(!tasks[1].includes("<html>"), "raw HTML transport noise must not be injected into the next prompt");
+	assert.ok(tasks[1].includes("non-JSON response") || tasks[1].includes("Access denied"), "the sanitized hint should still convey what happened");
 });
