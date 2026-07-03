@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow-monorepo",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "description": "Monorepo for taskflow-core, pi-taskflow, and codex-taskflow.",
   "type": "module",
