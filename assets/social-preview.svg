@@ -106,5 +106,5 @@
   <text x="1040" y="540" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.4" fill="#75787E"><tspan fill="#0E8A66" font-weight="700">04</tspan> RETURN</text>
 
   <!-- footer -->
-  <text x="640" y="596" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="14" fill="#8E9199">One declarative graph · statically verified · resumable across sessions · 9 phase types</text>
+  <text x="640" y="596" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="14" fill="#8E9199">One declarative graph · statically verified · resumable across sessions · 10 phase types</text>
 </svg>
