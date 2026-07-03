@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "taskflow": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "opencode-taskflow@0.1.5", "opencode-taskflow-mcp"],
+      "enabled": true
+    }
+  },
+  "skills": {
+    "paths": ["./skills"]
+  }
+}

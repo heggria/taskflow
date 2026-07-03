@@ -13,9 +13,9 @@ mistakes that break flows. Load the companion files **only when needed**:
 <!-- host:pi -->
 | `advanced.md` | Shared Context Tree (`ctx_*` tools, `ctx_spawn` sub-graphs), workspace isolation (`cwd: temp/dedicated/worktree`), dynamic sub-flow (`flow{def}`) contracts & security caps, and the **incremental recompute suite** (`ir` / `provenance` / `why-stale` / `recompute` / `cache-clear`). |
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 | `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, and workspace isolation (`cwd: temp/dedicated/worktree`). |
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->
 | `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. |
 
 > Rule of thumb: writing a flow with ≥ 4 phases, a gate, or any fan-out?
@@ -93,9 +93,9 @@ proper flow, so you still get progress, persistence, and resume.
 <!-- host:pi -->
 - You can pass these as top-level tool params **or** inside `define`.
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 - Pass these as the `define` argument to `taskflow_run`.
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->
 
 ## How to author a taskflow
 
@@ -105,11 +105,11 @@ Call the `taskflow` tool. To run a brand-new flow you write inline, pass
 **Before running a non-trivial flow, `action: "verify"` it — zero tokens,
 catches cycles / missing deps / undefined refs / contract typos.**
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
 **Before running a non-trivial flow, `taskflow_verify` it — zero tokens,
 catches cycles / missing deps / undefined refs / contract typos.**
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->
 
 ### DSL shape
 
@@ -290,11 +290,12 @@ The (interpolated) `task` is the prompt shown.
 Place one before the expensive part of a flow (a big fan-out, a mutation) —
 see the plan→approve→execute archetype in `patterns.md`.
 <!-- /host:pi -->
-<!-- host:codex -->
-> **Codex caveat:** MCP-driven runs are non-interactive, so an `approval` phase
-> **auto-rejects**. Prefer a `gate` (agent review) in flows you run through the
-> `taskflow_*` tools; use `approval` only in flows a human runs interactively.
-<!-- /host:codex -->
+<!-- host:codex,claude,opencode -->
+> **MCP-host caveat (Codex / Claude Code / OpenCode):** MCP-driven runs are
+> non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
+> (agent review) in flows you run through the `taskflow_*` tools; use `approval`
+> only in flows a human runs interactively.
+<!-- /host:codex,claude,opencode -->
 
 ### Sub-flows (composition) — summary
 
@@ -501,7 +502,7 @@ An unknown agent name fails the phase with the list of available agents.
 <!-- host:pi -->
 Check with `action: "agents"` instead of guessing.
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 Built-in agents: `executor`, `executor-code` (complex, multi-file),
 `executor-fast` (trivial), `executor-ui`, `scout` (cheap recon), `planner`,
 `analyst`, `critic`, `reviewer`, `risk-reviewer`, `security-reviewer`,
@@ -509,7 +510,7 @@ Built-in agents: `executor`, `executor-code` (complex, multi-file),
 `recover`, `visual-explorer`. **Do not invent agent names** — omit `agent` to
 use the default. Use cheap agents (`scout`) for discovery and strong agents
 (`critic`, `final-arbiter`) for gates/judging.
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->
 
 <!-- host:pi -->
 ## Actions (all 13)
@@ -579,7 +580,7 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 - `/tf init` — interactive model-roles setup
 - `/tf:<name> [args]` — shortcut for each saved flow
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 `taskflow_run` reports a `runId`. If the final output looks wrong, don't
 re-run blind — `taskflow_peek` the run: omit `phaseId` to list phase statuses
 and output sizes, then peek the suspicious phase (`json: true` for parsed
@@ -591,4 +592,4 @@ For flows re-run as the repo evolves, pass `incremental: true` to
 input → $0 instant hit. Per-phase `cache.fingerprint` entries
 (`git:HEAD`, `glob!:src/**/*.ts`, `file:package.json`) invalidate on world
 changes; a cached `map` re-executes only changed items. See `configuration.md` §8.
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->

@@ -1,0 +1,14 @@
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Taskflow">
+  <g stroke="#8B8AE3" stroke-width="2.4" stroke-linecap="round" fill="none">
+    <path d="M12 24 C18 24, 18 12, 24 12"/>
+    <path d="M12 24 H24"/>
+    <path d="M12 24 C18 24, 18 36, 24 36"/>
+    <path d="M24 12 C30 12, 30 24, 36 24"/>
+    <path d="M24 36 C30 36, 30 24, 36 24"/>
+  </g>
+  <circle cx="12" cy="24" r="5" fill="#6B6AD9"/>
+  <circle cx="24" cy="12" r="3.6" fill="#8B8AE3"/>
+  <circle cx="24" cy="24" r="3.6" fill="#8B8AE3"/>
+  <circle cx="24" cy="36" r="3.6" fill="#8B8AE3"/>
+  <circle cx="36" cy="24" r="5" fill="#1FA57E"/>
+</svg>

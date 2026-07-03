@@ -4,6 +4,41 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Added
+- **OpenCode as a fourth host.** New `opencode-taskflow` package: an OpenCode
+  subagent runner (`opencode run --format json`) plus an `opencode.json` MCP
+  config scaffold, mirroring the Codex/Claude adapters. A flow's subagents can
+  now execute as isolated `opencode run` sessions, and taskflow is exposed to
+  OpenCode via the same `taskflow_*` MCP tools. Register with
+  `opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp`
+  (or an `opencode.json` `mcp` entry). See `docs/opencode-mcp.md`.
+  - Read-only phases inject a deny-mutations permission policy via
+    `OPENCODE_CONFIG_CONTENT` (genuinely enforced); mutating phases run with
+    `--auto`.
+  - OpenCode model ids are `provider/model`, so the runner uses a different
+    drop rule than codex/claude (drops only `{{placeholder}}`, `:thinking`
+    suffixes, and multi-segment openrouter paths).
+  - Verified end-to-end: a 2-phase flow with real `opencode run` subagents
+    (data flows A→B) on a free `opencode/` model.
+
+- **Claude Code as a third host.** New `claude-taskflow` package: a Claude Code
+  subagent runner (`claude -p --output-format stream-json`) plus a
+  plug-and-play Claude Code plugin, mirroring the Codex adapter. The engine and
+  DSL are unchanged — a flow's subagents can now execute as isolated `claude -p`
+  sessions, and taskflow is exposed to Claude Code users via the same
+  `taskflow_*` MCP tools (`run`/`list`/`show`/`verify`/`compile`/`peek`).
+  Install: `claude plugin marketplace add heggria/taskflow && claude plugin
+  install claude-taskflow@taskflow`. See `docs/claude-mcp.md`.
+  - Read-only phases map to a `--allowedTools` whitelist; mutating phases run
+    under `--permission-mode bypassPermissions` (the codex workspace-write
+    analogue, no OS sandbox — documented).
+  - The MCP server (JSON-RPC stdio transport, `taskflow_*` tool schemas +
+    handlers, DAG SVG/outline renderer) moved into host-neutral
+    `taskflow-core/src/mcp/`, parameterized by a `SubagentRunner`; the codex and
+    claude adapters are now thin bindings. No behavior change for Codex.
+  - Skills are single-sourced for all hosts (`skills-src/taskflow/` with
+    comma-list host blocks, e.g. `<!-- host:codex,claude,opencode -->`).
+
 ## [0.1.5] — 2026-07-03
 
 ### Added

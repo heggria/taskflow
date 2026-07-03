@@ -1,7 +1,7 @@
 /**
  * Minimal, dependency-free stdio JSON-RPC 2.0 transport for an MCP server.
  *
- * pi-taskflow ships ZERO runtime dependencies (a core selling point), so we do
+ * taskflow-core ships ZERO runtime dependencies (a core selling point), so we do
  * NOT pull in `@modelcontextprotocol/sdk`. MCP's stdio transport is just
  * newline-delimited JSON-RPC 2.0 over stdin/stdout — small enough to implement
  * on Node built-ins. This module handles framing + dispatch only; the MCP

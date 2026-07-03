@@ -22,9 +22,15 @@
     "test:core": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-core/test/*.test.ts'",
     "test:pi": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/pi-taskflow/test/*.test.ts'",
     "test:codex": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/codex-taskflow/test/*.test.ts'",
+    "test:claude": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/claude-taskflow/test/*.test.ts'",
+    "test:opencode": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/opencode-taskflow/test/*.test.ts'",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
     "test:e2e-codex-mcp": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts",
-    "test:e2e-codex-mcp-full": "npm run build && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts"
+    "test:e2e-codex-mcp-full": "npm run build && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts",
+    "test:e2e-claude": "node --conditions=development --experimental-strip-types packages/claude-taskflow/test/e2e-claude.mts",
+    "test:e2e-claude-mcp": "node --conditions=development --experimental-strip-types packages/claude-taskflow/test/e2e-claude-mcp.mts",
+    "test:e2e-opencode": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode.mts",
+    "test:e2e-opencode-mcp": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode-mcp.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",

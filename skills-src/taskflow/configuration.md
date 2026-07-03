@@ -176,9 +176,9 @@ still reach `{args.X}`).
 
 Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 <!-- /host:pi -->
-<!-- host:codex -->
+<!-- host:codex,claude,opencode -->
 Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
-<!-- /host:codex -->
+<!-- /host:codex,claude,opencode -->
 
 ---
 
@@ -230,6 +230,23 @@ Notes:
   still looks like a pi-provider path (contains `/`) or an unresolved
   `{{placeholder}}` is dropped so codex falls back to its configured default.
 <!-- /host:codex -->
+<!-- host:claude -->
+- Each phase runs as an isolated `claude -p --output-format stream-json`
+  session. A model id that still looks like a pi-provider path (contains `/`)
+  or an unresolved `{{placeholder}}` is dropped so claude falls back to its
+  configured default. Read-only phases get a `--allowedTools` whitelist;
+  mutating phases run under `--permission-mode bypassPermissions` (no OS
+  sandbox — see the README security note).
+<!-- /host:claude -->
+<!-- host:opencode -->
+- Each phase runs as an isolated `opencode run --format json` session. A model
+  id that is an unresolved `{{placeholder}}`, carries a pi thinking suffix
+  (`:xhigh`), or is a multi-segment openrouter path (≥ 2 slashes) is dropped so
+  opencode falls back to its configured default; a clean `provider/model` id
+  passes through. Read-only phases inject a deny-mutations permission policy
+  (via `OPENCODE_CONFIG_CONTENT`) so bash/write/edit are genuinely blocked;
+  mutating phases run with `--auto` (auto-approve).
+<!-- /host:opencode -->
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---

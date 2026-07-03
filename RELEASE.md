@@ -1,18 +1,20 @@
 # Release Guide (monorepo)
 
-taskflow is a monorepo of three independently published packages:
+taskflow is a monorepo of five independently published packages:
 
 | Package | npm name | What it is |
 |---------|----------|------------|
-| `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify). Zero host SDK deps. |
+| `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify, MCP server). Zero host SDK deps. |
 | `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
-| `packages/codex-taskflow` | **`codex-taskflow`** | Codex adapter: subagent runner + MCP server. |
+| `packages/codex-taskflow` | **`codex-taskflow`** | Codex adapter: subagent runner + MCP bin. |
+| `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code adapter: subagent runner + MCP bin. |
+| `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode adapter: subagent runner + MCP bin. |
 
-Dependency order: `pi-taskflow` and `codex-taskflow` both depend on `taskflow-core`, so **core publishes first**.
+Dependency order: `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` all depend on `taskflow-core`, so **core publishes first**.
 
 ## One-time setup
 
-All three names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; `taskflow-core` and `codex-taskflow` are unclaimed (publishing creates them).
+All five names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; `taskflow-core`, `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` are unclaimed (publishing creates them).
 
 ```sh
 # 1. Point at PUBLIC npm (the repo's default registry may be a private mirror)
@@ -67,19 +69,22 @@ this release's CHANGELOG section, verify:
 npm publish -w taskflow-core   --registry=https://registry.npmjs.org/ --provenance
 npm publish -w pi-taskflow     --registry=https://registry.npmjs.org/ --provenance
 npm publish -w codex-taskflow  --registry=https://registry.npmjs.org/ --provenance
+npm publish -w claude-taskflow --registry=https://registry.npmjs.org/ --provenance
+npm publish -w opencode-taskflow --registry=https://registry.npmjs.org/ --provenance
 ```
 
 `publishConfig.access: public` is set on each package, so scoped/unscoped both publish publicly.
 
-> **Note on `taskflow-core` as a dependency.** `pi-taskflow` / `codex-taskflow`
-> declare `"taskflow-core": "0.1.3"` (an exact version, not `workspace:*`),
-> so the published tarballs resolve the real npm package once it exists. Always
-> publish `taskflow-core` first and bump all three in lockstep.
+> **Note on `taskflow-core` as a dependency.** `pi-taskflow` / `codex-taskflow` /
+> `claude-taskflow` / `opencode-taskflow` declare `"taskflow-core": "0.1.5"` (an
+> exact version, not `workspace:*`), so the published tarballs resolve the real
+> npm package once it exists. Always publish `taskflow-core` first and bump all
+> five in lockstep.
 
 ## Tag + GitHub Release (automated)
 
 Pushing a `v*` tag triggers `.github/workflows/publish.yml`, which verifies all
-three package versions match the tag, publishes them in order, and cuts a GitHub
+five package versions match the tag, publishes them in order, and cuts a GitHub
 Release from the matching `CHANGELOG.md` section.
 
 ```sh
@@ -92,6 +97,8 @@ git tag v0.1.3 && git push origin v0.1.3
 npm view taskflow-core version --registry=https://registry.npmjs.org/
 npm view pi-taskflow  version --registry=https://registry.npmjs.org/
 npm view codex-taskflow version --registry=https://registry.npmjs.org/
+npm view claude-taskflow version --registry=https://registry.npmjs.org/
+npm view opencode-taskflow version --registry=https://registry.npmjs.org/
 ```
 
 ## Install (end users)

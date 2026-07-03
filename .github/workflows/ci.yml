@@ -42,7 +42,7 @@ jobs:
         run: npm test
 
   e2e:
-    name: e2e (codex MCP, network-free)
+    name: e2e (MCP stdio, network-free)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -72,6 +72,20 @@ jobs:
       # rsvg rasterization is optional (auto-skipped when absent).
       - name: Codex MCP e2e (comprehensive rendering)
         run: npm run test:e2e-codex-mcp-full
+
+      # The claude MCP e2e likewise spawns the real bin over stdio and drives the
+      # full handshake + tool calls with no live model / no network. (The
+      # executor e2e test:e2e-claude needs a live claude session, so it stays
+      # manual.)
+      - name: Claude MCP e2e (stdio handshake + tool calls)
+        run: npm run test:e2e-claude-mcp
+
+      # The opencode MCP e2e likewise spawns the real bin over stdio and drives
+      # the full handshake + tool calls with no live model / no network. (The
+      # executor e2e test:e2e-opencode needs a live opencode session, so it
+      # stays manual.)
+      - name: OpenCode MCP e2e (stdio handshake + tool calls)
+        run: npm run test:e2e-opencode-mcp
 
   build:
     name: build (dist emit)

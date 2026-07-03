@@ -14,7 +14,7 @@ Before running a flow you designed, check it against this list. Every item is
 cheap to add and each one has prevented a real failure class:
 
 - [ ] **`verify` first.** Run the static verifier (pi: `action: "verify"` /
-      Codex: `taskflow_verify`) — zero tokens,
+      Codex / Claude Code / OpenCode: `taskflow_verify`) — zero tokens,
       catches cycles / missing deps / ref typos / contract mismatches.
 - [ ] **Every JSON-emitting phase has `expect` + `retry`.** "Output ONLY JSON"
       in the task text is a request; `expect` is enforcement. Without it, a

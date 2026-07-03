@@ -289,9 +289,10 @@ The (interpolated) `task` is the prompt shown.
 - **Background (detached)** runs **auto-reject** (no interactive approver);
   downstream sees the rejection; the flow continues (fail-open).
 
-> **Codex caveat:** MCP-driven runs are non-interactive, so an `approval` phase
-> **auto-rejects**. Prefer a `gate` (agent review) in flows you run through the
-> `taskflow_*` tools; use `approval` only in flows a human runs interactively.
+> **MCP-host caveat (Codex / Claude Code / OpenCode):** MCP-driven runs are
+> non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
+> (agent review) in flows you run through the `taskflow_*` tools; use `approval`
+> only in flows a human runs interactively.
 
 ### Sub-flows (composition) — summary
 

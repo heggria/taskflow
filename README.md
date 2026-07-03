@@ -10,7 +10,7 @@
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-918-4B4ACF?style=flat-square" alt="918 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
-  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex-4B4ACF?style=flat-square" alt="runs on Pi and Codex"></a>
+  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, and OpenCode"></a>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 
 <p><strong>A declarative, verifiable <em>graph of tasks</em> for coding-agent subagents.</strong><br/>
 Not a workflow you script — a DAG you declare. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.<br/>
-Runs on the <a href="https://pi.dev">Pi</a> coding agent and on <a href="https://github.com/openai/codex">OpenAI Codex</a>.</p>
+Runs on the <a href="https://pi.dev">Pi</a> coding agent, on <a href="https://github.com/openai/codex">OpenAI Codex</a>, on <a href="https://claude.com/product/claude-code">Claude Code</a>, and on <a href="https://opencode.ai">OpenCode</a>.</p>
 
 </div>
 
@@ -31,13 +31,20 @@ pi install npm:pi-taskflow
 # Codex
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
+
+# Claude Code
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+
+# OpenCode — add the MCP server to opencode.json (see the OpenCode guide)
+opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 ```
 
 ---
 
 **A `workflow` flows. A `taskflow` is a *graph*.** Other orchestrators let the model *script* the work — imperative code that flows step by step, with the graph hidden inside control flow. `taskflow` does the opposite: you **declare** the work as a graph of discrete, named **task** nodes connected by `dependsOn` edges — and the runtime *verifies that graph before it spends a single token.*
 
-You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and a hard spend ceiling.
+You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex, Claude Code, and OpenCode you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and a hard spend ceiling.
 
 And the whole time, **only the final phase reaches your conversation.** Every intermediate transcript stays in the runtime, never your context window.
 
@@ -172,6 +179,41 @@ codex plugin add taskflow@taskflow
 ```
 
 The plugin's MCP server runs via `npx` (a version-pinned `codex-taskflow`), so there's nothing else to install globally and the plugin version binds the exact code that runs. Then just ask Codex to run a multi-phase or fan-out job and it calls the tools. See the [Codex guide](./docs/codex-mcp.md).
+
+### On Claude Code
+
+taskflow ships as a Claude Code **plugin** too — install it once and the `taskflow_*` MCP tools plus a routing skill light up automatically, no manual `mcp add` and no config editing:
+
+```bash
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+```
+
+The plugin's MCP server runs via `npx` (a version-pinned `claude-taskflow`), so there's nothing else to install globally and the plugin version binds the exact code that runs. Each phase's subagent then runs as an isolated `claude -p` session. Just ask Claude Code to run a multi-phase or fan-out job and it calls the tools. See the [Claude Code guide](./docs/claude-mcp.md).
+
+### On OpenCode
+
+OpenCode reaches taskflow through the same MCP server. Register it once — either with the CLI or by adding an `mcp` entry to your `opencode.json`:
+
+```bash
+opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+```
+
+```jsonc
+// opencode.json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "taskflow": {
+      "type": "local",
+      "command": ["npx", "-y", "-p", "opencode-taskflow", "opencode-taskflow-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+The server runs via `npx` (a version-pinned `opencode-taskflow`), and each phase's subagent runs as an isolated `opencode run` session. OpenCode also auto-discovers the bundled routing skill (`**/SKILL.md`). Then just ask OpenCode to run a multi-phase or fan-out job and it calls the tools. See the [OpenCode guide](./docs/opencode-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 
@@ -552,7 +594,7 @@ Condition grammar (for `when`): `== != < > <= >=`, `&& || !`, parentheses, quote
 
 ## Commands
 
-Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, use the `taskflow_*` MCP tools instead — `taskflow_list` / `taskflow_show` / `taskflow_run` (by `name`) / `taskflow_verify` / `taskflow_compile`.
+Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, and OpenCode, use the `taskflow_*` MCP tools instead — `taskflow_list` / `taskflow_show` / `taskflow_run` (by `name`) / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
 
 | Command | What it does |
 |---|---|
@@ -565,7 +607,7 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
-Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `why-stale`, `recompute`, `cache-clear`. On Codex the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile`.
+Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `why-stale`, `recompute`, `cache-clear`. On Codex, Claude Code, and OpenCode the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
 
 ## Background (detached) execution
 
@@ -823,13 +865,15 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 
 ## Development
 
-`taskflow` is an npm-workspaces monorepo of three published packages:
+`taskflow` is an npm-workspaces monorepo of five published packages:
 
 | Package | Role |
 |---------|------|
-| [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine (zero host-SDK deps; only `typebox`) |
+| [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine + the dependency-free MCP server (zero host-SDK deps; only `typebox`) |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi extension adapter — `taskflow` tool + `/tf` commands (what `pi install npm:pi-taskflow` gives you) |
-| [`codex-taskflow`](./packages/codex-taskflow) | Codex subagent runner + a dependency-free MCP server, plus the [Codex plugin](./packages/codex-taskflow/plugin) ([guide](./docs/codex-mcp.md)) |
+| [`codex-taskflow`](./packages/codex-taskflow) | Codex subagent runner + MCP bin, plus the [Codex plugin](./packages/codex-taskflow/plugin) ([guide](./docs/codex-mcp.md)) |
+| [`claude-taskflow`](./packages/claude-taskflow) | Claude Code subagent runner + MCP bin, plus the [Claude Code plugin](./packages/claude-taskflow/plugin) ([guide](./docs/claude-mcp.md)) |
+| [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode subagent runner + MCP bin, plus the [OpenCode config scaffold](./packages/opencode-taskflow/plugin) ([guide](./docs/opencode-mcp.md)) |
 
 ```bash
 npm install
