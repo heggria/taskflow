@@ -1,83 +1,110 @@
-<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — declarative DAG orchestration for coding-agent subagents. Fan out, gate, resume, save as a command; intermediate results stay out of your context. Zero deps, runs on Pi and Codex.">
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — declarative DAG orchestration for coding-agent subagents. Declare, verify, run isolated, return only the result. Zero deps, runs on Pi and Codex.">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#131A2E"/>
-      <stop offset="0.55" stop-color="#0E1825"/>
-      <stop offset="1" stop-color="#0A1512"/>
-    </linearGradient>
-    <linearGradient id="ti" x1="380" y1="100" x2="900" y2="180" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#B692FF"/>
-      <stop offset="0.5" stop-color="#6E8BFF"/>
-      <stop offset="1" stop-color="#43D9AD"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="150" y1="0" x2="1160" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6E8BFF"/>
-      <stop offset="1" stop-color="#43D9AD"/>
-    </linearGradient>
+    <filter id="card" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#1B1D29" flood-opacity="0.05"/>
+    </filter>
   </defs>
-  <rect width="1280" height="640" rx="24" fill="url(#bg)"/>
 
-  <rect x="493" y="44" width="294" height="34" rx="17" fill="#0F1526" stroke="#2C3A60"/>
-  <circle cx="518" cy="61" r="4.5" fill="#43D9AD"/>
-  <text x="536" y="66" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="13.5" letter-spacing="1.2" fill="#9DA9C9">Pi · Codex · zero deps</text>
+  <rect width="1280" height="640" fill="#F7F6F3"/>
+  <rect x="0.5" y="0.5" width="1279" height="639" stroke="#E5E3DD"/>
 
-  <text x="640" y="176" text-anchor="middle" font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="96" font-weight="700" letter-spacing="-3" fill="url(#ti)">taskflow</text>
-  <text x="640" y="224" text-anchor="middle" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif" font-size="22" font-weight="600" fill="#C6CFE8">Declarative DAG orchestration for coding-agent subagents.</text>
-  <text x="640" y="256" text-anchor="middle" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16.5" fill="#8A97B8">Fan out · gate · resume · save as a command — intermediate results stay out of your context.</text>
+  <!-- badge -->
+  <rect x="502" y="68" width="276" height="32" rx="16" fill="#FFFFFF" stroke="#E5E3DD"/>
+  <circle cx="527" cy="84" r="4" fill="#0E8A66"/>
+  <text x="543" y="88.5" font-family="'SF Mono',Menlo,monospace" font-size="13" letter-spacing="1" fill="#75787E">Pi · Codex · zero deps</text>
 
-  <g font-family="ui-monospace,Menlo,monospace" font-size="14" fill="#9FB6F0">
-    <rect x="398" y="286" width="120" height="34" rx="17" fill="#0F1526" stroke="#2C3A60"/>
-    <text x="458" y="308" text-anchor="middle">0 deps</text>
-    <rect x="530" y="286" width="150" height="34" rx="17" fill="#0F1526" stroke="#2C3A60"/>
-    <text x="605" y="308" text-anchor="middle">Pi + Codex</text>
-    <rect x="692" y="286" width="150" height="34" rx="17" fill="#0F1526" stroke="#2C3A60"/>
-    <text x="767" y="308" text-anchor="middle">9 phase types</text>
+  <!-- logo mark + wordmark -->
+  <g transform="translate(400,124) scale(1.5)">
+    <path d="M8 22 C20 22, 22 8, 34 8 M8 22 C20 22, 22 36, 34 36 M34 8 C46 8, 48 22, 58 22 M34 36 C46 36, 48 22, 58 22" stroke="#4B4ACF" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <circle cx="8" cy="22" r="6" fill="#4B4ACF"/>
+    <circle cx="34" cy="8" r="5" fill="#8B8AE3"/>
+    <circle cx="34" cy="36" r="5" fill="#8B8AE3"/>
+    <circle cx="58" cy="22" r="6" fill="#0E8A66"/>
   </g>
+  <text x="520" y="192" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="92" font-weight="700" letter-spacing="-3" fill="#17181C">task<tspan fill="#4B4ACF">flow</tspan></text>
 
-  <rect x="392" y="352" width="518" height="248" rx="18" fill="#0B111F" fill-opacity="0.6" stroke="#243154" stroke-dasharray="7 6"/>
-  <circle cx="416" cy="378" r="4.5" fill="#A78BFA"/>
-  <text x="430" y="383" font-family="ui-monospace,Menlo,monospace" font-size="13" letter-spacing="1" fill="#9683C6">RUNTIME · isolated context</text>
+  <text x="640" y="240" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="24" font-weight="500" fill="#3C3F45">Declarative DAG orchestration for coding-agent subagents.</text>
+  <text x="640" y="274" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="16" fill="#75787E">Fan out · gate · resume · save as a command — intermediate results stay out of your context.</text>
 
-  <rect x="988" y="352" width="176" height="34" rx="17" fill="#0C1C16" stroke="#1F4A3A"/>
-  <circle cx="1012" cy="369" r="4.5" fill="#43D9AD"/>
-  <text x="1026" y="374" font-family="ui-monospace,Menlo,monospace" font-size="13" letter-spacing="1" fill="#5FCBAC">YOUR CONTEXT</text>
-
-  <g stroke="url(#edge)" stroke-width="3" fill="none" opacity="0.85">
-    <path d="M334 484 C372 484, 372 430, 438 430"/>
-    <path d="M334 484 H438"/>
-    <path d="M334 484 C372 484, 372 538, 438 538"/>
-    <path d="M586 430 C660 430, 660 484, 706 484"/>
-    <path d="M586 484 H706"/>
-    <path d="M586 538 C660 538, 660 484, 706 484"/>
-    <path d="M912 484 H1042" stroke="url(#edge)"/>
+  <!-- ============ MINI PIPELINE: declare → verify → run → return ============ -->
+  <!-- declare -->
+  <g filter="url(#card)"><rect x="150" y="352" width="180" height="170" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/></g>
+  <circle cx="170" cy="372" r="3.5" fill="#E8E6E1"/><circle cx="183" cy="372" r="3.5" fill="#E8E6E1"/><circle cx="196" cy="372" r="3.5" fill="#E8E6E1"/>
+  <text x="312" y="376" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="9.5" fill="#A6A9AE">flow.json</text>
+  <line x1="150" y1="386" x2="330" y2="386" stroke="#EFEEE9"/>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#3C3F45">
+    <text x="168" y="410"><tspan fill="#75787E">"phases"</tspan>: [</text>
+    <text x="180" y="430">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"scan"</tspan> },</text>
+    <text x="180" y="450">{ <tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"map"</tspan> },</text>
+    <text x="180" y="470">{ <tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"gate"</tspan> }</text>
+    <text x="168" y="490">]</text>
   </g>
+  <text x="240" y="540" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.4" fill="#75787E"><tspan fill="#4B4ACF" font-weight="700">01</tspan> DECLARE</text>
 
-  <g font-family="ui-monospace,Menlo,monospace">
-    <rect x="158" y="452" width="176" height="64" rx="12" fill="#141C31" stroke="#324268"/>
-    <text x="246" y="484" text-anchor="middle" font-size="17" font-weight="700" fill="#E7ECF7">definition</text>
-    <text x="246" y="504" text-anchor="middle" font-size="11.5" letter-spacing="1" fill="#8A97B8">ONE JSON DSL</text>
+  <!-- arrow -->
+  <path d="M338 437 H360" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M368 437 l-10 -5.5 v11 z" fill="#C9CBD1"/>
 
-    <g fill="#E7ECF7">
-      <rect x="438" y="404" width="148" height="50" rx="10" fill="#161F36" stroke="#3A3463"/>
-      <text x="458" y="426" font-size="14" font-weight="600">subagent · 1</text>
-      <rect x="458" y="434" width="108" height="6" rx="3" fill="#26345A"/><rect x="458" y="434" width="70" height="6" rx="3" fill="#6E8BFF"/>
-      <rect x="438" y="459" width="148" height="50" rx="10" fill="#161F36" stroke="#3A3463"/>
-      <text x="458" y="481" font-size="14" font-weight="600">subagent · 2</text>
-      <rect x="458" y="489" width="108" height="6" rx="3" fill="#26345A"/><rect x="458" y="489" width="52" height="6" rx="3" fill="#6E8BFF"/>
-      <rect x="438" y="514" width="148" height="50" rx="10" fill="#161F36" stroke="#3A3463"/>
-      <text x="458" y="536" font-size="14" font-weight="600">subagent · N</text>
-      <rect x="458" y="544" width="108" height="6" rx="3" fill="#26345A"/><rect x="458" y="544" width="88" height="6" rx="3" fill="#6E8BFF"/>
-    </g>
-    <text x="512" y="586" text-anchor="middle" font-size="11.5" letter-spacing="1" fill="#8A97B8">MAP · FAN-OUT</text>
+  <!-- verify -->
+  <g filter="url(#card)"><rect x="376" y="352" width="150" height="170" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/></g>
+  <circle cx="451" cy="414" r="22" fill="#EEEEFB"/>
+  <path d="M441 414 l7 7 l13 -14" stroke="#4B4ACF" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="393" y="456" width="116" height="24" rx="12" fill="#EEEEFB"/>
+  <text x="451" y="472" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" font-weight="700" fill="#4B4ACF">0 tokens spent</text>
+  <text x="451" y="540" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.4" fill="#75787E"><tspan fill="#4B4ACF" font-weight="700">02</tspan> VERIFY</text>
 
-    <rect x="706" y="452" width="148" height="64" rx="12" fill="#1C1608" stroke="#6B5320"/>
-    <text x="780" y="482" text-anchor="middle" font-size="17" font-weight="700" fill="#F0B45A">gate</text>
-    <text x="780" y="502" text-anchor="middle" font-size="11.5" letter-spacing="0.5" fill="#C79A4E">VERDICT: PASS</text>
+  <!-- arrow -->
+  <path d="M534 437 H556" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M564 437 l-10 -5.5 v11 z" fill="#C9CBD1"/>
 
-    <rect x="1042" y="452" width="122" height="64" rx="12" fill="#0C1C16" stroke="#1F5A44"/>
-    <text x="1103" y="482" text-anchor="middle" font-size="17" font-weight="700" fill="#43D9AD">report</text>
-    <text x="1103" y="502" text-anchor="middle" font-size="11" letter-spacing="0.5" fill="#5FCBAC">FINAL · returned</text>
+  <!-- run (isolated) -->
+  <rect x="572" y="352" width="330" height="170" rx="14" fill="#FBFAF8" stroke="#C9C8EF" stroke-dasharray="6 5"/>
+  <path d="M585.5 352.5 h303 a13 13 0 0 1 13 13 v17 h-329 v-17 a13 13 0 0 1 13 -13 z" fill="#EEEEFB"/>
+  <text x="594" y="372" font-family="'SF Mono',Menlo,monospace" font-size="9.5" letter-spacing="0.8" fill="#4B4ACF">RUNTIME · ISOLATED CONTEXT</text>
+
+  <g stroke="#B9B8EC" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M664 452 C682 452, 686 414, 704 414"/>
+    <path d="M664 452 H704"/>
+    <path d="M664 452 C682 452, 686 490, 704 490"/>
+    <path d="M788 414 C806 414, 810 452, 824 452"/>
+    <path d="M788 452 H824"/>
+    <path d="M788 490 C806 490, 810 452, 824 452"/>
   </g>
+  <g fill="#8B8AE3"><path d="M704 414 l-8 -4.5 v9 z"/><path d="M704 452 l-8 -4.5 v9 z"/><path d="M704 490 l-8 -4.5 v9 z"/></g>
+  <path d="M824 452 l-8 -4.5 v9 z" fill="#B07E1E"/>
 
-  <text x="640" y="622" text-anchor="middle" font-family="system-ui,Helvetica,Arial,sans-serif" font-size="13.5" fill="#6C7896">Dozens of transcripts run here — only the final result crosses back to you.</text>
+  <g filter="url(#card)"><rect x="596" y="431" width="68" height="42" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/></g>
+  <text x="630" y="456" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="11" font-weight="700" fill="#17181C">scan</text>
+  <g filter="url(#card)">
+    <rect x="704" y="396" width="84" height="36" rx="9" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="704" y="434" width="84" height="36" rx="9" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="704" y="472" width="84" height="36" rx="9" fill="#FFFFFF" stroke="#DBDAF4"/>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="10.5" font-weight="700" fill="#17181C" text-anchor="middle">
+    <text x="746" y="418">audit·a</text>
+    <text x="746" y="456">audit·b</text>
+    <text x="746" y="494">audit·n</text>
+  </g>
+  <g filter="url(#card)"><rect x="824" y="431" width="60" height="42" rx="10" fill="#FAF3E2" stroke="#E6D3A4"/></g>
+  <text x="854" y="456" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="11" font-weight="700" fill="#17181C">gate</text>
+  <text x="737" y="540" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.4" fill="#75787E"><tspan fill="#4B4ACF" font-weight="700">03</tspan> RUN</text>
+
+  <!-- arrow: result -->
+  <path d="M906 437 H936" stroke="#0E8A66" stroke-width="3" stroke-linecap="round"/>
+  <path d="M944 437 l-11 -6 v12 z" fill="#0E8A66"/>
+  <text x="925" y="421" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="9" fill="#0E8A66">result</text>
+
+  <!-- return -->
+  <g filter="url(#card)"><rect x="950" y="352" width="180" height="170" rx="14" fill="#FFFFFF" stroke="#BFE0D2"/></g>
+  <path d="M963.5 352.5 h153 a13 13 0 0 1 13 13 v17 h-179 v-17 a13 13 0 0 1 13 -13 z" fill="#E7F4EF"/>
+  <text x="972" y="372" font-family="'SF Mono',Menlo,monospace" font-size="9.5" letter-spacing="0.8" fill="#0A6E52">YOUR CONTEXT</text>
+  <g filter="url(#card)"><rect x="972" y="404" width="136" height="60" rx="11" fill="#FFFFFF" stroke="#0E8A66" stroke-width="1.4"/></g>
+  <circle cx="994" cy="434" r="4.5" fill="#0E8A66"/>
+  <text x="1006" y="430" font-family="'SF Mono',Menlo,monospace" font-size="13" font-weight="700" fill="#17181C">report</text>
+  <text x="1006" y="448" font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#0E8A66">final · returned</text>
+  <text x="1040" y="496" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="11.5" fill="#8E9199">Just the answer.</text>
+  <text x="1040" y="540" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.4" fill="#75787E"><tspan fill="#0E8A66" font-weight="700">04</tspan> RETURN</text>
+
+  <!-- footer -->
+  <text x="640" y="596" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="14" fill="#8E9199">One declarative graph · statically verified · resumable across sessions · 9 phase types</text>
 </svg>

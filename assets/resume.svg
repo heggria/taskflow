@@ -1,69 +1,81 @@
-<svg width="1000" height="280" viewBox="0 0 1000 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cross-session resume: a failed run is continued later, cached phases skip and only the remaining work runs">
+<svg width="1000" height="280" viewBox="0 0 1000 280" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cross-session resume: a run fails midway in session 1; state persists on disk; in session 2 /tf resume skips the cached phases and only re-runs the failed phase and what follows">
   <defs>
-    <linearGradient id="rbg" x1="0" y1="0" x2="1000" y2="280" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0B0E16"/><stop offset="1" stop-color="#0E1322"/>
-    </linearGradient>
-    <pattern id="rdots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1.3" cy="1.3" r="1.3" fill="#9FB0FF" fill-opacity="0.045"/></pattern>
+    <filter id="card" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#1B1D29" flood-opacity="0.05"/>
+    </filter>
   </defs>
-  <rect x="1" y="1" width="998" height="278" rx="18" fill="url(#rbg)"/>
-  <rect x="1" y="1" width="998" height="278" rx="18" fill="url(#rdots)"/>
-  <rect x="1.5" y="1.5" width="997" height="277" rx="17.5" stroke="#283357" stroke-opacity="0.6"/>
 
-  <!-- session 1 -->
-  <text x="40" y="58" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="0.8" fill="#8FA0C8">SESSION 1 &#183; run starts, fails midway</text>
-  <g>
-    <!-- nodes -->
-    <rect x="40" y="72" width="120" height="46" rx="11" fill="#10231C" stroke="#2F8E73"/>
-    <text x="56" y="92" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#E7ECF7">discover</text>
-    <text x="56" y="108" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#5FCBAC">&#10003; done</text>
+  <rect width="1000" height="280" rx="18" fill="#F7F6F3"/>
+  <rect x="0.5" y="0.5" width="999" height="279" rx="17.5" stroke="#E5E3DD"/>
 
-    <rect x="200" y="72" width="120" height="46" rx="11" fill="#10231C" stroke="#2F8E73"/>
-    <text x="216" y="92" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#E7ECF7">analyze</text>
-    <text x="216" y="108" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#5FCBAC">&#10003; done</text>
+  <!-- ============ SESSION 1 ============ -->
+  <text x="60" y="46" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.6" fill="#A6A9AE">SESSION 1</text>
+  <text x="148" y="46" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#75787E">run starts, fails midway</text>
 
-    <rect x="360" y="72" width="120" height="46" rx="11" fill="#241519" stroke="#8A4040"/>
-    <text x="376" y="92" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#E7ECF7">build</text>
-    <text x="376" y="108" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#E08A8A">&#10007; failed</text>
-
-    <rect x="520" y="72" width="120" height="46" rx="11" fill="#11141f" stroke="#33406B"/>
-    <text x="536" y="92" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#9AA6C6">report</text>
-    <text x="536" y="108" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#6C779A">&#9675; pending</text>
-
-    <g stroke="#39446c" stroke-width="2" fill="none" stroke-linecap="round">
-      <path d="M160 95 H200"/><path d="M320 95 H360"/><path d="M480 95 H520"/>
-    </g>
-    <g fill="#5b6791"><path d="M200 95 l-9 -5 v10 z"/><path d="M360 95 l-9 -5 v10 z"/><path d="M520 95 l-9 -5 v10 z"/></g>
+  <g filter="url(#card)">
+    <rect x="60" y="60" width="118" height="48" rx="11" fill="#FFFFFF" stroke="#BFE0D2"/>
+    <rect x="218" y="60" width="118" height="48" rx="11" fill="#FFFFFF" stroke="#BFE0D2"/>
+    <rect x="376" y="60" width="118" height="48" rx="11" fill="#FBF1F0" stroke="#E0A9A1"/>
+    <rect x="534" y="60" width="118" height="48" rx="11" fill="#FFFFFF" stroke="#E5E3DD"/>
   </g>
-  <text x="690" y="99" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#7C89AE">state on disk &#8594;</text>
-  <rect x="838" y="80" width="120" height="34" rx="9" fill="#10182B" stroke="#2C3A63"/>
-  <text x="898" y="101" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#9FB0DA">runs/&lt;id&gt;.json</text>
-
-  <!-- resume arrow -->
-  <text x="500" y="158" text-anchor="middle" font-family="system-ui, sans-serif" font-size="13" fill="#A78BFA">/tf resume &lt;runId&gt;  &#8595;  hours or days later</text>
-
-  <!-- session 2 -->
-  <text x="40" y="200" font-family="ui-monospace, Menlo, monospace" font-size="12" letter-spacing="0.8" fill="#8FA0C8">SESSION 2 &#183; cached phases skip, only the rest runs</text>
-  <g>
-    <rect x="40" y="214" width="120" height="46" rx="11" fill="#12151d" stroke="#33406B" stroke-dasharray="4 4"/>
-    <text x="56" y="234" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#8C97B6">discover</text>
-    <text x="56" y="250" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#6C779A">&#10227; cached &#183; skip</text>
-
-    <rect x="200" y="214" width="120" height="46" rx="11" fill="#12151d" stroke="#33406B" stroke-dasharray="4 4"/>
-    <text x="216" y="234" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#8C97B6">analyze</text>
-    <text x="216" y="250" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#6C779A">&#10227; cached &#183; skip</text>
-
-    <rect x="360" y="214" width="120" height="46" rx="11" fill="#1E1A2E" stroke="#A78BFA"/>
-    <text x="376" y="234" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#E7ECF7">build</text>
-    <text x="376" y="250" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#C6B6F2">&#9680; re-runs</text>
-
-    <rect x="520" y="214" width="120" height="46" rx="11" fill="#10231C" stroke="#2F8E73"/>
-    <text x="536" y="234" font-family="ui-monospace, Menlo, monospace" font-size="13" font-weight="700" fill="#EAFBF4">report</text>
-    <text x="536" y="250" font-family="ui-monospace, Menlo, monospace" font-size="9" fill="#5FCBAC">&#9655; runs</text>
-
-    <g stroke="#39446c" stroke-width="2" fill="none" stroke-linecap="round">
-      <path d="M160 237 H200"/><path d="M320 237 H360"/><path d="M480 237 H520"/>
-    </g>
-    <g fill="#5b6791"><path d="M200 237 l-9 -5 v10 z"/><path d="M360 237 l-9 -5 v10 z"/><path d="M520 237 l-9 -5 v10 z"/></g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700">
+    <text x="76" y="81" fill="#17181C">discover</text>
+    <text x="234" y="81" fill="#17181C">analyze</text>
+    <text x="392" y="81" fill="#17181C">build</text>
+    <text x="550" y="81" fill="#A6A9AE">report</text>
   </g>
-  <text x="838" y="240" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="#5FCBAC">no wasted spend</text>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="9">
+    <text x="76" y="97" fill="#0E8A66">✓ done</text>
+    <text x="234" y="97" fill="#0E8A66">✓ done</text>
+    <text x="392" y="97" fill="#C4473A">✗ failed</text>
+    <text x="550" y="97" fill="#A6A9AE">○ pending</text>
+  </g>
+  <g stroke="#C9CBD1" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M178 84 H210"/><path d="M336 84 H368"/><path d="M494 84 H526"/>
+  </g>
+  <g fill="#C9CBD1"><path d="M216 84 l-9 -5 v10 z"/><path d="M374 84 l-9 -5 v10 z"/><path d="M532 84 l-9 -5 v10 z"/></g>
+
+  <!-- state on disk -->
+  <text x="694" y="88" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#75787E">state on disk →</text>
+  <g filter="url(#card)"><rect x="806" y="67" width="134" height="34" rx="9" fill="#FFFFFF" stroke="#E5E3DD"/></g>
+  <text x="873" y="88" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#5A5D63">runs/&lt;id&gt;.json</text>
+
+  <!-- ============ RESUME DIVIDER ============ -->
+  <line x1="60" y1="140" x2="376" y2="140" stroke="#E5E3DD"/>
+  <line x1="624" y1="140" x2="940" y2="140" stroke="#E5E3DD"/>
+  <rect x="392" y="126" width="216" height="28" rx="14" fill="#EEEEFB" stroke="#D9D8F5"/>
+  <text x="500" y="144" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="11" font-weight="700" fill="#4B4ACF">/tf resume · days later</text>
+
+  <!-- ============ SESSION 2 ============ -->
+  <text x="60" y="186" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="1.6" fill="#A6A9AE">SESSION 2</text>
+  <text x="148" y="186" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#75787E">cached phases skip, only the rest runs</text>
+
+  <g>
+    <rect x="60" y="200" width="118" height="48" rx="11" fill="#F1F0EC" stroke="#D9D7D0" stroke-dasharray="4 4"/>
+    <rect x="218" y="200" width="118" height="48" rx="11" fill="#F1F0EC" stroke="#D9D7D0" stroke-dasharray="4 4"/>
+  </g>
+  <g filter="url(#card)">
+    <rect x="376" y="200" width="118" height="48" rx="11" fill="#EEEEFB" stroke="#8B8AE3"/>
+    <rect x="534" y="200" width="118" height="48" rx="11" fill="#FFFFFF" stroke="#0E8A66" stroke-width="1.4"/>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700">
+    <text x="76" y="221" fill="#8E9199">discover</text>
+    <text x="234" y="221" fill="#8E9199">analyze</text>
+    <text x="392" y="221" fill="#17181C">build</text>
+    <text x="550" y="221" fill="#17181C">report</text>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="9">
+    <text x="76" y="237" fill="#A6A9AE">⟳ cached · skip</text>
+    <text x="234" y="237" fill="#A6A9AE">⟳ cached · skip</text>
+    <text x="392" y="237" fill="#4B4ACF">◐ re-runs</text>
+    <text x="550" y="237" fill="#0E8A66">▷ runs</text>
+  </g>
+  <g stroke="#C9CBD1" stroke-width="2" fill="none" stroke-linecap="round">
+    <path d="M178 224 H210"/><path d="M336 224 H368"/><path d="M494 224 H526"/>
+  </g>
+  <g fill="#C9CBD1"><path d="M216 224 l-9 -5 v10 z"/><path d="M374 224 l-9 -5 v10 z"/><path d="M532 224 l-9 -5 v10 z"/></g>
+
+  <!-- outcome -->
+  <rect x="806" y="207" width="134" height="34" rx="17" fill="#E7F4EF" stroke="#BFE0D2"/>
+  <text x="873" y="228" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10.5" font-weight="700" fill="#0A6E52">no wasted spend</text>
 </svg>
