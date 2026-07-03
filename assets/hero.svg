@@ -1,171 +1,164 @@
-<svg width="1280" height="660" viewBox="0 0 1280 660" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — a declarative DAG of subagents: one source fans out, branches route conditionally, a gate guards quality, and only the final result returns to your context. 9 phase types, zero deps, runs on Pi and Codex.">
+<svg width="1280" height="660" viewBox="0 0 1280 660" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — declare one JSON graph, it is statically verified for zero tokens, runs isolated in the runtime, and only the final result returns to your context. 9 phase types, zero deps, runs on Pi and Codex.">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="660" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#0A0E18"/>
-      <stop offset="1" stop-color="#0C1120"/>
-    </linearGradient>
-    <radialGradient id="glowL" cx="0" cy="0" r="1" gradientTransform="translate(300 400) scale(560 380)">
-      <stop offset="0" stop-color="#6E8BFF" stop-opacity="0.16"/>
-      <stop offset="1" stop-color="#6E8BFF" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="glowR" cx="0" cy="0" r="1" gradientTransform="translate(1120 440) scale(420 300)">
-      <stop offset="0" stop-color="#43D9AD" stop-opacity="0.18"/>
-      <stop offset="1" stop-color="#43D9AD" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="ti" x1="455" y1="0" x2="825" y2="0" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#8AB4FF"/>
-      <stop offset="0.5" stop-color="#B692FF"/>
-      <stop offset="1" stop-color="#43D9AD"/>
-    </linearGradient>
-    <pattern id="dots" width="32" height="32" patternUnits="userSpaceOnUse">
-      <circle cx="1.5" cy="1.5" r="1.5" fill="#9FB0FF" fill-opacity="0.035"/>
-    </pattern>
-    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="6" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <filter id="card" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#1B1D29" flood-opacity="0.05"/>
     </filter>
   </defs>
 
   <!-- background -->
-  <rect x="1" y="1" width="1278" height="658" rx="28" fill="url(#bg)"/>
-  <rect x="1" y="1" width="1278" height="658" rx="28" fill="url(#dots)"/>
-  <rect x="1" y="1" width="1278" height="658" rx="28" fill="url(#glowL)"/>
-  <rect x="1" y="1" width="1278" height="658" rx="28" fill="url(#glowR)"/>
-  <rect x="1.5" y="1.5" width="1277" height="657" rx="27.5" stroke="#283357" stroke-opacity="0.55"/>
+  <rect width="1280" height="660" rx="28" fill="#F7F6F3"/>
+  <rect x="0.5" y="0.5" width="1279" height="659" rx="27.5" stroke="#E5E3DD"/>
 
-  <!-- ============ TITLE ============ -->
-  <rect x="487" y="40" width="306" height="34" rx="17" fill="#0F1526" stroke="#2C3A60"/>
-  <circle cx="512" cy="57" r="4.5" fill="#43D9AD"/>
-  <text x="530" y="62" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="13.5" letter-spacing="1.2" fill="#9DA9C9">Pi · Codex · zero deps</text>
+  <!-- ============ HERO HEADER (badge · mark · wordmark · subtitle) ============ -->
+  <rect x="502" y="34" width="276" height="32" rx="16" fill="#FFFFFF" stroke="#E5E3DD"/>
+  <circle cx="527" cy="50" r="4" fill="#0E8A66"/>
+  <text x="543" y="54.5" font-family="'SF Mono',Menlo,monospace" font-size="13" letter-spacing="1" fill="#75787E">Pi · Codex · zero deps</text>
 
-  <text x="640" y="166" text-anchor="middle" font-family="ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace" font-size="84" font-weight="700" letter-spacing="-2" fill="url(#ti)">taskflow</text>
-  <text x="640" y="206" text-anchor="middle" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif" font-size="21" font-weight="500" fill="#C6CFE8">One declarative graph. Nine kinds of phase. Only the result returns.</text>
-
-  <!-- ============ RUNTIME BOUNDARY (holds the whole DAG) ============ -->
-  <rect x="60" y="262" width="858" height="330" rx="20" fill="#0B111F" fill-opacity="0.62" stroke="#243154" stroke-dasharray="7 6"/>
-  <rect x="84" y="246" width="246" height="26" rx="13" fill="#111A2E" stroke="#2C3A60"/>
-  <circle cx="102" cy="259" r="4" fill="#A78BFA"/>
-  <text x="116" y="263" font-family="ui-monospace,Menlo,monospace" font-size="11.5" letter-spacing="1" fill="#9AA7CC">RUNTIME · isolated context</text>
-
-  <!-- =========================================================
-       THE DAG — 4 layers, clean fan-out → fan-in, no crossings
-       Layer A: source            (1 node)
-       Layer B: parallel/map      (3 nodes, fan-out)
-       Layer C: conditional route (2 nodes, when/branch)
-       Layer D: gate              (1 node, fan-in)
-       ========================================================= -->
-
-  <!-- EDGES (drawn first, under nodes) -->
-  <!-- A -> B  (fan-out: 1 source to 3 parallel) -->
-  <g stroke="#5566B8" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85">
-    <path d="M214 360 C252 360, 256 312, 296 312"/>
-    <path d="M214 360 C252 360, 256 360, 296 360"/>
-    <path d="M214 360 C252 360, 256 408, 296 408"/>
+  <!-- logo mark: tiny DAG, optically centered with the wordmark as one group -->
+  <g transform="translate(436,85) scale(1.3)">
+    <path d="M8 22 C20 22, 22 8, 34 8 M8 22 C20 22, 22 36, 34 36 M34 8 C46 8, 48 22, 58 22 M34 36 C46 36, 48 22, 58 22" stroke="#4B4ACF" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <circle cx="8" cy="22" r="6" fill="#4B4ACF"/>
+    <circle cx="34" cy="8" r="5" fill="#8B8AE3"/>
+    <circle cx="34" cy="36" r="5" fill="#8B8AE3"/>
+    <circle cx="58" cy="22" r="6" fill="#0E8A66"/>
   </g>
-  <!-- B -> C  (fan-in 3 to 2, then conditional split) -->
-  <g stroke="#7A5CC0" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85">
-    <path d="M428 312 C470 312, 474 330, 514 330"/>
-    <path d="M428 360 C470 360, 474 330, 514 330"/>
-    <path d="M428 408 C470 408, 474 408, 514 408"/>
-    <path d="M428 360 C470 360, 474 408, 514 408"/>
+  <text x="540" y="142" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="80" font-weight="700" letter-spacing="-2.5" fill="#17181C">task<tspan fill="#4B4ACF">flow</tspan></text>
+
+  <text x="640" y="182" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="20" font-weight="500" fill="#3C3F45">Declarative DAG orchestration for coding-agent subagents.</text>
+
+  <!-- ============ STEP LABELS (aligned to card left edges, one baseline) ============ -->
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1.6">
+    <text x="64" y="224" fill="#4B4ACF" font-weight="700">01</text><text x="88" y="224" fill="#75787E">DECLARE</text>
+    <text x="346" y="224" fill="#4B4ACF" font-weight="700">02</text><text x="370" y="224" fill="#75787E">VERIFY · FREE</text>
+    <text x="576" y="224" fill="#4B4ACF" font-weight="700">03</text><text x="600" y="224" fill="#75787E">RUN · ISOLATED</text>
+    <text x="1006" y="224" fill="#0E8A66" font-weight="700">04</text><text x="1030" y="224" fill="#75787E">RETURN</text>
   </g>
-  <!-- C -> D  (fan-in 2 to gate) -->
-  <g stroke="#B08A50" stroke-width="2.2" fill="none" stroke-linecap="round" opacity="0.85">
-    <path d="M646 330 C690 330, 694 372, 736 372"/>
-    <path d="M646 408 C690 408, 694 372, 736 372"/>
+
+  <!-- ============ ZONE 1 · DECLARE (64..296) ============ -->
+  <g filter="url(#card)">
+    <rect x="64" y="240" width="232" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
   </g>
-  <!-- arrowheads -->
-  <g fill="#6E8BFF"><path d="M296 312 l-9 -5 v10 z"/><path d="M296 360 l-9 -5 v10 z"/><path d="M296 408 l-9 -5 v10 z"/></g>
-  <g fill="#A78BFA"><path d="M514 330 l-9 -5 v10 z"/><path d="M514 408 l-9 -5 v10 z"/></g>
-  <g fill="#F0B45A"><path d="M736 372 l-9 -5 v10 z"/></g>
-
-  <!-- NODES -->
-  <!-- Layer A: source (agent) -->
-  <rect x="98" y="334" width="116" height="52" rx="12" fill="#121A2C" stroke="#33406B"/>
-  <circle cx="120" cy="352" r="4.5" fill="#6E8BFF"/>
-  <text x="134" y="356" font-family="ui-monospace,Menlo,monospace" font-size="14" font-weight="700" fill="#E7ECF7">discover</text>
-  <text x="116" y="376" font-family="ui-monospace,Menlo,monospace" font-size="9.5" letter-spacing="0.6" fill="#7C89AE">agent</text>
-
-  <!-- Layer B: 3 parallel map nodes -->
-  <g>
-    <rect x="298" y="288" width="130" height="48" rx="11" fill="#131A2E" stroke="#3A3463"/>
-    <circle cx="318" cy="305" r="4" fill="#A78BFA"/>
-    <text x="332" y="309" font-family="ui-monospace,Menlo,monospace" font-size="13" font-weight="700" fill="#E7ECF7">audit·auth</text>
-    <text x="316" y="326" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing="0.6" fill="#9683C6">map · item 1</text>
+  <circle cx="86" cy="260" r="4" fill="#E8E6E1"/><circle cx="100" cy="260" r="4" fill="#E8E6E1"/><circle cx="114" cy="260" r="4" fill="#E8E6E1"/>
+  <text x="276" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">flow.json</text>
+  <line x1="64" y1="280" x2="296" y2="280" stroke="#EFEEE9"/>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" fill="#3C3F45">
+    <text x="84" y="310"><tspan fill="#75787E">"phases"</tspan>: [</text>
+    <text x="98" y="332">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"scan"</tspan> },</text>
+    <text x="98" y="354">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"audit"</tspan>,</text>
+    <text x="112" y="376"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"map"</tspan> },</text>
+    <text x="98" y="398">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"fix"</tspan>,</text>
+    <text x="112" y="420"><tspan fill="#4B4ACF">"when"</tspan>: <tspan fill="#B07E1E">"high"</tspan> },</text>
+    <text x="98" y="442">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"gate"</tspan>,</text>
+    <text x="112" y="464"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"gate"</tspan> }</text>
+    <text x="84" y="486">]</text>
   </g>
-  <g>
-    <rect x="298" y="336" width="130" height="48" rx="11" fill="#131A2E" stroke="#3A3463"/>
-    <circle cx="318" cy="353" r="4" fill="#A78BFA"/>
-    <text x="332" y="357" font-family="ui-monospace,Menlo,monospace" font-size="13" font-weight="700" fill="#E7ECF7">audit·db</text>
-    <text x="316" y="374" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing="0.6" fill="#9683C6">map · item 2</text>
+  <text x="180" y="516" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">One file. The whole graph.</text>
+
+  <!-- arrow 1→2 -->
+  <path d="M304 388 H332" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M340 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
+
+  <!-- ============ ZONE 2 · VERIFY (346..526) ============ -->
+  <g filter="url(#card)">
+    <rect x="346" y="240" width="180" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
   </g>
-  <g>
-    <rect x="298" y="384" width="130" height="48" rx="11" fill="#131A2E" stroke="#3A3463"/>
-    <circle cx="318" cy="401" r="4" fill="#A78BFA"/>
-    <text x="332" y="405" font-family="ui-monospace,Menlo,monospace" font-size="13" font-weight="700" fill="#E7ECF7">audit·api</text>
-    <text x="316" y="422" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing="0.6" fill="#9683C6">map · item N</text>
+  <circle cx="368" cy="260" r="4" fill="#E8E6E1"/><circle cx="382" cy="260" r="4" fill="#E8E6E1"/><circle cx="396" cy="260" r="4" fill="#E8E6E1"/>
+  <text x="506" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">tf verify</text>
+  <line x1="346" y1="280" x2="526" y2="280" stroke="#EFEEE9"/>
+  <circle cx="436" cy="348" r="26" fill="#EEEEFB"/>
+  <path d="M424 348 l8 8 l16 -17" stroke="#4B4ACF" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="436" y="402" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#17181C">Statically verified</text>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#75787E" text-anchor="middle">
+    <text x="436" y="424">no cycles · no dead ends</text>
+    <text x="436" y="442">budgets · agents exist</text>
   </g>
-  <!-- fan-out bracket label -->
-  <text x="363" y="456" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="9.5" letter-spacing="1.8" fill="#7E70AE">FAN-OUT · concurrent</text>
+  <rect x="361" y="462" width="150" height="28" rx="14" fill="#EEEEFB"/>
+  <text x="436" y="480" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="11" font-weight="700" fill="#4B4ACF">0 tokens spent</text>
 
-  <!-- Layer C: conditional branches (when) -->
-  <g>
-    <rect x="516" y="306" width="130" height="48" rx="11" fill="#151430" stroke="#4A426A"/>
-    <circle cx="536" cy="323" r="4" fill="#B692FF"/>
-    <text x="550" y="327" font-family="ui-monospace,Menlo,monospace" font-size="13" font-weight="700" fill="#E7ECF7">deep-fix</text>
-    <text x="534" y="344" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing="0.5" fill="#8C99C0">when high</text>
+  <!-- arrow 2→3 -->
+  <path d="M534 388 H562" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M570 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
+
+  <!-- ============ ZONE 3 · RUN (576..956, dashed = isolation boundary) ============ -->
+  <rect x="576" y="240" width="380" height="296" rx="14" fill="#FBFAF8" stroke="#C9C8EF" stroke-dasharray="6 5"/>
+  <path d="M590 240.5 h352 a13.5 13.5 0 0 1 13.5 13.5 v26 h-379 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#EEEEFB"/>
+  <circle cx="598" cy="260" r="4" fill="#4B4ACF"/>
+  <text x="612" y="264.5" font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1" fill="#4B4ACF">RUNTIME · ISOLATED CONTEXT</text>
+
+  <!-- DAG edges -->
+  <g stroke="#B9B8EC" stroke-width="2.2" fill="none" stroke-linecap="round">
+    <path d="M674 398 C698 398, 702 332, 722 332"/>
+    <path d="M674 398 H722"/>
+    <path d="M674 398 C698 398, 702 464, 722 464"/>
+    <path d="M820 332 C838 332, 842 398, 858 398"/>
+    <path d="M820 398 H858"/>
+    <path d="M820 464 C838 464, 842 398, 858 398"/>
   </g>
-  <g>
-    <rect x="516" y="384" width="130" height="48" rx="11" fill="#151430" stroke="#4A426A"/>
-    <circle cx="536" cy="401" r="4" fill="#B692FF"/>
-    <text x="550" y="405" font-family="ui-monospace,Menlo,monospace" font-size="13" font-weight="700" fill="#E7ECF7">quick-fix</text>
-    <text x="534" y="422" font-family="ui-monospace,Menlo,monospace" font-size="9" letter-spacing="0.5" fill="#8C99C0">when low</text>
+  <g fill="#8B8AE3">
+    <path d="M722 332 l-8 -4.5 v9 z"/><path d="M722 398 l-8 -4.5 v9 z"/><path d="M722 464 l-8 -4.5 v9 z"/>
   </g>
-  <text x="581" y="456" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="9.5" letter-spacing="1.8" fill="#8C7CC0">ROUTE · when / join</text>
+  <path d="M858 398 l-8 -4.5 v9 z" fill="#B07E1E"/>
 
-  <!-- Layer D: gate (quality fan-in) -->
-  <rect x="738" y="344" width="120" height="56" rx="13" fill="#1A1A2A" stroke="#6E5A33"/>
-  <circle cx="760" cy="364" r="4.5" fill="#F0B45A"/>
-  <text x="774" y="368" font-family="ui-monospace,Menlo,monospace" font-size="15" font-weight="700" fill="#E7ECF7">gate</text>
-  <text x="756" y="388" font-family="ui-monospace,Menlo,monospace" font-size="9.5" letter-spacing="0.6" fill="#C79A56">VERDICT: PASS</text>
-  <text x="798" y="424" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="9.5" letter-spacing="1.6" fill="#B0894F">FAN-IN · halt or pass</text>
+  <!-- DAG nodes -->
+  <g filter="url(#card)"><rect x="596" y="374" width="78" height="48" rx="11" fill="#FFFFFF" stroke="#DBDAF4"/></g>
+  <text x="635" y="395" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">scan</text>
+  <text x="635" y="411" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="9" fill="#8E9199">agent</text>
 
-  <!-- runtime caption -->
-  <text x="489" y="566" text-anchor="middle" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif" font-size="13" fill="#6E7AA0">Every transcript runs &amp; stays inside the runtime.</text>
-
-  <!-- ============ THE CROSSING: only the final result ============ -->
-  <path d="M858 372 C912 372, 944 372, 1006 372" stroke="#43D9AD" stroke-width="3.5" fill="none" stroke-linecap="round"/>
-  <path d="M1006 372 l-13 -7 v14 z" fill="#43D9AD"/>
-  <circle cx="908" cy="372" r="3.4" fill="#9FE9D4"/>
-  <circle cx="950" cy="372" r="3.4" fill="#9FE9D4"/>
-  <text x="932" y="352" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10.5" letter-spacing="0.5" fill="#5FCBAC">only the result</text>
-
-  <!-- ============ YOUR CONTEXT ============ -->
-  <rect x="1012" y="266" width="208" height="320" rx="20" fill="#0A1F17" fill-opacity="0.5" stroke="#2B775D"/>
-  <rect x="1036" y="250" width="150" height="26" rx="13" fill="#0C231A" stroke="#2F8E73"/>
-  <circle cx="1054" cy="263" r="4" fill="#43D9AD"/>
-  <text x="1068" y="267" font-family="ui-monospace,Menlo,monospace" font-size="11.5" letter-spacing="1" fill="#7FD8BC">YOUR CONTEXT</text>
-
-  <g filter="url(#glow)">
-    <rect x="1040" y="338" width="152" height="72" rx="15" fill="#0E2A20" stroke="#43D9AD"/>
+  <g filter="url(#card)">
+    <rect x="722" y="310" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="722" y="376" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="722" y="442" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
   </g>
-  <circle cx="1066" cy="374" r="5" fill="#43D9AD"/>
-  <text x="1082" y="369" font-family="ui-monospace,Menlo,monospace" font-size="16" font-weight="700" fill="#EAFBF4">report</text>
-  <text x="1082" y="391" font-family="ui-monospace,Menlo,monospace" font-size="10" letter-spacing="0.6" fill="#6FD6B6">final · returned</text>
-  <text x="1116" y="466" text-anchor="middle" font-family="system-ui,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12.5" fill="#5C9A86">Your window stays clean.</text>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="700" fill="#17181C" text-anchor="middle">
+    <text x="771" y="329">audit·a</text>
+    <text x="771" y="395">audit·b</text>
+    <text x="771" y="461">audit·n</text>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#8B8AE3" text-anchor="middle">
+    <text x="771" y="344">map</text>
+    <text x="771" y="410">map</text>
+    <text x="771" y="476">map</text>
+  </g>
 
-  <!-- ============ PHASE-TYPE TOOLBOX (the "I have so many mechanisms" proof) ============ -->
-  <text x="640" y="612" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="10" letter-spacing="2" fill="#5C6A92">9 PHASE TYPES</text>
-  <g font-family="ui-monospace,Menlo,monospace" font-size="11.5" font-weight="600" text-anchor="middle">
-    <rect x="206" y="624" width="74" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="243" y="641" fill="#9FB6F0">agent</text>
-    <rect x="288" y="624" width="84" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="330" y="641" fill="#9FB6F0">parallel</text>
-    <rect x="380" y="624" width="60" height="26" rx="13" fill="#101a2e" stroke="#3A3463"/><text x="410" y="641" fill="#C6B6F2">map</text>
-    <rect x="448" y="624" width="62" height="26" rx="13" fill="#1A1622" stroke="#6E5A33"/><text x="479" y="641" fill="#F2C078">gate</text>
-    <rect x="518" y="624" width="76" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="556" y="641" fill="#9FB6F0">reduce</text>
-    <rect x="602" y="624" width="92" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="648" y="641" fill="#9FB6F0">approval</text>
-    <rect x="702" y="624" width="60" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="732" y="641" fill="#9FB6F0">flow</text>
-    <rect x="770" y="624" width="60" height="26" rx="13" fill="#0E1825" stroke="#26345A"/><text x="800" y="641" fill="#9FB6F0">loop</text>
-    <rect x="838" y="624" width="104" height="26" rx="13" fill="#0F2018" stroke="#2B775D"/><text x="890" y="641" fill="#7FD8BC">tournament</text>
-    <rect x="950" y="624" width="124" height="26" rx="13" fill="#0E1825" stroke="#1B3253"/><text x="1012" y="641" fill="#8A96B6">+ when·retry·budget</text>
+  <g filter="url(#card)"><rect x="858" y="372" width="68" height="52" rx="11" fill="#FAF3E2" stroke="#E6D3A4"/></g>
+  <text x="892" y="394" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">gate</text>
+  <text x="892" y="410" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#A87A18">PASS?</text>
+
+  <text x="766" y="516" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">Every transcript stays in here — never in your window.</text>
+
+  <!-- arrow 3→4: only the result crosses -->
+  <path d="M960 388 H992" stroke="#0E8A66" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1000 388 l-11 -6 v12 z" fill="#0E8A66"/>
+  <text x="978" y="372" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" fill="#0E8A66">result</text>
+
+  <!-- ============ ZONE 4 · RETURN (1006..1216) ============ -->
+  <g filter="url(#card)">
+    <rect x="1006" y="240" width="210" height="296" rx="14" fill="#FFFFFF" stroke="#BFE0D2"/>
+  </g>
+  <path d="M1019.5 240.5 h183 a13.5 13.5 0 0 1 13.5 13.5 v26 h-210 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#E7F4EF"/>
+  <circle cx="1028" cy="260" r="4" fill="#0E8A66"/>
+  <text x="1042" y="264.5" font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1" fill="#0A6E52">YOUR CONTEXT</text>
+
+  <g filter="url(#card)"><rect x="1026" y="336" width="170" height="72" rx="12" fill="#FFFFFF" stroke="#0E8A66" stroke-width="1.5"/></g>
+  <circle cx="1052" cy="372" r="5" fill="#0E8A66"/>
+  <text x="1066" y="368" font-family="'SF Mono',Menlo,monospace" font-size="15" font-weight="700" fill="#17181C">report</text>
+  <text x="1066" y="388" font-family="'SF Mono',Menlo,monospace" font-size="9.5" fill="#0E8A66">final · returned</text>
+
+  <text x="1111" y="452" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="13" font-weight="500" fill="#3C3F45">Just the answer.</text>
+  <text x="1111" y="472" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">No transcripts. No noise.</text>
+
+  <!-- ============ PHASE TYPES ============ -->
+  <text x="640" y="572" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="2" fill="#A6A9AE">9 PHASE TYPES</text>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="600" text-anchor="middle">
+    <rect x="184" y="588" width="74" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="221" y="606" fill="#5A5D63">agent</text>
+    <rect x="268" y="588" width="84" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="310" y="606" fill="#5A5D63">parallel</text>
+    <rect x="362" y="588" width="60" height="28" rx="14" fill="#EEEEFB" stroke="#D9D8F5"/><text x="392" y="606" fill="#4B4ACF">map</text>
+    <rect x="432" y="588" width="62" height="28" rx="14" fill="#FAF3E2" stroke="#E6D3A4"/><text x="463" y="606" fill="#A87A18">gate</text>
+    <rect x="504" y="588" width="76" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="542" y="606" fill="#5A5D63">reduce</text>
+    <rect x="590" y="588" width="92" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="636" y="606" fill="#5A5D63">approval</text>
+    <rect x="692" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="722" y="606" fill="#5A5D63">flow</text>
+    <rect x="762" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="792" y="606" fill="#5A5D63">loop</text>
+    <rect x="832" y="588" width="104" height="28" rx="14" fill="#E7F4EF" stroke="#BFE0D2"/><text x="884" y="606" fill="#0A6E52">tournament</text>
+    <rect x="946" y="588" width="150" height="28" rx="14" fill="#F1F0EC" stroke="#E5E3DD"/><text x="1021" y="606" fill="#8E9199">+ when·retry·budget</text>
   </g>
 </svg>
