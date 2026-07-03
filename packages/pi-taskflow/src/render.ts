@@ -113,6 +113,14 @@ export function summarizeRun(state: RunState): string {
 
 /** Build the detail column for a phase (the right-hand info). */
 function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): string {
+	const detail = phaseDetailInner(phase, ps, theme);
+	// Side-effect marker: the phase declared idempotent:false — it is never
+	// cached and transient errors are not auto-retried.
+	if (ps?.sideEffect) return detail + theme.fg("warning", "  ⚡");
+	return detail;
+}
+
+function phaseDetailInner(phase: Phase, ps: PhaseState | undefined, theme: Theme): string {
 	const type = phase.type ?? "agent";
 	if (!ps || ps.status === "pending") return theme.fg("dim", "—");
 
@@ -200,6 +208,8 @@ function phaseDetail(phase: Phase, ps: PhaseState | undefined, theme: Theme): st
 		const badge =
 			ps.gate.verdict === "block" ? theme.fg("error", theme.bold("BLOCK")) : theme.fg("success", "PASS");
 		let g = badge;
+		// Scoring gate: show the combined deterministic/judge score next to the verdict.
+		if (ps.gate.scores) g += theme.fg("toolOutput", ` ${ps.gate.scores.combined.toFixed(2)}`);
 		if (ps.gate.reason) {
 			const r = ps.gate.reason.replace(/\s+/g, " ");
 			g += theme.fg("dim", ` ${r.length > 44 ? `${r.slice(0, 44)}…` : r}`);

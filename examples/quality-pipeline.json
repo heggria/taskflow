@@ -1,0 +1,56 @@
+{
+  "name": "quality-pipeline",
+  "description": "The 2026-07 trio in one flow: a scoring gate (zero-token deterministic quality bar with weighted combination), a reflexion loop (contract violations become feedback for the next iteration), and a side-effect-classified notification step (idempotent:false — never cached, never auto-retried).",
+  "args": {
+    "topic": { "description": "What to analyze", "default": "the authentication module" }
+  },
+  "budget": { "maxUSD": 3 },
+  "phases": [
+    {
+      "id": "analyze",
+      "type": "agent",
+      "agent": "analyst",
+      "task": "Analyze {args.topic} in this repository. Return JSON: {\"summary\": \"...\", \"risks\": [\"...\"], \"recommendations\": [\"...\"]}. Be substantive — cite concrete files and behaviors.",
+      "output": "json"
+    },
+    {
+      "id": "quality",
+      "type": "gate",
+      "dependsOn": ["analyze"],
+      "score": {
+        "target": "{steps.analyze.output}",
+        "scorers": [
+          { "type": "json-schema", "name": "shape", "schema": { "type": "object", "required": ["summary", "risks", "recommendations"] } },
+          { "type": "regex", "name": "no-placeholders", "pattern": "TODO|TBD|\\.\\.\\.", "negate": true },
+          { "type": "length-range", "name": "substantive", "min": 300 }
+        ],
+        "combine": "weighted",
+        "weights": [3, 2, 1, 2],
+        "threshold": 0.8,
+        "judge": {
+          "agent": "reviewer",
+          "task": "Score this analysis 0.0-1.0 on depth, evidence quality, and actionability."
+        }
+      }
+    },
+    {
+      "id": "action-plan",
+      "type": "loop",
+      "dependsOn": ["quality"],
+      "reflexion": true,
+      "maxIterations": 4,
+      "output": "json",
+      "expect": { "type": "object", "required": ["actions", "done"], "properties": { "actions": { "type": "array" }, "done": { "type": "boolean" } } },
+      "until": "{steps.action-plan.json.done} == true",
+      "task": "Turn the analysis into a prioritized action plan. Analysis:\n{steps.analyze.output}\n\nQuality score: {steps.quality.json.combined}\n\nReturn JSON {\"actions\": [{\"title\", \"priority\", \"effort\"}], \"done\": true} when the plan is complete and every action is concrete.\n\n{reflexion}"
+    },
+    {
+      "id": "notify",
+      "type": "script",
+      "dependsOn": ["action-plan"],
+      "idempotent": false,
+      "run": ["echo", "PIPELINE COMPLETE — quality={steps.quality.json.combined} actions ready"],
+      "final": true
+    }
+  ]
+}

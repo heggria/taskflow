@@ -22,6 +22,7 @@ import { getAgentDir } from "./paths.ts";
 import type { Taskflow } from "./schema.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
+import type { ScorerResult } from "./scorers.ts";
 
 export interface SavedFlow {
 	name: string;
@@ -54,7 +55,19 @@ export interface PhaseState {
 	/** Latest activity line from the running subagent(s). */
 	liveText?: string;
 	/** Gate verdict (gate phases only). */
-	gate?: { verdict: "pass" | "block"; reason?: string };
+	gate?: {
+		verdict: "pass" | "block";
+		reason?: string;
+		/** Deterministic scorer results (score gates only). Present whenever the
+		 *  gate declared `score` and the scorers actually ran. `combined` is the
+		 *  [0,1] combined score; `threshold` echoes the configured cutoff. */
+		scores?: { results: ScorerResult[]; combined: number; threshold?: number };
+	};
+	/** True when this phase declared `idempotent: false` (irreversible side
+	 *  effects). Such a phase is never cached (in any scope) and transient
+	 *  provider errors are not auto-retried. De facto mutually exclusive with
+	 *  `cacheHit` (caching is disabled for side-effecting phases). */
+	sideEffect?: true;
 	/** Total subagent attempts incl. retries (when > calls, a retry happened). */
 	attempts?: number;
 	/** True when the phase's `timeout` cap expired and the subagent was aborted.
@@ -66,8 +79,12 @@ export interface PhaseState {
 	budgetTruncated?: boolean;
 	/** Human-in-the-loop outcome (approval phases only). */
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
-	/** Loop iteration accounting (loop phases only). */
-	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" | "aborted" };
+	/** Loop iteration accounting (loop phases only). `reflexion` is the last
+	 *  failure summary injected into an iteration (audit trail for reflexion loops).
+	 *  `failures` records each failed iteration's (sanitized) error — useful when a
+	 *  reflexion loop continues past failures and only the terminal one would
+	 *  otherwise survive in `error`. Bounded (most-recent kept). */
+	loop?: { iterations: number; stop: "until" | "converged" | "maxIterations" | "failed" | "aborted"; reflexion?: string; failures?: Array<{ iteration: number; error: string }> };
 	/** Tournament outcome (tournament phases only). */
 	tournament?: { variants: number; winner: number; mode: "best" | "aggregate"; reason?: string };
 	/** Set when a `flow { def }` inline sub-flow definition could not be resolved,

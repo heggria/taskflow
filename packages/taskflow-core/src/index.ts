@@ -11,6 +11,9 @@
 
 export * from "./schema.ts";
 export * from "./contract.ts";
+export * from "./scorers.ts";
+export * from "./scorer-runtime.ts";
+export * from "./reflexion.ts";
 export * from "./peek.ts";
 export * from "./runtime.ts";
 export * from "./cache.ts";
