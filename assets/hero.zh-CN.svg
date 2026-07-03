@@ -1,0 +1,165 @@
+<svg width="1280" height="660" viewBox="0 0 1280 660" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — 声明一张 JSON 图，零 token 静态验证，在运行时隔离执行，只有最终结果返回你的上下文。10 种 phase 类型，零依赖，运行于 Pi 和 Codex。">
+  <defs>
+    <filter id="card" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#1B1D29" flood-opacity="0.05"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1280" height="660" rx="28" fill="#F7F6F3"/>
+  <rect x="0.5" y="0.5" width="1279" height="659" rx="27.5" stroke="#E5E3DD"/>
+
+  <!-- ============ HERO HEADER (badge · mark · wordmark · subtitle) ============ -->
+  <rect x="502" y="34" width="276" height="32" rx="16" fill="#FFFFFF" stroke="#E5E3DD"/>
+  <circle cx="527" cy="50" r="4" fill="#0E8A66"/>
+  <text x="543" y="54.5" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="13" letter-spacing="1" fill="#75787E">Pi · Codex · 零依赖</text>
+
+  <!-- logo mark: tiny DAG, optically centered with the wordmark as one group -->
+  <g transform="translate(436,85) scale(1.3)">
+    <path d="M8 22 C20 22, 22 8, 34 8 M8 22 C20 22, 22 36, 34 36 M34 8 C46 8, 48 22, 58 22 M34 36 C46 36, 48 22, 58 22" stroke="#4B4ACF" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <circle cx="8" cy="22" r="6" fill="#4B4ACF"/>
+    <circle cx="34" cy="8" r="5" fill="#8B8AE3"/>
+    <circle cx="34" cy="36" r="5" fill="#8B8AE3"/>
+    <circle cx="58" cy="22" r="6" fill="#0E8A66"/>
+  </g>
+  <text x="540" y="142" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="80" font-weight="700" letter-spacing="-2.5" fill="#17181C">task<tspan fill="#4B4ACF">flow</tspan></text>
+
+  <text x="640" y="182" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="20" font-weight="500" fill="#3C3F45">面向编码智能体子代理的声明式 DAG 编排。</text>
+
+  <!-- ============ STEP LABELS (aligned to card left edges, one baseline) ============ -->
+  <g font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="11" letter-spacing="1.6">
+    <text x="64" y="224" fill="#4B4ACF" font-weight="700">01</text><text x="88" y="224" fill="#75787E">声明</text>
+    <text x="346" y="224" fill="#4B4ACF" font-weight="700">02</text><text x="370" y="224" fill="#75787E">验证 · 免费</text>
+    <text x="576" y="224" fill="#4B4ACF" font-weight="700">03</text><text x="600" y="224" fill="#75787E">运行 · 隔离</text>
+    <text x="1006" y="224" fill="#0E8A66" font-weight="700">04</text><text x="1030" y="224" fill="#75787E">返回</text>
+  </g>
+
+  <!-- ============ ZONE 1 · DECLARE (64..296) ============ -->
+  <g filter="url(#card)">
+    <rect x="64" y="240" width="232" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
+  </g>
+  <circle cx="86" cy="260" r="4" fill="#E8E6E1"/><circle cx="100" cy="260" r="4" fill="#E8E6E1"/><circle cx="114" cy="260" r="4" fill="#E8E6E1"/>
+  <text x="276" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">flow.json</text>
+  <line x1="64" y1="280" x2="296" y2="280" stroke="#EFEEE9"/>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" fill="#3C3F45">
+    <text x="84" y="310"><tspan fill="#75787E">"phases"</tspan>: [</text>
+    <text x="98" y="332">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"scan"</tspan> },</text>
+    <text x="98" y="354">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"audit"</tspan>,</text>
+    <text x="112" y="376"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"map"</tspan> },</text>
+    <text x="98" y="398">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"fix"</tspan>,</text>
+    <text x="112" y="420"><tspan fill="#4B4ACF">"when"</tspan>: <tspan fill="#B07E1E">"high"</tspan> },</text>
+    <text x="98" y="442">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"gate"</tspan>,</text>
+    <text x="112" y="464"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"gate"</tspan> }</text>
+    <text x="84" y="486">]</text>
+  </g>
+  <text x="180" y="516" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="12" fill="#8E9199">一个文件，整张图。</text>
+
+  <!-- arrow 1→2 -->
+  <path d="M304 388 H332" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M340 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
+
+  <!-- ============ ZONE 2 · VERIFY (346..526) ============ -->
+  <g filter="url(#card)">
+    <rect x="346" y="240" width="180" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
+  </g>
+  <circle cx="368" cy="260" r="4" fill="#E8E6E1"/><circle cx="382" cy="260" r="4" fill="#E8E6E1"/><circle cx="396" cy="260" r="4" fill="#E8E6E1"/>
+  <text x="506" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">tf verify</text>
+  <line x1="346" y1="280" x2="526" y2="280" stroke="#EFEEE9"/>
+  <circle cx="436" cy="348" r="26" fill="#EEEEFB"/>
+  <path d="M424 348 l8 8 l16 -17" stroke="#4B4ACF" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="436" y="402" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="15" font-weight="600" fill="#17181C">静态验证</text>
+  <g font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="10.5" fill="#75787E" text-anchor="middle">
+    <text x="436" y="424">无环 · 无死路</text>
+    <text x="436" y="442">预算 · agent 存在性</text>
+  </g>
+  <rect x="361" y="462" width="150" height="28" rx="14" fill="#EEEEFB"/>
+  <text x="436" y="480" text-anchor="middle" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="11" font-weight="700" fill="#4B4ACF">0 token 花费</text>
+
+  <!-- arrow 2→3 -->
+  <path d="M534 388 H562" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M570 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
+
+  <!-- ============ ZONE 3 · RUN (576..956, dashed = isolation boundary) ============ -->
+  <rect x="576" y="240" width="380" height="296" rx="14" fill="#FBFAF8" stroke="#C9C8EF" stroke-dasharray="6 5"/>
+  <path d="M590 240.5 h352 a13.5 13.5 0 0 1 13.5 13.5 v26 h-379 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#EEEEFB"/>
+  <circle cx="598" cy="260" r="4" fill="#4B4ACF"/>
+  <text x="612" y="264.5" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="11" letter-spacing="1" fill="#4B4ACF">运行时 · 隔离上下文</text>
+
+  <!-- DAG edges -->
+  <g stroke="#B9B8EC" stroke-width="2.2" fill="none" stroke-linecap="round">
+    <path d="M674 398 C698 398, 702 332, 722 332"/>
+    <path d="M674 398 H722"/>
+    <path d="M674 398 C698 398, 702 464, 722 464"/>
+    <path d="M820 332 C838 332, 842 398, 858 398"/>
+    <path d="M820 398 H858"/>
+    <path d="M820 464 C838 464, 842 398, 858 398"/>
+  </g>
+  <g fill="#8B8AE3">
+    <path d="M722 332 l-8 -4.5 v9 z"/><path d="M722 398 l-8 -4.5 v9 z"/><path d="M722 464 l-8 -4.5 v9 z"/>
+  </g>
+  <path d="M858 398 l-8 -4.5 v9 z" fill="#B07E1E"/>
+
+  <!-- DAG nodes -->
+  <g filter="url(#card)"><rect x="596" y="374" width="78" height="48" rx="11" fill="#FFFFFF" stroke="#DBDAF4"/></g>
+  <text x="635" y="395" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">scan</text>
+  <text x="635" y="411" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="9" fill="#8E9199">agent</text>
+
+  <g filter="url(#card)">
+    <rect x="722" y="310" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="722" y="376" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
+    <rect x="722" y="442" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="700" fill="#17181C" text-anchor="middle">
+    <text x="771" y="329">audit·a</text>
+    <text x="771" y="395">audit·b</text>
+    <text x="771" y="461">audit·n</text>
+  </g>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#8B8AE3" text-anchor="middle">
+    <text x="771" y="344">map</text>
+    <text x="771" y="410">map</text>
+    <text x="771" y="476">map</text>
+  </g>
+
+  <g filter="url(#card)"><rect x="858" y="372" width="68" height="52" rx="11" fill="#FAF3E2" stroke="#E6D3A4"/></g>
+  <text x="892" y="394" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">gate</text>
+  <text x="892" y="410" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#A87A18">PASS?</text>
+
+  <text x="766" y="516" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="12" fill="#8E9199">所有转录都留在这里 —— 绝不进入你的窗口。</text>
+
+  <!-- arrow 3→4: only the result crosses -->
+  <path d="M960 388 H992" stroke="#0E8A66" stroke-width="3" stroke-linecap="round"/>
+  <path d="M1000 388 l-11 -6 v12 z" fill="#0E8A66"/>
+  <text x="978" y="372" text-anchor="middle" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="10" fill="#0E8A66">结果</text>
+
+  <!-- ============ ZONE 4 · RETURN (1006..1216) ============ -->
+  <g filter="url(#card)">
+    <rect x="1006" y="240" width="210" height="296" rx="14" fill="#FFFFFF" stroke="#BFE0D2"/>
+  </g>
+  <path d="M1019.5 240.5 h183 a13.5 13.5 0 0 1 13.5 13.5 v26 h-210 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#E7F4EF"/>
+  <circle cx="1028" cy="260" r="4" fill="#0E8A66"/>
+  <text x="1042" y="264.5" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="11" letter-spacing="1" fill="#0A6E52">你的上下文</text>
+
+  <g filter="url(#card)"><rect x="1026" y="336" width="170" height="72" rx="12" fill="#FFFFFF" stroke="#0E8A66" stroke-width="1.5"/></g>
+  <circle cx="1052" cy="372" r="5" fill="#0E8A66"/>
+  <text x="1066" y="368" font-family="'SF Mono',Menlo,monospace" font-size="15" font-weight="700" fill="#17181C">report</text>
+  <text x="1066" y="388" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="9.5" fill="#0E8A66">最终 · 已返回</text>
+
+  <text x="1111" y="452" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="13" font-weight="500" fill="#3C3F45">只有答案。</text>
+  <text x="1111" y="472" text-anchor="middle" font-family="'PingFang SC','Hiragino Sans GB',sans-serif" font-size="12" fill="#8E9199">没有转录，没有噪音。</text>
+
+  <!-- ============ PHASE TYPES ============ -->
+  <text x="640" y="572" text-anchor="middle" font-family="'SF Mono',Menlo,'PingFang SC',monospace" font-size="10" letter-spacing="2" fill="#A6A9AE">10 种 PHASE 类型</text>
+  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="600" text-anchor="middle">
+    <rect x="142" y="588" width="74" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="179" y="606" fill="#5A5D63">agent</text>
+    <rect x="226" y="588" width="84" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="268" y="606" fill="#5A5D63">parallel</text>
+    <rect x="320" y="588" width="60" height="28" rx="14" fill="#EEEEFB" stroke="#D9D8F5"/><text x="350" y="606" fill="#4B4ACF">map</text>
+    <rect x="390" y="588" width="62" height="28" rx="14" fill="#FAF3E2" stroke="#E6D3A4"/><text x="421" y="606" fill="#A87A18">gate</text>
+    <rect x="462" y="588" width="76" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="500" y="606" fill="#5A5D63">reduce</text>
+    <rect x="548" y="588" width="92" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="594" y="606" fill="#5A5D63">approval</text>
+    <rect x="650" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="680" y="606" fill="#5A5D63">flow</text>
+    <rect x="720" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="750" y="606" fill="#5A5D63">loop</text>
+    <rect x="790" y="588" width="74" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="827" y="606" fill="#5A5D63">script</text>
+    <rect x="874" y="588" width="104" height="28" rx="14" fill="#E7F4EF" stroke="#BFE0D2"/><text x="926" y="606" fill="#0A6E52">tournament</text>
+    <rect x="988" y="588" width="150" height="28" rx="14" fill="#F1F0EC" stroke="#E5E3DD"/><text x="1063" y="606" fill="#8E9199">+ when·retry·budget</text>
+  </g>
+</svg>

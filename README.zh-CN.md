@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/hero.png" alt="taskflow — 面向编码智能体子代理的声明式、可验证的任务节点图：有状态、可恢复、上下文隔离" width="900">
+<img src="./assets/hero.zh-CN.png" alt="taskflow — 面向编码智能体子代理的声明式、可验证的任务节点图：有状态、可恢复、上下文隔离" width="900">
 
 <p>
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=4B4ACF&label=npm" alt="npm version"></a>
@@ -54,7 +54,7 @@ codex plugin add taskflow@taskflow
 这个区别，恰恰就是 Pi 生态里的设计分水岭：
 
 <div align="center">
-<img src="./assets/task-vs-work.png" alt="work 是一段流动的命令式脚本，它的图藏在控制流里、运行前无法验证；taskflow 是一张由离散任务节点构成的声明式图，在花掉任何 token 之前就被静态验证" width="900">
+<img src="./assets/task-vs-work.zh-CN.png" alt="work 是一段流动的命令式脚本，它的图藏在控制流里、运行前无法验证；taskflow 是一张由离散任务节点构成的声明式图，在花掉任何 token 之前就被静态验证" width="900">
 </div>
 
 - 一个 **`workflow`**（那种动态的、code-mode 的形态）是模型在写一段**「流动」的命令式脚本**：`await agent(...)`、一个 `if`、一个 `for`、又一个 `await`。很有表达力——它是图灵完备的——但那张图只在*代码跑起来的时候*才存在。你看不到它、diff 不了它，也无法在付费之前证明它会终止。
@@ -69,7 +69,7 @@ codex plugin add taskflow@taskflow
 `taskflow` 把计划**从提示词中移出，放入一张由任务节点构成的声明式图里。** 运行时（runtime）拥有 DAG、循环、重试和中间状态的所有权。你声明一次流水线，就能按名字运行上百次。因为这个计划是数据——不是文字，也不是代码——所以它可以被**验证、可视化、重放**。
 
 <div align="center">
-<img src="./assets/context-isolation.png" alt="使用原生子代理时每个转录物都涌入你的上下文；使用 taskflow 时转录物留在运行时，只有最终结果返回" width="900">
+<img src="./assets/context-isolation.zh-CN.png" alt="使用原生子代理时每个转录物都涌入你的上下文；使用 taskflow 时转录物留在运行时，只有最终结果返回" width="900">
 </div>
 
 > 十二个步骤、分支并发分发、一道审查门控、一个费用上限——这就是一张图，你想要*看到并检查*它，而不是每次运行都重新提示一遍。
@@ -519,7 +519,7 @@ Review the audit below. If any endpoint is missing auth, end with
 taskflow 运行与你的会话无关。每个已完成的阶段都写入磁盘，因此失败（或你中止）的运行可以通过 `/tf resume <runId>` 后续继续——**已缓存的阶段自动跳过**，只有剩余的工作会消耗代币。
 
 <div align="center">
-<img src="./assets/resume.png" alt="一个运行在会话 1 中途失败；在会话 2 中 /tf resume 跳过已缓存的阶段，只重新运行失败的阶段及其后续内容" width="900">
+<img src="./assets/resume.zh-CN.png" alt="一个运行在会话 1 中途失败；在会话 2 中 /tf resume 跳过已缓存的阶段，只重新运行失败的阶段及其后续内容" width="900">
 </div>
 
 恢复以每个阶段的输入哈希为键——如果上游输出发生了变化，依赖的阶段会重新运行；如果没有变化，则复用结果。没有其他 Pi 扩展能做到跨会话的这一点。
