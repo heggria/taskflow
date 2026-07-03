@@ -4,6 +4,88 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-07-03
+
+### Added
+- **Scoring gates (`score` on `gate` phases).** Deterministic, composable,
+  auditable quality checks: six pure scorers (`exact-match`, `contains`,
+  `regex`, `json-schema`, `length-range`, `code-compiles`) run against a target
+  string at **zero tokens** and combine via `all` / `any` / `weighted`
+  (+ `threshold`). When the deterministic combination passes and the judge
+  cannot veto it, the gate auto-passes with **no LLM call** (mirrors the `eval`
+  fast-path). When it fails, an optional `judge` (LLM-as-judge) decides, or the
+  gate `task` runs with the scorer report appended, or — with no fallback — the
+  gate blocks explicitly. The structured result is the gate's `.json`
+  (`{steps.<gate>.json.combined}`, `.json.results`), so downstream phases can
+  route on quality, not just pass/fail.
+- **Reflexion memory in loops (`reflexion: true`).** Each iteration after the
+  first receives a structured failure summary of the prior one via the
+  `{reflexion}` placeholder (auto-appended when absent, capped at 2000 chars):
+  `expect`-contract diagnostics, the (sanitized) error, or the unmet `until`,
+  plus a truncated output snippet. Body failures become **feedback instead of
+  termination** — timeout/abort/over-budget still hard-stop, and exhausting
+  `maxIterations` on a failure still fails the phase. `PhaseState.loop.failures`
+  records every failed iteration for audit. Default off = byte-for-byte the
+  historical behavior.
+- **Side-effect classification (`idempotent: false`).** Marks a phase with
+  irreversible side effects (webhook POSTs, deploys, DB writes): transient
+  provider errors are **not** auto-retried (explicit `retry{}` is still
+  honored) and the result is **never cached** in any scope (within-run resume,
+  cross-run, `incremental`). The phase state records `sideEffect: true`
+  (rendered as ⚡), and a re-execution on resume surfaces a warning.
+- **Single-source skills.** The pi and codex skill docs are now authored once
+  in `skills-src/taskflow/` and compiled per host by `scripts/build-skills.mjs`
+  (`npm run build:skills`); a drift guard (`skills-build.test.ts`) fails CI if a
+  generated file is edited directly. Codex reaches feature parity with pi
+  automatically.
+
+### Security
+- **Scoring-gate hardening for LLM-generated dynamic sub-flows.**
+  `validateTaskflow` rejects `code-compiles` scorers (compiler execution — the
+  `npx tsc` path could resolve a repo-planted `node_modules/.bin/tsc`) and
+  `regex` scorers (catastrophic-backtracking ReDoS) inside `flow{def}`
+  definitions produced at runtime — the same hardening class as the existing
+  `script`-phase block. Author-written flows keep both (a human reviewed them).
+- **`code-compiles` runs in an isolated temp directory.** `mkdtempSync` closes
+  the predictable-temp-name symlink/TOCTOU race, and running the compiler with
+  that dir as its cwd stops `npx` resolving a repo-planted `tsc` even in
+  author-written flows (defense-in-depth).
+- **Judge-prompt injection guard.** A scoring gate's judge embeds the
+  model-produced target in a fenced evidence block; fences in the target are
+  now neutralized so crafted output cannot close the block and inject
+  instructions at prompt level.
+- **Reflexion prompt-injection surface reduced.** Provider error noise is run
+  through `sanitizeErrorMessage` before it is injected into the next
+  iteration's prompt (HTML gateway pages no longer leak in verbatim).
+- **ReDoS fixes in `safeParse`.** The fenced-block extractor and the stray-key
+  diagnostic regexes are now linear-time (removed ambiguous adjacent whitespace
+  quantifiers) — closes two `js/polynomial-redos` code-scanning alerts.
+
+### Fixed
+- **Detached (background) runs load the host runner correctly.** The host now
+  self-reports its runner module path via `import.meta.url` instead of
+  resolving a relative `.ts` specifier that `rewriteRelativeImportExtensions`
+  left pointing at a non-existent `dist/runner.ts` — every detached phase
+  previously failed with "No subagent runner injected" in the published build
+  while dev checkouts worked. The detached runner now also fails fast (exits
+  non-zero, persisting the real import error on a `__detach__` phase) instead
+  of burying the cause under N no-runner stubs.
+- **Loop `until` self-references no longer error.** `{steps.<thisId>.json.done}`
+  in a loop's `until` (the documented stop-condition pattern) was flagged as a
+  self-reference bug; loop phases are now exempt.
+- **Per-scorer field validation.** Fields not applicable to a scorer's type
+  (e.g. `negate` on `contains`) are rejected instead of silently ignored.
+- **Loop-only fields on non-loop phases warn.** `until` / `maxIterations` /
+  `convergence` on a non-loop phase now surface a warning instead of being
+  silently dropped.
+
+### Docs
+- The interpolation reference now documents `{reflexion}`, `{loop.iteration}`,
+  `{loop.lastOutput}`, `{loop.maxIterations}`, and the `score.target` /
+  `score.judge.task` interpolation sites.
+- `examples/quality-pipeline.json` composes all three new features (scoring
+  gate → reflexion loop → non-idempotent notify).
+
 ## [0.1.4] — 2026-07-02
 
 ### Security
