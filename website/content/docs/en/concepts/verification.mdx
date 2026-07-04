@@ -5,70 +5,179 @@ description: How taskflow validates a DAG before spending tokens.
 
 # Verification
 
-<Callout type="info">
-  One of taskflow's core promises is that the runtime verifies the graph **before it spends a single token**.
-</Callout>
+You are about to run a flow that fans out over 500 files. Before you hit enter, a reasonable question is: *how do you know it won't loop forever, reference a phase that doesn't exist, or spend an hour discovering a typo in the last step?*
 
-## What gets checked
+taskflow answers that question before a single token is spent. The `verify` action runs a static analysis pass over your flow definition — no agents spawn, no models run, nothing touches the network. It is the safety net between "I wrote some JSON" and "I'm paying for a hundred subagent calls."
 
-The `verify` action (or `/tf verify`) runs a static analysis over the flow definition:
+## The safety net
 
-### 1. DAG shape
+Run it any time, on a saved flow or an inline definition:
 
-- **Cycles** — a phase cannot transitively depend on itself.
-- **Dead ends** — every phase must either be referenced downstream or marked `final`.
-- **Unreachable phases** — phases that nothing depends on and that are not `final`.
-
-### 2. References
-
-- **Undefined `dependsOn`** — every id in `dependsOn` must exist.
-- **Dangling interpolation** — `{steps.X.*}` references require `dependsOn: ["X"]`.
-- **Missing args** — with `strictInterpolation`, unresolved `{args.X}` is a hard error.
-
-### 3. Contracts
-
-- **JSON output** — `output: "json"` phases can declare an `expect` schema.
-- **Gate verdicts** — gate phases are checked for valid scoring configuration.
-- **Budget** — `budget.maxUSD` and `budget.maxTokens` must be positive numbers.
-
-### 4. Security caps
-
-For LLM-generated dynamic sub-flows (`flow {def}`):
-
-- Max 100 phases.
-- Max 200 map items.
-- Max 16 concurrency.
-- Max 5 nesting levels.
-- `cwd` containment.
-- Prototype pollution defense.
-
-## Example
-
-```bash title="Verify a flow"
-/tf verify my-flow
+```bash title="Verify a saved flow"
+/tf verify review-changes
 ```
 
-Output:
+```bash title="Verify an inline flow"
+/tf verify define='{ "name": "hello", "phases": [{ "id": "greet", "type": "agent", "task": "Say hi." }] }'
+```
+
+Verification happens in two stages. The first validates the **schema and structure** of your definition — the shape of every field, the existence of every reference, the presence of cycles. If that passes, the second runs a set of **graph analysis** passes over the DAG itself: dead ends, unreachable phases, gates that can trap the whole run.
+
+Both stages are pure functions. They cost nothing but CPU.
+
+## The classic mistake
+
+Here is a flow that looks correct at a glance. Read the `report` phase carefully:
+
+```json title="review-broken.json"
+{
+  "name": "review-broken",
+  "phases": [
+    {
+      "id": "audit",
+      "type": "agent",
+      "task": "Audit src/ for security risks."
+    },
+    {
+      "id": "report",
+      "type": "agent",
+      "task": "Summarize the audit:\n{steps.audit.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+`report` interpolates `{steps.audit.output}`, but it never declares `"dependsOn": ["audit"]`. Without that edge, the runtime treats the two phases as independent: `report` runs in parallel with `audit`, sees the literal string `{steps.audit.output}`, and hands the model a placeholder instead of a result. This is the most common authoring mistake, and it is silent at runtime — the model does its best with garbage input.
+
+Verification catches it before anything runs:
 
 ```txt title="Verification output"
-✗ verification FAILED — 1 error, 0 warnings
-
-error: Phase 'report' references {steps.audit.output} but 'audit' is not in dependsOn
+Schema validation failed:
+Phase 'report': task references {steps.audit.*} but 'audit' is not
+reachable via dependsOn. The phase will run in parallel with 'audit'
+and see the literal placeholder. Add "dependsOn": ["audit"] (or include
+'audit' transitively).
 ```
 
-## Verification vs. runtime errors
+The fix is the one line the error suggests:
 
-<Callout type="warn">
-  Verification catches **structural** problems. It cannot catch a subagent producing wrong content, a JSON schema being too permissive, or a gate agent blocking unexpectedly. These runtime issues are handled with `retry`, `optional`, and `onBlock`.
+```json title="review-fixed.json"
+{
+  "id": "report",
+  "type": "agent",
+  "task": "Summarize the audit:\n{steps.audit.output}",
+  "dependsOn": ["audit"],
+  "final": true
+}
+```
+
+The reachability check is transitive. If `report` depends on `summarize`, and `summarize` depends on `audit`, then `report` may freely reference `{steps.audit.output}` — verification follows the chain.
+
+<Callout type="tip">
+  The exception is `join: "any"`. A phase that only needs *one* of its dependencies to finish may reference other phases as informational context, so it is exempt from the reachability rule.
 </Callout>
+
+## What the schema stage catches
+
+The first stage is where most day-to-day mistakes surface. It checks that the definition is well-formed before the graph passes even look at it:
+
+- **Cycles** — a phase cannot transitively depend on itself. Detected with a topological sort; the error names the loop.
+- **Duplicate ids** — two phases sharing an id would silently overwrite each other in the step map.
+- **Unknown phase types** — a typo like `"type": "map"` when you meant `"map"` is rejected.
+- **Missing references** — every id in `dependsOn` and `from` must exist.
+- **Broken interpolation** — `{steps.X.*}` references must be reachable via `dependsOn`, as shown above.
+- **Per-type requirements** — a `map` needs `over` and `task`; a `parallel` needs `branches`; a `reduce` needs `from` and `task`; a `flow` needs exactly one of `use` or `def`; a `loop` needs `task` and `until`.
+- **Multiple finals** — at most one phase may carry `final: true`.
+- **Contract and cache shapes** — `expect` requires `output: "json"`; cache fingerprints must use a known prefix; retry and timeout values must be in range.
+- **Naming** — phase ids and agent names use hyphens, not underscores, so `{steps.audit-each.output}` stays consistent.
+
+If any of these fail, verification stops here. You get a list of every problem, not just the first.
+
+## What the graph stage catches
+
+When the schema is clean, verification turns to the DAG itself. These are subtler problems — a flow can be *valid* but still *surprising*.
+
+### Dead ends
+
+A phase with no dependents that isn't marked `final` computes a result nobody reads:
+
+```txt title="Dead-end warning"
+Phase 'draft' is a terminal phase (no dependents) but not marked as
+'final'. Its output will be discarded. Add "final": true or a
+downstream phase that depends on it.
+```
+
+This is a warning, not an error — the run will still work — but it almost always means you forgot a `final: true` or a `dependsOn` edge.
+
+### Unreachable phases
+
+If a phase is wired into the graph but disconnected from the main DAG, it can never run:
+
+```txt title="Unreachable error"
+Phase 'cleanup' is disconnected from the main DAG. Add a 'dependsOn'
+edge to connect it, or remove it.
+```
+
+A standalone phase with no edges at all is fine — it's a valid independent entry point. Only phases that *have* edges but sit in their own disconnected component are flagged.
+
+### Gates that can trap you
+
+A `gate` or `approval` that is the **sole path** to a final phase is dangerous. If it blocks, the entire run halts with no alternative route:
+
+```txt title="Gate-exhaustion warning"
+Gate 'verify' is the sole path to final phase(s) 'ship'. A block here
+halts the entire flow with no alternative route. Consider adding a
+bypass or marking the flow's structure as intentional.
+```
+
+Verification also flags **guard contradictions**: two phases with the same dependencies and opposing `when` conditions (`==` vs `!=`) guarantee that one branch never runs. Sometimes that's intentional; verification just wants you to confirm.
+
+### Budget reality checks
+
+If you set a `budget`, verification estimates the minimum cost to run every phase and warns when the cap is below it:
+
+```txt title="Budget-overflow warning"
+Budget cap (50000 tokens) is below the estimated minimum of ~120 tokens
+for 120 phase(s). The flow will likely be truncated before completion.
+```
+
+Loops and tournaments are counted at their expected iteration/variant count, so a `loop` with `maxIterations: 6` is not treated as a single call.
+
+<Callout type="info">
+  Verification catches **structural** problems. It cannot tell you whether a subagent will produce *correct* content, whether a JSON schema is too permissive, or whether a gate agent will block unexpectedly. Those runtime concerns are handled with `retry`, `optional`, and `onBlock` — see the [Control Flow](/en/docs/syntax/control-flow) reference.
+</Callout>
+
+## When the flow is generated by an LLM
+
+Some flows are written by hand and reviewed by a human. Others are generated at runtime by a `flow { def }` phase — an LLM authors the sub-flow, which makes its content untrusted.
+
+For those generated sub-flows, verification applies a second layer of hardening that authored flows never see. The blast radius of a model emitting a runaway graph is bounded:
+
+- At most **100 phases** per sub-flow.
+- At most **200 map items** per fan-out.
+- At most **16** concurrent subagents.
+- At most **5 levels** of nested sub-flows.
+- `cwd` must stay contained within the run directory — no escaping to siblings or parents.
+- No `script` phases (shell execution is too powerful to hand to a model).
+- No `code-compiles` or `regex` scoring gate types (compiler execution and ReDoS risk).
+
+None of this applies to flows you write yourself. It exists solely so a generated plan cannot accidentally — or maliciously — DoS your machine.
+
+## Make it part of your loop
+
+Verification is cheap enough to run on every save. Many teams wire `/tf verify` into a pre-commit hook or a CI step so a broken flow never reaches a run. The zero-token guarantee means there is no reason not to.
 
 ## Next
 
 <Cards>
   <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
-    Fields that affect verification.
+    Every field that verification checks, in one place.
   </Card>
   <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
-    Generated sub-flows are verified too.
+    How generated sub-flows are verified and sandboxed.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    Runtime safety nets: retry, optional, and onBlock.
   </Card>
 </Cards>

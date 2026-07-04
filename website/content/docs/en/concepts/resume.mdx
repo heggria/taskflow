@@ -5,77 +5,160 @@ description: How taskflow runs survive across sessions.
 
 # Resume
 
-<Callout type="info">
-  A taskflow run is not tied to your session. Every completed phase is written to disk, so a run that fails or is stopped can be continued later.
-</Callout>
+Your twenty-minute audit failed at the last step because of a rate limit. Nineteen minutes of subagent work succeeded; one phase tripped over a transient error and the run stopped. Without resume, you would start over from scratch — re-reading every file, re-running every review, paying for all of it twice.
 
-## How it works
+taskflow does not work that way. A run is not tied to your session. Every completed phase is written to disk as it finishes, so a run that fails, gets stopped, or simply outlives its terminal can be picked up later — and only the work that didn't finish gets redone.
+
+## How resume works
+
+When you resume a run, the runtime walks the DAG and asks one question of each phase: *has anything you depend on changed since you last ran?*
 
 <Steps>
-  <Step>Loads the existing run state.</Step>
-  <Step>Computes an input hash for each phase.</Step>
-  <Step>Skips phases whose inputs have not changed.</Step>
-  <Step>Re-runs phases that changed or never completed.</Step>
+  <Step>
+    **Load the persisted run state.** Every phase's last result — its output, its inputs, the moment it finished — is already on disk.
+  </Step>
+  <Step>
+    **Compute an input hash for each phase.** The hash folds together everything that materially affects what the subagent would produce.
+  </Step>
+  <Step>
+    **Skip phases whose hash hasn't moved.** If a phase already completed and its inputs are identical, its result is reused. No tokens spent.
+  </Step>
+  <Step>
+    **Re-run phases that changed or never completed.** Only these spend tokens. Their new results cascade to dependents, which re-evaluate the same way.
+  </Step>
 </Steps>
 
 ```bash title="Resume a run"
-/tf resume <runId>
+/tf resume nightly-audit-abc123
 ```
 
 ## What counts as "changed"
 
-A phase's input hash includes:
+A phase's input hash is the whole story. It includes:
 
-- The resolved task text.
-- The resolved `over` items (for `map`).
-- The resolved `context` files.
-- The resolved `args`.
+- The **resolved task text** — after interpolation, so if an upstream output it interpolates changed, the hash changes.
+- The resolved **`over` items**, for `map` phases.
+- The resolved **`context`** files — their pre-read content is part of the identity.
+- The resolved **`args`** passed to the run.
+- The flow name, the phase's structural fingerprint, and any `thinking` or `tools` overrides.
 
-If an upstream output changes, all dependent phases are re-run. If nothing changed, they are skipped.
+The key insight is the first one. Because the task text is interpolated *before* hashing, a phase that reads `{steps.audit.output}` will produce a different hash whenever `audit`'s output changes. The dependency propagates automatically — you don't have to declare "re-run me if audit changes," the interpolation does it for you.
 
-## Example
+If nothing an upstream phase produced has changed, the downstream hash is identical, and the downstream phase is skipped.
 
-Session 1:
+## A concrete example
 
-```txt title="Session 1 output"
-✓ discover
-✓ audit (map over 10 files)
-✗ review (rate limit)
+**Session 1.** You launch a nightly audit. It discovers ten files, reviews each one, and is about to summarize when the provider returns a 429:
+
+```txt title="Session 1 — the run stops"
+✓ discover      (10 files found)
+✓ audit         (map over 10 files — all done)
+✗ review        (rate limit — run paused)
 ```
 
-Session 2:
+The run is persisted in this exact state. `discover` and `audit` are `done`; `review` never completed.
 
-```bash title="Resume in a new session"
+**Session 2.** The next morning, from a fresh terminal, you resume:
+
+```bash title="Session 2 — pick up where it stopped"
 /tf resume nightly-audit-abc123
 ```
 
-```txt title="Session 2 output"
-✓ discover      (skipped)
-✓ audit         (skipped)
+```txt title="Session 2 — only the gap is filled"
+✓ discover      (skipped — cache: run-only)
+✓ audit         (skipped — cache: run-only)
 ◐ review        (re-running)
-✓ report
+✓ report        (ran, because review finished)
 ```
 
-Only the failed phase and what follows it spend tokens.
+`discover` and `audit` are reused for free — they carry a `cache: run-only` marker and spent zero new tokens. `review` runs because it never finished. `report` runs because it depends on `review`, and `review`'s output is now different from "nothing." Every phase after the failure point re-evaluates, and only the ones whose inputs actually moved spend tokens.
+
+<Callout type="tip">
+  This is within-run resume. It costs nothing to enable — it's the default behavior. Every run is resumable from the moment it starts.
+</Callout>
 
 ## Cross-run memoization
 
-Beyond within-run resume, you can opt a phase into `cross-run` caching with the `cache` field. If a prior run computed the same phase with identical inputs, the result is reused for $0.00.
+Within-run resume reuses results from *the same run*. But sometimes the work you did last week is identical to the work you're about to do today — a different run, with the same inputs. taskflow can reuse that too.
 
-```json title="cross-run-cache-example.json"
+Opt a phase into **cross-run** caching with the `cache` field:
+
+```json title="Cross-run cache on one phase"
 {
   "id": "analyze-auth",
+  "agent": "analyst",
+  "task": "Analyze the auth layer in src/auth/.",
   "cache": {
     "scope": "cross-run",
-    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"],
+    "ttl": "7d"
   }
 }
 ```
+
+Now, before this phase runs, the runtime checks a persistent store keyed on the phase's input hash plus its fingerprint. If *any* prior run computed this phase with identical inputs — same task, same files, same git commit — the stored result is restored for $0.00 and the subagent never spawns.
+
+### Fingerprints
+
+The `fingerprint` list is how you tell the cache "the world changed." Each entry is a freshness signal folded into the key:
+
+- **`git:HEAD`** — the current commit. A new commit means a new key, means a cache miss.
+- **`glob:src/auth/**/*.ts`** — the size and mtime of every matching file.
+- **`glob!:src/auth/**/*.ts`** — the *content hash* of every matching file. Catches changes that don't touch mtime.
+- **`file:package.json`** — the content hash of one specific file.
+- **`env:CI`** — the value of an environment variable.
+
+If any fingerprint entry changes, the cache key changes, and the phase re-runs. The combination of input hash and fingerprint is what makes a cache hit *sound* — you only ever reuse a result when nothing it depended on has moved.
+
+### When cross-run is disabled
+
+A few phase types can never be cross-run cached, because they must produce a fresh result every run:
+
+- `gate` and `approval` — a decision made last week is not a decision for today.
+- `loop` and `tournament` — their outcome depends on iteration dynamics.
+- `script` — shell commands often have side effects.
+
+A phase marked `idempotent: false` is also excluded — it has irreversible side effects (a deploy, a webhook, a database write) and must never be replayed from cache. Setting `cache.scope` to `cross-run` on any of these is a validation error, caught by `/tf verify`.
+
+### Going flow-wide
+
+If most of a flow is safely cacheable, set `incremental: true` at the top level to default every phase to `cross-run`:
+
+```json title="Incremental flow"
+{
+  "name": "nightly-audit",
+  "incremental": true,
+  "phases": [/* ... */]
+}
+```
+
+Re-running an incremental flow reuses unchanged phases across runs and sessions. The blocked types above still take precedence — gates and approvals always run fresh, even under `incremental`, so safety is never traded away for speed.
+
+<Callout type="info">
+  Cross-run cache lives on disk under your working directory, bounded to 1000 entries with a 90-day hard age limit. Eviction is automatic and best-effort — a full cache never breaks a run.
+</Callout>
+
+## Resume, end to end
+
+Put the pieces together and a taskflow run is a durable artifact, not an ephemeral script:
+
+- **Every phase is persisted** as it completes, so a crash or a closed terminal never loses finished work.
+- **Within-run resume** reuses completed phases for free, re-running only what failed or never ran.
+- **Cross-run memoization** extends that reuse across entirely separate runs, gated by fingerprints so a changed world always invalidates correctly.
+- **The final output still respects context isolation** — only the result reaches your conversation, no matter how many phases were reused to produce it.
+
+The result is that a flow you run on Monday and re-run on Tuesday costs roughly the difference between Monday and Tuesday — not the full price twice.
 
 ## Next
 
 <Cards>
   <Card title="Caching" href="/en/docs/syntax/caching">
-    Full cache options and fingerprinting.
+    The full `cache` field: scopes, fingerprints, and TTL.
+  </Card>
+  <Card title="Context Isolation" href="/en/docs/concepts/context-isolation">
+    Why reused phases still don't flood your context.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `retry`, `optional`, and `onBlock` — runtime safety nets.
   </Card>
 </Cards>
