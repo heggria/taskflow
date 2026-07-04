@@ -5,63 +5,204 @@ description: Spawn competing variants and let a judge pick the best result.
 
 # Tournament Selection
 
-<Callout type="info">
-  For open-ended creative or subjective work, generate several candidates and let a judge pick the strongest.
-</Callout>
+One headline might be bad. Four headlines plus a judge is more reliable.
 
-## Basic tournament
+That is the entire premise of the `tournament` phase. For creative or subjective work — naming, summaries, marketing copy, any task where a single shot can miss — you spawn several independent attempts, show them all to a judge, and let the judge pick the strongest (or synthesize them into one answer). The work that doesn't win is discarded; only the survivor comes back.
 
-## Basic tournament
+This guide walks through the two ways to define competitors, how the judge picks a winner, the two output modes, and the fail-open guarantees that mean you never lose the work.
 
-```json title="tournament-best-example.json"
+## The basic tournament
+
+Give it a `task`, a number of `variants`, and a `judge` rubric. The runtime spawns `variants` independent copies of the task, then runs a judge that sees every variant and picks a winner.
+
+```json title="headline-best.json"
 {
   "id": "headline",
   "type": "tournament",
   "task": "Write a punchy headline for this launch post.",
   "variants": 4,
-  "judge": "Pick the headline with the strongest hook and clearest promise.",
+  "judge": "Pick the headline with the strongest hook and the clearest promise.",
   "mode": "best"
 }
 ```
 
-## How it works
+That is a complete phase. The default `mode` is `"best"`, so you can omit it. The default `variants` is `3`, and the hard maximum is `20`.
+
+## How it runs
 
 <Steps>
-  <Step>Spawn `variants` copies of the task.</Step>
-  <Step>Run a judge agent that sees every variant.</Step>
-  <Step>The judge emits `WINNER: <n>` or JSON `{"winner": n}`.</Step>
-  <Step>Return the winning variant (`mode: "best"`) or a synthesized answer (`mode: "aggregate"`).</Step>
+  <Step>
+    **Spawn the competitors.** `variants` copies of `task` run as independent subagent calls, fanned out together. Each one produces its own answer without seeing the others.
+  </Step>
+  <Step>
+    **Label and present.** The runtime labels each surviving variant `### Variant 1`, `### Variant 2`, … and concatenates them into one prompt for the judge.
+  </Step>
+  <Step>
+    **The judge decides.** A judge agent — the same agent as the phase by default, or `judgeAgent` if you set it — reads the rubric and every variant, then emits its pick.
+  </Step>
+  <Step>
+    **Return the result.** In `best` mode, the output is the winning variant verbatim. In `aggregate` mode, the output is the judge's synthesized answer.
+  </Step>
 </Steps>
 
-## Branches
+## Two ways to define competitors
 
-For genuinely different approaches, use `branches`:
+### `variants` — same prompt, different rolls
 
-```json title="tournament-branches-example.json"
+When you use `variants`, every competitor gets the same `task`. The diversity comes from the model's sampling — each call is independent, so you get genuinely different attempts. This is the right choice when one good prompt could produce a great answer and you just want more shots at it.
+
+```json title="variants-mode.json"
+{
+  "id": "tagline",
+  "type": "tournament",
+  "task": "Write a one-line tagline for a developer tool that saves context-window tokens.",
+  "variants": 5,
+  "judge": "Pick the tagline that is most memorable and most specific.",
+  "mode": "best"
+}
+```
+
+### `branches` — different prompts, different angles
+
+When you want genuinely different *approaches* — not just different rolls of the same dice — use `branches`. Each branch is its own `{ task, agent? }`. The branches become the competitors; `variants` is ignored.
+
+```json title="branches-mode.json"
 {
   "id": "headline",
   "type": "tournament",
   "branches": [
     { "task": "Write a bold, provocative headline." },
     { "task": "Write a clear, benefit-driven headline." },
-    { "task": "Write a question-based headline." }
+    { "task": "Write a question-based headline that creates curiosity." }
   ],
-  "judge": "Pick the best headline.",
+  "judge": "Pick the headline most likely to earn a click without overselling.",
   "mode": "best"
 }
 ```
 
-## Fail-open
+Use `branches` when you can enumerate the strategies up front and want each one represented. Use `variants` when you trust the prompt and just want quantity.
+
+## The judge's verdict
+
+The judge is told how to format its pick. The directive appended to its prompt depends on the mode:
+
+- **`best`** — *"End your reply with a line exactly: `WINNER: <number>` (1–N), choosing the strongest eligible variant."*
+- **`aggregate`** — *"Synthesize the strongest possible answer by combining the best parts of the eligible variants. Then end with a line: `WINNER: <number>` indicating which variant contributed most."*
+
+The runtime parses the verdict flexibly. It accepts:
+
+- A `WINNER: <n>` line anywhere in the output (last match wins, so the judge can change its mind).
+- JSON like `{"winner": 3}` — it also accepts `"best"` or `"choice"` as the key name.
+
+Winner numbers are **1-based over the variants that actually ran** (budget-skipped competitors are excluded from the numbering the judge sees). The number is clamped to the valid range.
+
+<Callout type="info">
+  You don't have to write the directive — the runtime appends it for you. Your `judge` field is the rubric ("pick the strongest hook"); the runtime handles the mechanics of asking for a numbered pick.
+</Callout>
+
+## `best` vs `aggregate`
+
+The `mode` field decides what the phase returns.
+
+| Mode | Output | Use when |
+|---|---|---|
+| `best` (default) | The winning variant, verbatim. | You want one of the original attempts to survive unchanged. |
+| `aggregate` | The judge's synthesized answer, combining the best parts. | No single variant is perfect and you want the judge to merge them. |
+
+In `best` mode, the returned `model` is the model that produced the winning variant. In `aggregate` mode, it is the judge's model — because the judge authored the final output.
+
+```json title="aggregate-mode.json"
+{
+  "id": "summary",
+  "type": "tournament",
+  "task": "Summarize the attached research notes in three sentences.",
+  "variants": 4,
+  "judge": "Synthesize the most accurate and complete summary from the variants below.",
+  "mode": "aggregate"
+}
+```
+
+## Fail-open: the work is never lost
+
+A tournament spends tokens on every variant. taskflow guarantees that spend is never wasted by a judge hiccup.
 
 <Callout type="warn">
-  If the judge's verdict is unparseable, the tournament falls back to variant 1. Work is never lost.
+  If the judge's verdict cannot be parsed, the tournament falls back to **variant 1**. If the judge itself fails, it falls back to the first eligible surviving variant. Work is never silently discarded.
 </Callout>
 
-## When to use
+The full set of fallbacks, in order:
+
+<Steps>
+  <Step>
+    **All variants failed.** Nothing survived to judge. The tournament itself fails — there is genuinely nothing to return.
+  </Step>
+  <Step>
+    **Exactly one variant survived.** The judge is skipped and that variant is returned, with a `reason: "only surviving variant"` note.
+  </Step>
+  <Step>
+    **The run was aborted or over budget.** The judge is skipped; the first surviving variant is returned with a warning.
+  </Step>
+  <Step>
+    **The judge call failed.** The first eligible variant is returned, with a warning naming the failure.
+  </Step>
+  <Step>
+    **The verdict was unparseable.** Variant 1 is returned, with a `reason: "no parseable winner; defaulted to variant 1"` note.
+  </Step>
+  <Step>
+    **The judge picked an ineligible variant** (one that failed). The runtime falls back to the first eligible variant and records a warning.
+  </Step>
+</Steps>
+
+Every tournament result carries a `tournament` object on its phase state — `{ variants, winner, mode, reason }` — so you can always see which variant won and why.
+
+## A complete example
+
+A naming tournament that tries three angles and aggregates the best:
+
+```json title="naming-tournament.json"
+{
+  "name": "name-the-feature",
+  "phases": [
+    {
+      "id": "pick-name",
+      "type": "tournament",
+      "branches": [
+        { "task": "Propose a name that emphasizes speed." },
+        { "task": "Propose a name that emphasizes simplicity." },
+        { "task": "Propose a name that emphasizes reliability." }
+      ],
+      "judge": "Combine the best qualities of the proposals into one final feature name. Pick the single best variant as the winner.",
+      "judgeAgent": "final-arbiter",
+      "mode": "aggregate",
+      "final": true
+    }
+  ]
+}
+```
+
+The judge runs as `final-arbiter` (via `judgeAgent`), sees all three proposals, and returns a synthesized name. Because the phase is `final: true`, only that name reaches your context.
+
+## When to use a tournament
 
 <Callout type="tip">
-  - Creative writing where quality is subjective.
-  - Open-ended summarization.
-  - Naming, branding, or headline generation.
-  - Any task where one shot is unreliable.
+  Reach for a tournament when:
+  - The work is creative or subjective, and one shot is unreliable.
+  - You can enumerate a few distinct strategies (`branches`) or just want more rolls (`variants`).
+  - You want a judge to either pick the best or merge the best parts.
 </Callout>
+
+Reach for a plain `agent` phase when the task is deterministic — a tournament costs N+1 subagent calls (N variants plus the judge), so reserve it for work where the variance is worth it.
+
+## Next
+
+<Cards>
+  <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
+    Generate sub-flows at runtime and validate them before execution.
+  </Card>
+  <Card title="Tournament Phase" href="/en/docs/syntax/phase-types">
+    Full field reference for the `tournament` phase.
+  </Card>
+  <Card title="Gate Phase" href="/en/docs/syntax/phase-types">
+    `gate` uses the same verdict-parsing machinery for quality gates.
+  </Card>
+</Cards>

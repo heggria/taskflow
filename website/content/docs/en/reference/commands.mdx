@@ -5,61 +5,142 @@ description: Pi slash commands and Codex MCP tools.
 
 # Commands
 
+taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
+
+This page is a grouped reference for both. Every command has a one-line purpose and, where useful, a concrete example. If you just want to skim, jump to the [example session](#an-example-session) at the end.
+
 <Callout type="info">
-  Saved flows become CLI shortcuts on Pi. On Codex, the same operations are exposed as MCP tools.
+  Saved flows become CLI shortcuts on Pi (`/tf:<name>`). On MCP hosts, you run a saved flow by name through `taskflow_run`.
 </Callout>
 
 ## Pi `/tf` commands
 
-Saved flows become CLI shortcuts on Pi.
+The `/tf` command is the user-facing surface on Pi. Its subcommands fall into four groups.
+
+### Run
 
 | Command | Description |
 |---|---|
-| `/tf list` | List saved flows. |
-| `/tf run <name> [args]` | Run a saved flow. |
-| `/tf show <name>` | Print a flow definition. |
-| `/tf compile <name> [lr\|td]` | Render a Mermaid diagram. |
-| `/tf verify <name>` | Statically verify a flow. |
-| `/tf runs` | Browse run history. |
-| `/tf resume <runId>` | Continue a run. |
-| `/tf init` | Configure model roles. |
-| `/tf:<name> [args]` | Shortcut. |
+| `/tf run <name> [args]` | Run a saved flow, optionally passing args as `key=value` pairs or JSON. |
+| `/tf:<name> [args]` | Shortcut — equivalent to `/tf run <name> [args]`. Registered for every saved flow. |
+| `/tf resume <runId>` | Resume a paused or failed run from where it stopped. |
 
-### Tool actions
+### Inspect
 
-The model can use these `taskflow` tool actions:
+| Command | Description |
+|---|---|
+| `/tf list` | List all saved flows in this project. |
+| `/tf show <name>` | Print a saved flow's full JSON definition. |
+| `/tf runs` | Browse recent run history (last 50) and pick one to inspect or resume. |
+| `/tf peek <runId> [phaseId]` | Inspect a stored run's intermediate phase output (post-hoc debugging). Supports `--json`, `--item <n>`, `--limit <chars>`. |
+
+### Verify & analyze
+
+| Command | Description |
+|---|---|
+| `/tf verify <name>` | Statically verify a flow — cycles, missing deps, dead ends — at zero token cost. |
+| `/tf compile <name> [lr\|td]` | Render the DAG as a Mermaid diagram (`lr` = left-right, `td` = top-down). |
+| `/tf ir <name>` | Compile to FlowIR + content hash (the incremental-recompute intermediate). |
+| `/tf provenance <runId>` | Show the observed read-set provenance for a run. |
+| `/tf why-stale <runId> [phaseId]` | Explain why a cached run is stale — which fingerprint input changed. |
+| `/tf recompute <runId> <phaseId> [--apply]` | Minimally recompute a stale phase. Default is a safe dry-run; `--apply` spends tokens. |
+
+### Lifecycle
+
+| Command | Description |
+|---|---|
+| `/tf save` | Save the most recent inline flow definition under a name (makes `/tf:<name>` available immediately). |
+| `/tf init` | Configure model roles — map the built-in agent roles to your models. |
+
+<Callout type="tip">
+  `peek`, `provenance`, `why-stale`, and `recompute` are the debugging toolkit. Use them when a run did something unexpected and you need to see *why* without re-running it.
+</Callout>
+
+## The `taskflow` tool (Pi)
+
+On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action` plus parameters. The actions mirror the `/tf` subcommands and add a few the model uses internally:
 
 | Action | Description |
 |---|---|
-| `run` | Inline or saved flow. |
-| `save` | Persist a flow. |
-| `resume` | Resume by runId. |
-| `list` | List flows. |
+| `run` | Run an inline or saved flow. |
+| `save` | Persist a flow definition. |
+| `resume` | Resume a run by `runId`. |
+| `list` | List saved flows. |
+| `agents` | List the built-in agents. |
 | `verify` | Static check. |
-| `compile` | Mermaid diagram. |
-| `ir` / `provenance` / `why-stale` / `recompute` | Incremental recompute. |
-| `cache-clear` | Clear cross-run cache. |
-| `init` | Model roles. |
+| `compile` | Mermaid diagram + verification report. |
+| `ir` / `provenance` / `why-stale` / `recompute` | Incremental recompute toolkit. |
+| `cache-clear` | Clear the cross-run memoization cache. |
+| `init` | Configure model roles. |
 
-## Codex MCP tools
+## Codex / Claude / OpenCode MCP tools
 
-On Codex, taskflow exposes these MCP tools:
+On MCP hosts, taskflow exposes these tools (the model calls them; you usually don't type them):
 
 | Tool | Description |
 |---|---|
-| `taskflow_run` | Run saved or inline flow. |
-| `taskflow_list` | List saved flows. |
-| `taskflow_show` | Show flow JSON. |
-| `taskflow_verify` | Static check. |
-| `taskflow_compile` | Render DAG diagram. |
+| `taskflow_run` | Run an inline or saved flow; returns the final output and a `runId`. |
+| `taskflow_list` | List saved flows discoverable in this directory. |
+| `taskflow_show` | Print a saved flow's definition. |
+| `taskflow_verify` | Statically verify a flow (no execution). |
+| `taskflow_compile` | Render a flow as a DAG diagram (SVG image) plus a status line. |
+| `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). |
+
+<Callout type="info">
+  On MCP hosts there is no `/tf` slash command — you describe the work in natural language and the model calls `taskflow_run`. Use `taskflow_peek` with the `runId` that `taskflow_run` returns when you need to inspect intermediate output.
+</Callout>
+
+## An example session
+
+A realistic session on Pi, from first run to debugging:
+
+```bash title="Author and verify a flow"
+/tf verify review-changes
+```
+
+Verify catches a cycle and a missing `dependsOn` before any tokens are spent. Fix the JSON, then run it:
+
+```bash title="Run the flow with an argument"
+/tf run review-changes dir=src
+```
+
+The run completes and returns the final summary. You like it, so save it:
+
+```bash title="Save it as a shortcut"
+/tf save review-changes
+```
+
+From now on, the shortcut works:
+
+```bash title="Run the saved flow"
+/tf:review-changes dir=src
+```
+
+A few days later the summary looks stale. Check why without re-running:
+
+```bash title="Diagnose staleness"
+/tf runs
+/tf why-stale <runId> summary
+```
+
+`why-stale` reports that `git:HEAD` changed since the cached run. Recompute just that phase:
+
+```bash title="Minimally recompute the stale phase"
+/tf recompute <runId> summary --apply
+```
+
+Only `summary` re-runs; the rest of the flow is reused from cache.
 
 ## Next
 
 <Cards>
   <Card title="Shorthand" href="/en/docs/reference/shorthand">
-    `task`, `tasks`, `chain`.
+    `task`, `tasks`, `chain` — the quick-delegation shortcuts.
   </Card>
   <Card title="Getting Started" href="/en/docs/getting-started">
     Run your first taskflow.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization and the `why-stale` / `recompute` toolkit.
   </Card>
 </Cards>

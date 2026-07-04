@@ -1,17 +1,21 @@
 ---
 title: Shorthand
-description: The task, tasks, and chain shortcuts.
+description: The task, tasks, and chain shortcuts for quick delegations.
 ---
 
 # Shorthand
 
+Sometimes you don't need a DAG. You just want to delegate one thing, or run a few checks at once, or chain two steps where the second needs the first's output. Writing a full `phases` array for that is overhead.
+
+taskflow accepts three shorthand shapes — `task`, `tasks`, and `chain` — that the runtime **desugars** into proper flows before validation and execution. This page is a friendly quick reference: what each shape produces, when to reach for it, and the exact full-flow JSON it expands into.
+
 <Callout type="info">
-  taskflow accepts three shorthand forms that the runtime desugars into proper flows.
+  Shorthand is for fast delegation. Move to the full `phases` DAG when you need conditional routing, loops, gates, caching, or cross-session resume — shorthand can't express those.
 </Callout>
 
-## `task`
+## `task` — delegate one thing
 
-One agent, one task.
+You want to delegate a single piece of work to one agent. That is the whole flow.
 
 ```json title="task-shorthand.json"
 {
@@ -20,9 +24,28 @@ One agent, one task.
 }
 ```
 
-## `tasks`
+The runtime desugars this into a flow with one `agent` phase, marked `final` so its output is what comes back:
 
-Parallel tasks.
+```json title="task-desugared.json"
+{
+  "name": "task",
+  "phases": [
+    {
+      "id": "main",
+      "type": "agent",
+      "task": "Summarize the architecture of src/",
+      "agent": "explorer",
+      "final": true
+    }
+  ]
+}
+```
+
+Best for: one-off delegations where a single agent call is the entire answer.
+
+## `tasks` — run independent checks in parallel
+
+You have a fixed list of things you want checked at the same time. Each is independent; you want them all to run concurrently.
 
 ```json title="tasks-shorthand.json"
 {
@@ -33,9 +56,34 @@ Parallel tasks.
 }
 ```
 
-## `chain`
+This desugars into a single `parallel` phase whose `branches` are your tasks. The outputs are concatenated; the phase is `final`:
 
-Sequential tasks. Each step sees the previous output via `{previous.output}`.
+```json title="tasks-desugared.json"
+{
+  "name": "parallel",
+  "phases": [
+    {
+      "id": "parallel",
+      "type": "parallel",
+      "branches": [
+        { "task": "Audit auth in src/api", "agent": "analyst" },
+        { "task": "Audit input validation in src/api", "agent": "analyst" }
+      ],
+      "final": true
+    }
+  ]
+}
+```
+
+<Callout type="warn">
+  `parallel` does not synthesize — it just runs the branches and concatenates their outputs. If you want a single merged answer, add a downstream `reduce` phase in a full DAG instead.
+</Callout>
+
+Best for: a known list of independent checks you want to fan out and gather.
+
+## `chain` — steps that need the previous output
+
+Each step depends on the one before it. The second step needs to see the first step's result. The third needs the second's. This is a sequential chain.
 
 ```json title="chain-shorthand.json"
 {
@@ -46,15 +94,37 @@ Sequential tasks. Each step sees the previous output via `{previous.output}`.
 }
 ```
 
-## Precedence
+Each step becomes an `agent` phase (`step1`, `step2`, …) that depends on the previous one. The last step is `final`. Inside a step's `task`, `{previous.output}` resolves to the immediately preceding step's output:
 
-If multiple are given: `chain` > `tasks` > `task`.
+```json title="chain-desugared.json"
+{
+  "name": "chain",
+  "phases": [
+    {
+      "id": "step1",
+      "type": "agent",
+      "task": "List the public API of src/lib",
+      "agent": "scout"
+    },
+    {
+      "id": "step2",
+      "type": "agent",
+      "task": "Write docs for:\n{previous.output}",
+      "agent": "writer",
+      "dependsOn": ["step1"],
+      "final": true
+    }
+  ]
+}
+```
 
-## Context pre-reading
+Best for: a pipeline where each step consumes the last step's output. `{previous.output}` is the chain equivalent of `{steps.X.output}` in a full DAG.
 
-All shorthand steps support `context` and `contextLimit`:
+## Pre-reading files with `context`
 
-```json title="shorthand-context-example.json"
+All three shapes support `context` and `contextLimit` — files to pre-read and inject before the task runs, so the agent doesn't spend turns exploring.
+
+```json title="shorthand-context.json"
 {
   "chain": [
     {
@@ -67,10 +137,56 @@ All shorthand steps support `context` and `contextLimit`:
 }
 ```
 
+Put `context` on individual steps. In `chain` mode, a top-level `context` is **ignored** (with a warning) — declare it per step instead. In `tasks` mode, the union of the top-level `context` and each step's `context` is shared across all branches.
+
+## Precedence
+
+If you provide more than one shape, the runtime picks one in a fixed order: **`chain` > `tasks` > `task`**. A spec with both `chain` and `task` is treated as a chain; the `task` is ignored.
+
+## Carrying metadata through
+
+Shorthand specs accept the same top-level metadata as a full flow. These are passed through to the desugared definition:
+
+| Field | Effect |
+|---|---|
+| `name` | Flow name (defaults to `task`, `parallel`, or `chain`). |
+| `description` | Flow description. |
+| `concurrency` | Default max concurrent subagents. |
+| `agentScope` | Agent discovery scope (`user` / `project` / `both`). |
+| `args` | Declared invocation arguments. |
+| `budget` | Run-wide cost / token ceiling. |
+| `strictInterpolation` | Promote unresolved-placeholder warnings to errors. |
+
+```json title="shorthand-with-meta.json"
+{
+  "name": "audit-api",
+  "description": "Quick parallel audit of the API layer.",
+  "concurrency": 2,
+  "tasks": [
+    { "task": "Audit auth", "agent": "analyst" },
+    { "task": "Audit validation", "agent": "analyst" }
+  ]
+}
+```
+
+## From shorthand to full DAG
+
+Shorthand gets you started fast. When you outgrow it, the path is mechanical — the desugared JSON above is exactly what the runtime sees, so you can copy it, add the fields shorthand can't express, and keep going.
+
+<Callout type="tip">
+  Reach for the full `phases` DAG once you need any of: `when` guards, `join: "any"`, `retry`, `timeout`, `expect` contracts, `cache`, `loop`, `gate`, `map` (runtime fan-out), `tournament`, `flow` sub-workflows, or cross-session resume. Shorthand can express none of these.
+</Callout>
+
 ## Next
 
 <Cards>
   <Card title="Commands" href="/en/docs/reference/commands">
     Pi `/tf` commands and Codex MCP tools.
+  </Card>
+  <Card title="Flow Definition" href="/en/docs/syntax/flow-definition">
+    The full `phases` DAG that shorthand expands into.
+  </Card>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    See shorthand used in a real example.
   </Card>
 </Cards>
