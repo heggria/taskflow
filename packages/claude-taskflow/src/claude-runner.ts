@@ -82,13 +82,33 @@ export function newClaudeAccumulator(model?: string): ClaudeAccumulator {
 	return { usage: emptyUsage(), model, finalText: "", lastActivity: "", sawResult: false };
 }
 
+/** Summarize a claude tool_use for the live activity stream — parity with the
+ *  pi runner's summarizeToolCall and codex's shortCmd (which cover all tools,
+ *  not just Bash). Without this a Write/Edit/Read shows as just the bare tool
+ *  name, a UX regression vs the other hosts. */
 function shortTool(name: unknown, input: unknown): string {
 	const n = String(name ?? "tool");
-	if (n === "Bash" && input && typeof input === "object") {
-		const cmd = String((input as { command?: unknown }).command ?? "").replace(/\s+/g, " ").trim();
-		return `$ ${cmd.length > 64 ? `${cmd.slice(0, 64)}…` : cmd}`;
+	if (!input || typeof input !== "object") return n;
+	const obj = input as Record<string, unknown>;
+	const trim = (v: unknown) => String(v ?? "").replace(/\s+/g, " ").trim();
+	const brief = (v: unknown) => {
+		const s = trim(v);
+		return s.length > 64 ? `${s.slice(0, 64)}…` : s;
+	};
+	switch (n) {
+		case "Bash":
+			return `$ ${brief(obj.command)}`;
+		case "Read":
+		case "Write":
+		case "Edit":
+		case "NotebookEdit":
+			return `${n}: ${brief(obj.file_path ?? obj.path)}`;
+		case "Grep":
+		case "Glob":
+			return `${n}: ${brief(obj.pattern)}`;
+		default:
+			return n;
 	}
-	return n;
 }
 
 /**
@@ -137,6 +157,8 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 			acc.usage.output += u.output_tokens || 0;
 			acc.usage.cacheRead += u.cache_read_input_tokens || 0;
 			acc.usage.cacheWrite += u.cache_creation_input_tokens || 0;
+			// contextTokens is a host-specific gauge (NOT additive): claude reports input_tokens
+			// EXCLUDING cache read, so input+cache_read+output = full last-turn context.
 			acc.usage.contextTokens =
 				(u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
 		}

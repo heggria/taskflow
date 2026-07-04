@@ -106,6 +106,9 @@ export function foldCodexEventLine(acc: CodexAccumulator, line: string): LiveUpd
 		acc.usage.input += u.input_tokens || 0;
 		acc.usage.output += (u.output_tokens || 0) + (u.reasoning_output_tokens || 0);
 		acc.usage.cacheRead += u.cached_input_tokens || 0;
+		// contextTokens is a host-specific point-in-time gauge (NOT additive — excluded from aggregateUsage):
+		// each host's formula differs because each accounts for cache differently. Codex's input_tokens
+		// already includes cached tokens, so input+output = full last-turn context.
 		acc.usage.contextTokens = (u.input_tokens || 0) + (u.output_tokens || 0);
 	} else if (event.type === "item.completed" || event.type === "item.started") {
 		const item = event.item;

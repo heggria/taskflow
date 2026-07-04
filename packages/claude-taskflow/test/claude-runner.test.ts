@@ -90,7 +90,7 @@ test("claude parser: tool_use becomes a one-line activity for streaming", () => 
 		acc,
 		`{"type":"assistant","message":{"model":"m","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x"}}]}}`,
 	);
-	assert.equal(live2!.text, "Read", "non-Bash tools report the tool name");
+	assert.match(live2!.text, /^Read: \/x/, "Read/Edit/Write summarize to Tool: path (parity with pi/codex)");
 });
 
 test("claude parser: malformed / empty / unknown lines are ignored", () => {

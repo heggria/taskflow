@@ -8,7 +8,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-0E8A66?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-918-4B4ACF?style=flat-square" alt="918 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1045-4B4ACF?style=flat-square" alt="1045 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, and OpenCode"></a>
 </p>
@@ -734,12 +734,12 @@ provided files. Report violations grouped by file. No fixes.
 
 <div align="center">
 
-**0 个运行时依赖** · **918 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
+**0 个运行时依赖** · **1045 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
 
 </div>
 
 - **零运行时依赖。** 没有 `dependencies` 字段——运行时完全基于 Node 内置模块（`fs` / `path` / `os` / `child_process` / `crypto`）。文件锁是 `fs.openSync("wx")`，不是第三方库。
-- **918 个测试分布在 52 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
+- **1045 个测试分布在 64 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
 - **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
 - **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
 

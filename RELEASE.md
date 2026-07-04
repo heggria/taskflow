@@ -31,7 +31,7 @@ npm whoami --registry=https://registry.npmjs.org/   # expect: heggria (or the ow
 ```sh
 npm install            # links the workspaces
 npm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
-npm test               # 918/918 green
+npm test               # 1045/1045 green
 npm run build          # emit dist/ for all three packages (tsc → .js + .d.ts)
 ```
 

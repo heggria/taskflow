@@ -98,6 +98,10 @@ test("opencode parser: malformed / empty / unknown lines are ignored", () => {
 test("opencode model: a clean provider/model passes through", () => {
 	assert.equal(resolveOpencodeModel("opencode/deepseek-v4-flash-free"), "opencode/deepseek-v4-flash-free");
 	assert.equal(resolveOpencodeModel("anthropic/claude-sonnet-4-5"), "anthropic/claude-sonnet-4-5");
+	// A colon-tagged id that isn't a pi thinking suffix passes through (only
+	// :xhigh/:high/:medium/:low/:off are dropped); opencode rejects it at launch
+	// if invalid, rather than silently falling back to the default model.
+	assert.equal(resolveOpencodeModel("some/model:v2"), "some/model:v2");
 });
 
 test("opencode model: placeholders, thinking suffixes, and openrouter paths are dropped", () => {

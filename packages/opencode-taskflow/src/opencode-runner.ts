@@ -133,6 +133,8 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 				acc.usage.output += (tk.output || 0) + (tk.reasoning || 0);
 				acc.usage.cacheRead += tk.cache?.read || 0;
 				acc.usage.cacheWrite += tk.cache?.write || 0;
+				// contextTokens is a host-specific gauge (NOT additive): opencode's tokens.total is
+				// the full last-turn context (input+output+reasoning), already cache-accounted.
 				acc.usage.contextTokens = tk.total || acc.usage.contextTokens;
 			}
 			if (typeof part?.cost === "number") acc.usage.cost += part.cost;
@@ -185,8 +187,11 @@ export function isReadOnlyPhase(tools: string[] | undefined): boolean {
 export function resolveOpencodeModel(model: string | undefined): string | undefined {
 	if (!model) return undefined;
 	if (/^\{\{.*\}\}$/.test(model)) return undefined; // unresolved role placeholder
-	if (model.includes(":")) return undefined; // pi thinking suffix
-	if ((model.match(/\//g)?.length ?? 0) >= 2) return undefined; // openrouter path
+	// pi thinking suffix: `<model>:<level>` (e.g. "anthropic/glm-5.2:xhigh"). Only the
+	// colon-delimited form is dropped — a real `:tag` (no level keyword) passes
+	// through so opencode itself can reject it with a clear error if invalid.
+	if (/:\s*(?:xhigh|high|medium|low|off)$/.test(model)) return undefined;
+	if ((model.match(/\//g)?.length ?? 0) >= 2) return undefined; // openrouter path (openrouter/vendor/model)
 	return model;
 }
 
