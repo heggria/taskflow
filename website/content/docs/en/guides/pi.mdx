@@ -5,72 +5,208 @@ description: Install, run, save, and resume taskflows on the Pi coding agent.
 
 # Using taskflow on Pi
 
-<Callout type="info">
-  Install once, then describe flows in natural language or run saved flows by name.
-</Callout>
+If you already use [Pi](https://pi.dev) to delegate work to subagents, taskflow turns those one-off delegations into named, resumable, multi-step workflows. You describe the work as a graph — fan-out, gates, loops, whatever you need — and only the final result comes back into your context.
+
+This page walks through the whole arc: install, run your first flow, save it, run it by name, and wire up model roles. By the end you'll have a reusable command that does a real job in one line.
 
 ## Install
+
+taskflow is a Pi extension. Install it once:
 
 ```bash title="Install pi-taskflow"
 pi install npm:pi-taskflow
 ```
 
-## Run
+That's it. The extension registers a `taskflow` tool that the model can call automatically, plus a `/tf` command for you. No model-side configuration is required to start.
 
-In a Pi session, describe the work:
-
-<Callout type="tip">
-  Try: *"Run a chain: first explore the auth flow, then summarize the findings."*
+<Callout type="info">
+  The extension lives in your Pi agent directory. Restart your Pi session if it was already running when you installed.
 </Callout>
 
-The model calls the `taskflow` tool automatically.
+## Run your first flow
 
-## Save a flow
+Let's start with something real: review the changed files in a project and return a single risk summary. Save this as `review-changes.json` next to wherever you run Pi:
 
-After a run, say **"save it"** and give it a name. It becomes a one-word command:
-
-```bash title="Run a saved flow"
-/tf:audit-auth dir=src
+```json title="review-changes.json"
+{
+  "name": "review-changes",
+  "description": "Review changed files and return a single risk summary.",
+  "args": {
+    "dir": { "default": "." }
+  },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files under {args.dir} that have been changed recently. Output ONLY a JSON array of objects with a 'path' field. No prose.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph of findings or 'No issues found.'.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine the following per-file reviews into a single prioritized risk summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
 ```
 
-## Commands
+There are three phases, wired into a small DAG. `discover` lists the files. `review-each` fans out — one security reviewer per file, up to four at once. `summarize` folds the individual reviews into one report, and because it's marked `final: true`, that report is the only thing that returns to your conversation.
 
-| Command | Description |
-|---|---|
-| `/tf list` | List saved flows. |
-| `/tf run <name> [args]` | Run a saved flow. |
-| `/tf show <name>` | Print a flow definition. |
-| `/tf verify <name>` | Static-check a flow. |
-| `/tf compile <name>` | Render a Mermaid diagram. |
-| `/tf runs` | Browse run history. |
-| `/tf resume <runId>` | Continue a paused/failed run. |
-| `/tf init` | Configure model roles. |
-| `/tf:<name> [args]` | Shortcut. |
+Now run it. You have two ways to ask.
+
+### Just describe the work
+
+You don't need to remember a command. In a Pi session, describe what you want in plain language:
+
+<Callout type="tip">
+  Try: *"Run the review-changes flow in this repo with dir set to src."*
+</Callout>
+
+The model recognizes the intent, loads the `taskflow` tool, and executes the DAG. The intermediate transcripts from `discover`, `review-each`, and `summarize` stay inside the runtime — your context window only receives the final summary.
+
+### Use the command directly
+
+If you prefer to be explicit, the `/tf` command is always available:
+
+```bash title="Run a saved flow by name"
+/tf run review-changes dir=src
+```
+
+Either path runs the same flow. The command form is handy when you know exactly what you want and don't want to spend a model turn negotiating it.
+
+<Callout type="info">
+  Not sure your flow is sound before spending tokens? Run `/tf verify review-changes` — it statically checks for cycles, dangling `dependsOn`, unknown phase refs, and malformed configs at zero cost.
+</Callout>
+
+## Save a flow for later
+
+Running from a JSON file is fine for experimentation, but the real payoff is turning a flow you like into a one-word command.
+
+After a run, just tell Pi to save it:
+
+<Callout type="tip">
+  Try: *"Save that flow as review-changes."*
+</Callout>
+
+Or save it directly from a file with the command:
+
+```bash title="Save a flow definition"
+/tf save review-changes
+```
+
+taskflow writes the definition into your project's flow store. From then on, the flow has a shortcut:
+
+```bash title="Run a saved flow via its shortcut"
+/tf:review-changes dir=src
+```
+
+That `/tf:<name>` form is the fastest way to invoke a flow you've already shaped. It's the same as `/tf run <name>` — just shorter.
+
+<Callout type="info">
+  Saved flows are scoped per project. Run `/tf list` to see everything available in the current directory.
+</Callout>
+
+## When a run pauses or fails
+
+Real workflows don't always finish on the first try. An `approval` phase might pause for a human, a subagent might hit a transient error, or you might abort a long run and come back to it.
+
+Every run gets a `runId`, and the runtime persists its state. To continue a paused or failed run:
+
+```bash title="Resume a paused or failed run"
+/tf resume <runId>
+```
+
+To browse what you've run, including in-progress and paused runs:
+
+```bash title="Browse run history"
+/tf runs
+```
+
+And if you ever need to inspect a single phase's intermediate output after the fact — say, to debug why a gate blocked — `peek` shows it without re-running anything:
+
+```bash title="Peek at a phase's stored output"
+/tf peek <runId> summarize
+```
+
+<Callout type="warn">
+  `peek` is for debugging only. By design it pulls intermediate output into your context — that's the one exception to taskflow's isolation guarantee, and it's opt-in.
+</Callout>
 
 ## Model roles
 
-Run `/tf init` to map built-in agent roles to your models.
+taskflow ships with eighteen built-in agents (scout, security-reviewer, writer, and friends), and each one is tagged with a **role** that maps to a model. Out of the box, those roles may resolve to a default model — but you'll want to point them at your own.
+
+Run the interactive setup:
+
+```bash title="Configure model roles"
+/tf init
+```
+
+You'll get a picker that walks you through each role and recommends sensible defaults. The roles are:
+
+| Role | Purpose | Typical agents |
+|---|---|---|
+| `fast` | Cheap & quick — high-volume, low-stakes work. | executor, scout, verifier, doc-writer |
+| `strong` | Balanced planning and review. | planner, reviewer, executor-code |
+| `thinker` | Deep analysis and ambiguity detection. | analyst, critic |
+| `arbiter` | Final judgment and tiebreaks. | plan-arbiter, final-arbiter |
+| `vision` | Multimodal — UI work, design reading. | executor-ui, visual-explorer |
+| `reasoner` | Cautious reasoning — security and risk. | risk-reviewer, security-reviewer |
 
 <Callout type="tip">
-  Roles are referenced with `{{role}}` syntax inside agent definitions and phase configs.
+  If you skip this step, taskflow will hint that roles are unconfigured and agents will fall back to the default model. It works, but you're leaving cost and quality on the table — `fast` roles on a cheap model save a lot of tokens over time.
 </Callout>
 
-| Role | Purpose |
+The configuration is written to your Pi `settings.json` under `modelRoles`. You can re-run `/tf init` any time to change a single role or accept the recommended defaults.
+
+## Command reference
+
+Here's the full `/tf` surface, for when you know what you need:
+
+| Command | Description |
 |---|---|
-| `{{fast}}` | cheap & quick |
-| `{{strong}}` | balanced planning/review |
-| `{{thinker}}` | deep analysis |
-| `{{arbiter}}` | final judgment |
-| `{{vision}}` | multimodal |
-| `{{reasoner}}` | cautious reasoning |
+| `/tf list` | List saved flows in the current project. |
+| `/tf run <name> [args]` | Run a saved flow, optionally with args. |
+| `/tf:<name> [args]` | Shortcut for `/tf run <name>`. |
+| `/tf show <name>` | Print a saved flow's JSON definition. |
+| `/tf verify <name>` | Statically verify a flow (cycles, refs, configs). |
+| `/tf compile <name>` | Render the DAG as a Mermaid diagram. |
+| `/tf save <name>` | Save a flow definition to the project store. |
+| `/tf runs` | Browse run history (in-progress, paused, done). |
+| `/tf resume <runId>` | Continue a paused or failed run. |
+| `/tf peek <runId> [phaseId]` | Inspect a stored phase's output for debugging. |
+| `/tf init` | Configure model roles interactively. |
+
+<Callout type="info">
+  Several advanced subcommands exist for cache and provenance work (`ir`, `provenance`, `why-stale`, `recompute`, `cache-clear`). You'll meet them when you need them — see the reference docs for details.
+</Callout>
 
 ## Next
 
 <Cards>
   <Card title="Getting Started" href="/en/docs/getting-started">
-    Run your first taskflow.
+    The five-minute tour, if you haven't seen it yet.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks you can compose into a DAG.
   </Card>
   <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
-    Use taskflow with OpenAI Codex.
+    The same runtime, wired into OpenAI Codex.
   </Card>
 </Cards>

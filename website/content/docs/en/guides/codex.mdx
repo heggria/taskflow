@@ -5,68 +5,204 @@ description: Install taskflow as a Codex plugin and orchestrate multi-phase work
 
 # Using taskflow on Codex
 
-<Callout type="info">
-  taskflow runs on [Codex](https://github.com/openai/codex) as a plugin that exposes an MCP server.
-</Callout>
+[Codex](https://github.com/openai/codex) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Codex, taskflow ships as a plugin that registers an MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
+
+This page walks through the whole arc: install the plugin, confirm the MCP server is live, run a flow through a tool call, and configure things for long-running work.
 
 ## Install
 
-```bash title="Install taskflow plugin"
+taskflow is distributed through the shared plugin marketplace. Add the marketplace, then install the plugin:
+
+```bash title="Install the taskflow plugin"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
 
-The plugin registers its MCP server and a routing skill automatically.
+That single `plugin add` does three things at once:
 
-## Verify
+<Steps>
+  <Step>
+    **Registers the MCP server.** The plugin's `.mcp.json` declares a `taskflow` server launched via `npx codex-taskflow-mcp`, so Codex can reach the runtime over stdio.
+  </Step>
+  <Step>
+    **Installs the routing skill.** A bundled skill teaches Codex when to reach for the taskflow tools, so you don't have to remember their names.
+  </Step>
+  <Step>
+    **Sets a sane default timeout.** The server ships with a 30-minute (`1800` second) tool-call timeout, because DAGs can take a while.
+  </Step>
+</Steps>
 
-```bash title="Verify plugin and MCP server"
-codex plugin list   # taskflow@taskflow installed, enabled
-codex mcp list      # taskflow enabled
+Restart your Codex session if it was already running, so the new plugin is picked up.
+
+## Verify the install
+
+Before running anything, confirm both the plugin and its MCP server registered cleanly:
+
+```bash title="Verify the plugin and MCP server"
+codex plugin list   # taskflow@taskflow should appear, enabled
+codex mcp list      # taskflow should appear, enabled
 ```
 
-## Exposed MCP tools
+If either is missing, the `plugin add` step didn't complete — re-run it and check for errors.
 
-| Tool | Purpose |
-|---|---|
-| `taskflow_run` | Run a saved flow or inline definition. |
-| `taskflow_list` | List saved flows. |
-| `taskflow_show` | Show a saved flow's JSON. |
-| `taskflow_verify` | Statically verify a flow. |
-| `taskflow_compile` | Render a DAG diagram. |
+## Run your first flow
 
-## Use it
+On Codex, you don't invoke taskflow through a slash command — you invoke it through an MCP tool. The model decides when to call it, guided by the bundled skill. So the most natural way to start is to just describe the work.
 
-Just ask — the bundled skill tells Codex when to call the tools:
+### Just ask
 
-```
+Try one of these in a Codex session:
+
+```text title="Describe the work in plain language"
 > List my saved taskflows.
-> Verify this flow: {name:"x", phases:[{id:"a", type:"agent", agent:"writer", task:"draft"}]}
-> Run the "release-train" taskflow.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+The skill routes the request to the right tool. If a flow is saved in the current project, the model calls `taskflow_run` with the saved name; if you pasted an inline definition, it passes that instead.
+
+### Call the tool directly
+
+If you want to be explicit — useful in scripts or when you know the exact shape — the tool is `taskflow_run`. It accepts either a saved flow `name` or an inline `define`:
+
+```json title="Run a saved flow via taskflow_run"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+```json title="Run an inline flow via taskflow_run"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
+Either form runs the same DAG. The tool returns only the final output — the intermediate transcripts from `discover`, `review-each`, and `summarize` stay inside the runtime and never enter your context.
+
+<Callout type="info">
+  Only the phase marked `final: true` is returned. Everything else is context-isolated by design.
+</Callout>
+
+## Check a flow before spending tokens
+
+Before running a DAG, you can ask Codex to verify it statically. This catches cycles, dangling `dependsOn`, unknown phase references, and malformed configs — all at zero token cost:
+
+```json title="Verify a flow via taskflow_verify"
+{
+  "name": "review-changes"
+}
+```
+
+Or render the DAG as a diagram to eyeball its shape:
+
+```json title="Compile a flow to a diagram via taskflow_compile"
+{
+  "name": "review-changes"
+}
 ```
 
 ## Long-running flows
 
-`taskflow_run` returns only after the whole DAG finishes. The plugin ships a 30-minute default tool-call timeout. Override in `~/.codex/config.toml`:
+Here's the one thing to know about running taskflow on Codex: **`taskflow_run` is synchronous.** The tool call doesn't return until the entire DAG finishes — every phase, every subagent. For a three-phase review that's fine; for a fan-out over fifty files with a tournament at the end, it can take a while.
+
+The plugin ships a 30-minute default tool-call timeout to accommodate this. If your flows run longer, override it in your Codex config:
 
 ```toml title="~/.codex/config.toml"
 [mcp_servers.taskflow]
 tool_timeout_sec = 3600
 ```
 
+<Callout type="warn">
+  Don't set this timeout lower than your longest expected run. If the tool call times out, the run keeps executing in the background — but Codex will have already given up on the result.
+</Callout>
+
+For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. You can always resume a paused run by calling `taskflow_run` again with the stored `runId`.
+
+## Inspect a run after the fact
+
+Every `taskflow_run` returns a `runId`. If something went wrong — a gate blocked, a phase produced odd output — you can inspect a single phase's stored output without re-running the whole flow:
+
+```json title="Peek at a phase's stored output via taskflow_peek"
+{
+  "runId": "run_2026-07-04_abc123",
+  "phaseId": "summarize"
+}
+```
+
+Omit `phaseId` to list every phase with its status and output size. Output is hard-truncated (default 4000 chars) so a peek never floods your context.
+
+<Callout type="warn">
+  `taskflow_peek` is the one intentional exception to taskflow's context isolation. It pulls intermediate output into your conversation — use it for debugging, not as part of your normal flow.
+</Callout>
+
+## Tool reference
+
+Here's the full MCP surface the plugin exposes:
+
+| Tool | Purpose |
+|---|---|
+| `taskflow_run` | Run a saved flow (by `name`) or an inline definition (by `define`). Returns the final output. |
+| `taskflow_list` | List saved flows in the current project. |
+| `taskflow_show` | Print a saved flow's JSON definition. |
+| `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
+| `taskflow_compile` | Render the DAG as a Mermaid diagram. |
+| `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+
+<Callout type="tip">
+  You rarely need to memorize these. The bundled skill tells Codex which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.
+</Callout>
+
 ## Remove
 
-```bash title="Remove taskflow plugin"
+If you need to take taskflow off a machine:
+
+```bash title="Remove the taskflow plugin"
 codex plugin remove taskflow@taskflow
 ```
+
+This unregisters the MCP server and removes the skill. Any saved flow definitions on disk are left untouched.
 
 ## Next
 
 <Cards>
   <Card title="Getting Started" href="/en/docs/getting-started">
-    Run your first taskflow.
+    The five-minute tour, if you haven't seen it yet.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks you can compose into a DAG.
   </Card>
   <Card title="Using taskflow on Pi" href="/en/docs/guides/pi">
-    Use taskflow with the Pi coding agent.
+    The same runtime, wired into the Pi coding agent.
   </Card>
 </Cards>
