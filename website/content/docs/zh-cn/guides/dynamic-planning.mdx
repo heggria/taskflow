@@ -5,22 +5,30 @@ description: 在运行时生成子流程，并在执行前验证它们。
 
 # 动态规划
 
-<Callout type="info">
-  有些问题无法提前完全编写。规划阶段可以在运行时发出子流程定义，运行时验证并执行它。
-</Callout>
+有些问题拒绝被提前规划好。在你检查之前，你不知道有多少文件需要修复；而每个文件可能需要不同类型的修复。一个一次编写、永远运行的静态 DAG 无法描述这种情况。
 
-## 规划 → 执行
+taskflow 的答案是带内联 `def` 的 `flow` 阶段。一个 planner agent 在运行时发出一个子流程定义，运行时验证它、加固它，然后像你自己编写的一样执行它。把它和 `loop` 配对，计划就能自我修订，直到工作完成。
 
-```json title="规划执行示例.json"
+本指南走完整个周期：**规划 → 执行 → 验证 → 循环**。
+
+## 场景
+
+想象一个迁移任务："找到每个调用旧 `legacyAuth()` 辅助函数的文件，并把它更新到新的 `authorize()` API。"你无法事先知道哪些文件受影响，也不知道每个文件需要一次简单的重命名还是更深层的重构。计划只能在运行时被发现。
+
+## 先规划，再执行
+
+最简单的动态流程是两个阶段。一个 `planner` agent 检查情况并以 JSON 形式发出一个 taskflow 定义。一个 `flow` 阶段把这个 JSON 当作它的 `def` 来运行。
+
+```json title="plan-execute.json"
 {
-  "name": "iterative-replan",
+  "name": "plan-execute",
   "phases": [
     {
       "id": "plan",
       "type": "agent",
       "agent": "planner",
       "output": "json",
-      "task": "根据当前状态，输出一个包含 phases[] 的 JSON taskflow 定义。"
+      "task": "Inspect the codebase for calls to legacyAuth(). Output a JSON taskflow definition with phases that fix each affected file. The definition must have a 'name' and a 'phases' array."
     },
     {
       "id": "execute",
@@ -32,51 +40,136 @@ description: 在运行时生成子流程，并在执行前验证它们。
 }
 ```
 
-## 验证
+`{steps.plan.json}` 占位符在运行时被插值，然后做 JSON 解析。结果可以是一个完整的 `{name, phases}` 对象、一个裸的 `phases` 数组，或 `{phases: [...]}`——运行时会自动包裹裸形式。
+
+这就是核心思想：一个模型编写计划，另一个模型执行它。中间的计划永远不会进入你的上下文窗口；只有 `execute` 的最终输出会返回。
+
+## 执行前的验证
+
+LLM 编写的计划是不可信输入。在一个生成的子流程运行任何子代理之前，taskflow 用与人工编写的 flow 相同的校验器检查它——外加一组只对运行时生成的定义生效的**动态加固**检查。
+
+<Steps>
+  <Step>
+    **结构性检查。** 循环、悬空的 `dependsOn` 引用、重复 id、死胡同和缺失的必填字段会在这里被捕获。一个写了 `dependsOn: ["fix-config"]` 但没有 `fix-config` 阶段的计划永远不会运行。
+  </Step>
+  <Step>
+    **广度上限。** 一个生成的子流程最多可以有 **100 个阶段**，最多 fan-out 到 **200 个 map 条目**，最多运行 **16 个并发**子代理。这些限制了模型发出一个几千节点图的爆炸半径。
+  </Step>
+  <Step>
+    **嵌套深度。** 内联 `def` 子流程最多嵌套 **5 层**。一个生成了另一个生成流程的生成流程共用同一个计数器，所以两个维度都不能让另一个相乘放大。
+  </Step>
+  <Step>
+    **能力限制。** 生成的流程不能运行 `script` 阶段（任意 shell 执行），不能在 gate 中使用 `code-compiles` 或 `regex` 评分器（编译器执行和 ReDoS 风险），也不能请求隔离的 `cwd` 关键字（`temp`、`dedicated`、`worktree`）。
+  </Step>
+  <Step>
+    **文件系统遏制。** 一个生成阶段的 `cwd` 必须留在运行的工作目录内——它不能逃逸到别处去读写。
+  </Step>
+</Steps>
+
+### 坏计划会 fail-open
+
+当计划格式错误时会怎样？taskflow **fail-open**。`flow` 阶段以 `done` 状态解析，输出为空并带有一个 `defError` 诊断信息，运行继续。一个坏计划永远不会让整个 flow 崩溃。
 
 <Callout type="warn">
-  生成的子流程在执行前会检查结构性和安全性限制。
+  Fail-open 是安全的默认值——它保护长时间运行的 flow 免受一次糟糕的模型生成影响。如果你希望格式错误的计划成为硬失败，可以加一个下游 `gate` 检查 `{steps.execute.output}` 中的 `defError` 标记。
 </Callout>
 
-生成的子流程会检查：
+## 加固上限，具体说明
 
-- 循环
-- 悬空引用
-- 重复 id
-- 死胡同
-- 安全上限（100 个阶段、200 个 map 项目、5 层嵌套）
+这些上限的存在是为了让一个失控的模型无法在它自己发明的图上花掉你的预算。下面是每个上限阻止了什么，以及它中止的失败示例：
 
-格式错误的 plan 会 fail-open：阶段以 `defError` 跳过，运行继续。
+| 上限 | 限制 | 阻止什么 |
+|---|---|---|
+| 最大阶段数 | 100 | planner 发出"仓库里每个文件一个阶段"并产生一个 4000 节点的图。 |
+| 最大 map 条目 | 200 | 一个生成的 `map` 对上游 agent 返回的 10000 元素数组做 fan-out。 |
+| 最大并发 | 16 | 一个生成的 flow 设置 `concurrency: 500` 并一次性 spawn 几百个子代理。 |
+| 嵌套深度 | 5 | 一个计划 spawn 一个计划再 spawn 一个计划，无界递归。 |
+| 禁用 `script` | — | 一个生成的 flow 运行 `script` 阶段执行任意 shell 命令。 |
 
-## 安全加固
+当某个上限被超出时，验证失败，阶段 fail-open 并带有一个 `defError` 说明命中了哪个上限。
 
-LLM 生成的子流程受到限制：
+<Callout type="info">
+  这些上限**只**适用于运行时生成的子流程（`flow { def }` 和 `ctx_spawn` 子项）。你编写并保存的 flow 是受信任的——有人审查过它们——不受广度上限约束。
+</Callout>
 
-- 广度上限
-- `cwd` 限制
-- 预算限制为 `min(child, parent)`
-- 原型污染防护
-- gate 中禁用 scorer（`code-compiles`、`regex`）
+## 预算钳制
 
-## Loop + flow
+一个生成的子流程继承父运行的预算，但永远不会超过它。子流程的 `budget` 被钳制为它自己声明的预算与父运行剩余预算中较小的那个。一个在只剩 $5 的父运行里声明 `budget: { maxUSD: 50 }` 的计划，会以 $5 上限运行。
 
-将 `loop` 与 `flow {def}` 配对，实现数据驱动的迭代重规划：
+这意味着模型无法授予自己比父 flow 所允许的更多开销额度。
 
-```json title="循环流程示例.json"
+## 规划 → 执行 → 验证 → 循环
+
+真实的迁移工作很少一次完成。planner 的第一个计划修复了大多数文件，但后续检查又发现三个。你想根据剩余部分重新规划，并重复直到什么都不剩——然后执行最终计划。
+
+一个 `loop` 在每次迭代中重新运行 planner，通过 `{loop.lastOutput}` 把上一次输出反馈进去。当 planner 报告 `done: true`（什么都不剩）或命中 `maxIterations` 时，循环停止。下游的 `flow` 随后执行最终计划——但仅当确实有计划可执行时。
+
+```json title="iterative-replan.json"
 {
-  "id": "refine-plan",
-  "type": "loop",
-  "task": "基于 {loop.lastOutput} 规划下一次迭代。",
-  "until": "{steps.refine-plan.json.done} == true",
-  "maxIterations": 6,
-  "output": "json"
+  "name": "iterative-replan",
+  "phases": [
+    {
+      "id": "refine",
+      "type": "loop",
+      "task": "Inspect the codebase for remaining legacyAuth() calls. If any remain, output {plan: <taskflow-definition>, done: false}. If none remain, output {done: true}.",
+      "until": "{steps.refine.json.done} == true",
+      "maxIterations": 6,
+      "output": "json"
+    },
+    {
+      "id": "execute-final",
+      "type": "flow",
+      "def": "{steps.refine.json.plan}",
+      "when": "{steps.refine.json.done} == false",
+      "dependsOn": ["refine"]
+    }
+  ]
 }
 ```
 
-## 何时使用
+把两个阶段放在一起读：
+
+- 每次 `refine` 迭代检查代码库。当还有调用时，它发出一个新计划并设 `done: false`；当代码库干净时，它发出 `done: true`，循环停止。
+- `{steps.refine.json}` 总是解析为**最后一次**迭代的输出，所以 `execute-final` 看到的是结束循环的那次迭代的输出。
+- `when` 守卫是让它安全的关键。如果循环收敛了（`done: true`），守卫为假，`execute-final` 被跳过——工作已经完成，没有计划要运行。如果循环耗尽了迭代次数（`done: false`），守卫为真，剩余计划被执行。
+
+<Callout type="info">
+  `loop` 的 body 是单次 agent 调用，不是子流程——所以每次迭代的*执行*发生在那个 agent 内部（它有文件编辑工具），而不是通过嵌套的 `flow`。当你想让一个模型生成的 DAG 作为独立的、加固过的子流程运行时，使用上面的 `flow { def }` 模式。
+</Callout>
+
+### 循环安全
+
+一个 loop 永远不会无限挂起。三条保证成立：
+
+- **`maxIterations` 是硬上限。** 默认是 10；硬性最大值是 100。即使 `until` 永远不为真，循环也会在上限处停止。
+- **`convergence` 提前停止。** 默认情况下，如果一次迭代的输出与前一次相同，循环停止——一个不动点意味着后续迭代不会改变任何东西。
+- **解析错误让循环停止。** 如果 `until` 无法被求值，循环立即结束，而不是空转。
 
 <Callout type="tip">
-  - 步骤数量或形状依赖上游结果。
-  - 你希望一个模型制定计划，另一个模型执行计划。
-  - 需要基于反馈的迭代重规划。
+  对于希望每次迭代从上一次错误中学习的自我改进型工作，在 loop 上设置 `reflexion: true`。第一次之后的每次迭代都会收到一个 `{reflexion}` 占位符，携带上一次迭代的结构化失败摘要——body 的失败变成反馈，而不是终止循环。
 </Callout>
+
+## 何时使用动态规划
+
+<Callout type="tip">
+  在以下情况使用 `flow { def }`：
+  - 步骤的数量或形状依赖于你只能在运行时发现的上游结果。
+  - 你希望一个模型编写计划，另一个模型执行计划。
+  - 你需要由工作本身的反馈驱动的迭代重规划。
+</Callout>
+
+当结构事先已知时，改用静态编写的 DAG。动态规划用人工审查图的安全性换取模型生成图的灵活性——在灵活性值得其代价的地方使用它。
+
+## 下一步
+
+<Cards>
+  <Card title="锦标赛选择" href="/zh-cn/docs/guides/tournament">
+    生成竞争变体并让评委选出最佳。
+  </Card>
+  <Card title="Loop 阶段" href="/zh-cn/docs/syntax/phase-types">
+    `loop` 阶段的完整参考及其安全保证。
+  </Card>
+  <Card title="Flow 阶段" href="/zh-cn/docs/syntax/phase-types">
+    `flow` 阶段、`use` 和 `def` 的参考。
+  </Card>
+</Cards>

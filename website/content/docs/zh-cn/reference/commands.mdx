@@ -5,61 +5,142 @@ description: Pi 斜杠命令和 Codex MCP 工具。
 
 # 命令
 
+taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/tf run` 和 `/tf:review-changes` 这样的斜杠命令。在 **Codex**（以及 Claude Code、OpenCode）上，相同的操作是模型调用的 MCP 工具——`taskflow_run`、`taskflow_list` 等等。
+
+本页是两者的分组参考。每个命令有一行用途说明，并在有用处时给出具体示例。如果你只想略读，跳到末尾的[示例会话](#示例会话)。
+
 <Callout type="info">
-  在 Pi 上，已保存的 flow 变成 CLI 快捷方式。在 Codex 上，相同的操作通过 MCP 工具暴露。
+  已保存的 flow 在 Pi 上变成 CLI 快捷方式（`/tf:<name>`）。在 MCP 宿主上，你通过 `taskflow_run` 按名称运行已保存的 flow。
 </Callout>
 
 ## Pi `/tf` 命令
 
-在 Pi 上，已保存的 flow 变成 CLI 快捷方式。
+`/tf` 命令是 Pi 上面向用户的界面。它的子命令分为四组。
+
+### 运行
 
 | 命令 | 说明 |
 |---|---|
-| `/tf list` | 列出已保存 flow。 |
-| `/tf run <name> [args]` | 运行已保存 flow。 |
-| `/tf show <name>` | 打印 flow 定义。 |
-| `/tf compile <name> [lr\|td]` | 渲染 Mermaid 图。 |
-| `/tf verify <name>` | 静态检查 flow。 |
-| `/tf runs` | 浏览运行历史。 |
-| `/tf resume <runId>` | 继续运行。 |
-| `/tf init` | 配置模型角色。 |
-| `/tf:<name> [args]` | 快捷方式。 |
+| `/tf run <name> [args]` | 运行已保存的 flow，可选地以 `key=value` 对或 JSON 传入参数。 |
+| `/tf:<name> [args]` | 快捷方式——等价于 `/tf run <name> [args]`。为每个已保存的 flow 注册。 |
+| `/tf resume <runId>` | 从停止处续跑一个暂停或失败的运行。 |
 
-### 工具动作
+### 查看
 
-模型可以使用这些 `taskflow` 工具动作：
-
-| 动作 | 说明 |
+| 命令 | 说明 |
 |---|---|
-| `run` | 内联或已保存 flow。 |
-| `save` | 持久化 flow。 |
-| `resume` | 按 runId 续跑。 |
-| `list` | 列出 flow。 |
+| `/tf list` | 列出本项目所有已保存的 flow。 |
+| `/tf show <name>` | 打印一个已保存 flow 的完整 JSON 定义。 |
+| `/tf runs` | 浏览最近的运行历史（最近 50 条），并选一个来查看或续跑。 |
+| `/tf peek <runId> [phaseId]` | 查看一个已存储运行的中间阶段输出（事后调试）。支持 `--json`、`--item <n>`、`--limit <chars>`。 |
+
+### 验证与分析
+
+| 命令 | 说明 |
+|---|---|
+| `/tf verify <name>` | 静态验证一个 flow——循环、缺失依赖、死胡同——零 token 成本。 |
+| `/tf compile <name> [lr\|td]` | 把 DAG 渲染为 Mermaid 图（`lr` = 从左到右，`td` = 从上到下）。 |
+| `/tf ir <name>` | 编译为 FlowIR + 内容哈希（增量重算的中间产物）。 |
+| `/tf provenance <runId>` | 显示一个运行观察到的读集合来源。 |
+| `/tf why-stale <runId> [phaseId]` | 解释为什么一个缓存的运行已过期——哪个 fingerprint 输入变了。 |
+| `/tf recompute <runId> <phaseId> [--apply]` | 最小化地重算一个过期阶段。默认是安全的 dry-run；`--apply` 花 token。 |
+
+### 生命周期
+
+| 命令 | 说明 |
+|---|---|
+| `/tf save` | 把最近的内联 flow 定义保存到一个名称下（让 `/tf:<name>` 立即可用）。 |
+| `/tf init` | 配置模型角色——把内置 agent 角色映射到你的模型。 |
+
+<Callout type="tip">
+  `peek`、`provenance`、`why-stale` 和 `recompute` 是调试工具包。当一个运行做了意料之外的事、你需要在不重跑的情况下看*为什么*时使用它们。
+</Callout>
+
+## `taskflow` 工具（Pi）
+
+在 Pi 上，模型也可以直接调用一个 `taskflow` 工具。它接受一个 `action` 加参数。这些 action 与 `/tf` 子命令对应，并加上几个模型内部使用的：
+
+| Action | 说明 |
+|---|---|
+| `run` | 运行内联或已保存的 flow。 |
+| `save` | 持久化一个 flow 定义。 |
+| `resume` | 按 `runId` 续跑。 |
+| `list` | 列出已保存的 flow。 |
+| `agents` | 列出内置 agent。 |
 | `verify` | 静态检查。 |
-| `compile` | Mermaid 图。 |
-| `ir` / `provenance` / `why-stale` / `recompute` | 增量重算。 |
-| `cache-clear` | 清除跨运行缓存。 |
-| `init` | 模型角色。 |
+| `compile` | Mermaid 图 + 验证报告。 |
+| `ir` / `provenance` / `why-stale` / `recompute` | 增量重算工具包。 |
+| `cache-clear` | 清除跨运行记忆化缓存。 |
+| `init` | 配置模型角色。 |
 
-## Codex MCP 工具
+## Codex / Claude / OpenCode MCP 工具
 
-在 Codex 上，taskflow 暴露以下 MCP 工具：
+在 MCP 宿主上，taskflow 暴露这些工具（模型调用它们；你通常不输入它们）：
 
 | 工具 | 说明 |
 |---|---|
-| `taskflow_run` | 运行已保存或内联 flow。 |
-| `taskflow_list` | 列出已保存 flow。 |
-| `taskflow_show` | 显示 flow JSON。 |
-| `taskflow_verify` | 静态检查。 |
-| `taskflow_compile` | 渲染 DAG 图。 |
+| `taskflow_run` | 运行内联或已保存的 flow；返回最终输出和一个 `runId`。 |
+| `taskflow_list` | 列出在此目录下可发现的已保存 flow。 |
+| `taskflow_show` | 打印一个已保存 flow 的定义。 |
+| `taskflow_verify` | 静态验证一个 flow（不执行）。 |
+| `taskflow_compile` | 把 flow 渲染为 DAG 图（SVG 图像）加一行状态。 |
+| `taskflow_peek` | 查看一个已存储运行的某个阶段的中间输出（事后调试）。 |
+
+<Callout type="info">
+  在 MCP 宿主上没有 `/tf` 斜杠命令——你用自然语言描述工作，模型调用 `taskflow_run`。当你需要查看中间输出时，使用 `taskflow_peek` 配合 `taskflow_run` 返回的 `runId`。
+</Callout>
+
+## 示例会话
+
+一个在 Pi 上从首次运行到调试的现实会话：
+
+```bash title="编写并验证一个 flow"
+/tf verify review-changes
+```
+
+Verify 在任何 token 花费之前捕获一个循环和一个缺失的 `dependsOn`。修正 JSON，然后运行它：
+
+```bash title="带参数运行 flow"
+/tf run review-changes dir=src
+```
+
+运行完成并返回最终摘要。你喜欢它，所以保存它：
+
+```bash title="保存为快捷方式"
+/tf save review-changes
+```
+
+从现在起，快捷方式可用：
+
+```bash title="运行已保存的 flow"
+/tf:review-changes dir=src
+```
+
+几天后摘要看起来过期了。在不重跑的情况下检查原因：
+
+```bash title="诊断过期"
+/tf runs
+/tf why-stale <runId> summary
+```
+
+`why-stale` 报告自缓存运行以来 `git:HEAD` 变了。只重算那个阶段：
+
+```bash title="最小化重算过期阶段"
+/tf recompute <runId> summary --apply
+```
+
+只有 `summary` 重跑；flow 的其余部分从缓存复用。
 
 ## 下一步
 
 <Cards>
   <Card title="简写" href="/zh-cn/docs/reference/shorthand">
-    `task`、`tasks`、`chain`。
+    `task`、`tasks`、`chain`——快速委托快捷方式。
   </Card>
   <Card title="开始使用" href="/zh-cn/docs/getting-started">
-    运行第一个 taskflow。
+    运行你的第一个 taskflow。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    跨运行记忆化和 `why-stale` / `recompute` 工具包。
   </Card>
 </Cards>

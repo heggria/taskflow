@@ -1,75 +1,183 @@
 ---
 title: 验证
-description: taskflow 如何在消耗 token 之前验证 DAG。
+description: taskflow 如何在花 token 之前验证一张 DAG。
 ---
 
 # 验证
 
-<Callout type="info">
-  taskflow 的核心承诺之一是运行时**在消耗任何 token 之前**验证图。
-</Callout>
+你正要跑一个 fan-out 五百个文件的 flow。按下回车之前，一个合理的问题是：*你怎么知道它不会死循环、引用一个不存在的阶段、或者花一个小时才发现最后一步里有个笔误？*
 
-taskflow 的核心承诺之一是运行时**在消耗任何 token 之前**验证图。
+taskflow 在花任何一个 token 之前回答这个问题。`verify` 动作对你的 flow 定义跑一遍静态分析——不启动任何 agent、不跑任何模型、不碰网络。它是"我写了点 JSON"和"我要为一百次子代理调用付钱"之间的安全网。
 
-## 检查内容
+## 这张安全网
 
-`verify` 动作（或 `/tf verify`）对 flow 定义进行静态分析：
+随时都能跑，对已保存的 flow 或内联定义都行：
 
-### 1. DAG 形状
-
-- **循环** — 阶段不能传递依赖自身。
-- **死胡同** — 每个阶段必须被下游引用或标记为 `final`。
-- **不可达阶段** — 没有任何依赖且不是 `final` 的阶段。
-
-### 2. 引用
-
-- **未定义的 `dependsOn`** — `dependsOn` 中的每个 id 都必须存在。
-- **悬空插值** — `{steps.X.*}` 引用需要 `dependsOn: ["X"]`。
-- **缺失参数** — 开启 `strictInterpolation` 时，未解析的 `{args.X}` 是硬错误。
-
-### 3. 契约
-
-- **JSON 输出** — `output: "json"` 阶段可声明 `expect` 模式。
-- **Gate 裁决** — 检查 gate 阶段的评分配置是否有效。
-- **预算** — `budget.maxUSD` 和 `budget.maxTokens` 必须是正数。
-
-### 4. 安全上限
-
-对于 LLM 生成的动态子流程（`flow {def}`）：
-
-- 最多 100 个阶段。
-- 最多 200 个 map 项目。
-- 最多 5 层嵌套。
-- `cwd` 限制。
-- 原型污染防护。
-
-## 示例
-
-```bash title="验证 flow"
-/tf verify my-flow
+```bash title="验证一个已保存的 flow"
+/tf verify review-changes
 ```
 
-输出：
+```bash title="验证一个内联 flow"
+/tf verify define='{ "name": "hello", "phases": [{ "id": "greet", "type": "agent", "task": "Say hi." }] }'
+```
+
+验证分两个阶段。第一个验证你定义的**schema 和结构**——每个字段的形状、每个引用是否存在、有没有循环。如果通过了，第二个对 DAG 本身跑一组**图分析** pass：死胡同、不可达阶段、能把整次运行困住的 gate。
+
+两个阶段都是纯函数。它们只花一点 CPU。
+
+## 那个经典错误
+
+下面这个 flow 一眼看去是对的。仔细读 `report` 阶段：
+
+```json title="review-broken.json"
+{
+  "name": "review-broken",
+  "phases": [
+    {
+      "id": "audit",
+      "type": "agent",
+      "task": "Audit src/ for security risks."
+    },
+    {
+      "id": "report",
+      "type": "agent",
+      "task": "Summarize the audit:\n{steps.audit.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+`report` 插值了 `{steps.audit.output}`，但它从没声明 `"dependsOn": ["audit"]`。没有这条边，运行时把两个阶段当作独立的：`report` 和 `audit` 并行跑，看到的是字面字符串 `{steps.audit.output}`，把一个占位符而不是结果交给模型。这是最常见的编写错误，而且运行时是静默的——模型对着垃圾输入尽力而为。
+
+验证在任何东西跑之前抓住它：
 
 ```txt title="验证输出"
-✗ verification FAILED — 1 error, 0 warnings
-
-error: Phase 'report' 引用 {steps.audit.output} 但 'audit' 不在 dependsOn 中
+Schema validation failed:
+Phase 'report': task references {steps.audit.*} but 'audit' is not
+reachable via dependsOn. The phase will run in parallel with 'audit'
+and see the literal placeholder. Add "dependsOn": ["audit"] (or include
+'audit' transitively).
 ```
 
-## 验证与运行时错误
+修法就是报错建议的那一行：
 
-<Callout type="warn">
-  验证捕获**结构性**问题。它不能捕获子代理生成错误内容、JSON 模式过于宽松或 gate agent 意外阻塞等运行时问题。这些运行时问题通过 `retry`、`optional` 和 `onBlock` 处理。
+```json title="review-fixed.json"
+{
+  "id": "report",
+  "type": "agent",
+  "task": "Summarize the audit:\n{steps.audit.output}",
+  "dependsOn": ["audit"],
+  "final": true
+}
+```
+
+可达性检查是传递的。如果 `report` 依赖 `summarize`，而 `summarize` 依赖 `audit`，那么 `report` 可以自由引用 `{steps.audit.output}`——验证会顺着链条走。
+
+<Callout type="tip">
+  例外是 `join: "any"`。一个只需要其依赖中*一个*完成的阶段，可以把其他阶段作为信息性上下文引用，所以它豁免于可达性规则。
 </Callout>
+
+## schema 阶段抓住什么
+
+第一阶段是绝大多数日常错误浮现的地方。它在图 pass 之前检查定义是否良构：
+
+- **循环**——一个阶段不能传递依赖自身。用拓扑排序检测；报错会点名这条环。
+- **重复 id**——两个阶段共用一个 id 会在 step map 里静默互相覆盖。
+- **未知阶段类型**——把 `"type": "map"` 写错（其实你想写 `"map"`）会被拒绝。
+- **缺失引用**——`dependsOn` 和 `from` 里的每个 id 都必须存在。
+- **插值损坏**——`{steps.X.*}` 引用必须能通过 `dependsOn` 到达，如上所示。
+- **按类型的要求**——`map` 需要 `over` 和 `task`；`parallel` 需要 `branches`；`reduce` 需要 `from` 和 `task`；`flow` 需要 `use` 或 `def` 之一；`loop` 需要 `task` 和 `until`。
+- **多个 final**——至多一个阶段可带 `final: true`。
+- **契约和缓存形状**——`expect` 要求 `output: "json"`；缓存 fingerprint 必须用已知前缀；retry 和 timeout 值必须在范围内。
+- **命名**——阶段 id 和 agent 名用连字符而非下划线，这样 `{steps.audit-each.output}` 才能保持一致。
+
+这些里任何一个失败，验证就停在这里。你会拿到所有问题的列表，而不是只有第一个。
+
+## 图阶段抓住什么
+
+当 schema 干净时，验证转向 DAG 本身。这些是更微妙的问题——一个 flow 可以*合法*但仍然*出乎意料*。
+
+### 死胡同
+
+一个没有依赖者、又没标记 `final` 的阶段，算出一个没人读的结果：
+
+```txt title="死胡同警告"
+Phase 'draft' is a terminal phase (no dependents) but not marked as
+'final'. Its output will be discarded. Add "final": true or a
+downstream phase that depends on it.
+```
+
+这是警告，不是错误——运行仍能工作——但它几乎总是意味着你忘了 `final: true` 或一条 `dependsOn` 边。
+
+### 不可达阶段
+
+如果一个阶段被接进图里却和主 DAG 断开，它永远跑不了：
+
+```txt title="不可达错误"
+Phase 'cleanup' is disconnected from the main DAG. Add a 'dependsOn'
+edge to connect it, or remove it.
+```
+
+一个完全没有边的独立阶段是没问题的——它是一个合法的独立入口。只有那些*有*边却待在自己断开连通分量里的阶段才会被标记。
+
+### 能困住你的 gate
+
+一个 `gate` 或 `approval` 是到达 final 阶段的**唯一路径**时是危险的。一旦它 block，整次运行就停住，没有替代路径：
+
+```txt title="gate 耗尽警告"
+Gate 'verify' is the sole path to final phase(s) 'ship'. A block here
+halts the entire flow with no alternative route. Consider adding a
+bypass or marking the flow's structure as intentional.
+```
+
+验证还会标记**守卫矛盾**：两个阶段有相同依赖却带对立的 `when` 条件（`==` 对 `!=`），保证其中一条分支永远不跑。有时这是故意的；验证只是想让你确认。
+
+### 预算现实检查
+
+如果你设了 `budget`，验证估算跑每个阶段的最低成本，并在上限低于它时警告：
+
+```txt title="预算溢出警告"
+Budget cap (50000 tokens) is below the estimated minimum of ~120 tokens
+for 120 phase(s). The flow will likely be truncated before completion.
+```
+
+loop 和 tournament 按其预期迭代/变体数计算，所以一个 `maxIterations: 6` 的 `loop` 不会被当作单次调用。
+
+<Callout type="info">
+  验证抓住**结构性**问题。它无法告诉你一个子代理会不会产出*正确*内容、一个 JSON schema 是否过宽、或一个 gate agent 会不会意外 block。这些运行时关注点由 `retry`、`optional` 和 `onBlock` 处理——见[控制流](/zh-cn/docs/syntax/control-flow)参考。
+</Callout>
+
+## 当 flow 由 LLM 生成时
+
+有些 flow 是手写并经人审查的。另一些由 `flow { def }` 阶段在运行时生成——一个 LLM 撰写子流程，使它的内容不可信。
+
+对那些生成的子流程，验证施加了第二层加固，是手写 flow 永远看不到的。一个模型发出失控图的爆炸半径是有界的：
+
+- 每个子流程至多 **100 个阶段**。
+- 每次 fan-out 至多 **200 个 map 条目**。
+- 至多 **16 个**并发子代理。
+- 至多 **5 层**嵌套子流程。
+- `cwd` 必须留在运行目录内——不能逃到兄弟或父目录。
+- 不允许 `script` 阶段（shell 执行对模型来说太强）。
+- 不允许 `code-compiles` 或 `regex` 评分 gate 类型（编译器执行和 ReDoS 风险）。
+
+这些都不适用于你自己写的 flow。它存在 solely 是为了让一个生成的计划不会——不管有意还是恶意——DoS 你的机器。
+
+## 把它纳入你的循环
+
+验证便宜到可以在每次保存时跑。很多团队把 `/tf verify` 接进 pre-commit 钩子或 CI 步骤，让一个坏 flow 永远到不了运行。零 token 保证意味着不跑它没有理由。
 
 ## 下一步
 
 <Cards>
   <Card title="语法参考" href="/zh-cn/docs/syntax/flow-definition">
-    影响验证的字段。
+    验证检查的每个字段，集中在一处。
   </Card>
   <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
-    生成的子流程也会被验证。
+    生成的子流程如何被验证和沙箱化。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    运行时安全网：retry、optional 和 onBlock。
   </Card>
 </Cards>
