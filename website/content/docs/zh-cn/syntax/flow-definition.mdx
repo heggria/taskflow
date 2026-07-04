@@ -1,78 +1,58 @@
 ---
 title: 流程定义
-description: 定义 taskflow 的顶层字段。
+description: 把阶段包成一个 taskflow 的顶层字段。
 ---
 
 # 流程定义
 
-**流程定义**是一个 JSON 对象，声明一个多阶段工作流：其名称、调用参数、执行调参、成本上限，以及通过 `dependsOn` 构成 DAG 的有序阶段数组。每个 taskflow —— 无论保存到磁盘还是以简写内联传入 —— 都会被反糖化为 `TaskflowSchema` 验证的相同结构。
+**流程定义**是一个 JSON 对象，声明一个多阶段工作流：它的名字、它接受的参数、它该多激进地并行、它被允许花多少钱，以及构成其 DAG 的有序阶段数组。每个 taskflow —— 无论保存到磁盘还是作为一行内联传入 —— 都会先被反糖化为同一形状，再由运行时校验和执行。
 
-<Callout type="info">
-  结构上只有 `phases` 是必需的（保存的 flow 还需 `name`）。其他一切都是行为调参。简写规范（`task` / `tasks` / `chain`）完全省略 `phases`，在验证前被反糖化为完整 DAG。
-</Callout>
+你可能在想：*这些字段我都得用吗？* 不用。结构上只有 `phases` 是必需的（保存的 flow 还要 `name`）。其余字段都是行为调参 —— 并发、成本上限、缓存默认值、严格度。本页按你实际会需要它们的顺序逐一介绍，详尽的参考材料放在最后。
 
-flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远不会生成子代理。
+## 快速心智模型
 
-## 顶层字段参考
+一个 flow 只是个容器。它装着元数据、几个执行调参，以及一个阶段列表。阶段干真正的活；容器决定它们*怎么*跑。
 
-| 字段 | 类型 | 默认值 | 必需 | 说明 |
-|---|---|---|---|---|
-| `name` | `string`（`minLength: 1`） | — | **是**（保存的 flow） | 工作流标识符。保存后成为 `/tf:<name>` 命令，也是运行记录目录名。必须非空。 |
-| `description` | `string` | — | 否 | 人类可读摘要。出现在 `/tf list` 和运行记录中。 |
-| `version` | `number` | `1` | 否 | Schema/flow 版本标签，用于作者追踪。运行时不强制。 |
-| `args` | `Record<string, ArgSpec>` | — | 否 | 带默认值的已声明调用参数。见 [`args`](#args)。 |
-| `concurrency` | `number` | `8` | 否 | 默认最大并发子代理数。被未设自身 `concurrency` 的 `map` / `parallel` 阶段继承。 |
-| `budget` | `Budget` | — | 否 | 运行级成本/token 上限。见 [`budget`](#budget)。 |
-| `agentScope` | `"user" \| "project" \| "both"` | `"user"` | 否 | 发现 agent 的位置。见 [`agentScope`](#agentscope)。 |
-| `strictInterpolation` | `boolean` | `false` | 否 | 将验证警告（运行时缺失 `{args.X}`、cwd/codebase 不匹配、被忽略字段）提升为硬错误。见[验证行为](#验证行为)。 |
-| `contextSharing` | `boolean` | `false` | 否 | 为**所有**阶段启用共享上下文树（等价于每个阶段都设 `shareContext: true`）。个别阶段仍可退出。 |
-| `incremental` | `boolean` | `false` | 否 | 将每个阶段默认为 `cache.scope: "cross-run"`，使跨会话重跑复用未变阶段。见 [`incremental`](#incremental)。 |
-| `phases` | `Phase[]`（`minItems: 1`） | — | **是** | 有序阶段定义。DAG 由每个阶段的 `dependsOn` 构成。见[阶段类型](/zh-cn/docs/syntax/phase-types)。 |
+```json title="最小形状"
+{
+  "name": "my-flow",
+  "phases": [
+    { "id": "do", "type": "agent", "task": "...", "final": true }
+  ]
+}
+```
 
-### `ArgSpec`
+下面的一切都是在这个形状上做加法。运行时在生成任何子代理之前先校验整个对象 —— 非法 flow 永远不会花你一个 token。
 
-`args` 中的每个条目是含以下字段的对象：
+## 一个贯穿始终的示例
 
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `default` | `unknown` | — | 运行时未提供该参数时使用的值。类型不被 schema 强制 —— 插值需谨慎。 |
-| `description` | `string` | — | 人类可读的参数文档。 |
-| `required` | `boolean` | — | 作者声明的必需标志。（运行时在缺失时应用 `default`；`required` 是建议性元数据。） |
+我们会逐步构建一个真实的 flow —— **审计一个目录的路由是否缺认证检查** —— 一块一块来。每一节加一个顶层字段并解释你为什么会需要它。完整的 flow 出现在本页末尾。
 
----
+## 名字与描述
 
-## `name`
+每个保存的 flow 都需要一个 `name`。它会成为 `/tf:<name>` 命令别名和运行状态目录名。`description` 是可选的，但值得加 —— 它会出现在 `/tf list` 和运行记录里。
 
-**保存的 flow 必需。** 非空字符串（`minLength: 1`），用于 `/tf run <name>`、`/tf:<name>` 命令别名和运行状态目录。省略 `name` 的内联/简写 flow 会得到合成的回退名（`"task"`、`"parallel"` 或 `"chain"`）。
-
-```json title="name-基础.json"
+```json title="给 flow 命名"
 {
   "name": "audit-auth",
+  "description": "Audit routes for missing auth checks",
   "phases": [/* ... */]
 }
 ```
 
 <Callout type="warn">
-  缺失或空的 `name` 是硬验证错误：`Missing or invalid 'name'`。这在任何阶段验证之前检查。
+  缺失或为空的 `name` 是一个硬校验错误（`Missing or invalid 'name'`），在任何阶段校验之前就会检查。省略 `name` 的内联简写 flow 会得到一个合成的回退名（`"task"`、`"parallel"` 或 `"chain"`）。
 </Callout>
 
----
+## 声明你的参数：`args`
 
-## `description`
+大多数可复用的 flow 都接受参数 —— 一个目录、一个严重程度阈值、一个 feature flag。在 `args` 里声明它们，运行时就能应用默认值并给它们做文档。每个 arg 是一个对象，带可选的 `default`、`description` 和建议性的 `required` 标志。
 
-可选的人类可读字符串。不被解析或强制 —— 纯粹用于 `/tf list`、运行记录和文档。
-
----
-
-## `args`
-
-已声明的调用参数。每个参数可带 `default`、`description` 和建议性 `required` 标志。运行时，`resolveArgs` 将已声明默认值应用到提供的值上，然后透传任何额外提供的键（因此调用者也可提供未声明的参数）。
-
-```json title="args-带默认值.json"
+```json title="声明带默认值的 args"
 {
   "name": "audit",
   "args": {
-    "dir": { "default": "src/routes", "description": "要审计的目录" },
+    "dir": { "default": "src/routes", "description": "Directory to audit" },
     "force": { "default": false },
     "severity": { "default": "high", "required": true }
   },
@@ -86,78 +66,49 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
 /tf run audit dir=src/api force=true
 ```
 
-在任意阶段用 `{args.<name>}` 插值参数：
+然后在任意阶段里用 `{args.<name>}` 插值：
 
-```json title="args-插值.json"
+```json title="插值一个 arg"
 {
   "id": "scan",
   "type": "agent",
-  "task": "扫描 {args.dir} 中缺失的认证检查。"
+  "task": "Scan {args.dir} for missing auth checks."
 }
 ```
 
-### 验证行为
-
 <Callout type="tip">
-  声明 `args` 是可选的。运行时传入的未声明参数仍可通过 `{args.X}` 访问 —— 只是没有默认值。声明它们可获得默认值和文档。
+  声明 `args` 是可选的。运行时传入的未声明参数仍可通过 `{args.X}` 访问 —— 只是没有默认值。声明它们能给你默认值、文档，以及更清晰的校验信息。
 </Callout>
 
-当 flow **带**已解析调用参数验证时（即在运行启动时，而非静态 `/tf verify`），一个没有匹配提供值**且**没有默认值的 `{args.X}` 引用会产生警告：
+你可能在想：如果一个阶段引用了 `{args.X}`，但调用方没传 `X` 也没有默认值，会怎样？默认情况下占位符保持字面值，运行时发一条警告。在 `strictInterpolation: true` 下（见[安全网](#安全网-strictinterpolation)），那条警告会变成硬错误 —— 对生产 flow 很有用，因为字面的 `{args.X}` 漏进 prompt 是个 bug，不是个意外。
 
-> `Taskflow references {args.X} but the invocation did not provide 'X'. The placeholder will remain literal unless a default or runtime arg is supplied.`
+## 控制并行度：`concurrency`
 
-在 `strictInterpolation: true` 下，此警告变为硬错误。
+`concurrency` 是整个 flow 中同时跑多少个子代理的默认上限。默认值 `8`。`map` 和 `parallel` 阶段会继承它，除非它们设了自己的阶段级 `concurrency`。
 
----
-
-## `concurrency`
-
-整个 flow 的默认最大并发子代理数。被未设阶段级 `concurrency` 的 `map` 和 `parallel` 阶段继承。默认 `8`。
-
-```json title="concurrency-flow.json"
+```json title="flow 级 vs 阶段级并发"
 {
   "name": "fanout",
   "concurrency": 16,
   "phases": [
-    { "id": "scan", "type": "map", "over": "{steps.discover.json}", "task": "...", "concurrency": 4 }
+    {
+      "id": "scan",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "task": "...",
+      "concurrency": 4
+    }
   ]
 }
 ```
 
-上面阶段级 `concurrency: 4` 仅对该阶段覆盖 flow 级的 `16`。
+上面阶段级的 `concurrency: 4` 只对该阶段覆盖 flow 级的 `16`。
 
----
+## 给成本封顶：`budget`
 
-## `agentScope`
+有些 flow 是开放式的 —— 一个深度调研 loop、一个有很多变体的 tournament。`budget` 让你设一个运行级的 USD 成本和/或 token 用量上限。任一超出时，剩余阶段被**跳过**，运行以 `blocked` 状态结束。
 
-控制运行时在何处发现 agent 定义（带 YAML frontmatter 的 `.md` 文件）。
-
-| 取值 | 搜索路径 | 冲突规则 |
-|---|---|---|
-| `"user"`（默认） | `~/.pi/agent/agents/*.md` | — |
-| `"project"` | `.pi/agents/*.md` | — |
-| `"both"` | user，然后 project | 名称冲突时**project 优先** |
-
-```json title="agentscope-project.json"
-{
-  "name": "team-flow",
-  "agentScope": "both",
-  "phases": [/* ... */]
-}
-```
-
----
-
-## `budget`
-
-运行级成本上限。`Budget` 对象含两个可选上限：
-
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `maxUSD` | `number` | 累计成本超过此美元数时停止运行。 |
-| `maxTokens` | `number` | 累计输入+输出 token 超过此值时停止运行。 |
-
-```json title="budget-定义.json"
+```json title="设置预算"
 {
   "name": "capped-run",
   "budget": {
@@ -168,43 +119,35 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
 }
 ```
 
-当任一上限被超出时，剩余阶段被**跳过**，运行以 `blocked` 状态结束。已运行的子代理不会在调用中途被中断；上限在阶段之间检查。
-
 <Callout type="info">
-  两个字段都可选。设置其一或两者。`0` 的预算被视为"立即超出" —— 仅对干结构检查有用。
+  两个字段都可选 —— 设其一或都设。已经在跑的子代理不会在调用中途被中断；上限是在阶段**之间**检查的。`0` 的预算会被当作"立即超出"，只对干跑结构检查有用。
 </Callout>
 
----
+## agent 从哪来？`agentScope`
 
-## `strictInterpolation`
+阶段按名字引用 agent（`"agent": "security-reviewer"`）。运行时在三种作用域之一里发现 agent 定义（带 YAML frontmatter 的 `.md` 文件）：
 
-一个布尔值（默认 `false`），控制验证如何处理非致命问题。
-
-<Callout type="warn">
-  `strictInterpolation` **不**控制硬性 `{steps.X}` 可达性检查 —— 那始终是硬错误。它只把*警告*提升为错误。
-</Callout>
-
-### 始终为硬错误的部分（与该标志无关）
-
-- `{steps.X.*}` 引用中 `X` 无法经 `dependsOn` / `from`（传递地）到达。该阶段会与其生产者并行运行并看到字面占位符。
-- 阶段通过 `{steps.<self>.*}` 引用自身输出（`loop` 阶段除外，它在 `until` 中合法地这样做）。
-- 未知的 `dependsOn` / `from` 目标。
-- 依赖环。
-- 重复的阶段 id。
-- 多于一个 `final: true` 阶段。
-
-### 仅在 `strictInterpolation: true` 下变为硬错误的部分
-
-| 警告 | 默认 | 在 `strict` 下 |
+| 取值 | 搜索路径 | 冲突规则 |
 |---|---|---|
-| 引用了 `{args.X}` 但运行时未提供（且无默认值） | 警告 | **错误** |
-| 调用 `cwd` 与 `args.codebase` 不匹配 | 警告 | **错误** |
-| 仅 loop 适用的字段（`until`、`maxIterations`、`convergence`）设在非 loop 阶段 | 警告（忽略） | **错误** |
-| `idempotent: false` 在 `approval` / `flow` 上是空操作 | 警告 | **错误** |
-| `idempotent: false` 覆盖 `cache.scope: "cross-run"` | 警告 | **错误** |
-| gate 上同时设 `eval` 和 `score` | 警告 | **错误** |
+| `"user"`（默认） | `~/.pi/agent/agents/*.md` | — |
+| `"project"` | `.pi/agents/*.md` | — |
+| `"both"` | user，然后 project | 名称冲突时 **project 优先** |
 
-```json title="strict-开启.json"
+```json title="同时用两个作用域"
+{
+  "name": "team-flow",
+  "agentScope": "both",
+  "phases": [/* ... */]
+}
+```
+
+当你有共享的用户级 agent、但想让某个项目覆盖其中几个时，用 `"both"`。
+
+## 安全网：`strictInterpolation`
+
+默认情况下，taskflow 对非致命问题是宽松的 —— 它警告并继续。打开 `strictInterpolation` 把这些警告提升为硬错误。对保存的、生产用的 flow 这是对的取舍：它能在一次运行浪费 token *之前*抓住静默的占位符泄漏和过时字段引用。
+
+```json title="开启严格模式"
 {
   "name": "production-flow",
   "strictInterpolation": true,
@@ -212,23 +155,58 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
 }
 ```
 
-<Callout type="tip">
-  推荐用于已保存/生产 flow：它在运行浪费 token 之前捕获静默占位符泄漏和过时字段引用。
-</Callout>
-
----
-
-## `contextSharing`
-
-一个布尔值（默认 `false`），将 flow 中的**每个**阶段纳入共享上下文树。这等价于在每个阶段单独设 `shareContext: true` —— 阶段仍可通过设 `shareContext: false` 退出。
-
-启用后，每个阶段的子代理获得 `ctx_read` / `ctx_write`（与兄弟和祖先共享的 blackboard，避免重复读文件）以及 `ctx_report` / `ctx_spawn`（向上报告 + 排队运行时拾取的子任务）。
-
 <Callout type="warn">
-  当上下文共享激活时（经此标志或阶段级 `shareContext`），阶段 id 成为文件系统节点 id，必须匹配 `[A-Za-z0-9._-]+`。两个清理后相同的 id 会静默合并其 blackboard —— 这作为硬错误强制执行。
+  `strictInterpolation` **不**控制那个硬性的 `{steps.X}` 可达性检查 —— 那始终是硬错误。它只把*警告*提升为错误。
 </Callout>
 
-```json title="contextsharing-开启.json"
+始终是硬错误的部分（与该标志无关）：
+
+- `{steps.X.*}` 中 `X` 无法经 `dependsOn`/`from` 到达（阶段会和它的生产者并行跑，看到字面占位符）。
+- 阶段引用自身输出（`loop` 阶段除外，它在 `until` 里合法地这样做）。
+- 未知的 `dependsOn` / `from` 目标、依赖环、重复的阶段 id、多于一个 `final: true`。
+
+仅在 `strictInterpolation: true` 下才变成硬错误的部分：
+
+| 警告 | 默认 | 在 `strict` 下 |
+|---|---|---|
+| 引用了 `{args.X}` 但未提供（且无默认值） | 警告 | **错误** |
+| 调用 `cwd` 与 `args.codebase` 不匹配 | 警告 | **错误** |
+| 仅 loop 用的字段（`until`、`maxIterations`、`convergence`）出现在非 loop 阶段 | 警告（忽略） | **错误** |
+| `idempotent: false` 在 `approval` / `flow` 上是空操作 | 警告 | **错误** |
+| `idempotent: false` 覆盖 `cache.scope: "cross-run"` | 警告 | **错误** |
+| gate 上同时设了 `eval` 和 `score` | 警告 | **错误** |
+
+## 跨运行复用工作：`incremental`
+
+默认情况下，每次运行都从零开始 —— 每个阶段都重新执行，哪怕什么都没变。设 `incremental: true` 把每个阶段默认为跨运行缓存（`cache.scope: "cross-run"`），这样重新跑 flow 时会跨运行和跨会话复用未变阶段的结果。
+
+```json title="增量 flow"
+{
+  "name": "ci-audit",
+  "incremental": true,
+  "phases": [
+    { "id": "lint", "type": "script", "run": "npm run lint" },
+    { "id": "review", "type": "agent", "task": "Review recent changes." }
+  ]
+}
+```
+
+关于 `incremental` 与阶段级设置如何交互，有几条规则：
+
+- 它等价于在每个阶段上设 `cache: { scope: "cross-run" }`。
+- 阶段自己的 `cache` 设置**优先** —— `cache.scope: "off"` 或 `"run-only"` 仍被尊重。
+- 被跨运行阻止的阶段类型（`gate`、`approval`、`loop`、`tournament`、`script`）即使在 `incremental` 下也**永不**跨运行缓存 —— 它们每次运行都必须产出新结果。在上面的例子里，`lint` 尽管 `incremental` 仍每次调用都重跑；`review` 会被缓存。
+- `idempotent: false` 的阶段完全排除在缓存之外。在 `incremental` 下这会产生一条警告，让你知道该阶段不会被复用。
+
+<Callout type="info">
+  运行时的 `incremental` 参数（调用时传入）会覆盖 flow 声明的值，让你无需改 flow 就能强制一次全新或增量运行。
+</Callout>
+
+## 在阶段间共享上下文：`contextSharing`
+
+当多个阶段读同样的文件时，你可以用一个标志把它们统统纳入共享上下文树。`contextSharing: true` 是在每个阶段上设 `shareContext: true` 的简写 —— 每个阶段的子代理会得到 `ctx_read`/`ctx_write`（一个与兄弟和祖先共享的 blackboard）以及 `ctx_report`/`ctx_spawn`（向上汇报 + 排队子任务）。个别阶段仍可用 `shareContext: false` 退出。
+
+```json title="开启上下文共享"
 {
   "name": "collab-flow",
   "contextSharing": true,
@@ -239,217 +217,88 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
 }
 ```
 
----
-
-## `incremental`
-
-一个布尔值（默认 `false`），将每个阶段默认为跨运行缓存（`cache.scope: "cross-run"`），使重跑 flow 时复用跨运行和跨会话未变的阶段结果。
-
-### 如何与阶段级设置交互
-
-- 等价于在每个阶段设 `cache: { scope: "cross-run" }`。
-- 阶段自身的 `cache` 设置**优先** —— `cache.scope: "off"` 或 `"run-only"` 仍被尊重。
-- 跨运行被排除的阶段类型（`gate`、`approval`、`loop`、`tournament`、`script`）即使 `incremental` 也**永不**跨运行缓存 —— 它们每次运行必须产生新结果。
-- `idempotent: false` 阶段完全排除在缓存之外（它们总是重跑）。在 `incremental` 下，这会产生警告，让作者知道该阶段不会被复用。
-
-<Callout type="info">
-  运行时 `incremental` 参数（调用时传入）覆盖 flow 声明的值，让你无需编辑 flow 即可强制全新或增量运行。
+<Callout type="warn">
+  上下文共享激活时，阶段 id 成为文件系统节点 id，必须匹配 `[A-Za-z0-9._-]+`。两个清理后相同的 id 会静默合并它们的 blackboard —— 这作为硬错误强制执行。
 </Callout>
 
-```json title="incremental-开启.json"
-{
-  "name": "ci-audit",
-  "incremental": true,
-  "phases": [
-    { "id": "lint", "type": "script", "run": "npm run lint" },
-    { "id": "review", "type": "agent", "task": "审查最近的变更。" }
-  ]
-}
-```
+## phases 数组
 
-上面 `lint` 是 `script` 阶段 —— 即使 `incremental` 它每次调用都重跑。`review` 以其输入为键跨运行缓存。
-
----
-
-## `phases`
-
-必需的阶段定义数组（`minItems: 1`）。每个阶段需要唯一 `id` 并接受 `type`（默认 `"agent"`）。阶段通过 `dependsOn` 构成 DAG；无依赖的阶段在第一拓扑层运行。
+`phases` 是唯一必需的字段 —— 一个有序的阶段定义数组（`minItems: 1`）。每个阶段有唯一 `id`、一个 `type`（默认 `"agent"`），并通过 `dependsOn` 构成 DAG 边。没有依赖的阶段在第一拓扑层运行。
 
 <Callout type="info">
-  若没有阶段标记 `final: true`，数组顺序中**最后**一个阶段成为工作流结果。若多于一个标记 `final`，验证失败。
+  如果没有阶段标记 `final: true`，数组顺序中的**最后一个**阶段成为工作流结果。如果多于一个标记 `final`，校验失败。
 </Callout>
 
-每个阶段类型的每个字段见[阶段类型参考](/zh-cn/docs/syntax/phase-types)。
+运行时通过 Kahn 算法计算拓扑层：同层阶段并发运行（至多 `concurrency` 个）。一个阶段在它所有 `dependsOn` 完成后启动 —— 或在 `join: "any"` 下任一完成后启动。
 
-### 拓扑执行
+每种阶段类型的每个字段，见[阶段类型](/zh-cn/docs/syntax/phase-types)页。
 
-运行时通过 Kahn 算法计算拓扑层：同层阶段并发运行（至多 `concurrency` 个）。一个阶段在其所有 `dependsOn` 完成后启动（或在 `join: "any"` 下任一完成后）。
+## 简写：简单工作跳过 DAG
 
----
+对一次性委派，你不需要写一个完整的 `phases` DAG。taskflow 接受三种简写形状，运行时的 `desugar()` 会在校验前把它们展开成完整 flow。当一个 spec **没有** `phases` 数组、**但**有 `task`、`tasks` 或 `chain` 之一时，它被识别为简写。
 
-## 简写
+### 单个任务
 
-对一次性委派，可跳过完整 `phases` DAG 使用简写规范。运行时的 `desugar()` 在验证前将其变换为完整 `Taskflow`。当规范**没有** `phases` 数组**但**有 `task`、`tasks` 或 `chain` 之一时，被识别为简写。
-
-### `task` — 单个 agent
-
-```json title="task-简写.json"
-{ "task": "总结 src/" }
+```json title="单个 task 简写"
+{ "task": "Summarize src/", "agent": "explorer" }
 ```
 
-反糖化为：
+反糖化为一个 `agent` 阶段（id `"main"`、`final: true`）。可选的 `agent`、`context`、`contextLimit` 会透传。
 
-```json title="task-反糖化.json"
-{
-  "name": "task",
-  "phases": [
-    { "id": "main", "type": "agent", "task": "总结 src/", "final": true }
-  ]
-}
-```
+### 并行任务
 
-可选的 `agent`、`context` 和 `contextLimit` 会透传到阶段。
-
-### `tasks` — 并行 fan-out
-
-```json title="tasks-简写.json"
+```json title="并行 tasks 简写"
 {
   "tasks": [
-    { "task": "审计认证", "agent": "analyst" },
-    { "task": "审计校验", "agent": "analyst" }
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit validation in src/api", "agent": "analyst" }
   ]
 }
 ```
 
-反糖化为单个 `parallel` 阶段（id `"parallel"`，`final: true`）。上下文在所有分支间**共享**：规范级 `context` 加上步骤级 `context` 数组的并集被合并并读取一次。
+反糖化为一个 `parallel` 阶段（id `"parallel"`、`final: true`）。`context` 在所有分支间**共享**：spec 级 `context` 加上各步 `context` 数组的并集会被合并、只读一次。
 
-```json title="tasks-反糖化.json"
-{
-  "name": "parallel",
-  "phases": [
-    {
-      "id": "parallel",
-      "type": "parallel",
-      "branches": [
-        { "task": "审计认证", "agent": "analyst" },
-        { "task": "审计校验", "agent": "analyst" }
-      ],
-      "final": true
-    }
-  ]
-}
-```
+### 顺序链
 
-### `chain` — 顺序 agent
-
-```json title="chain-简写.json"
+```json title="chain 简写"
 {
   "chain": [
-    { "task": "找出所有 TODO 注释" },
-    { "task": "总结它们：{previous.output}" },
-    { "task": "为以下内容开 issue：{previous.output}" }
+    { "task": "Find all TODO comments" },
+    { "task": "Summarize them: {previous.output}" },
+    { "task": "Open issues for: {previous.output}" }
   ]
 }
 ```
 
-反糖化为顺序 `agent` 阶段（`step1`、`step2`、…），每个依赖前一个；最后一个是 `final: true`。每步用 `{previous.output}` 引用上一步输出。
-
-```json title="chain-反糖化.json"
-{
-  "name": "chain",
-  "phases": [
-    { "id": "step1", "type": "agent", "task": "找出所有 TODO 注释" },
-    { "id": "step2", "type": "agent", "task": "总结它们：{previous.output}", "dependsOn": ["step1"] },
-    { "id": "step3", "type": "agent", "task": "为以下内容开 issue：{previous.output}", "dependsOn": ["step2"], "final": true }
-  ]
-}
-```
+反糖化为顺序的 `agent` 阶段（`step1`、`step2`、……），每个依赖前一个；最后一个是 `final: true`。每一步用 `{previous.output}` 引用上一步的输出。
 
 <Callout type="warn">
-  在 `chain` 模式下，顶层 `context` / `contextLimit` 被**忽略**（运行时会警告）。把它们放在个别步骤上 —— chain 模式下的 `context` 会是 flow 级默认，这是有意不支持的。
+  在 `chain` 模式下，顶层的 `context` / `contextLimit` 会被**忽略**（运行时会警告）。把它们放在各个步骤上 —— chain 模式下的 flow 级 context 是刻意不支持的。
 </Callout>
 
-### 透传的元数据
+### 简写透传什么
 
-所有三种简写形式都把以下可选顶层字段透传到反糖化后的 flow：
-
-- `name`（默认为 `"task"`、`"parallel"` 或 `"chain"`）
-- `description`
-- `concurrency`
-- `agentScope`
-- `args`
-- `budget`
-- `strictInterpolation`
-
-### `isShorthand` 识别
-
-当规范没有 `phases` 数组**且**至少满足以下之一时为简写：
-
-- `chain` 是非空数组
-- `tasks` 是非空数组
-- `task` 是字符串
-
-否则被视为完整 flow 并按 `TaskflowSchema` 验证。
-
----
-
-## 验证行为
-
-每个 flow 在执行前都会验证。验证分两种模式：
-
-1. **静态**（`/tf verify`，无运行时参数）：仅结构检查 —— schema 形状、DAG 完整性、环检测、`{steps.X}` 引用可达性。零 token。
-2. **运行时**（运行启动时，带已解析参数）：以上全部加参数存在警告和 cwd/codebase 不匹配警告。
-
-### 硬错误（始终令运行失败）
-
-| 错误 | 原因 |
-|---|---|
-| `Missing or invalid 'name'` | `name` 缺失、为空或非字符串。 |
-| `Taskflow must have at least one phase` | `phases` 缺失或为空。 |
-| `Duplicate phase id: X` | 两个阶段共用一个 `id`。 |
-| `Phase 'X': unknown type 'Y'` | `type` 不在 10 个允许值中。 |
-| `Phase 'X': dependsOn unknown phase 'Y'` | 某个 `dependsOn` 或 `from` 条目没有匹配的阶段。 |
-| `Dependency cycle detected: A -> B -> A` | Kahn 算法发现环。 |
-| `Only one phase may be marked 'final' (found N)` | 多于一个 `final: true` 阶段。 |
-| `Phase 'X': task references {steps.Y.*} but 'Y' is not reachable via dependsOn` | `{steps.Y}` 引用中 `Y` 不是传递祖先（除非 `join: "any"`）。 |
-| `Phase 'X': references its own output via {steps.X.*}` | 自引用（`loop` 阶段除外）。 |
-| `Phase 'X': id uses underscores` | 阶段 id 含 `_`（用连字符）。 |
-| `Phase 'X': agent name 'Y' uses underscores` | agent 名含 `_`。 |
-| `Phase 'X': agent 'Y' has invalid name format` | agent 不匹配 `/^[a-z][a-z0-9-]*$/`。 |
-| `Phase 'X': ids used with context sharing must match [A-Za-z0-9._-]+` | 上下文共享阶段 id 字符集非法。 |
-
-### 警告（非致命；在 `strictInterpolation` 下提升为错误）
-
-| 警告 | 说明 |
-|---|---|
-| 引用了 `{args.X}` 但未提供 | 无默认值，无运行时值。占位符保持字面。 |
-| 调用 `cwd` ≠ `args.codebase` | 依赖 cwd 的 agent 可能检查错误的仓库。 |
-| 仅 loop 字段在非 loop 阶段 | `until` / `maxIterations` / `convergence` 被静默忽略。 |
-| `idempotent: false` 在 `approval` / `flow` 上是空操作 | 这些阶段不运行子代理（无瞬态重试），且已排除在跨运行缓存之外。该标志无效。 |
-| `idempotent: false` 覆盖 `cache.scope: "cross-run"` | 有副作用的阶段永不缓存。 |
-| `incremental` 下的 `idempotent: false` | 阶段排除在缓存之外，每次调用都重跑。 |
-| gate 上同时设 `eval` 和 `score` | `eval` 先运行；通常一个就够。 |
+三种形式都会把这些可选的顶层字段透传到反糖化后的 flow：`name`（默认为 `"task"`、`"parallel"` 或 `"chain"`）、`description`、`concurrency`、`agentScope`、`args`、`budget`、`strictInterpolation`。
 
 <Callout type="tip">
-  尽早并经常运行 `/tf verify`。它以零成本在任何子代理生成前捕获上述每个硬错误。
+  简写很适合做实验。当你需要条件路由、循环、gate、缓存或跨会话续跑时，再迁移到完整的 `phases` DAG。
 </Callout>
-
----
 
 ## 完整示例
 
-```json title="flow-定义-完整.json"
+这是把我们讨论过的所有内容都用上的 audit-auth flow：
+
+```json title="audit-auth — 完整版"
 {
   "name": "audit-auth",
-  "description": "审计路由是否缺失认证检查",
+  "description": "Audit routes for missing auth checks",
   "version": 2,
   "args": {
-    "dir": { "default": "src/routes", "description": "要审计的目录" },
+    "dir": { "default": "src/routes", "description": "Directory to audit" },
     "severity": { "default": "high", "required": true }
   },
   "concurrency": 8,
   "agentScope": "both",
-  "contextSharing": false,
   "strictInterpolation": true,
   "incremental": false,
   "budget": {
@@ -461,7 +310,7 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
       "id": "discover",
       "type": "agent",
       "agent": "scout",
-      "task": "以 JSON 列出 {args.dir} 中的每个路由处理器。",
+      "task": "List every route handler in {args.dir} as JSON.",
       "output": "json"
     },
     {
@@ -470,7 +319,7 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
       "over": "{steps.discover.json}",
       "as": "route",
       "agent": "security-reviewer",
-      "task": "{route.path} 是否需要认证？输出 {\"ok\": true|false}。",
+      "task": "Does {route.path} require auth? Output {\"ok\": true|false}.",
       "output": "json",
       "dependsOn": ["discover"]
     },
@@ -479,7 +328,7 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
       "type": "reduce",
       "from": ["audit-each"],
       "agent": "writer",
-      "task": "总结审计结果：{steps.audit-each.output}",
+      "task": "Summarize the audit results: {steps.audit-each.output}",
       "final": true,
       "dependsOn": ["audit-each"]
     }
@@ -489,14 +338,95 @@ flow 在执行前由 `/tf verify` 以零 token 成本验证。非法 flow 永远
 
 ---
 
+## 字段参考
+
+本页剩下的是详尽参考 —— 每个顶层字段、`ArgSpec` 形状，以及完整的校验表。需要精确答案时来查。
+
+### 顶层字段
+
+| 字段 | 类型 | 默认值 | 必需 | 说明 |
+|---|---|---|---|---|
+| `name` | `string`（`minLength: 1`） | — | **是**（保存的 flow） | 工作流标识符。成为 `/tf:<name>` 和运行状态目录名。 |
+| `description` | `string` | — | 否 | 人类可读摘要。出现在 `/tf list` 和运行记录中。 |
+| `version` | `number` | `1` | 否 | Schema/flow 版本标签，供作者追踪。不强制。 |
+| `args` | `Record<string, ArgSpec>` | — | 否 | 带默认值的已声明调用参数。见 [`ArgSpec`](#argspec)。 |
+| `concurrency` | `number` | `8` | 否 | 默认最大并发子代理数。被 `map`/`parallel` 阶段继承。 |
+| `budget` | `Budget` | — | 否 | 运行级成本/token 上限。见[`给成本封顶：budget`](#给成本封顶-budget)。 |
+| `agentScope` | `"user" \| "project" \| "both"` | `"user"` | 否 | 在何处发现 agent。 |
+| `strictInterpolation` | `boolean` | `false` | 否 | 把校验警告提升为硬错误。 |
+| `contextSharing` | `boolean` | `false` | 否 | 为所有阶段启用共享上下文树。 |
+| `incremental` | `boolean` | `false` | 否 | 把每个阶段默认为跨运行缓存。 |
+| `phases` | `Phase[]`（`minItems: 1`） | — | **是** | 有序阶段定义。见[阶段类型](/zh-cn/docs/syntax/phase-types)。 |
+
+### ArgSpec
+
+`args` 中的每个条目是一个带这些字段的对象：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `default` | `unknown` | — | 运行时未提供该参数时使用的值。类型不被 schema 强制 —— 插值需谨慎。 |
+| `description` | `string` | — | 人类可读的参数文档。 |
+| `required` | `boolean` | — | 作者声明的必需标志（建议性；缺失时运行时应用 `default`）。 |
+
+### 校验行为
+
+每个 flow 在执行前都会被校验，有两种模式：
+
+1. **静态**（`/tf verify`，无运行时参数）：仅结构检查 —— schema 形状、DAG 完整性、环检测、`{steps.X}` 引用的可达性。零 token。
+2. **运行时**（运行启动时，带已解析的参数）：以上全部，外加参数缺失警告和 cwd/codebase 不匹配警告。
+
+#### 硬错误（始终让运行失败）
+
+| 错误 | 原因 |
+|---|---|
+| `Missing or invalid 'name'` | `name` 缺失、为空、或不是字符串。 |
+| `Taskflow must have at least one phase` | `phases` 缺失或为空。 |
+| `Duplicate phase id: X` | 两个阶段共用一个 `id`。 |
+| `Phase 'X': unknown type 'Y'` | `type` 不在 10 个允许值里。 |
+| `Phase 'X': dependsOn unknown phase 'Y'` | `dependsOn` 或 `from` 条目没有对应阶段。 |
+| `Dependency cycle detected: A -> B -> A` | Kahn 算法发现环。 |
+| `Only one phase may be marked 'final' (found N)` | 多于一个 `final: true` 阶段。 |
+| `Phase 'X': task references {steps.Y.*} but 'Y' is not reachable via dependsOn` | 一个 `{steps.Y}` 引用中 `Y` 不是传递祖先（除非 `join: "any"`）。 |
+| `Phase 'X': references its own output via {steps.X.*}` | 自引用（`loop` 阶段除外）。 |
+| `Phase 'X': id uses underscores` | 阶段 id 含 `_`（应用连字符）。 |
+| `Phase 'X': agent name 'Y' uses underscores` | agent 名含 `_`。 |
+| `Phase 'X': agent 'Y' has invalid name format` | agent 不匹配 `/^[a-z][a-z0-9-]*$/`。 |
+| `Phase 'X': ids used with context sharing must match [A-Za-z0-9._-]+` | 上下文共享的阶段 id 字符集非法。 |
+
+#### 警告（在 `strictInterpolation` 下提升为错误）
+
+| 警告 | 说明 |
+|---|---|
+| 引用了 `{args.X}` 但未提供 | 无默认值，无运行时值。占位符保持字面。 |
+| 调用 `cwd` ≠ `args.codebase` | 依赖 cwd 的 agent 可能查错仓库。 |
+| 非 loop 阶段上的 loop 专用字段 | `until` / `maxIterations` / `convergence` 被静默忽略。 |
+| `idempotent: false` 在 `approval` / `flow` 上是空操作 | 这些阶段不跑子代理；该标志无效。 |
+| `idempotent: false` 覆盖 `cache.scope: "cross-run"` | 有副作用的阶段永不被缓存。 |
+| `incremental` 下的 `idempotent: false` | 阶段排除在缓存外，每次调用都重跑。 |
+| gate 上同时设 `eval` 和 `score` | `eval` 先运行；通常一个就够。 |
+
+<Callout type="tip">
+  尽早、经常跑 `/tf verify`。它能在零成本下抓住上面每一个硬错误，在任何子代理被生成之前。
+</Callout>
+
+### `isShorthand` 识别
+
+当一个 spec 没有 `phases` 数组、**且**至少满足下列之一时，被当作简写处理：
+
+- `chain` 是非空数组
+- `tasks` 是非空数组
+- `task` 是字符串
+
+否则它作为完整 flow 按 `TaskflowSchema` 校验。
+
 ## 下一步
 
 <Cards>
   <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
-    每个阶段类型的每个字段。
+    每种阶段类型的每个字段。
   </Card>
   <Card title="缓存" href="/zh-cn/docs/syntax/caching">
-    跨运行记忆化、fingerprint 和 TTL。
+    跨运行记忆化、指纹与 TTL。
   </Card>
   <Card title="插值" href="/zh-cn/docs/syntax/interpolation">
     占位符、条件，以及 `when` / `until` 表达式语法。

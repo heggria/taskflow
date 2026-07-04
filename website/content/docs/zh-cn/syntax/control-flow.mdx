@@ -1,32 +1,81 @@
 ---
 title: 控制流
-description: 条件路由、合并、重试和循环。
+description: 条件路由、合并、重试和自愈合 gate。
 ---
 
 # 控制流
 
-taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段在该拓扑之上添加*动态*行为 —— 跳过阶段、合并分支、从失败中恢复，以及对未通过 gate 的输出进行返工。
+taskflow 的 DAG 是静态拓扑 —— 边在定义时就固定了。但真实的工作流需要*动态*行为：当严重程度低时跳过某个阶段，当第一次尝试失败时切换到回退，对一个不稳定的模型重试，或对未通过质量门的输出进行返工。本页的字段在拓扑之上添加这一动态层。
 
 <Callout type="info">
-  此处的每个字段都由 `/tf verify` 在执行前以零成本验证。非法运算符、超范围重试值和矛盾合并都会被预先捕获。
+  此处的每个字段都由 `/tf verify` 在任何 agent 运行前以零成本检查。非法运算符、超范围的重试值和矛盾的合并都会被预先捕获 —— 绝不在花费 token 之后。
 </Callout>
 
+## 场景：带条件深度的 PR 审查
+
+想象你在构建一个代码审查 flow。并非每个 PR 都需要相同的处理。一个小型文档调整只需快速摘要；而一个高严重程度的变更应触发深度审计。下面这个 flow 根据分诊决策分支：
+
+```json title="conditional-review.json"
+{
+  "name": "conditional-review",
+  "phases": [
+    {
+      "id": "triage",
+      "type": "agent",
+      "output": "json",
+      "task": "Classify the PR. Output JSON {severity, reason}."
+    },
+    {
+      "id": "deep-audit",
+      "when": "{steps.triage.json.severity} == high",
+      "dependsOn": ["triage"],
+      "agent": "risk-reviewer",
+      "task": "Deep-dive the change. Reason: {steps.triage.json.reason}"
+    },
+    {
+      "id": "quick-summary",
+      "when": "{steps.triage.json.severity} != high",
+      "dependsOn": ["triage"],
+      "task": "Write a one-paragraph summary."
+    }
+  ]
+}
+```
+
+每个分支上的 `when` 字段就是守卫。当分诊解析为 `severity: "high"` 时，`deep-audit` 分支运行而 `quick-summary` 被跳过 —— 不花费 token、不生成子代理。低严重程度的 PR 则相反。
+
+`when` 是本指南的第一个工具。本页其余部分 walkthrough 六个字段，它们合起来让你能表达几乎所有运行时决策：
+
 <Cards>
-  <Card title="`when`" href="#when" description="条件守卫 —— 除非表达式为真，否则跳过阶段。" />
-  <Card title="`join`" href="#join" description="依赖合并 —— `all` 对 `any`，if/else 路由。" />
-  <Card title="`retry`" href="#retry" description="显式重试策略 + 瞬态自动重试。" />
-  <Card title="`optional`" href="#optional" description="容忍失败而不中止运行。" />
-  <Card title="`onBlock`" href="#onblock" description="自愈合 gate —— 在 BLOCK 时重跑上游。" />
-  <Card title="`idempotent`" href="#idempotent" description="不可逆阶段的副作用分类。" />
+  <Card title="`when`" href="#when">
+    条件守卫 —— 除非表达式为真，否则跳过阶段。
+  </Card>
+  <Card title="`join`" href="#join">
+    依赖合并 —— `all` 与 `any`，以及 if/else 路由。
+  </Card>
+  <Card title="`optional`" href="#optional">
+    容忍失败而不中止运行。
+  </Card>
+  <Card title="`retry`" href="#retry">
+    显式重试策略加瞬态自动重试。
+  </Card>
+  <Card title="`idempotent`" href="#idempotent">
+    针对不可逆阶段的副作用分类。
+  </Card>
+  <Card title="`onBlock`" href="#onblock">
+    自愈合 gate —— 在 BLOCK 时重跑上游。
+  </Card>
 </Cards>
 
 ---
 
-## `when`
+## `when`：有条件地跳过阶段
 
-条件守卫。仅当表达式求值为真时阶段才运行。被跳过的阶段不发出子代理调用、不消耗 token，并以 `status: "skipped"` 记录。
+`when` 表达式是一种微型、安全的布尔语言，在阶段运行*之前*求值。若为真，阶段运行；若为假，阶段被跳过：无子代理调用、无 token，运行记录显示 `status: "skipped"`。
 
-```json title="when-守卫-基础.json"
+最简单的守卫将一个 JSON 字段与字面量比较：
+
+```json title="when-basic.json"
 {
   "id": "deep",
   "when": "{steps.triage.json.severity} == high",
@@ -34,62 +83,21 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 }
 ```
 
-### 表达式语言
+可以用 `&&`、`||` 和 `!` 组合守卫：
 
-`when` 是一种微型、安全的布尔表达式语言 —— **无 `eval` / `Function`**。操作数要么是插值占位符（`{...}`，解析为其原始值），要么是字面量（引号字符串、数字、`true` / `false` / `null`，或被当作字符串的裸词）。
-
-| 运算符 | 含义 | 优先级 |
-|---|---|---|
-| `\|\|` | 逻辑或（短路） | 1（最低） |
-| `&&` | 逻辑与（短路） | 2 |
-| `==` `!=` | 相等 / 不等 | 3 |
-| `>` `<` `>=` `<=` | 顺序比较 | 3 |
-| `!` | 一元逻辑非 | 4 |
-| `( )` | 分组 | 5（最高） |
-
-比较是非结合的：`a == b == c` 是解析错误（`trailing tokens`）。请用显式分组：`(a == b) && (b == c)`。
-
-### 比较语义：数值 vs 字符串
-
-`==`、`!=`、`<`、`>`、`<=`、`>=` 按操作数类型分派：
-
-- 若**两个**操作数都是数值（JSON `number`，或可解析为有限数的字符串），比较为**数值比较**：`1.5 == "1.5"` → `true`；`"10" > "9"` → `true`。
-- 否则，两个操作数被强制为字符串（`null` / `undefined` → `""`）并按**字典序**比较：`"high" == "high"` → `true`；`"9" > "10"` → `false`（字符串顺序）。
-
-这意味着将一个解析为数字的占位符与 `high` 这样的裸词比较时，始终是字符串比较 —— 这正是你对枚举类字段的期望。
-
-### 真值规则
-
-裸操作数（无比较运算符）按真值求值。真值函数镜像常见配置约定：
-
-| 值 | 为真？ | 说明 |
-|---|---|---|
-| `true`（布尔） | ✅ | |
-| `false`（布尔） | ❌ | |
-| 非零数字 | ✅ | `0` 和 `NaN` 为假 |
-| `0`（数字） | ❌ | |
-| 非空字符串 | ✅ | 检查关键字前先 trim、小写化 |
-| `""`、`"false"`、`"0"`、`"no"`、`"off"`、`"null"` | ❌ | 大小写不敏感 |
-| 其他任何字符串 | ✅ | 如 `"high"`、`"true"` |
-| 非空数组 | ✅ | 空数组 `[]` 为假 |
-| 非空对象 | ✅ | 空对象 `{}` 为假 |
-| `null`、`undefined` | ❌ | |
-
-<Callout type="tip">
-  因为 `"0"` 为假而 `"high"` 为真，你可以只用 `{steps.triage.json.severity}` 守卫一个 JSON 枚举字段 —— 但显式比较（`== high`）更清晰，且能经受未来枚举值的变化。
-</Callout>
-
-### 占位符 vs 字面量
-
-```json title="when-占位符-vs-字面量.json"
+```json title="when-combined.json"
 {
-  "id": "a",
-  "when": "{steps.triage.json.severity} == high",
-  "task": "..."
+  "id": "deep",
+  "when": "({steps.triage.json.severity} == high || {steps.triage.json.severity} == critical) && !{steps.triage.json.suppressed}",
+  "dependsOn": ["triage"]
 }
 ```
 
-```json title="when-裸占位符.json"
+### 裸占位符也是守卫
+
+如果上游阶段产出的是一个布尔值，或一个你信任其真值性的 JSON 字段，你可以完全省略运算符：
+
+```json title="when-bare.json"
 {
   "id": "b",
   "when": "{steps.triage.json.hasFindings}",
@@ -97,223 +105,85 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 }
 ```
 
-```json title="when-复杂.json"
-{
-  "id": "c",
-  "when": "({steps.triage.json.severity} == high || {steps.triage.json.severity} == critical) && !{steps.triage.json.suppressed}",
-  "task": "..."
-}
-```
-
-- `{steps.triage.json.severity}` 解析为 JSON 值；`== high` 将其与裸词字符串 `"high"` 比较。
-- `{steps.triage.json.hasFindings}`（裸）直接对解析值的真值求值。
-- 裸词 `true` / `false` / `null` 是**关键字**，不是字符串。要与字面字符串 `"true"` 比较，请加引号：`{steps.x.json.flag} == "true"`。
-
-### 字符串转义
-
-单引号和双引号都接受。反斜杠按字面转义下一个字符（`\"` → `"`，`\\` → `\`）。所有其他 `\X` 序列变为字面 `X` —— `\n` 变成两个字符 `n`，**不是**换行。这不同于 JSON/JS 转义，但对条件字符串是正确的 —— 它们只需引号转义。
-
-```json title="when-字符串转义.json"
-{
-  "id": "d",
-  "when": "{steps.x.json.label} == \"high-priority\"",
-  "task": "..."
-}
-```
-
-### Fail-open 行为
-
-<Callout type="warn">
-  **`when` 的解析错误 fail-open。** 畸形表达式（未闭合字符串、意外字符、尾随 token、缺失 `)`）会在求值结果上设置 `error`，且阶段**仍会运行** —— 永远不会被静默丢弃。
+<Callout type="tip">
+  因为 `"0"`、`"false"`、`"no"`、`"off"` 和 `"null"`（大小写不敏感）都为假，一个产出 `{"hasFindings": "false"}` 的模型仍会正确求值。这是针对 LLM 输出漂移的有意为之的稳健性。不过显式的 `== high` 比较更清晰 —— 而且能经受未来枚举值的变化。
 </Callout>
 
-这是有意的不变量：破损的守卫绝不能意外压制工作。错误会出现在阶段的警告和运行记录中，便于发现和修复。空/全空白的 `when`（视为 `true`）以及表达式内未解析的占位符也是如此 —— 未解析的 `{steps.missing.json}` 解析为 `undefined`（为假），但表达式仍正常解析和求值。
+### 常见模式
 
-### 常见错误
-
-| 错误 | 原因 | 修复 |
+| 模式 | 示例 | 何时使用 |
 |---|---|---|
-| `trailing tokens` | 非结合比较被链式使用，如 `a == b == c`。 | 显式分组：`(a == b) && (b == c)`。 |
-| `unterminated string` | 缺少闭合引号。 | 闭合引号或转义它。 |
-| `unterminated placeholder` | `{` 没有匹配的 `}`。 | 加上闭合 `}`。 |
-| `unexpected end` | 期望操作数但表达式结束。 | 补全表达式。 |
-| `missing )` | 分组不平衡。 | 让每个 `(` 都有匹配的 `)`。 |
-| 阶段在你期望它被跳过时仍运行 | Fail-open：表达式有解析错误。 | 检查阶段的 `warnings` 找错误信息。 |
+| JSON 枚举上的相等 | `{steps.t.json.severity} == high` | 基于分类器离散输出路由。 |
+| 裸真值性 | `{steps.t.json.hasFindings}` | 模型很少漂移的布尔标志。 |
+| 带覆盖的复合路由 | `(A == high \|\| A == critical) && !B` | 多条路由汇聚，带一个抑制器。 |
+| 数值阈值 | `{steps.t.json.score} >= 0.8` | 质量门通过/失败阈值。 |
+
+### Fail-open：破损的守卫永不丢弃阶段
+
+<Callout type="warn">
+  如果 `when` 表达式解析失败（未闭合字符串、缺失 `)`、尾随 token），阶段**仍会运行**。一个破损的守卫绝不能意外地压制工作。
+</Callout>
+
+错误会出现在阶段的 `warnings` 和运行记录中，便于你发现和修复。空或全空白的 `when`（视为 `true`）以及未解析的占位符也是如此 —— 一个未解析的 `{steps.missing.json}` 解析为 `undefined`（为假），但表达式仍正常解析和求值。
+
+完整的运算符表、优先级、比较语义和解析错误见本页末尾的[条件参考](#条件参考)。
 
 ---
 
-## `join`
+## `join`：阶段如何等待其依赖
 
-控制阶段如何等待其 `dependsOn` 边。
+默认情况下，一个阶段等待**每个**声明的依赖完成（`join: "all"`）。这是正确的默认值 —— 大多数阶段确实需要其全部输入。
 
-| 模式 | 行为 | 默认？ |
-|---|---|---|
-| `"all"` | 等待**每个**依赖到达终态（done 或 failed-optional）。 | ✅ |
-| `"any"` | **任一**依赖到达终态即运行。 | |
+但回到上面的条件审查 flow。`deep-audit` / `quick-summary` 恰好运行一个；另一个被跳过。如果下游阶段依赖两者，它会永远挂起等待被跳过的分支。`join: "any"` 就是解法：
 
-### 何谓"满足"
-
-一个依赖若以 `done` 结束，**或**以 `failed` 结束**且**该依赖阶段标记为 `optional`，则视为满足。被跳过或非 optional 失败的依赖**不**满足。
-
-- `join: "all"` → `deps.every(depOk)` —— 每个依赖都必须满足，否则阶段被**跳过**，原因为 `"Upstream dependency not satisfied"`。
-- `join: "any"` → `deps.some(depOk)` —— 至少一个依赖满足即可，否则阶段被跳过，原因为 `"All dependencies failed or were skipped"`。
-
-### If / else 路由
-
-将 `when` 守卫与合并阶段的 `join: "any"` 组合，构建 if/else 分支：
-
-```json title="join-if-else-路由.json"
-[
-  {
-    "id": "triage",
-    "type": "agent",
-    "output": "json",
-    "task": "将严重程度分类为 high 或 low。输出 JSON {severity}。"
-  },
-  {
-    "id": "deep",
-    "when": "{steps.triage.json.severity} == high",
-    "dependsOn": ["triage"],
-    "task": "深度分析。"
-  },
-  {
-    "id": "quick",
-    "when": "{steps.triage.json.severity} != high",
-    "dependsOn": ["triage"],
-    "task": "快速总结。"
-  },
-  {
-    "id": "merge",
-    "type": "reduce",
-    "from": ["deep", "quick"],
-    "join": "any",
-    "dependsOn": ["deep", "quick"]
-  }
-]
-```
-
-`deep` / `quick` 恰好运行一个；另一个被跳过。`merge` 阶段用 `join: "any"`，以便在存活分支完成后即继续，而不是永远等待被跳过的分支。
-
-### 合并模式
-
-```json title="join-合并模式.json"
+```json title="join-merge.json"
 {
   "id": "merge",
   "type": "reduce",
-  "from": ["branch-a", "branch-b"],
+  "from": ["deep-audit", "quick-summary"],
   "join": "any",
-  "dependsOn": ["branch-a", "branch-b"]
+  "dependsOn": ["deep-audit", "quick-summary"],
+  "task": "Combine the surviving branch's output into one report."
 }
 ```
+
+有了 `join: "any"`，merge 阶段在*任一*依赖完成后即继续，而不是等待全部。
+
+### If / else 路由
+
+将 `when` 守卫与 merge 阶段上的 `join: "any"` 组合，是表达 if/else 分支的惯用法：
+
+```json title="join-if-else.json"
+[
+  { "id": "triage", "type": "agent", "output": "json", "task": "Classify severity." },
+  { "id": "deep",   "when": "{steps.triage.json.severity} == high", "dependsOn": ["triage"], "task": "Deep analysis." },
+  { "id": "quick",  "when": "{steps.triage.json.severity} != high", "dependsOn": ["triage"], "task": "Quick summary." },
+  { "id": "merge",  "type": "reduce", "from": ["deep", "quick"], "join": "any", "dependsOn": ["deep", "quick"] }
+]
+```
+
+`deep` / `quick` 恰好运行一个；`merge` 在存活分支完成后即继续。
+
+### 何谓"满足"
+
+一个依赖若以 `done` 结束，**或**以 `failed` 结束**且**被标记为 `optional`（见 [`optional`](#optional)），则视为满足。被跳过或非 optional 失败的依赖**不**满足。
+
+| 模式 | 行为 |
+|---|---|
+| `"all"`（默认） | 每个依赖都必须满足。否则阶段被跳过，原因为 `"Upstream dependency not satisfied"`。 |
+| `"any"` | 至少一个依赖须满足。否则阶段被跳过，原因为 `"All dependencies failed or were skipped"`。 |
 
 <Callout type="warn">
-  **陷阱：`join: "any"` 与下游引用。** 当一个分支被跳过时，`{steps.skipped-branch.output}` 会解析为占位符 —— 被跳过的阶段排除在插值上下文之外，且无输出的失败阶段解析为 `"[previous phase failed]"`。基于 `from: [...]` 的 `reduce` 只看到已完成分支，但手写的引用两个分支的 `task` 会插值到失败/被跳过的那个。用 `when` 守卫或用 `reduce` 的 `from` 列表。
+  **陷阱：`join: "any"` 与下游引用。** 当一个分支被跳过时，`{steps.skipped-branch.output}` 保持为字面占位符 —— 被跳过的阶段排除在插值上下文之外，无输出的失败阶段解析为 `"[previous phase failed]"`。基于 `from: [...]` 的 `reduce` 只看到已完成分支，但手写的引用两个分支的 `task` 会插值到失败/被跳过的那个。用 `when` 守卫，或用 `reduce` 的 `from` 列表。
 </Callout>
-
-### 陷阱
-
-| 陷阱 | 原因 | 修复 |
-|---|---|---|
-| 阶段被跳过且原因为 `"All dependencies failed or were skipped"` | `join: "any"` 但每个依赖都失败/被跳过。 | 确保至少一个依赖成功，或将某依赖标记为 `optional`。 |
-| 阶段挂起（永不启动） | `join: "all"`（默认）且某依赖永不会完成。 | 用 `join: "any"`，或将该依赖设为 `optional`。 |
-| 下游引用插值为 `"[previous phase failed]"` | 在 `task` 中按 id 引用失败/被跳过的分支。 | 用 `reduce` 的 `from`，或用 `when` 守卫该引用。 |
-| 未知合并模式 | 拼写错误，如 `"first"`。 | 用 `"all"` 或 `"any"`。 |
 
 ---
 
-## `retry`
+## `optional`：容忍失败
 
-针对子代理调用的显式阶段级重试策略。包裹阶段内的**每次**子代理调用（每个 `map` 项目、每个 `parallel` 分支、每次循环迭代各一次）。
+有些工作是尽力而为的。一个 lint 脚本可能失败；一个第三方丰富化调用可能 503。你并不总是想让那中止整个运行。
 
-```json title="retry-示例.json"
-{
-  "id": "patch",
-  "retry": {
-    "max": 3,
-    "backoffMs": 500,
-    "factor": 2
-  }
-}
-```
-
-### 字段
-
-| 字段 | 类型 | 默认值 | 约束 | 说明 |
-|---|---|---|---|---|
-| `max` | `number` | —（必需） | `0`–`20` | 首次尝试**之后**的最大重试次数。`0` = 不重试（仅一次尝试）。 |
-| `backoffMs` | `number` | `0` | `0`–`60000` | 尝试间的基础延迟，毫秒。 |
-| `factor` | `number` | `1` | `1`–`10` | 每次尝试的退避乘数。`1` = 固定延迟；`2` = 指数。 |
-
-### 退避公式
-
-第 *N* 次尝试（0 起始）前的延迟：`min(60000, round(backoffMs * factor ** attempt))`。
-
-- `factor: 1`（默认） → 每次尝试恒定 `backoffMs`。
-- `factor: 2` → `backoffMs`、`2×backoffMs`、`4×backoffMs`、… 上限 60 秒。
-- `backoffMs: 0` → 无延迟（适用于测试）。
-
-### 瞬态自动重试（隐式）
-
-即使**没有**显式 `retry`，瞬态提供者错误也会被自动重试，这样一次短暂的 429 会在运行内被吸收，而不是冒泡上去、促使调用方 agent 重新调用整个工具（那会堆叠重复的进度块）。
-
-| 属性 | 值 |
-|---|---|
-| 最大瞬态尝试 | 3（首次之后） |
-| 默认基础延迟 | 2000 ms |
-| 默认 factor | 2（指数） |
-| 上限 | 60000 ms |
-
-若失败信息 / stderr / 输出匹配以下则视为**瞬态**：`rate limit`、`too many requests`、`overloaded`、`429`、`502`、`503`、`504`、`service unavailable`、`temporarily unavailable`、`timeout`、`timed out`、`ECONNRESET`、`ETIMEDOUT`、`socket hang up`（大小写不敏感）。
-
-以下**不**视为瞬态，永不自动重试：
-- `stopReason: "aborted"`（显式中止）。
-- 空闲超时（`idleTimeout: true`）—— 确定性卡死；重试无益。
-- 阶段超时（`phaseTimeout: true`）—— 重试会双倍花费上限。
-- 其他任何硬错误（非零退出、解析失败、契约违反）。
-
-### 显式与瞬态重试的交互
-
-两种策略是组合而非替换：
-
-- 显式策略覆盖**所有**失败（瞬态*和*硬）至 `retry.max`。
-- 瞬态回退**仅**覆盖瞬态错误，至多 3 次尝试，**且仅当** `idempotent !== false`。
-- 总尝试预算为 `max(explicitMax, 1 + 3)`。
-- **退避曲线：** 若阶段定义了显式 `retry.backoffMs`，该曲线用于*显式和瞬态*重试（用 `backoffMs: 0` 可让测试快速）。否则用瞬态默认（2000 ms，factor 2）。
-
-<Callout type="info">
-  输出契约（`expect`）违反符合**显式**重试策略，不符合瞬态回退 —— 契约违反是确定性失败，不是提供者打嗝。
-</Callout>
-
-### 与 `idempotent: false` 的交互
-
-设 `idempotent: false` 会**抑制隐式瞬态重试** —— 在作者背后重复有副作用的调用，正是 `idempotent: false` 存在要防止的危害。显式 `retry: {}` 仍被尊重：它是作者声明重复可接受。见 [`idempotent`](#idempotent)。
-
-### 示例：为不稳定模型的指数退避
-
-```json title="retry-指数.json"
-{
-  "id": "generate",
-  "retry": { "max": 5, "backoffMs": 1000, "factor": 2 },
-  "task": "..."
-}
-```
-
-### 常见错误
-
-| 错误 | 原因 | 修复 |
-|---|---|---|
-| `retry.max must be a number >= 0` | `max` 缺失或为负。 | 设 `max: 0`–`20`。 |
-| `retry.max must be <= 20` | `max` 超过上限。 | 调低。 |
-| `retry.backoffMs must be between 0 and 60000` | 超范围。 | 用 0–60000。 |
-| `retry.factor must be between 1 and 10` | 超范围。 | 用 1–10。 |
-
----
-
-## `optional`
-
-标记一个失败**不会**中止运行的阶段。
-
-```json title="optional-示例.json"
+```json title="optional-basic.json"
 {
   "id": "lint",
   "type": "script",
@@ -322,35 +192,30 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 }
 ```
 
-### 失败语义
-
-- 失败的**非 optional** 阶段将运行状态设为 `failed` 并级联：`dependsOn` 含其的下游阶段被跳过（除非它们 `join: "any"` 或该依赖本身 `optional`）。
-- 失败的 **optional** 阶段被容忍：运行继续，且该阶段对 `join` 而言仍算"满足"的依赖（`"all"` 和 `"any"` 均如此）。下游阶段照常运行。
-
-### 下游可见性
-
-失败阶段（optional 与否）包含在插值上下文中。若它未产生输出，`{steps.X.output}` 解析为占位符字符串 `"[previous phase failed]"`，使下游引用不致中断。被跳过的阶段从上下文中**排除** —— 引用被跳过的阶段会让占位符保持字面（一个缺失警告）。
+失败的**非 optional** 阶段将运行状态设为 `failed` 并级联：`dependsOn` 含其的下游阶段被跳过（除非它们 `join: "any"` 或该依赖本身 `optional`）。失败的 **optional** 阶段被容忍 —— 运行继续，且该阶段对 `join` 而言仍算"满足"的依赖（`"all"` 和 `"any"` 均如此）。
 
 ### 与回退阶段配对
 
-用 `when` + `optional` 构建带回退的尽力阶段：
+`optional` + `when` 一起构建带回退的尽力阶段：
 
-```json title="optional-回退.json"
+```json title="optional-fallback.json"
 [
   {
     "id": "enrich",
     "type": "agent",
     "optional": true,
-    "task": "调用外部 API 并丰富记录。可能失败。"
+    "task": "Call the external API and enrich the record. May fail."
   },
   {
     "id": "fallback",
     "when": "{steps.enrich.output} == \"[previous phase failed]\"",
     "dependsOn": ["enrich"],
-    "task": "在无丰富的情况下产出最小记录。"
+    "task": "Produce a minimal record without enrichment."
   }
 ]
 ```
+
+当 `enrich` 失败时，其 `{steps.enrich.output}` 解析为哨兵 `"[previous phase failed]"`，使下游引用不致中断 —— 而 `fallback` 阶段的 `when` 守卫恰好捕获那种情况。
 
 <Callout type="tip">
   `optional` 对 `script` 阶段（lint、format、指标）和尽力 agent 调用最有用。对子流程，标记内部 `flow` 阶段为 `optional`，而非依赖子流程自身状态。
@@ -358,74 +223,68 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 
 ---
 
-## `onBlock`
+## `retry`：失败时重试
 
-<Callout type="info">
-  `onBlock` 是**仅 gate 适用**的字段。对其他阶段类型无效。
-</Callout>
+LLM 提供方会打嗝。速率限制、5xx 和超时是家常便饭。taskflow 分两层处理。
 
-控制 `gate` 阶段发出 `VERDICT: BLOCK` 时发生什么。
+### 第一层：隐式瞬态自动重试
 
-| 取值 | 行为 | 默认？ |
-|---|---|---|
-| `"halt"` | 停止 flow。gate 的 `failed` 状态级联到下游阶段。 | ✅ |
-| `"retry"` | 重跑 gate 的上游 `dependsOn` 阶段，然后重新评估 gate。重复直到 PASS 或达到上限。 | |
+即使**没有**显式 `retry` 块，瞬态提供方错误也会被自动重试，这样一次短暂的 429 会在运行内被吸收，而不是冒泡上去、促使调用方 agent 重新调用整个工具（那会堆叠重复的进度块）。
 
-### 返工循环
+| 属性 | 值 |
+|---|---|
+| 最大瞬态尝试 | 3（首次之后） |
+| 默认基础延迟 | 2000 ms |
+| 默认 factor | 2（指数） |
+| 上限 | 60000 ms |
 
-`onBlock: "retry"` 将 gate 变为生成→批判→再生成的循环：
+若失败信息匹配 `rate limit`、`too many requests`、`overloaded`、`429`、`502`、`503`、`504`、`service unavailable`、`temporarily unavailable`、`timeout`、`timed out`、`ECONNRESET`、`ETIMEDOUT` 或 `socket hang up`（大小写不敏感），则视为**瞬态**。确定性失败 —— 显式中止、空闲超时、阶段超时、契约违反 —— **不**被重试。
 
-```json title="onBlock-返工循环.json"
+### 第二层：显式逐阶段重试
+
+当你想控制曲线，或也想对*硬*失败重试时，加一个显式 `retry`：
+
+```json title="retry-explicit.json"
 {
-  "id": "implement",
-  "type": "agent",
-  "task": "实现该功能。"
-},
-{
-  "id": "quality",
-  "type": "gate",
-  "onBlock": "retry",
-  "retry": { "max": 3 },
-  "dependsOn": ["implement"],
-  "task": "这是否满足所有标准？输出 VERDICT: PASS 或 VERDICT: BLOCK 并附理由。"
+  "id": "generate",
+  "retry": { "max": 5, "backoffMs": 1000, "factor": 2 },
+  "task": "..."
 }
 ```
 
-每轮 `BLOCK`：
+| 字段 | 类型 | 默认值 | 约束 | 说明 |
+|---|---|---|---|---|
+| `max` | `number` | —（必需） | `0`–`20` | 首次尝试**之后**的最大重试次数。`0` = 不重试。 |
+| `backoffMs` | `number` | `0` | `0`–`60000` | 尝试间的基础延迟，毫秒。 |
+| `factor` | `number` | `1` | `1`–`10` | 每次尝试的退避乘数。`1` = 固定；`2` = 指数。 |
 
-1. gate 重新执行其 `dependsOn` 列表中的每个阶段。重跑的上游阶段**不会**缓存命中 —— gate 刻意传入自身的 `prior`（而非依赖的完成状态），使依赖实际重跑。
-2. gate 针对刚产出的上游输出重新评估。
-3. 重复直到 `PASS`，或直到 `retry.max` 轮耗尽（省略 `retry` 时默认 `1`）。
+第 *N* 次尝试（0 起始）前的延迟：`min(60000, round(backoffMs * factor ** attempt))`。
 
-### 限制与守卫
+### 两层如何组合
 
-| 守卫 | 行为 |
-|---|---|
-| 尝试上限 | `retry.max`（默认 `1`）。达到上限后，gate 以其最后 `BLOCK` 裁决失败。 |
-| 嵌套深度上限 | `MAX_RETRY_DEPTH = 3`。若 gate 的上游依赖*本身*是带 `onBlock: "retry"` 的 gate，则在深度 3 之后停止重跑上游 —— 防止指数级重执行。 |
-| 中止 | 若运行的 `signal` 被中止，循环立即中断。 |
-| 预算 | 若运行超预算，循环立即中断。 |
+两种策略组合，而非替换：
 
-<Callout type="warn">
-  **`onBlock: "retry"` 重跑的是上游，不是 gate 自身。** gate 自身的 `task` 每轮都针对新的上游输出重新评估。若你的 gate 没有 `dependsOn`（或其依赖是确定性 `script` 阶段），循环会针对相同输入反复评估并 BLOCK 直到上限 —— 请将 gate 指向你希望被返工的阶段的输出。
+- 显式策略覆盖**所有**失败（瞬态*和*硬）至 `retry.max`。
+- 瞬态回退**仅**覆盖瞬态错误，至多 3 次尝试，**且仅当** `idempotent !== false`。
+- 总尝试预算为 `max(explicitMax, 1 + 3)`。
+- **退避曲线：** 若阶段定义了显式 `retry.backoffMs`，该曲线用于*显式和瞬态*重试（用 `backoffMs: 0` 可让测试快速）。否则用瞬态默认（2000 ms，factor 2）。
+
+<Callout type="info">
+  输出契约（`expect`）违反符合**显式**重试策略，不符合瞬态回退 —— 契约违反是确定性失败，不是提供方打嗝。
 </Callout>
-
-### 评分 gate
-
-`onBlock: "retry"` 也适用于评分 gate（`score`）。同样的循环重跑上游依赖并针对新输出重新评分，共享深度上限和预算/中止守卫。
 
 ---
 
-## `idempotent`
+## `idempotent`：分类副作用
 
-分类一个阶段是否可安全自动重试和缓存。默认 `true`（安全）。
+有些阶段绝不能重复。一次部署、一个 webhook POST、一次 DB 迁移 —— 在瞬态 429 上重跑这些正是作者想要防止的危害。设 `idempotent: false` 声明"此阶段有不可逆副作用"：
 
-```json title="idempotent-示例.json"
+```json title="idempotent-deploy.json"
 {
   "id": "deploy",
   "type": "agent",
   "idempotent": false,
-  "task": "运行生产部署。这绝不能在瞬态错误时重复。",
+  "task": "Run the production deploy. This must not be repeated on transient errors.",
   "retry": { "max": 0 }
 }
 ```
@@ -435,44 +294,146 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 | 效果 | 细节 |
 |---|---|
 | 抑制隐式瞬态自动重试 | 3 次瞬态回退被禁用。部署上的 429 **不会**被静默重试。 |
-| 将结果排除在**所有**缓存之外 | 有效缓存作用域设为 `"off"` —— 不从运行内续跑提供，也不从跨运行存储读取或写入。以验证警告覆盖 `cache.scope: "cross-run"`。 |
-| 记录 `sideEffect: true` | 在单一退出点盖戳到阶段状态上，对每个非跳过状态都如此。 |
-| 续跑双触发警告 | 续跑时，非幂等阶段重新执行（它永不缓存）。若先前尝试已完成，记录警告：`"idempotent:false phase re-executed on resume … its side effect fired again"`。 |
+| 将结果排除在所有缓存之外 | 有效缓存作用域变为 `"off"` —— 不从运行内续跑提供，也不从跨运行存储读取或写入。 |
+| 记录 `sideEffect: true` | 盖戳到阶段状态上以供审计。 |
+| 续跑双触发警告 | 续跑时，非幂等阶段重新执行。若先前尝试已完成，记录一条警告。 |
 
-### 它**不**做什么
+### 它不做的事
 
-- 它**不**抑制显式 `retry: {}`。显式策略是作者声明重复可接受，故仍被尊重。要禁止所有重试，还需设 `retry: { max: 0 }`。
+- 它**不**抑制显式 `retry: {}`。显式策略是作者声明重复可接受。要禁止所有重试，还需设 `retry: { max: 0 }`。
 - 它**不**改变 `optional` 语义。有副作用的阶段仍可 `optional: true`。
 
 ### 验证交互
 
 | 场景 | 验证警告 |
 |---|---|
-| `approval` 或 `flow` 上的 `idempotent: false` | 空操作 —— 这些阶段不运行子代理（无瞬态重试），且已排除在跨运行缓存之外。该标志无效。 |
-| `idempotent: false` + `cache.scope: "cross-run"` | `"idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached."` |
-| `incremental: true` flow 下的 `idempotent: false` | `"idempotent:false under an incremental flow — this phase is excluded from caching and will re-run every invocation."` |
+| `approval` 或 `flow` 上的 `idempotent: false` | 空操作 —— 这些阶段不运行子代理（无瞬态重试），且已被排除在跨运行缓存之外。该标志无效。 |
+| `idempotent: false` + `cache.scope: "cross-run"` | `idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached.` |
+| `incremental: true` flow 下的 `idempotent: false` | `idempotent:false under an incremental flow — this phase is excluded from caching and will re-run every invocation.` |
 
 ### 何时设置
 
-对任何重执行**不**安全的阶段设 `idempotent: false`：
-
-- Webhook POST、邮件/通知发送。
-- 部署、迁移、DB 写入。
-- 任何每次调用都收费或变更外部状态的调用。
-
-对只读分析、生成和变换阶段保持 `true`（默认） —— 它们受益于瞬态重试和缓存。
+对任何重执行**不**安全的阶段设 `idempotent: false` —— webhook POST、邮件/通知发送、部署、迁移、DB 写入，任何每次调用都收费或变更外部状态的调用。对只读分析、生成和变换阶段保持 `true`（默认）—— 它们受益于瞬态重试和缓存。
 
 <Callout type="tip">
-  将 `idempotent: false` 与 `retry: { max: 0 }` 配对以获得硬性不重试保证，并考虑 `optional: true`（若失败的副作用不应中止整个运行）。
+  将 `idempotent: false` 与 `retry: { max: 0 }` 配对以获得硬性不重试保证。若失败的副作用不应中止整个运行，考虑 `optional: true`。
 </Callout>
 
 ---
 
-## 真值参考
+## `onBlock`：自愈合 gate
 
-复制自运行时的 `truthy()` 函数。适用于 `when` 表达式中的任何裸操作数，以及整个表达式的最终结果。
+<Callout type="info">
+  `onBlock` 是**仅 gate 适用**的字段。对其他阶段类型无效。
+</Callout>
 
-| 值 | 为真 |
+一个 `gate` 阶段可以发出 `VERDICT: BLOCK` 来中止 flow。但有时你不想中止 —— 你想让 gate *强制返工*并再试一次。这正是 `onBlock: "retry"` 做的：
+
+```json title="onBlock-rework.json"
+[
+  {
+    "id": "implement",
+    "type": "agent",
+    "task": "Implement the feature."
+  },
+  {
+    "id": "quality",
+    "type": "gate",
+    "onBlock": "retry",
+    "retry": { "max": 3 },
+    "dependsOn": ["implement"],
+    "task": "Does this satisfy all criteria? Output VERDICT: PASS or VERDICT: BLOCK with reasons."
+  }
+]
+```
+
+每轮 `BLOCK`：
+
+<Steps>
+  <Step>
+    **gate 重跑其上游 `dependsOn`。** gate 的 `dependsOn` 列表中的每个阶段（这里是 `implement`）再次执行。重跑的上游阶段**不会**缓存命中 —— gate 刻意传入自身的 prior 状态，使依赖实际重跑。
+  </Step>
+  <Step>
+    **gate 重新评估。** 它针对刚产出的上游输出运行其 `task`。
+  </Step>
+  <Step>
+    **重复或结束。** 循环继续直到 `PASS`，或直到 `retry.max` 轮耗尽（省略 `retry` 时默认 `1`）。
+  </Step>
+</Steps>
+
+| 取值 | 行为 |
+|---|---|
+| `"halt"`（默认） | 停止 flow。gate 的 `failed` 状态级联到下游。 |
+| `"retry"` | 重跑 gate 的上游 `dependsOn` 阶段，然后重新评估 gate。重复直到 PASS 或达到上限。 |
+
+<Callout type="warn">
+  **`onBlock: "retry"` 重跑的是上游，不是 gate 自身。** 若你的 gate 没有 `dependsOn`（或其依赖是确定性 `script` 阶段），循环会针对相同输入反复评估并 BLOCK 直到上限。将 gate 指向你希望被返工的阶段的输出。
+</Callout>
+
+### 防止失控循环的守卫
+
+| 守卫 | 行为 |
+|---|---|
+| 尝试上限 | `retry.max`（默认 `1`）。达到上限后，gate 以其最后 `BLOCK` 裁决失败。 |
+| 嵌套深度上限 | `MAX_RETRY_DEPTH = 3`。若 gate 的上游依赖*本身*是带 `onBlock: "retry"` 的 gate，则在深度 3 之后停止重跑上游 —— 防止指数级重执行。 |
+| 中止 | 若运行的 `signal` 被中止，循环立即中断。 |
+| 预算 | 若运行超预算，循环立即中断。 |
+
+评分 gate（`score`）工作方式相同 —— 循环重跑上游依赖并针对新输出重新评分，共享深度上限和预算/中止守卫。
+
+---
+
+## 条件参考
+
+`when` 表达式语言是一种微型、安全的布尔语法 —— **无 `eval` / `Function`**，一个手写的递归下降解析器。本节是详尽参考；日常使用上面[常见模式](#常见模式)的表就够了。
+
+### 运算符与优先级
+
+从最松到最紧绑定：
+
+| 等级 | 运算符 | 说明 |
+|---|---|---|
+| 1（最松） | `\|\|` | 左结合，短路 |
+| 2 | `&&` | 左结合，短路 |
+| 3 | `!`（一元前缀） | 应用于后面的比较 —— 见下方说明 |
+| 4 | `==` `!=` `>` `<` `>=` `<=` | 非结合：`a == b == c` 是解析错误 |
+| 5（最紧） | `( )` | 分组 |
+
+<Callout type="warn">
+  **`!` 绑定比比较更松。** `!{steps.x.json.s} == high` 解析为 `!({steps.x.json.s} == high)`，*不是* `(!{steps.x.json.s}) == high`。这镜像 Python 的 `not`，与 C/JavaScript 不同。若你意指后者，加显式括号。
+</Callout>
+
+比较是非结合的：`a == b == c` 是解析错误（`trailing tokens`）。用显式 `&&` 链式：`(a == b) && (b == c)`。
+
+### 比较语义：数值 vs 字符串
+
+`==`、`!=`、`<`、`>`、`<=`、`>=` 按操作数类型分派：
+
+- 若**两个**操作数都是数值（JSON `number`，或可解析为有限数的字符串），比较为**数值**：`1.5 == "1.5"` → `true`；`"10" > "9"` → `true`。
+- 否则，两个操作数被强制为字符串（`null` / `undefined` → `""`）并按**字典序**比较：`"high" == "high"` → `true`；`"9" > "10"` → `false`。
+
+这意味着将一个解析为数字的占位符与 `high` 这样的裸词比较时，始终是字符串比较 —— 这正是你对枚举类字段的期望。
+
+### 操作数
+
+| 操作数 | 语法 | 解析为 |
+|---|---|---|
+| 占位符 | `{steps.x.json.severity}` | 占位符的**原始**值（对象、字符串、数字等）—— 不字符串化 |
+| 引号字符串 | `"high"` 或 `'high'` | 字面字符串。`\X` → 字面 `X`（因此 `\"` 转义引号；`\n` → `n`，不是换行） |
+| 数字 | `42`、`3.14`、`-1`、`1e3` | 一个 JS number |
+| 布尔 | `true` / `false` | `true` / `false` |
+| Null | `null` | `null` |
+| 裸词 | `high`（未加引号） | 视为字符串 `"high"`（总是加引号更稳妥） |
+
+<Callout type="warn">
+  在条件内部，占位符解析为其**原始**值，而非 `task` 模板中使用的字符串化形式。因此当 `count` 是数字时，`{steps.x.json.count} > 5` 做的是数值比较。在 `task` 字符串中，同一占位符会被美化打印为 JSON。
+</Callout>
+
+### 真值性
+
+一个裸操作数（无比较运算符）按真值性求值：
+
+| 值 | 为真？ |
 |---|---|
 | `true` | ✅ |
 | `false` | ❌ |
@@ -486,17 +447,31 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 | 非空对象 | ✅ |
 | `null`、`undefined` | ❌ |
 
-## 运算符优先级参考
+### 字符串转义
 
-从最低到最高绑定：
+单引号和双引号都接受。反斜杠按字面转义下一个字符（`\"` → `"`，`\\` → `\`）。所有其他 `\X` 序列变为字面 `X` —— `\n` 变成两个字符 `n`，**不是**换行。这不同于 JSON/JS 转义，但对条件字符串是正确的 —— 它们只需引号转义。
 
-| 等级 | 运算符 | 结合性 |
+```json title="when-escaping.json"
+{
+  "id": "d",
+  "when": "{steps.x.json.label} == \"high-priority\"",
+  "task": "..."
+}
+```
+
+裸词 `true` / `false` / `null` 是**关键字**，不是字符串。要与字面字符串 `"true"` 比较，请加引号：`{steps.x.json.flag} == "true"`。
+
+### 常见解析错误
+
+| 错误 | 原因 | 修复 |
 |---|---|---|
-| 1 | `\|\|` | 左 |
-| 2 | `&&` | 左 |
-| 3 | `==` `!=` `>` `<` `>=` `<=` | 非结合（链式为解析错误） |
-| 4 | `!`（一元前缀） | 右 |
-| 5 | `( )` 分组 | — |
+| `trailing tokens` | 非结合比较被链式，如 `a == b == c`。 | 显式分组：`(a == b) && (b == c)`。 |
+| `unterminated string` | 缺少闭合引号。 | 闭合引号或转义它。 |
+| `unterminated placeholder` | `{` 没有匹配的 `}`。 | 加上闭合 `}`。 |
+| `unexpected end` | 期望操作数但表达式结束。 | 补全表达式。 |
+| `missing )` | 分组不平衡。 | 让每个 `(` 都有匹配的 `)`。 |
+| `unexpected char` | 分词器不认识的字符。 | 检查是否有杂散标点。 |
+| 阶段在你期望它被跳过时仍运行 | Fail-open：表达式有解析错误。 | 检查阶段的 `warnings` 找错误信息。 |
 
 ---
 
@@ -504,7 +479,7 @@ taskflow 的 DAG 是静态拓扑：边在定义时就固定了。本页的字段
 
 <Cards>
   <Card title="缓存" href="/zh-cn/docs/syntax/caching">
-    记忆化 —— `run-only`、`cross-run`、`off`、fingerprint、TTL。
+    记忆化 —— `run-only`、`cross-run`、`off`、指纹、TTL。
   </Card>
   <Card title="预算" href="/zh-cn/docs/syntax/budget">
     运行级成本上限和超预算行为。
