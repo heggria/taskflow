@@ -5,198 +5,19 @@ description: Run-wide cost and token caps.
 
 # Budget
 
-A `budget` is a run-wide ceiling on accumulated cost or tokens. When the cap is exceeded, taskflow halts the run as `blocked`, preserves every partial output produced so far, and returns a diagnostic `finalOutput`. Set a budget on **any** flow that can fan out unboundedly (`map`, `parallel`, `loop`, `tournament`) — it is the only thing standing between a mis-discovered 500-item array and runaway spend.
+You point a `map` phase at your repo and ask a scout agent to list the changed files. The scout returns 500 of them. Each one spawns a security reviewer. Four run at once. By the time you notice, you've spent twelve dollars on a flow that was supposed to cost forty cents.
+
+A `budget` is the one field that prevents this. It's a run-wide ceiling on accumulated cost or tokens. When the cap is exceeded, taskflow halts the run, preserves every partial output produced so far, and returns a diagnostic. Set it on **any** flow that can fan out unboundedly — `map`, `parallel`, `loop`, `tournament` — and it becomes the only thing standing between a mis-discovered array and runaway spend.
 
 <Callout type="info">
-  Budget is enforced purely from accumulated `usage` records written by each subagent. It costs zero extra tokens and is checked on every retry, every fan-out item, and every DAG layer transition.
+  Budget enforcement costs zero extra tokens. It reads the `usage` records every subagent already writes, and it's checked on every retry, every fan-out item, and every DAG layer transition.
 </Callout>
 
-## Fields
+## Set a budget on every fan-out flow
 
-`budget` is an optional top-level field on the flow definition. Both dimensions are optional; omitting a dimension disables that ceiling.
+If your flow contains `map`, `parallel`, `loop`, or `tournament`, add a `budget`. That's the whole rule.
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `maxUSD` | `number` | — | Halt the run once accumulated **cost** exceeds this many USD. Compared against the sum of every phase's `usage.cost`. |
-| `maxTokens` | `number` | — | Halt the run once accumulated **input + output tokens** exceed this value. `cacheRead`/`cacheWrite`/`contextTokens` are **not** added (cache reads are nearly free; `contextTokens` is a point-in-time gauge, not additive). |
-
-The schema rejects unknown keys (`additionalProperties: false`). At least one of `maxUSD` / `maxTokens` should be set — an empty `budget: {}` object is valid but a no-op.
-
-```json title="budget-both-dimensions.json"
-{
-  "name": "fan-out-audit",
-  "budget": {
-    "maxUSD": 2.0,
-    "maxTokens": 2000000
-  },
-  "phases": [ /* ... */ ]
-}
-```
-
-## How the cap is evaluated
-
-The runtime calls an internal `overBudget(state)` guard at every decision point. It aggregates `usage` across **all** phases in `state.phases` and applies a strict `>` comparison:
-
-- **Cost ceiling:** `aggregateUsage(...).cost > maxUSD` → `"cost $X.XXX exceeded cap $Y"`
-- **Token ceiling:** `(input + output) > maxTokens` → `"tokens N exceeded cap M"`
-
-<Callout type="warn">
-  The comparison is strict (`>`), not `>=`. A run that lands *exactly* on the cap is **not** blocked — only the next token/cent past it triggers the halt. This is intentional: a budget of `maxUSD: 2.0` permits a run that costs precisely `$2.000`.
-</Callout>
-
-The aggregate sums **every** phase, including failed ones, retried attempts, and `budget-skipped` fan-out items (which contribute zero usage). Cache hits (`cacheHit: "cross-run" | "run-only"`) report the cached `usage` but spent no new tokens this run.
-
-## Behavior when the cap is exceeded
-
-Once `overBudget()` returns `over: true`, the runtime takes these actions **immediately**:
-
-| Layer | Action |
-|---|---|
-| **DAG layers** | No new phases spawn. Every remaining phase in subsequent layers is recorded with `status: "skipped"` and `error: "Budget exceeded: <reason>"`. |
-| **In-flight fan-out** (`map` / `parallel`) | The fan-out loop stops spawning new items. Items not yet started are recorded as `stopReason: "budget-skipped"` with `output: "(skipped: budget exceeded)"` and zero usage. |
-| **`loop` iterations** | The next iteration is not started. A reflexion loop treats an exhausted budget as a **hard stop** (same category as timeout/abort) — it does *not* feed the failure back as reflexion input. |
-| **`tournament` judge** | The judge subagent is **skipped**; the first surviving variant is selected as winner with `warnings: ["judge skipped: run aborted or budget exceeded"]`. |
-| **Retries** | The retry loop breaks — no further attempts are made on the failing phase. |
-| **Run terminal state** | `state.status` becomes `"blocked"`. `finalOutput` is `"Budget exceeded — run halted.\nReason: <reason>"` followed by the final phase's partial output. |
-
-### Bounded overshoot
-
-<Callout type="warn">
-  Within a single DAG layer, phases run concurrently up to `concurrency` (default `8`). The budget check fires *after* each phase completes, so at most `concurrency - 1` extra phases in the same layer may start before the cap is detected. This bounded overshoot is by design: once `budgetBlocked` is set, it prevents cascading into subsequent layers, but it cannot revoke spend already in flight.
-</Callout>
-
-If you need a hard ceiling with zero overshoot, set `concurrency: 1` on the flow — phases then run strictly sequentially and the guard is re-evaluated before each one starts.
-
-### Partial outputs are preserved
-
-A blocked run is **not** a failed run. Every phase that completed before the cap is kept in `state.phases` with its `output`, `json`, and `usage`. The `finalOutput` is composed from the last phase that actually produced output (the designated `final` phase, or the last `done` phase in definition order if the final phase was skipped). This means a budget-blocked run can still return useful partial work to the host.
-
-## How costs accumulate per phase type
-
-Budget accounting reads `state.phases[*].usage`, which is populated differently by each phase type:
-
-| Phase type | What counts toward budget |
-|---|---|
-| `agent` | The subagent's `usage` on every attempt. Failed retries are summed before the retry decision (so the guard sees in-flight spend on each attempt). |
-| `parallel` | The sum of every branch's `usage`, aggregated via `mergePhaseState`. |
-| `map` | The sum of every *started* item's `usage`. Budget-skipped items contribute zero. The phase's `usage` reflects only items that actually ran. |
-| `loop` | The cumulative `usage` of every iteration. Each iteration's spend is folded into the live phase state **mid-loop** (not overwritten) — so a reflexion loop cannot spend past the ceiling unnoticed between iterations. |
-| `tournament` | The sum of every variant's `usage` plus the judge's `usage` (when the judge runs). If the judge is skipped, only variant spend counts. |
-| `flow` | The sub-flow runs with its **own** budget (see below). The parent phase records the sub-flow's aggregated usage so the parent's guard sees spawn spend. |
-| `gate` | The gate subagent's `usage`. |
-| `approval` | Zero — no subagent runs (human-in-the-loop only). |
-| `script` | Zero — runs a shell command, no LLM tokens. |
-| `reduce` | The reducer subagent's `usage`. |
-
-### Interaction with retries
-
-Every retry attempt pushes its `usage` into an accumulator *before* the retry decision is made. Concretely, for an `agent` phase:
-
-1. Attempt 1 runs → `usages.push(r.usage)` → `liveRetry.usage = aggregateUsage(usages)`.
-2. `overBudget(state)` is checked. If over, the retry loop **breaks** — no attempt 2.
-3. If under and the failure is retryable, attempt 2 runs and its spend is added on top.
-
-<Callout type="warn">
-  Failed retries **do** count toward budget. A phase that fails three times before succeeding has spent the tokens of all three attempts, and the third attempt may itself push the run over the cap. There is no "refund" for failed attempts — the provider already charged for them.
-</Callout>
-
-A phase declared `idempotent: false` disables the *implicit* transient retry (the runtime safety net), but an explicit `retry: { max }` is still honored — and every explicit retry still counts toward budget.
-
-## Budget clamping in dynamic sub-flows
-
-A `flow` phase runs a sub-taskflow. Sub-flows interact with the parent budget in two distinct ways, depending on whether the sub-flow was **generated inline** (`def`) or **loaded by name** (`use`).
-
-### Inline `def` sub-flows — hard clamp
-
-A generated inline definition cannot raise the parent's cap. `clampSubFlowBudget` takes `min(child, parent)` **per dimension**:
-
-```ts
-maxUSD:    Math.min(child?.maxUSD    ?? Infinity, parent.maxUSD    ?? Infinity)
-maxTokens: Math.min(child?.maxTokens ?? Infinity, parent.maxTokens ?? Infinity)
-```
-
-If the clamped result has no finite dimension left, the sub-flow's `budget` is set to `undefined` (no ceiling) — but the parent's guard still sees the sub-flow's spend because the parent phase records the aggregated sub-phase usage.
-
-```json title="subflow-def-clamped.json"
-{
-  "id": "plan-and-execute",
-  "type": "flow",
-  "def": {
-    "name": "inner-plan",
-    "budget": { "maxUSD": 5.0 },
-    "phases": [ /* ... */ ]
-  }
-}
-```
-
-If the parent flow has `budget: { maxUSD: 2.0 }`, the inner sub-flow's effective cap becomes `$2.0` regardless of its declared `$5.0`. It can only ever be **tighter** than the parent.
-
-### Saved `use` sub-flows — soft inheritance
-
-A sub-flow loaded by `use` enforces its **own** declared budget. If it declares none, it **inherits** the parent's cap as a soft per-flow ceiling:
-
-```ts
-const subDefEffective = subDef.budget || !state.def.budget
-  ? subDef
-  : { ...subDef, budget: state.def.budget };
-```
-
-<Callout type="info">
-  This inheritance is **best-effort**: spend does not cross flow boundaries. The parent's already-spent total is *not* subtracted from the child's inherited cap, so a child inheriting `$2.0` can itself spend up to `$2.0` even if the parent has already spent `$1.50`. The parent's own guard still catches the combined total when the sub-flow returns.
-</Callout>
-
-### Recursive sub-flows
-
-Recursion is blocked by a stack check (`recursionKey === state.flowName`), so a sub-flow cannot infinitely nest to bypass its own budget. The nesting counter is unified across both the `flow` and inline-spawn (`ctx_spawn`) recursion axes.
-
-## Inspecting budget usage in run records
-
-Every run record (`RunState`) persisted to `.taskflow/runs/<flow>/<runId>.json` exposes the information you need to audit spend:
-
-| Field | Location | What it tells you |
-|---|---|---|
-| `def.budget` | top-level | The ceiling that was in effect (`{ maxUSD?, maxTokens? }`). |
-| `status` | top-level | `"blocked"` if the budget was exceeded; `"completed"` / `"failed"` / `"paused"` otherwise. |
-| `phases.<id>.usage` | per-phase | `{ input, output, cacheRead, cacheWrite, cost, contextTokens, turns }` for that phase. `input + output` is what the token ceiling sums. |
-| `phases.<id>.budgetTruncated` | per-phase | `true` when a `map` / `parallel` fan-out was cut short by the cap (or by the `MAX_DYNAMIC_MAP_ITEMS` safety limit). |
-| `phases.<id>.attempts` | per-phase | Total subagent attempts including retries. When `> 1`, a retry happened — and every attempt's spend is in `usage`. |
-| `phases.<id>.cacheHit` | per-phase | `"cross-run"` or `"run-only"` if the result was served from cache (spent no new tokens this run). |
-| `phases.<id>.status` | per-phase | `"skipped"` with `error: "Budget exceeded: ..."` for phases that never ran. |
-
-The terminal `finalOutput` for a budget-blocked run reads:
-
-```
-Budget exceeded — run halted.
-Reason: cost $2.143 exceeded cap $2.000
-
-<final phase's partial output>
-```
-
-<Callout type="tip">
-  To get the run-wide total without summing phases yourself, read the value returned by `executeTaskflow` — `result.totalUsage` is the post-run `aggregateUsage` across all phases. Run records do not store a top-level `totalUsage`; the TUI computes it on read.
-</Callout>
-
-## Best practices for fan-out flows
-
-<Callout type="warn">
-  Set a `budget` on **every** flow containing `map`, `parallel`, `loop`, or `tournament`. These are the only phase types whose item/iteration count is discovered at runtime and can therefore grow without bound.
-</Callout>
-
-### 1. Pair `maxUSD` with `maxTokens` for defense in depth
-
-A model swap can shift spend from cost to tokens (or vice versa). Setting both dimensions protects against either ceiling being blown by a pricing change.
-
-```json title="defense-in-depth.json"
-{
-  "budget": { "maxUSD": 1.5, "maxTokens": 1500000 }
-}
-```
-
-### 2. Cap `map` fan-out with `concurrency` and `budget`
-
-`concurrency` limits *parallelism* (how many items run at once); `budget` limits *total* spend. Use both — `concurrency` alone cannot stop a 500-item array, and `budget` alone still lets `concurrency - 1` extra items overshoot.
-
-```json title="map-with-budget.json"
+```json title="budget-basic.json"
 {
   "name": "summarize-files",
   "budget": { "maxUSD": 1.5 },
@@ -206,7 +27,7 @@ A model swap can shift spend from cost to tokens (or vice versa). Setting both d
       "id": "discover",
       "type": "agent",
       "output": "json",
-      "task": "List files under {args.dir}. Output JSON array of { path }."
+      "task": "List files under {args.dir}. Output a JSON array of { path }."
     },
     {
       "id": "summarize",
@@ -220,7 +41,130 @@ A model swap can shift spend from cost to tokens (or vice versa). Setting both d
 }
 ```
 
-### 3. Estimate per-item cost before fanning out
+Both dimensions are optional. `maxUSD` caps accumulated cost; `maxTokens` caps accumulated input + output tokens. Set one or both. Omitting a dimension disables that ceiling.
+
+```json title="budget-both-dimensions.json"
+{
+  "name": "fan-out-audit",
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [ /* ... */ ]
+}
+```
+
+<Callout type="tip">
+  Pair `maxUSD` with `maxTokens` for defense in depth. A model swap or a pricing change can shift spend from cost to tokens (or vice versa). Setting both protects against either ceiling being blown.
+</Callout>
+
+The schema rejects unknown keys (`additionalProperties: false`). An empty `budget: {}` is valid but a no-op — at least one of `maxUSD` / `maxTokens` should be set.
+
+## What happens when you hit the cap
+
+The moment accumulated spend exceeds the cap, the runtime takes over. No new phases spawn. In-flight fan-out stops spawning items. The run ends as `blocked` — not `failed` — and every partial output produced before the cap is preserved.
+
+| Layer | What happens |
+|---|---|
+| **DAG layers** | Remaining phases are recorded as `skipped` with `error: "Budget exceeded: ..."`. |
+| **In-flight fan-out** (`map` / `parallel`) | The loop stops spawning. Unstarted items become `stopReason: "budget-skipped"` with zero usage. |
+| **`loop` iterations** | The next iteration doesn't start. A reflexion loop treats this as a **hard stop** — the failure is not fed back as reflexion input. |
+| **`tournament` judge** | The judge is **skipped**; the first surviving variant wins, with a warning. |
+| **Retries** | The retry loop breaks — no further attempts. |
+| **Run state** | `status` becomes `"blocked"`. `finalOutput` is `"Budget exceeded — run halted."` plus the reason and the final phase's partial output. |
+
+A blocked run is **not** a failed run. Every phase that completed before the cap keeps its `output`, `json`, and `usage`. The `finalOutput` is composed from the last phase that actually produced output — so a budget-blocked run can still return useful partial work to your conversation.
+
+<Callout type="info">
+  `blocked` means the budget or a `gate` halted the workflow. `failed` means a non-optional phase errored out. Check `state.status` and the per-phase `error` / `budgetTruncated` fields to tell them apart.
+</Callout>
+
+### The comparison is strict
+
+The check uses strict `>`, not `>=`. A run that lands *exactly* on the cap is **not** blocked — only the next cent or token past it triggers the halt. A budget of `maxUSD: 2.0` permits a run that costs precisely `$2.000`.
+
+### Bounded overshoot
+
+Within a single DAG layer, phases run concurrently up to `concurrency` (default `8`). The budget check fires *after* each phase completes, so at most `concurrency - 1` extra phases in the same layer may start before the cap is detected.
+
+<Callout type="warn">
+  This bounded overshoot is by design — once `budgetBlocked` is set, it prevents cascading into subsequent layers, but it cannot revoke spend already in flight. If you need a hard ceiling with zero overshoot, set `concurrency: 1` on the flow. Phases then run strictly sequentially and the guard is re-evaluated before each one starts.
+</Callout>
+
+## How costs accumulate per phase type
+
+Budget accounting reads `state.phases[*].usage`, which each phase type populates differently:
+
+| Phase type | What counts toward budget |
+|---|---|
+| `agent` | The subagent's `usage` on every attempt. Failed retries are summed before the retry decision. |
+| `parallel` | The sum of every branch's `usage`. |
+| `map` | The sum of every *started* item's `usage`. Budget-skipped items contribute zero. |
+| `loop` | The cumulative `usage` of every iteration, folded in **mid-loop** (not overwritten) — so a reflexion loop cannot spend past the ceiling unnoticed between iterations. |
+| `tournament` | Every variant's `usage` plus the judge's (when the judge runs). |
+| `flow` | The sub-flow runs with its **own** budget (see [below](#budget-in-sub-flows)). The parent phase records the sub-flow's aggregated usage. |
+| `gate` | The gate subagent's `usage`. |
+| `approval` | Zero — no subagent runs. |
+| `script` | Zero — no LLM tokens. |
+| `reduce` | The reducer subagent's `usage`. |
+
+<Callout type="info">
+  Cache hits (`cacheHit: "cross-run" | "run-only"`) report the cached `usage` but spent no new tokens this run. `cacheRead`/`cacheWrite`/`contextTokens` are **not** added to the token ceiling — cache reads are nearly free, and `contextTokens` is a point-in-time gauge, not additive.
+</Callout>
+
+## Retries and budget
+
+Every retry attempt pushes its `usage` into an accumulator *before* the retry decision is made. So a phase that fails three times before succeeding has spent the tokens of all three attempts — and the third attempt may itself push the run over the cap.
+
+<Callout type="warn">
+  Failed retries **do** count toward budget. There is no refund for failed attempts — the provider already charged for them.
+</Callout>
+
+A phase declared `idempotent: false` disables the *implicit* transient retry (the runtime safety net), so a flaky provider error won't silently double-charge by re-running a side effect. But an explicit `retry: { max }` is still honored — and every explicit retry still counts toward budget.
+
+```json title="idempotent-false-deploy.json"
+{
+  "id": "deploy",
+  "type": "agent",
+  "idempotent": false,
+  "task": "Run the production deploy. Report the rollout ID.",
+  "retry": { "max": 0 }
+}
+```
+
+## Budget in sub-flows
+
+A `flow` phase runs a sub-taskflow. How the sub-flow's budget interacts with the parent depends on whether the sub-flow was **generated inline** (`def`) or **loaded by name** (`use`).
+
+### Inline `def` sub-flows — hard clamp
+
+A generated inline definition cannot raise the parent's cap. The runtime takes `min(child, parent)` **per dimension**:
+
+```json title="subflow-def-clamped.json"
+{
+  "id": "plan-and-execute",
+  "type": "flow",
+  "def": {
+    "name": "inner-plan",
+    "budget": { "maxUSD": 5.0 },
+    "phases": [ /* ... */ ]
+  }
+}
+```
+
+If the parent flow has `budget: { maxUSD: 2.0 }`, the inner sub-flow's effective cap becomes `$2.0` regardless of its declared `$5.0`. It can only ever be **tighter** than the parent. If the clamped result has no finite dimension left, the sub-flow's `budget` is set to `undefined` — but the parent's guard still sees the sub-flow's spend because the parent phase records the aggregated sub-phase usage.
+
+### Saved `use` sub-flows — soft inheritance
+
+A sub-flow loaded by `use` enforces its **own** declared budget. If it declares none, it **inherits** the parent's cap as a soft per-flow ceiling.
+
+<Callout type="info">
+  This inheritance is **best-effort**: spend does not cross flow boundaries. The parent's already-spent total is *not* subtracted from the child's inherited cap, so a child inheriting `$2.0` can itself spend up to `$2.0` even if the parent already spent `$1.50`. The parent's own guard still catches the combined total when the sub-flow returns.
+</Callout>
+
+Recursion is blocked by a stack check, so a sub-flow cannot infinitely nest to bypass its own budget. The nesting counter is unified across both the `flow` and inline-spawn (`ctx_spawn`) recursion axes.
+
+## Estimate before you fan out
 
 For expensive per-item work, run a cheap **estimator** phase first and let its output decide whether to proceed. This converts an unbounded `map` into a bounded one.
 
@@ -272,9 +216,9 @@ For expensive per-item work, run a cheap **estimator** phase first and let its o
 
 The `when` guard on `review` skips the fan-out entirely when the estimate exceeds half the budget, leaving headroom for the fallback phase. Even with this guard, `budget` still protects against an underestimate.
 
-### 4. Give `loop` and `tournament` their own headroom
+## Give loops and tournaments their own headroom
 
-A reflexion `loop` can spend many iterations refining the same output; a `tournament` runs N variants plus a judge. Set the budget high enough for the *intended* iteration/variant count, then let the guard catch runaway cases.
+A reflexion `loop` can spend many iterations refining the same output. A `tournament` runs N variants plus a judge. Set the budget high enough for the *intended* iteration or variant count, then let the guard catch runaway cases.
 
 ```json title="tournament-with-budget.json"
 {
@@ -292,30 +236,43 @@ A reflexion `loop` can spend many iterations refining the same output; a `tourna
 }
 ```
 
-### 5. Use `idempotent: false` for spend you cannot afford to repeat
+## Inspecting budget usage
 
-A phase that performs an irreversible side effect (deploy, DB write, webhook) should set `idempotent: false`. This disables the implicit transient retry, so a flaky provider error will **not** silently double-charge the budget by re-running the side effect. An explicit `retry: { max }` is still honored if you declare it.
+Every run record persisted to `.pi/taskflows/runs/<flow>/<runId>.json` exposes what you need to audit spend:
 
-```json title="idempotent-false-deploy.json"
-{
-  "id": "deploy",
-  "type": "agent",
-  "idempotent": false,
-  "task": "Run the production deploy. Report the rollout ID.",
-  "retry": { "max": 0 }
-}
+| Field | What it tells you |
+|---|---|
+| `def.budget` | The ceiling that was in effect (`{ maxUSD?, maxTokens? }`). |
+| `status` | `"blocked"` if the budget was exceeded; `"completed"` / `"failed"` / `"paused"` otherwise. |
+| `phases.<id>.usage` | `{ input, output, cacheRead, cacheWrite, cost, contextTokens, turns }` for that phase. `input + output` is what the token ceiling sums. |
+| `phases.<id>.budgetTruncated` | `true` when a `map` / `parallel` fan-out was cut short by the cap (or by the `MAX_DYNAMIC_MAP_ITEMS` safety limit). |
+| `phases.<id>.attempts` | Total subagent attempts including retries. When `> 1`, a retry happened — and every attempt's spend is in `usage`. |
+| `phases.<id>.cacheHit` | `"cross-run"` or `"run-only"` if served from cache (no new tokens this run). |
+| `phases.<id>.status` | `"skipped"` with `error: "Budget exceeded: ..."` for phases that never ran. |
+
+The terminal `finalOutput` for a budget-blocked run reads:
+
+```text title="blocked-final-output"
+Budget exceeded — run halted.
+Reason: cost $2.143 exceeded cap $2.000
+
+<final phase's partial output>
 ```
+
+<Callout type="tip">
+  To get the run-wide total without summing phases yourself, read the value returned by `executeTaskflow` — `result.totalUsage` is the post-run aggregate across all phases. Run records don't store a top-level `totalUsage`; the TUI computes it on read.
+</Callout>
 
 ## Common errors
 
 | Error | Cause | Fix |
 |---|---|---|
 | `Budget exceeded — run halted. Reason: cost $X exceeded cap $Y` | Accumulated `cost` passed `maxUSD`. | Raise `maxUSD`, reduce fan-out (`concurrency` / `over` size), or add a `when` guard to skip expensive phases. |
-| `Budget exceeded — run halted. Reason: tokens N exceeded cap M` | Accumulated `input + output` passed `maxTokens`. | Raise `maxTokens`, switch to a cheaper model via `model`, or pre-read less context (`contextLimit`). |
+| `Budget exceeded — run halted. Reason: tokens N exceeded cap M` | Accumulated `input + output` passed `maxTokens`. | Raise `maxTokens`, switch to a cheaper `model`, or pre-read less context (`contextLimit`). |
 | `N item(s) skipped: budget exceeded` | A `map` / `parallel` fan-out was cut short. | Inspect `phases.<id>.budgetTruncated` in the run record. Raise the budget or reduce `concurrency`. |
 | `judge skipped: run aborted or budget exceeded` | A `tournament` reached the judge step after the cap was hit. | The first surviving variant was selected as winner. Raise the budget or reduce `variants`. |
 | Run status `blocked` but `finalOutput` looks complete | The final phase completed before the cap, but a *later* (non-final) phase pushed the total over. | Reorder so the expensive phase runs before the final phase, or mark a cheaper phase `final: true`. |
 
 <Callout type="info">
-  A `blocked` run is **not** a `failed` run. `blocked` means the budget or a `gate` halted the workflow; `failed` means a non-optional phase errored out. Check `state.status` and the per-phase `error`/`budgetTruncated` fields to distinguish them.
+  A `blocked` run is **not** a `failed` run. `blocked` means the budget or a `gate` halted the workflow; `failed` means a non-optional phase errored out. Check `state.status` and the per-phase `error` / `budgetTruncated` fields to distinguish them.
 </Callout>

@@ -5,85 +5,61 @@ description: Within-run resume and cross-run memoization.
 
 # Caching
 
-taskflow has **two independent layers of reuse**. Understanding both is essential for predictable incremental development and cost control.
+You run the same code audit every morning. Most of the files haven't changed since yesterday — the auth module is the same, the config loader is the same, only one PR touched the billing service. And yet every morning you pay to re-analyze all of it.
+
+taskflow's caching exists to fix exactly this. It has two layers that work at different time scales, and together they make sure you only pay for work whose inputs actually changed.
 
 <Callout type="info">
-  Every phase is **content-addressed**: its resolved inputs are hashed into a 16-hex `inputHash`, and an identical hash means the work can be skipped. The two layers differ only in *where* the prior result is looked up.
+  Every phase is **content-addressed**. Before a phase runs, taskflow hashes everything that could change its output — the task text, the resolved agent, the model, the pre-read context, the upstream outputs — into a 16-character `inputHash`. If that hash matches a prior result, the work is skipped. The two layers below differ only in *where* the prior result is looked up.
 </Callout>
 
+## The two layers at a glance
+
 <Cards>
-  <Card title="Within-run resume" href="#within-run-resume">
-    The default. Reuses a phase's own prior result **inside a single run** (e.g. after an abort+resume). Zero config, scope `"run-only"`.
+  <Card title="Within-run resume" href="#within-run-resume-is-free">
+    The default. Reuses a phase's own result from the **same run** — for example, after you abort and resume. Zero config. Costs nothing.
   </Card>
   <Card title="Cross-run memoization" href="#cross-run-memoization">
-    Opt-in. Reuses a phase's result from **any prior run** of the flow. Scope `"cross-run"`, with optional `ttl` and `fingerprint`.
+    Opt-in. Reuses a phase's result from **any prior run** of the flow. One line of config. Pays $0 for unchanged phases, across sessions.
   </Card>
 </Cards>
 
----
+## Within-run resume is free
 
-## Within-run resume
+The moment you run a flow, within-run resume is already on. You don't configure anything.
 
-**Scope `"run-only"` (the default).** When a flow is re-invoked and a phase's `inputHash` matches a prior `done` phase state from the same run, the phase is skipped and its prior output is reused. The phase state is marked `cacheHit: "run-only"` and its prior `usage` is preserved (so the run summary can report what the reuse would otherwise have cost).
+Here's what it does: if a phase's `inputHash` matches a prior `done` phase from the same run, the phase is skipped and its prior output is reused. The phase is marked `cacheHit: "run-only"`, and its prior `usage` is preserved so the run summary can tell you what the reuse would otherwise have cost.
 
-This is **automatic and zero-config**. It is what makes `resume` cheap: only phases whose inputs actually changed re-execute; everything else is a hash comparison.
+This is what makes `resume` cheap. Abort a run mid-flight, fix a typo, and re-run — only the phases whose inputs actually changed re-execute. Everything else is a hash comparison.
 
-### What feeds the `inputHash`
+```json title="run-only-default.json"
+{
+  "name": "audit",
+  "phases": [
+    {
+      "id": "scan",
+      "type": "agent",
+      "task": "List the changed files under src/."
+    }
+  ]
+}
+```
 
-The hash is computed by `cacheKeys()` and folds in everything that could materially change a subagent's output:
-
-| Input | Source | Notes |
-|---|---|---|
-| Flow name | `state.flowName` | Prevents collisions across flows that share a phase `id` + `task`. |
-| Per-phase structural sub-fingerprint | `state.phaseFingerprints[phase.id]` | Editing phase B invalidates only B + its transitive dependents. Falls back to the whole-flow fingerprint (`flowDefHash`) when per-phase soundness can't be guaranteed (e.g. sub-flow inner states). |
-| Phase `id` | `phase.id` | |
-| Resolved agent name | runtime agent resolution | |
-| `model` override | `phase.model` | |
-| Resolved `task` text | interpolation result | All `{args.X}`, `{steps.X.output}`, `{item.field}` placeholders are resolved *before* hashing. |
-| `thinking` level | `phase.thinking` | |
-| `tools` list | `phase.tools` | JSON-serialized. |
-| Resolved `context` pre-read content | `preRead` | Explicitly part of the cache identity — a `context` file change always invalidates, independent of whether the branch happens to fold `preRead` into the task string. |
-| `fingerprint` string | `resolveFingerprint(phase.cache.fingerprint, cwd)` | Empty string unless `scope === "cross-run"`. |
-
-Per-phase-type additions:
-
-| Phase type | Extra inputs folded into the hash |
-|---|---|
-| `agent` | — (uses the common inputs above) |
-| `parallel` | `JSON.stringify(branches)` (resolved task + agent per branch) |
-| `map` | **Per-item**: each item gets its own key from `[phase.id, item.agent, model, item.task]`. The phase-level key additionally folds `JSON.stringify(tasks)`. |
-| `script` | Interpolated `run` command + `input` stdin |
-| `flow` | Flow identity + `preRead` + `JSON.stringify(subArgs)` |
-| `gate` | Eval-skip / score-skip / judge / gate-task variants (each gate path has its own key) |
-| `loop` | `until` + first body + `maxIters` + reflexion flag |
-| `tournament` | Resolved competitors (embeds the variant task prompts) |
-| `reduce` | Common inputs (the `from` outputs are upstream `inputHash`es) |
-| `approval` | Phase `id` + `model` + `"approval"` + message |
+That's it. No `cache` field, no flags. The phase is already content-addressed and resumable within the run.
 
 <Callout type="tip">
-  Because interpolation happens *before* hashing, a `map` phase that fans out over `{steps.discover.json}` automatically gets a different per-item key when `discover`'s output changes — you don't need a fingerprint for that.
+  Because interpolation happens **before** hashing, a `map` phase that fans out over `{steps.discover.json}` automatically gets a different per-item key when `discover`'s output changes. You don't need a fingerprint for that — the change is already in the hash.
 </Callout>
-
-### Key versioning (backward compatibility)
-
-`cacheKeys()` produces **four** keys for every phase. Only `key` is written; the others are read-only fallbacks so an upgrade never produces a miss-storm:
-
-| Key shape | Era | Role |
-|---|---|---|
-| `v3:phasefp:<subfp>` | current | Write key. Per-phase structural sub-fingerprint. |
-| `v2:flowdef:<flowDefHash>` | pre-M6 | Read-only. Whole-flow fingerprint. |
-| `flowdef:<flowDefHash>` (bare) | pre-H1 | Read-only. Unversioned. |
-| *(flowdef line omitted)* | pre-flowDefHash | Read-only. |
-
-A hit on **any** tier is restored as a cache hit; taskflow does **not** write-through, so the cache size stays stable and legacy entries age out naturally.
-
----
 
 ## Cross-run memoization
 
-**Scope `"cross-run"`.** Opt a phase into persistent reuse across independent runs. The lookup consults the same `inputHash` (plus the resolved `fingerprint`), but against a **persistent on-disk store** under `.pi/taskflows/cache/` in your project.
+Within-run resume only looks inside one run. If you run the same flow *tomorrow*, it starts from scratch — even if nothing changed.
 
-```json title="cross-run-cache-basic.json"
+Cross-run memoization fixes that. Set `cache.scope` to `"cross-run"` and the phase's result is stored on disk under `.pi/taskflows/cache/`. The next run — tomorrow, next week, in a different session — checks the same `inputHash` against that store. A hit means zero tokens, zero cost.
+
+Here's the 80% case: a phase that should reuse its result as long as the git commit hasn't moved.
+
+```json title="cross-run-basic.json"
 {
   "id": "analyze-auth",
   "type": "agent",
@@ -91,88 +67,131 @@ A hit on **any** tier is restored as a cache hit; taskflow does **not** write-th
   "context": ["src/auth/**/*.ts"],
   "cache": {
     "scope": "cross-run",
-    "ttl": "6h",
-    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+    "fingerprint": ["git:HEAD"]
   }
 }
 ```
 
-On a cross-run hit, the **full `PhaseState` is restored** (preserving `gate`, `approval`, `reads`, `loop`/`tournament` metadata, warnings), `usage` is zeroed, and the phase is marked `cacheHit: "cross-run"`. On a miss followed by a successful execution, `recordCache()` writes the entry under the current `key` only.
+Run this once and it costs whatever the agent costs. Run it again at the same commit and it costs nothing. Push a new commit and the `git:HEAD` fingerprint changes, the key changes, and the phase re-executes — which is exactly what you want.
 
-### The `cache` field
+On a cross-run hit, the **full phase state is restored** (preserving `gate` verdicts, `approval` state, `reads`, loop/tournament metadata, warnings), `usage` is zeroed, and the phase is marked `cacheHit: "cross-run"`.
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `scope` | `"run-only" \| "cross-run" \| "off"` | `"run-only"` | Reuse scope. See [Scopes](#scopes). |
-| `ttl` | `string` | — *(no bound)* | Max age before a cross-run hit is treated as a miss. e.g. `"30m"`, `"6h"`, `"7d"`. Omit for no time bound (a 90-day hard backstop always applies). Ignored for `run-only`/`off`. |
-| `fingerprint` | `string[]` | — | Extra world-state inputs folded into the cache key so "the world changed" becomes a miss. Each entry is `<prefix><value>`. See [Fingerprints](#fingerprints). Only consulted when `scope === "cross-run"`. |
+### When should you reach for cross-run?
 
-All three fields are optional. An empty `cache: {}` object is valid and equivalent to the default (`run-only`, no TTL, no fingerprint).
-
-### Scopes
-
-| Scope | Within-run resume | Cross-run read | Cross-run write | When to use |
-|---|---|---|---|---|
-| `"run-only"` *(default)* | ✅ | ❌ | ❌ | Default. Cheap resume after abort; each new run starts fresh. |
-| `"cross-run"` | ✅ | ✅ | ✅ | Repeated runs of the same flow against an unchanged codebase. Pays $0 for unchanged phases. |
-| `"off"` | ❌ | ❌ | ❌ | Force a phase to always re-execute, even within a run. Also the effective scope for `idempotent: false` phases. |
+| Situation | Use cross-run? | Why |
+|---|---|---|
+| You run the same flow repeatedly against a codebase that rarely changes | ✅ Yes | Pays $0 for unchanged phases across sessions. |
+| A phase reads `context` files that change often | ✅ Yes, with a `file:` or `glob!:` fingerprint | The fingerprint makes the cache miss when the files change. |
+| A phase produces a side effect (deploy, webhook, DB write) | ❌ No | Use `idempotent: false` instead — side effects must never be replayed from cache. |
+| The phase is a `gate`, `approval`, `loop`, `tournament`, or `script` | ❌ No | These are blocked from cross-run (see [below](#blocked-phase-types)). |
+| You only need cheap resume after an abort | ❌ No need | The default `run-only` already covers this. |
 
 <Callout type="warn">
-  `"cross-run"` is **rejected** on `gate`, `approval`, `loop`, `tournament`, and `script` phases — they must produce a fresh result each run. See [Blocked phase types](#cross-run-blocked-phase-types).
+  `"cross-run"` is **rejected** on `gate`, `approval`, `loop`, `tournament`, and `script` phases. A gate's verdict must reflect the *current* upstream output; a cached `PASS` could let broken work through. The schema catches this at verify time; the runtime downgrades it as defense in depth.
 </Callout>
 
----
+## The `cache` field
 
-## Fingerprints
+Three optional fields. An empty `cache: {}` is valid and equivalent to the default.
 
-A `fingerprint` folds **implicit world-state** into the cache key. Without one, a `cross-run` phase only invalidates when its *declared* inputs change (task text, context files, args, upstream outputs). A fingerprint adds external signals — git commit, file contents, env vars — so that "the world changed" reliably produces a cache miss.
+| Field | Default | What it does |
+|---|---|---|
+| `scope` | `"run-only"` | Where to look for a prior result: `"run-only"` (same run), `"cross-run"` (any prior run), or `"off"` (never reuse). |
+| `ttl` | *(none)* | Max age for a cross-run hit, e.g. `"6h"`, `"7d"`. Omit for no time bound (a 90-day hard backstop always applies). Ignored for `run-only`/`off`. |
+| `fingerprint` | *(none)* | Extra world-state signals folded into the key — git commit, file contents, env vars. Only consulted when `scope === "cross-run"`. |
 
-Each entry is a string `<prefix><value>`. The runtime resolves each entry to a deterministic string, then hashes the concatenation into a 16-hex digest that becomes part of the cache key.
+### The three scopes
 
-### Prefix reference
+| Scope | Within-run resume | Cross-run read | Cross-run write | Use when |
+|---|---|---|---|---|
+| `"run-only"` *(default)* | ✅ | ❌ | ❌ | You want cheap resume but each run starts fresh. |
+| `"cross-run"` | ✅ | ✅ | ✅ | You run the same flow repeatedly against an unchanged codebase. |
+| `"off"` | ❌ | ❌ | ❌ | The phase must always re-execute, even within a run. Also the effective scope for `idempotent: false`. |
 
-| Prefix | Resolves to | Cost | Failure mode |
-|---|---|---|---|
-| `git:HEAD` *(or `git:<ref>`)* | `git rev-parse <ref>` (commit SHA) | one git call, 30s timeout | non-git repo → `git:<ref>=<no-git>`; timeout → `git:<ref>=<timeout>`; flag-like ref → `git:<ref>=<invalid-ref>` |
-| `glob:<pattern>` | **Stat-based**: `size:mtime` of each matched file | cheap (stat only) | glob error → `<glob-error>`; per-file stat error → `<stat-error>` |
-| `glob!:<pattern>` | **Content hash**: SHA-256 (16 hex) of each matched file | reads file bytes | files >10 MB or non-regular → `<skip>` |
-| `file:<path>` | Content hash (SHA-256, 16 hex) of a single file | reads file bytes | >10 MB → `<skip>`; missing → `<file>:<path>=<missing>` |
-| `env:<NAME>` | Value of `process.env[NAME]` | free | unset → empty string |
+## TTL: when stale results are dangerous
+
+Sometimes "the inputs haven't changed" isn't enough — the result itself goes stale. A security summary written two weeks ago may not reflect a vulnerability introduced yesterday, even if the task text and context files are byte-identical.
+
+`ttl` puts a time bound on a cross-run hit:
+
+```json title="ttl-example.json"
+{
+  "id": "security-summary",
+  "type": "agent",
+  "task": "Summarize known security risks in src/.",
+  "cache": {
+    "scope": "cross-run",
+    "ttl": "6h",
+    "fingerprint": ["git:HEAD"]
+  }
+}
+```
+
+This phase reuses its result for up to six hours after it was first computed. After that, the entry is treated as a miss and the phase re-executes.
+
+The grammar is a number followed by an optional unit:
+
+| Unit | Multiplier | Example |
+|---|---|---|
+| `ms` | 1 | `"500ms"` |
+| `s` | 1,000 | `"90s"` |
+| `m` | 60,000 | `"30m"` |
+| `h` | 3,600,000 | `"6h"` |
+| `d` | 86,400,000 | `"7d"` |
+| *(omitted)* | 1 (ms) | `"60000"` |
 
 <Callout type="info">
-  All fingerprint resolution is **failure-tolerant and deterministic**. A missing file, a non-git repo, or an unreadable path resolves to a stable sentinel string — the key stays deterministic. If the resource later *appears*, the sentinel changes to a real value, the key changes, and the cache misses. **The safe direction.**
+  Omitting `ttl` means **no time bound** — but a **90-day hard backstop** always applies. Entries older than 90 days are evicted regardless of TTL. TTL is a *maximum*; the backstop is the floor.
 </Callout>
 
-### Choosing between `glob:` and `glob!:`
+A malformed or non-positive `ttl` is a hard validation error. Run `/tf verify` to catch it before any tokens are spent.
 
-<Tabs items={['glob:', 'glob!:']}>
-  <Tab value="glob:">
-    **glob: (stat-based)** — Use when **modifications** to matched files should invalidate the cache but you don't want to pay the I/O of reading file contents. Cheapest option. Best for large trees where mtime is a good proxy for "something changed".
+## Fingerprints: telling the cache about the world
+
+Without a fingerprint, a `cross-run` phase only invalidates when its *declared* inputs change — the task text, the `context` files, the `args`, the upstream outputs. That's usually enough. But sometimes the thing that should invalidate the cache lives outside the flow definition: the current git commit, the contents of a config file, the value of an environment variable.
+
+A `fingerprint` folds those external signals into the cache key. Each entry is a string `<prefix><value>`. The runtime resolves each entry to a deterministic string, hashes the concatenation, and folds the digest into the key.
+
+### The five prefixes
+
+| Prefix | Resolves to | Cost | When it misses |
+|---|---|---|---|
+| `git:HEAD` *(or `git:<ref>`)* | The commit SHA from `git rev-parse` | One git call | You push a new commit. |
+| `glob:<pattern>` | `size:mtime` of each matched file (stat only) | Cheap | A matched file is modified. |
+| `glob!:pattern` | SHA-256 of each matched file's contents | Reads file bytes | A matched file's *content* changes (survives mtime resets). |
+| `file:<path>` | SHA-256 of a single file | Reads file bytes | That file's content changes. |
+| `env:<NAME>` | The value of `process.env[NAME]` | Free | The env var changes. |
+
+<Callout type="info">
+  All fingerprint resolution is **failure-tolerant and deterministic**. A missing file, a non-git repo, or an unreadable path resolves to a stable sentinel string. If the resource later *appears*, the sentinel changes to a real value, the key changes, and the cache misses — the safe direction.
+</Callout>
+
+### `glob:` vs `glob!:`
+
+<Tabs items={['glob: (stat)', 'glob!: (content)']}>
+  <Tab value="glob: (stat)">
+    Use **`glob:`** when modifications to matched files should invalidate the cache, but you don't want to pay the I/O of reading file contents. This is the cheapest option and works well for large trees where `mtime` is a good proxy for "something changed."
 
     ```json title="fingerprint-glob-stat.json"
     "fingerprint": ["glob:src/**/*.ts"]
     ```
+
+    The catch: `git checkout` resets mtimes, and CI may restore them non-deterministically. If you see false cache hits after a checkout, switch to `glob!:`.
   </Tab>
-  <Tab value="glob!:">
-    **glob!: (content-hash)** — Use when mtime is unreliable (e.g. `git checkout` resets mtimes, CI restores mtimes non-deterministically, or a build step touches files without changing content). Reads and hashes each file (≤10 MB each).
+  <Tab value="glob!: (content)">
+    Use **`glob!:`** when mtime is unreliable. It reads and hashes each matched file (up to 10 MB each), so the cache misses on a real content change even if the mtime was reset.
 
     ```json title="fingerprint-glob-content.json"
     "fingerprint": ["glob!:src/**/*.ts"]
     ```
+
+    Costs more I/O, but it's the correct choice after `git checkout` or in CI.
   </Tab>
 </Tabs>
 
-### Defensive caps
+### A realistic fingerprint
 
-| Cap | Value | Effect |
-|---|---|---|
-| Max glob matches per entry | `5000` | Matches beyond this are dropped before hashing. |
-| Max file bytes for content-hash | `10 MB` | Larger files resolve to `<skip>` (kept in the match list but not hashed). |
-| Glob match ordering | sorted | Stable across platforms/runs. |
-
-### Examples
-
-```json title="fingerprint-git-and-glob.json"
+```json title="fingerprint-realistic.json"
 {
   "id": "lint-summary",
   "type": "agent",
@@ -184,155 +203,98 @@ Each entry is a string `<prefix><value>`. The runtime resolves each entry to a d
 }
 ```
 
-```json title="fingerprint-env-driven.json"
-{
-  "id": "report",
-  "type": "agent",
-  "task": "Generate a report for the {args.env} environment.",
-  "cache": {
-    "scope": "cross-run",
-    "fingerprint": ["env:NODE_ENV", "file:config/report-template.md"]
-  }
-}
-```
+This misses when the commit moves, when any TypeScript file is modified, or when `package.json`'s content changes — three independent signals, all folded into one digest.
 
 <Callout type="warn">
-  Fingerprint entries are validated at zero cost by `/tf verify`. An entry without a known prefix, or with an empty value after the prefix, is a hard validation error — the flow will not run.
+  Fingerprint entries are validated at zero cost by `/tf verify`. An entry without a known prefix, or with an empty value after the prefix, is a hard error — the flow will not run.
 </Callout>
 
----
+## Opt the whole flow in: `incremental: true`
 
-## TTL parsing rules
-
-`ttl` is parsed by `parseTtlMs()` into milliseconds. The grammar:
-
-```text title="ttl-grammar"
-<number>[<unit>]
-```
-
-- `<number>` is a decimal (`\d+(?:\.\d+)?`), must be positive.
-- `<unit>` is optional and case-insensitive.
-
-| Unit | Multiplier | Example |
-|---|---|---|
-| `ms` | 1 | `"500ms"` → 500 ms |
-| `s` | 1,000 | `"90s"` → 90,000 ms |
-| `m` | 60,000 | `"30m"` → 1,800,000 ms |
-| `h` | 3,600,000 | `"6h"` → 21,600,000 ms |
-| `d` | 86,400,000 | `"7d"` → 604,800,000 ms |
-| *(omitted)* | 1 (ms) | `"60000"` → 60,000 ms |
-
-```json title="ttl-examples.json"
-[
-  { "scope": "cross-run", "ttl": "30m" },
-  { "scope": "cross-run", "ttl": "6h" },
-  { "scope": "cross-run", "ttl": "7d" },
-  { "scope": "cross-run", "ttl": "500ms" },
-  { "scope": "cross-run", "ttl": "90s" },
-  { "scope": "cross-run", "ttl": "60000" }
-]
-```
-
-A malformed or non-positive `ttl` returns `null` and is a **hard validation error** (`invalid cache.ttl '...' (expected e.g. '30m', '6h', '7d')`).
-
-<Callout type="info">
-  Omitting `ttl` means **no time bound** — but a **90-day hard backstop** (`DEFAULT_MAX_AGE_MS`) always applies, regardless of `ttl`. Entries older than 90 days are treated as misses and evicted.
-</Callout>
-
----
-
-## Cross-run blocked phase types
-
-These phase types **cannot** use `cache.scope: "cross-run"`:
-
-| Phase type | Why blocked |
-|---|---|
-| `gate` | A gate's verdict must reflect the *current* upstream output; a stale PASS/BLOCK could let broken work through or halt a fixed flow. |
-| `approval` | A human decision must be re-obtained each run; auto-approving from a prior run defeats the purpose. |
-| `loop` | Convergence is stateful — the loop must re-walk its iteration trajectory against current inputs. |
-| `tournament` | Variants and the judge must be regenerated fresh; a cached "winner" could be stale relative to changed inputs. |
-| `script` | Shell commands frequently have side effects (writes, deploys); caching them is unsound. |
-
-This is enforced **twice**:
-
-1. **Schema validation** (`/tf verify`, zero cost): `cache.scope: "cross-run"` on any of these types is a hard error.
-2. **Runtime defense-in-depth**: even if a blocked scope somehow reaches execution, it is silently downgraded to `"run-only"`.
-
-<Callout type="warn">
-  There is one additional runtime guard: if the flow-definition hash failed to compute (`flowDefHash === "failed"`), **all** `cross-run` phases are downgraded to `"run-only"` for that run — the key would otherwise degrade to flow-name-only and reopen cross-flow collisions.
-</Callout>
-
----
-
-## Interaction with `idempotent: false`
-
-`idempotent: false` marks a phase as having **irreversible side effects** (webhook POSTs, deploys, DB writes). Its effect on caching is absolute:
-
-| Behavior | Effect |
-|---|---|
-| Effective cache scope | **`"off"`** — one assignment covers every cache path, including the `map` per-item path. |
-| Within-run resume | ❌ Disabled. |
-| Cross-run read | ❌ Disabled. |
-| Cross-run write | ❌ Disabled. |
-| Transient auto-retry | ❌ Disabled (a 429 mid-deploy must not fire the side effect twice). |
-| Explicit `retry {}` | ✅ Still honored — the author has declared a repeat is acceptable. |
-| Phase state | Records `sideEffect: true` for audit. |
-
-<Callout type="warn">
-  `idempotent: false` is a **no-op** on `approval` and `flow` phases (they run no subagent, so there's no transient retry to disable, and they're already excluded from cross-run cache). Validation emits a warning.
-</Callout>
-
-Validation also warns when:
-- `idempotent: false` is combined with `cache.scope: "cross-run"` (the side-effect override wins; the phase re-runs every time).
-- `idempotent: false` appears under a flow with `incremental: true` and no explicit `cache.scope` (the phase is excluded from the incremental default and will re-run every invocation — this is the safe behavior for side effects).
-
----
-
-## Interaction with `incremental` (flow-wide)
-
-`incremental: true` at the **flow level** defaults every phase's cache scope to `"cross-run"`, so re-running the flow reuses unchanged phases across runs/sessions.
+If most of your phases should be cross-run cached, set `incremental: true` at the flow level. It defaults every phase's cache scope to `"cross-run"`.
 
 ```json title="incremental-flow.json"
 {
   "name": "code-review",
   "incremental": true,
   "phases": [
-    { "id": "discover", "type": "agent", "task": "List the changed files.", "cache": { "scope": "cross-run", "fingerprint": ["git:HEAD"] } },
-    { "id": "review",   "type": "agent", "task": "Review {steps.discover.output}.", "dependsOn": ["discover"] }
+    {
+      "id": "discover",
+      "type": "agent",
+      "task": "List the changed files.",
+      "cache": { "fingerprint": ["git:HEAD"] }
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "task": "Review {steps.discover.output}.",
+      "dependsOn": ["discover"]
+    }
   ]
 }
 ```
 
-### Precedence rules
+Now re-running the flow reuses unchanged phases across runs and sessions. The precedence rules are simple:
 
 <Steps>
-  <Step title="Invocation-level `incremental` arg wins">
-    A run-time `incremental` argument (passed to the `taskflow` tool) overrides the flow's own `incremental` field. Omit it to use the flow's setting.
+  <Step title="Invocation arg wins">
+    A run-time `incremental` argument overrides the flow's own field. Omit it to use the flow's setting.
   </Step>
-  <Step title="Per-phase `cache.scope` wins over the flow default">
-    A phase that explicitly sets `cache.scope` keeps that scope regardless of `incremental`. Set a phase to `"run-only"` or `"off"` to opt it out of incremental reuse.
+  <Step title="Per-phase scope wins over the flow default">
+    A phase that explicitly sets `cache.scope` keeps that scope. Set a phase to `"run-only"` or `"off"` to opt it out.
   </Step>
   <Step title="Blocked types are still blocked">
     `gate`/`approval`/`loop`/`tournament`/`script` are downgraded to `"run-only"` even under `incremental`.
   </Step>
-  <Step title="`idempotent: false` still wins">
-    Side-effecting phases are downgraded to `"off"` even under `incremental` — they re-run every invocation.
-  </Step>
-  <Step title="Default is off">
-    Without `incremental` (flow or invocation), the default is `"run-only"` — each run starts fresh unless a phase opts in.
+  <Step title="Side effects still win">
+    `idempotent: false` phases are downgraded to `"off"` — they re-run every invocation, even under `incremental`.
   </Step>
 </Steps>
 
----
+## Edge cases worth knowing
+
+### `idempotent: false` disables all caching
+
+A phase that performs an irreversible side effect (a deploy, a webhook POST, a DB write) must never be replayed from cache. Set `idempotent: false` and the effective scope becomes `"off"` — one assignment covers every cache path, including the `map` per-item path.
+
+| Behavior | Effect |
+|---|---|
+| Within-run resume | ❌ Disabled |
+| Cross-run read | ❌ Disabled |
+| Cross-run write | ❌ Disabled |
+| Transient auto-retry | ❌ Disabled (a 429 mid-deploy must not fire the side effect twice) |
+| Explicit `retry {}` | ✅ Still honored — the author declared a repeat is acceptable |
+
+<Callout type="warn">
+  `idempotent: false` is a **no-op** on `approval` and `flow` phases — they run no subagent, so there's no transient retry to disable, and they're already excluded from cross-run cache. Validation emits a warning.
+</Callout>
+
+### Blocked phase types
+
+These phase types **cannot** use `cache.scope: "cross-run"`:
+
+| Phase type | Why blocked |
+|---|---|
+| `gate` | A gate's verdict must reflect the *current* upstream output; a stale PASS/BLOCK could let broken work through or halt a fixed flow. |
+| `approval` | A human decision must be re-obtained each run. |
+| `loop` | Convergence is stateful — the loop must re-walk its iteration trajectory against current inputs. |
+| `tournament` | Variants and the judge must be regenerated fresh. |
+| `script` | Shell commands frequently have side effects; caching them is unsound. |
+
+This is enforced **twice**: schema validation rejects it at `/tf verify` (zero cost), and the runtime downgrades it to `"run-only"` as defense in depth.
+
+### When the flow definition can't be hashed
+
+If the flow-definition hash fails to compute (`flowDefHash === "failed"`), **all** cross-run phases are downgraded to `"run-only"` for that run. Without the flow hash, the key would degrade to flow-name-only and reopen cross-flow collisions. Run `/tf verify` to diagnose why the hash failed.
 
 ## How the cache key is computed
 
-The full identity for a `cross-run` phase is:
+The full identity for a `cross-run` phase is a SHA-256, truncated to 16 hex characters:
 
 ```text title="cache-key-composition"
 key = sha256(
   "flow:" + flowName,
-  "v3:phasefp:" + (phaseFp ?? flowDefHash),
+  "v3:phasefp:" + (phaseFp ?? flowDefHash),   // per-phase structural sub-fingerprint
   phaseId,
   agentName,
   model,
@@ -340,92 +302,78 @@ key = sha256(
   "think:" + thinking,
   "tools:" + JSON(tools),
   "ctx:" + preRead,          // resolved context file contents
-  fingerprintDigest          // sha256 of resolved fingerprint entries (only if cross-run)
+  fingerprintDigest          // only when scope === "cross-run"
 ).slice(0, 16)
 ```
 
-For `map` phases, **each item** additionally gets a per-item key:
+A few things worth noting:
 
-```text title="map-per-item-key-composition"
-perItemKey = sha256(
-  "flow:" + flowName,
-  "v3:phasefp:" + (phaseFp ?? flowDefHash),
-  phaseId,
-  itemAgent,
-  model,
-  resolvedItemTaskText,
-  "think:" + thinking,
-  "tools:" + JSON(tools),
-  "ctx:" + preRead,
-  fingerprintDigest
-).slice(0, 16)
-```
+- **Interpolation happens before hashing.** A `map` phase that fans out over `{steps.discover.json}` gets a different key per item when `discover`'s output changes — no fingerprint needed.
+- **`context` file contents are part of the identity.** Editing a `context` file always invalidates the phase, independent of whether the task text mentions it.
+- **The fingerprint digest is only resolved for `cross-run` phases.** For `run-only` it's an empty string — within-run resume already captures declared-input changes.
+- **Editing phase B invalidates only B and its transitive dependents**, not the whole flow. That's the per-phase structural sub-fingerprint (`v3:phasefp:`).
 
-A per-item hit synthesizes a 0-token `done` result for that item; a per-item miss executes only that item and records it independently.
+### Per-phase-type additions
 
-<Callout type="info">
-  The `fingerprintDigest` is only resolved when `scope === "cross-run"`. For `run-only` phases it is an empty string — fingerprints are ignored entirely. This is intentional: within-run resume already captures declared-input changes via the inputHash.
-</Callout>
+Each phase type folds a little more into the key:
 
----
+| Phase type | Extra inputs folded into the hash |
+|---|---|
+| `agent` | — (the common inputs above) |
+| `parallel` | `JSON.stringify(branches)` (resolved task + agent per branch) |
+| `map` | **Per-item**: each item gets its own key from `[phase.id, item.agent, model, item.task]`. The phase-level key additionally folds `JSON.stringify(tasks)`. |
+| `script` | Interpolated `run` command + `input` stdin |
+| `flow` | Flow identity + `preRead` + `JSON.stringify(subArgs)` |
+| `gate` | Eval-skip / score-skip / judge / gate-task variants (each gate path has its own key) |
+| `loop` | `until` + first body + `maxIters` + reflexion flag |
+| `tournament` | Resolved competitors (embeds the variant task prompts) |
+| `reduce` | Common inputs (the `from` outputs are upstream `inputHash`es) |
+| `approval` | Phase `id` + `model` + `"approval"` + message |
 
-## Cache invalidation patterns
+### Backward compatibility: four keys, one write
 
-A cache hit requires the `inputHash` (and, for cross-run, the fingerprint + TTL) to match. Anything that changes any of these produces a miss:
+`cacheKeys()` produces **four** keys for every phase. Only `key` is written; the others are read-only fallbacks so an upgrade never produces a miss-storm:
 
-| Change | Why it invalidates | Layer |
+| Key shape | Era | Role |
 |---|---|---|
-| Edit `task` text | Resolved task changes → hash changes | Both |
-| Change `model` / `thinking` / `tools` | Folded into key explicitly | Both |
-| Edit a `context` file | `preRead` changes → `ctx:` line changes | Both |
-| Change `args` | Interpolation resolves differently → task/over changes | Both |
-| Upstream phase output changes | `{steps.X.output}` resolves differently → task changes | Both |
-| `map` `over` array changes | Per-item keys change per item | Both |
-| Edit the flow definition | `phaseFp` / `flowDefHash` changes → key changes | Both (per-phase: only B + transitive deps) |
-| Git HEAD moves | `git:HEAD` fingerprint changes | Cross-run only |
-| Matched glob files change (mtime or content) | `glob:` / `glob!:` digest changes | Cross-run only |
-| A fingerprinted file's content changes | `file:` digest changes | Cross-run only |
-| An `env:` variable changes | `env:` value changes | Cross-run only |
-| TTL expires | Entry age > `ttlMs` → treated as miss | Cross-run only |
-| 90-day hard backstop exceeded | Entry evicted regardless of TTL | Cross-run only |
-| `cache.scope: "off"` | Never reused | Both |
-| `idempotent: false` | Effective scope `"off"` | Both |
+| `v3:phasefp:<subfp>` | current | Write key. Per-phase structural sub-fingerprint. |
+| `v2:flowdef:<flowDefHash>` | pre-M6 | Read-only. Whole-flow fingerprint. |
+| `flowdef:<flowDefHash>` (bare) | pre-H1 | Read-only. Unversioned. |
+| *(flowdef line omitted)* | pre-flowDefHash | Read-only. |
 
-<Callout type="tip">
-  Editing phase B in a saved flow invalidates **only B and its transitive dependents** — not the entire flow. This is the per-phase structural sub-fingerprint (`v3:phasefp:`). Re-running an edited flow is cheap: unchanged phases still hit.
+A hit on **any** tier is restored as a cache hit. taskflow does **not** write-through, so the cache size stays stable and legacy entries age out naturally.
+
+## Where the cache lives
+
+The cross-run cache is a directory of `.json` files under `.pi/taskflows/cache/` in your project — the nearest `.pi` directory walking up from `cwd`, never `~/.pi/`.
+
+| Property | Value |
+|---|---|
+| Location | `.pi/taskflows/cache/` (per-project, per-cwd) |
+| File format | One `CacheEntry` per `<key>.json` |
+| Max entries | `1000` (LRU-ish eviction by `createdAt`) |
+| Hard max age | `90 days` (applied regardless of `ttl`) |
+| Write atomicity | `writeFileAtomic` + file lock |
+| Key format | `/^[0-9a-f]{8,64}$/` (prevents path traversal) |
+| Failure tolerance | Best-effort, never throws — a broken cache never breaks a run |
+
+Eviction is **opportunistic**: triggered on each write. Entries older than the 90-day backstop are dropped; if the live count exceeds 1000, the oldest go first.
+
+<Callout type="warn">
+  Defensive caps: a single `glob:` / `glob!:` entry hashes at most **5000** matched files; files larger than **10 MB** are skipped (kept in the match list but not hashed). Glob matches are sorted, so the key is stable across platforms.
 </Callout>
-
----
-
-## Cache store & eviction
-
-The cross-run cache is a directory of `.json` files under `.pi/taskflows/cache/` in your project (the nearest `.pi` directory walking up from `cwd`; never `~/.pi/`).
-
-| Property | Value | Notes |
-|---|---|---|
-| Location | `.pi/taskflows/cache/` | Per-project, per-cwd. |
-| File format | `<key>.json` | One `CacheEntry` per file. |
-| Max entries | `1000` (`DEFAULT_MAX_ENTRIES`) | LRU-ish eviction by `createdAt`. |
-| Hard max age | `90 days` (`DEFAULT_MAX_AGE_MS`) | Applied regardless of `ttl`. |
-| Write atomicity | `writeFileAtomic` + file lock | `withLock` around each write. |
-| Key format | `/^[0-9a-f]{8,64}$/` | Prevents path traversal. |
-| Failure tolerance | Best-effort, never throws | A broken cache never breaks a run — misses just re-execute. |
-
-Eviction is **opportunistic**: triggered on each `put()`. Entries older than the 90-day backstop are dropped; if the live count exceeds 1000, the oldest are evicted first.
-
----
 
 ## Debugging
 
 ### Reading the reuse summary
 
-Every run result carries a `reuse` summary (`RuntimeResult.reuse`):
+Every run result carries a `reuse` summary:
 
 | Field | Meaning |
 |---|---|
 | `executed` | Phases that ran a subagent this run. |
-| `reusedRunOnly` | Phases served from within-run resume (no new tokens). Prior `usage` preserved. |
-| `reusedCrossRun` | Phases restored from the cross-run store (no new tokens). `usage` zeroed. |
+| `reusedRunOnly` | Phases served from within-run resume. Prior `usage` preserved. |
+| `reusedCrossRun` | Phases restored from the cross-run store. `usage` zeroed. |
 | `done` | `executed + reusedRunOnly + reusedCrossRun`. |
 | `savedUSD` | USD the within-run-reused phases would have cost. Cross-run hits excluded (cost not recoverable). |
 
@@ -433,9 +381,7 @@ Each phase state carries a `cacheHit` marker: `"run-only"`, `"cross-run"`, or `u
 
 ### Forcing a re-run
 
-<Callout type="info">
-  A `forceRerun` seed (the M5 recompute path) bypasses **both** the within-run prior **and** the cross-run store for a single phase. Downstream phases are **not** forced — they re-evaluate naturally: if the seed's new output changed their `inputHash`, they miss and re-run; otherwise they hit (early cutoff).
-</Callout>
+A `forceRerun` seed bypasses **both** the within-run prior **and** the cross-run store for a single phase. Downstream phases are **not** forced — they re-evaluate naturally: if the seed's new output changed their `inputHash`, they miss and re-run; otherwise they hit.
 
 ### Inspecting the cache
 
@@ -454,41 +400,36 @@ cat .pi/taskflows/cache/<key>.json | jq '{flowName, phaseId, runId, createdAt, o
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Phase re-runs despite `cross-run` | No `fingerprint`, and a declared input changed (e.g. `{args.X}`) | Expected behavior — add a fingerprint if the change shouldn't invalidate. |
+| Phase re-runs despite `cross-run` | No `fingerprint`, and a declared input changed (e.g. `{args.X}`) | Expected — add a fingerprint if the change shouldn't invalidate. |
 | Phase re-runs despite unchanged inputs | `git checkout` reset mtimes and you used `glob:` | Switch to `glob!:` (content-hash). |
-| Cross-run never hits | `idempotent: false` (effective scope `"off"`) | Remove `idempotent: false` or accept it must re-run. |
+| Cross-run never hits | `idempotent: false` (effective scope `"off"`) | Remove it, or accept the phase must re-run. |
 | Cross-run never hits | Phase is a blocked type (`gate`/`approval`/`loop`/`tournament`/`script`) | Expected — these can't be cross-run cached. |
-| Cross-run never hits | `flowDefHash === "failed"` (whole-flow downgrade) | Check `/tf verify` for flow-definition errors. |
+| Cross-run never hits | `flowDefHash === "failed"` (whole-flow downgrade) | Run `/tf verify` for flow-definition errors. |
 | Stale result after editing a flow | Old entry still matches a legacy key shape | The four-tier read falls back to legacy keys; edit the phase structurally to move its `phaseFp`, or clear the cache. |
 | TTL seems ignored | Entry is under the 90-day backstop but TTL is longer | TTL is a *maximum*; the 90-day backstop always applies. |
-| Cache grows unbounded | Cleanup is opportunistic (on `put()`) | Run any flow to trigger cleanup, or `rm` files manually. |
+| Cache grows unbounded | Cleanup is opportunistic (on write) | Run any flow to trigger cleanup, or `rm` files manually. |
 
 ### Clearing the cache
 
-There is no first-class clear command in the DSL; the store is just files. Remove the directory:
+There's no clear command in the DSL — the store is just files:
 
 ```bash title="clear-cache.sh"
 rm -rf .pi/taskflows/cache/
 ```
 
 <Callout type="warn">
-  Clearing the cache is safe — the worst case is that the next run re-executes everything. No run state is lost (run state lives under `.pi/taskflows/runs/`, not `cache/`).
+  Clearing the cache is safe. The worst case is that the next run re-executes everything. No run state is lost — run state lives under `.pi/taskflows/runs/`, not `cache/`.
 </Callout>
-
----
 
 ## Common errors
 
 | Error | Cause | Fix |
 |---|---|---|
-| `unknown cache.scope '...'` | Scope is not one of `run-only`, `cross-run`, `off`. | Use a valid scope. |
-| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script phases` | A blocked phase type opted into `cross-run`. | Use `"run-only"` (the default) or restructure the flow. |
-| `invalid cache.fingerprint entry '...'` | Entry lacks a known prefix or has an empty value. | Use `git:`, `glob:`, `glob!:`, `file:`, or `env:` followed by a non-empty value. |
-| `cache.fingerprint entries must be strings` | A non-string slipped into the array. | Ensure every entry is a string. |
+| `unknown cache.scope '...'` | Scope is not `run-only`, `cross-run`, or `off`. | Use a valid scope. |
+| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script` | A blocked phase type opted into `cross-run`. | Use `"run-only"` (the default) or restructure the flow. |
+| `invalid cache.fingerprint entry '...'` | Entry lacks a known prefix or has an empty value. | Use `git:`, `glob:`, `glob!:`, `file:`, or `env:` with a non-empty value. |
 | `invalid cache.ttl '...'` | TTL doesn't match the `<number>[<unit>]` grammar or is non-positive. | Use e.g. `"30m"`, `"6h"`, `"7d"`. |
-| `'cache' must be an object` | `cache` is set to a non-object (e.g. a string). | Set `cache` to an object `{ ... }`. |
-
----
+| `'cache' must be an object` | `cache` is set to a non-object. | Set `cache` to an object `{ ... }`. |
 
 ## Next
 
