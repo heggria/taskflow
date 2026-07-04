@@ -5,7 +5,9 @@ description: 运行内续跑和跨运行记忆化。
 
 # 缓存
 
-taskflow 有两层复用：运行内续跑和跨运行记忆化。
+<Callout type="info">
+  taskflow 有两层复用：运行内续跑和跨运行记忆化。
+</Callout>
 
 ## 运行内续跑
 
@@ -22,7 +24,7 @@ taskflow 有两层复用：运行内续跑和跨运行记忆化。
 
 让阶段在独立运行之间持久复用：
 
-```json
+```json title="跨运行缓存示例.json"
 {
   "id": "analyze-auth",
   "task": "总结认证如何工作。",
@@ -63,4 +65,8 @@ taskflow 有两层复用：运行内续跑和跨运行记忆化。
 
 ## 下一步
 
-- [续跑](/zh-cn/docs/concepts/resume) — 续跑如何复用阶段。
+<Cards>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    续跑如何复用阶段。
+  </Card>
+</Cards>

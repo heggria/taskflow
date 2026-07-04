@@ -5,11 +5,13 @@ description: 将 taskflow 作为 Codex 插件安装，并通过 MCP 编排多阶
 
 # 在 Codex 上使用 taskflow
 
-taskflow 以插件形式运行在 [Codex](https://github.com/openai/codex) 上，暴露一个 MCP 服务器。
+<Callout type="info">
+  taskflow 以插件形式运行在 [Codex](https://github.com/openai/codex) 上，暴露一个 MCP 服务器。
+</Callout>
 
 ## 安装
 
-```bash
+```bash title="安装 taskflow 插件"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
@@ -18,7 +20,7 @@ codex plugin add taskflow@taskflow
 
 ## 验证
 
-```bash
+```bash title="验证插件和 MCP 服务器"
 codex plugin list   # taskflow@taskflow 已安装、已启用
 codex mcp list      # taskflow 已启用
 ```
@@ -47,13 +49,13 @@ codex mcp list      # taskflow 已启用
 
 `taskflow_run` 会在整个 DAG 完成后才返回。插件默认工具调用超时 30 分钟。在 `~/.codex/config.toml` 中覆盖：
 
-```toml
+```toml title="~/.codex/config.toml"
 [mcp_servers.taskflow]
 tool_timeout_sec = 3600
 ```
 
 ## 卸载
 
-```bash
+```bash title="卸载 taskflow 插件"
 codex plugin remove taskflow@taskflow
 ```

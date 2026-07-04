@@ -5,6 +5,10 @@ description: 数据如何在 taskflow 的阶段之间流动。
 
 # 插值
 
+<Callout type="info">
+  taskflow 使用简单的模板语法在阶段之间传递数据。在阶段运行前，花括号 `{...}` 中的内容会在运行时被解析。
+</Callout>
+
 taskflow 使用简单的模板语法在阶段之间传递数据。
 
 ## 占位符
@@ -26,7 +30,7 @@ taskflow 使用简单的模板语法在阶段之间传递数据。
 
 ### 参数
 
-```json
+```json title="args-示例.json"
 {
   "args": { "dir": { "default": "src" } },
   "phases": [
@@ -40,7 +44,7 @@ taskflow 使用简单的模板语法在阶段之间传递数据。
 
 ### 阶段输出
 
-```json
+```json title="阶段输出示例.json"
 {
   "phases": [
     { "id": "a", "task": "生成一个名字。", "dependsOn": [] },
@@ -51,7 +55,7 @@ taskflow 使用简单的模板语法在阶段之间传递数据。
 
 ### 解析 JSON
 
-```json
+```json title="解析 JSON 示例.json"
 {
   "phases": [
     {
@@ -70,7 +74,7 @@ taskflow 使用简单的模板语法在阶段之间传递数据。
 
 ### Map 项目
 
-```json
+```json title="Map 项目示例.json"
 {
   "id": "audit",
   "type": "map",
@@ -90,16 +94,22 @@ taskflow 使用简单的模板语法在阶段之间传递数据。
 - 引号字符串和数字
 - 任何 `{...}` 引用
 
-```json
+```json title="条件示例.json"
 "when": "{steps.triage.json.severity} == high && {args.force} != true"
 ```
 
 ## 验证
 
-引用 `{steps.X}` 但不声明 `dependsOn: ["X"]` 是**硬验证错误**。这能在任何 agent 运行前捕获最常见的流水线 bug。
+<Callout type="warn">
+  引用 `{steps.X}` 但不声明 `dependsOn: ["X"]` 是**硬验证错误**。这能在任何 agent 运行前捕获最常见的流水线 bug。
+</Callout>
 
 未解析的插值引用会在运行记录中显示为阶段警告。
 
 ## 下一步
 
-- [控制流](/zh-cn/docs/syntax/control-flow) — `when`、`join` 和路由。
+<Cards>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `when`、`join` 和路由。
+  </Card>
+</Cards>

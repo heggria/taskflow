@@ -5,6 +5,10 @@ description: 为什么只有最终阶段会到达你的对话。
 
 # 上下文隔离
 
+<Callout type="info">
+  使用原始子代理时，每个 transcript 都会涌入你的上下文窗口。使用 taskflow 时，中间结果保留在运行时中。
+</Callout>
+
 使用原始子代理时，每个 transcript 都会涌入你的上下文窗口。使用 taskflow 时，中间结果保留在运行时中。
 
 ## 问题
@@ -41,7 +45,7 @@ description: 为什么只有最终阶段会到达你的对话。
 
 有时你需要检查中间输出进行调试。使用 CLI：
 
-```bash
+```bash title="窥视中间输出"
 /tf peek <runId> <phaseId>
 ```
 
@@ -62,4 +66,8 @@ description: 为什么只有最终阶段会到达你的对话。
 
 ## 下一步
 
-- [续跑](/zh-cn/docs/concepts/resume) — 隔离如何启用跨会话重放。
+<Cards>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    隔离如何启用跨会话重放。
+  </Card>
+</Cards>

@@ -5,9 +5,13 @@ description: 在 Pi 编程智能体上安装、运行、保存和续跑 taskflow
 
 # 在 Pi 上使用 taskflow
 
+<Callout type="info">
+  一次安装，然后在自然语言中描述 flow，或按名称运行已保存的 flow。
+</Callout>
+
 ## 安装
 
-```bash
+```bash title="安装 pi-taskflow"
 pi install npm:pi-taskflow
 ```
 
@@ -15,7 +19,9 @@ pi install npm:pi-taskflow
 
 在 Pi 会话中描述工作：
 
-> 运行一个 chain：先探索认证流程，然后总结发现。
+<Callout type="tip">
+  试试：*"运行一个 chain：先探索认证流程，然后总结发现。"*
+</Callout>
 
 模型会自动调用 `taskflow` 工具。
 
@@ -23,7 +29,7 @@ pi install npm:pi-taskflow
 
 运行后说 **"save it"** 并命名。它会变成单字命令：
 
-```bash
+```bash title="运行已保存的 flow"
 /tf:audit-auth dir=src
 ```
 
@@ -43,15 +49,28 @@ pi install npm:pi-taskflow
 
 ## 模型角色
 
-运行 `/tf init` 将内置 agent 角色映射到你的模型。角色：
+运行 `/tf init` 将内置 agent 角色映射到你的模型。
 
-- `{{fast}}` — 便宜快速
-- `{{strong}}` — 平衡规划/审查
-- `{{thinker}}` — 深度分析
-- `{{arbiter}}` — 最终判断
-- `{{vision}}` — 多模态
-- `{{reasoner}}` — 谨慎推理
+<Callout type="tip">
+  角色在 agent 定义和阶段配置中通过 `{{role}}` 语法引用。
+</Callout>
+
+| 角色 | 用途 |
+|---|---|
+| `{{fast}}` | 便宜快速 |
+| `{{strong}}` | 平衡规划/审查 |
+| `{{thinker}}` | 深度分析 |
+| `{{arbiter}}` | 最终判断 |
+| `{{vision}}` | 多模态 |
+| `{{reasoner}}` | 谨慎推理 |
 
 ## 下一步
 
-- [开始使用](/zh-cn/docs/getting-started)
+<Cards>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    运行你的第一个 taskflow。
+  </Card>
+  <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
+    与 OpenAI Codex 一起使用 taskflow。
+  </Card>
+</Cards>

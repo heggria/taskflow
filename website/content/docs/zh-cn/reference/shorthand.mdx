@@ -5,13 +5,15 @@ description: task、tasks 和 chain 快捷形式。
 
 # 简写
 
-taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 flow。
+<Callout type="info">
+  taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 flow。
+</Callout>
 
 ## `task`
 
 一个 agent，一个任务。
 
-```json
+```json title="task-简写.json"
 {
   "task": "总结 src/ 的架构",
   "agent": "explorer"
@@ -22,7 +24,7 @@ taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 f
 
 并行任务。
 
-```json
+```json title="tasks-简写.json"
 {
   "tasks": [
     { "task": "审计 src/api 的认证", "agent": "analyst" },
@@ -35,7 +37,7 @@ taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 f
 
 顺序任务。每一步通过 `{previous.output}` 看到上一步输出。
 
-```json
+```json title="chain-简写.json"
 {
   "chain": [
     { "task": "列出 src/lib 的公共 API", "agent": "scout" },
@@ -52,7 +54,7 @@ taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 f
 
 所有简写步骤都支持 `context` 和 `contextLimit`：
 
-```json
+```json title="简写上下文示例.json"
 {
   "chain": [
     {
@@ -64,3 +66,11 @@ taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 f
   ]
 }
 ```
+
+## 下一步
+
+<Cards>
+  <Card title="命令" href="/zh-cn/docs/reference/commands">
+    Pi `/tf` 命令和 Codex MCP 工具。
+  </Card>
+</Cards>

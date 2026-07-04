@@ -5,11 +5,13 @@ description: 生成竞争变体，让评委选出最佳结果。
 
 # 锦标赛选择
 
-对于开放式创意或主观工作，生成多个候选并让评委选出最强的。
+<Callout type="info">
+  对于开放式创意或主观工作，生成多个候选并让评委选出最强的。
+</Callout>
 
 ## 基本锦标赛
 
-```json
+```json title="锦标赛最佳示例.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -22,16 +24,18 @@ description: 生成竞争变体，让评委选出最佳结果。
 
 ## 工作原理
 
-1. 生成 `variants` 份任务副本。
-2. 运行评委 agent，它看到每个变体。
-3. 评委输出 `WINNER: <n>` 或 JSON `{"winner": n}`。
-4. 返回获胜变体（`mode: "best"`）或综合答案（`mode: "aggregate"`）。
+<Steps>
+  <Step>生成 `variants` 份任务副本。</Step>
+  <Step>运行评委 agent，它看到每个变体。</Step>
+  <Step>评委输出 `WINNER: <n>` 或 JSON `{"winner": n}`。</Step>
+  <Step>返回获胜变体（`mode: "best"`）或综合答案（`mode: "aggregate"`）。</Step>
+</Steps>
 
 ## Branches
 
 对于真正不同的方法，使用 `branches`：
 
-```json
+```json title="锦标赛分支示例.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -47,11 +51,15 @@ description: 生成竞争变体，让评委选出最佳结果。
 
 ## Fail-open
 
-如果评委裁决无法解析，锦标赛回退到变体 1。不会丢失工作。
+<Callout type="warn">
+  如果评委裁决无法解析，锦标赛回退到变体 1。不会丢失工作。
+</Callout>
 
 ## 何时使用
 
-- 质量主观的创意写作。
-- 开放式摘要。
-- 命名、品牌或标题生成。
-- 任何一次尝试不可靠的任务。
+<Callout type="tip">
+  - 质量主观的创意写作。
+  - 开放式摘要。
+  - 命名、品牌或标题生成。
+  - 任何一次尝试不可靠的任务。
+</Callout>

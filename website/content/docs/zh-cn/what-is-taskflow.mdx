@@ -5,7 +5,9 @@ description: taskflow 存在的理由以及它解决什么问题。
 
 # 什么是 taskflow？
 
-**taskflow** 是面向编程智能体子代理的声明式、可验证的*任务图*。
+<Callout type="info">
+  **taskflow** 是面向编程智能体子代理的声明式、可验证的*任务图*。
+</Callout>
 
 简而言之：它让你把多步骤智能体工作描述成一个由离散**任务**节点组成的 **DAG**（有向无环图），在任何一个模型调用运行之前就验证该图，然后以动态 fan-out、gate、loop、tournament 和跨会话续跑的方式执行它。
 
@@ -71,7 +73,7 @@ taskflow 定义是 JSON（或 YAML、或 MDX frontmatter）。它声明：
 
 ## 整体架构
 
-```
+```txt title="taskflow 流水线"
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │   作者定义      │ ──▶ │  运行时验证      │ ──▶ │  运行时执行     │
 │  taskflow JSON  │     │ 在 token 前验证  │     │  按阶段执行     │
@@ -86,6 +88,14 @@ taskflow 定义是 JSON（或 YAML、或 MDX frontmatter）。它声明：
 
 ## 下一步
 
-- [开始使用](/zh-cn/docs/getting-started) — 运行第一个 taskflow。
-- [核心概念](/zh-cn/docs/concepts) — 理解 DAG 模型。
-- [语法参考](/zh-cn/docs/syntax/flow-definition) — 完整 DSL。
+<Cards>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    运行第一个 taskflow。
+  </Card>
+  <Card title="核心概念" href="/zh-cn/docs/concepts">
+    理解 DAG 模型。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax">
+    完整 DSL 参考。
+  </Card>
+</Cards>

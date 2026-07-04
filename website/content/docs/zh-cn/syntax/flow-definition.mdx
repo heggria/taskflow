@@ -5,11 +5,13 @@ description: 定义 taskflow 的顶层字段。
 
 # 流程定义
 
-taskflow 是一个具有少量顶层字段的 JSON 对象。
+<Callout type="info">
+  taskflow 是一个具有少量顶层字段的 JSON 对象。
+</Callout>
 
 ## 示例
 
-```json
+```json title="流程定义示例.json"
 {
   "name": "audit-auth",
   "description": "审计路由是否缺失认证",
@@ -44,7 +46,7 @@ taskflow 是一个具有少量顶层字段的 JSON 对象。
 
 调用参数。每个参数可以是：
 
-```json
+```json title="参数定义.json"
 {
   "args": {
     "dir": { "default": "." },
@@ -55,7 +57,7 @@ taskflow 是一个具有少量顶层字段的 JSON 对象。
 
 运行时传参：
 
-```bash
+```bash title="带参数运行"
 /tf run audit-auth dir=src force=true
 ```
 
@@ -85,7 +87,7 @@ taskflow 是一个具有少量顶层字段的 JSON 对象。
 
 运行级成本上限：
 
-```json
+```json title="预算定义.json"
 {
   "budget": {
     "maxUSD": 2.0,
@@ -104,15 +106,15 @@ taskflow 是一个具有少量顶层字段的 JSON 对象。
 
 对于一次性运行，你可以跳过大多数字段，使用简写：
 
-```json
+```json title="单任务简写.json"
 { "task": "总结 src/" }
 ```
 
-```json
+```json title="多任务简写.json"
 { "tasks": [/* ... */] }
 ```
 
-```json
+```json title="链式简写.json"
 { "chain": [/* ... */] }
 ```
 
@@ -120,4 +122,8 @@ taskflow 是一个具有少量顶层字段的 JSON 对象。
 
 ## 下一步
 
-- [阶段类型](/zh-cn/docs/syntax/phase-types) — 每个阶段字段。
+<Cards>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    每个阶段字段。
+  </Card>
+</Cards>

@@ -5,9 +5,11 @@ description: 运行级成本和 token 上限。
 
 # 预算
 
-添加运行级上限以防止支出失控。
+<Callout type="warn">
+  添加运行级上限以防止支出失控。
+</Callout>
 
-```json
+```json title="预算示例.json"
 {
   "name": "fan-out-audit",
   "budget": {
@@ -31,7 +33,7 @@ description: 运行级成本和 token 上限。
 
 对错误发现的 500 个项目做 `map` 会导致无界支出。始终设置上限：
 
-```json
+```json title="带预算的文件总结.json"
 {
   "name": "summarize-files",
   "budget": { "maxUSD": 1.5 },
@@ -54,4 +56,6 @@ description: 运行级成本和 token 上限。
 
 ## 最佳实践
 
-任何包含 `map`、`parallel`、`loop` 或 `tournament` 的 flow 都应设置 `budget`。
+<Callout type="warn">
+  任何包含 `map`、`parallel`、`loop` 或 `tournament` 的 flow 都应设置 `budget`。
+</Callout>

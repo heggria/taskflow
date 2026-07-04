@@ -5,13 +5,15 @@ description: 条件路由、合并、重试和循环。
 
 # 控制流
 
-taskflow 提供了多个原语用于路由和可靠性。
+<Callout type="info">
+  taskflow 提供了多个原语用于路由和可靠性。
+</Callout>
 
 ## `when` — 条件守卫
 
 除非表达式为真，否则跳过阶段。
 
-```json
+```json title="when-守卫-示例.json"
 {
   "id": "deep",
   "when": "{steps.triage.json.severity} == high",
@@ -21,7 +23,9 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 运算符：`==`、`!=`、`<`、`>`、`<=`、`>=`、`&&`、`||`、`!`、括号、引号字符串和数字。
 
-**Fail-open：** `when` 解析错误会让阶段运行，不会静默丢弃。
+<Callout type="warn">
+  **Fail-open：** `when` 解析错误会让阶段运行，不会静默丢弃。
+</Callout>
 
 ## `join` — 依赖合并
 
@@ -30,7 +34,7 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 将 `join: "any"` 与条件分支结合构建 if/else 路由：
 
-```json
+```json title="join-任意-路由-示例.json"
 {
   "id": "triage",
   "type": "agent",
@@ -60,7 +64,7 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 重试失败的阶段：
 
-```json
+```json title="retry-示例.json"
 {
   "id": "patch",
   "retry": {
@@ -81,7 +85,7 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 `optional` 阶段的失败不会中止运行。
 
-```json
+```json title="optional-示例.json"
 {
   "id": "lint",
   "type": "script",
@@ -96,7 +100,7 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 默认情况下，阻塞 gate 会中止运行。设为 `"retry"` 时，gate 会重新运行其上游 `dependsOn` 阶段并重新评估，最多 `retry.max` 轮。
 
-```json
+```json title="onBlock-重试-示例.json"
 {
   "id": "quality",
   "type": "gate",
@@ -119,5 +123,11 @@ taskflow 提供了多个原语用于路由和可靠性。
 
 ## 下一步
 
-- [缓存](/zh-cn/docs/syntax/caching) — 记忆化。
-- [预算](/zh-cn/docs/syntax/budget) — 成本上限。
+<Cards>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    记忆化。
+  </Card>
+  <Card title="预算" href="/zh-cn/docs/syntax/budget">
+    成本上限。
+  </Card>
+</Cards>

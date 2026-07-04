@@ -5,69 +5,86 @@ description: 在 Pi 或 Codex 上运行第一个 taskflow。
 
 # 开始使用
 
-## 在 Pi 上
+<Callout type="info">
+  taskflow 支持 [Pi](https://pi.dev) 和 [OpenAI Codex](https://github.com/openai/codex)。在下面选择你的宿主。
+</Callout>
 
-安装扩展：
+## 安装
 
-```bash
-pi install npm:pi-taskflow
-```
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash
+    pi install npm:pi-taskflow
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
+  </Tab>
+</Tabs>
 
-然后在 Pi 会话中描述工作：
+## 运行第一个 flow
 
-> 运行一个 chain：先探索认证流程，然后总结发现。
+<Steps>
+  <Step>
+    ### 描述工作
 
-模型会自动调用 `taskflow` 工具。你会看到实时进度、每步耗时、token 消耗和保存的运行记录。
+    在 Pi 或 Codex 会话中直接说出需求：
 
-说一句 **"save it"**，你就能永久使用 `/tf:<name>`。
+    > 运行一个 chain：先探索认证流程，然后总结发现。
+  </Step>
+  <Step>
+    ### 观察运行时
 
-### 可选设置
+    模型会自动调用 `taskflow` 工具。你会看到实时进度、每步耗时、token 消耗和保存的运行记录。
+  </Step>
+  <Step>
+    ### 保存它
+
+    说一句 **"save it"**，你就能永久使用 `/tf:<name>`。
+  </Step>
+</Steps>
+
+## 可选 Pi 设置
 
 运行 `/tf init` 一次，将 18 个内置 agent 的模型角色（`fast`、`strong`、`thinker` 等）映射到你自己的模型。跳过则 agent 使用 Pi 默认模型。
-
-## 在 Codex 上
-
-安装插件：
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-```
-
-然后让 Codex 运行一个多阶段任务：
-
-> 运行一个 taskflow，审计 src/routes 中的每个路由，并报告缺失的认证。
-
-Codex 会自动调用 `taskflow_*` MCP 工具。
 
 ## 简写形式
 
 你已经熟悉智能体内置的子代理简写——`task` / `tasks` / `chain`。taskflow 使用相同的形状：
 
-```json
-{
-  "task": "总结 src/ 的架构",
-  "agent": "explorer"
-}
-```
-
-```json
-{
-  "tasks": [
-    { "task": "审计 src/api 的认证", "agent": "analyst" },
-    { "task": "审计 src/api 的输入校验", "agent": "analyst" }
-  ]
-}
-```
-
-```json
-{
-  "chain": [
-    { "task": "列出 src/lib 的公共 API", "agent": "scout" },
-    { "task": "为以下内容写文档：\n{previous.output}", "agent": "writer" }
-  ]
-}
-```
+<Tabs items={['task', 'tasks', 'chain']}>
+  <Tab value="task">
+    ```json
+    {
+      "task": "总结 src/ 的架构",
+      "agent": "explorer"
+    }
+    ```
+  </Tab>
+  <Tab value="tasks">
+    ```json
+    {
+      "tasks": [
+        { "task": "审计 src/api 的认证", "agent": "analyst" },
+        { "task": "审计 src/api 的输入校验", "agent": "analyst" }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab value="chain">
+    ```json
+    {
+      "chain": [
+        { "task": "列出 src/lib 的公共 API", "agent": "scout" },
+        { "task": "为以下内容写文档：\n{previous.output}", "agent": "writer" }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
 
 `agent` 是可选的（默认使用第一个发现的 agent）。添加 `name` 可以标记运行并解锁保存为命令。
 
@@ -75,7 +92,7 @@ Codex 会自动调用 `taskflow_*` MCP 工具。
 
 当你需要更复杂的工作流时，完整的 DSL 提供了真正的 DAG：
 
-```json
+```json title="summarize-files.json"
 {
   "name": "summarize-files",
   "description": "发现文件、逐个总结、生成一份报告",
@@ -131,5 +148,11 @@ Codex 会自动调用 `taskflow_*` MCP 工具。
 
 ## 下一步
 
-- [核心概念](/zh-cn/docs/concepts) — 理解 DAG 模型。
-- [语法参考](/zh-cn/docs/syntax/flow-definition) — 完整 DSL。
+<Cards>
+  <Card title="核心概念" href="/zh-cn/docs/concepts">
+    理解 DAG 模型。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax/flow-definition">
+    完整 DSL。
+  </Card>
+</Cards>

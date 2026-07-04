@@ -7,6 +7,10 @@ description: 每个 taskflow 的十个构建块。
 
 阶段是 DAG 中的单个节点。taskflow 提供十种阶段类型，每种用于不同的工作。
 
+<Callout type="info">
+  每个阶段都有唯一的 `id`、`type` 和可选的 `dependsOn`。运行时将它们连线成 DAG 并按拓扑顺序执行。
+</Callout>
+
 ## 概览
 
 | 类型 | 用途 |
@@ -26,7 +30,7 @@ description: 每个 taskflow 的十个构建块。
 
 最简单的阶段：一个子代理，一个任务。
 
-```json
+```json title="agent-示例.json"
 {
   "id": "summarize",
   "type": "agent",
@@ -40,7 +44,7 @@ description: 每个 taskflow 的十个构建块。
 
 并发运行多个任务。类似简写 `tasks`。
 
-```json
+```json title="parallel-示例.json"
 {
   "id": "audit",
   "type": "parallel",
@@ -55,7 +59,7 @@ description: 每个 taskflow 的十个构建块。
 
 动态 fan-out。`over` 表达式必须解析为数组。每个项目生成一个子代理。
 
-```json
+```json title="map-示例.json"
 {
   "id": "summarize",
   "type": "map",
@@ -72,7 +76,7 @@ description: 每个 taskflow 的十个构建块。
 
 质量门审查上游输出并可以阻止下游工作。
 
-```json
+```json title="gate-示例.json"
 {
   "id": "verify",
   "type": "gate",
@@ -88,7 +92,7 @@ description: 每个 taskflow 的十个构建块。
 
 将上游输出聚合为最终摘要。
 
-```json
+```json title="reduce-示例.json"
 {
   "id": "report",
   "type": "reduce",
@@ -102,7 +106,7 @@ description: 每个 taskflow 的十个构建块。
 
 暂停等待人工决定。
 
-```json
+```json title="approval-示例.json"
 {
   "id": "approve",
   "type": "approval",
@@ -121,7 +125,7 @@ description: 每个 taskflow 的十个构建块。
 
 运行子流程。
 
-```json
+```json title="flow-保存示例.json"
 {
   "id": "sub",
   "type": "flow",
@@ -132,7 +136,7 @@ description: 每个 taskflow 的十个构建块。
 
 或运行时生成：
 
-```json
+```json title="flow-运行时示例.json"
 {
   "id": "execute",
   "type": "flow",
@@ -145,7 +149,7 @@ description: 每个 taskflow 的十个构建块。
 
 迭代直到完成、收敛或 `maxIterations`。
 
-```json
+```json title="loop-示例.json"
 {
   "id": "refine",
   "type": "loop",
@@ -161,7 +165,7 @@ description: 每个 taskflow 的十个构建块。
 
 生成变体并让评委选出最佳。
 
-```json
+```json title="tournament-示例.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -176,7 +180,7 @@ description: 每个 taskflow 的十个构建块。
 
 运行 shell 命令。零 token。
 
-```json
+```json title="script-示例.json"
 {
   "id": "build",
   "type": "script",
@@ -187,5 +191,11 @@ description: 每个 taskflow 的十个构建块。
 
 ## 下一步
 
-- [流程定义](/zh-cn/docs/syntax/flow-definition) — 顶层字段。
-- [阶段类型参考](/zh-cn/docs/syntax/phase-types) — 每种类型的详尽字段。
+<Cards>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    顶层字段。
+  </Card>
+  <Card title="阶段类型参考" href="/zh-cn/docs/syntax/phase-types">
+    每种类型的详尽字段。
+  </Card>
+</Cards>
