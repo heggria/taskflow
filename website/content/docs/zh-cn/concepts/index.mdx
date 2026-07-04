@@ -1,0 +1,15 @@
+---
+title: 核心概念
+description: taskflow 声明式 DAG 模型背后的思想。
+---
+
+# 核心概念
+
+这些页面解释使 taskflow 不同于命令式编排的理念。
+
+- [DAG 模型](/zh-cn/docs/concepts/dag) — 为什么使用任务节点图，以及 `dependsOn` 如何构建它。
+- [阶段类型](/zh-cn/docs/concepts/phases) — 每个 taskflow 的 10 个构建块。
+- [插值](/zh-cn/docs/concepts/interpolation) — 数据如何在阶段之间流动。
+- [验证](/zh-cn/docs/concepts/verification) — 在消耗 token 之前捕获错误。
+- [上下文隔离](/zh-cn/docs/concepts/context-isolation) — 为什么只有最终结果会到达你这里。
+- [续跑](/zh-cn/docs/concepts/resume) — 跨会话重放如何工作。

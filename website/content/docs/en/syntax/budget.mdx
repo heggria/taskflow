@@ -1,0 +1,57 @@
+---
+title: Budget
+description: Run-wide cost and token caps.
+---
+
+# Budget
+
+Add a run-wide ceiling to prevent runaway spend.
+
+```json
+{
+  "name": "fan-out-audit",
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [ /* ... */ ]
+}
+```
+
+## Behavior
+
+When accumulated cost or tokens exceed the cap:
+
+- No new phases spawn.
+- In-flight `map`/`parallel` stop spawning new items.
+- The run ends as `blocked`.
+- Partial outputs are preserved.
+
+## Why every fan-out needs a budget
+
+A `map` over a mis-discovered 500-item array is unbounded spend. Always cap it:
+
+```json
+{
+  "name": "summarize-files",
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "output": "json",
+      "task": "List files under {args.dir}. Output JSON array."
+    },
+    {
+      "id": "summarize",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "task": "Summarize {item.file}."
+    }
+  ]
+}
+```
+
+## Best practice
+
+Set `budget` on any flow with `map`, `parallel`, `loop`, or `tournament`.

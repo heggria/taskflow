@@ -1,0 +1,123 @@
+---
+title: 流程定义
+description: 定义 taskflow 的顶层字段。
+---
+
+# 流程定义
+
+taskflow 是一个具有少量顶层字段的 JSON 对象。
+
+## 示例
+
+```json
+{
+  "name": "audit-auth",
+  "description": "审计路由是否缺失认证",
+  "args": {
+    "dir": { "default": "src/routes" }
+  },
+  "concurrency": 8,
+  "agentScope": "project",
+  "contextSharing": false,
+  "strictInterpolation": true,
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [
+    /* ... */
+  ]
+}
+```
+
+## 字段
+
+### `name`
+
+**保存 flow 时必需。** 唯一标识符，用于 `/tf run <name>` 和 `/tf:<name>`。
+
+### `description`
+
+可选的人类可读描述。
+
+### `args`
+
+调用参数。每个参数可以是：
+
+```json
+{
+  "args": {
+    "dir": { "default": "." },
+    "force": { "default": false }
+  }
+}
+```
+
+运行时传参：
+
+```bash
+/tf run audit-auth dir=src force=true
+```
+
+### `concurrency`
+
+`map` 和 `parallel` 阶段的默认 fan-out 上限。默认 `8`。
+
+### `agentScope`
+
+发现 agent 的位置：
+
+- `"user"` — `~/.pi/agent/agents/*.md`
+- `"project"` — `.pi/agents/*.md`
+- `"both"` — 两者；project 在冲突时胜出
+
+默认 `"user"`。
+
+### `contextSharing`
+
+默认对所有阶段启用共享上下文树。阶段仍可单独选择退出。
+
+### `strictInterpolation`
+
+将未解析的 `{args.X}` / `{steps.X}` 占位符从警告提升为硬错误。建议用于已保存的 flow。
+
+### `budget`
+
+运行级成本上限：
+
+```json
+{
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  }
+}
+```
+
+超出时，剩余阶段跳过，运行以 `blocked` 结束。
+
+### `phases`
+
+阶段定义数组。每个阶段需要唯一 `id` 和 `type`。
+
+## 简写
+
+对于一次性运行，你可以跳过大多数字段，使用简写：
+
+```json
+{ "task": "总结 src/" }
+```
+
+```json
+{ "tasks": [/* ... */] }
+```
+
+```json
+{ "chain": [/* ... */] }
+```
+
+运行时会将这些反糖化为完整 flow。
+
+## 下一步
+
+- [阶段类型](/zh-cn/docs/syntax/phase-types) — 每个阶段字段。

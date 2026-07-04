@@ -13,13 +13,17 @@ Install the extension:
 pi install npm:pi-taskflow
 ```
 
-Then in a Pi session, just describe the work:
+Then in a Pi session, describe the work:
 
 > Run a chain: first explore the auth flow, then summarize the findings.
 
 The model calls the `taskflow` tool automatically. You get live progress, per-step timing, token cost, and a saved run record.
 
 Say **"save it"** and you have `/tf:<name>` forever.
+
+### Optional setup
+
+Run `/tf init` once to map the 18 built-in agents' model roles (`fast`, `strong`, `thinker`, …) to your own models. Skip it and agents just use Pi's default model.
 
 ## On Codex
 
@@ -65,6 +69,8 @@ You already know your agent's built-in subagent shorthand — `task` / `tasks` /
 }
 ```
 
+`agent` is optional (defaults to the first discovered agent). Add a `name` to label the run and unlock saving it as a command.
+
 ## Go declarative
 
 When you outgrow the shorthand, the full DSL gives you a real DAG:
@@ -72,12 +78,15 @@ When you outgrow the shorthand, the full DSL gives you a real DAG:
 ```json
 {
   "name": "summarize-files",
+  "description": "Discover files, summarize each, produce one report",
+  "args": { "dir": { "default": "." } },
+  "concurrency": 8,
   "phases": [
     {
       "id": "discover",
       "type": "agent",
       "agent": "scout",
-      "task": "List source files under src/",
+      "task": "List source files under {args.dir} (non-recursive).\nOutput ONLY a JSON array [{\"file\":\"\"}]. No prose.",
       "output": "json"
     },
     {
@@ -101,3 +110,26 @@ When you outgrow the shorthand, the full DSL gives you a real DAG:
   ]
 }
 ```
+
+How it runs:
+
+1. `discover` lists files and emits JSON.
+2. `summarize` fans out one subagent per file, throttled to 8 concurrent.
+3. `report` merges every summary into one clean overview.
+
+Only the report reaches your context.
+
+## Verify before running
+
+For any non-trivial flow, verify it first:
+
+```bash
+/tf verify <name>
+```
+
+This catches cycles, missing deps, undefined refs, and contract typos — zero tokens.
+
+## Next steps
+
+- [Core Concepts](/en/docs/concepts) — understand the DAG model.
+- [Syntax Reference](/en/docs/syntax/flow-definition) — full DSL.

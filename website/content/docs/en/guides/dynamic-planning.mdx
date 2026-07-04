@@ -1,0 +1,74 @@
+---
+title: Dynamic Planning
+description: Generate sub-flows at runtime and validate them before execution.
+---
+
+# Dynamic Planning
+
+Some problems cannot be fully authored in advance. A planner phase can emit a sub-flow definition at runtime, and the runtime validates and executes it.
+
+## Plan → execute
+
+```json
+{
+  "name": "iterative-replan",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "output": "json",
+      "task": "Given the current state, output a JSON taskflow definition with phases[]."
+    },
+    {
+      "id": "execute",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"]
+    }
+  ]
+}
+```
+
+## Validation
+
+The generated sub-flow is checked for:
+
+- Cycles
+- Dangling refs
+- Duplicate ids
+- Dead ends
+- Security caps (100 phases, 200 map items, 5 nesting levels)
+
+A malformed plan fails open: the phase is skipped with a `defError`, and the run continues.
+
+## Security hardening
+
+LLM-generated sub-flows are restricted:
+
+- Breadth caps
+- `cwd` containment
+- Budget clamped to `min(child, parent)`
+- Prototype-pollution defense
+- Forbidden scorers in gates (`code-compiles`, `regex`)
+
+## Loop + flow
+
+Pair `loop` with `flow {def}` for data-dependent iterative replanning:
+
+```json
+{
+  "id": "refine-plan",
+  "type": "loop",
+  "task": "Plan the next iteration based on {loop.lastOutput}.",
+  "until": "{steps.refine-plan.json.done} == true",
+  "maxIterations": 6,
+  "output": "json"
+}
+```
+
+## When to use
+
+- The number or shape of steps depends on upstream results.
+- You want a model to author a plan and another model to execute it.
+- You need iterative replanning based on feedback.

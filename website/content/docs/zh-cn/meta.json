@@ -1,4 +1,33 @@
 {
   "title": "文档",
-  "pages": ["index", "getting-started", "codex"]
+  "pages": [
+    "index",
+    "what-is-taskflow",
+    "getting-started",
+    "---核心概念---",
+    "concepts",
+    "concepts/dag",
+    "concepts/phases",
+    "concepts/interpolation",
+    "concepts/verification",
+    "concepts/context-isolation",
+    "concepts/resume",
+    "---语法参考---",
+    "syntax",
+    "syntax/flow-definition",
+    "syntax/phase-types",
+    "syntax/control-flow",
+    "syntax/caching",
+    "syntax/budget",
+    "---指南---",
+    "guides",
+    "guides/pi",
+    "guides/codex",
+    "guides/dynamic-planning",
+    "guides/tournament",
+    "---参考---",
+    "reference",
+    "reference/shorthand",
+    "reference/commands"
+  ]
 }

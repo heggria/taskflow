@@ -1,0 +1,123 @@
+---
+title: Flow Definition
+description: Top-level fields that define a taskflow.
+---
+
+# Flow Definition
+
+A taskflow is a JSON object with a small set of top-level fields.
+
+## Example
+
+```json
+{
+  "name": "audit-auth",
+  "description": "Audit routes for missing auth",
+  "args": {
+    "dir": { "default": "src/routes" }
+  },
+  "concurrency": 8,
+  "agentScope": "project",
+  "contextSharing": false,
+  "strictInterpolation": true,
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [
+    /* ... */
+  ]
+}
+```
+
+## Fields
+
+### `name`
+
+**Required for saved flows.** A unique identifier used for `/tf run <name>` and `/tf:<name>`.
+
+### `description`
+
+Optional human-readable description.
+
+### `args`
+
+Invocation arguments. Each arg can be:
+
+```json
+{
+  "args": {
+    "dir": { "default": "." },
+    "force": { "default": false }
+  }
+}
+```
+
+Pass args at runtime:
+
+```bash
+/tf run audit-auth dir=src force=true
+```
+
+### `concurrency`
+
+Default fan-out cap for `map` and `parallel` phases. Default `8`.
+
+### `agentScope`
+
+Where to discover agents:
+
+- `"user"` — `~/.pi/agent/agents/*.md`
+- `"project"` — `.pi/agents/*.md`
+- `"both"` — both; project wins on collision
+
+Default `"user"`.
+
+### `contextSharing`
+
+Enable the Shared Context Tree for all phases by default. Phases can still opt out individually.
+
+### `strictInterpolation`
+
+Promote unresolved `{args.X}` / `{steps.X}` placeholders from warnings to hard errors. Recommended for saved flows.
+
+### `budget`
+
+Run-wide cost ceiling:
+
+```json
+{
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  }
+}
+```
+
+When exceeded, remaining phases are skipped and the run ends as `blocked`.
+
+### `phases`
+
+The array of phase definitions. Each phase needs a unique `id` and a `type`.
+
+## Shorthand
+
+For one-off runs, you can skip most top-level fields and use shorthand:
+
+```json
+{ "task": "Summarize src/" }
+```
+
+```json
+{ "tasks": [/* ... */] }
+```
+
+```json
+{ "chain": [/* ... */] }
+```
+
+The runtime desugars these into full flows.
+
+## Next
+
+- [Phase Types](/en/docs/syntax/phase-types) — every phase field.

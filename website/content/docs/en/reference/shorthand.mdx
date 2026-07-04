@@ -1,0 +1,66 @@
+---
+title: Shorthand
+description: The task, tasks, and chain shortcuts.
+---
+
+# Shorthand
+
+taskflow accepts three shorthand forms that the runtime desugars into proper flows.
+
+## `task`
+
+One agent, one task.
+
+```json
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+## `tasks`
+
+Parallel tasks.
+
+```json
+{
+  "tasks": [
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit input validation in src/api", "agent": "analyst" }
+  ]
+}
+```
+
+## `chain`
+
+Sequential tasks. Each step sees the previous output via `{previous.output}`.
+
+```json
+{
+  "chain": [
+    { "task": "List the public API of src/lib", "agent": "scout" },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+## Precedence
+
+If multiple are given: `chain` > `tasks` > `task`.
+
+## Context pre-reading
+
+All shorthand steps support `context` and `contextLimit`:
+
+```json
+{
+  "chain": [
+    {
+      "task": "List the public API",
+      "agent": "scout",
+      "context": ["src/lib/**/*.ts"]
+    },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```

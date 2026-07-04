@@ -1,0 +1,69 @@
+---
+title: 验证
+description: taskflow 如何在消耗 token 之前验证 DAG。
+---
+
+# 验证
+
+taskflow 的核心承诺之一是运行时**在消耗任何 token 之前**验证图。
+
+## 检查内容
+
+`verify` 动作（或 `/tf verify`）对 flow 定义进行静态分析：
+
+### 1. DAG 形状
+
+- **循环** — 阶段不能传递依赖自身。
+- **死胡同** — 每个阶段必须被下游引用或标记为 `final`。
+- **不可达阶段** — 没有任何依赖且不是 `final` 的阶段。
+
+### 2. 引用
+
+- **未定义的 `dependsOn`** — `dependsOn` 中的每个 id 都必须存在。
+- **悬空插值** — `{steps.X.*}` 引用需要 `dependsOn: ["X"]`。
+- **缺失参数** — 开启 `strictInterpolation` 时，未解析的 `{args.X}` 是硬错误。
+
+### 3. 契约
+
+- **JSON 输出** — `output: "json"` 阶段可声明 `expect` 模式。
+- **Gate 裁决** — 检查 gate 阶段的评分配置是否有效。
+- **预算** — `budget.maxUSD` 和 `budget.maxTokens` 必须是正数。
+
+### 4. 安全上限
+
+对于 LLM 生成的动态子流程（`flow {def}`）：
+
+- 最多 100 个阶段。
+- 最多 200 个 map 项目。
+- 最多 5 层嵌套。
+- `cwd` 限制。
+- 原型污染防护。
+
+## 示例
+
+```bash
+/tf verify my-flow
+```
+
+输出：
+
+```
+✗ verification FAILED — 1 error, 0 warnings
+
+error: Phase 'report' 引用 {steps.audit.output} 但 'audit' 不在 dependsOn 中
+```
+
+## 验证与运行时错误
+
+验证捕获**结构性**问题。它不能捕获：
+
+- 子代理生成错误内容。
+- JSON 模式过于宽松。
+- gate agent 意外阻塞。
+
+这些在运行时被捕获，可以通过 `retry`、`optional` 和 `onBlock` 处理。
+
+## 下一步
+
+- [语法参考](/zh-cn/docs/syntax/flow-definition) — 影响验证的字段。
+- [动态规划](/zh-cn/docs/guides/dynamic-planning) — 生成的子流程也会被验证。

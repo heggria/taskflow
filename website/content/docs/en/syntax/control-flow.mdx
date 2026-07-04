@@ -1,0 +1,123 @@
+---
+title: Control Flow
+description: Conditional routing, joins, retries, and loops.
+---
+
+# Control Flow
+
+taskflow provides several primitives for routing and reliability.
+
+## `when` — conditional guards
+
+Skip a phase unless the expression is truthy.
+
+```json
+{
+  "id": "deep",
+  "when": "{steps.triage.json.severity} == high",
+  "dependsOn": ["triage"]
+}
+```
+
+Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, parentheses, quoted strings/numbers.
+
+**Fail-open:** a parse error in `when` causes the phase to run, never silently drop.
+
+## `join` — dependency joins
+
+- `"all"` (default) — wait for every dependency.
+- `"any"` — run as soon as one dependency completes.
+
+Use `join: "any"` with conditional branches to build if/else routing:
+
+```json
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "Classify severity as high or low."
+},
+{
+  "id": "deep",
+  "when": "{steps.triage.json.severity} == high",
+  "dependsOn": ["triage"]
+},
+{
+  "id": "quick",
+  "when": "{steps.triage.json.severity} == low",
+  "dependsOn": ["triage"]
+},
+{
+  "id": "merge",
+  "type": "reduce",
+  "from": ["deep", "quick"],
+  "join": "any",
+  "dependsOn": ["deep", "quick"]
+}
+```
+
+## `retry`
+
+Retry a failing phase:
+
+```json
+{
+  "id": "patch",
+  "retry": {
+    "max": 3,
+    "backoffMs": 500,
+    "factor": 2
+  }
+}
+```
+
+- `max` — max attempts.
+- `backoffMs` — initial delay.
+- `factor` — `1` = fixed, `2` = exponential.
+
+Transient provider errors (rate limits, 5xx, timeouts) are auto-retried even without an explicit policy.
+
+## `optional`
+
+A failure in an `optional` phase does not abort the run.
+
+```json
+{
+  "id": "lint",
+  "type": "script",
+  "run": "npm run lint",
+  "optional": true
+}
+```
+
+Pair with a fallback phase guarded by `when`.
+
+## `onBlock` — self-healing gates
+
+By default a blocking gate halts the run. With `"retry"`, the gate re-runs its upstream `dependsOn` phases and re-evaluates, up to `retry.max` rounds.
+
+```json
+{
+  "id": "quality",
+  "type": "gate",
+  "onBlock": "retry",
+  "retry": { "max": 3 },
+  "dependsOn": ["implement"],
+  "task": "Does this satisfy all criteria? VERDICT: PASS or BLOCK."
+}
+```
+
+This creates a generate→critique→regenerate rework loop.
+
+## `idempotent`
+
+Set `idempotent: false` for phases with irreversible side effects (webhook POSTs, deploys, DB writes). This:
+
+- Suppresses implicit transient auto-retry.
+- Excludes the result from all caches.
+- Records `sideEffect: true` in the phase state.
+
+## Next
+
+- [Caching](/en/docs/syntax/caching) — memoization.
+- [Budget](/en/docs/syntax/budget) — cost caps.

@@ -1,0 +1,230 @@
+---
+title: 阶段类型参考
+description: 每种阶段类型的完整字段参考。
+---
+
+# 阶段类型参考
+
+每个阶段共享一组公共字段。在此基础上，每种阶段类型添加自己的必需和可选字段。
+
+## 公共字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | `string` | 唯一阶段标识符。使用连字符。 |
+| `type` | `string` | 阶段类型。默认 `agent`。 |
+| `agent` | `string` | agent 名称。默认第一个发现的 agent。 |
+| `dependsOn` | `string[]` | 此阶段等待的阶段。 |
+| `join` | `"all" \| "any"` | 依赖合并语义。默认 `"all"`。 |
+| `when` | `string` | 条件守卫。 |
+| `retry` | `object` | `{ max, backoffMs?, factor? }`。 |
+| `timeout` | `number` | 每次调用超时毫秒数（>= 1000）。 |
+| `output` | `"text" \| "json"` | 输出格式。默认 `"text"`。 |
+| `context` | `string[]` | 预读进 prompt 的文件。 |
+| `contextLimit` | `number` | 每个上下文文件最大字符数。默认 `8000`。 |
+| `final` | `boolean` | 标记承载结果的阶段。 |
+| `optional` | `boolean` | 失败不会中止运行。 |
+| `cache` | `object` | `{ scope, ttl?, fingerprint? }`。 |
+| `idempotent` | `boolean` | 默认 `true`。对不可逆副作用设为 `false`。 |
+
+## `agent`
+
+一个子代理运行一个任务。
+
+### 必需字段
+
+- `task`
+
+### 示例
+
+```json
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "总结 src/ 的架构。",
+  "output": "json",
+  "expect": {
+    "type": "object",
+    "required": ["summary"]
+  }
+}
+```
+
+## `parallel`
+
+并发运行 `branches[]`。
+
+### 必需字段
+
+- `branches` — `{ task, agent?, ...commonFields? }` 数组
+
+### 示例
+
+```json
+{
+  "id": "audit",
+  "type": "parallel",
+  "branches": [
+    { "task": "审计认证", "agent": "analyst" },
+    { "task": "审计校验", "agent": "analyst" }
+  ]
+}
+```
+
+## `map`
+
+对数组 fan out。
+
+### 必需字段
+
+- `over` — 解析为数组的插值表达式。
+- `task`
+
+### 可选字段
+
+- `as` — 循环变量名。默认 `"item"`。
+- `concurrency` — 阶段级覆盖。
+
+### 示例
+
+```json
+{
+  "id": "summarize",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "agent": "scout",
+  "task": "读取 {item.file} 并总结。",
+  "concurrency": 8
+}
+```
+
+## `gate`
+
+质量门。可中止流程。
+
+### 必需字段
+
+- `task`
+
+### 可选字段
+
+- `eval` — 零 token 断言。
+- `score` — 确定性评分。
+- `onBlock` — `"halt"`（默认）或 `"retry"`。
+
+### 示例
+
+```json
+{
+  "id": "quality",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["fix"],
+  "eval": ["{steps.fix.output} contains 'VERDICT: PASS'"],
+  "task": "审查修复。以 VERDICT: PASS 或 BLOCK 结尾。"
+}
+```
+
+## `reduce`
+
+聚合上游输出。
+
+### 必需字段
+
+- `from` — 阶段 id 数组。
+- `task`
+
+### 示例
+
+```json
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["audit"],
+  "agent": "writer",
+  "task": "合并成报告：\n{steps.audit.output}"
+}
+```
+
+## `approval`
+
+人工介入。
+
+### 可选字段
+
+- `task` — 显示给人类的提示。
+
+## `flow`
+
+运行子流程。
+
+### 必需字段（二选一）
+
+- `use` — 已保存 flow 的名称。
+- `def` — 解析为 flow 定义的插值表达式。
+
+### 可选字段
+
+- `with` — 传给 `use` 的参数。
+
+## `loop`
+
+迭代直到完成。
+
+### 必需字段
+
+- `task`
+- `until`
+- `maxIterations`
+
+### 可选字段
+
+- `convergence` — 输出不再变化时停止。
+- `reflexion` — 将失败摘要反馈回循环。
+- `output` — 通常为 `"json"`。
+
+## `tournament`
+
+竞争并评判。
+
+### 必需字段
+
+- `task`（使用 `variants` 时）
+
+### 可选字段
+
+- `variants` — 副本数量。
+- `branches` — 不同方法。
+- `judge` — 评委评分标准。
+- `judgeAgent` — 评委 agent。
+- `mode` — `"best"` 或 `"aggregate"`。
+
+## `script`
+
+运行 shell 命令。零 token。
+
+### 必需字段
+
+- `run` — 字符串（shell）或数组（直接 exec）。
+
+### 可选字段
+
+- `input` — 通过 stdin 传入。
+- `timeout` — 毫秒上限，默认 `60000`，最大 `300000`。
+
+### 示例
+
+```json
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## 下一步
+
+- [控制流](/zh-cn/docs/syntax/control-flow) — `when`、`join`、路由。

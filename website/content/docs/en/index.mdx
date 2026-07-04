@@ -1,9 +1,9 @@
 ---
-title: Overview
+title: Introduction
 description: A declarative, verifiable graph of task nodes for coding-agent subagents.
 ---
 
-# What is taskflow?
+# Introduction
 
 **taskflow** is a declarative, verifiable _graph of tasks_ for coding-agent subagents.
 
@@ -11,27 +11,41 @@ Not a workflow you script — a **DAG you declare**. Fan out · gate · loop · 
 
 Runs on the [Pi](https://pi.dev) coding agent and on [OpenAI Codex](https://github.com/openai/codex).
 
-## Why "taskflow" and not "workflow"?
+## The problem with raw subagents
 
-In engineering, a **task** is a _discrete, declared unit of work_ — the node of a task graph. **Work**, by contrast, is _fluid and unbounded_ — the continuous, imperative act of doing.
+When you delegate multi-step work to a coding agent, you usually describe the plan in prose. The model then:
 
-- A **`workflow`** is the model writing an **imperative script** that flows: `await agent(...)`, an `if`, a `for`, another `await`. The graph only exists as the code runs.
-- A **`taskflow`** moves the plan **out of code and into a declarative graph of `task` nodes.** Because the graph is _data_, the runtime can statically verify it before a single subagent spawns, render it, resume it phase-by-phase, and save it as a one-word command.
+1. Re-derives the plan every run.
+2. Floods your context with intermediate transcripts.
+3. Starts over from zero when one call fails.
+4. Gives you no way to _check_ the plan before it burns tokens.
 
-## Key features
+There is no reuse, no recovery, no structure.
 
-| Feature | Description |
-|---|---|
-| **Declarative DAG** | Define workflows as JSON/YAML data, not imperative code. |
-| **Static verification** | Catch cycles, dead ends, dangling refs, and budget overflow before execution. |
-| **Context isolation** | Only the final phase reaches your conversation. |
-| **Dynamic fan-out** | `map` phases spawn one subagent per item. |
-| **Quality gates** | `gate` phases halt the flow on `VERDICT: BLOCK`. |
-| **Human approval** | `approval` phases pause for human review. |
-| **Loops & tournaments** | Iterate until done, or pit variants against each other. |
-| **Cross-session resume** | Re-run flows; cached phases auto-skip. |
-| **Cost control** | Run-wide `budget` caps in USD or tokens. |
-| **Zero runtime deps** | The core engine has no runtime dependencies. |
+## The taskflow answer
+
+`taskflow` moves the plan **out of the prompt and into a declarative graph of task nodes.** The runtime owns the DAG, the loops, the retries, and the intermediate state. You declare a pipeline once and run it a hundred times — by name.
+
+Because the plan is data, not prose and not code, it can be **validated, visualized, and replayed.**
+
+## What makes it different
+
+| | subagent (built-in) | **taskflow** |
+|---|---|---|
+| **Who drives** | the model, turn by turn | the runtime, from a definition |
+| **Topology** | chain / flat parallel | **DAG with layered concurrency + routing** |
+| **Intermediate results** | in your context window | **in the runtime — not your context** |
+| **Scale** | a handful of tasks | **dynamic `map` fan-out over dozens of items** |
+| **Reusable** | re-described every time | **saved by name** |
+| **Resumable** | ✗ | **✓ cross-session** |
+| **Quality gates** | ✗ | **`gate` phases** |
+| **Conditional routing** | ✗ | **`when` guards + `join: any`** |
+| **Fault tolerance** | ✗ | **per-phase `retry`** |
+| **Human-in-the-loop** | ✗ | **`approval` phases** |
+| **Cost control** | ✗ | **run-wide `budget`** |
+| **Composition** | ✗ | **`flow` sub-flows** |
+| **Iterative loops** | ✗ | **`loop` phases** |
+| **Competitive selection** | ✗ | **`tournament` phases** |
 
 ## Quick install
 
@@ -50,5 +64,6 @@ codex plugin add taskflow@taskflow
 
 ## Next steps
 
+- [What is taskflow?](/en/docs/what-is-taskflow)
 - [Getting Started](/en/docs/getting-started)
-- [Using taskflow on Codex](/en/docs/codex)
+- [Core Concepts](/en/docs/concepts)

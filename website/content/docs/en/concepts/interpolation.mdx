@@ -1,0 +1,105 @@
+---
+title: Interpolation
+description: How data flows between phases in a taskflow.
+---
+
+# Interpolation
+
+taskflow uses a simple template syntax to pass data between phases.
+
+## Placeholders
+
+| Placeholder | Resolves to |
+|---|---|
+| `{args.X}` | Invocation argument |
+| `{steps.ID.output}` | Prior phase text output |
+| `{steps.ID.json}` | Prior output parsed as JSON |
+| `{steps.ID.json.field}` | Nested JSON field |
+| `{item}` / `{item.field}` | Current item inside a `map` phase |
+| `{previous.output}` | Immediately upstream phase output |
+| `{loop.iteration}` | Current loop iteration (1-based) |
+| `{loop.lastOutput}` | Previous loop iteration output |
+| `{loop.maxIterations}` | Loop cap |
+| `{reflexion}` | Failure summary (with `reflexion: true`) |
+
+## Examples
+
+### Args
+
+```json
+{
+  "args": { "dir": { "default": "src" } },
+  "phases": [
+    {
+      "id": "list",
+      "task": "List files under {args.dir}."
+    }
+  ]
+}
+```
+
+### Step output
+
+```json
+{
+  "phases": [
+    { "id": "a", "task": "Generate a name.", "dependsOn": [] },
+    { "id": "b", "task": "Use this name: {steps.a.output}", "dependsOn": ["a"] }
+  ]
+}
+```
+
+### Parsed JSON
+
+```json
+{
+  "phases": [
+    {
+      "id": "triage",
+      "output": "json",
+      "task": "Classify severity. Output {severity}."
+    },
+    {
+      "id": "deep",
+      "when": "{steps.triage.json.severity} == high",
+      "dependsOn": ["triage"]
+    }
+  ]
+}
+```
+
+### Map item
+
+```json
+{
+  "id": "audit",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "task": "Audit {item.route} in {item.file}."
+}
+```
+
+## Conditions
+
+`when` and `until` expressions support:
+
+- `==`, `!=`, `<`, `>`, `<=`, `>=`
+- `&&`, `||`, `!`
+- Parentheses
+- Quoted strings and numbers
+- Any `{...}` reference
+
+```json
+"when": "{steps.triage.json.severity} == high && {args.force} != true"
+```
+
+## Validation
+
+Referencing `{steps.X}` without declaring `dependsOn: ["X"]` is a **hard validation error**. This catches the most common pipeline bug before a single agent runs.
+
+Unresolved interpolation refs are surfaced as phase warnings in the run record.
+
+## Next
+
+- [Control Flow](/en/docs/syntax/control-flow) — `when`, `join`, and routing.

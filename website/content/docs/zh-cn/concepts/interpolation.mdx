@@ -1,0 +1,105 @@
+---
+title: 插值
+description: 数据如何在 taskflow 的阶段之间流动。
+---
+
+# 插值
+
+taskflow 使用简单的模板语法在阶段之间传递数据。
+
+## 占位符
+
+| 占位符 | 解析为 |
+|---|---|
+| `{args.X}` | 调用参数 |
+| `{steps.ID.output}` | 先前阶段的文本输出 |
+| `{steps.ID.json}` | 先前输出解析为 JSON |
+| `{steps.ID.json.field}` | 嵌套 JSON 字段 |
+| `{item}` / `{item.field}` | `map` 阶段中的当前项目 |
+| `{previous.output}` | 紧接的上游阶段输出 |
+| `{loop.iteration}` | 当前循环迭代（从 1 开始） |
+| `{loop.lastOutput}` | 上一次循环迭代输出 |
+| `{loop.maxIterations}` | 循环上限 |
+| `{reflexion}` | 失败摘要（`reflexion: true`） |
+
+## 示例
+
+### 参数
+
+```json
+{
+  "args": { "dir": { "default": "src" } },
+  "phases": [
+    {
+      "id": "list",
+      "task": "列出 {args.dir} 下的文件。"
+    }
+  ]
+}
+```
+
+### 阶段输出
+
+```json
+{
+  "phases": [
+    { "id": "a", "task": "生成一个名字。", "dependsOn": [] },
+    { "id": "b", "task": "使用这个名字：{steps.a.output}", "dependsOn": ["a"] }
+  ]
+}
+```
+
+### 解析 JSON
+
+```json
+{
+  "phases": [
+    {
+      "id": "triage",
+      "output": "json",
+      "task": "分类严重程度。输出 {severity}。"
+    },
+    {
+      "id": "deep",
+      "when": "{steps.triage.json.severity} == high",
+      "dependsOn": ["triage"]
+    }
+  ]
+}
+```
+
+### Map 项目
+
+```json
+{
+  "id": "audit",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "task": "审计 {item.route}（{item.file}）。"
+}
+```
+
+## 条件
+
+`when` 和 `until` 表达式支持：
+
+- `==`、`!=`、`<`、`>`、`<=`、`>=`
+- `&&`、`||`、`!`
+- 括号
+- 引号字符串和数字
+- 任何 `{...}` 引用
+
+```json
+"when": "{steps.triage.json.severity} == high && {args.force} != true"
+```
+
+## 验证
+
+引用 `{steps.X}` 但不声明 `dependsOn: ["X"]` 是**硬验证错误**。这能在任何 agent 运行前捕获最常见的流水线 bug。
+
+未解析的插值引用会在运行记录中显示为阶段警告。
+
+## 下一步
+
+- [控制流](/zh-cn/docs/syntax/control-flow) — `when`、`join` 和路由。

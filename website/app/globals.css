@@ -3,12 +3,61 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 4%;
+    --fd-background: 0 0% 100%;
+    --fd-foreground: 240 10% 4%;
+    --fd-card: 0 0% 100%;
+    --fd-card-foreground: 240 10% 4%;
+    --fd-popover: 0 0% 100%;
+    --fd-popover-foreground: 240 10% 4%;
+    --fd-primary: 250 92% 60%;
+    --fd-primary-foreground: 0 0% 100%;
+    --fd-secondary: 240 5% 96%;
+    --fd-secondary-foreground: 240 6% 10%;
+    --fd-muted: 240 5% 96%;
+    --fd-muted-foreground: 240 4% 46%;
+    --fd-accent: 240 5% 96%;
+    --fd-accent-foreground: 240 6% 10%;
+    --fd-border: 240 6% 90%;
+    --fd-ring: 250 92% 60%;
   }
 
   .dark {
-    --background: 240 10% 4%;
-    --foreground: 0 0% 98%;
+    --fd-background: 240 10% 4%;
+    --fd-foreground: 0 0% 98%;
+    --fd-card: 240 10% 6%;
+    --fd-card-foreground: 0 0% 98%;
+    --fd-popover: 240 10% 6%;
+    --fd-popover-foreground: 0 0% 98%;
+    --fd-primary: 250 92% 65%;
+    --fd-primary-foreground: 0 0% 100%;
+    --fd-secondary: 240 4% 16%;
+    --fd-secondary-foreground: 0 0% 98%;
+    --fd-muted: 240 4% 16%;
+    --fd-muted-foreground: 240 5% 65%;
+    --fd-accent: 240 4% 16%;
+    --fd-accent-foreground: 0 0% 98%;
+    --fd-border: 240 4% 20%;
+    --fd-ring: 250 92% 65%;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--fd-primary)) 0%, hsl(270 90% 65%) 100%);
+  }
+
+  .bg-grid {
+    background-size: 40px 40px;
+    background-image: linear-gradient(to right, hsl(var(--fd-border) / 0.4) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--fd-border) / 0.4) 1px, transparent 1px);
+  }
+
+  .bg-hero-glow {
+    background: radial-gradient(
+      ellipse 80% 60% at 50% -20%,
+      hsl(var(--fd-primary) / 0.15),
+      transparent
+    );
   }
 }

@@ -1,0 +1,57 @@
+---
+title: 预算
+description: 运行级成本和 token 上限。
+---
+
+# 预算
+
+添加运行级上限以防止支出失控。
+
+```json
+{
+  "name": "fan-out-audit",
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [ /* ... */ ]
+}
+```
+
+## 行为
+
+当累计成本或 token 超过上限时：
+
+- 不再生成新阶段。
+- 运行中的 `map`/`parallel` 停止生成新项目。
+- 运行以 `blocked` 结束。
+- 部分输出被保留。
+
+## 为什么每个 fan-out 都需要预算
+
+对错误发现的 500 个项目做 `map` 会导致无界支出。始终设置上限：
+
+```json
+{
+  "name": "summarize-files",
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "output": "json",
+      "task": "列出 {args.dir} 下的文件。输出 JSON 数组。"
+    },
+    {
+      "id": "summarize",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "task": "总结 {item.file}。"
+    }
+  ]
+}
+```
+
+## 最佳实践
+
+任何包含 `map`、`parallel`、`loop` 或 `tournament` 的 flow 都应设置 `budget`。

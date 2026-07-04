@@ -1,0 +1,59 @@
+---
+title: 在 Codex 上使用 taskflow
+description: 将 taskflow 作为 Codex 插件安装，并通过 MCP 编排多阶段工作流。
+---
+
+# 在 Codex 上使用 taskflow
+
+taskflow 以插件形式运行在 [Codex](https://github.com/openai/codex) 上，暴露一个 MCP 服务器。
+
+## 安装
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+插件会自动注册 MCP 服务器和路由 skill。
+
+## 验证
+
+```bash
+codex plugin list   # taskflow@taskflow 已安装、已启用
+codex mcp list      # taskflow 已启用
+```
+
+## 暴露的 MCP 工具
+
+| 工具 | 用途 |
+|---|---|
+| `taskflow_run` | 运行已保存或内联 flow。 |
+| `taskflow_list` | 列出已保存 flow。 |
+| `taskflow_show` | 显示 flow 的 JSON。 |
+| `taskflow_verify` | 静态检查 flow。 |
+| `taskflow_compile` | 渲染 DAG 图。 |
+
+## 使用
+
+直接描述需求——内置 skill 会告诉 Codex 何时调用工具：
+
+```
+> 列出我保存的 taskflows。
+> 验证这个 flow：{name:"x", phases:[{id:"a", type:"agent", agent:"writer", task:"draft"}]}
+> 运行 "release-train" taskflow。
+```
+
+## 长时间运行的 flow
+
+`taskflow_run` 会在整个 DAG 完成后才返回。插件默认工具调用超时 30 分钟。在 `~/.codex/config.toml` 中覆盖：
+
+```toml
+[mcp_servers.taskflow]
+tool_timeout_sec = 3600
+```
+
+## 卸载
+
+```bash
+codex plugin remove taskflow@taskflow
+```

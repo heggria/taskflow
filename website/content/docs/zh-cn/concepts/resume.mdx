@@ -1,0 +1,75 @@
+---
+title: 续跑
+description: taskflow 运行如何跨会话存活。
+---
+
+# 续跑
+
+taskflow 运行不绑定到你的会话。每个完成的阶段都会写入磁盘，因此失败或被停止的运行可以在稍后继续。
+
+## 工作原理
+
+当你恢复一个运行时，运行时会：
+
+1. 加载现有运行状态。
+2. 为每个阶段计算输入哈希。
+3. 跳过输入未变的阶段。
+4. 重新运行已更改或从未完成的阶段。
+
+```bash
+/tf resume <runId>
+```
+
+## 什么算作"变化"
+
+阶段的输入哈希包括：
+
+- 解析后的任务文本。
+- 解析后的 `over` 项目（对于 `map`）。
+- 解析后的 `context` 文件。
+- 解析后的 `args`。
+
+如果上游输出变化，所有依赖阶段都会重新运行。如果什么都没变，它们会被跳过。
+
+## 示例
+
+会话 1：
+
+```
+✓ discover
+✓ audit（map 10 个文件）
+✗ review（速率限制）
+```
+
+会话 2：
+
+```bash
+/tf resume nightly-audit-abc123
+```
+
+```
+✓ discover      （跳过）
+✓ audit         （跳过）
+◐ review        （重新运行）
+✓ report
+```
+
+只有失败的阶段及其后续阶段消耗 token。
+
+## 跨运行记忆化
+
+除了运行内续跑，你还可以通过 `cache` 字段将阶段选择加入 `cross-run` 缓存。如果之前的运行用相同的输入计算过相同阶段，结果会以 $0.00 复用。
+
+```json
+{
+  "id": "analyze-auth",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+  }
+}
+```
+
+## 下一步
+
+- [缓存](/zh-cn/docs/syntax/caching) — 完整缓存选项和 fingerprint。

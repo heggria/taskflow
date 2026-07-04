@@ -1,0 +1,57 @@
+---
+title: Tournament Selection
+description: Spawn competing variants and let a judge pick the best result.
+---
+
+# Tournament Selection
+
+For open-ended creative or subjective work, generate several candidates and let a judge pick the strongest.
+
+## Basic tournament
+
+```json
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the headline with the strongest hook and clearest promise.",
+  "mode": "best"
+}
+```
+
+## How it works
+
+1. Spawn `variants` copies of the task.
+2. Run a judge agent that sees every variant.
+3. The judge emits `WINNER: <n>` or JSON `{"winner": n}`.
+4. Return the winning variant (`mode: "best"`) or a synthesized answer (`mode: "aggregate"`).
+
+## Branches
+
+For genuinely different approaches, use `branches`:
+
+```json
+{
+  "id": "headline",
+  "type": "tournament",
+  "branches": [
+    { "task": "Write a bold, provocative headline." },
+    { "task": "Write a clear, benefit-driven headline." },
+    { "task": "Write a question-based headline." }
+  ],
+  "judge": "Pick the best headline.",
+  "mode": "best"
+}
+```
+
+## Fail-open
+
+If the judge's verdict is unparseable, the tournament falls back to variant 1. Work is never lost.
+
+## When to use
+
+- Creative writing where quality is subjective.
+- Open-ended summarization.
+- Naming, branding, or headline generation.
+- Any task where one shot is unreliable.

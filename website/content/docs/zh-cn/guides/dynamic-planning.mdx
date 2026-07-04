@@ -1,0 +1,74 @@
+---
+title: 动态规划
+description: 在运行时生成子流程，并在执行前验证它们。
+---
+
+# 动态规划
+
+有些问题无法提前完全编写。规划阶段可以在运行时发出子流程定义，运行时验证并执行它。
+
+## 规划 → 执行
+
+```json
+{
+  "name": "iterative-replan",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "output": "json",
+      "task": "根据当前状态，输出一个包含 phases[] 的 JSON taskflow 定义。"
+    },
+    {
+      "id": "execute",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"]
+    }
+  ]
+}
+```
+
+## 验证
+
+生成的子流程会检查：
+
+- 循环
+- 悬空引用
+- 重复 id
+- 死胡同
+- 安全上限（100 个阶段、200 个 map 项目、5 层嵌套）
+
+格式错误的 plan 会 fail-open：阶段以 `defError` 跳过，运行继续。
+
+## 安全加固
+
+LLM 生成的子流程受到限制：
+
+- 广度上限
+- `cwd` 限制
+- 预算限制为 `min(child, parent)`
+- 原型污染防护
+- gate 中禁用 scorer（`code-compiles`、`regex`）
+
+## Loop + flow
+
+将 `loop` 与 `flow {def}` 配对，实现数据驱动的迭代重规划：
+
+```json
+{
+  "id": "refine-plan",
+  "type": "loop",
+  "task": "基于 {loop.lastOutput} 规划下一次迭代。",
+  "until": "{steps.refine-plan.json.done} == true",
+  "maxIterations": 6,
+  "output": "json"
+}
+```
+
+## 何时使用
+
+- 步骤数量或形状依赖上游结果。
+- 你希望一个模型制定计划，另一个模型执行计划。
+- 需要基于反馈的迭代重规划。

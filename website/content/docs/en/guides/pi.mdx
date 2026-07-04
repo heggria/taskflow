@@ -1,0 +1,57 @@
+---
+title: Using taskflow on Pi
+description: Install, run, save, and resume taskflows on the Pi coding agent.
+---
+
+# Using taskflow on Pi
+
+## Install
+
+```bash
+pi install npm:pi-taskflow
+```
+
+## Run
+
+In a Pi session, describe the work:
+
+> Run a chain: first explore the auth flow, then summarize the findings.
+
+The model calls the `taskflow` tool automatically.
+
+## Save a flow
+
+After a run, say **"save it"** and give it a name. It becomes a one-word command:
+
+```bash
+/tf:audit-auth dir=src
+```
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/tf list` | List saved flows. |
+| `/tf run <name> [args]` | Run a saved flow. |
+| `/tf show <name>` | Print a flow definition. |
+| `/tf verify <name>` | Static-check a flow. |
+| `/tf compile <name>` | Render a Mermaid diagram. |
+| `/tf runs` | Browse run history. |
+| `/tf resume <runId>` | Continue a paused/failed run. |
+| `/tf init` | Configure model roles. |
+| `/tf:<name> [args]` | Shortcut. |
+
+## Model roles
+
+Run `/tf init` to map built-in agent roles to your models. Roles:
+
+- `{{fast}}` — cheap & quick
+- `{{strong}}` — balanced planning/review
+- `{{thinker}}` — deep analysis
+- `{{arbiter}}` — final judgment
+- `{{vision}}` — multimodal
+- `{{reasoner}}` — cautious reasoning
+
+## Next
+
+- [Getting Started](/en/docs/getting-started)

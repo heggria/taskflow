@@ -1,0 +1,123 @@
+---
+title: 控制流
+description: 条件路由、合并、重试和循环。
+---
+
+# 控制流
+
+taskflow 提供了多个原语用于路由和可靠性。
+
+## `when` — 条件守卫
+
+除非表达式为真，否则跳过阶段。
+
+```json
+{
+  "id": "deep",
+  "when": "{steps.triage.json.severity} == high",
+  "dependsOn": ["triage"]
+}
+```
+
+运算符：`==`、`!=`、`<`、`>`、`<=`、`>=`、`&&`、`||`、`!`、括号、引号字符串和数字。
+
+**Fail-open：** `when` 解析错误会让阶段运行，不会静默丢弃。
+
+## `join` — 依赖合并
+
+- `"all"`（默认）—— 等待每个依赖。
+- `"any"` —— 任一依赖完成即运行。
+
+将 `join: "any"` 与条件分支结合构建 if/else 路由：
+
+```json
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "将严重程度分类为 high 或 low。"
+},
+{
+  "id": "deep",
+  "when": "{steps.triage.json.severity} == high",
+  "dependsOn": ["triage"]
+},
+{
+  "id": "quick",
+  "when": "{steps.triage.json.severity} == low",
+  "dependsOn": ["triage"]
+},
+{
+  "id": "merge",
+  "type": "reduce",
+  "from": ["deep", "quick"],
+  "join": "any",
+  "dependsOn": ["deep", "quick"]
+}
+```
+
+## `retry`
+
+重试失败的阶段：
+
+```json
+{
+  "id": "patch",
+  "retry": {
+    "max": 3,
+    "backoffMs": 500,
+    "factor": 2
+  }
+}
+```
+
+- `max` — 最大尝试次数。
+- `backoffMs` — 初始延迟。
+- `factor` — `1` 为固定间隔，`2` 为指数退避。
+
+即使没有显式策略，速率限制、5xx、超时等瞬态提供程序错误也会自动重试。
+
+## `optional`
+
+`optional` 阶段的失败不会中止运行。
+
+```json
+{
+  "id": "lint",
+  "type": "script",
+  "run": "npm run lint",
+  "optional": true
+}
+```
+
+可与受 `when` 守卫保护的回退阶段配对。
+
+## `onBlock` — 自愈合 gate
+
+默认情况下，阻塞 gate 会中止运行。设为 `"retry"` 时，gate 会重新运行其上游 `dependsOn` 阶段并重新评估，最多 `retry.max` 轮。
+
+```json
+{
+  "id": "quality",
+  "type": "gate",
+  "onBlock": "retry",
+  "retry": { "max": 3 },
+  "dependsOn": ["implement"],
+  "task": "这是否满足所有标准？VERDICT: PASS 或 BLOCK。"
+}
+```
+
+这会形成生成→批判→再生成的 rework 循环。
+
+## `idempotent`
+
+对不可逆副作用的阶段（webhook POST、部署、DB 写入）设置 `idempotent: false`。这会：
+
+- 抑制隐式瞬态自动重试。
+- 将结果排除在所有缓存之外。
+- 在阶段状态中记录 `sideEffect: true`。
+
+## 下一步
+
+- [缓存](/zh-cn/docs/syntax/caching) — 记忆化。
+- [预算](/zh-cn/docs/syntax/budget) — 成本上限。

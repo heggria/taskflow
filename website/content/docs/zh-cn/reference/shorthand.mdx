@@ -1,0 +1,66 @@
+---
+title: 简写
+description: task、tasks 和 chain 快捷形式。
+---
+
+# 简写
+
+taskflow 接受三种简写形式，运行时会将它们反糖化为完整的 flow。
+
+## `task`
+
+一个 agent，一个任务。
+
+```json
+{
+  "task": "总结 src/ 的架构",
+  "agent": "explorer"
+}
+```
+
+## `tasks`
+
+并行任务。
+
+```json
+{
+  "tasks": [
+    { "task": "审计 src/api 的认证", "agent": "analyst" },
+    { "task": "审计 src/api 的输入校验", "agent": "analyst" }
+  ]
+}
+```
+
+## `chain`
+
+顺序任务。每一步通过 `{previous.output}` 看到上一步输出。
+
+```json
+{
+  "chain": [
+    { "task": "列出 src/lib 的公共 API", "agent": "scout" },
+    { "task": "为以下内容写文档：\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+## 优先级
+
+如果同时给出多个：`chain` > `tasks` > `task`。
+
+## 上下文预读
+
+所有简写步骤都支持 `context` 和 `contextLimit`：
+
+```json
+{
+  "chain": [
+    {
+      "task": "列出公共 API",
+      "agent": "scout",
+      "context": ["src/lib/**/*.ts"]
+    },
+    { "task": "为以下内容写文档：\n{previous.output}", "agent": "writer" }
+  ]
+}
+```

@@ -1,0 +1,50 @@
+---
+title: Commands
+description: Pi slash commands and Codex MCP tools.
+---
+
+# Commands
+
+## Pi `/tf` commands
+
+Saved flows become CLI shortcuts on Pi.
+
+| Command | Description |
+|---|---|
+| `/tf list` | List saved flows. |
+| `/tf run <name> [args]` | Run a saved flow. |
+| `/tf show <name>` | Print a flow definition. |
+| `/tf compile <name> [lr\|td]` | Render a Mermaid diagram. |
+| `/tf verify <name>` | Statically verify a flow. |
+| `/tf runs` | Browse run history. |
+| `/tf resume <runId>` | Continue a run. |
+| `/tf init` | Configure model roles. |
+| `/tf:<name> [args]` | Shortcut. |
+
+### Tool actions
+
+The model can use these `taskflow` tool actions:
+
+| Action | Description |
+|---|---|
+| `run` | Inline or saved flow. |
+| `save` | Persist a flow. |
+| `resume` | Resume by runId. |
+| `list` | List flows. |
+| `verify` | Static check. |
+| `compile` | Mermaid diagram. |
+| `ir` / `provenance` / `why-stale` / `recompute` | Incremental recompute. |
+| `cache-clear` | Clear cross-run cache. |
+| `init` | Model roles. |
+
+## Codex MCP tools
+
+On Codex, taskflow exposes these MCP tools:
+
+| Tool | Description |
+|---|---|
+| `taskflow_run` | Run saved or inline flow. |
+| `taskflow_list` | List saved flows. |
+| `taskflow_show` | Show flow JSON. |
+| `taskflow_verify` | Static check. |
+| `taskflow_compile` | Render DAG diagram. |

@@ -1,0 +1,65 @@
+---
+title: Context Isolation
+description: Why only the final phase reaches your conversation.
+---
+
+# Context Isolation
+
+With raw subagents, every transcript floods your context window. With taskflow, intermediate results stay in the runtime.
+
+## The problem
+
+A typical multi-step agent job looks like this:
+
+1. Explore the codebase.
+2. Audit 20 files.
+3. Summarize findings.
+4. Write a patch.
+5. Review the patch.
+
+If each step produces 4K tokens of transcript, your context window grows by 20K tokens before you even see a result. Repeat a few times and you hit the limit, lose earlier context, or pay for duplicated work.
+
+## The taskflow model
+
+In taskflow, each phase runs in an isolated subagent process. The runtime collects outputs but **does not push them into your conversation** until the `final` phase completes.
+
+```
+Your context          Runtime
+├─ final output  ←──  ├─ phase A output
+                      ├─ phase B output
+                      ├─ phase C output
+                      └─ phase D output (final)
+```
+
+This means you can:
+
+- Run 50 subagents in parallel without growing your context.
+- Resume a long run without replaying every transcript.
+- Keep the focus on the outcome, not the process.
+
+## When you need to peek
+
+Sometimes you need to inspect an intermediate output for debugging. Use the CLI:
+
+```bash
+/tf peek <runId> <phaseId>
+```
+
+This is read-only and human-invoked — it does not break the isolation contract for normal runs.
+
+## Shared Context Tree
+
+By default, subagents are fully isolated. For phases that need to share expensive context, opt in with `shareContext: true` (or `contextSharing: true` flow-wide).
+
+This gives subagents four tools:
+
+- `ctx_write(key, value)` — publish a finding.
+- `ctx_read(key?)` — read published findings.
+- `ctx_report(summary, structured?)` — report up to the parent.
+- `ctx_spawn(assignments[])` — delegate child work.
+
+Everything is opt-in, size-bounded, depth-capped, and cleaned up with the run.
+
+## Next
+
+- [Resume](/en/docs/concepts/resume) — how isolation enables cross-session replay.

@@ -1,0 +1,230 @@
+---
+title: Phase Types Reference
+description: Complete field reference for every phase type.
+---
+
+# Phase Types Reference
+
+Every phase shares a common set of fields. On top of those, each phase type adds its own required and optional fields.
+
+## Common fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `string` | Unique phase identifier. Use hyphens. |
+| `type` | `string` | Phase type. Defaults to `agent`. |
+| `agent` | `string` | Agent name. Defaults to first discovered agent. |
+| `dependsOn` | `string[]` | Phases this phase waits for. |
+| `join` | `"all" \| "any"` | Dependency join semantics. Default `"all"`. |
+| `when` | `string` | Conditional guard. |
+| `retry` | `object` | `{ max, backoffMs?, factor? }`. |
+| `timeout` | `number` | Per-call timeout in ms (>= 1000). |
+| `output` | `"text" \| "json"` | Output format. Default `"text"`. |
+| `context` | `string[]` | Files to pre-read into the prompt. |
+| `contextLimit` | `number` | Max chars per context file. Default `8000`. |
+| `final` | `boolean` | Marks the result-bearing phase. |
+| `optional` | `boolean` | Failure does not abort the run. |
+| `cache` | `object` | `{ scope, ttl?, fingerprint? }`. |
+| `idempotent` | `boolean` | Default `true`. Set `false` for irreversible side effects. |
+
+## `agent`
+
+One subagent runs one task.
+
+### Required fields
+
+- `task`
+
+### Example
+
+```json
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Summarize the architecture of src/.",
+  "output": "json",
+  "expect": {
+    "type": "object",
+    "required": ["summary"]
+  }
+}
+```
+
+## `parallel`
+
+Run `branches[]` concurrently.
+
+### Required fields
+
+- `branches` — array of `{ task, agent?, ...commonFields? }`
+
+### Example
+
+```json
+{
+  "id": "audit",
+  "type": "parallel",
+  "branches": [
+    { "task": "Audit auth", "agent": "analyst" },
+    { "task": "Audit validation", "agent": "analyst" }
+  ]
+}
+```
+
+## `map`
+
+Fan out over an array.
+
+### Required fields
+
+- `over` — interpolation expression resolving to an array.
+- `task`
+
+### Optional fields
+
+- `as` — loop variable name. Default `"item"`.
+- `concurrency` — per-phase override.
+
+### Example
+
+```json
+{
+  "id": "summarize",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "agent": "scout",
+  "task": "Read {item.file} and summarize.",
+  "concurrency": 8
+}
+```
+
+## `gate`
+
+Quality gate. Can halt the flow.
+
+### Required fields
+
+- `task`
+
+### Optional fields
+
+- `eval` — zero-token assertions.
+- `score` — deterministic scoring.
+- `onBlock` — `"halt"` (default) or `"retry"`.
+
+### Example
+
+```json
+{
+  "id": "quality",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["fix"],
+  "eval": ["{steps.fix.output} contains 'VERDICT: PASS'"],
+  "task": "Review the fix. End with VERDICT: PASS or BLOCK."
+}
+```
+
+## `reduce`
+
+Aggregate upstream outputs.
+
+### Required fields
+
+- `from` — array of phase ids.
+- `task`
+
+### Example
+
+```json
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["audit"],
+  "agent": "writer",
+  "task": "Combine into a report:\n{steps.audit.output}"
+}
+```
+
+## `approval`
+
+Human-in-the-loop.
+
+### Optional fields
+
+- `task` — prompt shown to the human.
+
+## `flow`
+
+Run a sub-flow.
+
+### Required fields (one of)
+
+- `use` — name of a saved flow.
+- `def` — interpolation expression resolving to a flow definition.
+
+### Optional fields
+
+- `with` — args passed to `use`.
+
+## `loop`
+
+Iterate until done.
+
+### Required fields
+
+- `task`
+- `until`
+- `maxIterations`
+
+### Optional fields
+
+- `convergence` — stop when output stops changing.
+- `reflexion` — feed failure summaries back into the loop.
+- `output` — usually `"json"`.
+
+## `tournament`
+
+Compete and judge.
+
+### Required fields
+
+- `task` (if using `variants`)
+
+### Optional fields
+
+- `variants` — number of copies.
+- `branches` — distinct approaches.
+- `judge` — rubric for the judge.
+- `judgeAgent` — agent for judging.
+- `mode` — `"best"` or `"aggregate"`.
+
+## `script`
+
+Run a shell command. Zero tokens.
+
+### Required fields
+
+- `run` — string (shell) or array (direct exec).
+
+### Optional fields
+
+- `input` — piped to stdin.
+- `timeout` — ms cap, default `60000`, max `300000`.
+
+### Example
+
+```json
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## Next
+
+- [Control Flow](/en/docs/syntax/control-flow) — `when`, `join`, routing.

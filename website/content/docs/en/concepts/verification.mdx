@@ -1,0 +1,70 @@
+---
+title: Verification
+description: How taskflow validates a DAG before spending tokens.
+---
+
+# Verification
+
+One of taskflow's core promises is that the runtime verifies the graph **before it spends a single token**.
+
+## What gets checked
+
+The `verify` action (or `/tf verify`) runs a static analysis over the flow definition:
+
+### 1. DAG shape
+
+- **Cycles** — a phase cannot transitively depend on itself.
+- **Dead ends** — every phase must either be referenced downstream or marked `final`.
+- **Unreachable phases** — phases that nothing depends on and that are not `final`.
+
+### 2. References
+
+- **Undefined `dependsOn`** — every id in `dependsOn` must exist.
+- **Dangling interpolation** — `{steps.X.*}` references require `dependsOn: ["X"]`.
+- **Missing args** — with `strictInterpolation`, unresolved `{args.X}` is a hard error.
+
+### 3. Contracts
+
+- **JSON output** — `output: "json"` phases can declare an `expect` schema.
+- **Gate verdicts** — gate phases are checked for valid scoring configuration.
+- **Budget** — `budget.maxUSD` and `budget.maxTokens` must be positive numbers.
+
+### 4. Security caps
+
+For LLM-generated dynamic sub-flows (`flow {def}`):
+
+- Max 100 phases.
+- Max 200 map items.
+- Max 16 concurrency.
+- Max 5 nesting levels.
+- `cwd` containment.
+- Prototype pollution defense.
+
+## Example
+
+```bash
+/tf verify my-flow
+```
+
+Output:
+
+```
+✗ verification FAILED — 1 error, 0 warnings
+
+error: Phase 'report' references {steps.audit.output} but 'audit' is not in dependsOn
+```
+
+## Verification vs. runtime errors
+
+Verification catches **structural** problems. It cannot catch:
+
+- A subagent producing wrong content.
+- A JSON schema being too permissive.
+- A gate agent blocking unexpectedly.
+
+These are caught at runtime and can be handled with `retry`, `optional`, and `onBlock`.
+
+## Next
+
+- [Syntax Reference](/en/docs/syntax/flow-definition) — fields that affect verification.
+- [Dynamic Planning](/en/docs/guides/dynamic-planning) — generated sub-flows are verified too.

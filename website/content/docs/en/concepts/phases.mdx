@@ -1,0 +1,191 @@
+---
+title: Phase Types
+description: The ten building blocks of every taskflow.
+---
+
+# Phase Types
+
+A phase is a single node in the DAG. taskflow provides ten phase types, each for a different kind of work.
+
+## Overview
+
+| Type | Purpose |
+|---|---|
+| `agent` | One subagent runs a single task. |
+| `parallel` | Run `branches[]` concurrently. |
+| `map` | Fan out over an array — one subagent per item. |
+| `gate` | Quality/review step that can halt the flow. |
+| `reduce` | Aggregate upstream phase outputs into one. |
+| `approval` | Human-in-the-loop pause. |
+| `flow` | Run a saved or runtime-generated sub-flow. |
+| `loop` | Repeat a task until a condition or cap. |
+| `tournament` | N variants compete; a judge picks best. |
+| `script` | Run a shell command — zero tokens. |
+
+## `agent`
+
+The simplest phase: one subagent, one task.
+
+```json
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Summarize the architecture of src/.",
+  "final": true
+}
+```
+
+## `parallel`
+
+Run several tasks concurrently. Similar to the shorthand `tasks`.
+
+```json
+{
+  "id": "audit",
+  "type": "parallel",
+  "branches": [
+    { "task": "Audit auth", "agent": "analyst" },
+    { "task": "Audit validation", "agent": "analyst" }
+  ]
+}
+```
+
+## `map`
+
+Dynamic fan-out. The `over` expression must resolve to an array. One subagent is spawned per item.
+
+```json
+{
+  "id": "summarize",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "agent": "scout",
+  "task": "Read {item.file} and summarize."
+}
+```
+
+Use `concurrency` to throttle parallelism.
+
+## `gate`
+
+A quality gate reviews upstream output and can block downstream work.
+
+```json
+{
+  "id": "verify",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["fix"],
+  "task": "Review the diff. End with VERDICT: PASS or BLOCK."
+}
+```
+
+On `VERDICT: BLOCK`, downstream phases skip and the run ends as `blocked`. Ambiguous output fails open (treated as PASS).
+
+## `reduce`
+
+Aggregate outputs from upstream phases into one final summary.
+
+```json
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["summarize"],
+  "agent": "writer",
+  "task": "Combine into one report:\n{steps.summarize.output}"
+}
+```
+
+## `approval`
+
+Pause for a human decision.
+
+```json
+{
+  "id": "approve",
+  "type": "approval",
+  "dependsOn": ["fix"],
+  "task": "Review the fix before shipping."
+}
+```
+
+- **Approve** → continue.
+- **Reject** → halt.
+- **Edit** → typed note becomes the phase output.
+
+Detached/CI runs auto-reject.
+
+## `flow`
+
+Run a sub-flow as one phase.
+
+```json
+{
+  "id": "sub",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+Or generate it at runtime:
+
+```json
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+## `loop`
+
+Iterate until done, convergence, or `maxIterations`.
+
+```json
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft. Return JSON {draft, done}.",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6,
+  "convergence": true
+}
+```
+
+## `tournament`
+
+Spawn variants and let a judge pick the best.
+
+```json
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline.",
+  "variants": 4,
+  "judge": "Pick the strongest hook.",
+  "mode": "best"
+}
+```
+
+## `script`
+
+Run a shell command. Zero tokens.
+
+```json
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## Next
+
+- [Flow Definition](/en/docs/syntax/flow-definition) — top-level fields.
+- [Phase Types Reference](/en/docs/syntax/phase-types) — exhaustive per-type reference.

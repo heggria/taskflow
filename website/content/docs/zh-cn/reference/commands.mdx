@@ -1,0 +1,50 @@
+---
+title: 命令
+description: Pi 斜杠命令和 Codex MCP 工具。
+---
+
+# 命令
+
+## Pi `/tf` 命令
+
+在 Pi 上，已保存的 flow 变成 CLI 快捷方式。
+
+| 命令 | 说明 |
+|---|---|
+| `/tf list` | 列出已保存 flow。 |
+| `/tf run <name> [args]` | 运行已保存 flow。 |
+| `/tf show <name>` | 打印 flow 定义。 |
+| `/tf compile <name> [lr\|td]` | 渲染 Mermaid 图。 |
+| `/tf verify <name>` | 静态检查 flow。 |
+| `/tf runs` | 浏览运行历史。 |
+| `/tf resume <runId>` | 继续运行。 |
+| `/tf init` | 配置模型角色。 |
+| `/tf:<name> [args]` | 快捷方式。 |
+
+### 工具动作
+
+模型可以使用这些 `taskflow` 工具动作：
+
+| 动作 | 说明 |
+|---|---|
+| `run` | 内联或已保存 flow。 |
+| `save` | 持久化 flow。 |
+| `resume` | 按 runId 续跑。 |
+| `list` | 列出 flow。 |
+| `verify` | 静态检查。 |
+| `compile` | Mermaid 图。 |
+| `ir` / `provenance` / `why-stale` / `recompute` | 增量重算。 |
+| `cache-clear` | 清除跨运行缓存。 |
+| `init` | 模型角色。 |
+
+## Codex MCP 工具
+
+在 Codex 上，taskflow 暴露以下 MCP 工具：
+
+| 工具 | 说明 |
+|---|---|
+| `taskflow_run` | 运行已保存或内联 flow。 |
+| `taskflow_list` | 列出已保存 flow。 |
+| `taskflow_show` | 显示 flow JSON。 |
+| `taskflow_verify` | 静态检查。 |
+| `taskflow_compile` | 渲染 DAG 图。 |

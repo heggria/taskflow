@@ -1,0 +1,66 @@
+---
+title: Caching
+description: Within-run resume and cross-run memoization.
+---
+
+# Caching
+
+taskflow has two layers of reuse: within-run resume and cross-run memoization.
+
+## Within-run resume
+
+Every phase is content-addressed: if its resolved inputs are unchanged, it is skipped on resume. This is automatic and requires no configuration.
+
+Inputs that affect the hash include:
+
+- Resolved task text.
+- `over` items.
+- `context` file contents.
+- `args`.
+
+## Cross-run memoization
+
+Opt a phase into persistent reuse across independent runs:
+
+```json
+{
+  "id": "analyze-auth",
+  "task": "Summarize how auth works.",
+  "context": ["src/auth/**/*.ts"],
+  "cache": {
+    "scope": "cross-run",
+    "ttl": "6h",
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+  }
+}
+```
+
+### `scope`
+
+- `"run-only"` — default, within-run resume only.
+- `"cross-run"` — reuse across runs.
+- `"off"` — never reuse, even within a run.
+
+### `fingerprint`
+
+Fold implicit world-state into the cache key:
+
+| Prefix | Meaning |
+|---|---|
+| `git:HEAD` | Current commit hash. |
+| `glob:<pat>` | Size + mtime of matched files. |
+| `glob!:<pat>` | Content hash of matched files. |
+| `file:<path>` | Specific file. |
+| `env:<NAME>` | Environment variable. |
+
+### `ttl`
+
+Time-to-live: `30m`, `6h`, `7d`.
+
+## Exclusions
+
+`gate`, `approval`, `loop`, `tournament`, and `script` phases are excluded from `cross-run` cache by default because they must produce fresh results.
+
+## Next
+
+- [Resume](/en/docs/concepts/resume) — how resume reuses phases.

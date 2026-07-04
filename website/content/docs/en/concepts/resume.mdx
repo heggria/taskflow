@@ -1,0 +1,75 @@
+---
+title: Resume
+description: How taskflow runs survive across sessions.
+---
+
+# Resume
+
+A taskflow run is not tied to your session. Every completed phase is written to disk, so a run that fails or is stopped can be continued later.
+
+## How it works
+
+When you resume a run, the runtime:
+
+1. Loads the existing run state.
+2. Computes an input hash for each phase.
+3. Skips phases whose inputs have not changed.
+4. Re-runs phases that changed or never completed.
+
+```bash
+/tf resume <runId>
+```
+
+## What counts as "changed"
+
+A phase's input hash includes:
+
+- The resolved task text.
+- The resolved `over` items (for `map`).
+- The resolved `context` files.
+- The resolved `args`.
+
+If an upstream output changes, all dependent phases are re-run. If nothing changed, they are skipped.
+
+## Example
+
+Session 1:
+
+```
+✓ discover
+✓ audit (map over 10 files)
+✗ review (rate limit)
+```
+
+Session 2:
+
+```bash
+/tf resume nightly-audit-abc123
+```
+
+```
+✓ discover      (skipped)
+✓ audit         (skipped)
+◐ review        (re-running)
+✓ report
+```
+
+Only the failed phase and what follows it spend tokens.
+
+## Cross-run memoization
+
+Beyond within-run resume, you can opt a phase into `cross-run` caching with the `cache` field. If a prior run computed the same phase with identical inputs, the result is reused for $0.00.
+
+```json
+{
+  "id": "analyze-auth",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+  }
+}
+```
+
+## Next
+
+- [Caching](/en/docs/syntax/caching) — full cache options and fingerprinting.

@@ -1,0 +1,191 @@
+---
+title: 阶段类型
+description: 每个 taskflow 的十个构建块。
+---
+
+# 阶段类型
+
+阶段是 DAG 中的单个节点。taskflow 提供十种阶段类型，每种用于不同的工作。
+
+## 概览
+
+| 类型 | 用途 |
+|---|---|
+| `agent` | 一个子代理运行一个任务。 |
+| `parallel` | 并发运行 `branches[]`。 |
+| `map` | 对数组 fan out —— 每个项目一个子代理。 |
+| `gate` | 质量/审查步骤，可中止流程。 |
+| `reduce` | 将上游阶段输出聚合为一个。 |
+| `approval` | 人工介入暂停。 |
+| `flow` | 运行已保存或运行时生成的子流程。 |
+| `loop` | 重复任务直到条件或上限。 |
+| `tournament` | N 个变体竞争；评委选出最佳。 |
+| `script` | 运行 shell 命令 —— 零 token。 |
+
+## `agent`
+
+最简单的阶段：一个子代理，一个任务。
+
+```json
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "总结 src/ 的架构。",
+  "final": true
+}
+```
+
+## `parallel`
+
+并发运行多个任务。类似简写 `tasks`。
+
+```json
+{
+  "id": "audit",
+  "type": "parallel",
+  "branches": [
+    { "task": "审计认证", "agent": "analyst" },
+    { "task": "审计校验", "agent": "analyst" }
+  ]
+}
+```
+
+## `map`
+
+动态 fan-out。`over` 表达式必须解析为数组。每个项目生成一个子代理。
+
+```json
+{
+  "id": "summarize",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "item",
+  "agent": "scout",
+  "task": "读取 {item.file} 并总结。"
+}
+```
+
+使用 `concurrency` 限制并行度。
+
+## `gate`
+
+质量门审查上游输出并可以阻止下游工作。
+
+```json
+{
+  "id": "verify",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["fix"],
+  "task": "审查 diff。以 VERDICT: PASS 或 BLOCK 结尾。"
+}
+```
+
+在 `VERDICT: BLOCK` 时，下游阶段跳过，运行以 `blocked` 结束。模糊输出 fail-open（视为 PASS）。
+
+## `reduce`
+
+将上游输出聚合为最终摘要。
+
+```json
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["audit"],
+  "agent": "writer",
+  "task": "合并成报告：\n{steps.audit.output}"
+}
+```
+
+## `approval`
+
+暂停等待人工决定。
+
+```json
+{
+  "id": "approve",
+  "type": "approval",
+  "dependsOn": ["fix"],
+  "task": "在发布前审查修复。"
+}
+```
+
+- **Approve** → 继续。
+- **Reject** → 中止。
+- **Edit** → 输入的备注成为阶段输出。
+
+分离/CI 运行自动拒绝。
+
+## `flow`
+
+运行子流程。
+
+```json
+{
+  "id": "sub",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+或运行时生成：
+
+```json
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+## `loop`
+
+迭代直到完成、收敛或 `maxIterations`。
+
+```json
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "改进这个草稿。返回 JSON {draft, done}。",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6,
+  "convergence": true
+}
+```
+
+## `tournament`
+
+生成变体并让评委选出最佳。
+
+```json
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "为这篇发布帖子写一个醒目的标题。",
+  "variants": 4,
+  "judge": "选择最有吸引力、承诺最清晰的标题。",
+  "mode": "best"
+}
+```
+
+## `script`
+
+运行 shell 命令。零 token。
+
+```json
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## 下一步
+
+- [流程定义](/zh-cn/docs/syntax/flow-definition) — 顶层字段。
+- [阶段类型参考](/zh-cn/docs/syntax/phase-types) — 每种类型的详尽字段。

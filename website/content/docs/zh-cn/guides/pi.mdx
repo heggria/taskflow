@@ -1,0 +1,57 @@
+---
+title: 在 Pi 上使用 taskflow
+description: 在 Pi 编程智能体上安装、运行、保存和续跑 taskflow。
+---
+
+# 在 Pi 上使用 taskflow
+
+## 安装
+
+```bash
+pi install npm:pi-taskflow
+```
+
+## 运行
+
+在 Pi 会话中描述工作：
+
+> 运行一个 chain：先探索认证流程，然后总结发现。
+
+模型会自动调用 `taskflow` 工具。
+
+## 保存 flow
+
+运行后说 **"save it"** 并命名。它会变成单字命令：
+
+```bash
+/tf:audit-auth dir=src
+```
+
+## 命令
+
+| 命令 | 说明 |
+|---|---|
+| `/tf list` | 列出已保存 flow。 |
+| `/tf run <name> [args]` | 运行已保存 flow。 |
+| `/tf show <name>` | 打印 flow 定义。 |
+| `/tf compile <name> [lr\|td]` | 渲染 Mermaid 图。 |
+| `/tf verify <name>` | 静态检查 flow。 |
+| `/tf runs` | 浏览运行历史。 |
+| `/tf resume <runId>` | 继续运行。 |
+| `/tf init` | 配置模型角色。 |
+| `/tf:<name> [args]` | 快捷方式。 |
+
+## 模型角色
+
+运行 `/tf init` 将内置 agent 角色映射到你的模型。角色：
+
+- `{{fast}}` — 便宜快速
+- `{{strong}}` — 平衡规划/审查
+- `{{thinker}}` — 深度分析
+- `{{arbiter}}` — 最终判断
+- `{{vision}}` — 多模态
+- `{{reasoner}}` — 谨慎推理
+
+## 下一步
+
+- [开始使用](/zh-cn/docs/getting-started)

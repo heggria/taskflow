@@ -13,13 +13,17 @@ description: 在 Pi 或 Codex 上运行第一个 taskflow。
 pi install npm:pi-taskflow
 ```
 
-然后在 Pi 会话中直接描述工作：
+然后在 Pi 会话中描述工作：
 
 > 运行一个 chain：先探索认证流程，然后总结发现。
 
 模型会自动调用 `taskflow` 工具。你会看到实时进度、每步耗时、token 消耗和保存的运行记录。
 
 说一句 **"save it"**，你就能永久使用 `/tf:<name>`。
+
+### 可选设置
+
+运行 `/tf init` 一次，将 18 个内置 agent 的模型角色（`fast`、`strong`、`thinker` 等）映射到你自己的模型。跳过则 agent 使用 Pi 默认模型。
 
 ## 在 Codex 上
 
@@ -65,6 +69,8 @@ Codex 会自动调用 `taskflow_*` MCP 工具。
 }
 ```
 
+`agent` 是可选的（默认使用第一个发现的 agent）。添加 `name` 可以标记运行并解锁保存为命令。
+
 ## 使用声明式 DSL
 
 当你需要更复杂的工作流时，完整的 DSL 提供了真正的 DAG：
@@ -72,12 +78,15 @@ Codex 会自动调用 `taskflow_*` MCP 工具。
 ```json
 {
   "name": "summarize-files",
+  "description": "发现文件、逐个总结、生成一份报告",
+  "args": { "dir": { "default": "." } },
+  "concurrency": 8,
   "phases": [
     {
       "id": "discover",
       "type": "agent",
       "agent": "scout",
-      "task": "列出 src/ 下的源文件",
+      "task": "列出 {args.dir} 下的源文件（非递归）。\n只输出 JSON 数组 [{\"file\":\"\"}]。不要 prose。",
       "output": "json"
     },
     {
@@ -101,3 +110,26 @@ Codex 会自动调用 `taskflow_*` MCP 工具。
   ]
 }
 ```
+
+运行方式：
+
+1. `discover` 列出文件并输出 JSON。
+2. `summarize` 为每个文件生成一个子代理，最多 8 个并发。
+3. `report` 将所有总结合并成一份干净的概述。
+
+只有 report 会进入你的上下文。
+
+## 运行前验证
+
+对于任何非平凡的 flow，先验证它：
+
+```bash
+/tf verify <name>
+```
+
+这可以捕获循环、缺失依赖、未定义引用和契约拼写错误——零 token。
+
+## 下一步
+
+- [核心概念](/zh-cn/docs/concepts) — 理解 DAG 模型。
+- [语法参考](/zh-cn/docs/syntax/flow-definition) — 完整 DSL。

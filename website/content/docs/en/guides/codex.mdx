@@ -1,0 +1,59 @@
+---
+title: Using taskflow on Codex
+description: Install taskflow as a Codex plugin and orchestrate multi-phase workflows via MCP.
+---
+
+# Using taskflow on Codex
+
+taskflow runs on [Codex](https://github.com/openai/codex) as a plugin that exposes an MCP server.
+
+## Install
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+The plugin registers its MCP server and a routing skill automatically.
+
+## Verify
+
+```bash
+codex plugin list   # taskflow@taskflow installed, enabled
+codex mcp list      # taskflow enabled
+```
+
+## Exposed MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `taskflow_run` | Run a saved flow or inline definition. |
+| `taskflow_list` | List saved flows. |
+| `taskflow_show` | Show a saved flow's JSON. |
+| `taskflow_verify` | Statically verify a flow. |
+| `taskflow_compile` | Render a DAG diagram. |
+
+## Use it
+
+Just ask — the bundled skill tells Codex when to call the tools:
+
+```
+> List my saved taskflows.
+> Verify this flow: {name:"x", phases:[{id:"a", type:"agent", agent:"writer", task:"draft"}]}
+> Run the "release-train" taskflow.
+```
+
+## Long-running flows
+
+`taskflow_run` returns only after the whole DAG finishes. The plugin ships a 30-minute default tool-call timeout. Override in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.taskflow]
+tool_timeout_sec = 3600
+```
+
+## Remove
+
+```bash
+codex plugin remove taskflow@taskflow
+```

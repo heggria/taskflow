@@ -1,0 +1,66 @@
+---
+title: 缓存
+description: 运行内续跑和跨运行记忆化。
+---
+
+# 缓存
+
+taskflow 有两层复用：运行内续跑和跨运行记忆化。
+
+## 运行内续跑
+
+每个阶段都是内容寻址的：如果其解析后的输入未变，则在续跑时跳过。这自动发生，无需配置。
+
+影响哈希的输入包括：
+
+- 解析后的任务文本。
+- `over` 项目。
+- `context` 文件内容。
+- `args`。
+
+## 跨运行记忆化
+
+让阶段在独立运行之间持久复用：
+
+```json
+{
+  "id": "analyze-auth",
+  "task": "总结认证如何工作。",
+  "context": ["src/auth/**/*.ts"],
+  "cache": {
+    "scope": "cross-run",
+    "ttl": "6h",
+    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]
+  }
+}
+```
+
+### `scope`
+
+- `"run-only"` — 默认，仅运行内续跑。
+- `"cross-run"` — 跨运行复用。
+- `"off"` — 永不复用，即使在运行内。
+
+### `fingerprint`
+
+将隐式世界状态纳入缓存键：
+
+| 前缀 | 含义 |
+|---|---|
+| `git:HEAD` | 当前提交哈希。 |
+| `glob:<pat>` | 匹配文件的大小 + 修改时间。 |
+| `glob!:<pat>` | 匹配文件的内容哈希。 |
+| `file:<path>` | 特定文件。 |
+| `env:<NAME>` | 环境变量。 |
+
+### `ttl`
+
+生存时间：`30m`、`6h`、`7d`。
+
+## 排除项
+
+`gate`、`approval`、`loop`、`tournament` 和 `script` 阶段默认被排除在 `cross-run` 缓存之外，因为它们必须产生新结果。
+
+## 下一步
+
+- [续跑](/zh-cn/docs/concepts/resume) — 续跑如何复用阶段。
