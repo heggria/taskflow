@@ -5,175 +5,452 @@ description: 每种阶段类型的完整字段参考。
 
 # 阶段类型参考
 
+阶段是 taskflow DAG 中的单个节点。本页是每个阶段类型每个字段的权威参考。
+
 <Callout type="info">
-  每个阶段共享一组公共字段。在此基础上，每种阶段类型添加自己的必需和可选字段。
+  此处记录的所有字段都会在执行前验证。非法值、缺失的必需字段或互斥组合都会被 `/tf verify` 以零成本捕获。
 </Callout>
 
 ## 公共字段
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | `string` | 唯一阶段标识符。使用连字符。 |
-| `type` | `string` | 阶段类型。默认 `agent`。 |
-| `agent` | `string` | agent 名称。默认第一个发现的 agent。 |
-| `dependsOn` | `string[]` | 此阶段等待的阶段。 |
-| `join` | `"all" \| "any"` | 依赖合并语义。默认 `"all"`。 |
-| `when` | `string` | 条件守卫。 |
-| `retry` | `object` | `{ max, backoffMs?, factor? }`。 |
-| `timeout` | `number` | 每次调用超时毫秒数（>= 1000）。 |
-| `output` | `"text" \| "json"` | 输出格式。默认 `"text"`。 |
-| `context` | `string[]` | 预读进 prompt 的文件。 |
-| `contextLimit` | `number` | 每个上下文文件最大字符数。默认 `8000`。 |
-| `final` | `boolean` | 标记承载结果的阶段。 |
-| `optional` | `boolean` | 失败不会中止运行。 |
-| `cache` | `object` | `{ scope, ttl?, fingerprint? }`。 |
-| `idempotent` | `boolean` | 默认 `true`。对不可逆副作用设为 `false`。 |
+每个阶段都接受这些字段。某些字段在特定阶段类型上会被忽略或禁用 —— 这些例外在各类型下单独列出。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `id` | `string` | — | **必需。** 阶段的唯一标识符。在 `dependsOn`、`{steps.<id>.output}` 和运行记录中被引用。必须使用连字符，不能用下划线。 |
+| `type` | `string` | `"agent"` | 阶段类型。取值之一：`agent`、`parallel`、`map`、`gate`、`reduce`、`approval`、`flow`、`loop`、`tournament`、`script`。 |
+| `agent` | `string` | 第一个发现的 agent | 运行此阶段的 agent 名称。默认为作用域内发现的第一个 agent。必须使用连字符。 |
+| `task` | `string` | — | 任务 prompt。支持插值（`{args.X}`、`{steps.X.output}`、`{item.field}` 等）。对 `agent`、`map`、`reduce`、`loop`、`tournament` 必需（除非使用 `branches`）。 |
+| `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
+| `join` | `"all" \| "any"` | `"all"` | 依赖合并语义。`"all"` 等待每个依赖；`"any"` 在任一依赖完成后即运行。 |
+| `when` | `string` | — | 条件守卫。除非表达式为真，否则跳过阶段。解析错误 fail-open（阶段仍会运行）。 |
+| `retry` | `object` | — | `{ max: number, backoffMs?: number, factor?: number }`。显式重试策略。即使没有它，瞬态错误仍会被重试。 |
+| `timeout` | `number` | — | 每次调用超时毫秒数（`>= 1000`）。对 `script`，最大为 `300000`，默认 `60000`。不支持 `approval` 和 `flow`。 |
+| `output` | `"text" \| "json"` | `"text"` | 将子代理输出解析为 JSON。使用 `expect` 时必需。 |
+| `expect` | `object` | — | 类 JSON Schema 的输出契约。仅在 `agent`/`gate`/`reduce`/`loop` 上与 `output: "json"` 一起有效。 |
+| `context` | `string[]` | — | 预读到 prompt 中的文件或 `{steps.X}` 引用。消除重复的探索轮次。 |
+| `contextLimit` | `number` | `8000` | 每个上下文文件读取的最大字符数。 |
+| `final` | `boolean` | `false` | 将此阶段输出标记为工作流结果。只能有一个阶段是 `final`。如果都没标记，最后一个阶段成为 final。 |
+| `optional` | `boolean` | `false` | 为 `true` 时，失败不会中止运行。 |
+| `cache` | `object` | `{ scope: "run-only" }` | 缓存策略。见[缓存](/zh-cn/docs/syntax/caching)。 |
+| `idempotent` | `boolean` | `true` | 对不可逆副作用（部署、DB 写入）设为 `false`。禁用瞬态自动重试和所有缓存；记录 `sideEffect: true`。 |
+| `model` | `string` | — | 此阶段的模型覆盖。 |
+| `thinking` | `string` | — | 此阶段的思考等级覆盖。 |
+| `tools` | `string[]` | — | 限制此阶段 agent 可用的工具。 |
+| `cwd` | `string` | — | 工作目录：字面路径，或保留关键字 `temp`、`dedicated`、`worktree`。 |
+| `shareContext` | `boolean` | `false` | 将此阶段纳入共享上下文树。 |
+
+### 公共字段的验证规则
+
+- `id` 在整个 flow 中必须唯一。
+- `id` 和 `agent` 必须使用连字符，不能用下划线。
+- 运行 agent 的阶段 `timeout` 必须 `>= 1000`。
+- `script` 的 `timeout` 必须在 `1000` 到 `300000` 之间。
+- `final: true` 只能出现在一个阶段上。
+- `cache.scope: "cross-run"` 在 `gate`、`approval`、`loop`、`tournament`、`script` 上禁用。
+
+---
 
 ## `agent`
 
-一个子代理运行一个任务。
+最简单也最常见的阶段：一个子代理运行一个任务。
 
 ### 必需字段
 
 - `task`
 
-### 示例
+### 可选字段
 
-```json title="agent-阶段-示例.json"
+所有公共字段。省略 `agent` 时默认为第一个发现的 agent。
+
+### 示例：基础 agent
+
+```json title="agent-基础.json"
 {
   "id": "summarize",
   "type": "agent",
   "agent": "writer",
-  "task": "总结 src/ 的架构。",
+  "task": "用两段话总结 src/ 的架构。"
+}
+```
+
+### 示例：带契约的结构化 JSON 输出
+
+```json title="agent-json-契约.json"
+{
+  "id": "triage",
+  "type": "agent",
   "output": "json",
+  "task": "对这个问题的严重程度分类。只输出 JSON。",
   "expect": {
     "type": "object",
-    "required": ["summary"]
+    "required": ["severity", "reason"],
+    "properties": {
+      "severity": { "enum": ["low", "medium", "high", "critical"] },
+      "reason": { "type": "string" }
+    }
   }
 }
 ```
 
+如果子代理输出不匹配 `expect`，阶段会以精确的诊断失败，并符合 `retry` 条件。
+
+### 示例：上下文预读
+
+```json title="agent-上下文.json"
+{
+  "id": "review-auth",
+  "type": "agent",
+  "agent": "risk-reviewer",
+  "context": ["src/auth/**/*.ts", "{args.spec}"],
+  "contextLimit": 12000,
+  "task": "对照规范审查 auth 实现。列出每个风险。"
+}
+```
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `Phase 'x' (agent) requires 'task'` | `task` 缺失或为空。 | 添加 `task` 字符串。 |
+| `expect requires output:"json"` | 设置了 `expect` 但 `output` 是 `"text"`。 | 设 `output: "json"`。 |
+| `agent 'x' uses underscores` | agent 名包含 `_`。 | 改为连字符。 |
+
+---
+
 ## `parallel`
 
-并发运行 `branches[]`。
+在单个阶段内并发运行多个分支。类似 `tasks` 简写，但嵌入完整 DAG。
 
 ### 必需字段
 
-- `branches` — `{ task, agent?, ...commonFields? }` 数组
+- `branches`：`{ task: string, agent?: string }` 数组
 
-### 示例
+### 可选字段
 
-```json title="parallel-阶段-示例.json"
+- `concurrency`：限制并行分支数（默认为 flow 级 `concurrency`）。
+- 公共字段，但不含 `task`（改用 `branches[].task`）。
+
+### 示例：并行审计
+
+```json title="parallel-审计.json"
 {
   "id": "audit",
   "type": "parallel",
   "branches": [
-    { "task": "审计认证", "agent": "analyst" },
-    { "task": "审计校验", "agent": "analyst" }
+    { "task": "审计 src/api 的认证", "agent": "analyst" },
+    { "task": "审计 src/api 的输入校验", "agent": "analyst" }
   ]
 }
 ```
 
+### 示例：带共享上下文的并行
+
+```json title="parallel-共享上下文.json"
+{
+  "id": "audit",
+  "type": "parallel",
+  "context": ["src/api/**/*.ts"],
+  "branches": [
+    { "task": "找出缺失的认证检查", "agent": "analyst" },
+    { "task": "找出缺失的速率限制", "agent": "analyst" },
+    { "task": "找出缺失的校验", "agent": "analyst" }
+  ],
+  "concurrency": 4
+}
+```
+
+`context` 数组只读取一次，并在所有分支间共享。
+
+### 输出
+
+阶段输出是所有分支输出的拼接。没有自动聚合 agent；如需综合，使用下游 `reduce` 阶段。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `parallel requires non-empty 'branches'` | `branches` 缺失或为空。 | 至少添加一个带 `task` 的分支。 |
+| `branches[i].task must be a string` | 某分支缺 `task` 或类型错误。 | 确保每个分支有 `task: "..."`。 |
+
+---
+
 ## `map`
 
-对数组 fan out。
+动态 fan-out：为数组中每个项目生成一个子代理。当工作项数量在运行时才发现时使用。
 
 ### 必需字段
 
-- `over` — 解析为数组的插值表达式。
+- `over`：解析为数组的插值表达式。
 - `task`
 
 ### 可选字段
 
-- `as` — 循环变量名。默认 `"item"`。
-- `concurrency` — 阶段级覆盖。
+- `as`：循环变量名。默认 `"item"`。
+- `concurrency`：阶段级 fan-out 上限。
+- 公共字段。
 
-### 示例
+### `over` 的解析方式
 
-```json title="map-阶段-示例.json"
+1. 表达式被插值（如 `{steps.discover.json}`）。
+2. 如需要，值被解析为 JSON。
+3. 若值是对象，运行时查找 `items`、`results`、`list`、`data` 或 `findings` 键。
+4. 若找不到数组，阶段失败。
+
+### 示例：对发现的文件 fan out
+
+```json title="map-文件.json"
 {
   "id": "summarize",
   "type": "map",
   "over": "{steps.discover.json}",
-  "as": "item",
+  "as": "file",
   "agent": "scout",
-  "task": "读取 {item.file} 并总结。",
-  "concurrency": 8
+  "task": "读取 {file.path} 并给出一句话总结。",
+  "concurrency": 8,
+  "dependsOn": ["discover"]
 }
 ```
+
+### 示例：嵌套字段访问
+
+```json title="map-嵌套.json"
+{
+  "id": "audit-routes",
+  "type": "map",
+  "over": "{steps.discover.json.routes}",
+  "as": "route",
+  "task": "检查 {route.method} {route.path} 是否有授权。"
+}
+```
+
+### 输出
+
+`map` 阶段的输出是所有每项输出的拼接。用 `{steps.<id>.output}` 访问单个结果，或当每项都输出 JSON 时用 `{steps.<id>.json}` 解析结构化结果。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `map requires 'over'` | `over` 缺失。 | 提供一个解析为数组的插值表达式。 |
+| `over must be a string interpolation ref` | `over` 是字面数组而非字符串。 | 用引号包裹：`"over": "{steps.x.json}"`。 |
+| `Dynamic sub-flow phase 'x': concurrency too high` | 生成的子流程超过最大并发。 | 将 `concurrency` 降到 `<= 16`。 |
+
+---
 
 ## `gate`
 
-质量门。可中止流程。
+质量门审查上游输出并可中止流程。当子代理输出包含 `VERDICT: PASS`（或评委/评分器判定通过）时 gate 通过。
 
 ### 必需字段
 
-- `task`
+- `task` —— 除非使用 `score`。
 
 ### 可选字段
 
-- `eval` — 零 token 断言。
-- `score` — 确定性评分。
-- `onBlock` — `"halt"`（默认）或 `"retry"`。
+- `eval`：零 token 机器检查数组。若**全部**通过，gate 无需 LLM 调用即自动通过。
+- `score`：确定性评分器，可选 LLM 评委回退。
+- `onBlock`：`"halt"`（默认）或 `"retry"`。
+- `retry`：`onBlock: "retry"` 时必需。
+- 公共字段。
 
-### 示例
+### 示例：LLM gate
 
-```json title="gate-阶段-示例.json"
+```json title="gate-llm.json"
 {
-  "id": "quality",
+  "id": "verify",
   "type": "gate",
   "agent": "reviewer",
   "dependsOn": ["fix"],
-  "eval": ["{steps.fix.output} contains 'VERDICT: PASS'"],
-  "task": "审查修复。以 VERDICT: PASS 或 BLOCK 结尾。"
+  "task": "审查 diff。以 VERDICT: PASS 或 BLOCK 结尾。"
 }
 ```
+
+### 示例：带零 token eval 的 gate
+
+```json title="gate-eval.json"
+{
+  "id": "lint-pass",
+  "type": "gate",
+  "dependsOn": ["lint"],
+  "eval": [
+    "{steps.lint.output} contains '0 errors'",
+    "{steps.lint.output} contains '0 warnings'"
+  ],
+  "task": "确认 lint 已干净。VERDICT: PASS 或 BLOCK。"
+}
+```
+
+若**任一** eval 失败，LLM `task` 照常运行。若**全部** eval 通过，gate 立即通过。
+
+### 示例：自愈合 gate
+
+```json title="gate-自愈合.json"
+{
+  "id": "quality",
+  "type": "gate",
+  "onBlock": "retry",
+  "retry": { "max": 3 },
+  "dependsOn": ["implement"],
+  "task": "这是否满足所有标准？VERDICT: PASS 或 BLOCK。"
+}
+```
+
+在 `BLOCK` 时，gate 会重新运行其上游 `dependsOn` 阶段并重新评估，最多 `retry.max` 轮。
+
+### Fail-open 行为
+
+模糊的 gate 输出（既不是明确的 `PASS` 也不是 `BLOCK`）被视为 `PASS`。gate 永远不会意外丢失工作。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `gate requires 'task' (or 'score')` | 既没提供 `task` 也没 `score`。 | 加一个。 |
+| `cache.scope 'cross-run' is not allowed for gate` | 试图跨运行缓存 gate。 | 用 `run-only` 或省略 `cache`。 |
+| `both 'eval' and 'score' are set` | 警告：两者都在。 | 通常选一个；`eval` 先运行。 |
+
+---
 
 ## `reduce`
 
-聚合上游输出。
+将上游阶段的输出聚合为一个最终摘要。
 
 ### 必需字段
 
-- `from` — 阶段 id 数组。
+- `from`：阶段 id 数组。
 - `task`
 
-### 示例
+### 可选字段
 
-```json title="reduce-阶段-示例.json"
+- 公共字段。
+
+### 示例：合并审计报告
+
+```json title="reduce-报告.json"
 {
   "id": "report",
   "type": "reduce",
-  "from": ["audit"],
+  "from": ["auth-audit", "validation-audit"],
   "agent": "writer",
-  "task": "合并成报告：\n{steps.audit.output}"
+  "task": "将这些审计合并为一份按优先级排序的报告：\n{steps.auth-audit.output}\n---\n{steps.validation-audit.output}"
 }
 ```
 
+### 输出
+
+`reduce` agent 在其 prompt 中接收上游输出。其自身输出成为阶段输出。`reduce` **不会**自动拼接；`task` 必须告诉 agent 做什么。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `reduce requires 'from'` | `from` 缺失或为空。 | 至少列出一个上游阶段 id。 |
+| `from unknown phase 'x'` | `from` 中某 id 不存在。 | 修正 id 或添加缺失的阶段。 |
+
+---
+
 ## `approval`
 
-人工介入。
+暂停流程等待人工决定。仅在交互式宿主（Pi）中支持，CI/分离运行不支持。
+
+### 必需字段
+
+无。
 
 ### 可选字段
 
-- `task` — 显示给人类的提示。
+- `task`：显示给人类的提示。
+- 公共字段。
+
+### 示例
+
+```json title="approval-示例.json"
+{
+  "id": "approve-ship",
+  "type": "approval",
+  "dependsOn": ["fix"],
+  "task": "在发布前审查修复。"
+}
+```
+
+### 行为
+
+- **Approve** → 阶段输出为 `"approved"`，流程继续。
+- **Reject** → 阶段失败，流程中止（除非 `optional: true`）。
+- **Edit** → 输入的备注成为阶段输出，流程继续。
+
+分离/CI 运行会自动拒绝。
+
+### 限制
+
+- 不支持 `timeout`。
+- 禁止 `cache.scope: "cross-run"`。
+
+---
 
 ## `flow`
 
-运行子流程。
+将已保存或运行时生成的子流程作为单个阶段运行。
 
 ### 必需字段（二选一）
 
-- `use` — 已保存 flow 的名称。
-- `def` — 解析为 flow 定义的插值表达式。
+- `use`：已保存 flow 的名称。
+- `def`：内联 flow 定义或解析为定义的插值。
 
 ### 可选字段
 
-- `with` — 传给 `use` 的参数。
+- `with`：传给 `use` 的参数。
+- 公共字段。
+
+### 示例：已保存子流程
+
+```json title="flow-已保存.json"
+{
+  "id": "research",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+### 示例：运行时生成子流程
+
+```json title="flow-运行时.json"
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+运行时生成的子流程在执行前会被验证。若验证失败，阶段报告 `defError` 并继续运行（对生成的计划 fail-open）。
+
+### 动态子流程加固
+
+生成的子流程受额外限制：
+
+- 最多 `100` 个阶段。
+- 最多 `200` 个 map 项目。
+- 最多 `16` 并发。
+- 最多 `5` 层嵌套。
+- 禁止 `script` 阶段。
+- `cwd` 不能逃逸运行目录。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `flow requires 'use' or 'def'` | 都没提供。 | 提供恰好一个。 |
+| `use and def are mutually exclusive` | 两者都提供了。 | 选一个。 |
+| `Dynamic sub-flow has too many phases` | 生成的计划太大。 | 约束规划器 prompt。 |
+
+---
 
 ## `loop`
 
-迭代直到完成。
+重复一个任务，直到条件满足、输出收敛或达到硬迭代上限。
 
 ### 必需字段
 
@@ -183,42 +460,140 @@ description: 每种阶段类型的完整字段参考。
 
 ### 可选字段
 
-- `convergence` — 输出不再变化时停止。
-- `reflexion` — 将失败摘要反馈回循环。
-- `output` — 通常为 `"json"`。
+- `convergence`：输出与上一轮相同时提前停止。默认 `true`。
+- `reflexion`：将失败摘要反馈回循环。默认 `false`。
+- `output`：通常为 `"json"`。
+- 公共字段。
+
+### 示例：迭代直到完成
+
+```json title="loop-精炼.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "改进这个草稿。返回 JSON {draft, done}。",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6,
+  "convergence": true
+}
+```
+
+### 示例：带 reflexion 的循环
+
+```json title="loop-reflexion.json"
+{
+  "id": "fix-tests",
+  "type": "loop",
+  "task": "修复失败的测试。用 {reflexion} 从先前失败中学习。返回 {patch, passes}。",
+  "until": "{steps.fix-tests.json.passes} == true",
+  "output": "json",
+  "maxIterations": 10,
+  "reflexion": true
+}
+```
+
+### 迭代限制
+
+| 限制 | 值 |
+|---|---|
+| 默认 `maxIterations` | `10` |
+| 硬上限 `maxIterations` | `100` |
+
+若 `until` 永不为真，循环在 `maxIterations` 处停止。最后一轮的输出成为阶段输出。若最后一轮失败且开启了 `reflexion`，阶段失败。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `loop requires 'task'` | 缺 `task`。 | 添加迭代体 prompt。 |
+| `loop requires 'until'` | 缺停止条件。 | 加 `until` 表达式。 |
+| `maxIterations must be <= 100` | 超过硬上限。 | 降低上限。 |
+
+---
 
 ## `tournament`
 
-竞争并评判。
+生成竞争变体并让评委选出最佳（或综合出聚合答案）。
 
 ### 必需字段
 
-- `task`（使用 `variants` 时）
+- `task` —— 使用 `variants` 时。
 
 ### 可选字段
 
-- `variants` — 副本数量。
-- `branches` — 不同方法。
-- `judge` — 评委评分标准。
-- `judgeAgent` — 评委 agent。
-- `mode` — `"best"` 或 `"aggregate"`。
+- `variants`：副本数量。默认 `3`，最大 `20`。提供 `branches` 时忽略。
+- `branches`：不同的竞争任务。
+- `judge`：评委的评分标准/prompt。
+- `judgeAgent`：运行评委的 agent。
+- `mode`：`"best"`（默认）或 `"aggregate"`。
+- 公共字段。
+
+### 示例：变体
+
+```json title="tournament-变体.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "为这篇发布帖子写一个醒目的标题。",
+  "variants": 4,
+  "judge": "选择钩子最强、承诺最清晰的标题。",
+  "mode": "best"
+}
+```
+
+### 示例：分支
+
+```json title="tournament-分支.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "branches": [
+    { "task": "写一个大胆、挑衅的标题。" },
+    { "task": "写一个清晰、利益驱动的标题。" },
+    { "task": "写一个问句形式的标题。" }
+  ],
+  "judge": "选出最佳标题。",
+  "mode": "best"
+}
+```
+
+### 评委裁决
+
+评委必须输出以下之一：
+
+- `WINNER: <n>`（1 起始的变体编号）
+- JSON `{"winner": n}`
+
+无法解析的裁决回退到变体 `1`（fail-open）。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `tournament requires 'task' or non-empty 'branches'` | 两者都缺。 | 提供一个。 |
+| `variants must be a number >= 2` | `variants` < 2。 | 至少用 2。 |
+| `variants must be <= 20` | 变体太多。 | 降低上限。 |
+
+---
 
 ## `script`
 
-运行 shell 命令。零 token。
+运行 shell 命令。零 token。适用于构建、测试、lint 或文件系统准备。
 
 ### 必需字段
 
-- `run` — 字符串（shell）或数组（直接 exec）。
+- `run`：字符串（shell）或数组（直接 exec）。
 
 ### 可选字段
 
-- `input` — 通过 stdin 传入。
-- `timeout` — 毫秒上限，默认 `60000`，最大 `300000`。
+- `input`：通过 stdin 管道传入的文本。支持插值。
+- `timeout`：默认 `60000`，最大 `300000`。
+- 公共字段，但不含 `retry` 和 `output: "json"`（两者都禁用）。
 
-### 示例
+### 示例：数组形式（推荐）
 
-```json title="script-阶段-示例.json"
+```json title="script-数组.json"
 {
   "id": "build",
   "type": "script",
@@ -227,10 +602,73 @@ description: 每种阶段类型的完整字段参考。
 }
 ```
 
+### 示例：字符串形式
+
+```json title="script-字符串.json"
+{
+  "id": "list",
+  "type": "script",
+  "run": "find src -name '*.ts' | head -20"
+}
+```
+
+### 示例：管道输入
+
+```json title="script-输入.json"
+{
+  "id": "format",
+  "type": "script",
+  "run": ["npx", "prettier", "--stdin-filepath", "foo.ts"],
+  "input": "{steps.generate.output}"
+}
+```
+
+### 安全说明
+
+- 数组形式是 execvp 风格，免受 shell 注入。
+- 字符串形式经过 shell；不要将不可信值插值进去。
+- 字符串 `run` 不得包含 `{...}` 占位符（用数组形式或 `input`）。
+
+### 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `script requires 'run'` | 缺命令。 | 加 `run`。 |
+| `script: 'run' array must be non-empty` | 空数组。 | 提供命令。 |
+| `script: string 'run' must not contain interpolation` | 在字符串 `run` 中用了 `{args.x}`。 | 用数组形式或 `input`。 |
+| `retry is not supported for script phases` | 加了 `retry`。 | 移除它。 |
+
+---
+
+## 按阶段类型字段参考
+
+| 阶段 | task | over | as | branches | from | use | def | with | run | input | until | maxIterations | variants | judge | eval | score |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `agent` | 必需 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `parallel` | 忽略 | — | — | 必需 | — | — | — | — | — | — | — | — | — | — | — | — |
+| `map` | 必需 | 必需 | 可选 | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `gate` | 必需* | — | — | — | — | — | — | — | — | — | — | — | — | — | 可选 | 可选 |
+| `reduce` | 必需 | — | — | — | 必需 | — | — | — | — | — | — | — | — | — | — | — |
+| `approval` | 可选 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `flow` | 忽略 | — | — | — | — | 必需† | 必需† | 可选（配 `use`） | — | — | — | — | — | — | — | — |
+| `loop` | 必需 | — | — | — | — | — | — | — | — | — | 必需 | 必需 | — | — | — | — |
+| `tournament` | 必需‡ | — | — | 可选‡ | — | — | — | — | — | — | — | — | 可选 | 可选 | — | — |
+| `script` | 忽略 | — | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — | — | — |
+
+\* `gate` 要求 `task`，除非使用 `score`。
+† `flow` 要求恰好一个 `use` 或 `def`。
+‡ `tournament` 要求 `task`，除非使用 `branches`。
+
 ## 下一步
 
 <Cards>
   <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
-    `when`、`join`、路由。
+    深入 `when`、`join`、`retry` 和 gate。
+  </Card>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    将阶段组装为 taskflow 的顶层字段。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    `cache` 与 `idempotent` 如何交互。
   </Card>
 </Cards>

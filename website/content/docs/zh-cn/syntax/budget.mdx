@@ -1,15 +1,28 @@
 ---
 title: 预算
-description: 运行级成本和 token 上限。
+description: 运行级成本与 token 上限。
 ---
 
 # 预算
 
-<Callout type="warn">
-  添加运行级上限以防止支出失控。
+`budget` 是对累计成本或 token 的运行级上限。当超出上限时，taskflow 以 `blocked` 状态中止运行，保留此前产生的所有部分输出，并返回一个诊断性 `finalOutput`。**任何**可能无界 fan-out 的 flow（`map`、`parallel`、`loop`、`tournament`）都应设置预算——它是阻止一个被错误发现的 500 项数组引发失控支出的唯一防线。
+
+<Callout type="info">
+  预算完全依据每个子代理写入的累计 `usage` 记录来执行。它不花费额外 token，并在每次重试、每个 fan-out 项、每次 DAG 层切换时被检查。
 </Callout>
 
-```json title="预算示例.json"
+## 字段
+
+`budget` 是 flow 定义上的可选顶层字段。两个维度都可选；省略某个维度即关闭该上限。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `maxUSD` | `number` | — | 累计**成本**超过此 USD 数即中止运行。与所有阶段 `usage.cost` 之和比较。 |
+| `maxTokens` | `number` | — | 累计**输入 + 输出 token** 超过此值即中止运行。`cacheRead`/`cacheWrite`/`contextTokens` **不**计入（缓存读取几乎免费；`contextTokens` 是时点指标，不可累加）。 |
+
+Schema 拒绝未知键（`additionalProperties: false`）。`maxUSD` / `maxTokens` 至少应设置一个——空的 `budget: {}` 对象合法但是空操作。
+
+```json title="budget-both-dimensions.json"
 {
   "name": "fan-out-audit",
   "budget": {
@@ -20,42 +33,289 @@ description: 运行级成本和 token 上限。
 }
 ```
 
-## 行为
+## 上限如何评估
 
-当累计成本或 token 超过上限时：
+运行时在每个决策点调用内部 `overBudget(state)` 守卫。它汇总 `state.phases` 中**所有**阶段的 `usage`，并应用严格 `>` 比较：
 
-- 不再生成新阶段。
-- 运行中的 `map`/`parallel` 停止生成新项目。
-- 运行以 `blocked` 结束。
-- 部分输出被保留。
+- **成本上限：** `aggregateUsage(...).cost > maxUSD` → `"cost $X.XXX exceeded cap $Y"`
+- **Token 上限：** `(input + output) > maxTokens` → `"tokens N exceeded cap M"`
 
-## 为什么每个 fan-out 都需要预算
+<Callout type="warn">
+  比较是严格的（`>`），不是 `>=`。恰好落在上限上的运行**不**被阻止——只有超过它的下一个 token/美分才触发中止。这是有意为之：`maxUSD: 2.0` 的预算允许成本恰好为 `$2.000` 的运行。
+</Callout>
 
-对错误发现的 500 个项目做 `map` 会导致无界支出。始终设置上限：
+汇总涵盖**每个**阶段，包括失败的、重试的尝试，以及 `budget-skipped` 的 fan-out 项（它们贡献零 usage）。缓存命中（`cacheHit: "cross-run" | "run-only"`）报告缓存的 `usage`，但本次运行未花费新 token。
 
-```json title="带预算的文件总结.json"
+## 超出上限时的行为
+
+一旦 `overBudget()` 返回 `over: true`，运行时**立即**采取以下行动：
+
+| 层 | 行动 |
+|---|---|
+| **DAG 层** | 不再生成新阶段。后续层中每个剩余阶段被记录为 `status: "skipped"` 且 `error: "Budget exceeded: <reason>"`。 |
+| **进行中的 fan-out**（`map` / `parallel`） | fan-out 循环停止生成新项。尚未开始的项目被记录为 `stopReason: "budget-skipped"`，`output: "(skipped: budget exceeded)"`，零 usage。 |
+| **`loop` 迭代** | 不开始下一次迭代。reflexion loop 将预算耗尽视为**硬停止**（与超时/中止同类）——它*不*将失败作为 reflexion 输入反馈回去。 |
+| **`tournament` 评委** | 评委子代理被**跳过**；第一个存活的变体被选为赢家，带 `warnings: ["judge skipped: run aborted or budget exceeded"]`。 |
+| **重试** | 重试循环中断——不再对失败阶段进行更多尝试。 |
+| **运行终态** | `state.status` 变为 `"blocked"`。`finalOutput` 为 `"Budget exceeded — run halted.\nReason: <reason>"` 后跟最终阶段的部分输出。 |
+
+### 有界超支
+
+<Callout type="warn">
+  在单个 DAG 层内，阶段并发运行至多到 `concurrency`（默认 `8`）。预算检查在每个阶段*完成后*触发，因此同一层中至多有 `concurrency - 1` 个额外阶段可能在超限被检测到之前就开始。这种有界超支是设计使然：一旦 `budgetBlocked` 被设置，它阻止级联到后续层，但无法撤销已经在途的花费。
+</Callout>
+
+若你需要零超支的硬上限，将 flow 的 `concurrency` 设为 `1`——阶段随后严格顺序运行，守卫在每个开始前重新评估。
+
+### 部分输出被保留
+
+被阻止的运行**不**是失败的运行。在超限前完成的每个阶段都保留在 `state.phases` 中，连同其 `output`、`json` 与 `usage`。`finalOutput` 由实际产生输出的最后一个阶段（指定的 `final` 阶段，或若最终阶段被跳过则按定义顺序的最后一个 `done` 阶段）组合而成。这意味着预算被阻止的运行仍可向主机返回有用的部分工作。
+
+## 各阶段类型的成本如何累计
+
+预算核算读取 `state.phases[*].usage`，不同阶段类型对其填充方式不同：
+
+| 阶段类型 | 计入预算的内容 |
+|---|---|
+| `agent` | 子代理在每次尝试上的 `usage`。失败重试在重试决策前被累加（因此守卫能看到每次尝试的在途花费）。 |
+| `parallel` | 每个分支 `usage` 之和，通过 `mergePhaseState` 汇总。 |
+| `map` | 每个*已开始*项目 `usage` 之和。预算跳过的项贡献零。阶段 `usage` 只反映实际运行的项目。 |
+| `loop` | 每次迭代累计的 `usage`。每次迭代的花费在**循环中**折入实时阶段状态（而非覆盖）——因此 reflexion loop 无法在迭代之间不知不觉地超过上限。 |
+| `tournament` | 每个变体 `usage` 之和加上评委 `usage`（当评委运行时）。若评委被跳过，只计变体花费。 |
+| `flow` | 子 flow 运行其**自身**预算（见下文）。父阶段记录子 flow 的累计 usage，使父守卫能看到 spawn 花费。 |
+| `gate` | gate 子代理的 `usage`。 |
+| `approval` | 零——不运行子代理（仅人工介入）。 |
+| `script` | 零——运行 shell 命令，无 LLM token。 |
+| `reduce` | reducer 子代理的 `usage`。 |
+
+### 与重试的交互
+
+每次重试尝试在重试决策*之前*将其 `usage` 推入累加器。具体而言，对 `agent` 阶段：
+
+1. 尝试 1 运行 → `usages.push(r.usage)` → `liveRetry.usage = aggregateUsage(usages)`。
+2. 检查 `overBudget(state)`。若超限，重试循环**中断**——无尝试 2。
+3. 若未超且失败可重试，尝试 2 运行，其花费叠加其上。
+
+<Callout type="warn">
+  失败的重试**确实**计入预算。一个失败三次才成功的阶段花费了全部三次尝试的 token，且第三次尝试本身可能将运行推过上限。失败尝试没有"退款"——提供方已经对其计费。
+</Callout>
+
+声明为 `idempotent: false` 的阶段禁用*隐式*瞬态重试（运行时安全网），但显式 `retry: { max }` 仍被遵守——且每次显式重试仍计入预算。
+
+## 动态子流程中的预算钳制
+
+`flow` 阶段运行子 taskflow。子流程以两种不同方式与父预算交互，取决于子流程是**内联生成**（`def`）还是**按名加载**（`use`）。
+
+### 内联 `def` 子流程——硬钳制
+
+生成的内联定义不能抬高父上限。`clampSubFlowBudget` 每个维度取 `min(child, parent)`：
+
+```ts
+maxUSD:    Math.min(child?.maxUSD    ?? Infinity, parent.maxUSD    ?? Infinity)
+maxTokens: Math.min(child?.maxTokens ?? Infinity, parent.maxTokens ?? Infinity)
+```
+
+若钳制后没有任何有限维度剩下，子 flow 的 `budget` 被设为 `undefined`（无上限）——但父守卫仍能看到子 flow 的花费，因为父阶段记录了累计的子阶段 usage。
+
+```json title="subflow-def-clamped.json"
+{
+  "id": "plan-and-execute",
+  "type": "flow",
+  "def": {
+    "name": "inner-plan",
+    "budget": { "maxUSD": 5.0 },
+    "phases": [ /* ... */ ]
+  }
+}
+```
+
+若父 flow 有 `budget: { maxUSD: 2.0 }`，内层子 flow 的有效上限变为 `$2.0`，无论其声明的 `$5.0`。它只能比父更**紧**。
+
+### 已保存 `use` 子流程——软继承
+
+按 `use` 加载的子 flow 执行其**自身**声明的预算。若未声明，则**继承**父上限作为软性每流上限：
+
+```ts
+const subDefEffective = subDef.budget || !state.def.budget
+  ? subDef
+  : { ...subDef, budget: state.def.budget };
+```
+
+<Callout type="info">
+  此继承是**尽力而为**：花费不跨 flow 边界。父已花费总额*不*从子继承的上限中扣除，因此继承 `$2.0` 的子流程即使父已花费 `$1.50`，自身仍可花费至多 `$2.0`。父自身的守卫在子流程返回时仍会捕获合并总额。
+</Callout>
+
+### 递归子流程
+
+递归被栈检查（`recursionKey === state.flowName`）阻止，因此子 flow 不能无限嵌套以绕过自身预算。嵌套计数器在 `flow` 与内联 spawn（`ctx_spawn`）两条递归轴上统一。
+
+## 在运行记录中检查预算用量
+
+持久化到 `.taskflow/runs/<flow>/<runId>.json` 的每个运行记录（`RunState`）都暴露了审计花费所需的信息：
+
+| 字段 | 位置 | 说明 |
+|---|---|---|
+| `def.budget` | 顶层 | 生效的上限（`{ maxUSD?, maxTokens? }`）。 |
+| `status` | 顶层 | 超出预算时为 `"blocked"`；否则为 `"completed"` / `"failed"` / `"paused"`。 |
+| `phases.<id>.usage` | 逐阶段 | 该阶段的 `{ input, output, cacheRead, cacheWrite, cost, contextTokens, turns }`。`input + output` 是 token 上限所汇总的。 |
+| `phases.<id>.budgetTruncated` | 逐阶段 | 当 `map` / `parallel` fan-out 被上限（或 `MAX_DYNAMIC_MAP_ITEMS` 安全限制）截断时为 `true`。 |
+| `phases.<id>.attempts` | 逐阶段 | 包括重试在内的子代理总尝试次数。`> 1` 时表示发生了重试——且每次尝试的花费都在 `usage` 中。 |
+| `phases.<id>.cacheHit` | 逐阶段 | 结果由缓存提供时为 `"cross-run"` 或 `"run-only"`（本次运行无新 token）。 |
+| `phases.<id>.status` | 逐阶段 | 从未运行的阶段为 `"skipped"` 且 `error: "Budget exceeded: ..."`。 |
+
+预算被阻止运行的终态 `finalOutput` 为：
+
+```
+Budget exceeded — run halted.
+Reason: cost $2.143 exceeded cap $2.000
+
+<最终阶段的部分输出>
+```
+
+<Callout type="tip">
+  要获得运行级总额而无需自己汇总阶段，读取 `executeTaskflow` 返回的值——`result.totalUsage` 是跨所有阶段的运行后 `aggregateUsage`。运行记录不存储顶层 `totalUsage`；TUI 在读取时计算。
+</Callout>
+
+## fan-out flow 的最佳实践
+
+<Callout type="warn">
+  在**每个**包含 `map`、`parallel`、`loop` 或 `tournament` 的 flow 上设置 `budget`。这些是仅有的项/迭代计数在运行时发现、因此可能无界增长的阶段类型。
+</Callout>
+
+### 1. 将 `maxUSD` 与 `maxTokens` 配对以纵深防御
+
+模型切换可能将花费从成本转移到 token（或反之）。同时设置两个维度可防止任一上限被定价变化击穿。
+
+```json title="defense-in-depth.json"
+{
+  "budget": { "maxUSD": 1.5, "maxTokens": 1500000 }
+}
+```
+
+### 2. 用 `concurrency` 与 `budget` 限制 `map` fan-out
+
+`concurrency` 限制*并行度*（同时多少项运行）；`budget` 限制*总*花费。两者并用——仅 `concurrency` 无法阻止 500 项数组，仅 `budget` 仍会让 `concurrency - 1` 个额外项超支。
+
+```json title="map-with-budget.json"
 {
   "name": "summarize-files",
   "budget": { "maxUSD": 1.5 },
+  "concurrency": 4,
   "phases": [
     {
       "id": "discover",
       "type": "agent",
       "output": "json",
-      "task": "列出 {args.dir} 下的文件。输出 JSON 数组。"
+      "task": "List files under {args.dir}. Output JSON array of { path }."
     },
     {
       "id": "summarize",
       "type": "map",
       "over": "{steps.discover.json}",
-      "task": "总结 {item.file}。"
+      "as": "file",
+      "concurrency": 8,
+      "task": "Read {file.path} and give a one-sentence summary."
     }
   ]
 }
 ```
 
-## 最佳实践
+### 3. 在 fan-out 前估算逐项成本
 
-<Callout type="warn">
-  任何包含 `map`、`parallel`、`loop` 或 `tournament` 的 flow 都应设置 `budget`。
+对昂贵的逐项工作，先运行一个廉价的**估算器**阶段，让其输出决定是否继续。这把无界的 `map` 转为有界的。
+
+```json title="map-with-per-item-estimation.json"
+{
+  "name": "bounded-review",
+  "budget": { "maxUSD": 3.0, "maxTokens": 3000000 },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "output": "json",
+      "task": "List files under src/. Output JSON: { items: [{ path }] }."
+    },
+    {
+      "id": "estimate",
+      "type": "agent",
+      "output": "json",
+      "context": ["{steps.discover.json}"],
+      "task": "Given these files, estimate tokens to review each. Output JSON: { items: [{ path, estTokens }], totalEstTokens }.",
+      "expect": {
+        "type": "object",
+        "required": ["items", "totalEstTokens"],
+        "properties": {
+          "items": { "type": "array", "items": { "type": "object" } },
+          "totalEstTokens": { "type": "number" }
+        }
+      }
+    },
+    {
+      "id": "review",
+      "type": "map",
+      "over": "{steps.estimate.json.items}",
+      "as": "item",
+      "when": "{steps.estimate.json.totalEstTokens} < 2500000",
+      "concurrency": 6,
+      "task": "Review {item.path} for security risks. List concrete findings."
+    },
+    {
+      "id": "fallback",
+      "type": "agent",
+      "when": "{steps.estimate.json.totalEstTokens} >= 2500000",
+      "task": "The estimated token cost ({steps.estimate.json.totalEstTokens}) exceeds half the budget. Summarize src/ at a high level instead of per-file review."
+    }
+  ]
+}
+```
+
+`review` 上的 `when` 守卫在估算超过预算一半时完全跳过 fan-out，为 fallback 阶段留出余量。即使有此守卫，`budget` 仍能防止低估。
+
+### 4. 给 `loop` 与 `tournament` 各自的余量
+
+reflexion `loop` 可能在精炼同一输出上花费多次迭代；`tournament` 运行 N 个变体加一个评委。将预算设得足够覆盖*预期*的迭代/变体数，再让守卫捕获失控情况。
+
+```json title="tournament-with-budget.json"
+{
+  "name": "pick-best-title",
+  "budget": { "maxUSD": 0.80 },
+  "phases": [
+    {
+      "id": "compete",
+      "type": "tournament",
+      "variants": 4,
+      "task": "Write a title for: {args.topic}.",
+      "judge": "Pick the single best title. Output only the winner."
+    }
+  ]
+}
+```
+
+### 5. 对你无法承受重复的花费使用 `idempotent: false`
+
+执行不可逆副作用（部署、DB 写入、webhook）的阶段应设置 `idempotent: false`。这禁用隐式瞬态重试，因此一个不稳定的提供方错误**不**会通过重新运行副作用而静默地对预算双重计费。若你声明了显式 `retry: { max }`，它仍被遵守。
+
+```json title="idempotent-false-deploy.json"
+{
+  "id": "deploy",
+  "type": "agent",
+  "idempotent": false,
+  "task": "Run the production deploy. Report the rollout ID.",
+  "retry": { "max": 0 }
+}
+```
+
+## 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `Budget exceeded — run halted. Reason: cost $X exceeded cap $Y` | 累计 `cost` 超过 `maxUSD`。 | 提高 `maxUSD`、减少 fan-out（`concurrency` / `over` 大小），或加 `when` 守卫跳过昂贵阶段。 |
+| `Budget exceeded — run halted. Reason: tokens N exceeded cap M` | 累计 `input + output` 超过 `maxTokens`。 | 提高 `maxTokens`、通过 `model` 切换更廉价的模型，或预读更少 context（`contextLimit`）。 |
+| `N item(s) skipped: budget exceeded` | `map` / `parallel` fan-out 被截断。 | 在运行记录中检查 `phases.<id>.budgetTruncated`。提高预算或降低 `concurrency`。 |
+| `judge skipped: run aborted or budget exceeded` | `tournament` 在超限后到达评委步骤。 | 第一个存活变体被选为赢家。提高预算或减少 `variants`。 |
+| 运行状态 `blocked` 但 `finalOutput` 看似完整 | 最终阶段在超限前完成，但更后的（非最终）阶段把总额推过了上限。 | 重排让昂贵阶段在最终阶段之前运行，或标记一个更廉价的阶段为 `final: true`。 |
+
+<Callout type="info">
+  `blocked` 运行**不**是 `failed` 运行。`blocked` 表示预算或 `gate` 中止了工作流；`failed` 表示非可选阶段报错退出。检查 `state.status` 与逐阶段的 `error`/`budgetTruncated` 字段以区分两者。
 </Callout>

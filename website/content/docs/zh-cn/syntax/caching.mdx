@@ -1,33 +1,93 @@
 ---
 title: 缓存
-description: 运行内续跑和跨运行记忆化。
+description: 运行内续跑与跨运行记忆化。
 ---
 
 # 缓存
 
+taskflow 有**两层互相独立的复用机制**。理解这两层对于可预测的增量开发与成本控制至关重要。
+
 <Callout type="info">
-  taskflow 有两层复用：运行内续跑和跨运行记忆化。
+  每个阶段都是**内容寻址的**：其解析后的输入会被哈希为一个 16 位十六进制的 `inputHash`，哈希相同意味着可以跳过工作。两层机制的区别仅在于*从哪里查找先前结果*。
 </Callout>
+
+<Cards>
+  <Card title="运行内续跑" href="#运行内续跑">
+    默认机制。在**单次运行内**复用阶段自身先前的结果（例如在中止后续跑时）。零配置，作用域为 `"run-only"`。
+  </Card>
+  <Card title="跨运行记忆化" href="#跨运行记忆化">
+    可选项。从该 flow 的**任意一次先前运行**复用阶段结果。作用域为 `"cross-run"`，可选 `ttl` 与 `fingerprint`。
+  </Card>
+</Cards>
+
+---
 
 ## 运行内续跑
 
-每个阶段都是内容寻址的：如果其解析后的输入未变，则在续跑时跳过。这自动发生，无需配置。
+**作用域 `"run-only"`（默认）。** 当 flow 被重新调用，且某阶段的 `inputHash` 与同一次运行中先前处于 `done` 状态的阶段状态匹配时，该阶段被跳过，复用其先前输出。阶段状态被标记为 `cacheHit: "run-only"`，且其先前的 `usage` 被保留（这样运行摘要可以报告这次复用原本会花费多少）。
 
-影响哈希的输入包括：
+这是**自动且零配置**的。它正是 `resume` 之所以廉价的原因：只有输入真正变化的阶段才会重新执行；其余阶段只需一次哈希比较。
 
-- 解析后的任务文本。
-- `over` 项目。
-- `context` 文件内容。
-- `args`。
+### `inputHash` 的输入来源
+
+哈希由 `cacheKeys()` 计算，纳入了所有可能实质性改变子代理输出的因素：
+
+| 输入 | 来源 | 说明 |
+|---|---|---|
+| Flow 名称 | `state.flowName` | 防止跨 flow 的碰撞（即使它们共享相同的阶段 `id` + `task`）。 |
+| 每阶段结构子指纹 | `state.phaseFingerprints[phase.id]` | 编辑阶段 B 只会让 B 及其传递依赖失效。当无法保证逐阶段可靠性时（例如子流程内部状态），回退到全 flow 指纹（`flowDefHash`）。 |
+| 阶段 `id` | `phase.id` | |
+| 解析后的 agent 名称 | 运行时 agent 解析 | |
+| `model` 覆盖 | `phase.model` | |
+| 解析后的 `task` 文本 | 插值结果 | 所有 `{args.X}`、`{steps.X.output}`、`{item.field}` 占位符都在*哈希之前*被解析。 |
+| `thinking` 级别 | `phase.thinking` | |
+| `tools` 列表 | `phase.tools` | JSON 序列化。 |
+| 解析后的 `context` 预读内容 | `preRead` | 显式纳入缓存身份——`context` 文件变更总会导致失效，无论该分支是否恰好将 `preRead` 折叠进 task 字符串。 |
+| `fingerprint` 字符串 | `resolveFingerprint(phase.cache.fingerprint, cwd)` | 除非 `scope === "cross-run"`，否则为空字符串。 |
+
+各阶段类型的额外纳入项：
+
+| 阶段类型 | 折叠进哈希的额外输入 |
+|---|---|
+| `agent` | —（使用上方的通用输入） |
+| `parallel` | `JSON.stringify(branches)`（每分支解析后的 task + agent） |
+| `map` | **逐项**：每个项目从 `[phase.id, item.agent, model, item.task]` 获得自己的键。阶段级键额外折叠 `JSON.stringify(tasks)`。 |
+| `script` | 插值后的 `run` 命令 + `input` stdin |
+| `flow` | Flow 身份 + `preRead` + `JSON.stringify(subArgs)` |
+| `gate` | Eval-skip / score-skip / judge / gate-task 变体（每条 gate 路径都有自己的键） |
+| `loop` | `until` + 首次 body + `maxIters` + reflexion 标志 |
+| `tournament` | 解析后的竞争者（嵌入变体 task 提示词） |
+| `reduce` | 通用输入（`from` 输出即上游 `inputHash`） |
+| `approval` | 阶段 `id` + `model` + `"approval"` + 消息 |
+
+<Callout type="tip">
+  由于插值发生在*哈希之前*，一个对 `{steps.discover.json}` fan-out 的 `map` 阶段会在 `discover` 输出变化时自动获得不同的逐项键——你不需要为此配置 fingerprint。
+</Callout>
+
+### 键版本管理（向后兼容）
+
+`cacheKeys()` 为每个阶段生成**四个**键。只有 `key` 被写入；其余为只读回退项，确保升级不会引发缓存未命中风暴：
+
+| 键形态 | 时期 | 角色 |
+|---|---|---|
+| `v3:phasefp:<subfp>` | 当前 | 写入键。每阶段结构子指纹。 |
+| `v2:flowdef:<flowDefHash>` | pre-M6 | 只读。全 flow 指纹。 |
+| `flowdef:<flowDefHash>`（裸） | pre-H1 | 只读。无版本号。 |
+| *（省略 flowdef 行）* | pre-flowDefHash | 只读。 |
+
+任意层级的命中都会作为缓存命中恢复；taskflow **不会**写穿（write-through），因此缓存大小保持稳定，遗留条目会自然老化淘汰。
+
+---
 
 ## 跨运行记忆化
 
-让阶段在独立运行之间持久复用：
+**作用域 `"cross-run"`。** 让阶段在独立运行之间持久复用。查找仍参照相同的 `inputHash`（加上解析后的 `fingerprint`），但是针对项目下 `.pi/taskflows/cache/` 中的**持久化磁盘存储**。
 
-```json title="跨运行缓存示例.json"
+```json title="cross-run-cache-basic.json"
 {
   "id": "analyze-auth",
-  "task": "总结认证如何工作。",
+  "type": "agent",
+  "task": "Summarize how auth works in src/auth/.",
   "context": ["src/auth/**/*.ts"],
   "cache": {
     "scope": "cross-run",
@@ -37,36 +97,412 @@ description: 运行内续跑和跨运行记忆化。
 }
 ```
 
-### `scope`
+跨运行命中时，**完整的 `PhaseState` 会被恢复**（保留 `gate`、`approval`、`reads`、`loop`/`tournament` 元数据与警告），`usage` 被清零，阶段被标记为 `cacheHit: "cross-run"`。未命中后执行成功时，`recordCache()` 只在当前 `key` 下写入该条目。
 
-- `"run-only"` — 默认，仅运行内续跑。
-- `"cross-run"` — 跨运行复用。
-- `"off"` — 永不复用，即使在运行内。
+### `cache` 字段
 
-### `fingerprint`
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `scope` | `"run-only" \| "cross-run" \| "off"` | `"run-only"` | 复用作用域。见 [作用域](#作用域)。 |
+| `ttl` | `string` | — *（无界限）* | 跨运行命中被视为未命中的最大年龄。例如 `"30m"`、`"6h"`、`"7d"`。省略表示无时间界限（但 90 天硬性兜底始终适用）。对 `run-only`/`off` 忽略。 |
+| `fingerprint` | `string[]` | — | 折叠进缓存键的额外世界状态输入，使"世界变了"产生未命中。每项为 `<前缀><值>`。见 [指纹](#指纹)。仅当 `scope === "cross-run"` 时被查询。 |
 
-将隐式世界状态纳入缓存键：
+三个字段都是可选的。空的 `cache: {}` 对象合法，等价于默认值（`run-only`、无 TTL、无 fingerprint）。
 
-| 前缀 | 含义 |
+### 作用域
+
+| 作用域 | 运行内续跑 | 跨运行读 | 跨运行写 | 何时使用 |
+|---|---|---|---|---|
+| `"run-only"` *（默认）* | ✅ | ❌ | ❌ | 默认。中止后续跑成本低；每次新运行从零开始。 |
+| `"cross-run"` | ✅ | ✅ | ✅ | 对同一 flow 针对未变代码库的重复运行。未变阶段花费 $0。 |
+| `"off"` | ❌ | ❌ | ❌ | 强制阶段始终重新执行，即使在单次运行内。也是 `idempotent: false` 阶段的有效作用域。 |
+
+<Callout type="warn">
+  `"cross-run"` 在 `gate`、`approval`、`loop`、`tournament` 与 `script` 阶段上被**拒绝**——它们每次运行都必须产生新结果。见 [被阻止的阶段类型](#跨运行被阻止的阶段类型)。
+</Callout>
+
+---
+
+## 指纹
+
+`fingerprint` 将**隐式世界状态**折叠进缓存键。没有它时，`cross-run` 阶段只在其*声明*输入变化时失效（task 文本、context 文件、args、上游输出）。指纹加入外部信号——git 提交、文件内容、环境变量——使"世界变了"可靠地产生缓存未命中。
+
+每项为字符串 `<前缀><值>`。运行时将每项解析为确定性字符串，然后将拼接结果哈希为 16 位十六进制摘要，作为缓存键的一部分。
+
+### 前缀参考
+
+| 前缀 | 解析为 | 成本 | 失败模式 |
+|---|---|---|---|
+| `git:HEAD` *（或 `git:<ref>`）* | `git rev-parse <ref>`（提交 SHA） | 一次 git 调用，30s 超时 | 非 git 仓库 → `git:<ref>=<no-git>`；超时 → `git:<ref>=<timeout>`；类标志的 ref → `git:<ref>=<invalid-ref>` |
+| `glob:<pattern>` | **基于 stat**：每个匹配文件的 `size:mtime` | 廉价（仅 stat） | glob 错误 → `<glob-error>`；单文件 stat 错误 → `<stat-error>` |
+| `glob!:<pattern>` | **内容哈希**：每个匹配文件的 SHA-256（16 位十六进制） | 读取文件字节 | 文件 >10 MB 或非常规文件 → `<skip>` |
+| `file:<path>` | 单个文件的内容哈希（SHA-256，16 位十六进制） | 读取文件字节 | >10 MB → `<skip>`；缺失 → `<file>:<path>=<missing>` |
+| `env:<NAME>` | `process.env[NAME]` 的值 | 免费 | 未设置 → 空字符串 |
+
+<Callout type="info">
+  所有指纹解析都是**失败容错且确定性的**。缺失的文件、非 git 仓库或不可读路径都会解析为稳定的哨兵字符串——键保持确定性。若该资源后来*出现*，哨兵变为真实值，键变化，缓存未命中。**安全的方向。**
+</Callout>
+
+### 在 `glob:` 与 `glob!:` 之间选择
+
+<Tabs items={['glob:', 'glob!:']}>
+  <Tab value="glob:">
+    **glob:（基于 stat）**——当对匹配文件的*修改*应该使缓存失效，但你不想付出读取文件内容的 I/O 时使用。最廉价选项。适用于大型文件树，其中 mtime 是"有东西变了"的良好代理。
+
+    ```json title="fingerprint-glob-stat.json"
+    "fingerprint": ["glob:src/**/*.ts"]
+    ```
+  </Tab>
+  <Tab value="glob!:">
+    **glob!:（内容哈希）**——当 mtime 不可靠时使用（例如 `git checkout` 重置 mtime、CI 非确定性地恢复 mtime，或构建步骤在不改变内容的情况下触碰文件）。读取并哈希每个文件（每个 ≤10 MB）。
+
+    ```json title="fingerprint-glob-content.json"
+    "fingerprint": ["glob!:src/**/*.ts"]
+    ```
+  </Tab>
+</Tabs>
+
+### 防御性上限
+
+| 上限 | 值 | 效果 |
+|---|---|---|
+| 每项最大 glob 匹配数 | `5000` | 超出的匹配在哈希前被丢弃。 |
+| 内容哈希的最大文件字节 | `10 MB` | 更大文件解析为 `<skip>`（保留在匹配列表中但不哈希）。 |
+| glob 匹配排序 | 排序 | 跨平台/运行的稳定性。 |
+
+### 示例
+
+```json title="fingerprint-git-and-glob.json"
+{
+  "id": "lint-summary",
+  "type": "agent",
+  "task": "Summarize the lint findings across the repo.",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob:src/**/*.ts", "glob!:package.json"]
+  }
+}
+```
+
+```json title="fingerprint-env-driven.json"
+{
+  "id": "report",
+  "type": "agent",
+  "task": "Generate a report for the {args.env} environment.",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["env:NODE_ENV", "file:config/report-template.md"]
+  }
+}
+```
+
+<Callout type="warn">
+  指纹项由 `/tf verify` 零成本校验。没有已知前缀的项，或前缀后值为空的项，是硬性校验错误——flow 将不会运行。
+</Callout>
+
+---
+
+## TTL 解析规则
+
+`ttl` 由 `parseTtlMs()` 解析为毫秒。语法：
+
+```text title="ttl-grammar"
+<数字>[<单位>]
+```
+
+- `<数字>` 是十进制（`\d+(?:\.\d+)?`），必须为正。
+- `<单位>` 可选，大小写不敏感。
+
+| 单位 | 倍数 | 示例 |
+|---|---|---|
+| `ms` | 1 | `"500ms"` → 500 ms |
+| `s` | 1,000 | `"90s"` → 90,000 ms |
+| `m` | 60,000 | `"30m"` → 1,800,000 ms |
+| `h` | 3,600,000 | `"6h"` → 21,600,000 ms |
+| `d` | 86,400,000 | `"7d"` → 604,800,000 ms |
+| *（省略）* | 1（毫秒） | `"60000"` → 60,000 ms |
+
+```json title="ttl-examples.json"
+[
+  { "scope": "cross-run", "ttl": "30m" },
+  { "scope": "cross-run", "ttl": "6h" },
+  { "scope": "cross-run", "ttl": "7d" },
+  { "scope": "cross-run", "ttl": "500ms" },
+  { "scope": "cross-run", "ttl": "90s" },
+  { "scope": "cross-run", "ttl": "60000" }
+]
+```
+
+格式错误或非正的 `ttl` 返回 `null`，是一个**硬性校验错误**（`invalid cache.ttl '...' (expected e.g. '30m', '6h', '7d')`）。
+
+<Callout type="info">
+  省略 `ttl` 表示**无时间界限**——但**90 天硬性兜底**（`DEFAULT_MAX_AGE_MS`）始终适用，与 `ttl` 无关。超过 90 天的条目被视为未命中并被淘汰。
+</Callout>
+
+---
+
+## 跨运行被阻止的阶段类型
+
+这些阶段类型**不能**使用 `cache.scope: "cross-run"`：
+
+| 阶段类型 | 为何被阻止 |
 |---|---|
-| `git:HEAD` | 当前提交哈希。 |
-| `glob:<pat>` | 匹配文件的大小 + 修改时间。 |
-| `glob!:<pat>` | 匹配文件的内容哈希。 |
-| `file:<path>` | 特定文件。 |
-| `env:<NAME>` | 环境变量。 |
+| `gate` | gate 的裁决必须反映*当前*的上游输出；过期的 PASS/BLOCK 可能让损坏的工作通过，或中止已修复的 flow。 |
+| `approval` | 人工决定每次运行都必须重新获得；从先前运行自动批准违背其初衷。 |
+| `loop` | 收敛是有状态的——loop 必须针对当前输入重新走其迭代轨迹。 |
+| `tournament` | 变体与评委必须重新生成；缓存的"赢家"可能相对于已变输入过期。 |
+| `script` | Shell 命令通常有副作用（写入、部署）；缓存它们不可靠。 |
 
-### `ttl`
+这被**两次**强制执行：
 
-生存时间：`30m`、`6h`、`7d`。
+1. **Schema 校验**（`/tf verify`，零成本）：在这些类型上设置 `cache.scope: "cross-run"` 是硬性错误。
+2. **运行时纵深防御**：即使被阻止的作用域以某种方式到达执行，它也会被静默降级为 `"run-only"`。
 
-## 排除项
+<Callout type="warn">
+  还有一个额外的运行时守卫：如果 flow 定义哈希计算失败（`flowDefHash === "failed"`），该次运行中**所有** `cross-run` 阶段都被降级为 `"run-only"`——否则键会退化为仅 flow 名称，重新打开跨 flow 碰撞。
+</Callout>
 
-`gate`、`approval`、`loop`、`tournament` 和 `script` 阶段默认被排除在 `cross-run` 缓存之外，因为它们必须产生新结果。
+---
+
+## 与 `idempotent: false` 的交互
+
+`idempotent: false` 将阶段标记为具有**不可逆副作用**（webhook POST、部署、DB 写入）。它对缓存的影响是绝对的：
+
+| 行为 | 效果 |
+|---|---|
+| 有效缓存作用域 | **`"off"`**——一次赋值覆盖每条缓存路径，包括 `map` 的逐项路径。 |
+| 运行内续跑 | ❌ 禁用。 |
+| 跨运行读 | ❌ 禁用。 |
+| 跨运行写 | ❌ 禁用。 |
+| 瞬态自动重试 | ❌ 禁用（部署中途的 429 绝不能触发副作用两次）。 |
+| 显式 `retry {}` | ✅ 仍被遵守——作者已声明重复是可接受的。 |
+| 阶段状态 | 记录 `sideEffect: true` 以供审计。 |
+
+<Callout type="warn">
+  `idempotent: false` 在 `approval` 与 `flow` 阶段上是**空操作**（它们不运行子代理，因此没有瞬态重试可禁用，且它们已被排除在跨运行缓存之外）。校验会发出警告。
+</Callout>
+
+校验还在以下情况发出警告：
+- `idempotent: false` 与 `cache.scope: "cross-run"` 组合（副作用覆盖胜出；阶段每次都重新运行）。
+- `idempotent: false` 出现在启用了 `incremental: true` 且无显式 `cache.scope` 的 flow 下（该阶段被排除在增量默认之外，每次调用都会重新运行——这是对副作用的安全行为）。
+
+---
+
+## 与 `incremental` 的交互（flow 级）
+
+flow 级的 `incremental: true` 将每个阶段的缓存作用域默认为 `"cross-run"`，因此重新运行该 flow 时跨运行/会话复用未变阶段。
+
+```json title="incremental-flow.json"
+{
+  "name": "code-review",
+  "incremental": true,
+  "phases": [
+    { "id": "discover", "type": "agent", "task": "List the changed files.", "cache": { "scope": "cross-run", "fingerprint": ["git:HEAD"] } },
+    { "id": "review",   "type": "agent", "task": "Review {steps.discover.output}.", "dependsOn": ["discover"] }
+  ]
+}
+```
+
+### 优先级规则
+
+<Steps>
+  <Step title="调用级 `incremental` 参数优先">
+    运行时传入的 `incremental` 参数（传给 `taskflow` 工具）覆盖 flow 自身的 `incremental` 字段。省略它以使用 flow 的设置。
+  </Step>
+  <Step title="逐阶段 `cache.scope` 优先于 flow 默认">
+    显式设置 `cache.scope` 的阶段无论 `incremental` 如何都保留该作用域。将阶段设为 `"run-only"` 或 `"off"` 以将其排除出增量复用。
+  </Step>
+  <Step title="被阻止的类型仍被阻止">
+    `gate`/`approval`/`loop`/`tournament`/`script` 即使在 `incremental` 下也被降级为 `"run-only"`。
+  </Step>
+  <Step title="`idempotent: false` 仍优先">
+    有副作用的阶段即使在 `incremental` 下也被降级为 `"off"`——它们每次调用都重新运行。
+  </Step>
+  <Step title="默认为关闭">
+    没有 `incremental`（flow 或调用）时，默认为 `"run-only"`——每次运行从零开始，除非阶段主动加入。
+  </Step>
+</Steps>
+
+---
+
+## 缓存键如何计算
+
+`cross-run` 阶段的完整身份为：
+
+```text title="cache-key-composition"
+key = sha256(
+  "flow:" + flowName,
+  "v3:phasefp:" + (phaseFp ?? flowDefHash),
+  phaseId,
+  agentName,
+  model,
+  resolvedTaskText,          // 插值之后
+  "think:" + thinking,
+  "tools:" + JSON(tools),
+  "ctx:" + preRead,          // 解析后的 context 文件内容
+  fingerprintDigest          // 已解析指纹项的 sha256（仅 cross-run）
+).slice(0, 16)
+```
+
+对 `map` 阶段，**每个项目**额外获得一个逐项键：
+
+```text title="map-per-item-key-composition"
+perItemKey = sha256(
+  "flow:" + flowName,
+  "v3:phasefp:" + (phaseFp ?? flowDefHash),
+  phaseId,
+  itemAgent,
+  model,
+  resolvedItemTaskText,
+  "think:" + thinking,
+  "tools:" + JSON(tools),
+  "ctx:" + preRead,
+  fingerprintDigest
+).slice(0, 16)
+```
+
+逐项命中为该项目合成一个 0 token 的 `done` 结果；逐项未命中只执行该项目并独立记录。
+
+<Callout type="info">
+  `fingerprintDigest` 仅当 `scope === "cross-run"` 时才被解析。对 `run-only` 阶段它是空字符串——指纹被完全忽略。这是有意为之：运行内续跑已通过 inputHash 捕获了声明输入的变化。
+</Callout>
+
+---
+
+## 缓存失效模式
+
+缓存命中要求 `inputHash`（对跨运行还需 fingerprint + TTL）匹配。任何改变这些的因素都产生未命中：
+
+| 变化 | 为何失效 | 层级 |
+|---|---|---|
+| 编辑 `task` 文本 | 解析后的 task 变化 → 哈希变化 | 两层 |
+| 改变 `model` / `thinking` / `tools` | 显式折叠进键 | 两层 |
+| 编辑 `context` 文件 | `preRead` 变化 → `ctx:` 行变化 | 两层 |
+| 改变 `args` | 插值结果不同 → task/over 变化 | 两层 |
+| 上游阶段输出变化 | `{steps.X.output}` 解析不同 → task 变化 | 两层 |
+| `map` 的 `over` 数组变化 | 逐项键按项目变化 | 两层 |
+| 编辑 flow 定义 | `phaseFp` / `flowDefHash` 变化 → 键变化 | 两层（逐阶段：仅 B + 传递依赖） |
+| Git HEAD 移动 | `git:HEAD` 指纹变化 | 仅跨运行 |
+| 匹配的 glob 文件变化（mtime 或内容） | `glob:` / `glob!:` 摘要变化 | 仅跨运行 |
+| 被指纹的文件内容变化 | `file:` 摘要变化 | 仅跨运行 |
+| `env:` 变量变化 | `env:` 值变化 | 仅跨运行 |
+| TTL 到期 | 条目年龄 > `ttlMs` → 视为未命中 | 仅跨运行 |
+| 超过 90 天硬性兜底 | 条目无论 TTL 都被淘汰 | 仅跨运行 |
+| `cache.scope: "off"` | 永不复用 | 两层 |
+| `idempotent: false` | 有效作用域 `"off"` | 两层 |
+
+<Callout type="tip">
+  在已保存的 flow 中编辑阶段 B 只会让 **B 及其传递依赖**失效——而不是整个 flow。这就是逐阶段结构子指纹（`v3:phasefp:`）。重新运行编辑后的 flow 是廉价的：未变阶段仍命中。
+</Callout>
+
+---
+
+## 缓存存储与淘汰
+
+跨运行缓存是项目下 `.pi/taskflows/cache/` 目录中的 `.json` 文件集合（从 `cwd` 向上查找最近的 `.pi` 目录；从不到 `~/.pi/`）。
+
+| 属性 | 值 | 说明 |
+|---|---|---|
+| 位置 | `.pi/taskflows/cache/` | 每项目、每 cwd。 |
+| 文件格式 | `<key>.json` | 每文件一个 `CacheEntry`。 |
+| 最大条目数 | `1000`（`DEFAULT_MAX_ENTRIES`） | 按 `createdAt` 的类 LRU 淘汰。 |
+| 硬性最大年龄 | `90 天`（`DEFAULT_MAX_AGE_MS`） | 无论 `ttl` 都适用。 |
+| 写入原子性 | `writeFileAtomic` + 文件锁 | 每次写入用 `withLock` 包裹。 |
+| 键格式 | `/^[0-9a-f]{8,64}$/` | 防止路径穿越。 |
+| 失败容错 | 尽力而为，从不抛出 | 损坏的缓存从不破坏运行——未命中只是重新执行。 |
+
+淘汰是**机会式的**：在每次 `put()` 时触发。超过 90 天兜底的条目被丢弃；若存活数超过 1000，最旧的先被淘汰。
+
+---
+
+## 调试
+
+### 阅读复用摘要
+
+每次运行结果都带有 `reuse` 摘要（`RuntimeResult.reuse`）：
+
+| 字段 | 含义 |
+|---|---|
+| `executed` | 本次运行执行了子代理的阶段。 |
+| `reusedRunOnly` | 由运行内续跑提供的阶段（无新 token）。保留先前 `usage`。 |
+| `reusedCrossRun` | 从跨运行存储恢复的阶段（无新 token）。`usage` 清零。 |
+| `done` | `executed + reusedRunOnly + reusedCrossRun`。 |
+| `savedUSD` | 运行内续用阶段原本会花费的 USD。跨运行命中不计（成本不可恢复）。 |
+
+每个阶段状态都带有 `cacheHit` 标记：`"run-only"`、`"cross-run"` 或 `undefined`（全新执行）。
+
+### 强制重新运行
+
+<Callout type="info">
+  `forceRerun` 种子（M5 重算路径）对单个阶段**同时**绕过运行内先前结果**和**跨运行存储。下游阶段**不**被强制——它们自然重新评估：若种子的新输出改变了它们的 `inputHash`，则未命中并重新运行；否则命中（提前截断）。
+</Callout>
+
+### 检查缓存
+
+```bash title="inspect-cache.sh"
+# 缓存在哪里？
+ls .pi/taskflows/cache/
+
+# 有多少条目？
+ls .pi/taskflows/cache/*.json | wc -l
+
+# 检查具体条目（来源：flowName、phaseId、runId、createdAt）
+cat .pi/taskflows/cache/<key>.json | jq '{flowName, phaseId, runId, createdAt, output}'
+```
+
+### 常见陷阱
+
+| 症状 | 可能原因 | 修复 |
+|---|---|---|
+| 设置了 `cross-run` 但阶段重新运行 | 无 `fingerprint`，且某个声明输入变化了（例如 `{args.X}`） | 预期行为——若该变化不应失效，添加 fingerprint。 |
+| 输入未变但阶段重新运行 | `git checkout` 重置了 mtime 且你用了 `glob:` | 改用 `glob!:`（内容哈希）。 |
+| 跨运行从不命中 | `idempotent: false`（有效作用域 `"off"`） | 移除 `idempotent: false` 或接受它必须重新运行。 |
+| 跨运行从不命中 | 阶段是被阻止的类型（`gate`/`approval`/`loop`/`tournament`/`script`） | 预期行为——这些不能跨运行缓存。 |
+| 跨运行从不命中 | `flowDefHash === "failed"`（全 flow 降级） | 检查 `/tf verify` 的 flow 定义错误。 |
+| 编辑 flow 后结果过期 | 旧条目仍匹配遗留键形态 | 四级读取回退到遗留键；结构性地编辑阶段以移动其 `phaseFp`，或清空缓存。 |
+| TTL 似乎被忽略 | 条目在 90 天兜底之内但 TTL 更长 | TTL 是*最大值*；90 天兜底始终适用。 |
+| 缓存无限增长 | 清理是机会式的（在 `put()` 时） | 运行任意 flow 触发清理，或手动 `rm` 文件。 |
+
+### 清空缓存
+
+DSL 中没有一等公民的清空命令；存储只是文件。删除目录即可：
+
+```bash title="clear-cache.sh"
+rm -rf .pi/taskflows/cache/
+```
+
+<Callout type="warn">
+  清空缓存是安全的——最坏情况是下次运行重新执行一切。不会丢失运行状态（运行状态位于 `.pi/taskflows/runs/`，而非 `cache/`）。
+</Callout>
+
+---
+
+## 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `unknown cache.scope '...'` | 作用域不是 `run-only`、`cross-run`、`off` 之一。 | 使用有效作用域。 |
+| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script phases` | 被阻止的阶段类型选择了 `cross-run`。 | 使用 `"run-only"`（默认）或重构 flow。 |
+| `invalid cache.fingerprint entry '...'` | 项缺少已知前缀或值为空。 | 使用 `git:`、`glob:`、`glob!:`, `file:` 或 `env:` 后接非空值。 |
+| `cache.fingerprint entries must be strings` | 数组中混入了非字符串。 | 确保每项都是字符串。 |
+| `invalid cache.ttl '...'` | TTL 不匹配 `<数字>[<单位>]` 语法或非正。 | 使用例如 `"30m"`、`"6h"`、`"7d"`。 |
+| `'cache' must be an object` | `cache` 被设为非对象（例如字符串）。 | 将 `cache` 设为对象 `{ ... }`。 |
+
+---
 
 ## 下一步
 
 <Cards>
   <Card title="续跑" href="/zh-cn/docs/concepts/resume">
-    续跑如何复用阶段。
+    运行内续跑如何在中止后复用阶段。
+  </Card>
+  <Card title="验证" href="/zh-cn/docs/concepts/verification">
+    `/tf verify` 零成本捕获无效缓存配置。
+  </Card>
+  <Card title="阶段类型参考" href="/zh-cn/docs/syntax/phase-types">
+    每种阶段类型上的 `cache` 字段。
+  </Card>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    flow 级的 `incremental` 设置。
   </Card>
 </Cards>
