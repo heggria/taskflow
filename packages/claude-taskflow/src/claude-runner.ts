@@ -181,7 +181,7 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 }
 
 /** Override the claude binary (tests / unusual installs). */
-function claudeBin(): string {
+export function claudeBin(): string {
 	return process.env.PI_TASKFLOW_CLAUDE_BIN || "claude";
 }
 
@@ -200,6 +200,46 @@ export function permissionArgsForTools(tools: string[] | undefined): string[] {
 	const canMutate = tools.some((t) => mutating.has(t));
 	if (canMutate) return ["--permission-mode", "bypassPermissions"];
 	return ["--allowedTools", READ_ONLY_TOOLS.join(",")];
+}
+
+/** Resolve a modelRoles/pi model id for `claude --model`, or `undefined` to let
+ *  claude fall back to its own default. Claude model ids are FLAT (aliases like
+ *  "sonnet"/"haiku" or full ids like "claude-sonnet-4-6"), so — same rule as
+ *  codex — a pi-provider path (contains "/") or an unresolved {{placeholder}}
+ *  is dropped. Exported for unit-testing the contract. */
+export function resolveClaudeModel(model: string | undefined): string | undefined {
+	if (!model) return undefined;
+	if (model.includes("/")) return undefined;
+	if (/^\{\{.*\}\}$/.test(model)) return undefined;
+	return model;
+}
+
+/** Context for {@link buildClaudeArgs} — the pure inputs to argv construction. */
+export interface ClaudeArgsCtx {
+	systemPrompt: string;
+	task: string;
+	/** Already-resolved model (opts.model ?? agent.model). */
+	model?: string;
+	tools?: string[];
+}
+
+/**
+ * Build the full `claude -p` argv from a phase's resolved context — PURE
+ * (no process.env, no spawn). Extracted from `runClaudeAgentTask` so the host's
+ * CLI flag contract is unit-testable in CI without a live claude session.
+ *
+ *   claude -p --output-format stream-json --verbose --strict-mcp-config
+ *          [--permission-mode bypassPermissions | --allowedTools ...]
+ *          [--model m] [--append-system-prompt ...] <task>
+ */
+export function buildClaudeArgs(ctx: ClaudeArgsCtx): string[] {
+	const claudeModel = resolveClaudeModel(ctx.model);
+	const args: string[] = ["-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config"];
+	args.push(...permissionArgsForTools(ctx.tools));
+	if (claudeModel) args.push("--model", claudeModel);
+	if (ctx.systemPrompt.trim()) args.push("--append-system-prompt", ctx.systemPrompt.trim());
+	args.push(ctx.task);
+	return args;
 }
 
 /**
@@ -222,25 +262,12 @@ export async function runClaudeAgentTask(
 	const tools = opts.tools ?? agent.tools;
 	void globalThinking; // claude -p has no thinking-level flag; reserved.
 
-	// The agent.model comes from the shared modelRoles table, which is written in
-	// the pi provider format (e.g. "openrouter/deepseek/...", "anthropic/claude-…:xhigh"
-	// — note the `/` provider prefix). Claude model ids are flat (aliases like
-	// "sonnet"/"opus"/"haiku" or full ids like "claude-sonnet-4-6"), so — same
-	// rule as the codex runner — a resolved model that still looks like a
-	// pi-provider path (contains "/") or an unresolved {{placeholder}} is dropped
-	// and `claude` falls back to its own configured default model.
-	const claudeModel = model && !model.includes("/") && !/^\{\{.*\}\}$/.test(model) ? model : undefined;
-
-	// claude -p [PROMPT] --output-format stream-json --verbose (required for
-	// stream-json with -p) --strict-mcp-config (don't load the user's MCP servers
-	// into every subagent — flows needing them can add tools explicitly).
-	// Unlike codex, claude has a real --append-system-prompt flag, so the agent's
-	// system prompt rides there instead of being pasted into the task prompt.
-	const args: string[] = ["-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config"];
-	args.push(...permissionArgsForTools(tools));
-	if (claudeModel) args.push("--model", claudeModel);
-	if (agent.systemPrompt.trim()) args.push("--append-system-prompt", agent.systemPrompt.trim());
-	args.push(task);
+	const args = buildClaudeArgs({
+		systemPrompt: agent.systemPrompt,
+		task,
+		model,
+		tools,
+	});
 
 	return runSubagentProcess({
 		agent: agentName,

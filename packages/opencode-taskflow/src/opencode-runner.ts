@@ -146,7 +146,7 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 }
 
 /** Override the opencode binary (tests / unusual installs). */
-function opencodeBin(): string {
+export function opencodeBin(): string {
 	return process.env.PI_TASKFLOW_OPENCODE_BIN || "opencode";
 }
 
@@ -183,6 +183,47 @@ export function resolveOpencodeModel(model: string | undefined): string | undefi
 	return model;
 }
 
+/** Context for {@link buildOpencodeArgs} — the pure inputs to argv construction. */
+export interface OpencodeArgsCtx {
+	systemPrompt: string;
+	task: string;
+	/** Already-resolved model (opts.model ?? agent.model). */
+	model?: string;
+	tools?: string[];
+	cwd?: string;
+}
+
+/** Result of {@link buildOpencodeArgs}: the argv plus whether a read-only
+ *  permission policy should be injected via OPENCODE_CONFIG_CONTENT (the env
+ *  side-effect is left to the caller, which owns `process.env`). */
+export interface OpencodeArgs {
+	args: string[];
+	/** True for a read-only phase — the caller injects the deny-mutations config. */
+	readOnly: boolean;
+}
+
+/**
+ * Build the full `opencode run` argv from a phase's resolved context — PURE
+ * (no process.env, no spawn). Extracted from `runOpencodeAgentTask` so the
+ * host's CLI flag contract is unit-testable in CI without a live opencode
+ * session. Returns whether the phase is read-only so the caller can inject the
+ * matching OPENCODE_CONFIG_CONTENT env without re-deriving it.
+ *
+ *   opencode run <prompt> --format json [--dir cwd] [-m model] [--auto]
+ */
+export function buildOpencodeArgs(ctx: OpencodeArgsCtx): OpencodeArgs {
+	const opencodeModel = resolveOpencodeModel(ctx.model);
+	const readOnly = isReadOnlyPhase(ctx.tools);
+	const fullPrompt = ctx.systemPrompt.trim()
+		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
+		: `Task: ${ctx.task}`;
+	const args: string[] = ["run", fullPrompt, "--format", "json"];
+	if (ctx.cwd) args.push("--dir", ctx.cwd);
+	if (opencodeModel) args.push("-m", opencodeModel);
+	if (!readOnly) args.push("--auto");
+	return { args, readOnly };
+}
+
 /**
  * Run a single subagent task via `opencode run --format json`. Resolves the
  * agent from `agents` by name; returns the same structured `RunResult` the pi,
@@ -203,23 +244,14 @@ export async function runOpencodeAgentTask(
 	const tools = opts.tools ?? agent.tools;
 	void globalThinking; // opencode's --variant is provider-specific; reserved.
 
-	const opencodeModel = resolveOpencodeModel(model);
-	const readOnly = isReadOnlyPhase(tools);
-
-	// opencode run has no --append-system-prompt, so (like codex) the agent's
-	// system prompt is prepended to the task as guidance.
-	const fullPrompt = agent.systemPrompt.trim()
-		? `${agent.systemPrompt.trim()}\n\n---\n\nTask: ${task}`
-		: `Task: ${task}`;
-
 	const cwd = opts.cwd ?? defaultCwd;
-	// opencode run [message] --format json --dir <cwd> [-m model] [--auto]
-	// A read-only phase omits --auto and instead injects a deny-mutations policy
-	// via OPENCODE_CONFIG_CONTENT; a mutating phase auto-approves with --auto.
-	const args: string[] = ["run", fullPrompt, "--format", "json"];
-	if (cwd) args.push("--dir", cwd);
-	if (opencodeModel) args.push("-m", opencodeModel);
-	if (!readOnly) args.push("--auto");
+	const { args, readOnly } = buildOpencodeArgs({
+		systemPrompt: agent.systemPrompt,
+		task,
+		model,
+		tools,
+		cwd,
+	});
 
 	return runSubagentProcess({
 		agent: agentName,

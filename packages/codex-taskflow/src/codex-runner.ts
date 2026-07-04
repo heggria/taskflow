@@ -132,7 +132,7 @@ export function foldCodexEventLine(acc: CodexAccumulator, line: string): LiveUpd
 }
 
 /** Override the codex binary (tests / unusual installs). */
-function codexBin(): string {
+export function codexBin(): string {
 	return process.env.PI_TASKFLOW_CODEX_BIN || "codex";
 }
 
@@ -143,11 +143,53 @@ function codexBin(): string {
  * else gets `workspace-write`. No whitelist → workspace-write (the engine's
  * default-capable agent). `danger-full-access` is never selected automatically.
  */
-function sandboxForTools(tools: string[] | undefined): "read-only" | "workspace-write" {
+export function sandboxForTools(tools: string[] | undefined): "read-only" | "workspace-write" {
 	if (!tools || tools.length === 0) return "workspace-write";
 	const mutating = new Set(["write", "edit", "bash", "apply_patch"]);
 	const canMutate = tools.some((t) => mutating.has(t));
 	return canMutate ? "workspace-write" : "read-only";
+}
+
+/** Resolve a modelRoles/pi model id for `codex exec -m`, or `undefined` to let
+ *  codex fall back to its own default. Codex model ids are FLAT (e.g.
+ *  "gpt-5.5"), so a pi-provider path (contains "/") or an unresolved role
+ *  placeholder ({{...}}) is dropped. Exported so the model-id contract is
+ *  unit-testable without a live codex session. */
+export function resolveCodexModel(model: string | undefined): string | undefined {
+	if (!model) return undefined;
+	if (model.includes("/")) return undefined;
+	if (/^\{\{.*\}\}$/.test(model)) return undefined;
+	return model;
+}
+
+/** Context for {@link buildCodexArgs} — the pure inputs to argv construction. */
+export interface CodexArgsCtx {
+	systemPrompt: string;
+	task: string;
+	/** Already-resolved model (opts.model ?? agent.model). */
+	model?: string;
+	tools?: string[];
+	cwd?: string;
+}
+
+/**
+ * Build the full `codex exec` argv from a phase's resolved context — PURE
+ * (no process.env, no spawn). Extracted from `runCodexAgentTask` so the host's
+ * CLI flag contract is unit-testable in CI without a live codex session.
+ *
+ *   codex exec --json --skip-git-repo-check -s <sandbox> [-m model] [-C cwd] <prompt>
+ */
+export function buildCodexArgs(ctx: CodexArgsCtx): string[] {
+	const sandbox = sandboxForTools(ctx.tools);
+	const codexModel = resolveCodexModel(ctx.model);
+	const fullPrompt = ctx.systemPrompt.trim()
+		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
+		: `Task: ${ctx.task}`;
+	const args: string[] = ["exec", "--json", "--skip-git-repo-check", "-s", sandbox];
+	if (codexModel) args.push("-m", codexModel);
+	if (ctx.cwd) args.push("-C", ctx.cwd);
+	args.push(fullPrompt);
+	return args;
 }
 
 /**
@@ -167,32 +209,16 @@ export async function runCodexAgentTask(
 
 	const model = opts.model ?? agent.model;
 	const tools = opts.tools ?? agent.tools;
-	const sandbox = sandboxForTools(tools);
 	void globalThinking; // codex has no thinking-level flag on exec; reserved.
 
-	// The agent.model comes from the shared modelRoles table, which is written in
-	// the pi provider format (e.g. "openrouter/deepseek/...", "anthropic/glm-5.2:xhigh"
-	// — note the `/` provider prefix and `:thinking` suffix). Those ids are pi's
-	// namespacing and Codex does not recognise them ("Model metadata for ... not
-	// found"). Codex model ids are flat (e.g. "gpt-5.5", "claude-sonnet-4-6"). So:
-	// if the resolved model still looks like a pi-provider path (contains "/"),
-	// drop it and let `codex exec` fall back to its own configured default model.
-	// A user who wants a specific Codex model can set it directly (no "/") and it
-	// will be passed through. Likewise an unresolved {{placeholder}} is dropped.
-	const codexModel = model && !model.includes("/") && !/^\{\{.*\}\}$/.test(model) ? model : undefined;
-
-	// codex exec [PROMPT] --json --skip-git-repo-check -s <sandbox> [-m model] [-C cwd]
-	// The agent's system prompt is prepended to the task as guidance, since
-	// `codex exec` has no separate append-system-prompt flag. We keep it compact.
-	const fullPrompt = agent.systemPrompt.trim()
-		? `${agent.systemPrompt.trim()}\n\n---\n\nTask: ${task}`
-		: `Task: ${task}`;
-
-	const args: string[] = ["exec", "--json", "--skip-git-repo-check", "-s", sandbox];
-	if (codexModel) args.push("-m", codexModel);
 	const cwd = opts.cwd ?? defaultCwd;
-	if (cwd) args.push("-C", cwd);
-	args.push(fullPrompt);
+	const args = buildCodexArgs({
+		systemPrompt: agent.systemPrompt,
+		task,
+		model,
+		tools,
+		cwd,
+	});
 
 	return runSubagentProcess({
 		agent: agentName,
