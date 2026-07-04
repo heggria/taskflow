@@ -61,7 +61,7 @@ package's `plugin/` directory.
 From a checkout of this repo (no install), point OpenCode at the built bin:
 
 ```sh
-npm run build
+pnpm run build
 opencode mcp add taskflow -- node /abs/path/to/taskflow/packages/opencode-taskflow/dist/mcp/bin.js
 ```
 
@@ -129,10 +129,10 @@ opencode mcp remove taskflow    # or delete the mcp.taskflow entry from opencode
 
 ## Proof / tests
 
-- `npm run test:e2e-opencode-mcp` — spawns `bin.ts` as OpenCode would and drives
+- `pnpm run test:e2e-opencode-mcp` — spawns `bin.ts` as OpenCode would and drives
   the full MCP handshake + tool calls over a real subprocess pipe (no live
   model needed).
-- `npm run test:e2e-opencode` — runs a 2-phase flow whose subagents are real
+- `pnpm run test:e2e-opencode` — runs a 2-phase flow whose subagents are real
   `opencode run` sessions (proves OpenCode-as-executor; data flows phase A → B).
   Uses a free `opencode/` model by default (override with
   `PI_TASKFLOW_OPENCODE_MODEL`).

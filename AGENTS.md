@@ -9,7 +9,7 @@ taskflow is a **declarative DAG orchestration runtime** for coding agents — it
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
 **Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
 **Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp`) and the three MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp`). Everything depends on `typebox`.\
-**Layout:** npm-workspaces monorepo of six published packages — `taskflow-core` (host-neutral engine), `taskflow-mcp` (the host-neutral MCP server + DAG renderer, depends on core), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), `codex-taskflow` (Codex runner + MCP bin + a `plugin/` scaffold installable via `codex plugin add`), `claude-taskflow` (Claude Code runner + MCP bin + a `plugin/` scaffold installable via `claude plugin install`), and `opencode-taskflow` (OpenCode runner + MCP bin + an `opencode.json` config scaffold).\
+**Layout:** pnpm-workspace monorepo of six published packages — `taskflow-core` (host-neutral engine), `taskflow-mcp` (the host-neutral MCP server + DAG renderer, depends on core), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), `codex-taskflow` (Codex runner + MCP bin + a `plugin/` scaffold installable via `codex plugin add`), `claude-taskflow` (Claude Code runner + MCP bin + a `plugin/` scaffold installable via `claude plugin install`), and `opencode-taskflow` (OpenCode runner + MCP bin + an `opencode.json` config scaffold).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
 
 ## Architecture
@@ -134,22 +134,22 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 ## Development Commands
 
 ```bash
-npm install           # links the six workspaces
-npm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
-npm test              # full unit suite (node --experimental-strip-types --test)
-npm run test:core     # engine tests only
-npm run test:pi       # pi-adapter tests only
-npm run test:codex    # codex-adapter tests only
-npm run test:claude   # claude-adapter tests only
-npm run test:opencode # opencode-adapter tests only
-npm run build         # emit dist/*.js + .d.ts for all six packages
-npm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
-npm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
-npm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)
-npm run test:e2e-claude          # claude executor e2e (needs live claude + model access)
-npm run test:e2e-claude-mcp      # claude MCP stdio e2e (src; no live claude needed)
-npm run test:e2e-opencode        # opencode executor e2e (needs live opencode; uses a free model by default)
-npm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencode needed)
+pnpm install           # links the six workspace packages
+pnpm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
+pnpm test              # full unit suite (node --experimental-strip-types --test)
+pnpm run test:core     # engine tests only
+pnpm run test:pi       # pi-adapter tests only
+pnpm run test:codex    # codex-adapter tests only
+pnpm run test:claude   # claude-adapter tests only
+pnpm run test:opencode # opencode-adapter tests only
+pnpm run build         # emit dist/*.js + .d.ts for all six packages
+pnpm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
+pnpm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
+pnpm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)
+pnpm run test:e2e-claude          # claude executor e2e (needs live claude + model access)
+pnpm run test:e2e-claude-mcp      # claude MCP stdio e2e (src; no live claude needed)
+pnpm run test:e2e-opencode        # opencode executor e2e (needs live opencode; uses a free model by default)
+pnpm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencode needed)
 # pi e2e suites are run directly (they use .mts so the unit glob skips them):
 #   node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
 ```

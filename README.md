@@ -865,7 +865,7 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 
 ## Development
 
-`taskflow` is an npm-workspaces monorepo of six published packages:
+`taskflow` is a pnpm-workspace monorepo of six published packages:
 
 | Package | Role |
 |---------|------|
@@ -877,13 +877,13 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 | [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode subagent runner + MCP bin, plus the [OpenCode config scaffold](./packages/opencode-taskflow/plugin) ([guide](./docs/opencode-mcp.md)) |
 
 ```bash
-npm install
-npm run typecheck     # tsc --noEmit across all packages (no build needed)
-npm test              # unit tests — no network, no process spawning
-npm run test:core     # engine tests only  (also: test:pi, test:codex, test:claude, test:opencode)
-npm run build         # emit dist/*.js + .d.ts for all six packages
-npm run test:e2e-codex      # codex executor e2e (needs `codex` + model access)
-npm run test:e2e-codex-mcp  # codex MCP server e2e
+pnpm install
+pnpm run typecheck     # tsc --noEmit across all packages (no build needed)
+pnpm test              # unit tests — no network, no process spawning
+pnpm run test:core     # engine tests only  (also: test:pi, test:codex, test:claude, test:opencode)
+pnpm run build         # emit dist/*.js + .d.ts for all six packages
+pnpm run test:e2e-codex      # codex executor e2e (needs `codex` + model access)
+pnpm run test:e2e-codex-mcp  # codex MCP server e2e
 ```
 
 The pi end-to-end suites spawn live `pi` subagents and are run directly (they use

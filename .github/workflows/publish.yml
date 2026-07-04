@@ -19,23 +19,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci --registry https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: pnpm test
 
       - name: Build all packages (emit dist)
-        run: npm run build
+        run: pnpm run build
 
       - name: Verify tag matches workspace versions
         run: |
@@ -94,11 +95,11 @@ jobs:
             local name version
             name="$(node -p "require('./packages/$pkg/package.json').name")"
             version="$(node -p "require('./packages/$pkg/package.json').version")"
-            if npm view "$name@$version" version >/dev/null 2>&1; then
+            if pnpm view "$name@$version" version >/dev/null 2>&1; then
               echo "::notice::$name@$version already published — skipping"
             else
               echo "Publishing $name@$version"
-              npm publish -w "$pkg" --provenance --access public
+              pnpm publish --filter "$pkg" --provenance --access public --no-git-checks
             fi
           }
           publish_one taskflow-core

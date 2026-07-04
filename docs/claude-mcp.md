@@ -80,7 +80,7 @@ From a checkout of this repo (no install), point Claude Code at the built bin
 instead:
 
 ```sh
-npm run build
+pnpm run build
 claude mcp add taskflow -- \
   node /abs/path/to/taskflow/packages/claude-taskflow/dist/mcp/bin.js
 ```
@@ -145,10 +145,10 @@ claude mcp remove taskflow                          # if registered manually
 
 ## Proof / tests
 
-- `npm run test:e2e-claude-mcp` — spawns `bin.ts` as Claude Code would and
+- `pnpm run test:e2e-claude-mcp` — spawns `bin.ts` as Claude Code would and
   drives the full MCP handshake + tool calls over a real subprocess pipe (no
   live claude needed).
-- `npm run test:e2e-claude` — runs a 2-phase flow whose subagents are real
+- `pnpm run test:e2e-claude` — runs a 2-phase flow whose subagents are real
   `claude -p` sessions (proves Claude-as-executor; data flows phase A → B).
   Requires an authenticated `claude` CLI.
 - `packages/claude-taskflow/test/mcp-server.test.ts` — protocol + binding tests

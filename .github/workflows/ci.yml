@@ -26,20 +26,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # pnpm via corepack — the version is pinned by the `packageManager` field
+      # in package.json, so every contributor and CI run use the same pnpm.
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node }}
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci --registry https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: pnpm test
 
   e2e:
     name: e2e (MCP stdio, network-free)
@@ -47,45 +51,47 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci --registry https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
 
       # server.ts imports `taskflow-core` by package name, which resolves to
       # node_modules/taskflow-core/dist — so the workspace dist must exist first.
       - name: Build all packages
-        run: npm run build
+        run: pnpm run build
 
       # The codex MCP e2e spawns the real bin over stdio and drives the full
       # handshake + tool calls — no live model / no network. The other e2e
       # (test:e2e-codex) needs a live codex session, so it stays manual.
       - name: Codex MCP e2e (stdio handshake + tool calls)
-        run: npm run test:e2e-codex-mcp
+        run: pnpm run test:e2e-codex-mcp
 
       # Comprehensive rendering/validation E2E against the built dist bin:
       # malformed-input safety, false-pass guards, SVG injection escaping.
       # rsvg rasterization is optional (auto-skipped when absent).
       - name: Codex MCP e2e (comprehensive rendering)
-        run: npm run test:e2e-codex-mcp-full
+        run: pnpm run test:e2e-codex-mcp-full
 
       # The claude MCP e2e likewise spawns the real bin over stdio and drives the
       # full handshake + tool calls with no live model / no network. (The
       # executor e2e test:e2e-claude needs a live claude session, so it stays
       # manual.)
       - name: Claude MCP e2e (stdio handshake + tool calls)
-        run: npm run test:e2e-claude-mcp
+        run: pnpm run test:e2e-claude-mcp
 
       # The opencode MCP e2e likewise spawns the real bin over stdio and drives
       # the full handshake + tool calls with no live model / no network. (The
       # executor e2e test:e2e-opencode needs a live opencode session, so it
       # stays manual.)
       - name: OpenCode MCP e2e (stdio handshake + tool calls)
-        run: npm run test:e2e-opencode-mcp
+        run: pnpm run test:e2e-opencode-mcp
 
   build:
     name: build (dist emit)
@@ -93,19 +99,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci --registry https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
 
       # Published packages ship compiled dist/. Proving the build emits on every
       # PR catches type-strip-only breakages that `tsc --noEmit` can miss.
       - name: Build all packages
-        run: npm run build
+        run: pnpm run build
 
   codeql:
     name: CodeQL (JS/TS)

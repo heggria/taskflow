@@ -84,7 +84,7 @@ codex mcp add taskflow -- codex-taskflow-mcp
 From a checkout of this repo (no install), point Codex at the built bin instead:
 
 ```sh
-npm run build
+pnpm run build
 codex mcp add taskflow -- \
   node /abs/path/to/taskflow/packages/codex-taskflow/dist/mcp/bin.js
 ```
@@ -166,9 +166,9 @@ codex mcp remove taskflow               # if registered manually
 
 ## Proof / tests
 
-- `npm run test:e2e-codex-mcp` — spawns `bin.ts` as codex would and drives the
+- `pnpm run test:e2e-codex-mcp` — spawns `bin.ts` as codex would and drives the
   full MCP handshake + tool calls over a real subprocess pipe.
-- `npm run test:e2e-codex` — runs a 2-phase flow whose subagents are real codex
+- `pnpm run test:e2e-codex` — runs a 2-phase flow whose subagents are real codex
   sessions (proves Codex-as-executor; data flows phase A → B).
 - `test/mcp-server.test.ts` — protocol + dispatch unit tests (in-memory streams).
 - `test/codex-runner.test.ts` — codex JSONL parser pinned against real captured
