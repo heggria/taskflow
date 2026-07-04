@@ -1,0 +1,103 @@
+---
+title: Getting Started
+description: Run your first taskflow on Pi or Codex.
+---
+
+# Getting Started
+
+## On Pi
+
+Install the extension:
+
+```bash
+pi install npm:pi-taskflow
+```
+
+Then in a Pi session, just describe the work:
+
+> Run a chain: first explore the auth flow, then summarize the findings.
+
+The model calls the `taskflow` tool automatically. You get live progress, per-step timing, token cost, and a saved run record.
+
+Say **"save it"** and you have `/tf:<name>` forever.
+
+## On Codex
+
+Install the plugin:
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+Then ask Codex to run a multi-phase job:
+
+> Run a taskflow that audits every route in src/routes and reports missing auth.
+
+Codex calls the `taskflow_*` MCP tools automatically.
+
+## The shorthand
+
+You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. taskflow speaks the same shape:
+
+```json
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+```json
+{
+  "tasks": [
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit input validation in src/api", "agent": "analyst" }
+  ]
+}
+```
+
+```json
+{
+  "chain": [
+    { "task": "List the public API of src/lib", "agent": "scout" },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+## Go declarative
+
+When you outgrow the shorthand, the full DSL gives you a real DAG:
+
+```json
+{
+  "name": "summarize-files",
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files under src/",
+      "output": "json"
+    },
+    {
+      "id": "summarize",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "item",
+      "agent": "scout",
+      "task": "Read {item.file} and give a one-sentence summary.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["summarize"],
+      "agent": "writer",
+      "task": "Combine into a short overview:\n{steps.summarize.output}",
+      "dependsOn": ["summarize"],
+      "final": true
+    }
+  ]
+}
+```

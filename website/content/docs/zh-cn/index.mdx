@@ -1,0 +1,54 @@
+---
+title: 概览
+description: 面向编程智能体子代理的声明式、可验证任务节点图。
+---
+
+# 什么是 taskflow？
+
+**taskflow** 是面向编程智能体子代理的声明式、可验证的*任务图*。
+
+不是脚本化的 workflow，而是声明式的 **DAG**。支持 fan-out、gate、loop、tournament、断点续跑，并保存为命令——中间结果不会进入你的上下文。
+
+支持 [Pi](https://pi.dev) 编程智能体和 [OpenAI Codex](https://github.com/openai/codex)。
+
+## 为什么叫 "taskflow" 而不是 "workflow"？
+
+在工程领域，**task** 是*离散的、声明的工作单元*——任务图的节点。而 **work** 是*流动且无界的*——连续的命令式执行过程。
+
+- **`workflow`** 是模型写出的**命令式脚本**：`await agent(...)`、`if`、`for`、又一个 `await`。图只有在代码运行时才存在。
+- **`taskflow`** 把计划**从代码中移出，变成声明式的 `task` 节点图。**因为图是*数据*，运行时可以在生成任何子代理之前静态验证它、渲染它、按阶段续跑它，并把它保存为一个单词的命令。
+
+## 核心特性
+
+| 特性 | 说明 |
+|---|---|
+| **声明式 DAG** | 用 JSON/YAML 数据定义工作流，而非命令式代码。 |
+| **静态验证** | 在执行前捕获循环、死胡同、悬空引用和预算溢出。 |
+| **上下文隔离** | 只有最终阶段的结果进入对话上下文。 |
+| **动态 fan-out** | `map` 阶段为每个项目生成一个子代理。 |
+| **质量门** | `gate` 阶段可在 `VERDICT: BLOCK` 时中止流程。 |
+| **人工审批** | `approval` 阶段暂停等待人工审核。 |
+| **循环与锦标赛** | 迭代直到完成，或让多个变体竞争。 |
+| **跨会话续跑** | 重新运行工作流时自动跳过已缓存阶段。 |
+| **成本控制** | 按美元或 token 设置运行级预算上限。 |
+| **零运行时依赖** | 核心引擎没有任何运行时依赖。 |
+
+## 快速安装
+
+### Pi
+
+```bash
+pi install npm:pi-taskflow
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+## 下一步
+
+- [开始使用](/zh-cn/docs/getting-started)
+- [在 Codex 上使用 taskflow](/zh-cn/docs/codex)

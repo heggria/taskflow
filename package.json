@@ -2,7 +2,7 @@
   "name": "pi-taskflow-monorepo",
   "version": "0.1.5",
   "private": true,
-  "description": "Monorepo for taskflow-core, pi-taskflow, and codex-taskflow.",
+  "description": "Monorepo for taskflow-core, pi-taskflow, codex-taskflow, and the documentation website.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -10,10 +10,12 @@
   "workspaces": [
     "packages/taskflow-core",
     "packages/pi-taskflow",
-    "packages/codex-taskflow"
+    "packages/codex-taskflow",
+    "website"
   ],
   "scripts": {
     "build": "npm run build:skills && npm run build -w taskflow-core && npm run build -w pi-taskflow && npm run build -w codex-taskflow",
+    "build:website": "npm run build -w taskflow-website",
     "build:skills": "node scripts/build-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",

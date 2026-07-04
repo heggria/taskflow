@@ -1,0 +1,23 @@
+# Dependencies
+node_modules
+
+# Build
+.next
+out
+dist
+
+# Generated
+.source
+
+# Logs
+*.log
+
+# Environment
+.env*.local
+
+# IDE
+.vscode
+.idea
+
+# OS
+.DS_Store

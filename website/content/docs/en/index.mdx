@@ -1,0 +1,54 @@
+---
+title: Overview
+description: A declarative, verifiable graph of task nodes for coding-agent subagents.
+---
+
+# What is taskflow?
+
+**taskflow** is a declarative, verifiable _graph of tasks_ for coding-agent subagents.
+
+Not a workflow you script — a **DAG you declare**. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.
+
+Runs on the [Pi](https://pi.dev) coding agent and on [OpenAI Codex](https://github.com/openai/codex).
+
+## Why "taskflow" and not "workflow"?
+
+In engineering, a **task** is a _discrete, declared unit of work_ — the node of a task graph. **Work**, by contrast, is _fluid and unbounded_ — the continuous, imperative act of doing.
+
+- A **`workflow`** is the model writing an **imperative script** that flows: `await agent(...)`, an `if`, a `for`, another `await`. The graph only exists as the code runs.
+- A **`taskflow`** moves the plan **out of code and into a declarative graph of `task` nodes.** Because the graph is _data_, the runtime can statically verify it before a single subagent spawns, render it, resume it phase-by-phase, and save it as a one-word command.
+
+## Key features
+
+| Feature | Description |
+|---|---|
+| **Declarative DAG** | Define workflows as JSON/YAML data, not imperative code. |
+| **Static verification** | Catch cycles, dead ends, dangling refs, and budget overflow before execution. |
+| **Context isolation** | Only the final phase reaches your conversation. |
+| **Dynamic fan-out** | `map` phases spawn one subagent per item. |
+| **Quality gates** | `gate` phases halt the flow on `VERDICT: BLOCK`. |
+| **Human approval** | `approval` phases pause for human review. |
+| **Loops & tournaments** | Iterate until done, or pit variants against each other. |
+| **Cross-session resume** | Re-run flows; cached phases auto-skip. |
+| **Cost control** | Run-wide `budget` caps in USD or tokens. |
+| **Zero runtime deps** | The core engine has no runtime dependencies. |
+
+## Quick install
+
+### Pi
+
+```bash
+pi install npm:pi-taskflow
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+## Next steps
+
+- [Getting Started](/en/docs/getting-started)
+- [Using taskflow on Codex](/en/docs/codex)

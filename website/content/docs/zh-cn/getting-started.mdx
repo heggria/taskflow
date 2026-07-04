@@ -1,0 +1,103 @@
+---
+title: 开始使用
+description: 在 Pi 或 Codex 上运行第一个 taskflow。
+---
+
+# 开始使用
+
+## 在 Pi 上
+
+安装扩展：
+
+```bash
+pi install npm:pi-taskflow
+```
+
+然后在 Pi 会话中直接描述工作：
+
+> 运行一个 chain：先探索认证流程，然后总结发现。
+
+模型会自动调用 `taskflow` 工具。你会看到实时进度、每步耗时、token 消耗和保存的运行记录。
+
+说一句 **"save it"**，你就能永久使用 `/tf:<name>`。
+
+## 在 Codex 上
+
+安装插件：
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+然后让 Codex 运行一个多阶段任务：
+
+> 运行一个 taskflow，审计 src/routes 中的每个路由，并报告缺失的认证。
+
+Codex 会自动调用 `taskflow_*` MCP 工具。
+
+## 简写形式
+
+你已经熟悉智能体内置的子代理简写——`task` / `tasks` / `chain`。taskflow 使用相同的形状：
+
+```json
+{
+  "task": "总结 src/ 的架构",
+  "agent": "explorer"
+}
+```
+
+```json
+{
+  "tasks": [
+    { "task": "审计 src/api 的认证", "agent": "analyst" },
+    { "task": "审计 src/api 的输入校验", "agent": "analyst" }
+  ]
+}
+```
+
+```json
+{
+  "chain": [
+    { "task": "列出 src/lib 的公共 API", "agent": "scout" },
+    { "task": "为以下内容写文档：\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+## 使用声明式 DSL
+
+当你需要更复杂的工作流时，完整的 DSL 提供了真正的 DAG：
+
+```json
+{
+  "name": "summarize-files",
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "列出 src/ 下的源文件",
+      "output": "json"
+    },
+    {
+      "id": "summarize",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "item",
+      "agent": "scout",
+      "task": "读取 {item.file} 并给出一句总结。",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["summarize"],
+      "agent": "writer",
+      "task": "合并成简短概述：\n{steps.summarize.output}",
+      "dependsOn": ["summarize"],
+      "final": true
+    }
+  ]
+}
+```
