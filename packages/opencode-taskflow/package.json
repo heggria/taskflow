@@ -39,7 +39,6 @@
       "default": "./dist/mcp/server.js"
     }
   },
-  "types": "./dist/opencode-runner.d.ts",
   "bin": {
     "opencode-taskflow-mcp": "./dist/mcp/bin.js"
   },

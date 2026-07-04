@@ -40,7 +40,6 @@
       "default": "./dist/mcp/server.js"
     }
   },
-  "types": "./dist/claude-runner.d.ts",
   "bin": {
     "claude-taskflow-mcp": "./dist/mcp/bin.js"
   },
