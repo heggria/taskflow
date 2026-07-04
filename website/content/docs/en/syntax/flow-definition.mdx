@@ -5,125 +5,500 @@ description: Top-level fields that define a taskflow.
 
 # Flow Definition
 
+A **flow definition** is a single JSON object that declares a multi-phase workflow: its name, invocation arguments, execution tunables, cost ceiling, and an ordered array of phases that form a DAG via `dependsOn`. Every taskflow — whether saved to disk or passed inline as shorthand — desugars into the same shape validated by the `TaskflowSchema`.
+
 <Callout type="info">
-  A taskflow is a JSON object with a small set of top-level fields. Only `phases` is required; everything else tunes behavior.
+  Only `phases` is structurally required (and `name` for saved flows). Everything else tunes behavior. Shorthand specs (`task` / `tasks` / `chain`) omit `phases` entirely and are desugared into a full DAG before validation.
 </Callout>
 
-## Example
+A flow is validated before execution by `/tf verify` at zero token cost. Invalid flows never spawn a subagent.
 
-```json title="flow-definition-example.json"
+## Top-level field reference
+
+| Field | Type | Default | Required | Description |
+|---|---|---|---|---|
+| `name` | `string` (`minLength: 1`) | — | **Yes** (saved flows) | Workflow identifier. Becomes the `/tf:<name>` command when saved, and the run-record directory name. Must be non-empty. |
+| `description` | `string` | — | No | Human-readable summary. Surfaced in `/tf list` and run records. |
+| `version` | `number` | `1` | No | Schema/flow version tag for author tracking. Not enforced by the runtime. |
+| `args` | `Record<string, ArgSpec>` | — | No | Declared invocation arguments with defaults. See [`args`](#args). |
+| `concurrency` | `number` | `8` | No | Default max concurrent subagents. Inherited by `map` / `parallel` phases that don't set their own `concurrency`. |
+| `budget` | `Budget` | — | No | Run-wide cost / token ceiling. See [`budget`](#budget). |
+| `agentScope` | `"user" \| "project" \| "both"` | `"user"` | No | Where to discover agents. See [`agentScope`](#agentscope). |
+| `strictInterpolation` | `boolean` | `false` | No | Promote validation warnings (missing `{args.X}` at runtime, cwd/codebase mismatch, ignored fields) to hard errors. See [Validation behavior](#validation-behavior). |
+| `contextSharing` | `boolean` | `false` | No | Enable the Shared Context Tree for **all** phases (shorthand for `shareContext: true` on every phase). Individual phases can still opt out. |
+| `incremental` | `boolean` | `false` | No | Default every phase to `cache.scope: "cross-run"` so re-runs reuse unchanged phases across sessions. See [`incremental`](#incremental). |
+| `phases` | `Phase[]` (`minItems: 1`) | — | **Yes** | Ordered phase definitions. The DAG is formed by each phase's `dependsOn`. See [Phase Types](/en/docs/syntax/phase-types). |
+
+### `ArgSpec`
+
+Each entry in `args` is an object with these fields:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `default` | `unknown` | — | Value used when the arg is not supplied at runtime. Type is not enforced by the schema — interpolate carefully. |
+| `description` | `string` | — | Human-readable arg documentation. |
+| `required` | `boolean` | — | Author-declared required flag. (The runtime applies `default` when missing; `required` is advisory metadata.) |
+
+---
+
+## `name`
+
+**Required for saved flows.** A non-empty string (`minLength: 1`) used for `/tf run <name>`, the `/tf:<name>` command alias, and the run-state directory. Inline/shorthand flows that omit `name` get a synthesized fallback (`"task"`, `"parallel"`, or `"chain"`).
+
+```json title="name-basic.json"
 {
   "name": "audit-auth",
-  "description": "Audit routes for missing auth",
+  "phases": [/* ... */]
+}
+```
+
+<Callout type="warn">
+  A missing or empty `name` is a hard validation error: `Missing or invalid 'name'`. This is checked before any phase validation.
+</Callout>
+
+---
+
+## `description`
+
+Optional human-readable string. Not parsed or enforced — purely for `/tf list`, run records, and documentation.
+
+---
+
+## `args`
+
+Declared invocation arguments. Each arg may carry a `default`, a `description`, and an advisory `required` flag. At runtime, `resolveArgs` applies declared defaults over provided values, then passes through any extra provided keys (so callers can supply undeclared args too).
+
+```json title="args-with-defaults.json"
+{
+  "name": "audit",
   "args": {
-    "dir": { "default": "src/routes" }
+    "dir": { "default": "src/routes", "description": "Directory to audit" },
+    "force": { "default": false },
+    "severity": { "default": "high", "required": true }
   },
-  "concurrency": 8,
-  "agentScope": "project",
-  "contextSharing": false,
-  "strictInterpolation": true,
-  "budget": {
-    "maxUSD": 2.0,
-    "maxTokens": 2000000
-  },
+  "phases": [/* ... */]
+}
+```
+
+Pass args at invocation time:
+
+```bash title="Run with args"
+/tf run audit dir=src/api force=true
+```
+
+Interpolate args inside any phase with `{args.<name>}`:
+
+```json title="args-interpolation.json"
+{
+  "id": "scan",
+  "type": "agent",
+  "task": "Scan {args.dir} for missing auth checks."
+}
+```
+
+### Validation behavior
+
+<Callout type="tip">
+  Declaring `args` is optional. Undeclared args passed at runtime are still accessible via `{args.X}` — they just won't get a default. Declaring them gives you defaults and documentation.
+</Callout>
+
+When the flow is validated **with** resolved invocation args (i.e. at run start, not at static `/tf verify`), a `{args.X}` reference with no matching provided value **and** no default produces a warning:
+
+> `Taskflow references {args.X} but the invocation did not provide 'X'. The placeholder will remain literal unless a default or runtime arg is supplied.`
+
+Under `strictInterpolation: true`, this warning becomes a hard error.
+
+---
+
+## `concurrency`
+
+Default max concurrent subagents for the whole flow. Inherited by `map` and `parallel` phases that don't set a per-phase `concurrency`. Default `8`.
+
+```json title="concurrency-flow.json"
+{
+  "name": "fanout",
+  "concurrency": 16,
   "phases": [
-    /* ... */
+    { "id": "scan", "type": "map", "over": "{steps.discover.json}", "task": "...", "concurrency": 4 }
   ]
 }
 ```
 
-## Fields
+The per-phase `concurrency: 4` above overrides the flow-level `16` for that phase only.
 
-### `name`
+---
 
-**Required for saved flows.** A unique identifier used for `/tf run <name>` and `/tf:<name>`.
+## `agentScope`
 
-### `description`
+Controls where the runtime discovers agent definitions (`.md` files with YAML frontmatter).
 
-Optional human-readable description.
+| Value | Search path | Collision rule |
+|---|---|---|
+| `"user"` (default) | `~/.pi/agent/agents/*.md` | — |
+| `"project"` | `.pi/agents/*.md` | — |
+| `"both"` | user, then project | **Project wins** on name collision |
 
-### `args`
-
-Invocation arguments. Each arg can be:
-
-```json title="args-definition.json"
+```json title="agentscope-project.json"
 {
-  "args": {
-    "dir": { "default": "." },
-    "force": { "default": false }
-  }
+  "name": "team-flow",
+  "agentScope": "both",
+  "phases": [/* ... */]
 }
 ```
 
-Pass args at runtime:
+---
 
-```bash title="Run with args"
-/tf run audit-auth dir=src force=true
-```
+## `budget`
 
-### `concurrency`
+Run-wide cost ceiling. A `Budget` object with two optional caps:
 
-Default fan-out cap for `map` and `parallel` phases. Default `8`.
-
-### `agentScope`
-
-Where to discover agents:
-
-- `"user"` — `~/.pi/agent/agents/*.md`
-- `"project"` — `.pi/agents/*.md`
-- `"both"` — both; project wins on collision
-
-Default `"user"`.
-
-### `contextSharing`
-
-Enable the Shared Context Tree for all phases by default. Phases can still opt out individually.
-
-### `strictInterpolation`
-
-Promote unresolved `{args.X}` / `{steps.X}` placeholders from warnings to hard errors. Recommended for saved flows.
-
-### `budget`
-
-Run-wide cost ceiling:
+| Field | Type | Description |
+|---|---|---|
+| `maxUSD` | `number` | Halt the run once accumulated cost exceeds this many USD. |
+| `maxTokens` | `number` | Halt the run once accumulated input+output tokens exceed this. |
 
 ```json title="budget-definition.json"
 {
+  "name": "capped-run",
   "budget": {
     "maxUSD": 2.0,
     "maxTokens": 2000000
-  }
+  },
+  "phases": [/* ... */]
 }
 ```
 
-When exceeded, remaining phases are skipped and the run ends as `blocked`.
+When either ceiling is exceeded, remaining phases are **skipped** and the run ends with status `blocked`. Already-running subagents are not interrupted mid-call; the ceiling is checked between phases.
 
-### `phases`
+<Callout type="info">
+  Both fields are optional. Set either or both. A budget of `0` is treated as "exceed immediately" — useful only for dry structural checks.
+</Callout>
 
-The array of phase definitions. Each phase needs a unique `id` and a `type`.
+---
+
+## `strictInterpolation`
+
+A boolean (default `false`) that controls how validation treats non-fatal issues.
+
+<Callout type="warn">
+  `strictInterpolation` does **not** control the hard `{steps.X}` reachability check — that is always a hard error. It only promotes *warnings* to errors.
+</Callout>
+
+### What is always a hard error (regardless of this flag)
+
+- `{steps.X.*}` references where `X` is not reachable via `dependsOn` / `from` (transitively). The phase would run in parallel with its producer and see the literal placeholder.
+- A phase referencing its own output via `{steps.<self>.*}` (except `loop` phases, which legitimately do this in `until`).
+- Unknown `dependsOn` / `from` targets.
+- Dependency cycles.
+- Duplicate phase ids.
+- More than one `final: true` phase.
+
+### What becomes a hard error only under `strictInterpolation: true`
+
+| Warning | Default | Under `strict` |
+|---|---|---|
+| `{args.X}` referenced but not provided at runtime (and no default) | warning | **error** |
+| Invocation `cwd` does not match `args.codebase` | warning | **error** |
+| Loop-only fields (`until`, `maxIterations`, `convergence`) set on a non-loop phase | warning (ignored) | **error** |
+| `idempotent: false` is a no-op on `approval` / `flow` | warning | **error** |
+| `idempotent: false` overrides `cache.scope: "cross-run"` | warning | **error** |
+| Both `eval` and `score` set on a gate | warning | **error** |
+
+```json title="strict-on.json"
+{
+  "name": "production-flow",
+  "strictInterpolation": true,
+  "phases": [/* ... */]
+}
+```
+
+<Callout type="tip">
+  Recommended for saved/production flows: it catches silent placeholder leakage and stale field references before a run wastes tokens.
+</Callout>
+
+---
+
+## `contextSharing`
+
+A boolean (default `false`) that opts **every** phase in the flow into the Shared Context Tree. This is shorthand for setting `shareContext: true` on each phase individually — phases can still opt out by setting `shareContext: false`.
+
+When enabled, each phase's subagent gets `ctx_read` / `ctx_write` (a blackboard shared with siblings and ancestors, avoiding re-reading files) and `ctx_report` / `ctx_spawn` (report upward + queue child tasks the runtime picks up).
+
+<Callout type="warn">
+  When context sharing is active (either via this flag or per-phase `shareContext`), phase ids become filesystem node ids and must match `[A-Za-z0-9._-]+`. Two ids that sanitize to the same node would silently merge their blackboards — this is enforced as a hard error.
+</Callout>
+
+```json title="contextsharing-on.json"
+{
+  "name": "collab-flow",
+  "contextSharing": true,
+  "phases": [
+    { "id": "explore", "type": "agent", "task": "..." },
+    { "id": "synthesize", "type": "agent", "task": "...", "dependsOn": ["explore"] }
+  ]
+}
+```
+
+---
+
+## `incremental`
+
+A boolean (default `false`) that defaults every phase to cross-run caching (`cache.scope: "cross-run"`), so re-running the flow reuses unchanged phase results across runs and sessions.
+
+### How it interacts with per-phase settings
+
+- Equivalent to setting `cache: { scope: "cross-run" }` on every phase.
+- A phase's own `cache` setting **takes precedence** — `cache.scope: "off"` or `"run-only"` is honored.
+- The cross-run-blocked phase types (`gate`, `approval`, `loop`, `tournament`, `script`) are **never** cached cross-run, even under `incremental` — they must produce a fresh result each run.
+- `idempotent: false` phases are excluded from caching entirely (they always re-run). Under `incremental`, this produces a warning so the author knows the phase won't be reused.
+
+<Callout type="info">
+  A run-time `incremental` argument (passed at invocation) overrides the flow's declared value, letting you force a fresh or incremental run without editing the flow.
+</Callout>
+
+```json title="incremental-on.json"
+{
+  "name": "ci-audit",
+  "incremental": true,
+  "phases": [
+    { "id": "lint", "type": "script", "run": "npm run lint" },
+    { "id": "review", "type": "agent", "task": "Review recent changes." }
+  ]
+}
+```
+
+Above, `lint` is a `script` phase — it re-runs every invocation despite `incremental`. `review` is cached cross-run keyed on its inputs.
+
+---
+
+## `phases`
+
+The required array of phase definitions (`minItems: 1`). Each phase needs a unique `id` and accepts a `type` (default `"agent"`). Phases form a DAG via `dependsOn`; phases with no dependencies run in the first topological layer.
+
+<Callout type="info">
+  If no phase is marked `final: true`, the **last** phase in array order becomes the workflow result. If more than one is marked `final`, validation fails.
+</Callout>
+
+See the [Phase Types Reference](/en/docs/syntax/phase-types) for every field on every phase type.
+
+### Topological execution
+
+The runtime computes topological layers via Kahn's algorithm: phases in the same layer run concurrently (up to `concurrency`). A phase starts once all its `dependsOn` complete (or one completes, under `join: "any"`).
+
+---
 
 ## Shorthand
 
-For one-off runs, you can skip most top-level fields and use shorthand:
+For one-off delegations you can skip the full `phases` DAG and use a shorthand spec. The runtime's `desugar()` transforms it into a complete `Taskflow` before validation. A spec is recognized as shorthand when it has **no** `phases` array **but** has one of `task`, `tasks`, or `chain`.
+
+### `task` — single agent
 
 ```json title="task-shorthand.json"
 { "task": "Summarize src/" }
 ```
 
-```json title="tasks-shorthand.json"
-{ "tasks": [/* ... */] }
+Desugars to:
+
+```json title="task-desugared.json"
+{
+  "name": "task",
+  "phases": [
+    { "id": "main", "type": "agent", "task": "Summarize src/", "final": true }
+  ]
+}
 ```
+
+Optional `agent`, `context`, and `contextLimit` are carried through to the phase.
+
+### `tasks` — parallel fan-out
+
+```json title="tasks-shorthand.json"
+{
+  "tasks": [
+    { "task": "Audit auth", "agent": "analyst" },
+    { "task": "Audit validation", "agent": "analyst" }
+  ]
+}
+```
+
+Desugars to a single `parallel` phase (id `"parallel"`, `final: true`). Context is **shared** across all branches: spec-level `context` plus the union of step-level `context` arrays are merged and read once.
+
+```json title="tasks-desugared.json"
+{
+  "name": "parallel",
+  "phases": [
+    {
+      "id": "parallel",
+      "type": "parallel",
+      "branches": [
+        { "task": "Audit auth", "agent": "analyst" },
+        { "task": "Audit validation", "agent": "analyst" }
+      ],
+      "final": true
+    }
+  ]
+}
+```
+
+### `chain` — sequential agents
 
 ```json title="chain-shorthand.json"
-{ "chain": [/* ... */] }
+{
+  "chain": [
+    { "task": "Find all TODO comments" },
+    { "task": "Summarize them: {previous.output}" },
+    { "task": "Open issues for: {previous.output}" }
+  ]
+}
 ```
 
-The runtime desugars these into full flows.
+Desugars to sequential `agent` phases (`step1`, `step2`, …), each depending on the prior; the last is `final: true`. Each step references the prior step's output with `{previous.output}`.
+
+```json title="chain-desugared.json"
+{
+  "name": "chain",
+  "phases": [
+    { "id": "step1", "type": "agent", "task": "Find all TODO comments" },
+    { "id": "step2", "type": "agent", "task": "Summarize them: {previous.output}", "dependsOn": ["step1"] },
+    { "id": "step3", "type": "agent", "task": "Open issues for: {previous.output}", "dependsOn": ["step2"], "final": true }
+  ]
+}
+```
+
+<Callout type="warn">
+  In `chain` mode, top-level `context` / `contextLimit` are **ignored** (the runtime warns). Put them on individual steps instead — `context` in chain mode would be a flow-level default, which is deliberately unsupported.
+</Callout>
+
+### Carried-through metadata
+
+All three shorthand forms carry through these optional top-level fields into the desugared flow:
+
+- `name` (defaults to `"task"`, `"parallel"`, or `"chain"`)
+- `description`
+- `concurrency`
+- `agentScope`
+- `args`
+- `budget`
+- `strictInterpolation`
+
+### `isShorthand` recognition
+
+A spec is shorthand when it has no `phases` array **and** at least one of:
+
+- `chain` is a non-empty array
+- `tasks` is a non-empty array
+- `task` is a string
+
+Otherwise it's treated as a full flow and validated against `TaskflowSchema`.
+
+---
+
+## Validation behavior
+
+Every flow is validated before execution. Validation runs in two modes:
+
+1. **Static** (`/tf verify`, no runtime args): structural checks only — schema shape, DAG integrity, cycle detection, reachability of `{steps.X}` refs. Zero tokens.
+2. **Runtime** (at run start, with resolved args): everything above plus arg-presence warnings and cwd/codebase mismatch warnings.
+
+### Hard errors (always fail the run)
+
+| Error | Cause |
+|---|---|
+| `Missing or invalid 'name'` | `name` missing, empty, or not a string. |
+| `Taskflow must have at least one phase` | `phases` missing or empty. |
+| `Duplicate phase id: X` | Two phases share an `id`. |
+| `Phase 'X': unknown type 'Y'` | `type` not in the 10 allowed values. |
+| `Phase 'X': dependsOn unknown phase 'Y'` | A `dependsOn` or `from` entry has no matching phase. |
+| `Dependency cycle detected: A -> B -> A` | Kahn's algorithm found a cycle. |
+| `Only one phase may be marked 'final' (found N)` | More than one `final: true` phase. |
+| `Phase 'X': task references {steps.Y.*} but 'Y' is not reachable via dependsOn` | A `{steps.Y}` ref where `Y` isn't a transitive ancestor (unless `join: "any"`). |
+| `Phase 'X': references its own output via {steps.X.*}` | Self-reference (except `loop` phases). |
+| `Phase 'X': id uses underscores` | Phase id contains `_` (use hyphens). |
+| `Phase 'X': agent name 'Y' uses underscores` | Agent name contains `_`. |
+| `Phase 'X': agent 'Y' has invalid name format` | Agent doesn't match `/^[a-z][a-z0-9-]*$/`. |
+| `Phase 'X': ids used with context sharing must match [A-Za-z0-9._-]+` | Context-sharing phase id has invalid charset. |
+
+### Warnings (non-fatal; promoted to errors under `strictInterpolation`)
+
+| Warning | Notes |
+|---|---|
+| `{args.X}` referenced but not provided | No default, no runtime value. Placeholder stays literal. |
+| Invocation `cwd` ≠ `args.codebase` | Agents relying on cwd may inspect the wrong repo. |
+| Loop-only field on non-loop phase | `until` / `maxIterations` / `convergence` are silently ignored. |
+| `idempotent: false` no-op on `approval` / `flow` | These phases run no subagent; the flag has no effect. |
+| `idempotent: false` overrides `cache.scope: "cross-run"` | A side-effecting phase is never cached. |
+| `idempotent: false` under `incremental` | Phase excluded from caching, re-runs every invocation. |
+| Both `eval` and `score` on a gate | `eval` runs first; usually one suffices. |
+
+<Callout type="tip">
+  Run `/tf verify` early and often. It catches every hard error above at zero cost, before any subagent is spawned.
+</Callout>
+
+---
+
+## Complete example
+
+```json title="flow-definition-complete.json"
+{
+  "name": "audit-auth",
+  "description": "Audit routes for missing auth checks",
+  "version": 2,
+  "args": {
+    "dir": { "default": "src/routes", "description": "Directory to audit" },
+    "severity": { "default": "high", "required": true }
+  },
+  "concurrency": 8,
+  "agentScope": "both",
+  "contextSharing": false,
+  "strictInterpolation": true,
+  "incremental": false,
+  "budget": {
+    "maxUSD": 2.0,
+    "maxTokens": 2000000
+  },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List every route handler in {args.dir} as JSON.",
+      "output": "json"
+    },
+    {
+      "id": "audit-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "route",
+      "agent": "security-reviewer",
+      "task": "Does {route.path} require auth? Output {\"ok\": true|false}.",
+      "output": "json",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["audit-each"],
+      "agent": "writer",
+      "task": "Summarize the audit results: {steps.audit-each.output}",
+      "final": true,
+      "dependsOn": ["audit-each"]
+    }
+  ]
+}
+```
+
+---
 
 ## Next
 
 <Cards>
   <Card title="Phase Types" href="/en/docs/syntax/phase-types">
-    Every phase field.
+    Every field on every phase type.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization, fingerprints, and TTLs.
+  </Card>
+  <Card title="Interpolation" href="/en/docs/syntax/interpolation">
+    Placeholders, conditions, and the `when` / `until` expression grammar.
   </Card>
 </Cards>

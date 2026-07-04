@@ -5,175 +5,452 @@ description: Complete field reference for every phase type.
 
 # Phase Types Reference
 
+A phase is a single node in the taskflow DAG. This page is the authoritative reference for every field on every phase type.
+
 <Callout type="info">
-  Every phase shares a common set of fields. On top of those, each phase type adds its own required and optional fields.
+  All fields documented here are validated before execution. Invalid values, missing required fields, or mutually-exclusive combinations are caught by `/tf verify` at zero cost.
 </Callout>
 
 ## Common fields
 
-| Field | Type | Description |
-|---|---|---|
-| `id` | `string` | Unique phase identifier. Use hyphens. |
-| `type` | `string` | Phase type. Defaults to `agent`. |
-| `agent` | `string` | Agent name. Defaults to first discovered agent. |
-| `dependsOn` | `string[]` | Phases this phase waits for. |
-| `join` | `"all" \| "any"` | Dependency join semantics. Default `"all"`. |
-| `when` | `string` | Conditional guard. |
-| `retry` | `object` | `{ max, backoffMs?, factor? }`. |
-| `timeout` | `number` | Per-call timeout in ms (>= 1000). |
-| `output` | `"text" \| "json"` | Output format. Default `"text"`. |
-| `context` | `string[]` | Files to pre-read into the prompt. |
-| `contextLimit` | `number` | Max chars per context file. Default `8000`. |
-| `final` | `boolean` | Marks the result-bearing phase. |
-| `optional` | `boolean` | Failure does not abort the run. |
-| `cache` | `object` | `{ scope, ttl?, fingerprint? }`. |
-| `idempotent` | `boolean` | Default `true`. Set `false` for irreversible side effects. |
+Every phase accepts these fields. Some fields are ignored or forbidden on specific phase types — those exceptions are listed per type.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | `string` | — | **Required.** Unique identifier for the phase. Referenced in `dependsOn`, `{steps.<id>.output}`, and run records. Must use hyphens, not underscores. |
+| `type` | `string` | `"agent"` | Phase kind. One of: `agent`, `parallel`, `map`, `gate`, `reduce`, `approval`, `flow`, `loop`, `tournament`, `script`. |
+| `agent` | `string` | first discovered | Agent name that runs this phase. Defaults to the first agent discovered in scope. Must use hyphens. |
+| `task` | `string` | — | Task prompt. Supports interpolation (`{args.X}`, `{steps.X.output}`, `{item.field}`, etc.). Required for `agent`, `map`, `reduce`, `loop`, `tournament` (unless `branches` is used). |
+| `dependsOn` | `string[]` | `[]` | Phase ids that must complete before this phase starts. Forms the DAG edges. |
+| `join` | `"all" \| "any"` | `"all"` | Dependency join semantics. `"all"` waits for every dependency; `"any"` runs as soon as one dependency completes. |
+| `when` | `string` | — | Conditional guard. Skips the phase unless the expression is truthy. Parse errors fail open (phase still runs). |
+| `retry` | `object` | — | `{ max: number, backoffMs?: number, factor?: number }`. Explicit retry policy. Transient errors are still retried even without this. |
+| `timeout` | `number` | — | Per-call timeout in milliseconds (`>= 1000`). For `script`, max is `300000` and default is `60000`. Not supported for `approval` or `flow`. |
+| `output` | `"text" \| "json"` | `"text"` | Parse the subagent output as JSON. Required when using `expect`. |
+| `expect` | `object` | — | JSON-Schema-like output contract. Only valid with `output: "json"` on `agent`/`gate`/`reduce`/`loop`. |
+| `context` | `string[]` | — | Files or `{steps.X}` refs to pre-read into the prompt. Eliminates repeated exploration turns. |
+| `contextLimit` | `number` | `8000` | Max characters read per context file. |
+| `final` | `boolean` | `false` | Mark this phase's output as the workflow result. Only one phase may be `final`. If none is marked, the last phase becomes final. |
+| `optional` | `boolean` | `false` | If `true`, failure does not abort the run. |
+| `cache` | `object` | `{ scope: "run-only" }` | Cache policy. See [Caching](/en/docs/syntax/caching). |
+| `idempotent` | `boolean` | `true` | Set `false` for irreversible side effects (deploys, DB writes). Disables transient auto-retry and all caching; records `sideEffect: true`. |
+| `model` | `string` | — | Model override for this phase. |
+| `thinking` | `string` | — | Thinking level override for this phase. |
+| `tools` | `string[]` | — | Restrict available tools for this phase's agent. |
+| `cwd` | `string` | — | Working directory: literal path, or reserved keywords `temp`, `dedicated`, `worktree`. |
+| `shareContext` | `boolean` | `false` | Opt this phase into the Shared Context Tree. |
+
+### Validation rules for common fields
+
+- `id` must be unique across the flow.
+- `id` and `agent` must use hyphens, not underscores.
+- `timeout` for agent-running phases must be `>= 1000`.
+- `timeout` for `script` must be between `1000` and `300000`.
+- `final: true` may appear on exactly one phase.
+- `cache.scope: "cross-run"` is forbidden on `gate`, `approval`, `loop`, `tournament`, and `script`.
+
+---
 
 ## `agent`
 
-One subagent runs one task.
+The simplest and most common phase: one subagent runs one task.
 
 ### Required fields
 
 - `task`
 
-### Example
+### Optional fields
 
-```json title="agent-phase-example.json"
+All common fields. `agent` defaults to the first discovered agent if omitted.
+
+### Example: basic agent
+
+```json title="agent-basic.json"
 {
   "id": "summarize",
   "type": "agent",
   "agent": "writer",
-  "task": "Summarize the architecture of src/.",
+  "task": "Summarize the architecture of src/ in two paragraphs."
+}
+```
+
+### Example: structured JSON output with contract
+
+```json title="agent-json-contract.json"
+{
+  "id": "triage",
+  "type": "agent",
   "output": "json",
+  "task": "Classify the severity of this issue. Output only JSON.",
   "expect": {
     "type": "object",
-    "required": ["summary"]
+    "required": ["severity", "reason"],
+    "properties": {
+      "severity": { "enum": ["low", "medium", "high", "critical"] },
+      "reason": { "type": "string" }
+    }
   }
 }
 ```
 
+If the subagent output does not match `expect`, the phase fails with a precise diagnostic and is eligible for `retry`.
+
+### Example: context pre-reading
+
+```json title="agent-context.json"
+{
+  "id": "review-auth",
+  "type": "agent",
+  "agent": "risk-reviewer",
+  "context": ["src/auth/**/*.ts", "{args.spec}"],
+  "contextLimit": 12000,
+  "task": "Review the auth implementation against the spec. List every risk."
+}
+```
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `Phase 'x' (agent) requires 'task'` | `task` is missing or empty. | Add a `task` string. |
+| `expect requires output:"json"` | `expect` is set but `output` is `"text"`. | Set `output: "json"`. |
+| `agent 'x' uses underscores` | Agent name contains `_`. | Rename to hyphens. |
+
+---
+
 ## `parallel`
 
-Run `branches[]` concurrently.
+Run multiple branches concurrently inside a single phase. Similar to the `tasks` shorthand, but embedded in a full DAG.
 
 ### Required fields
 
-- `branches` — array of `{ task, agent?, ...commonFields? }`
+- `branches`: array of `{ task: string, agent?: string }`
 
-### Example
+### Optional fields
 
-```json title="parallel-phase-example.json"
+- `concurrency`: cap parallel branches (defaults to flow-level `concurrency`).
+- Common fields except `task` (use `branches[].task` instead).
+
+### Example: parallel audit
+
+```json title="parallel-audit.json"
 {
   "id": "audit",
   "type": "parallel",
   "branches": [
-    { "task": "Audit auth", "agent": "analyst" },
-    { "task": "Audit validation", "agent": "analyst" }
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit input validation in src/api", "agent": "analyst" }
   ]
 }
 ```
 
+### Example: parallel with shared context
+
+```json title="parallel-shared-context.json"
+{
+  "id": "audit",
+  "type": "parallel",
+  "context": ["src/api/**/*.ts"],
+  "branches": [
+    { "task": "Find missing auth checks", "agent": "analyst" },
+    { "task": "Find missing rate limits", "agent": "analyst" },
+    { "task": "Find missing validation", "agent": "analyst" }
+  ],
+  "concurrency": 4
+}
+```
+
+The `context` array is read once and shared across all branches.
+
+### Output
+
+The phase output is a concatenation of all branch outputs. There is no automatic aggregation agent; use a downstream `reduce` phase if you need synthesis.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `parallel requires non-empty 'branches'` | `branches` missing or empty. | Add at least one branch with a `task`. |
+| `branches[i].task must be a string` | A branch is missing `task` or has wrong type. | Ensure every branch has `task: "..."`. |
+
+---
+
 ## `map`
 
-Fan out over an array.
+Dynamic fan-out: spawn one subagent per item in an array. Use this when the number of work items is discovered at runtime.
 
 ### Required fields
 
-- `over` — interpolation expression resolving to an array.
+- `over`: interpolation expression resolving to an array.
 - `task`
 
 ### Optional fields
 
-- `as` — loop variable name. Default `"item"`.
-- `concurrency` — per-phase override.
+- `as`: loop variable name. Default `"item"`.
+- `concurrency`: per-phase fan-out cap.
+- Common fields.
 
-### Example
+### How `over` is resolved
 
-```json title="map-phase-example.json"
+1. The expression is interpolated (e.g. `{steps.discover.json}`).
+2. The value is parsed as JSON if needed.
+3. If the value is an object, the runtime looks for `items`, `results`, `list`, `data`, or `findings` keys.
+4. If no array is found, the phase fails.
+
+### Example: fan out over discovered files
+
+```json title="map-files.json"
 {
   "id": "summarize",
   "type": "map",
   "over": "{steps.discover.json}",
-  "as": "item",
+  "as": "file",
   "agent": "scout",
-  "task": "Read {item.file} and summarize.",
-  "concurrency": 8
+  "task": "Read {file.path} and give a one-sentence summary.",
+  "concurrency": 8,
+  "dependsOn": ["discover"]
 }
 ```
+
+### Example: nested field access
+
+```json title="map-nested.json"
+{
+  "id": "audit-routes",
+  "type": "map",
+  "over": "{steps.discover.json.routes}",
+  "as": "route",
+  "task": "Check whether {route.method} {route.path} has authorization."
+}
+```
+
+### Output
+
+A `map` phase's output is a concatenation of all per-item outputs. Access individual results with `{steps.<id>.output}` or parse structured results with `{steps.<id>.json}` if each item emitted JSON.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `map requires 'over'` | `over` is missing. | Provide an interpolation expression that resolves to an array. |
+| `over must be a string interpolation ref` | `over` is a literal array instead of a string. | Wrap it in quotes: `"over": "{steps.x.json}"`. |
+| `Dynamic sub-flow phase 'x': concurrency too high` | Generated sub-flow exceeds max concurrency. | Lower `concurrency` to `<= 16`. |
+
+---
 
 ## `gate`
 
-Quality gate. Can halt the flow.
+A quality gate reviews upstream output and can halt the flow. The gate passes when the subagent output contains `VERDICT: PASS` (or the judge/scorer declares pass).
 
 ### Required fields
 
-- `task`
+- `task` — unless `score` is used.
 
 ### Optional fields
 
-- `eval` — zero-token assertions.
-- `score` — deterministic scoring.
-- `onBlock` — `"halt"` (default) or `"retry"`.
+- `eval`: array of zero-token machine checks. If **all** pass, the gate auto-passes without an LLM call.
+- `score`: deterministic scorers with optional LLM-judge fallback.
+- `onBlock`: `"halt"` (default) or `"retry"`.
+- `retry`: required when `onBlock: "retry"`.
+- Common fields.
 
-### Example
+### Example: LLM gate
 
-```json title="gate-phase-example.json"
+```json title="gate-llm.json"
 {
-  "id": "quality",
+  "id": "verify",
   "type": "gate",
   "agent": "reviewer",
   "dependsOn": ["fix"],
-  "eval": ["{steps.fix.output} contains 'VERDICT: PASS'"],
-  "task": "Review the fix. End with VERDICT: PASS or BLOCK."
+  "task": "Review the diff. End with VERDICT: PASS or BLOCK."
 }
 ```
+
+### Example: gate with zero-token eval
+
+```json title="gate-eval.json"
+{
+  "id": "lint-pass",
+  "type": "gate",
+  "dependsOn": ["lint"],
+  "eval": [
+    "{steps.lint.output} contains '0 errors'",
+    "{steps.lint.output} contains '0 warnings'"
+  ],
+  "task": "Confirm lint is clean. VERDICT: PASS or BLOCK."
+}
+```
+
+If **any** eval fails, the LLM `task` runs as normal. If **all** eval pass, the gate passes immediately.
+
+### Example: self-healing gate
+
+```json title="gate-self-healing.json"
+{
+  "id": "quality",
+  "type": "gate",
+  "onBlock": "retry",
+  "retry": { "max": 3 },
+  "dependsOn": ["implement"],
+  "task": "Does this satisfy all criteria? VERDICT: PASS or BLOCK."
+}
+```
+
+On `BLOCK`, the gate re-runs its upstream `dependsOn` phases and re-evaluates, up to `retry.max` rounds.
+
+### Fail-open behavior
+
+Ambiguous gate output (neither clear `PASS` nor `BLOCK`) is treated as `PASS`. A gate never accidentally loses work.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `gate requires 'task' (or 'score')` | Neither `task` nor `score` provided. | Add one. |
+| `cache.scope 'cross-run' is not allowed for gate` | Tried to cache a gate across runs. | Use `run-only` or omit `cache`. |
+| `both 'eval' and 'score' are set` | Warning: both present. | Usually pick one; `eval` runs first. |
+
+---
 
 ## `reduce`
 
-Aggregate upstream outputs.
+Aggregate outputs from upstream phases into one final summary.
 
 ### Required fields
 
-- `from` — array of phase ids.
+- `from`: array of phase ids.
 - `task`
 
-### Example
+### Optional fields
 
-```json title="reduce-phase-example.json"
+- Common fields.
+
+### Example: combine audit reports
+
+```json title="reduce-report.json"
 {
   "id": "report",
   "type": "reduce",
-  "from": ["audit"],
+  "from": ["auth-audit", "validation-audit"],
   "agent": "writer",
-  "task": "Combine into a report:\n{steps.audit.output}"
+  "task": "Combine these audits into one prioritized report:\n{steps.auth-audit.output}\n---\n{steps.validation-audit.output}"
 }
 ```
 
+### Output
+
+The `reduce` agent receives the upstream outputs in its prompt. Its own output becomes the phase output. `reduce` does **not** automatically concatenate; the `task` must tell the agent what to do.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `reduce requires 'from'` | `from` missing or empty. | List at least one upstream phase id. |
+| `from unknown phase 'x'` | An id in `from` does not exist. | Fix the id or add the missing phase. |
+
+---
+
 ## `approval`
 
-Human-in-the-loop.
+Pause the flow for a human decision. Only supported in interactive hosts (Pi), not in CI/detached runs.
+
+### Required fields
+
+None.
 
 ### Optional fields
 
-- `task` — prompt shown to the human.
+- `task`: prompt shown to the human.
+- Common fields.
+
+### Example
+
+```json title="approval-example.json"
+{
+  "id": "approve-ship",
+  "type": "approval",
+  "dependsOn": ["fix"],
+  "task": "Review the fix before shipping."
+}
+```
+
+### Behavior
+
+- **Approve** → phase output is `"approved"`, flow continues.
+- **Reject** → phase fails, flow aborts (unless `optional: true`).
+- **Edit** → typed note becomes the phase output, flow continues.
+
+Detached/CI runs auto-reject.
+
+### Restrictions
+
+- `timeout` is not supported.
+- `cache.scope: "cross-run"` is forbidden.
+
+---
 
 ## `flow`
 
-Run a sub-flow.
+Run a saved or runtime-generated sub-flow as one phase.
 
-### Required fields (one of)
+### Required fields (exactly one of)
 
-- `use` — name of a saved flow.
-- `def` — interpolation expression resolving to a flow definition.
+- `use`: name of a saved flow.
+- `def`: inline flow definition or interpolation resolving to one.
 
 ### Optional fields
 
-- `with` — args passed to `use`.
+- `with`: args passed to `use`.
+- Common fields.
+
+### Example: saved sub-flow
+
+```json title="flow-saved.json"
+{
+  "id": "research",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+### Example: runtime-generated sub-flow
+
+```json title="flow-runtime.json"
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+Runtime-generated sub-flows are validated before execution. If validation fails, the phase reports `defError` and the run continues (fail-open for generated plans).
+
+### Dynamic sub-flow hardening
+
+Generated sub-flows are subject to extra limits:
+
+- Max `100` phases.
+- Max `200` map items.
+- Max `16` concurrency.
+- Max `5` nesting levels.
+- `script` phases are forbidden.
+- `cwd` cannot escape the run directory.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `flow requires 'use' or 'def'` | Neither provided. | Provide exactly one. |
+| `use and def are mutually exclusive` | Both provided. | Pick one. |
+| `Dynamic sub-flow has too many phases` | Generated plan too large. | Constrain the planner prompt. |
+
+---
 
 ## `loop`
 
-Iterate until done.
+Repeat a task until a condition is met, output converges, or the hard iteration cap is reached.
 
 ### Required fields
 
@@ -183,42 +460,140 @@ Iterate until done.
 
 ### Optional fields
 
-- `convergence` — stop when output stops changing.
-- `reflexion` — feed failure summaries back into the loop.
-- `output` — usually `"json"`.
+- `convergence`: stop early if output equals previous iteration output. Default `true`.
+- `reflexion`: feed failure summaries back into the loop. Default `false`.
+- `output`: usually `"json"`.
+- Common fields.
+
+### Example: refine until done
+
+```json title="loop-refine.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft. Return JSON {draft, done}.",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6,
+  "convergence": true
+}
+```
+
+### Example: loop with reflexion
+
+```json title="loop-reflexion.json"
+{
+  "id": "fix-tests",
+  "type": "loop",
+  "task": "Fix the failing tests. Use {reflexion} to learn from prior failures. Return {patch, passes}.",
+  "until": "{steps.fix-tests.json.passes} == true",
+  "output": "json",
+  "maxIterations": 10,
+  "reflexion": true
+}
+```
+
+### Iteration limits
+
+| Limit | Value |
+|---|---|
+| Default `maxIterations` | `10` |
+| Hard cap `maxIterations` | `100` |
+
+If `until` never becomes truthy, the loop stops at `maxIterations`. The final iteration's output becomes the phase output. If the last iteration failed and `reflexion` is on, the phase fails.
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `loop requires 'task'` | Missing `task`. | Add iteration body prompt. |
+| `loop requires 'until'` | Missing stop condition. | Add `until` expression. |
+| `maxIterations must be <= 100` | Exceeded hard cap. | Lower the cap. |
+
+---
 
 ## `tournament`
 
-Compete and judge.
+Spawn competing variants and let a judge pick the best (or synthesize an aggregate answer).
 
 ### Required fields
 
-- `task` (if using `variants`)
+- `task` — if using `variants`.
 
 ### Optional fields
 
-- `variants` — number of copies.
-- `branches` — distinct approaches.
-- `judge` — rubric for the judge.
-- `judgeAgent` — agent for judging.
-- `mode` — `"best"` or `"aggregate"`.
+- `variants`: number of copies. Default `3`, max `20`. Ignored when `branches` is provided.
+- `branches`: distinct competitor tasks.
+- `judge`: rubric/prompt for the judge.
+- `judgeAgent`: agent that runs the judge.
+- `mode`: `"best"` (default) or `"aggregate"`.
+- Common fields.
+
+### Example: variants
+
+```json title="tournament-variants.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the headline with the strongest hook and clearest promise.",
+  "mode": "best"
+}
+```
+
+### Example: branches
+
+```json title="tournament-branches.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "branches": [
+    { "task": "Write a bold, provocative headline." },
+    { "task": "Write a clear, benefit-driven headline." },
+    { "task": "Write a question-based headline." }
+  ],
+  "judge": "Pick the best headline.",
+  "mode": "best"
+}
+```
+
+### Judge verdict
+
+The judge must emit one of:
+
+- `WINNER: <n>` (1-based variant number)
+- JSON `{"winner": n}`
+
+Unparseable verdicts fall back to variant `1` (fail-open).
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `tournament requires 'task' or non-empty 'branches'` | Missing both. | Provide one. |
+| `variants must be a number >= 2` | `variants` < 2. | Use at least 2. |
+| `variants must be <= 20` | Too many variants. | Lower the cap. |
+
+---
 
 ## `script`
 
-Run a shell command. Zero tokens.
+Run a shell command. Zero tokens. Useful for builds, tests, lint, or file-system prep.
 
 ### Required fields
 
-- `run` — string (shell) or array (direct exec).
+- `run`: string (shell) or array (direct exec).
 
 ### Optional fields
 
-- `input` — piped to stdin.
-- `timeout` — ms cap, default `60000`, max `300000`.
+- `input`: text piped to stdin. Supports interpolation.
+- `timeout`: default `60000`, max `300000`.
+- Common fields except `retry` and `output: "json"` (both forbidden).
 
-### Example
+### Example: array form (recommended)
 
-```json title="script-phase-example.json"
+```json title="script-array.json"
 {
   "id": "build",
   "type": "script",
@@ -227,10 +602,73 @@ Run a shell command. Zero tokens.
 }
 ```
 
+### Example: string form
+
+```json title="script-string.json"
+{
+  "id": "list",
+  "type": "script",
+  "run": "find src -name '*.ts' | head -20"
+}
+```
+
+### Example: piped input
+
+```json title="script-input.json"
+{
+  "id": "format",
+  "type": "script",
+  "run": ["npx", "prettier", "--stdin-filepath", "foo.ts"],
+  "input": "{steps.generate.output}"
+}
+```
+
+### Security notes
+
+- Array form is execvp-style and safe from shell injection.
+- String form passes through a shell; do not interpolate untrusted values into it.
+- String `run` must not contain `{...}` placeholders (use array form or `input`).
+
+### Common errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `script requires 'run'` | Missing command. | Add `run`. |
+| `script: 'run' array must be non-empty` | Empty array. | Provide a command. |
+| `script: string 'run' must not contain interpolation` | Tried `{args.x}` in string `run`. | Use array form or `input`. |
+| `retry is not supported for script phases` | Added `retry`. | Remove it. |
+
+---
+
+## Field reference by phase type
+
+| Phase | task | over | as | branches | from | use | def | with | run | input | until | maxIterations | variants | judge | eval | score |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `agent` | required | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `parallel` | ignored | — | — | required | — | — | — | — | — | — | — | — | — | — | — | — |
+| `map` | required | required | optional | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `gate` | required* | — | — | — | — | — | — | — | — | — | — | — | — | — | optional | optional |
+| `reduce` | required | — | — | — | required | — | — | — | — | — | — | — | — | — | — | — |
+| `approval` | optional | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `flow` | ignored | — | — | — | — | required† | required† | optional (with `use`) | — | — | — | — | — | — | — | — |
+| `loop` | required | — | — | — | — | — | — | — | — | — | required | required | — | — | — | — |
+| `tournament` | required‡ | — | — | optional‡ | — | — | — | — | — | — | — | — | optional | optional | — | — |
+| `script` | ignored | — | — | — | — | — | — | — | required | optional | — | — | — | — | — | — |
+
+\* `gate` requires `task` unless `score` is used.  
+† `flow` requires exactly one of `use` or `def`.  
+‡ `tournament` requires `task` unless `branches` is used.
+
 ## Next
 
 <Cards>
   <Card title="Control Flow" href="/en/docs/syntax/control-flow">
-    `when`, `join`, routing.
+    Deep dive into `when`, `join`, `retry`, and gates.
+  </Card>
+  <Card title="Flow Definition" href="/en/docs/syntax/flow-definition">
+    Top-level fields that wrap phases into a taskflow.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    How `cache` and `idempotent` interact.
   </Card>
 </Cards>
