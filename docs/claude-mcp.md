@@ -8,13 +8,13 @@ directions, both built on the host-neutral `SubagentRunner` seam
    sessions (`packages/claude-taskflow/src/claude-runner.ts`).
 2. **Claude Code as the caller** — taskflow is exposed to a Claude Code user as
    an **MCP server**, so the `taskflow_*` tools appear inside the session. The
-   MCP protocol, tools, and rendering all live in the host-neutral core
-   (`packages/taskflow-core/src/mcp/`); the claude adapter just binds them to
+   MCP protocol, tools, and rendering all live in the host-neutral taskflow-mcp package
+   (`packages/taskflow-mcp/src/mcp/`); the claude adapter just binds them to
    the `claude -p` subagent runner (`packages/claude-taskflow/src/mcp/`). This
    is the direction described here.
 
 The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
+built-ins (`packages/taskflow-mcp/src/mcp/jsonrpc.ts`), so taskflow keeps its
 **zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
 
 ## Install (recommended): the Claude Code plugin

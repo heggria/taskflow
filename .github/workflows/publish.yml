@@ -1,6 +1,6 @@
 name: Publish & Release
 
-# Publishes taskflow-core + pi-taskflow + codex-taskflow + claude-taskflow +
+# Publishes taskflow-core + taskflow-mcp + pi-taskflow + codex-taskflow + claude-taskflow +
 # opencode-taskflow to npmjs.com and creates a GitHub Release, when a v* tag is
 # pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All six workspace
 # versions must equal the tag.

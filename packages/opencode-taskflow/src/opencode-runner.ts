@@ -38,6 +38,7 @@
 
 import {
 	runSubagentProcess,
+	num,
 	unknownAgentResult,
 	type AgentConfig,
 	type LiveUpdate,
@@ -116,13 +117,13 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 			acc.usage.turns++;
 			const tk = part?.tokens;
 			if (tk) {
-				acc.usage.input += tk.input || 0;
-				acc.usage.output += (tk.output || 0) + (tk.reasoning || 0);
-				acc.usage.cacheRead += tk.cache?.read || 0;
-				acc.usage.cacheWrite += tk.cache?.write || 0;
+			acc.usage.input += num(tk.input);
+				acc.usage.output += num(tk.output) + num(tk.reasoning);
+				acc.usage.cacheRead += num(tk.cache?.read);
+				acc.usage.cacheWrite += num(tk.cache?.write);
 				// contextTokens is a host-specific gauge (NOT additive): opencode's tokens.total is
 				// the full last-turn context (input+output+reasoning), already cache-accounted.
-				acc.usage.contextTokens = tk.total || acc.usage.contextTokens;
+				acc.usage.contextTokens = num(tk.total) || acc.usage.contextTokens;
 			}
 			if (typeof part?.cost === "number") acc.usage.cost += part.cost;
 			break;

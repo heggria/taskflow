@@ -245,6 +245,15 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 // — then delegates here for everything else. Adding a new host can no longer
 // drift the process/classify contract.
 
+/** Coerce a JSON-sourced numeric field to a finite number, defaulting to 0.
+ *  Provider event streams are parsed off `any`; a version drift could ship a
+ *  numeric STRING (e.g. "1234"), and `number += string` silently corrupts to
+ *  string concatenation / NaN. This guard keeps usage accounting honest. */
+export function num(v: unknown): number {
+	const n = Number(v);
+	return Number.isFinite(n) ? n : 0;
+}
+
 /** Tracks every live subagent child so a process exit can SIGKILL stragglers.
  *  Module-global (not per-host): a single exit handler must reach every host's
  *  children, so all host runners register here. */
@@ -361,8 +370,16 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		armIdle();
 
 		const processLine = (line: string) => {
-			const live = foldLine(acc, line);
-			if (live && opts.onLive) opts.onLive(live);
+			// A throwing foldLine (malformed/hostile stream line) or a throwing onLive
+			// callback must NEVER crash the run — this is the fail-open backstop that
+			// turns a bad line into a skipped line. It also honours the AGENTS.md
+			// invariant that user callbacks are wrapped in try/catch.
+			try {
+				const live = foldLine(acc, line);
+				if (live && opts.onLive) opts.onLive(live);
+			} catch {
+				/* malformed stream line / throwing callback — skip, never crash */
+			}
 		};
 
 		proc.stdout.on("data", (data) => {
@@ -377,7 +394,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		let stderrCapped = false;
 		proc.stderr.on("data", (data) => {
 			if (!stderrCapped) {
-			result.stderr += data.toString();
+				result.stderr += data.toString();
 				if (result.stderr.length >= STDERR_MAX_LEN) {
 					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
 					stderrCapped = true;
@@ -394,6 +411,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		});
 		proc.on("error", (err) => {
 			clearTimers();
+			if (proc.pid) activeChildren.delete(proc.pid); // defensive: close usually fires after error, but don't rely on it
 			if (!result.stderr) result.stderr = err.message;
 			if (!result.errorMessage) result.errorMessage = err.message;
 			resolve(1);
@@ -402,6 +420,11 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		if (opts.signal) {
 			const kill = () => {
 				wasAborted = true;
+				// Disarm the idle watchdog first: otherwise, if the idle timer fires
+				// between this SIGTERM and the close event, `idleTimedOut` would be
+				// set and the post-exit classify chain (which checks idle BEFORE
+				// abort) would misreport a user abort as an idle stall.
+				clearTimers();
 				proc.kill("SIGTERM");
 				const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
 				forceKill.unref();

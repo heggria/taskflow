@@ -11,7 +11,7 @@ both built on the host-neutral `SubagentRunner` seam
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
 The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/codex-taskflow/src/mcp/jsonrpc.ts`), so taskflow keeps its
+built-ins (`packages/taskflow-mcp/src/mcp/jsonrpc.ts`), so taskflow keeps its
 **zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
 
 ## Install (recommended): the Codex plugin
@@ -31,7 +31,7 @@ globally, and the plugin version binds the exact code that runs. Verify:
 
 ```sh
 codex plugin list   # → taskflow@taskflow  installed, enabled
-codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.1.3 codex-taskflow-mcp)
+codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.1.5 codex-taskflow-mcp)
 ```
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
@@ -53,7 +53,7 @@ To stop large flows from being cut off, the plugin's `.mcp.json` ships a
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.1.3", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.1.5", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }

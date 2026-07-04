@@ -53,7 +53,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

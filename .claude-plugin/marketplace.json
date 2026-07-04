@@ -1,7 +1,7 @@
 {
   "name": "taskflow",
   "metadata": {
-    "description": "Declarative, verifiable DAG orchestration for coding agents. Taskflow lets you define multi-phase subagent workflows (fan-out, gates, loops, tournaments, approvals, sub-flow composition) as JSON, verify them before they run, and keep intermediate transcripts out of your context — exposed to Codex and Claude Code as the taskflow_* MCP tools plus a routing skill."
+    "description": "Declarative, verifiable DAG orchestration for coding agents. Taskflow lets you define multi-phase subagent workflows (fan-out, gates, loops, tournaments, approvals, sub-flow composition) as JSON, verify them before they run, and keep intermediate transcripts out of your context — exposed to Codex, Claude Code, and OpenCode as the taskflow_* MCP tools plus a routing skill."
   },
   "owner": {
     "name": "heggria",

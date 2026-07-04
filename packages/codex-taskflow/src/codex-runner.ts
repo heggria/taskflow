@@ -31,6 +31,7 @@
 
 import {
 	runSubagentProcess,
+	num,
 	unknownAgentResult,
 	type AgentConfig,
 	type LiveUpdate,
@@ -91,13 +92,13 @@ export function foldCodexEventLine(acc: CodexAccumulator, line: string): LiveUpd
 	if (event.type === "turn.completed" && event.usage) {
 		const u = event.usage;
 		acc.usage.turns++;
-		acc.usage.input += u.input_tokens || 0;
-		acc.usage.output += (u.output_tokens || 0) + (u.reasoning_output_tokens || 0);
-		acc.usage.cacheRead += u.cached_input_tokens || 0;
+		acc.usage.input += num(u.input_tokens);
+		acc.usage.output += num(u.output_tokens) + num(u.reasoning_output_tokens);
+		acc.usage.cacheRead += num(u.cached_input_tokens);
 		// contextTokens is a host-specific point-in-time gauge (NOT additive — excluded from aggregateUsage):
 		// each host's formula differs because each accounts for cache differently. Codex's input_tokens
 		// already includes cached tokens, so input+output = full last-turn context.
-		acc.usage.contextTokens = (u.input_tokens || 0) + (u.output_tokens || 0);
+		acc.usage.contextTokens = num(u.input_tokens) + num(u.output_tokens);
 	} else if (event.type === "item.completed" || event.type === "item.started") {
 		const item = event.item;
 		if (!item) return null;

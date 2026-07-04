@@ -34,7 +34,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs opencode-taskflow",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs opencode-taskflow",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

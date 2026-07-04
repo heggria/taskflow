@@ -91,7 +91,7 @@ six package versions match the tag, publishes them in order, and cuts a GitHub
 Release from the matching `CHANGELOG.md` section.
 
 ```sh
-git tag v0.1.3 && git push origin v0.1.3
+git tag v0.1.5 && git push origin v0.1.5
 ```
 
 ## Verify after publish
@@ -111,7 +111,14 @@ npm view opencode-taskflow version --registry=https://registry.npmjs.org/
 # Pi users (unchanged):
 pi install npm:pi-taskflow
 
-# Codex users (MCP server):
-npm i -g codex-taskflow
-codex mcp add taskflow -- codex-taskflow-mcp
+# Codex users (plugin):
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+
+# Claude Code users (plugin):
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+
+# OpenCode users (MCP server):
+opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 ```

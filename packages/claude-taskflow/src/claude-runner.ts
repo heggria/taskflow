@@ -36,6 +36,7 @@
 
 import {
 	runSubagentProcess,
+	num,
 	unknownAgentResult,
 	type AgentConfig,
 	type LiveUpdate,
@@ -140,14 +141,14 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 		const u = msg.usage;
 		if (!acc.sawResult && u && !synthetic) {
 			acc.usage.turns++;
-			acc.usage.input += u.input_tokens || 0;
-			acc.usage.output += u.output_tokens || 0;
-			acc.usage.cacheRead += u.cache_read_input_tokens || 0;
-			acc.usage.cacheWrite += u.cache_creation_input_tokens || 0;
+			acc.usage.input += num(u.input_tokens);
+			acc.usage.output += num(u.output_tokens);
+			acc.usage.cacheRead += num(u.cache_read_input_tokens);
+			acc.usage.cacheWrite += num(u.cache_creation_input_tokens);
 			// contextTokens is a host-specific gauge (NOT additive): claude reports input_tokens
 			// EXCLUDING cache read, so input+cache_read+output = full last-turn context.
 			acc.usage.contextTokens =
-				(u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
+				num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.output_tokens);
 		}
 	} else if (event.type === "result") {
 		acc.sawResult = true;
@@ -155,10 +156,10 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 		if (u) {
 			const prev = acc.usage.contextTokens;
 			acc.usage = emptyUsage();
-			acc.usage.input = u.input_tokens || 0;
-			acc.usage.output = u.output_tokens || 0;
-			acc.usage.cacheRead = u.cache_read_input_tokens || 0;
-			acc.usage.cacheWrite = u.cache_creation_input_tokens || 0;
+			acc.usage.input = num(u.input_tokens);
+			acc.usage.output = num(u.output_tokens);
+			acc.usage.cacheRead = num(u.cache_read_input_tokens);
+			acc.usage.cacheWrite = num(u.cache_creation_input_tokens);
 			acc.usage.contextTokens = prev;
 		}
 		acc.usage.turns = typeof event.num_turns === "number" ? event.num_turns : acc.usage.turns;

@@ -26,7 +26,7 @@
 
 <p><strong>面向编码智能体子代理（subagent）的声明式、可验证的「任务图」。</strong><br/>
 不是你要去「写脚本」的 workflow——而是你去「声明」的一张 DAG。并发分发（fan out）· 门控（gate）· 恢复（resume）· 保存为命令——中间结果始终远离你的上下文窗口（context window）。<br/>
-可运行于 <a href="https://pi.dev">Pi</a> 编码智能体与 <a href="https://github.com/openai/codex">OpenAI Codex</a>。</p>
+可运行于 <a href="https://pi.dev">Pi</a> 编码智能体、<a href="https://github.com/openai/codex">OpenAI Codex</a>、<a href="https://claude.com/product/claude-code">Claude Code</a> 与 <a href="https://opencode.ai">OpenCode</a>。</p>
 
 </div>
 
@@ -764,7 +764,7 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
-**v0.1.3**——当前发布版。完整历史（含修复 issue #3 执行问题的 v0.1.1）详见 [CHANGELOG](./CHANGELOG.md)。本版新增 Codex MCP `taskflow_compile` 的 SVG 图表，以及针对 `validate`/`verify`/`compile` 的全面畸形输入加固。基线：**多宿主 monorepo**——引擎拆分为宿主无关的 `taskflow-core`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`（Codex 运行器 + 插件）、`claude-taskflow`（Claude Code 运行器 + 插件）与 `opencode-taskflow`（OpenCode 运行器 + 配置脚手架），四个宿主适配器共享 core 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+**v0.1.5**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**六个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp` MCP 服务器，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（各为一个宿主运行器 + MCP bin + 插件/配置），四者共享 `taskflow-mcp` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 

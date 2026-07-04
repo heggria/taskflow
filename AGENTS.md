@@ -8,7 +8,7 @@ taskflow is a **declarative DAG orchestration runtime** for coding agents — it
 
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
 **Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
-**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the Codex (`codex-taskflow`), Claude Code (`claude-taskflow`), and OpenCode (`opencode-taskflow`) adapters depend only on `taskflow-core`. Everything depends on `typebox`.\
+**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp`) and the three MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp`). Everything depends on `typebox`.\
 **Layout:** npm-workspaces monorepo of six published packages — `taskflow-core` (host-neutral engine), `taskflow-mcp` (the host-neutral MCP server + DAG renderer, depends on core), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), `codex-taskflow` (Codex runner + MCP bin + a `plugin/` scaffold installable via `codex plugin add`), `claude-taskflow` (Claude Code runner + MCP bin + a `plugin/` scaffold installable via `claude plugin install`), and `opencode-taskflow` (OpenCode runner + MCP bin + an `opencode.json` config scaffold).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
 
@@ -134,7 +134,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 ## Development Commands
 
 ```bash
-npm install           # links the four workspaces
+npm install           # links the six workspaces
 npm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
 npm test              # full unit suite (node --experimental-strip-types --test)
 npm run test:core     # engine tests only

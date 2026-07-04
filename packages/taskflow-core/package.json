@@ -1,7 +1,7 @@
 {
   "name": "taskflow-core",
   "version": "0.1.5",
-  "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow and codex-taskflow.",
+  "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow, codex-taskflow, claude-taskflow, and opencode-taskflow.",
   "keywords": [
     "taskflow",
     "dag",
@@ -39,7 +39,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node ../../scripts/copy-agents.mjs && node ../../scripts/copy-readme.mjs taskflow-core",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-agents.mjs && node ../../scripts/copy-readme.mjs taskflow-core",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
