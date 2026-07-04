@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { executeTaskflow, type RuntimeDeps } from "taskflow-core";
-import { opencodeSubagentRunner } from "../src/opencode-runner.ts";
+import { opencodeSubagentRunner } from "taskflow-hosts/opencode";
 import type { AgentConfig } from "taskflow-core";
 import type { Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";

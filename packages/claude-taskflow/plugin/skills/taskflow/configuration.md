@@ -356,6 +356,10 @@ Each entry is one of:
 | Variable | Effect |
 |----------|--------|
 | `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
+| `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
+| `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
+| `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
+| `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
 
 ---
 

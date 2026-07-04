@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { executeTaskflow, type RuntimeDeps } from "taskflow-core";
-import { codexSubagentRunner } from "../src/codex-runner.ts";
+import { codexSubagentRunner } from "taskflow-hosts/codex";
 import type { AgentConfig } from "taskflow-core";
 import type { Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";

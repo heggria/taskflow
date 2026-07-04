@@ -65,7 +65,7 @@ packages/
    │  └─ mcp/              ← thin bind: server.ts re-exports core's MCP server bound to codexSubagentRunner; bin.ts
    ├─ plugin/            ← Codex plugin scaffold (`codex plugin add taskflow@taskflow`)
    │  ├─ .codex-plugin/plugin.json  ← plugin manifest (skills + mcpServers pointers)
-   │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx codex-taskflow`
+   │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx codex-taskflow-mcp`
    │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← plugin icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← mcp-server unit test + .mts e2e scripts
@@ -75,7 +75,7 @@ packages/
    │  └─ mcp/              ← thin bind: server.ts re-exports core's MCP server bound to claudeSubagentRunner; bin.ts
    ├─ plugin/            ← Claude Code plugin scaffold (`claude plugin install claude-taskflow@taskflow`)
    │  ├─ .claude-plugin/plugin.json ← plugin manifest
-   │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx claude-taskflow`
+   │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx claude-taskflow-mcp`
    │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← plugin icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← mcp-server unit test + .mts e2e scripts
@@ -84,7 +84,7 @@ packages/
    │  ├─ index.ts          ← re-exports the opencode runner from taskflow-hosts (back-compat public surface)
    │  └─ mcp/              ← thin bind: server.ts re-exports core's MCP server bound to opencodeSubagentRunner; bin.ts
    ├─ plugin/            ← OpenCode config scaffold (no marketplace; users add the mcp entry)
-   │  ├─ opencode.json     ← ready-to-copy config: mcp.taskflow (npx opencode-taskflow) + skills.paths
+   │  ├─ opencode.json     ← ready-to-copy config: mcp.taskflow (npx opencode-taskflow-mcp) + skills.paths
    │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← opencode-adapter unit tests + .mts e2e scripts
@@ -99,7 +99,7 @@ skills-src/taskflow/      ← SINGLE SOURCE for all hosts' skills: entry.pi.md +
                             core.md/patterns.md/advanced.md/configuration.md (shared body with
                             <!-- host:pi/codex/claude/opencode --> blocks; the host field is a
                             comma-list, e.g. <!-- host:codex,claude,opencode -->). Compiled by
-                            scripts/build-skills.mjs (npm run build:skills); drift-guarded by
+                            scripts/build-skills.mjs (pnpm run build:skills); drift-guarded by
                             packages/pi-taskflow/test/skills-build.test.ts.
 scripts/                  ← build helpers (copy-agents.mjs, build-skills.mjs)
 examples/                 ← runnable flow definitions (.json)
@@ -145,7 +145,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 pnpm install           # links the seven workspace packages
 pnpm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
 pnpm test              # full unit suite (node --experimental-strip-types --test)
-pnpm run test:core     # engine tests only
+pnpm run test:hosts    # taskflow-hosts tests only
 pnpm run test:pi       # pi-adapter tests only
 pnpm run test:codex    # codex-adapter tests only
 pnpm run test:claude   # claude-adapter tests only

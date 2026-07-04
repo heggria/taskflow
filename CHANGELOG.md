@@ -22,7 +22,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   parameterized by a per-host `SubagentAccumulator` + `foldLine`. Each host
   runner shrank to just its host-specific bits (argv, model-id rule,
   permission mapping, event parser): codex 366→217, claude 417→266, opencode
-  397→247 lines. Behavior is identical (1045/1045 tests pass); adding a new
+  397→247 lines. Behavior is identical (1092/1092 tests pass); adding a new
   host can no longer drift the process/classify contract.
 
 ### Added
@@ -91,7 +91,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   (rendered as ⚡), and a re-execution on resume surfaces a warning.
 - **Single-source skills.** The pi and codex skill docs are now authored once
   in `skills-src/taskflow/` and compiled per host by `scripts/build-skills.mjs`
-  (`npm run build:skills`); a drift guard (`skills-build.test.ts`) fails CI if a
+  (`pnpm run build:skills`); a drift guard (`skills-build.test.ts`) fails CI if a
   generated file is edited directly. Codex reaches feature parity with pi
   automatically.
 
@@ -276,7 +276,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   plugin version binds the exact code executed. The publish workflow verifies the
   pin (and `plugin.json`'s version) equals the release tag.
 - **CI matured for the multi-host monorepo.** Node `22`/`24` test matrix,
-  cross-platform `npm install`, a `build` (dist-emit) job, the network-free Codex
+  cross-platform `pnpm install`, a `build` (dist-emit) job, the network-free Codex
   MCP e2e suites (stdio handshake + comprehensive rendering/injection), CodeQL,
   Dependabot, and least-privilege permissions.
 - **Rebrand: `pi-taskflow` → taskflow.** The project is now presented as a
@@ -294,7 +294,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - **Codex plugin** (`packages/codex-taskflow/plugin/`) for zero-config,
   plug-and-play install: `codex plugin marketplace add heggria/taskflow` then
   `codex plugin add taskflow@taskflow`. Ships a `.codex-plugin/plugin.json`
-  manifest, a `.mcp.json` that launches the MCP server via `npx codex-taskflow`
+  manifest, a `.mcp.json` that launches the MCP server via `npx -y -p codex-taskflow@<version> codex-taskflow-mcp`
   (no separate global install), and a routing `SKILL.md` so Codex reaches for the
   `taskflow_*` tools on multi-phase / fan-out work automatically. A repo-root
   `.claude-plugin/marketplace.json` makes the plugin discoverable.

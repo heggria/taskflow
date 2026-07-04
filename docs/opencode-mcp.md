@@ -5,7 +5,7 @@ on the host-neutral `SubagentRunner` seam
 (`packages/taskflow-core/src/host/runner-types.ts`):
 
 1. **OpenCode as the executor** — a taskflow's subagents run as `opencode run`
-   sessions (`packages/opencode-taskflow/src/opencode-runner.ts`).
+   sessions (`packages/taskflow-hosts/src/opencode-runner.ts`).
 2. **OpenCode as the caller** — taskflow is exposed to an OpenCode user as an
    **MCP server**, so the `taskflow_*` tools appear in the session. The MCP
    protocol, tools, and rendering all live in the host-neutral taskflow-mcp package

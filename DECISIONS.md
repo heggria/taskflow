@@ -1,7 +1,7 @@
 # Architecture Decisions (taskflow)
 
 > Status: **living document**. Records the structural decisions behind the
-> multi-host layout (taskflow-core / taskflow-mcp / pi-taskflow /
+> multi-host layout (taskflow-core / taskflow-mcp / taskflow-hosts / pi-taskflow /
 > codex-taskflow / claude-taskflow / opencode-taskflow), the trade-offs that
 > were considered, and the direction to take as the host count grows.
 >
@@ -51,17 +51,17 @@ host ecosystem's delivery artifact (`codex plugin add taskflow@taskflow`,
 `npm i -g codex-taskflow`, an MCP server a user points their client at). But
 there is *no* reason their release cadence is independent — adapters almost
 never change except when `taskflow-core`'s contract changes or a host CLI
-changes its flags. Today all six packages are **lockstep versioned** at the
+changes its flags. Today all seven packages are **lockstep versioned** at the
 same number, which makes a per-package semver meaningless: a codex flag fix
 forces a new version of the untouched core engine.
 
 ### Cost projection at N hosts
-| | 3 hosts (now) | 12 hosts |
+| | 3 hosts (now) | 12 hosts (projected) |
 |---|---|---|
-| npm publishes per release | 6 | 15 |
-| `package.json` to keep version-pinned | 6 | 15 |
-| README/CHANGELOG to keep in sync | 6 | 15 |
-| npm names consumed (`*-taskflow`) | 3 | 12 |
+| npm publishes per release | 7 | 7 |
+| `package.json` to keep version-pinned | 7 | 7 |
+| README/CHANGELOG package rows | 7 | 7 |
+| npm names consumed (`*-taskflow`) | 3 | 3 (new hosts live inside `taskflow-hosts`) |
 
 ### Decision
 **Keep the three existing packages for backward compatibility** (their names
@@ -72,15 +72,15 @@ from one published unit:
 
 ```
 taskflow-hosts
-├─ codex-runner.ts        ← re-export from codex-taskflow (existing)
-├─ claude-runner.ts       ← re-export from claude-taskflow (existing)
-├─ opencode-runner.ts     ← re-export from opencode-taskflow (existing)
+├─ codex-runner.ts        ← lives here directly
+├─ claude-runner.ts       ← lives here directly
+├─ opencode-runner.ts     ← lives here directly
 ├─ <future-host-a>.ts     ← lives here directly
-├─ mcp/                   ← one thin bin per host
-└─ test/                  ← all host arg-contract tests
+├─ test/                  ← all host arg-contract + parser tests
+└─ index.ts               ← barrel re-exporting the three runners
 ```
 
-- Publishes: `core → mcp → hosts` (3 publishes), not `core → mcp → ×N`.
+- Current publishes: `core → mcp → hosts → pi/codex/claude/opencode` (7 publishes). Future hosts ship inside `taskflow-hosts`, so the publish count stops growing.
 - Future hosts ship in `taskflow-hosts` and are discovered via
   `npx -p taskflow-hosts <host>-mcp` or static import.
 - The three legacy packages can later become thin re-exports of
@@ -171,10 +171,11 @@ error blob.
   comma host list; the skill body is shared. Do not per-host the skill body.
 - **MCP server is its own package (`taskflow-mcp`)** — a pure presentation
   layer over core. Pi users never pull MCP code. This boundary is correct.
-- **Lockstep versioning is kept for now** (all packages share a version). It is
-  crude but it is *less* work than tracking which subset of packages need a
-  given bump, and at 6 packages the cost is low. Revisit when `taskflow-hosts`
-  exists and core can finally move on its own cadence.
+- **Lockstep versioning is kept for now** (all seven packages share a version).
+  It is crude but it is *less* work than tracking which subset of packages need
+  a given bump, and at 7 packages the cost is still low. `taskflow-hosts` now
+  exists; the next revisit is when core genuinely needs to move on its own
+  cadence independent of host CLI flag churn.
 
 ---
 

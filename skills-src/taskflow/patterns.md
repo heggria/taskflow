@@ -102,7 +102,7 @@ without you writing a loop.
       "task": "Implement the feature per the spec in docs/spec.md. Run nothing; just edit." },
 
     { "id": "build-test", "type": "script",
-      "run": "npx tsc --noEmit && npm test 2>&1 | tail -20",
+      "run": "npx tsc --noEmit && pnpm test 2>&1 | tail -20",
       "timeout": 180000, "dependsOn": ["implement"] },
 
     { "id": "spec-gate", "type": "gate", "agent": "reviewer",
@@ -167,7 +167,7 @@ before the spend. The approval's **Edit** option injects mid-run guidance.
       "task": "Execute the migration plan:\n{steps.plan.output}\n\nOperator guidance (if any): {steps.checkpoint.output}",
       "dependsOn": ["checkpoint"] },
 
-    { "id": "verify", "type": "script", "run": "npx tsc --noEmit && npm test 2>&1 | tail -5",
+    { "id": "verify", "type": "script", "run": "npx tsc --noEmit && pnpm test 2>&1 | tail -5",
       "timeout": 180000, "dependsOn": ["execute"], "final": true }
   ]
 }

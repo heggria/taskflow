@@ -14,7 +14,7 @@
 
 import assert from "node:assert/strict";
 import { executeTaskflow, type RuntimeDeps } from "taskflow-core";
-import { claudeSubagentRunner } from "../src/claude-runner.ts";
+import { claudeSubagentRunner } from "taskflow-hosts/claude";
 import type { AgentConfig } from "taskflow-core";
 import type { Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";

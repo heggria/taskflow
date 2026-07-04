@@ -5,7 +5,7 @@ directions, both built on the host-neutral `SubagentRunner` seam
 (`packages/taskflow-core/src/host/runner-types.ts`):
 
 1. **Claude Code as the executor** — a taskflow's subagents run as `claude -p`
-   sessions (`packages/claude-taskflow/src/claude-runner.ts`).
+   sessions (`packages/taskflow-hosts/src/claude-runner.ts`).
 2. **Claude Code as the caller** — taskflow is exposed to a Claude Code user as
    an **MCP server**, so the `taskflow_*` tools appear inside the session. The
    MCP protocol, tools, and rendering all live in the host-neutral taskflow-mcp package
@@ -72,7 +72,7 @@ If you'd rather not use the plugin, install the package and register its
 `claude-taskflow-mcp` bin yourself:
 
 ```sh
-npm install -g claude-taskflow
+pnpm add -g claude-taskflow
 claude mcp add taskflow -- claude-taskflow-mcp
 ```
 

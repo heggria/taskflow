@@ -404,7 +404,7 @@ output is exact.
   side effects). Not allowed inside LLM-generated dynamic sub-flows (RCE guard).
 
 ```jsonc
-{ "id": "build", "type": "script", "run": "npm run build", "timeout": 120000 },
+{ "id": "build", "type": "script", "run": "pnpm run build", "timeout": 120000 },
 { "id": "score", "type": "script", "run": ["python", "score.py"],
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```

@@ -5,7 +5,7 @@ both built on the host-neutral `SubagentRunner` seam
 (`packages/taskflow-core/src/host/runner-types.ts`):
 
 1. **Codex as the executor** — a taskflow's subagents run as `codex exec`
-   sessions (`packages/codex-taskflow/src/codex-runner.ts`).
+   sessions (`packages/taskflow-hosts/src/codex-runner.ts`).
 2. **Codex as the caller** — taskflow is exposed to a Codex user as an **MCP
    server**, so the `taskflow_*` tools appear inside codex
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
@@ -77,7 +77,7 @@ If you'd rather not use the plugin, install the package and register its
 `codex-taskflow-mcp` bin yourself:
 
 ```sh
-npm install -g codex-taskflow
+pnpm add -g codex-taskflow
 codex mcp add taskflow -- codex-taskflow-mcp
 ```
 
