@@ -5,11 +5,24 @@ description: 简写和命令速查。
 
 # 参考
 
+参考页是*查阅材料*。它们不是教程——当你已经知道自己要什么、只差确切形状时才来看它们。关于其中任何东西的*为什么*，见[核心概念](/zh-cn/docs/concepts)；关于逐字段的详尽细节，见[语法参考](/zh-cn/docs/syntax)。
+
+这里有两页：
+
+- **[简写](/zh-cn/docs/reference/shorthand)** —— `task`、`tasks` 和 `chain` 快捷方式，以及每一个展开成的确切完整 flow JSON。
+- **[命令](/zh-cn/docs/reference/commands)** —— 每一条 Pi `/tf` 命令和每一个 Codex / Claude / OpenCode 的 MCP 工具，按用途分组，并附一个完整示例会话。
+
+<Callout type="info">
+  在 Pi 上，保存的 flow 会自动变成斜杠命令快捷方式：`/tf:review-changes` 等同于 `/tf run review-changes`。在 MCP 宿主上，你通过 `taskflow_run` 按名称运行保存的 flow。
+</Callout>
+
+## 页面
+
 <Cards>
   <Card title="简写" href="/zh-cn/docs/reference/shorthand">
-    `task`、`tasks`、`chain`。
+    `task`、`tasks`、`chain` —— 快速委托的快捷方式。
   </Card>
   <Card title="命令" href="/zh-cn/docs/reference/commands">
-    Pi `/tf` 命令和 Codex MCP 工具。
+    Pi `/tf` 命令和 Codex / Claude / OpenCode 的 MCP 工具。
   </Card>
 </Cards>
