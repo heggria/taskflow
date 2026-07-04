@@ -1,32 +1,81 @@
 ---
 title: Control Flow
-description: Conditional routing, joins, retries, and loops.
+description: Conditional routing, joins, retries, and self-healing gates.
 ---
 
 # Control Flow
 
-A taskflow DAG is static topology: edges are fixed at definition time. The fields on this page add *dynamic* behavior on top of that topology — skipping phases, merging branches, recovering from failure, and reworking output that fails a gate.
+A taskflow DAG is static topology — edges are fixed at definition time. But real workflows need *dynamic* behavior: skip a phase when severity is low, route to a fallback when the first attempt fails, retry a flaky model, or rework output that fails a quality gate. The fields on this page add that dynamic layer on top of the topology.
 
 <Callout type="info">
-  Every field here is validated by `/tf verify` at zero cost before execution. Invalid operators, out-of-range retry values, and contradictory joins are caught up front.
+  Every field here is checked by `/tf verify` at zero cost before any agent runs. Invalid operators, out-of-range retry values, and contradictory joins are caught up front — never after spending tokens.
 </Callout>
 
+## The scenario: a PR review with conditional depth
+
+Imagine you are building a code review flow. Not every PR needs the same treatment. A small docs tweak deserves a quick summary; a high-severity change should trigger a deep audit. Here is a flow that branches on a triage decision:
+
+```json title="conditional-review.json"
+{
+  "name": "conditional-review",
+  "phases": [
+    {
+      "id": "triage",
+      "type": "agent",
+      "output": "json",
+      "task": "Classify the PR. Output JSON {severity, reason}."
+    },
+    {
+      "id": "deep-audit",
+      "when": "{steps.triage.json.severity} == high",
+      "dependsOn": ["triage"],
+      "agent": "risk-reviewer",
+      "task": "Deep-dive the change. Reason: {steps.triage.json.reason}"
+    },
+    {
+      "id": "quick-summary",
+      "when": "{steps.triage.json.severity} != high",
+      "dependsOn": ["triage"],
+      "task": "Write a one-paragraph summary."
+    }
+  ]
+}
+```
+
+The `when` field on each branch is the guard. When triage resolves to `severity: "high"`, the `deep-audit` branch runs and `quick-summary` is skipped — no tokens spent, no subagent spawned. The opposite happens for low-severity PRs.
+
+`when` is the first tool in this guide. The rest of the page walks through six fields that, together, let you express nearly any runtime decision:
+
 <Cards>
-  <Card title="`when`" href="#when" description="Conditional guards — skip a phase unless an expression is truthy." />
-  <Card title="`join`" href="#join" description="Dependency joins — `all` vs `any`, if/else routing." />
-  <Card title="`retry`" href="#retry" description="Explicit retry policy + transient auto-retry." />
-  <Card title="`optional`" href="#optional" description="Tolerate failure without aborting the run." />
-  <Card title="`onBlock`" href="#onblock" description="Self-healing gates — re-run upstream on BLOCK." />
-  <Card title="`idempotent`" href="#idempotent" description="Side-effect classification for irreversible phases." />
+  <Card title="`when`" href="#when">
+    Conditional guards — skip a phase unless an expression is truthy.
+  </Card>
+  <Card title="`join`" href="#join">
+    Dependency joins — `all` vs `any`, and if/else routing.
+  </Card>
+  <Card title="`optional`" href="#optional">
+    Tolerate failure without aborting the run.
+  </Card>
+  <Card title="`retry`" href="#retry">
+    Explicit retry policy plus transient auto-retry.
+  </Card>
+  <Card title="`idempotent`" href="#idempotent">
+    Side-effect classification for irreversible phases.
+  </Card>
+  <Card title="`onBlock`" href="#onblock">
+    Self-healing gates — re-run upstream on BLOCK.
+  </Card>
 </Cards>
 
 ---
 
-## `when`
+## `when`: skip a phase conditionally
 
-A conditional guard. The phase runs only if the expression evaluates truthy. A skipped phase emits no subagent call, costs no tokens, and is recorded with `status: "skipped"`.
+A `when` expression is a small, safe boolean language evaluated *before* the phase runs. If it is truthy, the phase runs. If it is falsy, the phase is skipped: no subagent call, no tokens, and the run record shows `status: "skipped"`.
 
-```json title="when-guard-basic.json"
+The simplest guard compares a JSON field to a literal:
+
+```json title="when-basic.json"
 {
   "id": "deep",
   "when": "{steps.triage.json.severity} == high",
@@ -34,62 +83,21 @@ A conditional guard. The phase runs only if the expression evaluates truthy. A s
 }
 ```
 
-### Expression language
+You can combine guards with `&&`, `||`, and `!`:
 
-`when` is a tiny, safe boolean expression language — **no `eval` / `Function`**. Operands are either interpolation placeholders (`{...}`, resolved to their raw value) or literals (quoted string, number, `true` / `false` / `null`, or a bare word treated as a string).
-
-| Operator | Meaning | Precedence |
-|---|---|---|
-| `\|\|` | Logical OR (short-circuit) | 1 (lowest) |
-| `&&` | Logical AND (short-circuit) | 2 |
-| `==` `!=` | Equality / inequality | 3 |
-| `>` `<` `>=` `<=` | Ordering comparison | 3 |
-| `!` | Unary logical NOT | 4 |
-| `( )` | Grouping | 5 (highest) |
-
-Comparisons are non-associative: `a == b == c` is a parse error (`trailing tokens`). Use explicit grouping: `(a == b) && (b == c)`.
-
-### Comparison semantics: numeric vs string
-
-`==`, `!=`, `<`, `>`, `<=`, `>=` are dispatched by operand type:
-
-- If **both** operands are numeric (a JSON `number`, or a string that parses to a finite number), comparison is **numeric**: `1.5 == "1.5"` → `true`; `"10" > "9"` → `true`.
-- Otherwise, both operands are coerced to strings (`null` / `undefined` → `""`) and compared **lexicographically**: `"high" == "high"` → `true`; `"9" > "10"` → `false` (string order).
-
-This means comparing a placeholder that resolves to a number against a bareword like `high` is always a string comparison — which is what you want for enum-like fields.
-
-### Truthiness rules
-
-A bare operand (no comparison operator) is evaluated for truthiness. The truthiness function mirrors common config conventions:
-
-| Value | Truthy? | Notes |
-|---|---|---|
-| `true` (boolean) | ✅ | |
-| `false` (boolean) | ❌ | |
-| non-zero number | ✅ | `0` and `NaN` are falsy |
-| `0` (number) | ❌ | |
-| non-empty string | ✅ | trimmed, lowercased before checking keywords |
-| `""`, `"false"`, `"0"`, `"no"`, `"off"`, `"null"` | ❌ | case-insensitive |
-| any other string | ✅ | e.g. `"high"`, `"true"` |
-| non-empty array | ✅ | empty array `[]` is falsy |
-| non-empty object | ✅ | empty object `{}` is falsy |
-| `null`, `undefined` | ❌ | |
-
-<Callout type="tip">
-  Because `"0"` is falsy and `"high"` is truthy, you can guard on a JSON enum field with just `{steps.triage.json.severity}` — but explicit comparisons (`== high`) are clearer and survive future enum values.
-</Callout>
-
-### Placeholders vs literals
-
-```json title="when-placeholder-vs-literal.json"
+```json title="when-combined.json"
 {
-  "id": "a",
-  "when": "{steps.triage.json.severity} == high",
-  "task": "..."
+  "id": "deep",
+  "when": "({steps.triage.json.severity} == high || {steps.triage.json.severity} == critical) && !{steps.triage.json.suppressed}",
+  "dependsOn": ["triage"]
 }
 ```
 
-```json title="when-bare-placeholder.json"
+### A bare placeholder is also a guard
+
+If the upstream phase emits a boolean or a JSON field whose truthiness you trust, you can skip the operator entirely:
+
+```json title="when-bare.json"
 {
   "id": "b",
   "when": "{steps.triage.json.hasFindings}",
@@ -97,223 +105,85 @@ A bare operand (no comparison operator) is evaluated for truthiness. The truthin
 }
 ```
 
-```json title="when-complex.json"
-{
-  "id": "c",
-  "when": "({steps.triage.json.severity} == high || {steps.triage.json.severity} == critical) && !{steps.triage.json.suppressed}",
-  "task": "..."
-}
-```
-
-- `{steps.triage.json.severity}` resolves to the JSON value; `== high` compares it to the bareword string `"high"`.
-- `{steps.triage.json.hasFindings}` (bare) evaluates the resolved value's truthiness directly.
-- Barewords `true` / `false` / `null` are **keywords**, not strings. To compare against the literal string `"true"`, quote it: `{steps.x.json.flag} == "true"`.
-
-### String escaping
-
-Single and double quotes are both accepted. Backslash escapes the next character literally (`\"` → `"`, `\\` → `\`). All other `\X` sequences become literal `X` — `\n` becomes the two characters `n`, **not** a newline. This differs from JSON/JS escaping but is correct for condition strings, which only need quote escaping.
-
-```json title="when-string-escaping.json"
-{
-  "id": "d",
-  "when": "{steps.x.json.label} == \"high-priority\"",
-  "task": "..."
-}
-```
-
-### Fail-open behavior
-
-<Callout type="warn">
-  **Parse errors in `when` fail open.** A malformed expression (unterminated string, unexpected char, trailing tokens, missing `)`) sets `error` on the evaluation result and the phase **runs** — it is never silently dropped.
+<Callout type="tip">
+  Because `"0"`, `"false"`, `"no"`, `"off"`, and `"null"` (case-insensitive) are all falsy, a model that emits `{"hasFindings": "false"}` still evaluates correctly. This is intentional robustness against LLM output drift. Explicit `== high` comparisons are clearer, though — and they survive future enum values.
 </Callout>
 
-This is an intentional invariant: a broken guard must never accidentally suppress work. The error is surfaced in the phase's warnings and the run record, so you can find and fix it. The same applies to an empty/whitespace `when` (treated as `true`) and to unresolved placeholders inside the expression — an unresolved `{steps.missing.json}` resolves to `undefined`, which is falsy, but the expression still parses and evaluates normally.
+### Common patterns
 
-### Common errors
-
-| Error | Cause | Fix |
+| Pattern | Example | When to use |
 |---|---|---|
-| `trailing tokens` | Non-associative comparison chained, e.g. `a == b == c`. | Group explicitly: `(a == b) && (b == c)`. |
-| `unterminated string` | Missing closing quote. | Close the quote, or escape it. |
-| `unterminated placeholder` | `{` without a matching `}`. | Add the closing `}`. |
-| `unexpected end` | Operand expected but expression ended. | Complete the expression. |
-| `missing )` | Unbalanced grouping. | Match every `(` with a `)`. |
-| Phase runs despite a guard you expected to skip it | Fail-open: the expression had a parse error. | Check the phase's `warnings` for the error message. |
+| Equality on a JSON enum | `{steps.t.json.severity} == high` | Routing on a classifier's discrete output. |
+| Bare truthiness | `{steps.t.json.hasFindings}` | A boolean flag where the model rarely drifts. |
+| Compound route with override | `(A == high \|\| A == critical) && !B` | Multiple routes converge, with a suppressor. |
+| Numeric threshold | `{steps.t.json.score} >= 0.8` | Quality-gate pass/fail thresholds. |
+
+### Fail-open: a broken guard never drops a phase
+
+<Callout type="warn">
+  If a `when` expression fails to parse (unterminated string, missing `)`, trailing tokens), the phase **runs anyway**. A broken guard must never accidentally suppress work.
+</Callout>
+
+The error is surfaced in the phase's `warnings` and the run record, so you can find and fix it. The same applies to an empty or whitespace-only `when` (treated as `true`) and to unresolved placeholders — an unresolved `{steps.missing.json}` resolves to `undefined` (falsy), but the expression still parses and evaluates normally.
+
+The full operator table, precedence, comparison semantics, and parse errors live in [Condition reference](#condition-reference) at the end of this page.
 
 ---
 
-## `join`
+## `join`: how a phase waits on its dependencies
 
-Controls how a phase waits on its `dependsOn` edges.
+By default, a phase waits for **every** declared dependency to finish (`join: "all"`). That is the right default — most phases genuinely need all their inputs.
 
-| Mode | Behavior | Default? |
-|---|---|---|
-| `"all"` | Waits for **every** dependency to reach a terminal state (done or failed-optional). | ✅ |
-| `"any"` | Runs as soon as **one** dependency reaches a terminal state. | |
+But return to the conditional-review flow above. Exactly one of `deep-audit` / `quick-summary` runs; the other is skipped. If a downstream phase depends on both, it would hang forever waiting for the skipped branch. `join: "any"` is the fix:
 
-### What counts as "satisfied"
-
-A dependency is satisfied if it ended in `done`, **or** it ended in `failed` **and** that dependency phase is marked `optional`. A skipped or non-optionally-failed dependency is **not** satisfied.
-
-- `join: "all"` → `deps.every(depOk)` — every dep must be satisfied, otherwise the phase is **skipped** with reason `"Upstream dependency not satisfied"`.
-- `join: "any"` → `deps.some(depOk)` — at least one dep must be satisfied, otherwise the phase is skipped with reason `"All dependencies failed or were skipped"`.
-
-### If / else routing
-
-Combine `when` guards with `join: "any"` on a merge phase to build if/else branches:
-
-```json title="join-if-else-routing.json"
-[
-  {
-    "id": "triage",
-    "type": "agent",
-    "output": "json",
-    "task": "Classify severity as high or low. Output JSON {severity}."
-  },
-  {
-    "id": "deep",
-    "when": "{steps.triage.json.severity} == high",
-    "dependsOn": ["triage"],
-    "task": "Deep analysis."
-  },
-  {
-    "id": "quick",
-    "when": "{steps.triage.json.severity} != high",
-    "dependsOn": ["triage"],
-    "task": "Quick summary."
-  },
-  {
-    "id": "merge",
-    "type": "reduce",
-    "from": ["deep", "quick"],
-    "join": "any",
-    "dependsOn": ["deep", "quick"]
-  }
-]
-```
-
-Exactly one of `deep` / `quick` runs; the other is skipped. The `merge` phase uses `join: "any"` so it proceeds as soon as the surviving branch completes, instead of waiting forever for the skipped branch.
-
-### Merge pattern
-
-```json title="join-merge-pattern.json"
+```json title="join-merge.json"
 {
   "id": "merge",
   "type": "reduce",
-  "from": ["branch-a", "branch-b"],
+  "from": ["deep-audit", "quick-summary"],
   "join": "any",
-  "dependsOn": ["branch-a", "branch-b"]
+  "dependsOn": ["deep-audit", "quick-summary"],
+  "task": "Combine the surviving branch's output into one report."
 }
 ```
+
+With `join: "any"`, the merge phase proceeds as soon as *one* dependency completes, instead of waiting for all of them.
+
+### If / else routing
+
+Combining `when` guards with `join: "any"` on a merge phase is the idiomatic way to express if/else branches:
+
+```json title="join-if-else.json"
+[
+  { "id": "triage", "type": "agent", "output": "json", "task": "Classify severity." },
+  { "id": "deep",   "when": "{steps.triage.json.severity} == high", "dependsOn": ["triage"], "task": "Deep analysis." },
+  { "id": "quick",  "when": "{steps.triage.json.severity} != high", "dependsOn": ["triage"], "task": "Quick summary." },
+  { "id": "merge",  "type": "reduce", "from": ["deep", "quick"], "join": "any", "dependsOn": ["deep", "quick"] }
+]
+```
+
+Exactly one of `deep` / `quick` runs; `merge` proceeds as soon as the surviving branch completes.
+
+### What "satisfied" means
+
+A dependency counts as satisfied if it ended `done`, **or** it ended `failed` **and** is marked `optional` (see [`optional`](#optional)). A skipped or non-optionally-failed dependency is **not** satisfied.
+
+| Mode | Behavior |
+|---|---|
+| `"all"` (default) | Every dependency must be satisfied. Otherwise the phase is skipped with reason `"Upstream dependency not satisfied"`. |
+| `"any"` | At least one dependency must be satisfied. Otherwise the phase is skipped with reason `"All dependencies failed or were skipped"`. |
 
 <Callout type="warn">
-  **Pitfall: `join: "any"` and downstream refs.** When one branch is skipped, `{steps.skipped-branch.output}` resolves to a placeholder — skipped phases are excluded from the interpolation context, and failed phases without output resolve to `"[previous phase failed]"`. A `reduce` over `from: [...]` only sees completed branches, but a hand-written `task` referencing both branches will interpolate the failed/skipped one. Guard with `when` or use `reduce`'s `from` list.
+  **Pitfall: `join: "any"` and downstream refs.** When one branch is skipped, `{steps.skipped-branch.output}` stays as a literal placeholder — skipped phases are excluded from the interpolation context, and failed phases without output resolve to `"[previous phase failed]"`. A `reduce` over `from: [...]` only sees completed branches, but a hand-written `task` that references both branches will interpolate the failed or skipped one. Guard with `when`, or use `reduce`'s `from` list.
 </Callout>
-
-### Pitfalls
-
-| Pitfall | Cause | Fix |
-|---|---|---|
-| Phase skipped with `"All dependencies failed or were skipped"` | `join: "any"` but every dep failed/skipped. | Ensure at least one dep succeeds, or mark a dep `optional`. |
-| Phase hangs (never starts) | `join: "all"` (default) with a dep that will never complete. | Use `join: "any"`, or make the dep `optional`. |
-| Downstream refs interpolate `"[previous phase failed]"` | Referencing a failed/skipped branch by id in `task`. | Use `reduce`'s `from`, or guard the ref with `when`. |
-| Unknown join mode | Typo, e.g. `"first"`. | Use `"all"` or `"any"`. |
 
 ---
 
-## `retry`
+## `optional`: tolerate failure
 
-An explicit per-phase retry policy for subagent calls. Wraps **every** subagent invocation inside the phase (one per `map` item, per `parallel` branch, per loop iteration).
+Some work is best-effort. A lint script might fail; a third-party enrichment call might 503. You don't always want that to abort the whole run.
 
-```json title="retry-example.json"
-{
-  "id": "patch",
-  "retry": {
-    "max": 3,
-    "backoffMs": 500,
-    "factor": 2
-  }
-}
-```
-
-### Fields
-
-| Field | Type | Default | Constraint | Description |
-|---|---|---|---|---|
-| `max` | `number` | — (required) | `0`–`20` | Max retry attempts **after** the first try. `0` = no retries (one attempt only). |
-| `backoffMs` | `number` | `0` | `0`–`60000` | Base delay between attempts, in ms. |
-| `factor` | `number` | `1` | `1`–`10` | Backoff multiplier per attempt. `1` = fixed delay; `2` = exponential. |
-
-### Backoff formula
-
-Delay before attempt *N* (0-indexed): `min(60000, round(backoffMs * factor ** attempt))`.
-
-- `factor: 1` (default) → constant `backoffMs` every attempt.
-- `factor: 2` → `backoffMs`, `2×backoffMs`, `4×backoffMs`, … capped at 60 s.
-- `backoffMs: 0` → no delay (useful for tests).
-
-### Transient auto-retry (implicit)
-
-Even **without** an explicit `retry`, transient provider errors are auto-retried so a momentary 429 is absorbed inside the run instead of bubbling up and provoking the calling agent to re-invoke the whole tool (which stacks duplicate progress blocks).
-
-| Property | Value |
-|---|---|
-| Max transient attempts | 3 (after the first try) |
-| Default base delay | 2000 ms |
-| Default factor | 2 (exponential) |
-| Cap | 60000 ms |
-
-A failure is **transient** if its error message / stderr / output matches: `rate limit`, `too many requests`, `overloaded`, `429`, `502`, `503`, `504`, `service unavailable`, `temporarily unavailable`, `timeout`, `timed out`, `ECONNRESET`, `ETIMEDOUT`, `socket hang up` (case-insensitive).
-
-The following are **not** transient and are never auto-retried:
-- `stopReason: "aborted"` (explicit abort).
-- Idle timeout (`idleTimeout: true`) — a deterministic stall; retrying won't help.
-- Phase timeout (`phaseTimeout: true`) — retrying would double-spend the cap.
-- Any other hard error (non-zero exit, parse failure, contract violation).
-
-### Interaction between explicit and transient retry
-
-The two policies compose, not replace:
-
-- The explicit policy covers **all** failures (transient *and* hard) up to `retry.max`.
-- The transient fallback covers **only** transient errors, up to 3 attempts, **and only when** `idempotent !== false`.
-- The total attempt budget is `max(explicitMax, 1 + 3)`.
-- **Backoff curve:** if the phase defines an explicit `retry.backoffMs`, that curve is used for *both* explicit and transient retries (keeping tests fast with `backoffMs: 0`). Otherwise the transient defaults (2000 ms, factor 2) apply.
-
-<Callout type="info">
-  Output-contract (`expect`) violations are eligible for the **explicit** retry policy, never the transient fallback — a contract violation is a deterministic failure, not a provider hiccup.
-</Callout>
-
-### Interaction with `idempotent: false`
-
-Setting `idempotent: false` **suppresses the implicit transient retry** — repeating a side-effecting call behind the author's back is exactly the hazard `idempotent: false` exists to prevent. An explicit `retry: {}` is still honored: it is the author's declaration that a repeat is acceptable. See [`idempotent`](#idempotent).
-
-### Example: exponential backoff for a flaky model
-
-```json title="retry-exponential.json"
-{
-  "id": "generate",
-  "retry": { "max": 5, "backoffMs": 1000, "factor": 2 },
-  "task": "..."
-}
-```
-
-### Common errors
-
-| Error | Cause | Fix |
-|---|---|---|
-| `retry.max must be a number >= 0` | `max` missing or negative. | Set `max: 0`–`20`. |
-| `retry.max must be <= 20` | `max` exceeds the cap. | Lower it. |
-| `retry.backoffMs must be between 0 and 60000` | Out of range. | Use 0–60000. |
-| `retry.factor must be between 1 and 10` | Out of range. | Use 1–10. |
-
----
-
-## `optional`
-
-Marks a phase whose failure does **not** abort the run.
-
-```json title="optional-example.json"
+```json title="optional-basic.json"
 {
   "id": "lint",
   "type": "script",
@@ -322,18 +192,11 @@ Marks a phase whose failure does **not** abort the run.
 }
 ```
 
-### Failure semantics
-
-- A failed **non-optional** phase sets the run status to `failed` and cascades: downstream phases whose `dependsOn` includes it are skipped (unless they `join: "any"` or the dep is itself `optional`).
-- A failed **optional** phase is tolerated: the run continues, and the phase still counts as a "satisfied" dependency for `join` purposes (both `"all"` and `"any"`). Downstream phases run normally.
-
-### Downstream visibility
-
-A failed phase (optional or not) is included in the interpolation context. If it produced no output, `{steps.X.output}` resolves to the placeholder string `"[previous phase failed]"` so downstream refs don't break. Skipped phases are **excluded** from the context — referencing a skipped phase leaves the placeholder intact (a missing warning).
+A failed **non-optional** phase sets the run status to `failed` and cascades: downstream phases whose `dependsOn` includes it are skipped (unless they `join: "any"` or the dep is itself `optional`). A failed **optional** phase is tolerated — the run continues, and the phase still counts as a "satisfied" dependency for `join` purposes (both `"all"` and `"any"`).
 
 ### Pairing with a fallback phase
 
-Use `when` + `optional` to build a best-effort phase with a fallback:
+`optional` + `when` together build a best-effort phase with a graceful fallback:
 
 ```json title="optional-fallback.json"
 [
@@ -352,75 +215,71 @@ Use `when` + `optional` to build a best-effort phase with a fallback:
 ]
 ```
 
+When `enrich` fails, its `{steps.enrich.output}` resolves to the sentinel `"[previous phase failed]"` so downstream refs don't break — and the `fallback` phase's `when` guard catches exactly that case.
+
 <Callout type="tip">
-  `optional` is most useful for `script` phases (lint, format, metrics) and for best-effort agent calls. For sub-flows, mark the inner `flow` phase `optional` rather than relying on the sub-flow's own status.
+  `optional` shines for `script` phases (lint, format, metrics) and best-effort agent calls. For sub-flows, mark the inner `flow` phase `optional` rather than relying on the sub-flow's own status.
 </Callout>
 
 ---
 
-## `onBlock`
+## `retry`: try again on failure
 
-<Callout type="info">
-  `onBlock` is a **gate-only** field. It has no effect on other phase types.
-</Callout>
+LLM providers hiccup. Rate limits, 5xx, and timeouts are routine. taskflow handles this in two layers.
 
-Controls what happens when a `gate` phase emits `VERDICT: BLOCK`.
+### Layer 1: implicit transient auto-retry
 
-| Value | Behavior | Default? |
-|---|---|---|
-| `"halt"` | Stop the flow. The gate's `failed` status cascades to downstream phases. | ✅ |
-| `"retry"` | Re-run the gate's upstream `dependsOn` phases, then re-evaluate the gate. Repeat until PASS or the cap is hit. | |
+Even **without** an explicit `retry` block, transient provider errors are auto-retried so a momentary 429 is absorbed inside the run instead of bubbling up and provoking the calling agent to re-invoke the whole tool (which stacks duplicate progress blocks).
 
-### Rework loop
+| Property | Value |
+|---|---|
+| Max transient attempts | 3 (after the first try) |
+| Default base delay | 2000 ms |
+| Default factor | 2 (exponential) |
+| Cap | 60000 ms |
 
-`onBlock: "retry"` turns a gate into a generate→critique→regenerate loop:
+A failure is **transient** if its message matches `rate limit`, `too many requests`, `overloaded`, `429`, `502`, `503`, `504`, `service unavailable`, `temporarily unavailable`, `timeout`, `timed out`, `ECONNRESET`, `ETIMEDOUT`, or `socket hang up` (case-insensitive). Deterministic failures — explicit aborts, idle timeouts, phase timeouts, contract violations — are **not** retried.
 
-```json title="onBlock-rework-loop.json"
+### Layer 2: explicit per-phase retry
+
+When you want control over the curve, or want to retry on *hard* failures too, add an explicit `retry`:
+
+```json title="retry-explicit.json"
 {
-  "id": "implement",
-  "type": "agent",
-  "task": "Implement the feature."
-},
-{
-  "id": "quality",
-  "type": "gate",
-  "onBlock": "retry",
-  "retry": { "max": 3 },
-  "dependsOn": ["implement"],
-  "task": "Does this satisfy all criteria? Output VERDICT: PASS or VERDICT: BLOCK with reasons."
+  "id": "generate",
+  "retry": { "max": 5, "backoffMs": 1000, "factor": 2 },
+  "task": "..."
 }
 ```
 
-Each `BLOCK` round:
+| Field | Type | Default | Constraint | Description |
+|---|---|---|---|---|
+| `max` | `number` | — (required) | `0`–`20` | Max retry attempts **after** the first try. `0` = no retries. |
+| `backoffMs` | `number` | `0` | `0`–`60000` | Base delay between attempts, in ms. |
+| `factor` | `number` | `1` | `1`–`10` | Backoff multiplier per attempt. `1` = fixed; `2` = exponential. |
 
-1. The gate re-executes every phase in its `dependsOn` list. Re-run upstream phases **do not** cache-hit — the gate deliberately passes its own `prior` (not the dep's completed state) so the dep actually re-runs.
-2. The gate re-evaluates against the freshly produced upstream output.
-3. Repeat until `PASS`, or until `retry.max` rounds elapse (default `1` if `retry` is omitted).
+Delay before attempt *N* (0-indexed): `min(60000, round(backoffMs * factor ** attempt))`.
 
-### Limitations and guards
+### How the two layers compose
 
-| Guard | Behavior |
-|---|---|
-| Attempt cap | `retry.max` (default `1`). After the cap, the gate fails with its last `BLOCK` verdict. |
-| Nested-depth cap | `MAX_RETRY_DEPTH = 3`. A gate whose upstream dep is *itself* a gate with `onBlock: "retry"` stops re-running upstream beyond depth 3 — prevents exponential re-execution. |
-| Abort | If the run's `signal` is aborted, the loop breaks immediately. |
-| Budget | If the run is over budget, the loop breaks immediately. |
+The two policies compose, not replace:
 
-<Callout type="warn">
-  **`onBlock: "retry"` re-runs upstream, not the gate itself.** The gate's own `task` re-evaluates each round against new upstream output. If your gate has no `dependsOn` (or its deps are deterministic `script` phases), the loop will re-evaluate identical input and BLOCK forever until the cap — point the gate at the phase whose output you want reworked.
+- The explicit policy covers **all** failures (transient *and* hard) up to `retry.max`.
+- The transient fallback covers **only** transient errors, up to 3 attempts, **and only when** `idempotent !== false`.
+- The total attempt budget is `max(explicitMax, 1 + 3)`.
+- **Backoff curve:** if the phase defines an explicit `retry.backoffMs`, that curve is used for *both* explicit and transient retries (keeping tests fast with `backoffMs: 0`). Otherwise the transient defaults (2000 ms, factor 2) apply.
+
+<Callout type="info">
+  Output-contract (`expect`) violations are eligible for the **explicit** retry policy, never the transient fallback — a contract violation is a deterministic failure, not a provider hiccup.
 </Callout>
-
-### Scoring gates
-
-`onBlock: "retry"` also works with scoring gates (`score`). The same loop re-runs upstream deps and re-scores against the fresh output, sharing the depth cap and budget/abort guards.
 
 ---
 
-## `idempotent`
+## `idempotent`: classify side effects
 
-Classifies whether a phase is safe to auto-retry and cache. Defaults to `true` (safe).
+Some phases must never be repeated. A deploy, a webhook POST, a DB migration — re-running these on a transient 429 is exactly the hazard the author wants to prevent. Setting `idempotent: false` declares "this phase has irreversible side effects":
 
-```json title="idempotent-example.json"
+```json title="idempotent-deploy.json"
 {
   "id": "deploy",
   "type": "agent",
@@ -435,13 +294,13 @@ Classifies whether a phase is safe to auto-retry and cache. Defaults to `true` (
 | Effect | Detail |
 |---|---|
 | Suppresses implicit transient auto-retry | The 3-attempt transient fallback is disabled. A 429 on a deploy will **not** be silently retried. |
-| Excludes the result from **all** caches | Sets effective cache scope to `"off"` — not served from within-run resume, not served from or written to the cross-run store. Overrides `cache.scope: "cross-run"` with a validation warning. |
-| Records `sideEffect: true` | Stamped on the phase state at the single exit point, for every non-skipped status. |
-| Resume double-fire warning | On resume, a non-idempotent phase re-executes (it is never cached). If a prior attempt already completed, a warning is recorded: `"idempotent:false phase re-executed on resume … its side effect fired again"`. |
+| Excludes the result from all caches | Effective cache scope becomes `"off"` — not served from within-run resume, not served from or written to the cross-run store. |
+| Records `sideEffect: true` | Stamped on the phase state for audit. |
+| Resume double-fire warning | On resume, a non-idempotent phase re-executes. If a prior attempt already completed, a warning is recorded. |
 
-### What it does **not** do
+### What it does not do
 
-- It does **not** suppress an explicit `retry: {}`. An explicit policy is the author's declaration that a repeat is acceptable, so it stays honored. To forbid all retries, also set `retry: { max: 0 }`.
+- It does **not** suppress an explicit `retry: {}`. An explicit policy is the author's declaration that a repeat is acceptable. To forbid all retries, also set `retry: { max: 0 }`.
 - It does **not** change `optional` semantics. A side-effecting phase can still be `optional: true`.
 
 ### Validation interactions
@@ -449,30 +308,132 @@ Classifies whether a phase is safe to auto-retry and cache. Defaults to `true` (
 | Scenario | Validation warning |
 |---|---|
 | `idempotent: false` on `approval` or `flow` | No-op — those phases run no subagent (no transient retry) and are already excluded from cross-run cache. The flag has no effect. |
-| `idempotent: false` + `cache.scope: "cross-run"` | `"idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached."` |
-| `idempotent: false` under an `incremental: true` flow | `"idempotent:false under an incremental flow — this phase is excluded from caching and will re-run every invocation."` |
+| `idempotent: false` + `cache.scope: "cross-run"` | `idempotent:false overrides cache.scope 'cross-run' — a side-effecting phase is never cached.` |
+| `idempotent: false` under an `incremental: true` flow | `idempotent:false under an incremental flow — this phase is excluded from caching and will re-run every invocation.` |
 
 ### When to set it
 
-Set `idempotent: false` for any phase whose re-execution is **not** safe to repeat:
-
-- Webhook POSTs, email/notification sends.
-- Deploys, migrations, DB writes.
-- Any call that charges money or mutates external state on each invocation.
-
-Leave it `true` (default) for read-only analysis, generation, and transformation phases — these benefit from transient retry and caching.
+Set `idempotent: false` for any phase whose re-execution is not safe to repeat — webhook POSTs, email/notification sends, deploys, migrations, DB writes, anything that charges money or mutates external state. Leave it `true` (the default) for read-only analysis, generation, and transformation phases — those benefit from transient retry and caching.
 
 <Callout type="tip">
-  Pair `idempotent: false` with `retry: { max: 0 }` for a hard no-retry guarantee, and consider `optional: true` if a failed side effect should not abort the whole run.
+  Pair `idempotent: false` with `retry: { max: 0 }` for a hard no-retry guarantee. Consider `optional: true` if a failed side effect should not abort the whole run.
 </Callout>
 
 ---
 
-## Truthiness reference
+## `onBlock`: self-healing gates
 
-Reproduced from the runtime's `truthy()` function. Apply this to any bare operand in a `when` expression, and to the final result of the whole expression.
+<Callout type="info">
+  `onBlock` is a **gate-only** field. It has no effect on other phase types.
+</Callout>
 
-| Value | Truthy |
+A `gate` phase can emit `VERDICT: BLOCK` to halt the flow. But sometimes you don't want to halt — you want the gate to *force a rework* and try again. That is what `onBlock: "retry"` does:
+
+```json title="onBlock-rework.json"
+[
+  {
+    "id": "implement",
+    "type": "agent",
+    "task": "Implement the feature."
+  },
+  {
+    "id": "quality",
+    "type": "gate",
+    "onBlock": "retry",
+    "retry": { "max": 3 },
+    "dependsOn": ["implement"],
+    "task": "Does this satisfy all criteria? Output VERDICT: PASS or VERDICT: BLOCK with reasons."
+  }
+]
+```
+
+Each `BLOCK` round:
+
+<Steps>
+  <Step>
+    **The gate re-runs its upstream `dependsOn`.** Every phase in the gate's `dependsOn` list (here, `implement`) executes again. Re-run upstream phases do **not** cache-hit — the gate deliberately passes its own prior state so the dependency actually re-runs.
+  </Step>
+  <Step>
+    **The gate re-evaluates.** It runs its `task` against the freshly produced upstream output.
+  </Step>
+  <Step>
+    **Repeat or finish.** The loop continues until `PASS`, or until `retry.max` rounds elapse (default `1` if `retry` is omitted).
+  </Step>
+</Steps>
+
+| Value | Behavior |
+|---|---|
+| `"halt"` (default) | Stop the flow. The gate's `failed` status cascades downstream. |
+| `"retry"` | Re-run the gate's upstream `dependsOn` phases, then re-evaluate the gate. Repeat until PASS or the cap. |
+
+<Callout type="warn">
+  **`onBlock: "retry"` re-runs upstream, not the gate itself.** If your gate has no `dependsOn` (or its deps are deterministic `script` phases), the loop will re-evaluate identical input and BLOCK forever until the cap. Point the gate at the phase whose output you want reworked.
+</Callout>
+
+### Guards against runaway loops
+
+| Guard | Behavior |
+|---|---|
+| Attempt cap | `retry.max` (default `1`). After the cap, the gate fails with its last `BLOCK` verdict. |
+| Nested-depth cap | `MAX_RETRY_DEPTH = 3`. A gate whose upstream dep is *itself* a gate with `onBlock: "retry"` stops re-running upstream beyond depth 3 — prevents exponential re-execution. |
+| Abort | If the run's `signal` is aborted, the loop breaks immediately. |
+| Budget | If the run is over budget, the loop breaks immediately. |
+
+Scoring gates (`score`) work the same way — the loop re-runs upstream deps and re-scores against the fresh output, sharing the depth cap and budget/abort guards.
+
+---
+
+## Condition reference
+
+The `when` expression language is a tiny, safe boolean grammar — **no `eval` / `Function`**, a hand-written recursive-descent parser. This section is the exhaustive reference; for everyday use, the [common patterns](#common-patterns) table above is enough.
+
+### Operators and precedence
+
+From loosest to tightest binding:
+
+| Level | Operators | Notes |
+|---|---|---|
+| 1 (loosest) | `\|\|` | left-associative, short-circuit |
+| 2 | `&&` | left-associative, short-circuit |
+| 3 | `!` (unary prefix) | applies to the following comparison — see note below |
+| 4 | `==` `!=` `>` `<` `>=` `<=` | non-associative: `a == b == c` is a parse error |
+| 5 (tightest) | `( )` | grouping |
+
+<Callout type="warn">
+  **`!` binds looser than comparisons.** `!{steps.x.json.s} == high` parses as `!({steps.x.json.s} == high)`, *not* `(!{steps.x.json.s}) == high`. This mirrors Python's `not` and differs from C/JavaScript. Add explicit parentheses if you mean the latter.
+</Callout>
+
+Comparisons are non-associative: `a == b == c` is a parse error (`trailing tokens`). Chain with explicit `&&`: `(a == b) && (b == c)`.
+
+### Comparison semantics: numeric vs string
+
+`==`, `!=`, `<`, `>`, `<=`, `>=` dispatch by operand type:
+
+- If **both** operands are numeric (a JSON `number`, or a string that parses to a finite number), comparison is **numeric**: `1.5 == "1.5"` → `true`; `"10" > "9"` → `true`.
+- Otherwise, both operands are coerced to strings (`null` / `undefined` → `""`) and compared **lexicographically**: `"high" == "high"` → `true`; `"9" > "10"` → `false`.
+
+This means comparing a placeholder that resolves to a number against a bareword like `high` is always a string comparison — which is what you want for enum-like fields.
+
+### Operands
+
+| Operand | Syntax | Resolves to |
+|---|---|---|
+| Placeholder | `{steps.x.json.severity}` | The placeholder's **raw** value (object, string, number, etc.) — not stringified |
+| Quoted string | `"high"` or `'high'` | The literal string. `\X` → literal `X` (so `\"` escapes a quote; `\n` → `n`, not newline) |
+| Number | `42`, `3.14`, `-1`, `1e3` | A JS number |
+| Booleans | `true` / `false` | `true` / `false` |
+| Null | `null` | `null` |
+| Bareword | `high` (unquoted) | Treated as a string `"high"` (always quote to be safe) |
+
+<Callout type="warn">
+  Inside conditions, placeholders resolve to their **raw** value, not the stringified form used in `task` templates. So `{steps.x.json.count} > 5` does a numeric comparison when `count` is a number. In a `task` string, the same placeholder would be pretty-printed JSON.
+</Callout>
+
+### Truthiness
+
+A bare operand (no comparison operator) is evaluated for truthiness:
+
+| Value | Truthy? |
 |---|---|
 | `true` | ✅ |
 | `false` | ❌ |
@@ -486,17 +447,31 @@ Reproduced from the runtime's `truthy()` function. Apply this to any bare operan
 | non-empty object | ✅ |
 | `null`, `undefined` | ❌ |
 
-## Operator precedence reference
+### String escaping
 
-From lowest to highest binding:
+Single and double quotes are both accepted. Backslash escapes the next character literally (`\"` → `"`, `\\` → `\`). All other `\X` sequences become literal `X` — `\n` becomes the two characters `n`, **not** a newline. This differs from JSON/JS escaping but is correct for condition strings, which only need quote escaping.
 
-| Level | Operators | Associativity |
+```json title="when-escaping.json"
+{
+  "id": "d",
+  "when": "{steps.x.json.label} == \"high-priority\"",
+  "task": "..."
+}
+```
+
+Barewords `true` / `false` / `null` are **keywords**, not strings. To compare against the literal string `"true"`, quote it: `{steps.x.json.flag} == "true"`.
+
+### Common parse errors
+
+| Error | Cause | Fix |
 |---|---|---|
-| 1 | `\|\|` | left |
-| 2 | `&&` | left |
-| 3 | `==` `!=` `>` `<` `>=` `<=` | non-associative (chain is a parse error) |
-| 4 | `!` (unary prefix) | right |
-| 5 | `( )` grouping | — |
+| `trailing tokens` | Non-associative comparison chained, e.g. `a == b == c`. | Group explicitly: `(a == b) && (b == c)`. |
+| `unterminated string` | Missing closing quote. | Close the quote, or escape it. |
+| `unterminated placeholder` | `{` without a matching `}`. | Add the closing `}`. |
+| `unexpected end` | Operand expected but expression ended. | Complete the expression. |
+| `missing )` | Unbalanced grouping. | Match every `(` with a `)`. |
+| `unexpected char` | A character the tokenizer doesn't recognize. | Check for stray punctuation. |
+| Phase runs despite a guard you expected to skip it | Fail-open: the expression had a parse error. | Check the phase's `warnings` for the error message. |
 
 ---
 
