@@ -5,13 +5,15 @@ description: The task, tasks, and chain shortcuts.
 
 # Shorthand
 
-taskflow accepts three shorthand forms that the runtime desugars into proper flows.
+<Callout type="info">
+  taskflow accepts three shorthand forms that the runtime desugars into proper flows.
+</Callout>
 
 ## `task`
 
 One agent, one task.
 
-```json
+```json title="task-shorthand.json"
 {
   "task": "Summarize the architecture of src/",
   "agent": "explorer"
@@ -22,7 +24,7 @@ One agent, one task.
 
 Parallel tasks.
 
-```json
+```json title="tasks-shorthand.json"
 {
   "tasks": [
     { "task": "Audit auth in src/api", "agent": "analyst" },
@@ -35,7 +37,7 @@ Parallel tasks.
 
 Sequential tasks. Each step sees the previous output via `{previous.output}`.
 
-```json
+```json title="chain-shorthand.json"
 {
   "chain": [
     { "task": "List the public API of src/lib", "agent": "scout" },
@@ -52,7 +54,7 @@ If multiple are given: `chain` > `tasks` > `task`.
 
 All shorthand steps support `context` and `contextLimit`:
 
-```json
+```json title="shorthand-context-example.json"
 {
   "chain": [
     {
@@ -64,3 +66,11 @@ All shorthand steps support `context` and `contextLimit`:
   ]
 }
 ```
+
+## Next
+
+<Cards>
+  <Card title="Commands" href="/en/docs/reference/commands">
+    Pi `/tf` commands and Codex MCP tools.
+  </Card>
+</Cards>

@@ -5,18 +5,20 @@ description: How taskflow runs survive across sessions.
 
 # Resume
 
-A taskflow run is not tied to your session. Every completed phase is written to disk, so a run that fails or is stopped can be continued later.
+<Callout type="info">
+  A taskflow run is not tied to your session. Every completed phase is written to disk, so a run that fails or is stopped can be continued later.
+</Callout>
 
 ## How it works
 
-When you resume a run, the runtime:
+<Steps>
+  <Step>Loads the existing run state.</Step>
+  <Step>Computes an input hash for each phase.</Step>
+  <Step>Skips phases whose inputs have not changed.</Step>
+  <Step>Re-runs phases that changed or never completed.</Step>
+</Steps>
 
-1. Loads the existing run state.
-2. Computes an input hash for each phase.
-3. Skips phases whose inputs have not changed.
-4. Re-runs phases that changed or never completed.
-
-```bash
+```bash title="Resume a run"
 /tf resume <runId>
 ```
 
@@ -35,7 +37,7 @@ If an upstream output changes, all dependent phases are re-run. If nothing chang
 
 Session 1:
 
-```
+```txt title="Session 1 output"
 ✓ discover
 ✓ audit (map over 10 files)
 ✗ review (rate limit)
@@ -43,11 +45,11 @@ Session 1:
 
 Session 2:
 
-```bash
+```bash title="Resume in a new session"
 /tf resume nightly-audit-abc123
 ```
 
-```
+```txt title="Session 2 output"
 ✓ discover      (skipped)
 ✓ audit         (skipped)
 ◐ review        (re-running)
@@ -60,7 +62,7 @@ Only the failed phase and what follows it spend tokens.
 
 Beyond within-run resume, you can opt a phase into `cross-run` caching with the `cache` field. If a prior run computed the same phase with identical inputs, the result is reused for $0.00.
 
-```json
+```json title="cross-run-cache-example.json"
 {
   "id": "analyze-auth",
   "cache": {
@@ -72,4 +74,8 @@ Beyond within-run resume, you can opt a phase into `cross-run` caching with the 
 
 ## Next
 
-- [Caching](/en/docs/syntax/caching) — full cache options and fingerprinting.
+<Cards>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Full cache options and fingerprinting.
+  </Card>
+</Cards>

@@ -9,6 +9,10 @@ A phase is a single node in the DAG. taskflow provides ten phase types, each for
 
 ## Overview
 
+<Callout type="info">
+  Every phase has a unique `id`, a `type`, and optional `dependsOn`. The runtime wires them into a DAG and executes them in topological order.
+</Callout>
+
 | Type | Purpose |
 |---|---|
 | `agent` | One subagent runs a single task. |
@@ -26,7 +30,7 @@ A phase is a single node in the DAG. taskflow provides ten phase types, each for
 
 The simplest phase: one subagent, one task.
 
-```json
+```json title="agent-example.json"
 {
   "id": "summarize",
   "type": "agent",
@@ -40,7 +44,7 @@ The simplest phase: one subagent, one task.
 
 Run several tasks concurrently. Similar to the shorthand `tasks`.
 
-```json
+```json title="parallel-example.json"
 {
   "id": "audit",
   "type": "parallel",
@@ -55,7 +59,7 @@ Run several tasks concurrently. Similar to the shorthand `tasks`.
 
 Dynamic fan-out. The `over` expression must resolve to an array. One subagent is spawned per item.
 
-```json
+```json title="map-example.json"
 {
   "id": "summarize",
   "type": "map",
@@ -72,7 +76,7 @@ Use `concurrency` to throttle parallelism.
 
 A quality gate reviews upstream output and can block downstream work.
 
-```json
+```json title="gate-example.json"
 {
   "id": "verify",
   "type": "gate",
@@ -88,7 +92,7 @@ On `VERDICT: BLOCK`, downstream phases skip and the run ends as `blocked`. Ambig
 
 Aggregate outputs from upstream phases into one final summary.
 
-```json
+```json title="reduce-example.json"
 {
   "id": "report",
   "type": "reduce",
@@ -102,7 +106,7 @@ Aggregate outputs from upstream phases into one final summary.
 
 Pause for a human decision.
 
-```json
+```json title="approval-example.json"
 {
   "id": "approve",
   "type": "approval",
@@ -121,7 +125,7 @@ Detached/CI runs auto-reject.
 
 Run a sub-flow as one phase.
 
-```json
+```json title="flow-saved-example.json"
 {
   "id": "sub",
   "type": "flow",
@@ -132,7 +136,7 @@ Run a sub-flow as one phase.
 
 Or generate it at runtime:
 
-```json
+```json title="flow-runtime-example.json"
 {
   "id": "execute",
   "type": "flow",
@@ -145,7 +149,7 @@ Or generate it at runtime:
 
 Iterate until done, convergence, or `maxIterations`.
 
-```json
+```json title="loop-example.json"
 {
   "id": "refine",
   "type": "loop",
@@ -161,7 +165,7 @@ Iterate until done, convergence, or `maxIterations`.
 
 Spawn variants and let a judge pick the best.
 
-```json
+```json title="tournament-example.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -176,7 +180,7 @@ Spawn variants and let a judge pick the best.
 
 Run a shell command. Zero tokens.
 
-```json
+```json title="script-example.json"
 {
   "id": "build",
   "type": "script",
@@ -187,5 +191,11 @@ Run a shell command. Zero tokens.
 
 ## Next
 
-- [Flow Definition](/en/docs/syntax/flow-definition) — top-level fields.
-- [Phase Types Reference](/en/docs/syntax/phase-types) — exhaustive per-type reference.
+<Cards>
+  <Card title="Flow Definition" href="/en/docs/syntax/flow-definition">
+    Top-level fields.
+  </Card>
+  <Card title="Phase Types Reference" href="/en/docs/syntax/phase-types">
+    Exhaustive per-type reference.
+  </Card>
+</Cards>

@@ -5,6 +5,10 @@ description: How data flows between phases in a taskflow.
 
 # Interpolation
 
+<Callout type="info">
+  taskflow uses a simple template syntax to pass data between phases. Anything in `{curly braces}` is resolved at runtime before the phase runs.
+</Callout>
+
 taskflow uses a simple template syntax to pass data between phases.
 
 ## Placeholders
@@ -26,7 +30,7 @@ taskflow uses a simple template syntax to pass data between phases.
 
 ### Args
 
-```json
+```json title="args-example.json"
 {
   "args": { "dir": { "default": "src" } },
   "phases": [
@@ -40,7 +44,7 @@ taskflow uses a simple template syntax to pass data between phases.
 
 ### Step output
 
-```json
+```json title="step-output-example.json"
 {
   "phases": [
     { "id": "a", "task": "Generate a name.", "dependsOn": [] },
@@ -51,7 +55,7 @@ taskflow uses a simple template syntax to pass data between phases.
 
 ### Parsed JSON
 
-```json
+```json title="parsed-json-example.json"
 {
   "phases": [
     {
@@ -70,7 +74,7 @@ taskflow uses a simple template syntax to pass data between phases.
 
 ### Map item
 
-```json
+```json title="map-item-example.json"
 {
   "id": "audit",
   "type": "map",
@@ -90,16 +94,22 @@ taskflow uses a simple template syntax to pass data between phases.
 - Quoted strings and numbers
 - Any `{...}` reference
 
-```json
+```json title="condition-example.json"
 "when": "{steps.triage.json.severity} == high && {args.force} != true"
 ```
 
 ## Validation
 
-Referencing `{steps.X}` without declaring `dependsOn: ["X"]` is a **hard validation error**. This catches the most common pipeline bug before a single agent runs.
+<Callout type="warn">
+  Referencing `{steps.X}` without declaring `dependsOn: ["X"]` is a **hard validation error**. This catches the most common pipeline bug before a single agent runs.
+</Callout>
 
 Unresolved interpolation refs are surfaced as phase warnings in the run record.
 
 ## Next
 
-- [Control Flow](/en/docs/syntax/control-flow) — `when`, `join`, and routing.
+<Cards>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `when`, `join`, and routing.
+  </Card>
+</Cards>

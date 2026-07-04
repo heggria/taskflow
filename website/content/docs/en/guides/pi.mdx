@@ -5,9 +5,13 @@ description: Install, run, save, and resume taskflows on the Pi coding agent.
 
 # Using taskflow on Pi
 
+<Callout type="info">
+  Install once, then describe flows in natural language or run saved flows by name.
+</Callout>
+
 ## Install
 
-```bash
+```bash title="Install pi-taskflow"
 pi install npm:pi-taskflow
 ```
 
@@ -15,7 +19,9 @@ pi install npm:pi-taskflow
 
 In a Pi session, describe the work:
 
-> Run a chain: first explore the auth flow, then summarize the findings.
+<Callout type="tip">
+  Try: *"Run a chain: first explore the auth flow, then summarize the findings."*
+</Callout>
 
 The model calls the `taskflow` tool automatically.
 
@@ -23,7 +29,7 @@ The model calls the `taskflow` tool automatically.
 
 After a run, say **"save it"** and give it a name. It becomes a one-word command:
 
-```bash
+```bash title="Run a saved flow"
 /tf:audit-auth dir=src
 ```
 
@@ -43,15 +49,28 @@ After a run, say **"save it"** and give it a name. It becomes a one-word command
 
 ## Model roles
 
-Run `/tf init` to map built-in agent roles to your models. Roles:
+Run `/tf init` to map built-in agent roles to your models.
 
-- `{{fast}}` — cheap & quick
-- `{{strong}}` — balanced planning/review
-- `{{thinker}}` — deep analysis
-- `{{arbiter}}` — final judgment
-- `{{vision}}` — multimodal
-- `{{reasoner}}` — cautious reasoning
+<Callout type="tip">
+  Roles are referenced with `{{role}}` syntax inside agent definitions and phase configs.
+</Callout>
+
+| Role | Purpose |
+|---|---|
+| `{{fast}}` | cheap & quick |
+| `{{strong}}` | balanced planning/review |
+| `{{thinker}}` | deep analysis |
+| `{{arbiter}}` | final judgment |
+| `{{vision}}` | multimodal |
+| `{{reasoner}}` | cautious reasoning |
 
 ## Next
 
-- [Getting Started](/en/docs/getting-started)
+<Cards>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow.
+  </Card>
+  <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
+    Use taskflow with OpenAI Codex.
+  </Card>
+</Cards>

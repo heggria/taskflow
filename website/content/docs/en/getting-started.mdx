@@ -5,69 +5,86 @@ description: Run your first taskflow on Pi or Codex.
 
 # Getting Started
 
-## On Pi
+<Callout type="info">
+  taskflow runs on [Pi](https://pi.dev) and [OpenAI Codex](https://github.com/openai/codex). Pick your host below.
+</Callout>
 
-Install the extension:
+## Install
 
-```bash
-pi install npm:pi-taskflow
-```
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash
+    pi install npm:pi-taskflow
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
+  </Tab>
+</Tabs>
 
-Then in a Pi session, describe the work:
+## Run your first flow
 
-> Run a chain: first explore the auth flow, then summarize the findings.
+<Steps>
+  <Step>
+    ### Describe the work
 
-The model calls the `taskflow` tool automatically. You get live progress, per-step timing, token cost, and a saved run record.
+    In a Pi or Codex session, just say what you want:
 
-Say **"save it"** and you have `/tf:<name>` forever.
+    > Run a chain: first explore the auth flow, then summarize the findings.
+  </Step>
+  <Step>
+    ### Watch the runtime
 
-### Optional setup
+    The model calls the `taskflow` tool automatically. You get live progress, per-step timing, token cost, and a saved run record.
+  </Step>
+  <Step>
+    ### Save it
+
+    Say **"save it"** and you have `/tf:<name>` forever.
+  </Step>
+</Steps>
+
+## Optional Pi setup
 
 Run `/tf init` once to map the 18 built-in agents' model roles (`fast`, `strong`, `thinker`, …) to your own models. Skip it and agents just use Pi's default model.
-
-## On Codex
-
-Install the plugin:
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-```
-
-Then ask Codex to run a multi-phase job:
-
-> Run a taskflow that audits every route in src/routes and reports missing auth.
-
-Codex calls the `taskflow_*` MCP tools automatically.
 
 ## The shorthand
 
 You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. taskflow speaks the same shape:
 
-```json
-{
-  "task": "Summarize the architecture of src/",
-  "agent": "explorer"
-}
-```
-
-```json
-{
-  "tasks": [
-    { "task": "Audit auth in src/api", "agent": "analyst" },
-    { "task": "Audit input validation in src/api", "agent": "analyst" }
-  ]
-}
-```
-
-```json
-{
-  "chain": [
-    { "task": "List the public API of src/lib", "agent": "scout" },
-    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
-  ]
-}
-```
+<Tabs items={['task', 'tasks', 'chain']}>
+  <Tab value="task">
+    ```json
+    {
+      "task": "Summarize the architecture of src/",
+      "agent": "explorer"
+    }
+    ```
+  </Tab>
+  <Tab value="tasks">
+    ```json
+    {
+      "tasks": [
+        { "task": "Audit auth in src/api", "agent": "analyst" },
+        { "task": "Audit input validation in src/api", "agent": "analyst" }
+      ]
+    }
+    ```
+  </Tab>
+  <Tab value="chain">
+    ```json
+    {
+      "chain": [
+        { "task": "List the public API of src/lib", "agent": "scout" },
+        { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+      ]
+    }
+    ```
+  </Tab>
+</Tabs>
 
 `agent` is optional (defaults to the first discovered agent). Add a `name` to label the run and unlock saving it as a command.
 
@@ -75,7 +92,7 @@ You already know your agent's built-in subagent shorthand — `task` / `tasks` /
 
 When you outgrow the shorthand, the full DSL gives you a real DAG:
 
-```json
+```json title="summarize-files.json"
 {
   "name": "summarize-files",
   "description": "Discover files, summarize each, produce one report",
@@ -131,5 +148,11 @@ This catches cycles, missing deps, undefined refs, and contract typos — zero t
 
 ## Next steps
 
-- [Core Concepts](/en/docs/concepts) — understand the DAG model.
-- [Syntax Reference](/en/docs/syntax/flow-definition) — full DSL.
+<Cards>
+  <Card title="Core Concepts" href="/en/docs/concepts">
+    Understand the DAG model.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
+    Full DSL reference.
+  </Card>
+</Cards>

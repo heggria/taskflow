@@ -19,7 +19,7 @@ A **node** is a phase: a single unit of work with a unique `id` and a `type`.
 
 An **edge** is a `dependsOn` array: it says "this phase waits for these other phases to finish before it starts."
 
-```json
+```json title="a-b-c-d.json"
 {
   "phases": [
     { "id": "a", "type": "agent", "task": "Step A" },
@@ -47,7 +47,9 @@ a
 
 Dependencies are **declared**, not inferred. The runtime does not care about the order of phases in the `phases[]` array — it cares about `dependsOn`.
 
-This is the most common mistake for new users: four phases listed in order with no `dependsOn` are four **parallel** phases, not a chain.
+<Callout type="warn">
+  This is the most common mistake for new users: four phases listed in order with no `dependsOn` are four **parallel** phases, not a chain.
+</Callout>
 
 ## No cycles
 
@@ -76,5 +78,11 @@ Static `dependsOn` is enough for most flows. For runtime-discovered work, a `flo
 
 ## Next
 
-- [Phase Types](/en/docs/concepts/phases) — the 10 node types.
-- [Control Flow](/en/docs/syntax/control-flow) — `when`, `join`, and routing.
+<Cards>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The 10 node types.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `when`, `join`, and routing.
+  </Card>
+</Cards>

@@ -5,7 +5,9 @@ description: How taskflow validates a DAG before spending tokens.
 
 # Verification
 
-One of taskflow's core promises is that the runtime verifies the graph **before it spends a single token**.
+<Callout type="info">
+  One of taskflow's core promises is that the runtime verifies the graph **before it spends a single token**.
+</Callout>
 
 ## What gets checked
 
@@ -42,13 +44,13 @@ For LLM-generated dynamic sub-flows (`flow {def}`):
 
 ## Example
 
-```bash
+```bash title="Verify a flow"
 /tf verify my-flow
 ```
 
 Output:
 
-```
+```txt title="Verification output"
 ✗ verification FAILED — 1 error, 0 warnings
 
 error: Phase 'report' references {steps.audit.output} but 'audit' is not in dependsOn
@@ -56,15 +58,17 @@ error: Phase 'report' references {steps.audit.output} but 'audit' is not in depe
 
 ## Verification vs. runtime errors
 
-Verification catches **structural** problems. It cannot catch:
-
-- A subagent producing wrong content.
-- A JSON schema being too permissive.
-- A gate agent blocking unexpectedly.
-
-These are caught at runtime and can be handled with `retry`, `optional`, and `onBlock`.
+<Callout type="warn">
+  Verification catches **structural** problems. It cannot catch a subagent producing wrong content, a JSON schema being too permissive, or a gate agent blocking unexpectedly. These runtime issues are handled with `retry`, `optional`, and `onBlock`.
+</Callout>
 
 ## Next
 
-- [Syntax Reference](/en/docs/syntax/flow-definition) — fields that affect verification.
-- [Dynamic Planning](/en/docs/guides/dynamic-planning) — generated sub-flows are verified too.
+<Cards>
+  <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
+    Fields that affect verification.
+  </Card>
+  <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
+    Generated sub-flows are verified too.
+  </Card>
+</Cards>

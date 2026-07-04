@@ -5,7 +5,9 @@ description: Why only the final phase reaches your conversation.
 
 # Context Isolation
 
-With raw subagents, every transcript floods your context window. With taskflow, intermediate results stay in the runtime.
+<Callout type="info">
+  With raw subagents, every transcript floods your context window. With taskflow, intermediate results stay in the runtime.
+</Callout>
 
 ## The problem
 
@@ -23,7 +25,7 @@ If each step produces 4K tokens of transcript, your context window grows by 20K 
 
 In taskflow, each phase runs in an isolated subagent process. The runtime collects outputs but **does not push them into your conversation** until the `final` phase completes.
 
-```
+```txt title="Context isolation model"
 Your context          Runtime
 ├─ final output  ←──  ├─ phase A output
                       ├─ phase B output
@@ -41,7 +43,7 @@ This means you can:
 
 Sometimes you need to inspect an intermediate output for debugging. Use the CLI:
 
-```bash
+```bash title="Peek at an intermediate output"
 /tf peek <runId> <phaseId>
 ```
 
@@ -62,4 +64,8 @@ Everything is opt-in, size-bounded, depth-capped, and cleaned up with the run.
 
 ## Next
 
-- [Resume](/en/docs/concepts/resume) — how isolation enables cross-session replay.
+<Cards>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    How isolation enables cross-session replay.
+  </Card>
+</Cards>

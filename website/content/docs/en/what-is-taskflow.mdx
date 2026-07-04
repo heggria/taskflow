@@ -5,7 +5,9 @@ description: Why taskflow exists and what problem it solves.
 
 # What is taskflow?
 
-**taskflow** is a declarative, verifiable *graph of tasks* for coding-agent subagents.
+<Callout type="info">
+  **taskflow** is a declarative, verifiable *graph of tasks* for coding-agent subagents.
+</Callout>
 
 In plain English: it lets you describe multi-step agent work as a **DAG** (directed acyclic graph) of discrete task nodes, validates that graph before any model call runs, and then executes it with dynamic fan-out, gates, loops, tournaments, and cross-session resume.
 
@@ -71,7 +73,7 @@ Don't use taskflow for one-off, single-step delegations — the built-in subagen
 
 ## How it fits together
 
-```
+```txt title="The taskflow pipeline"
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Author defines │ ──▶ │ Runtime verifies │ ──▶ │ Runtime executes│
 │  taskflow JSON  │     │ DAG before tokens│     │ phase-by-phase  │
@@ -86,6 +88,14 @@ Don't use taskflow for one-off, single-step delegations — the built-in subagen
 
 ## Next steps
 
-- [Getting Started](/en/docs/getting-started) — run your first taskflow.
-- [Core Concepts](/en/docs/concepts) — learn the DAG model.
-- [Syntax Reference](/en/docs/syntax) — full DSL reference.
+<Cards>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow.
+  </Card>
+  <Card title="Core Concepts" href="/en/docs/concepts">
+    Learn the DAG model.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax">
+    Full DSL reference.
+  </Card>
+</Cards>

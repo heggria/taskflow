@@ -49,21 +49,30 @@ Because the plan is data, not prose and not code, it can be **validated, visuali
 
 ## Quick install
 
-### Pi
-
-```bash
-pi install npm:pi-taskflow
-```
-
-### Codex
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-```
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash
+    pi install npm:pi-taskflow
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
+  </Tab>
+</Tabs>
 
 ## Next steps
 
-- [What is taskflow?](/en/docs/what-is-taskflow)
-- [Getting Started](/en/docs/getting-started)
-- [Core Concepts](/en/docs/concepts)
+<Cards>
+  <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
+    Why taskflow exists and what it solves.
+  </Card>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow.
+  </Card>
+  <Card title="Core Concepts" href="/en/docs/concepts">
+    Learn the DAG model.
+  </Card>
+</Cards>

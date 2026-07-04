@@ -5,13 +5,15 @@ description: Conditional routing, joins, retries, and loops.
 
 # Control Flow
 
-taskflow provides several primitives for routing and reliability.
+<Callout type="info">
+  taskflow provides several primitives for routing and reliability.
+</Callout>
 
 ## `when` — conditional guards
 
 Skip a phase unless the expression is truthy.
 
-```json
+```json title="when-guard-example.json"
 {
   "id": "deep",
   "when": "{steps.triage.json.severity} == high",
@@ -21,7 +23,9 @@ Skip a phase unless the expression is truthy.
 
 Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, parentheses, quoted strings/numbers.
 
-**Fail-open:** a parse error in `when` causes the phase to run, never silently drop.
+<Callout type="warn">
+  **Fail-open:** a parse error in `when` causes the phase to run, never silently drop.
+</Callout>
 
 ## `join` — dependency joins
 
@@ -30,7 +34,7 @@ Operators: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, parentheses, quote
 
 Use `join: "any"` with conditional branches to build if/else routing:
 
-```json
+```json title="join-any-routing-example.json"
 {
   "id": "triage",
   "type": "agent",
@@ -60,7 +64,7 @@ Use `join: "any"` with conditional branches to build if/else routing:
 
 Retry a failing phase:
 
-```json
+```json title="retry-example.json"
 {
   "id": "patch",
   "retry": {
@@ -81,7 +85,7 @@ Transient provider errors (rate limits, 5xx, timeouts) are auto-retried even wit
 
 A failure in an `optional` phase does not abort the run.
 
-```json
+```json title="optional-example.json"
 {
   "id": "lint",
   "type": "script",
@@ -96,7 +100,7 @@ Pair with a fallback phase guarded by `when`.
 
 By default a blocking gate halts the run. With `"retry"`, the gate re-runs its upstream `dependsOn` phases and re-evaluates, up to `retry.max` rounds.
 
-```json
+```json title="onBlock-retry-example.json"
 {
   "id": "quality",
   "type": "gate",
@@ -119,5 +123,11 @@ Set `idempotent: false` for phases with irreversible side effects (webhook POSTs
 
 ## Next
 
-- [Caching](/en/docs/syntax/caching) — memoization.
-- [Budget](/en/docs/syntax/budget) — cost caps.
+<Cards>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Memoization.
+  </Card>
+  <Card title="Budget" href="/en/docs/syntax/budget">
+    Cost caps.
+  </Card>
+</Cards>

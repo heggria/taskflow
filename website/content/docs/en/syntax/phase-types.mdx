@@ -5,7 +5,9 @@ description: Complete field reference for every phase type.
 
 # Phase Types Reference
 
-Every phase shares a common set of fields. On top of those, each phase type adds its own required and optional fields.
+<Callout type="info">
+  Every phase shares a common set of fields. On top of those, each phase type adds its own required and optional fields.
+</Callout>
 
 ## Common fields
 
@@ -37,7 +39,7 @@ One subagent runs one task.
 
 ### Example
 
-```json
+```json title="agent-phase-example.json"
 {
   "id": "summarize",
   "type": "agent",
@@ -61,7 +63,7 @@ Run `branches[]` concurrently.
 
 ### Example
 
-```json
+```json title="parallel-phase-example.json"
 {
   "id": "audit",
   "type": "parallel",
@@ -88,7 +90,7 @@ Fan out over an array.
 
 ### Example
 
-```json
+```json title="map-phase-example.json"
 {
   "id": "summarize",
   "type": "map",
@@ -116,7 +118,7 @@ Quality gate. Can halt the flow.
 
 ### Example
 
-```json
+```json title="gate-phase-example.json"
 {
   "id": "quality",
   "type": "gate",
@@ -138,7 +140,7 @@ Aggregate upstream outputs.
 
 ### Example
 
-```json
+```json title="reduce-phase-example.json"
 {
   "id": "report",
   "type": "reduce",
@@ -216,7 +218,7 @@ Run a shell command. Zero tokens.
 
 ### Example
 
-```json
+```json title="script-phase-example.json"
 {
   "id": "build",
   "type": "script",
@@ -227,4 +229,8 @@ Run a shell command. Zero tokens.
 
 ## Next
 
-- [Control Flow](/en/docs/syntax/control-flow) — `when`, `join`, routing.
+<Cards>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `when`, `join`, routing.
+  </Card>
+</Cards>

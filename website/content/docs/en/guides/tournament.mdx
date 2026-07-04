@@ -5,11 +5,15 @@ description: Spawn competing variants and let a judge pick the best result.
 
 # Tournament Selection
 
-For open-ended creative or subjective work, generate several candidates and let a judge pick the strongest.
+<Callout type="info">
+  For open-ended creative or subjective work, generate several candidates and let a judge pick the strongest.
+</Callout>
 
 ## Basic tournament
 
-```json
+## Basic tournament
+
+```json title="tournament-best-example.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -22,16 +26,18 @@ For open-ended creative or subjective work, generate several candidates and let 
 
 ## How it works
 
-1. Spawn `variants` copies of the task.
-2. Run a judge agent that sees every variant.
-3. The judge emits `WINNER: <n>` or JSON `{"winner": n}`.
-4. Return the winning variant (`mode: "best"`) or a synthesized answer (`mode: "aggregate"`).
+<Steps>
+  <Step>Spawn `variants` copies of the task.</Step>
+  <Step>Run a judge agent that sees every variant.</Step>
+  <Step>The judge emits `WINNER: <n>` or JSON `{"winner": n}`.</Step>
+  <Step>Return the winning variant (`mode: "best"`) or a synthesized answer (`mode: "aggregate"`).</Step>
+</Steps>
 
 ## Branches
 
 For genuinely different approaches, use `branches`:
 
-```json
+```json title="tournament-branches-example.json"
 {
   "id": "headline",
   "type": "tournament",
@@ -47,11 +53,15 @@ For genuinely different approaches, use `branches`:
 
 ## Fail-open
 
-If the judge's verdict is unparseable, the tournament falls back to variant 1. Work is never lost.
+<Callout type="warn">
+  If the judge's verdict is unparseable, the tournament falls back to variant 1. Work is never lost.
+</Callout>
 
 ## When to use
 
-- Creative writing where quality is subjective.
-- Open-ended summarization.
-- Naming, branding, or headline generation.
-- Any task where one shot is unreliable.
+<Callout type="tip">
+  - Creative writing where quality is subjective.
+  - Open-ended summarization.
+  - Naming, branding, or headline generation.
+  - Any task where one shot is unreliable.
+</Callout>

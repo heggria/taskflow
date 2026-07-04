@@ -5,11 +5,13 @@ description: Install taskflow as a Codex plugin and orchestrate multi-phase work
 
 # Using taskflow on Codex
 
-taskflow runs on [Codex](https://github.com/openai/codex) as a plugin that exposes an MCP server.
+<Callout type="info">
+  taskflow runs on [Codex](https://github.com/openai/codex) as a plugin that exposes an MCP server.
+</Callout>
 
 ## Install
 
-```bash
+```bash title="Install taskflow plugin"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 ```
@@ -18,7 +20,7 @@ The plugin registers its MCP server and a routing skill automatically.
 
 ## Verify
 
-```bash
+```bash title="Verify plugin and MCP server"
 codex plugin list   # taskflow@taskflow installed, enabled
 codex mcp list      # taskflow enabled
 ```
@@ -47,13 +49,24 @@ Just ask — the bundled skill tells Codex when to call the tools:
 
 `taskflow_run` returns only after the whole DAG finishes. The plugin ships a 30-minute default tool-call timeout. Override in `~/.codex/config.toml`:
 
-```toml
+```toml title="~/.codex/config.toml"
 [mcp_servers.taskflow]
 tool_timeout_sec = 3600
 ```
 
 ## Remove
 
-```bash
+```bash title="Remove taskflow plugin"
 codex plugin remove taskflow@taskflow
 ```
+
+## Next
+
+<Cards>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow.
+  </Card>
+  <Card title="Using taskflow on Pi" href="/en/docs/guides/pi">
+    Use taskflow with the Pi coding agent.
+  </Card>
+</Cards>

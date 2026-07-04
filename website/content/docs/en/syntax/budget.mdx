@@ -5,9 +5,11 @@ description: Run-wide cost and token caps.
 
 # Budget
 
-Add a run-wide ceiling to prevent runaway spend.
+<Callout type="warn">
+  Add a run-wide ceiling to prevent runaway spend.
+</Callout>
 
-```json
+```json title="budget-example.json"
 {
   "name": "fan-out-audit",
   "budget": {
@@ -31,7 +33,7 @@ When accumulated cost or tokens exceed the cap:
 
 A `map` over a mis-discovered 500-item array is unbounded spend. Always cap it:
 
-```json
+```json title="summarize-files-with-budget.json"
 {
   "name": "summarize-files",
   "budget": { "maxUSD": 1.5 },
@@ -54,4 +56,6 @@ A `map` over a mis-discovered 500-item array is unbounded spend. Always cap it:
 
 ## Best practice
 
-Set `budget` on any flow with `map`, `parallel`, `loop`, or `tournament`.
+<Callout type="warn">
+  Set `budget` on any flow with `map`, `parallel`, `loop`, or `tournament`.
+</Callout>

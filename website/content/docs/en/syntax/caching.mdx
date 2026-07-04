@@ -5,7 +5,9 @@ description: Within-run resume and cross-run memoization.
 
 # Caching
 
-taskflow has two layers of reuse: within-run resume and cross-run memoization.
+<Callout type="info">
+  taskflow has two layers of reuse: within-run resume and cross-run memoization.
+</Callout>
 
 ## Within-run resume
 
@@ -22,7 +24,7 @@ Inputs that affect the hash include:
 
 Opt a phase into persistent reuse across independent runs:
 
-```json
+```json title="cross-run-cache-example.json"
 {
   "id": "analyze-auth",
   "task": "Summarize how auth works.",
@@ -63,4 +65,8 @@ Time-to-live: `30m`, `6h`, `7d`.
 
 ## Next
 
-- [Resume](/en/docs/concepts/resume) — how resume reuses phases.
+<Cards>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    How resume reuses phases.
+  </Card>
+</Cards>

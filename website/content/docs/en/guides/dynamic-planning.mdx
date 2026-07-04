@@ -5,11 +5,13 @@ description: Generate sub-flows at runtime and validate them before execution.
 
 # Dynamic Planning
 
-Some problems cannot be fully authored in advance. A planner phase can emit a sub-flow definition at runtime, and the runtime validates and executes it.
+<Callout type="info">
+  Some problems cannot be fully authored in advance. A planner phase can emit a sub-flow definition at runtime, and the runtime validates and executes it.
+</Callout>
 
 ## Plan → execute
 
-```json
+```json title="plan-execute-example.json"
 {
   "name": "iterative-replan",
   "phases": [
@@ -31,6 +33,10 @@ Some problems cannot be fully authored in advance. A planner phase can emit a su
 ```
 
 ## Validation
+
+<Callout type="warn">
+  The generated sub-flow is checked for structural and security limits before it runs.
+</Callout>
 
 The generated sub-flow is checked for:
 
@@ -56,7 +62,7 @@ LLM-generated sub-flows are restricted:
 
 Pair `loop` with `flow {def}` for data-dependent iterative replanning:
 
-```json
+```json title="loop-flow-example.json"
 {
   "id": "refine-plan",
   "type": "loop",
@@ -69,6 +75,8 @@ Pair `loop` with `flow {def}` for data-dependent iterative replanning:
 
 ## When to use
 
-- The number or shape of steps depends on upstream results.
-- You want a model to author a plan and another model to execute it.
-- You need iterative replanning based on feedback.
+<Callout type="tip">
+  - The number or shape of steps depends on upstream results.
+  - You want a model to author a plan and another model to execute it.
+  - You need iterative replanning based on feedback.
+</Callout>

@@ -5,11 +5,13 @@ description: Top-level fields that define a taskflow.
 
 # Flow Definition
 
-A taskflow is a JSON object with a small set of top-level fields.
+<Callout type="info">
+  A taskflow is a JSON object with a small set of top-level fields. Only `phases` is required; everything else tunes behavior.
+</Callout>
 
 ## Example
 
-```json
+```json title="flow-definition-example.json"
 {
   "name": "audit-auth",
   "description": "Audit routes for missing auth",
@@ -44,7 +46,7 @@ Optional human-readable description.
 
 Invocation arguments. Each arg can be:
 
-```json
+```json title="args-definition.json"
 {
   "args": {
     "dir": { "default": "." },
@@ -55,7 +57,7 @@ Invocation arguments. Each arg can be:
 
 Pass args at runtime:
 
-```bash
+```bash title="Run with args"
 /tf run audit-auth dir=src force=true
 ```
 
@@ -85,7 +87,7 @@ Promote unresolved `{args.X}` / `{steps.X}` placeholders from warnings to hard e
 
 Run-wide cost ceiling:
 
-```json
+```json title="budget-definition.json"
 {
   "budget": {
     "maxUSD": 2.0,
@@ -104,15 +106,15 @@ The array of phase definitions. Each phase needs a unique `id` and a `type`.
 
 For one-off runs, you can skip most top-level fields and use shorthand:
 
-```json
+```json title="task-shorthand.json"
 { "task": "Summarize src/" }
 ```
 
-```json
+```json title="tasks-shorthand.json"
 { "tasks": [/* ... */] }
 ```
 
-```json
+```json title="chain-shorthand.json"
 { "chain": [/* ... */] }
 ```
 
@@ -120,4 +122,8 @@ The runtime desugars these into full flows.
 
 ## Next
 
-- [Phase Types](/en/docs/syntax/phase-types) — every phase field.
+<Cards>
+  <Card title="Phase Types" href="/en/docs/syntax/phase-types">
+    Every phase field.
+  </Card>
+</Cards>
