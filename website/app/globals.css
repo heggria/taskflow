@@ -3,48 +3,48 @@
 
 @layer base {
   :root {
-    --fd-background: 0 0% 100%;
-    --fd-foreground: 240 10% 4%;
-    --fd-card: 0 0% 100%;
-    --fd-card-foreground: 240 10% 4%;
-    --fd-popover: 0 0% 100%;
-    --fd-popover-foreground: 240 10% 4%;
-    --fd-primary: 250 92% 60%;
+    --fd-background: 40 33% 98%;
+    --fd-foreground: 30 10% 10%;
+    --fd-card: 40 30% 99%;
+    --fd-card-foreground: 30 10% 10%;
+    --fd-popover: 40 30% 99%;
+    --fd-popover-foreground: 30 10% 10%;
+    --fd-primary: 30 100% 48%;
     --fd-primary-foreground: 0 0% 100%;
-    --fd-secondary: 240 5% 96%;
-    --fd-secondary-foreground: 240 6% 10%;
-    --fd-muted: 240 5% 96%;
-    --fd-muted-foreground: 240 4% 46%;
-    --fd-accent: 240 5% 96%;
-    --fd-accent-foreground: 240 6% 10%;
-    --fd-border: 240 6% 90%;
-    --fd-ring: 250 92% 60%;
+    --fd-secondary: 40 20% 95%;
+    --fd-secondary-foreground: 30 10% 10%;
+    --fd-muted: 40 15% 95%;
+    --fd-muted-foreground: 30 5% 45%;
+    --fd-accent: 40 20% 95%;
+    --fd-accent-foreground: 30 10% 10%;
+    --fd-border: 40 15% 90%;
+    --fd-ring: 30 100% 48%;
   }
 
   .dark {
-    --fd-background: 240 10% 4%;
-    --fd-foreground: 0 0% 98%;
-    --fd-card: 240 10% 6%;
-    --fd-card-foreground: 0 0% 98%;
-    --fd-popover: 240 10% 6%;
-    --fd-popover-foreground: 0 0% 98%;
-    --fd-primary: 250 92% 65%;
+    --fd-background: 30 10% 8%;
+    --fd-foreground: 40 20% 98%;
+    --fd-card: 30 10% 10%;
+    --fd-card-foreground: 40 20% 98%;
+    --fd-popover: 30 10% 10%;
+    --fd-popover-foreground: 40 20% 98%;
+    --fd-primary: 30 100% 52%;
     --fd-primary-foreground: 0 0% 100%;
-    --fd-secondary: 240 4% 16%;
-    --fd-secondary-foreground: 0 0% 98%;
-    --fd-muted: 240 4% 16%;
-    --fd-muted-foreground: 240 5% 65%;
-    --fd-accent: 240 4% 16%;
-    --fd-accent-foreground: 0 0% 98%;
-    --fd-border: 240 4% 20%;
-    --fd-ring: 250 92% 65%;
+    --fd-secondary: 30 10% 18%;
+    --fd-secondary-foreground: 40 20% 98%;
+    --fd-muted: 30 10% 18%;
+    --fd-muted-foreground: 40 10% 60%;
+    --fd-accent: 30 10% 18%;
+    --fd-accent-foreground: 40 20% 98%;
+    --fd-border: 30 10% 20%;
+    --fd-ring: 30 100% 52%;
   }
 }
 
 @layer utilities {
   .text-gradient {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, hsl(var(--fd-primary)) 0%, hsl(270 90% 65%) 100%);
+    background-image: linear-gradient(135deg, hsl(var(--fd-primary)) 0%, hsl(35 100% 55%) 100%);
   }
 
   .bg-grid {
@@ -56,7 +56,7 @@
   .bg-hero-glow {
     background: radial-gradient(
       ellipse 80% 60% at 50% -20%,
-      hsl(var(--fd-primary) / 0.15),
+      hsl(var(--fd-primary) / 0.12),
       transparent
     );
   }
