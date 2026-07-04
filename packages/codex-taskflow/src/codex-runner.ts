@@ -25,15 +25,13 @@
  *     non-zero exit is.
  *
  * Process handling (idle watchdog, abort, signal-kill detection, stderr cap,
- * error sanitization) mirrors the pi runner so behavior is uniform across hosts.
+ * error sanitization) is delegated to the shared `runSubagentProcess` in
+ * taskflow-core, so behavior is uniform across hosts.
  */
 
-import { spawn } from "node:child_process";
 import {
-	emptyUsage,
-	isFailed,
-	sanitizeErrorMessage,
-	TRANSPORT_ERROR_PLACEHOLDER,
+	runSubagentProcess,
+	unknownAgentResult,
 	type AgentConfig,
 	type LiveUpdate,
 	type RunOptions,
@@ -41,17 +39,7 @@ import {
 	type SubagentRunner,
 	type UsageStats,
 } from "taskflow-core";
-
-const activeChildren = new Set<number>();
-const killAll = () => {
-	for (const pid of activeChildren) {
-		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
-	}
-};
-process.on("exit", killAll);
-
-/** Same idle window as the pi runner: a child silent this long is wedged. */
-const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
+import { emptyUsage } from "taskflow-core";
 
 /** Benign codex `error` items that are warnings, not failures. Matched as a
  *  prefix/substring so version drift in the message tail still classifies. */
@@ -174,19 +162,7 @@ export async function runCodexAgentTask(
 	globalThinking?: string,
 ): Promise<RunResult> {
 	const agent = agents.find((a) => a.name === agentName);
-	if (!agent) {
-		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-		return {
-			agent: agentName,
-			task,
-			exitCode: 1,
-			output: "",
-			stderr: `Unknown agent: "${agentName}". Available: ${available}.`,
-			usage: emptyUsage(),
-			errorMessage: `Unknown agent: ${agentName}`,
-			stopReason: "error",
-		};
-	}
+	if (!agent) return unknownAgentResult(agentName, task, agents);
 
 	const model = opts.model ?? agent.model;
 	const tools = opts.tools ?? agent.tools;
@@ -217,149 +193,24 @@ export async function runCodexAgentTask(
 	if (cwd) args.push("-C", cwd);
 	args.push(fullPrompt);
 
-	const acc = newCodexAccumulator(model);
-	const result: RunResult = {
+	return runSubagentProcess({
 		agent: agentName,
 		task,
-		exitCode: 0,
-		output: "",
-		stderr: "",
-		usage: emptyUsage(),
 		model,
-	};
-
-	let wasAborted = false;
-	let idleTimedOut = false;
-	let killedBySignal: string | undefined;
-
-	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn(codexBin(), args, {
-			cwd,
-			shell: false,
-			stdio: ["ignore", "pipe", "pipe"],
-			env: { ...process.env },
-		});
-		if (proc.pid) activeChildren.add(proc.pid);
-
-		let buffer = "";
-		let idleTimer: NodeJS.Timeout | undefined;
-		let forceTimer: NodeJS.Timeout | undefined;
-		const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-		const clearTimers = () => {
-			if (idleTimer) clearTimeout(idleTimer);
-			if (forceTimer) clearTimeout(forceTimer);
-		};
-		const hardKill = () => {
-			idleTimedOut = true;
-			proc.kill("SIGTERM");
-			forceTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
-			forceTimer.unref();
-		};
-		const armIdle = () => {
-			if (idleTimer) clearTimeout(idleTimer);
-			if (idleMs <= 0) return;
-			idleTimer = setTimeout(hardKill, idleMs);
-			idleTimer.unref();
-		};
-		armIdle();
-
-		const processLine = (line: string) => {
-			const live = foldCodexEventLine(acc, line);
-			if (live && opts.onLive) opts.onLive(live);
-		};
-
-		proc.stdout.on("data", (data) => {
-			armIdle();
-			buffer += data.toString();
-			const lines = buffer.split("\n");
-			buffer = lines.pop() || "";
-			for (const line of lines) processLine(line);
-		});
-
-		const STDERR_MAX_LEN = 64 * 1024;
-		let stderrCapped = false;
-		proc.stderr.on("data", (data) => {
-			if (!stderrCapped) {
-				result.stderr += data.toString();
-				if (result.stderr.length >= STDERR_MAX_LEN) {
-					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
-					stderrCapped = true;
-				}
-			}
-		});
-
-		proc.on("close", (code, signal) => {
-			if (proc.pid) activeChildren.delete(proc.pid);
-			clearTimers();
-			if (buffer.trim()) processLine(buffer);
-			if (code === null && signal) killedBySignal = signal;
-			resolve(code ?? 0);
-		});
-		proc.on("error", (err) => {
-			clearTimers();
-			if (!result.stderr) result.stderr = err.message;
-			if (!result.errorMessage) result.errorMessage = err.message;
-			resolve(1);
-		});
-
-		if (opts.signal) {
-			const kill = () => {
-				wasAborted = true;
-				proc.kill("SIGTERM");
-				const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
-				forceKill.unref();
-			};
-			if (opts.signal.aborted) kill();
-			else opts.signal.addEventListener("abort", kill, { once: true });
-		}
+		bin: codexBin(),
+		args,
+		cwd,
+		idleTimeoutMs: opts.idleTimeoutMs,
+		signal: opts.signal,
+		onLive: opts.onLive,
+		acc: newCodexAccumulator(model),
+		foldLine: foldCodexEventLine,
 	});
-
-	result.exitCode = exitCode;
-	result.usage = acc.usage;
-	result.model = acc.model;
-	result.output = acc.finalText;
-
-	if (acc.fatalError) {
-		result.exitCode = result.exitCode || 1;
-		result.stopReason = "error";
-		result.errorMessage = acc.fatalError;
-	} else {
-		result.stopReason = exitCode === 0 ? "end" : "error";
-	}
-
-	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted) {
-		result.exitCode = 1;
-		result.stopReason = "error";
-		result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
-	}
-	if (idleTimedOut) {
-		result.stopReason = "error";
-		result.idleTimeout = true;
-		result.errorMessage = `Subagent stalled: no output for ${Math.round(
-			(opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS) / 1000,
-		)}s (idle timeout) — killed`;
-	} else if (wasAborted) {
-		result.stopReason = "aborted";
-		result.errorMessage = "Subagent was aborted";
-	}
-
-	if (isFailed(result)) {
-		if (!result.output) {
-			result.output = TRANSPORT_ERROR_PLACEHOLDER;
-			if (!result.errorMessage) {
-				result.errorMessage =
-					result.stderr || `Subagent exited with code ${result.exitCode} (stopReason: ${result.stopReason ?? "unknown"})`;
-			}
-		}
-		if (result.errorMessage) result.errorMessage = sanitizeErrorMessage(result.errorMessage);
-	}
-
-	return result;
 }
 
 /**
  * The Codex host's `SubagentRunner`. Drops into `RuntimeDeps.runTask` exactly
- * like `piSubagentRunner`, so the engine runs unchanged on Codex.
+ * like the pi/codex/claude/opencode runners, so the engine runs unchanged on Codex.
  */
 export const codexSubagentRunner: SubagentRunner<AgentConfig> = {
 	runTask: runCodexAgentTask,

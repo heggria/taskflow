@@ -1,5 +1,5 @@
 /**
- * The Codex binding of the host-neutral MCP server (taskflow-core/mcp/server).
+ * The Codex binding of the host-neutral MCP server (taskflow-mcp/server).
  *
  * The protocol layer, tool schemas, and handlers all live in core; this shim
  * only closes the loop for Codex: every subagent a flow spawns is itself a
@@ -11,8 +11,8 @@ import {
 	makeMcpHandlers as coreMakeMcpHandlers,
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
-} from "taskflow-core/mcp/server";
-import type { RpcHandler } from "taskflow-core/mcp/jsonrpc";
+} from "taskflow-mcp/server";
+import type { RpcHandler } from "taskflow-mcp/jsonrpc";
 import { codexSubagentRunner } from "../codex-runner.ts";
 
 /** Per-call tool handlers with codex subagent execution bound in. */

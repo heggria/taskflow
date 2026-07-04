@@ -1,14 +1,20 @@
 /**
  * Host-neutral subagent-result helpers: failure classification, transient-error
- * detection, error sanitization, and the NDJSON event accumulator/parser.
+ * detection, error sanitization, and the NDJSON event accumulator/parser, PLUS
+ * the shared `runSubagentProcess` that the codex/claude/opencode runners delegate
+ * to for the identical spawn / idle-watchdog / abort / signal-kill / stderr-cap /
+ * post-exit classification block.
  *
  * This is the pure, host-SDK-free half of the original runner. The pi spawn
- * machinery lives in the pi adapter (`pi-taskflow`); the codex spawn machinery
- * in the codex adapter (`codex-taskflow`). Both reuse everything here so failure
- * semantics, retry heuristics, and usage folding are identical across hosts.
+ * machinery lives in the pi adapter (`pi-taskflow`); the codex/claude/opencode
+ * spawn machinery in their adapters. All of them reuse everything here so
+ * failure semantics, retry heuristics, and usage folding are identical across
+ * hosts.
  */
 
+import { spawn } from "node:child_process";
 import { emptyUsage, type UsageStats } from "./usage.ts";
+import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
 
 // Re-export the host-neutral execution contract types so importers of the
@@ -221,4 +227,227 @@ export async function mapWithConcurrencyLimit<TIn, TOut>(
 	});
 	await Promise.all(workers);
 	return results;
+}
+
+// ---------------------------------------------------------------------------
+// Shared subagent process runner
+// ---------------------------------------------------------------------------
+//
+// The codex/claude/opencode host runners each spawn an isolated CLI process,
+// fold its JSON event stream into an accumulator, and classify the outcome
+// into a RunResult. The spawn + idle-watchdog + abort + signal-kill + stderr-
+// cap + post-exit classification block was copy-pasted across all three
+// (~82 lines × 3, byte-identical after renaming) — which already caused one
+// divergence bug (contextTokens). This function is that block, extracted once.
+//
+// Each host runner now does only what is genuinely host-specific — build the
+// argv (bin/flags/model/permission/prompt) and provide a foldLine + accumulator
+// — then delegates here for everything else. Adding a new host can no longer
+// drift the process/classify contract.
+
+/** Tracks every live subagent child so a process exit can SIGKILL stragglers.
+ *  Module-global (not per-host): a single exit handler must reach every host's
+ *  children, so all host runners register here. */
+const activeChildren = new Set<number>();
+const killAllChildren = () => {
+	for (const pid of activeChildren) {
+		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+	}
+};
+process.on("exit", killAllChildren);
+
+/** Same idle window every host runner uses: a child silent this long is wedged. */
+export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
+
+/** The base accumulator contract the shared process runner reads/writes. Each
+ *  host's accumulator (Codex/Claude/OpenCode) satisfies this structurally and
+ *  may carry extra fields (e.g. claude's `sawResult`) its own foldLine uses. */
+export interface SubagentAccumulator {
+	usage: UsageStats;
+	model?: string;
+	/** Final answer text (the host's foldLine sets this from its event stream). */
+	finalText: string;
+	lastActivity: string;
+	/** Set by the host foldLine when the stream reported a fatal error event. */
+	fatalError?: string;
+}
+
+/** Standard "unknown agent" RunResult — identical across every host runner. */
+export function unknownAgentResult(
+	agentName: string,
+	task: string,
+	agents: AgentConfig[],
+): RunResult {
+	const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+	return {
+		agent: agentName,
+		task,
+		exitCode: 1,
+		output: "",
+		stderr: `Unknown agent: "${agentName}". Available: ${available}.`,
+		usage: emptyUsage(),
+		errorMessage: `Unknown agent: ${agentName}`,
+		stopReason: "error",
+	};
+}
+
+export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
+	/** Identity fields written verbatim onto the RunResult. */
+	agent: string;
+	task: string;
+	model?: string;
+	/** Spawn spec. `env` defaults to the parent process env; a host may override
+	 *  (e.g. opencode injects OPENCODE_CONFIG_CONTENT for read-only phases). */
+	bin: string;
+	args: string[];
+	env?: NodeJS.ProcessEnv;
+	cwd: string;
+	/** Execution knobs (forwarded from the phase's RunOptions). */
+	idleTimeoutMs?: number;
+	signal?: AbortSignal;
+	onLive?: (live: LiveUpdate) => void;
+	/** Per-host event folding: the host's accumulator + its line parser. */
+	acc: TAcc;
+	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
+}
+
+/** Spawn an isolated subagent process, fold its event stream, and classify the
+ *  outcome into a RunResult. The whole tail (fatalError, signal-kill remap,
+ *  idle-timeout, abort, isFailed + placeholder + sanitize) is the single source
+ *  of truth — every host runner that delegates here gets identical semantics. */
+export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
+	opts: RunSubagentProcessOptions<TAcc>,
+): Promise<RunResult> {
+	const { agent, task, model, bin, args, cwd, acc, foldLine } = opts;
+	const env = opts.env ?? { ...process.env };
+	const result: RunResult = {
+		agent,
+		task,
+		exitCode: 0,
+		output: "",
+		stderr: "",
+		usage: emptyUsage(),
+		model,
+	};
+
+	let wasAborted = false;
+	let idleTimedOut = false;
+	let killedBySignal: string | undefined;
+	const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+
+	const exitCode = await new Promise<number>((resolve) => {
+		const proc = spawn(bin, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env });
+		if (proc.pid) activeChildren.add(proc.pid);
+
+		let buffer = "";
+		let idleTimer: NodeJS.Timeout | undefined;
+		let forceTimer: NodeJS.Timeout | undefined;
+		const clearTimers = () => {
+			if (idleTimer) clearTimeout(idleTimer);
+			if (forceTimer) clearTimeout(forceTimer);
+		};
+		const hardKill = () => {
+			idleTimedOut = true;
+			proc.kill("SIGTERM");
+			forceTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+			forceTimer.unref();
+		};
+		const armIdle = () => {
+			if (idleTimer) clearTimeout(idleTimer);
+			if (idleMs <= 0) return;
+			idleTimer = setTimeout(hardKill, idleMs);
+			idleTimer.unref();
+		};
+		armIdle();
+
+		const processLine = (line: string) => {
+			const live = foldLine(acc, line);
+			if (live && opts.onLive) opts.onLive(live);
+		};
+
+		proc.stdout.on("data", (data) => {
+			armIdle();
+			buffer += data.toString();
+			const lines = buffer.split("\n");
+			buffer = lines.pop() || "";
+			for (const line of lines) processLine(line);
+		});
+
+		const STDERR_MAX_LEN = 64 * 1024;
+		let stderrCapped = false;
+		proc.stderr.on("data", (data) => {
+			if (!stderrCapped) {
+			result.stderr += data.toString();
+				if (result.stderr.length >= STDERR_MAX_LEN) {
+					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
+					stderrCapped = true;
+				}
+			}
+		});
+
+		proc.on("close", (code, signal) => {
+			if (proc.pid) activeChildren.delete(proc.pid);
+			clearTimers();
+			if (buffer.trim()) processLine(buffer);
+			if (code === null && signal) killedBySignal = signal;
+			resolve(code ?? 0);
+		});
+		proc.on("error", (err) => {
+			clearTimers();
+			if (!result.stderr) result.stderr = err.message;
+			if (!result.errorMessage) result.errorMessage = err.message;
+			resolve(1);
+		});
+
+		if (opts.signal) {
+			const kill = () => {
+				wasAborted = true;
+				proc.kill("SIGTERM");
+				const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
+				forceKill.unref();
+			};
+			if (opts.signal.aborted) kill();
+			else opts.signal.addEventListener("abort", kill, { once: true });
+		}
+	});
+
+	result.exitCode = exitCode;
+	result.usage = acc.usage;
+	result.model = acc.model;
+	result.output = acc.finalText;
+
+	if (acc.fatalError) {
+		result.exitCode = result.exitCode || 1;
+		result.stopReason = "error";
+		result.errorMessage = acc.fatalError;
+	} else {
+		result.stopReason = exitCode === 0 ? "end" : "error";
+	}
+
+	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted) {
+		result.exitCode = 1;
+		result.stopReason = "error";
+		result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
+	}
+	if (idleTimedOut) {
+		result.stopReason = "error";
+		result.idleTimeout = true;
+		result.errorMessage = `Subagent stalled: no output for ${Math.round(idleMs / 1000)}s (idle timeout) — killed`;
+	} else if (wasAborted) {
+		result.stopReason = "aborted";
+		result.errorMessage = "Subagent was aborted";
+	}
+
+	if (isFailed(result)) {
+		if (!result.output) {
+			result.output = TRANSPORT_ERROR_PLACEHOLDER;
+			if (!result.errorMessage) {
+				result.errorMessage =
+					result.stderr || `Subagent exited with code ${result.exitCode} (stopReason: ${result.stopReason ?? "unknown"})`;
+			}
+		}
+		if (result.errorMessage) result.errorMessage = sanitizeErrorMessage(result.errorMessage);
+	}
+
+	return result;
 }

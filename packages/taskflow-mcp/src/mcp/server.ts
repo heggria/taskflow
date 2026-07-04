@@ -12,7 +12,7 @@
  * runtime-deps guarantee; we do NOT use @modelcontextprotocol/sdk.
  *
  * This module is intentionally NOT in the barrel (index.ts) — hosts import it
- * via the subpath `taskflow-core/mcp/server` (mirrors detached-runner).
+ * via the `taskflow-mcp` package (it is NOT re-exported from taskflow-core.
  *
  * Tools exposed:
  *   - taskflow_run     : run an inline or saved flow, return the final output
@@ -45,9 +45,8 @@ import {
 	type RunState,
 	type Taskflow,
 	type VerificationIssue,
-} from "../index.ts";
-import type { SubagentRunner } from "../host/runner-types.ts";
-import type { AgentConfig } from "../agents.ts";
+} from "taskflow-core";
+import type { SubagentRunner, AgentConfig } from "taskflow-core";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: "0.1.5" } as const;

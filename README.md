@@ -865,11 +865,12 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 
 ## Development
 
-`taskflow` is an npm-workspaces monorepo of five published packages:
+`taskflow` is an npm-workspaces monorepo of six published packages:
 
 | Package | Role |
 |---------|------|
-| [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine + the dependency-free MCP server (zero host-SDK deps; only `typebox`) |
+| [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine (zero host-SDK deps; only `typebox`) — runtime, DSL, cache, verify |
+| [`taskflow-mcp`](./packages/taskflow-mcp) | Host-neutral MCP server (stdio JSON-RPC + `taskflow_*` tools + DAG renderer); depends on core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi extension adapter — `taskflow` tool + `/tf` commands (what `pi install npm:pi-taskflow` gives you) |
 | [`codex-taskflow`](./packages/codex-taskflow) | Codex subagent runner + MCP bin, plus the [Codex plugin](./packages/codex-taskflow/plugin) ([guide](./docs/codex-mcp.md)) |
 | [`claude-taskflow`](./packages/claude-taskflow) | Claude Code subagent runner + MCP bin, plus the [Claude Code plugin](./packages/claude-taskflow/plugin) ([guide](./docs/claude-mcp.md)) |

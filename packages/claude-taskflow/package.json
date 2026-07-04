@@ -42,6 +42,7 @@
     "access": "public"
   },
   "dependencies": {
-    "taskflow-core": "0.1.5"
+    "taskflow-core": "0.1.5",
+    "taskflow-mcp": "0.1.5"
   }
 }

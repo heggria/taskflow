@@ -4,6 +4,27 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+- **Extracted the MCP server into its own `taskflow-mcp` package** (sixth
+  package). The stdio JSON-RPC server + `taskflow_*` tool handlers + DAG
+  SVG/outline renderer moved out of `taskflow-core` into `taskflow-mcp`, so
+  core is again purely the portable engine (DSL/runtime/cache/verify) and the
+  MCP presentation layer is an independently-publishable unit. The host
+  adapters (codex/claude/opencode) now depend on `taskflow-mcp` and import it
+  via `taskflow-mcp/server` / `taskflow-mcp/jsonrpc`. `pi-taskflow` is
+  unaffected (it never used the MCP server).
+- **De-duplicated the three host runners.** The codex/claude/opencode runners
+  each copy-pasted ~82 lines of identical process-handling boilerplate
+  (spawn / idle watchdog / abort / signal-kill detection / stderr cap / post-exit
+  classification), which had already caused one divergence bug. The shared
+  block — plus `unknownAgentResult` and a centralized `activeChildren` set —
+  is now a single `runSubagentProcess` in `taskflow-core`'s `runner-core.ts`,
+  parameterized by a per-host `SubagentAccumulator` + `foldLine`. Each host
+  runner shrank to just its host-specific bits (argv, model-id rule,
+  permission mapping, event parser): codex 366→217, claude 417→266, opencode
+  397→247 lines. Behavior is identical (1045/1045 tests pass); adding a new
+  host can no longer drift the process/classify contract.
+
 ### Added
 - **OpenCode as a fourth host.** New `opencode-taskflow` package: an OpenCode
   subagent runner (`opencode run --format json`) plus an `opencode.json` MCP

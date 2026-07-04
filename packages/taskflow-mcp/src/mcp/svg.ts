@@ -37,7 +37,7 @@ import {
 	type Taskflow,
 	type VerificationResult,
 	type VerificationIssue,
-} from "../index.ts";
+} from "taskflow-core";
 
 // ---------------------------------------------------------------------------
 // Layout constants (px). Tuned so a small flow (3–8 phases) is legible even

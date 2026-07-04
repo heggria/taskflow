@@ -778,11 +778,12 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 开发
 
-`taskflow` 是一个 npm-workspaces monorepo，包含五个发布包：
+`taskflow` 是一个 npm-workspaces monorepo，包含六个发布包：
 
 | 包 | 角色 |
 |----|------|
-| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎 + 零依赖 MCP 服务器（零宿主 SDK 依赖；仅 `typebox`） |
+| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`）——运行时、DSL、缓存、验证 |
+| [`taskflow-mcp`](./packages/taskflow-mcp) | 宿主无关的 MCP 服务器（stdio JSON-RPC + `taskflow_*` 工具 + DAG 渲染）；依赖 core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi 扩展适配器——`taskflow` 工具 + `/tf` 命令（即 `pi install npm:pi-taskflow` 安装的内容） |
 | [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + MCP bin，及 [Codex 插件](./packages/codex-taskflow/plugin)（[指南](./docs/codex-mcp.md)） |
 | [`claude-taskflow`](./packages/claude-taskflow) | Claude Code 子代理运行器 + MCP bin，及 [Claude Code 插件](./packages/claude-taskflow/plugin)（[指南](./docs/claude-mcp.md)） |
@@ -793,7 +794,7 @@ npm install
 npm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
 npm test              # 单元测试——无网络，无进程派生
 npm run test:core     # 仅引擎测试（另有 test:pi、test:codex、test:claude、test:opencode）
-npm run build         # 为五个包生成 dist/*.js + .d.ts
+npm run build         # 为六个包生成 dist/*.js + .d.ts
 npm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
 npm run test:e2e-codex-mcp  # codex MCP 服务器端到端
 npm run test:e2e-claude-mcp # claude MCP 服务器端到端（无需实时 claude）

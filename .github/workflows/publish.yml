@@ -2,7 +2,7 @@ name: Publish & Release
 
 # Publishes taskflow-core + pi-taskflow + codex-taskflow + claude-taskflow +
 # opencode-taskflow to npmjs.com and creates a GitHub Release, when a v* tag is
-# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All five workspace
+# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All six workspace
 # versions must equal the tag.
 
 on:
@@ -45,7 +45,7 @@ jobs:
             echo "::error::Tag $TAG does not match root version $EXPECT"
             exit 1
           fi
-          for pkg in taskflow-core pi-taskflow codex-taskflow claude-taskflow opencode-taskflow; do
+          for pkg in taskflow-core taskflow-mcp pi-taskflow codex-taskflow claude-taskflow opencode-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
@@ -102,6 +102,7 @@ jobs:
             fi
           }
           publish_one taskflow-core
+          publish_one taskflow-mcp
           publish_one pi-taskflow
           publish_one codex-taskflow
           publish_one claude-taskflow
@@ -126,7 +127,7 @@ jobs:
               }
             } catch {}
             const text = body.join('\n').trim();
-            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow.'));
+            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow.'));
           " "$VERSION"
           gh release create "$GITHUB_REF_NAME" \
             --notes-file /tmp/release-notes.md \
