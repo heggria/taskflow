@@ -69,7 +69,7 @@ The `when` field on each branch is the guard. When triage resolves to `severity:
 
 ---
 
-## `when`: skip a phase conditionally
+## `when`: skip a phase conditionally [#when]
 
 A `when` expression is a small, safe boolean language evaluated *before* the phase runs. If it is truthy, the phase runs. If it is falsy, the phase is skipped: no subagent call, no tokens, and the run record shows `status: "skipped"`.
 
@@ -130,7 +130,7 @@ The full operator table, precedence, comparison semantics, and parse errors live
 
 ---
 
-## `join`: how a phase waits on its dependencies
+## `join`: how a phase waits on its dependencies [#join]
 
 By default, a phase waits for **every** declared dependency to finish (`join: "all"`). That is the right default — most phases genuinely need all their inputs.
 
@@ -179,7 +179,7 @@ A dependency counts as satisfied if it ended `done`, **or** it ended `failed` **
 
 ---
 
-## `optional`: tolerate failure
+## `optional`: tolerate failure [#optional]
 
 Some work is best-effort. A lint script might fail; a third-party enrichment call might 503. You don't always want that to abort the whole run.
 
@@ -223,7 +223,7 @@ When `enrich` fails, its `{steps.enrich.output}` resolves to the sentinel `"[pre
 
 ---
 
-## `retry`: try again on failure
+## `retry`: try again on failure [#retry]
 
 LLM providers hiccup. Rate limits, 5xx, and timeouts are routine. taskflow handles this in two layers.
 
@@ -275,7 +275,7 @@ The two policies compose, not replace:
 
 ---
 
-## `idempotent`: classify side effects
+## `idempotent`: classify side effects [#idempotent]
 
 Some phases must never be repeated. A deploy, a webhook POST, a DB migration — re-running these on a transient 429 is exactly the hazard the author wants to prevent. Setting `idempotent: false` declares "this phase has irreversible side effects":
 
@@ -321,7 +321,7 @@ Set `idempotent: false` for any phase whose re-execution is not safe to repeat �
 
 ---
 
-## `onBlock`: self-healing gates
+## `onBlock`: self-healing gates [#onblock]
 
 <Callout type="info">
   `onBlock` is a **gate-only** field. It has no effect on other phase types.

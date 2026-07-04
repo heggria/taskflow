@@ -192,7 +192,7 @@ For that, a `flow` phase runs a **sub-taskflow** whose definition can be produce
     {
       "id": "execute",
       "type": "flow",
-      "use": "{steps.plan.json}",
+      "def": "{steps.plan.json}",
       "dependsOn": ["plan"],
       "final": true
     }

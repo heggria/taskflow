@@ -548,7 +548,7 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 | `reduce` | required | — | — | — | required | — | — | — | — | — | — | — | — | — | — |
 | `approval` | optional | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 | `flow` | ignored | — | — | — | — | required² | optional | — | — | — | — | — | — | — | — |
-| `loop` | required | — | — | — | — | — | — | — | — | required | required | — | — | — | — |
+| `loop` | required | — | — | — | — | — | — | — | — | required | optional | — | — | — | — |
 | `tournament` | required³ | — | — | optional³ | — | — | — | — | — | — | — | optional | optional | — | — |
 | `script` | ignored | — | — | — | — | — | — | required | optional | — | — | — | — | — | — |
 
@@ -570,7 +570,7 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 <summary><code>loop</code> — <code>until</code>, <code>convergence</code>, <code>reflexion</code></summary>
 
 - **`until`** (`string`, required): stop condition evaluated after each iteration. Supports the same operators as `when`. A parse error stops the loop (fail-safe).
-- **`maxIterations`** (`number`, required): hard cap. Default `10`, hard max `100`.
+- **`maxIterations`** (`number`, default `10`): hard cap. Hard max `100`. Not required — the default of `10` applies when omitted.
 - **`convergence`** (`boolean`, default `true`): stop early if an iteration's output equals the previous one.
 - **`reflexion`** (`boolean`, default `false`): feed a structured failure summary of the prior iteration back into the next as `{reflexion}`. If `maxIterations` exhausts with the last iteration failed, the phase fails.
 

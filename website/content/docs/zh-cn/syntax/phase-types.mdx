@@ -548,7 +548,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | `reduce` | 必需 | — | — | — | 必需 | — | — | — | — | — | — | — | — | — | — |
 | `approval` | 可选 | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 | `flow` | 忽略 | — | — | — | — | 必需² | 可选 | — | — | — | — | — | — | — | — |
-| `loop` | 必需 | — | — | — | — | — | — | — | — | 必需 | 必需 | — | — | — | — |
+| `loop` | 必需 | — | — | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — |
 | `tournament` | 必需³ | — | — | 可选³ | — | — | — | — | — | — | — | 可选 | 可选 | — | — |
 | `script` | 忽略 | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — | — | — |
 
@@ -570,7 +570,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 <summary><code>loop</code> — <code>until</code>、<code>convergence</code>、<code>reflexion</code></summary>
 
 - **`until`**（`string`，必需）：每次迭代后求值的停止条件。支持与 `when` 相同的运算符。解析错误会停止循环（fail-safe）。
-- **`maxIterations`**（`number`，必需）：硬上限。默认 `10`、硬上限 `100`。
+- **`maxIterations`**（`number`，默认 `10`）：硬上限。硬上限 `100`。非必需——省略时默认 `10`。
 - **`convergence`**（`boolean`，默认 `true`）：当某次迭代输出与上一次相同时提前停止。
 - **`reflexion`**（`boolean`，默认 `false`）：把上一次迭代失败的结构化摘要作为 `{reflexion}` 反馈进下一次迭代。若 `maxIterations` 耗尽且最后一次迭代失败，阶段失败。
 

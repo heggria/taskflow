@@ -147,7 +147,7 @@ tool_timeout_sec = 3600
   不要把这个超时设得比你预期的最长运行还短。如果工具调用超时，运行会在后台继续执行——但 Codex 那时已经放弃了结果。
 </Callout>
 
-对于真正长的工作，考虑拆分 flow：在已保存的 flow 里跑重的阶段，用下游的 `approval` 或 `gate` 阶段来暂停审查。你随时可以通过再次调用 `taskflow_run` 并带上存储的 `runId` 来续跑一个暂停的运行。
+对于真正长的工作，考虑拆分 flow：在已保存的 flow 里跑重的阶段，用下游的 `approval` 或 `gate` 阶段来暂停审查。（按 `runId` 续跑一个暂停的运行是 Pi 独有的能力——`/tf resume`。在 Codex 上没有 `taskflow_resume` MCP 工具，因此要继续一个暂停的运行就重新运行该 flow；带 `cache.scope: "cross-run"` 的阶段会被自动复用。）
 
 ## 在事后检查一次运行
 

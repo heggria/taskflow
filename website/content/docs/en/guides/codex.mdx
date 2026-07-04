@@ -147,7 +147,7 @@ tool_timeout_sec = 3600
   Don't set this timeout lower than your longest expected run. If the tool call times out, the run keeps executing in the background — but Codex will have already given up on the result.
 </Callout>
 
-For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. You can always resume a paused run by calling `taskflow_run` again with the stored `runId`.
+For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. (Resuming a paused run by `runId` is a Pi-only capability — `/tf resume`. On Codex there is no `taskflow_resume` MCP tool, so a paused run is continued by re-running the flow; phases with `cache.scope: "cross-run"` are reused automatically.)
 
 ## Inspect a run after the fact
 

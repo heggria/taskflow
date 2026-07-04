@@ -104,7 +104,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 上面阶段级的 `concurrency: 4` 只对该阶段覆盖 flow 级的 `16`。
 
-## 给成本封顶：`budget`
+## 给成本封顶：`budget` [#给成本封顶-budget]
 
 有些 flow 是开放式的 —— 一个深度调研 loop、一个有很多变体的 tournament。`budget` 让你设一个运行级的 USD 成本和/或 token 用量上限。任一超出时，剩余阶段被**跳过**，运行以 `blocked` 状态结束。
 
@@ -143,7 +143,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 当你有共享的用户级 agent、但想让某个项目覆盖其中几个时，用 `"both"`。
 
-## 安全网：`strictInterpolation`
+## 安全网：`strictInterpolation` [#安全网-strictinterpolation]
 
 默认情况下，taskflow 对非致命问题是宽松的 —— 它警告并继续。打开 `strictInterpolation` 把这些警告提升为硬错误。对保存的、生产用的 flow 这是对的取舍：它能在一次运行浪费 token *之前*抓住静默的占位符泄漏和过时字段引用。
 
@@ -428,7 +428,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
   <Card title="缓存" href="/zh-cn/docs/syntax/caching">
     跨运行记忆化、指纹与 TTL。
   </Card>
-  <Card title="插值" href="/zh-cn/docs/syntax/interpolation">
+  <Card title="插值" href="/zh-cn/docs/concepts/interpolation">
     占位符、条件，以及 `when` / `until` 表达式语法。
   </Card>
 </Cards>
