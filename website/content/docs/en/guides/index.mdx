@@ -5,15 +5,31 @@ description: Practical guides for using taskflow on different hosts and patterns
 
 # Guides
 
-Practical guides for using taskflow on different hosts and patterns.
+The Guides are the *practical* half of these docs. Where [Concepts](/en/docs/concepts) explains the model and the [Syntax Reference](/en/docs/syntax) lists every field, the Guides walk you through doing something real end to end — install on a specific host, run a flow, save it, debug it, and reach for an advanced pattern when the work demands it.
+
+They come in two flavors:
+
+- **By host.** taskflow runs on Pi, Codex, Claude Code, and OpenCode. Each host has its own install path and invocation surface, so each gets a dedicated walkthrough.
+- **By pattern.** Once the basics work, some problems want a specific shape — a model that plans its own sub-flow at runtime, or a tournament that spawns competing drafts and picks a winner.
+
+<Callout type="tip">
+  New to taskflow? Start with the host you already use. Both host guides end with the same runnable review flow, so you can compare notes across hosts afterwards.
+</Callout>
+
+## By host
 
 <Cards>
   <Card title="Using taskflow on Pi" href="/en/docs/guides/pi">
-    Install, run, save, and resume on the Pi coding agent.
+    Install the extension, run with `/tf`, save flows, and configure model roles.
   </Card>
   <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
-    Use taskflow as a Codex plugin and orchestrate via MCP.
+    Install the plugin, call `taskflow_run` over MCP, and handle long-running flows.
   </Card>
+</Cards>
+
+## By pattern
+
+<Cards>
   <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
     Generate sub-flows at runtime and validate them before execution.
   </Card>

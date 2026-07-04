@@ -5,7 +5,47 @@ description: The ideas behind taskflow's declarative DAG model.
 
 # Core Concepts
 
-These pages explain the ideas that make taskflow different from imperative orchestration.
+This chapter is the *mental model* behind taskflow. It does not list every field — that is the [Syntax Reference](/en/docs/syntax) — and it does not walk through a host install — that is the [Guides](/en/docs/guides). Instead it explains the six ideas that make a taskflow different from an imperative script you write by hand:
+
+- work is a **graph**, not a sequence of calls;
+- the graph is built from ten **phase types**;
+- data moves between phases through **interpolation**;
+- the whole graph is **verified** before a token is spent;
+- intermediate output is **isolated** from your context;
+- and a run can be **resumed** across sessions.
+
+Read these once and the rest of the docs click into place.
+
+## Suggested reading order
+
+The concepts build on each other. Read them top to bottom the first time:
+
+<Steps>
+  <Step>
+    **[The DAG Model](/en/docs/concepts/dag)** — why work is a graph of `dependsOn` edges, and why array order is *not* an edge.
+  </Step>
+  <Step>
+    **[Phase Types](/en/docs/concepts/phases)** — the ten building blocks (`agent`, `map`, `gate`, `loop`, …) and when to reach for each.
+  </Step>
+  <Step>
+    **[Interpolation](/en/docs/concepts/interpolation)** — how `{steps.X.output}` and friends move data between phases, deterministically and zero-token.
+  </Step>
+  <Step>
+    **[Verification](/en/docs/concepts/verification)** — the static analysis pass that catches cycles, dead ends, and dangling refs before any agent runs.
+  </Step>
+  <Step>
+    **[Context Isolation](/en/docs/concepts/context-isolation)** — why only the `final` phase reaches your conversation, and how to peek when you need to.
+  </Step>
+  <Step>
+    **[Resume](/en/docs/concepts/resume)** — how a failed run picks up where it stopped, and how cross-run memoization reuses last week's work.
+  </Step>
+</Steps>
+
+<Callout type="info">
+  Already comfortable with DAGs and build systems like Make or Bazel? You can skim the first two pages and start at [Verification](/en/docs/concepts/verification) — that is where taskflow's safety story really begins.
+</Callout>
+
+## The concepts
 
 <Cards>
   <Card title="The DAG Model" href="/en/docs/concepts/dag">

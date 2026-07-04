@@ -5,74 +5,75 @@ description: A declarative, verifiable graph of task nodes for coding-agent suba
 
 # Introduction
 
-**taskflow** is a declarative, verifiable _graph of tasks_ for coding-agent subagents.
+Welcome to the **taskflow** docs. taskflow is a declarative, verifiable *graph of tasks* for coding-agent subagents — you describe multi-step agent work as a DAG, the runtime verifies it before a single token is spent, and only the final result ever reaches your context window.
 
-Not a workflow you script — a **DAG you declare**. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.
+Here is the whole idea in four lines of JSON:
 
-Runs on the [Pi](https://pi.dev) coding agent and on [OpenAI Codex](https://github.com/openai/codex).
+```json title="A complete taskflow"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
 
-## The problem with raw subagents
+That is a complete taskflow. The runtime turns it into a graph, runs one subagent, and returns the result. Add more phases, wire them with `dependsOn`, and the same shape scales to fan-out over hundreds of files — with retries, gates, loops, and cross-session resume handled for you.
 
-When you delegate multi-step work to a coding agent, you usually describe the plan in prose. The model then:
+## Who is this for?
 
-1. Re-derives the plan every run.
-2. Floods your context with intermediate transcripts.
-3. Starts over from zero when one call fails.
-4. Gives you no way to _check_ the plan before it burns tokens.
+taskflow is for anyone who delegates multi-step work to a coding agent and has hit one of these:
 
-There is no reuse, no recovery, no structure.
+- **Context-window pressure.** Every subagent transcript floods your conversation, and a five-step audit eats your context before you ever see a result.
+- **Plans that only exist while they run.** You describe a workflow in prose, the model re-derives it every run, and there is nothing to diff, reuse, or hand to a reviewer.
+- **No recovery.** A run dies at the last step and you start over from scratch — paying for every subagent call again.
+- **Reusable pipelines.** You want to name a workflow once and invoke it by name, on Pi, Codex, Claude Code, or OpenCode.
 
-## The taskflow answer
+If any of that sounds familiar, taskflow was built for you.
 
-`taskflow` moves the plan **out of the prompt and into a declarative graph of task nodes.** The runtime owns the DAG, the loops, the retries, and the intermediate state. You declare a pipeline once and run it a hundred times — by name.
+## How to read these docs
 
-Because the plan is data, not prose and not code, it can be **validated, visualized, and replayed.**
+The docs are organized as a learning path. Read them in order the first time; jump around once you know what you are looking for.
 
-## What makes it different
+<Steps>
+  <Step>
+    **[What is taskflow?](/en/docs/what-is-taskflow)** — the *why*. The problem with imperative subagent scripts, and the one trade that makes a declarative graph worth it.
+  </Step>
+  <Step>
+    **[Getting Started](/en/docs/getting-started)** — the *how*. Run your first taskflow in under five minutes, then meet a real fan-out example.
+  </Step>
+  <Step>
+    **[Core Concepts](/en/docs/concepts)** — the *model*. The DAG, phase types, interpolation, verification, context isolation, and resume.
+  </Step>
+  <Step>
+    **[Syntax Reference](/en/docs/syntax)** — the *details*. Every field on every phase type, control flow, caching, and budget.
+  </Step>
+  <Step>
+    **[Guides](/en/docs/guides)** — the *practice*. Per-host walkthroughs (Pi, Codex) and pattern guides (dynamic planning, tournament).
+  </Step>
+</Steps>
 
-| | subagent (built-in) | **taskflow** |
-|---|---|---|
-| **Who drives** | the model, turn by turn | the runtime, from a definition |
-| **Topology** | chain / flat parallel | **DAG with layered concurrency + routing** |
-| **Intermediate results** | in your context window | **in the runtime — not your context** |
-| **Scale** | a handful of tasks | **dynamic `map` fan-out over dozens of items** |
-| **Reusable** | re-described every time | **saved by name** |
-| **Resumable** | ✗ | **✓ cross-session** |
-| **Quality gates** | ✗ | **`gate` phases** |
-| **Conditional routing** | ✗ | **`when` guards + `join: any`** |
-| **Fault tolerance** | ✗ | **per-phase `retry`** |
-| **Human-in-the-loop** | ✗ | **`approval` phases** |
-| **Cost control** | ✗ | **run-wide `budget`** |
-| **Composition** | ✗ | **`flow` sub-flows** |
-| **Iterative loops** | ✗ | **`loop` phases** |
-| **Competitive selection** | ✗ | **`tournament` phases** |
+<Callout type="tip">
+  In a hurry? Skim [Getting Started](/en/docs/getting-started), then keep the [Syntax Reference](/en/docs/syntax) open as you write your first real flow. Run `/tf verify` early and often — it is zero-token.
+</Callout>
 
-## Quick install
-
-<Tabs groupId="host" items={['Pi', 'Codex']}>
-  <Tab value="Pi">
-    ```bash
-    pi install npm:pi-taskflow
-    ```
-  </Tab>
-  <Tab value="Codex">
-    ```bash
-    codex plugin marketplace add heggria/taskflow
-    codex plugin add taskflow@taskflow
-    ```
-  </Tab>
-</Tabs>
-
-## Next steps
+## The chapters
 
 <Cards>
   <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
-    Why taskflow exists and what it solves.
+    Why a declarative graph beats an imperative script.
   </Card>
   <Card title="Getting Started" href="/en/docs/getting-started">
-    Run your first taskflow.
+    Run your first taskflow in five minutes.
   </Card>
   <Card title="Core Concepts" href="/en/docs/concepts">
-    Learn the DAG model.
+    The DAG model, phases, interpolation, verification, isolation, resume.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax">
+    Every field, every phase type, exhaustively.
+  </Card>
+  <Card title="Guides" href="/en/docs/guides">
+    Per-host walkthroughs and pattern guides.
+  </Card>
+  <Card title="Reference" href="/en/docs/reference">
+    Commands and shorthand, at a glance.
   </Card>
 </Cards>

@@ -5,7 +5,37 @@ description: Complete reference for the taskflow DSL.
 
 # Syntax Reference
 
-These pages provide an exhaustive reference for the taskflow DSL.
+This chapter is the *detailed field-and-behavior reference* for the taskflow DSL. Where [Concepts](/en/docs/concepts) gives you the mental model in prose, this chapter tells you exactly which fields exist, what type each one is, what its default is, and what `/tf verify` will reject. Reach for it when you are writing a real flow and need a precise answer.
+
+Every page is exhaustive: a friendly walkthrough up top, then a field-reference table and a validation table at the bottom. You can read them straight through, or jump straight to the table when you know what you are looking for.
+
+## Suggested reading order
+
+The pages layer on top of each other. Read them in this order the first time:
+
+<Steps>
+  <Step>
+    **[Flow Definition](/en/docs/syntax/flow-definition)** — the top-level container: `name`, `args`, `concurrency`, `budget`, `agentScope`, `incremental`, and the `phases` array.
+  </Step>
+  <Step>
+    **[Phase Types](/en/docs/syntax/phase-types)** — every field on every one of the ten phase types, plus the per-type requirement matrix.
+  </Step>
+  <Step>
+    **[Control Flow](/en/docs/syntax/control-flow)** — `when` guards, `join`, `retry`, `timeout`, and self-healing gates.
+  </Step>
+  <Step>
+    **[Caching](/en/docs/syntax/caching)** — within-run resume and cross-run memoization, fingerprints, and TTLs.
+  </Step>
+  <Step>
+    **[Budget](/en/docs/syntax/budget)** — run-wide cost and token caps, and what happens when a ceiling is hit.
+  </Step>
+</Steps>
+
+<Callout type="tip">
+  Writing your first flow? Skim [Flow Definition](/en/docs/syntax/flow-definition) and [Phase Types](/en/docs/syntax/phase-types), then keep this chapter open in a tab. Run `/tf verify` after every change — it catches every hard error on these pages at zero token cost.
+</Callout>
+
+## The pages
 
 <Cards>
   <Card title="Flow Definition" href="/en/docs/syntax/flow-definition">
