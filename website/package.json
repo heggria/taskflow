@@ -1,0 +1,32 @@
+{
+  "name": "taskflow-website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "postinstall": "fumadocs-mdx",
+    "prepare-source": "fumadocs-mdx"
+  },
+  "dependencies": {
+    "fumadocs-core": "16.10.7",
+    "fumadocs-mdx": "15.0.13",
+    "fumadocs-ui": "16.10.7",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2",
+    "@tailwindcss/postcss": "4.3.2",
+    "@types/node": "26.1.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "tailwindcss": "4.3.2",
+    "typescript": "6.0.3"
+  }
+}

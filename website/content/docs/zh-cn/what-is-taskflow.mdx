@@ -1,0 +1,204 @@
+---
+title: 什么是 taskflow？
+description: taskflow 存在的理由以及它解决什么问题。
+---
+
+taskflow 是面向编程智能体子代理的声明式、可验证的*任务图*。你把多步骤智能体工作描述成一张由离散**任务**节点组成的 **DAG**（有向无环图），运行时在任何一个模型调用运行之前就检查这张图，然后以动态 fan-out、gate、loop 和跨会话续跑的方式执行它。
+
+这是用一句话给出的答案。真正有意思的问题是*为什么*你会需要它——所以我们从一个你大概已经撞过的问题开始。
+
+## 问题：命令式子代理脚本
+
+假设你正在发布一个版本，想要做一次发布就绪检查。在编程智能体里最自然的做法是把它*脚本化*：调用一个子代理，看结果，分支，再调用另一个。它长这样：
+
+```js title="release-check.js — 命令式写法（伪代码）"
+const changed = await subagent("List files changed since the last tag");
+if (changed.length === 0) return "Nothing to ship.";
+
+const audits = [];
+for (const file of changed) {
+  audits.push(await subagent(`Audit ${file} for breaking changes`));
+}
+
+const changelog = await subagent(`Write a changelog from:\n${audits.join("\n")}`);
+if (changelog.includes("BREAKING")) {
+  return await subagent("Summarize the breaking changes for the release notes");
+}
+return changelog;
+```
+
+这能跑。但麻烦也正是从这里开始的。
+
+<Steps>
+  <Step>
+    **计划只存在于代码运行的时候。** 你看不到这张图，没法 diff 它，也没法把它交给审查者。如果循环体里有 bug，你要等付完审计的钱之后才会发现。
+  </Step>
+  <Step>
+    **每个 transcript 都会涌入你的上下文。** 每个 `await subagent(...)` 都把它的完整推理返回到你的对话里。审计五十个文件，你的上下文窗口就没了。
+  </Step>
+  <Step>
+    **没法续跑。** 如果运行在 changelog 这一步死了，你得从文件列表重新开始——并为每个审计再付一次钱。
+  </Step>
+  <Step>
+    **不可复用。** 下次发布，你复制粘贴这段脚本。两周以后，没人记得哪个副本才是正本。
+  </Step>
+</Steps>
+
+这些都不是脚本里的 bug。它们是计划活在*命令式代码*里的必然结果。
+
+## 同样的工作，声明成一个 taskflow
+
+下面是把发布检查写成一个 taskflow。工作是一样的；形状变成了数据。
+
+```json title="release-check.json"
+{
+  "name": "release-check",
+  "description": "Audit changed files and return a single release-readiness summary.",
+  "args": { "since": { "default": "last-tag" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files changed since {args.since}. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "audit-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "analyst",
+      "task": "Audit {file.path} for breaking changes. Return one paragraph.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["audit-each"],
+      "agent": "writer",
+      "task": "Combine these audits into one release-readiness summary:\n{steps.audit-each.output}",
+      "dependsOn": ["audit-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+运行它：
+
+```bash title="运行发布检查"
+/tf run release-check since=v1.4.0
+```
+
+这个区别不是装饰性的。因为计划是一张由声明式 `task` 节点组成的图，而不是一段正在运行的脚本，运行时能做四件命令式脚本在结构上做不到的事。
+
+## 声明式 vs 命令式
+
+taskflow 的整个设计来自一次刻意的权衡：
+
+| | 命令式智能体脚本 | taskflow |
+|---|---|---|
+| 计划活在 | 正在运行的代码（`await`、`if`、`for`） | 声明式 JSON（一张 `task` 节点图） |
+| 花 token 之前可验证？ | 否——bug 在运行时才暴露 | 是——循环、死胡同、悬空引用、预算 |
+| 上下文成本 | 每个 transcript 都涌入宿主 | 只有最终输出返回 |
+| 失败后续跑 | 从头重跑 | 已缓存阶段自动跳过，只重跑剩余部分 |
+| 按名称复用 | 复制粘贴脚本 | `/tf:release-check since=v1.4.0` |
+| 能否安全地交给 LLM 生成 | 有风险——它是任意代码 | 安全——图在运行前会被验证 |
+
+> **一句话论点：** 我们放弃任意代码的原始表达力，换回一张*可验证、可观察、可重放、且可安全交给模型生成*的图。
+
+如果你用过 Make、Bazel 或 Vite 这类构建系统，这种分工你已经很熟了。这些工具把编译声明化，好让构建图能被并行化、缓存和审查。taskflow 对智能体工作做的是同一件事。
+
+## 运行时给你什么
+
+### 计划是数据
+
+taskflow 定义是 JSON（或 YAML、或 MDX frontmatter）。它声明**阶段**——离散任务节点（`agent`、`map`、`gate`、`reduce`、`loop`、`tournament`、`approval`、`flow`、`script`）——由 `dependsOn` 边连成一张 DAG，再加上 `when` 守卫、`join`、`retry`、`budget` 等控制流。
+
+正因为它是数据，你可以在代码审查里 diff 它、给它打版本、从另一个模型生成它。
+
+### 花 token 之前先验证
+
+在任何一个子代理启动之前，运行时检查这张图：
+
+- DAG 里没有循环。
+- 没有死胡同或不可达阶段。
+- 没有悬空的 `dependsOn` 引用。
+- 没有 `{steps.X}` 占位符无法从该阶段的依赖到达。
+- 没有低于最低可能成本的预算上限。
+
+```bash title="免费检查一个 flow"
+/tf verify release-check
+```
+
+这是优先选择声明式图的主要原因：你可以在花钱之前*证明*计划的结构属性。
+
+<Callout type="tip">
+  验证是零 token 的。养成习惯：在一个新 flow 上先 `/tf verify` 再 `/tf run`——它能在零成本下抓住绝大多数编写错误。
+</Callout>
+
+### 上下文隔离
+
+用原始子代理时，每个 transcript 都返回到你的对话里。用 taskflow 时，每个中间输出都保存在*运行时内部*。只有标记了 `final: true` 的阶段会返回到你的上下文。
+
+你可以并行 fan-out 五十个文件，而上下文窗口依然很小。宿主永远只看到末尾的那一份摘要。
+
+### 跨会话续跑
+
+每个完成的阶段都持久化到磁盘。一个失败、被停止或撞到预算上限的运行可以稍后继续：
+
+```bash title="续跑一个被停止的运行"
+/tf resume <runId>
+```
+
+已缓存阶段自动跳过。只有没完成的工作才花 token——所以一个五十文件审计在摘要那一步死了，只要再付一次 `writer` 调用就能跑完。
+
+## 何时用 taskflow（以及何时不用）
+
+以下情况用 taskflow：
+
+- 一个工作有**多个相互依赖的步骤**。
+- 你需要在很多条目上**fan out**。
+- 你想在最终输出前加一道**质量门**。
+- 计划应该能**按名称复用**。
+- 你想要**成本控制**或**人工审批**。
+- 计划可能由另一个模型**生成**，并且必须在运行前被检查。
+
+<Callout type="warn">
+  不要为一次性的单步委托动用 taskflow。宿主自带的子代理工具本来就是"去做这一件事"的正确选择。taskflow 的开销在出现第二个依赖前一步的步骤时才开始值回票价。
+</Callout>
+
+## 整体如何拼起来
+
+```txt title="taskflow 流水线"
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│   作者定义      │ ──▶ │  运行时验证      │ ──▶ │  运行时执行     │
+│  taskflow JSON  │     │ 在 token 前验证  │     │  按阶段执行     │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                               │                          │
+                               ▼                          ▼
+                        ┌─────────────┐          ┌─────────────┐
+                        │ Mermaid SVG │          │  仅最终输出  │
+                        │   报告      │          │             │
+                        └─────────────┘          └─────────────┘
+```
+
+## 下一步
+
+<Cards>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    五分钟内运行你的第一个 taskflow。
+  </Card>
+  <Card title="DAG 模型" href="/zh-cn/docs/concepts/dag">
+    阶段如何变成图，以及为什么数组顺序无关紧要。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    taskflow 的十种构建块。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax/flow-definition">
+    flow 定义和阶段字段的完整参考。
+  </Card>
+</Cards>

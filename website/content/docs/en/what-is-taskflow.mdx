@@ -1,0 +1,204 @@
+---
+title: What is taskflow?
+description: Why taskflow exists and what problem it solves.
+---
+
+taskflow is a declarative, verifiable *graph of tasks* for coding-agent subagents. You describe multi-step agent work as a **DAG** of discrete task nodes, the runtime checks that graph before any model call runs, and then executes it with dynamic fan-out, gates, loops, and cross-session resume.
+
+That is the one-sentence answer. The interesting question is *why* you would want that — so let's start with a problem you have probably already hit.
+
+## The problem: imperative subagent scripts
+
+Imagine you are shipping a release and you want a release-readiness check. The natural thing to do in a coding agent is to *script* it: call a subagent, look at the result, branch, call another. It looks like this:
+
+```js title="release-check.js — the imperative way (pseudocode)"
+const changed = await subagent("List files changed since the last tag");
+if (changed.length === 0) return "Nothing to ship.";
+
+const audits = [];
+for (const file of changed) {
+  audits.push(await subagent(`Audit ${file} for breaking changes`));
+}
+
+const changelog = await subagent(`Write a changelog from:\n${audits.join("\n")}`);
+if (changelog.includes("BREAKING")) {
+  return await subagent("Summarize the breaking changes for the release notes");
+}
+return changelog;
+```
+
+This works. It is also where the trouble starts.
+
+<Steps>
+  <Step>
+    **The plan only exists while the code runs.** You cannot see the graph, diff it, or hand it to a reviewer. If the loop body has a bug, you find out *after* you have paid for the audits.
+  </Step>
+  <Step>
+    **Every transcript floods your context.** Each `await subagent(...)` returns its full reasoning into your conversation. Audit fifty files and your context window is gone.
+  </Step>
+  <Step>
+    **There is no resume.** If the run dies at the changelog step, you start over from the file listing — and pay for every audit again.
+  </Step>
+  <Step>
+    **It is not reusable.** Next release, you copy-paste the script. Two weeks later, nobody remembers which copy is canonical.
+  </Step>
+</Steps>
+
+None of these are bugs in the script. They are consequences of the plan living in *imperative code*.
+
+## The same job, declared as a taskflow
+
+Here is the release check as a taskflow. The work is the same; the shape is data.
+
+```json title="release-check.json"
+{
+  "name": "release-check",
+  "description": "Audit changed files and return a single release-readiness summary.",
+  "args": { "since": { "default": "last-tag" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files changed since {args.since}. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "audit-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "analyst",
+      "task": "Audit {file.path} for breaking changes. Return one paragraph.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["audit-each"],
+      "agent": "writer",
+      "task": "Combine these audits into one release-readiness summary:\n{steps.audit-each.output}",
+      "dependsOn": ["audit-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+Run it:
+
+```bash title="Run the release check"
+/tf run release-check since=v1.4.0
+```
+
+The difference is not cosmetic. Because the plan is a graph of declared `task` nodes instead of a running script, the runtime can do four things an imperative script structurally cannot.
+
+## Declarative vs imperative
+
+The whole design of taskflow comes from one trade, made on purpose:
+
+| | Imperative agent script | taskflow |
+|---|---|---|
+| The plan lives in | running code (`await`, `if`, `for`) | declarative JSON (a graph of `task` nodes) |
+| Verifiable before tokens? | No — bugs surface at runtime | Yes — cycles, dead-ends, dangling refs, budget |
+| Context cost | every transcript floods the host | only the final output returns |
+| Resume after failure | re-run from scratch | cached phases auto-skip, only the rest re-runs |
+| Reusable by name | copy-paste the script | `/tf:release-check since=v1.4.0` |
+| Safe to generate with an LLM | risky — it is arbitrary code | safe — the graph is verified before it runs |
+
+> **The thesis, in one line:** we give up the raw expressivity of arbitrary code to gain a graph that is *verifiable, observable, replayable, and safe to hand to a model to generate.*
+
+If you have used a build system like Make, Bazel, or Vite, this split is already familiar. Those tools made compilation declarative so the build graph could be parallelized, cached, and inspected. taskflow does the same thing for agent work.
+
+## What the runtime gives you
+
+### The plan is data
+
+A taskflow definition is JSON (or YAML, or MDX frontmatter). It declares **phases** — discrete task nodes (`agent`, `map`, `gate`, `reduce`, `loop`, `tournament`, `approval`, `flow`, `script`) — wired into a DAG by `dependsOn` edges, plus control flow like `when` guards, `join`, `retry`, and `budget`.
+
+Because it is data, you can diff it in code review, version it, and generate it from another model.
+
+### Verification before tokens
+
+Before a single subagent spawns, the runtime checks the graph:
+
+- No cycles in the DAG.
+- No dead-end or unreachable phases.
+- No dangling `dependsOn` references.
+- No `{steps.X}` placeholder that is not reachable from the phase's dependencies.
+- No budget cap below the minimum possible cost.
+
+```bash title="Check a flow for free"
+/tf verify release-check
+```
+
+This is the main reason to prefer a declarative graph: you can *prove* structural properties of the plan before you spend money on it.
+
+<Callout type="tip">
+  Verification is zero-token. Get into the habit of running `/tf verify` on a new flow before you ever `/tf run` it — it catches the vast majority of authoring mistakes at no cost.
+</Callout>
+
+### Context isolation
+
+With raw subagents, every transcript returns to your conversation. With taskflow, every intermediate output is held *inside the runtime*. Only the phase marked `final: true` returns to your context.
+
+You can fan out over fifty files in parallel and your context window stays small. The host only ever sees the one summary at the end.
+
+### Cross-session resume
+
+Every completed phase is persisted to disk. A run that fails, is stopped, or hits a budget cap can be continued later:
+
+```bash title="Resume a stopped run"
+/tf resume <runId>
+```
+
+Cached phases auto-skip. Only the work that did not finish spends tokens — so a fifty-file audit that died at the summary step costs exactly one `writer` call to finish.
+
+## When to use taskflow (and when not to)
+
+Use taskflow when:
+
+- A job has **multiple dependent steps**.
+- You need to **fan out** over many items.
+- You want a **quality gate** before final output.
+- The plan should be **reusable** by name.
+- You want **cost control** or **human approval**.
+- The plan might be **generated by another model** and must be checked before it runs.
+
+<Callout type="warn">
+  Don't reach for taskflow for a one-off, single-step delegation. The host's built-in subagent tool is already the right tool for "go do this one thing." taskflow earns its overhead the moment there is a second step that depends on the first.
+</Callout>
+
+## How it fits together
+
+```txt title="The taskflow pipeline"
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  Author defines │ ──▶ │ Runtime verifies │ ──▶ │ Runtime executes│
+│  taskflow JSON  │     │ DAG before tokens│     │ phase-by-phase  │
+└─────────────────┘     └──────────────────┘     └─────────────────┘
+                               │                          │
+                               ▼                          ▼
+                        ┌─────────────┐          ┌─────────────┐
+                        │ Mermaid SVG │          │ Final output│
+                        │   report    │          │  only       │
+                        └─────────────┘          └─────────────┘
+```
+
+## Next steps
+
+<Cards>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow in under five minutes.
+  </Card>
+  <Card title="The DAG Model" href="/en/docs/concepts/dag">
+    How phases become a graph, and why order in the array does not matter.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks of a taskflow.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
+    Full reference for flow definitions and phase fields.
+  </Card>
+</Cards>

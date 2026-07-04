@@ -1,0 +1,54 @@
+---
+title: 语法参考
+description: taskflow DSL 的完整参考。
+---
+
+这一章是 taskflow DSL 的*详尽字段与行为参考*。[核心概念](/zh-cn/docs/concepts)用散文给你心智模型，而本章告诉你确切有哪些字段、每个字段是什么类型、默认值是什么、`/tf verify` 会拒绝什么。当你在写一个真实 flow、需要精确答案时就查它。
+
+每一页都是详尽的：顶部是友好的走查，底部是字段参考表和验证表。你可以从头读到尾，也可以在清楚自己要找什么时直接跳到表。
+
+## 建议阅读顺序
+
+这些页面层层叠加。第一次请按这个顺序读：
+
+<Steps>
+  <Step>
+    **[流程定义](/zh-cn/docs/syntax/flow-definition)** —— 顶层容器：`name`、`args`、`concurrency`、`budget`、`agentScope`、`incremental`，以及 `phases` 数组。
+  </Step>
+  <Step>
+    **[阶段类型](/zh-cn/docs/syntax/phase-types)** —— 十种阶段类型每一种的每个字段，加上按类型的需求矩阵。
+  </Step>
+  <Step>
+    **[控制流](/zh-cn/docs/syntax/control-flow)** —— `when` 守卫、`join`、`retry`、`timeout`，以及自愈 gate。
+  </Step>
+  <Step>
+    **[缓存](/zh-cn/docs/syntax/caching)** —— 运行内续跑和跨运行记忆化、指纹和 TTL。
+  </Step>
+  <Step>
+    **[预算](/zh-cn/docs/syntax/budget)** —— 运行级的成本和 token 上限，以及触及上限时会发生什么。
+  </Step>
+</Steps>
+
+<Callout type="tip">
+  在写第一个 flow？略读[流程定义](/zh-cn/docs/syntax/flow-definition)和[阶段类型](/zh-cn/docs/syntax/phase-types)，然后把这一章留在某个标签页里打开。每次改动后运行 `/tf verify`——它以零 token 代价捕获这些页上每一个硬错误。
+</Callout>
+
+## 页面
+
+<Cards>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    顶层字段和结构。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    每种类型的所有字段。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `when`、`join`、路由、重试。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    运行内和跨运行记忆化。
+  </Card>
+  <Card title="预算" href="/zh-cn/docs/syntax/budget">
+    成本和 token 上限。
+  </Card>
+</Cards>

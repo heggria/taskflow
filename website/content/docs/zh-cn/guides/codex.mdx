@@ -1,0 +1,206 @@
+---
+title: 在 Codex 上使用 taskflow
+description: 把 taskflow 作为 Codex 插件安装，通过 MCP 编排多阶段工作流。
+---
+
+[Codex](https://github.com/openai/codex) 是 taskflow 的天然归宿：它已经在用子代理的方式思考，而 taskflow 给那些子代理一个声明式图来在里面运行。在 Codex 上，taskflow 以插件形式发布，注册一个 MCP 服务器加一个路由 skill，于是模型一看到多步骤任务就能调用它。
+
+本页走完整个弧线：安装插件、确认 MCP 服务器活了、通过一次工具调用运行一个 flow，以及为长时间运行的工作做配置。
+
+## 安装
+
+taskflow 通过共享的插件市场分发。先添加市场，再安装插件：
+
+```bash title="安装 taskflow 插件"
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+单单这一个 `plugin add` 就同时做了三件事：
+
+<Steps>
+  <Step>
+    **注册 MCP 服务器。** 插件的 `.mcp.json` 声明一个 `taskflow` 服务器，通过 `npx codex-taskflow-mcp` 启动，于是 Codex 能通过 stdio 访问运行时。
+  </Step>
+  <Step>
+    **安装路由 skill。** 一个打包的 skill 教 Codex 何时去拿 taskflow 工具，于是你不用记它们的名字。
+  </Step>
+  <Step>
+    **设一个合理的默认超时。** 服务器自带一个 30 分钟（`1800` 秒）的工具调用超时，因为 DAG 可能要跑一会儿。
+  </Step>
+</Steps>
+
+如果 Codex 会话已经在运行，重启一下，好让新插件被识别。
+
+## 验证安装
+
+在运行任何东西之前，确认插件和它的 MCP 服务器都干净地注册了：
+
+```bash title="验证插件和 MCP 服务器"
+codex plugin list   # taskflow@taskflow 应该出现，已启用
+codex mcp list      # taskflow 应该出现，已启用
+```
+
+如果哪个不见了，说明 `plugin add` 那步没完成——重新运行它并检查报错。
+
+## 运行你的第一个 flow
+
+在 Codex 上，你不是通过斜杠命令调用 taskflow——你是通过一个 MCP 工具调用它。模型在打包 skill 的引导下决定何时调用它。所以最自然的开始方式就是直接描述工作。
+
+### 直接问
+
+在 Codex 会话里试试这些：
+
+```text title="用自然语言描述工作"
+> List my saved taskflows.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+skill 把请求路由到正确的工具。如果一个 flow 已保存在当前项目里，模型用保存的名字调用 `taskflow_run`；如果你贴了一个内联定义，它就把那个传进去。
+
+### 直接调用工具
+
+如果你想明确一点——在脚本里或当你知道确切形状时很有用——这个工具是 `taskflow_run`。它接受一个已保存 flow 的 `name` 或一个内联 `define`：
+
+```json title="通过 taskflow_run 运行一个已保存的 flow"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+```json title="通过 taskflow_run 运行一个内联 flow"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
+两种形式运行的是同一个 DAG。工具只返回最终输出——来自 `discover`、`review-each` 和 `summarize` 的中间 transcript 留在运行时内部，从不进入你的上下文。
+
+<Callout type="info">
+  只有标记为 `final: true` 的阶段被返回。其余一切按设计是上下文隔离的。
+</Callout>
+
+## 在花 token 之前检查一个 flow
+
+在运行一个 DAG 之前，你可以让 Codex 静态验证它。这捕获循环、悬空的 `dependsOn`、未知的阶段引用和格式错误的配置——全部零 token 成本：
+
+```json title="通过 taskflow_verify 验证一个 flow"
+{
+  "name": "review-changes"
+}
+```
+
+或者把 DAG 渲染成一张图来目测它的形状：
+
+```json title="通过 taskflow_compile 把一个 flow 编译成图"
+{
+  "name": "review-changes"
+}
+```
+
+## 长时间运行的 flow
+
+关于在 Codex 上运行 taskflow，有一件事要知道：**`taskflow_run` 是同步的。** 工具调用直到整个 DAG 完成——每个阶段、每个子代理——才返回。对一次三阶段的审查来说没问题；对一次五十个文件的 fan-out 外加末尾一个 tournament 来说，可能要花一会儿。
+
+插件自带一个 30 分钟的默认工具调用超时来适应这点。如果你的 flow 跑得更久，在你的 Codex 配置里覆盖它：
+
+```toml title="~/.codex/config.toml"
+[mcp_servers.taskflow]
+tool_timeout_sec = 3600
+```
+
+<Callout type="warn">
+  不要把这个超时设得比你预期的最长运行还短。如果工具调用超时，运行会在后台继续执行——但 Codex 那时已经放弃了结果。
+</Callout>
+
+对于真正长的工作，考虑拆分 flow：在已保存的 flow 里跑重的阶段，用下游的 `approval` 或 `gate` 阶段来暂停审查。（按 `runId` 续跑一个暂停的运行是 Pi 独有的能力——`/tf resume`。在 Codex 上没有 `taskflow_resume` MCP 工具，因此要继续一个暂停的运行就重新运行该 flow；带 `cache.scope: "cross-run"` 的阶段会被自动复用。）
+
+## 在事后检查一次运行
+
+每次 `taskflow_run` 返回一个 `runId`。如果出了问题——一个 gate block 了、一个阶段产出了奇怪的输出——你可以不重新运行整个 flow 就检查某个阶段存储的输出：
+
+```json title="通过 taskflow_peek 窥视某个阶段存储的输出"
+{
+  "runId": "run_2026-07-04_abc123",
+  "phaseId": "summarize"
+}
+```
+
+省略 `phaseId` 来列出每个阶段及其状态和输出大小。输出是硬截断的（默认 4000 字符），所以一次 peek 永远不会淹没你的上下文。
+
+<Callout type="warn">
+  `taskflow_peek` 是 taskflow 上下文隔离的唯一有意例外。它把中间输出拉进你的对话——用于调试，不要作为正常 flow 的一部分。
+</Callout>
+
+## 工具参考
+
+这是插件暴露的完整 MCP 表面：
+
+| 工具 | 用途 |
+|---|---|
+| `taskflow_run` | 运行一个已保存的 flow（按 `name`）或一个内联定义（按 `define`）。返回最终输出。 |
+| `taskflow_list` | 列出当前项目里已保存的 flow。 |
+| `taskflow_show` | 打印一个已保存 flow 的 JSON 定义。 |
+| `taskflow_verify` | 静态验证一个 flow（循环、引用、配置），零成本。 |
+| `taskflow_compile` | 把 DAG 渲染成 Mermaid 图。 |
+| `taskflow_peek` | 检查一个存储阶段的输出，用于事后调试。 |
+
+<Callout type="tip">
+  你很少需要记这些。打包的 skill 告诉 Codex 哪个工具适合这个请求——"验证这个 flow"、"给我看图"、"运行它"都会自己正确路由。
+</Callout>
+
+## 卸载
+
+如果你需要把 taskflow 从一台机器上拿掉：
+
+```bash title="卸载 taskflow 插件"
+codex plugin remove taskflow@taskflow
+```
+
+这会注销 MCP 服务器并移除 skill。磁盘上任何已保存的 flow 定义都不动。
+
+## 下一步
+
+<Cards>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    如果你还没看过，这里是五分钟导览。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    你可以组合进一个 DAG 的十个构建块。
+  </Card>
+  <Card title="在 Pi 上使用 taskflow" href="/zh-cn/docs/guides/pi">
+    同一个运行时，接入 Pi 编程智能体。
+  </Card>
+</Cards>

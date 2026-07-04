@@ -1,0 +1,37 @@
+---
+title: 指南
+description: 在不同宿主和模式下使用 taskflow 的实用指南。
+---
+
+指南是这些文档中*实用*的那一半。[核心概念](/zh-cn/docs/concepts)解释模型，[语法参考](/zh-cn/docs/syntax)列举每个字段，而指南带你端到端地做一件真实的事——在某个宿主上安装、跑一个 flow、保存它、调试它，并在工作需要时上手一个进阶模式。
+
+它们分两种：
+
+- **按宿主。** taskflow 跑在 Pi、Codex、Claude Code 和 OpenCode 上。每个宿主有自己的安装路径和调用入口，所以各自有专门的走查。
+- **按模式。** 基础跑通之后，有些问题想要特定的形状——一个在运行时规划自己子流程的模型，或者一个生成多份竞争草稿再由评委挑出最佳的锦标赛。
+
+<Callout type="tip">
+  刚接触 taskflow？从你已经在用的宿主开始。两个宿主指南都以同一个可运行的 review flow 收尾，所以之后你可以跨宿主对照着看。
+</Callout>
+
+## 按宿主
+
+<Cards>
+  <Card title="在 Pi 上使用 taskflow" href="/zh-cn/docs/guides/pi">
+    安装扩展、用 `/tf` 运行、保存 flow，并配置模型角色。
+  </Card>
+  <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
+    安装插件、通过 MCP 调用 `taskflow_run`，并处理长时间运行的 flow。
+  </Card>
+</Cards>
+
+## 按模式
+
+<Cards>
+  <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
+    在运行时生成子流程，并在执行前验证它们。
+  </Card>
+  <Card title="锦标赛选择" href="/zh-cn/docs/guides/tournament">
+    生成竞争变体，让评委选出最佳结果。
+  </Card>
+</Cards>

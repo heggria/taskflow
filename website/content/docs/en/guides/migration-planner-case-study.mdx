@@ -1,0 +1,284 @@
+---
+title: Automating a Risky Codebase Migration
+description: Plan a migration at runtime, validate the plan, execute it, and loop until the old API is gone.
+---
+
+You need to migrate from an old HTTP client to a new one. The old call site is `legacyAuth()`; the new one is `authorize()`. The catch: you don't know how many files call the old helper, and each file may need a one-line rename or a deeper refactor. You can't write the migration plan up front — you have to discover it at runtime, validate it, execute it, and then do it again for whatever the first pass missed.
+
+This guide builds a taskflow that does the migration safely. We start with a one-shot discover-and-plan, add a gate that sanity-checks the plan, execute the plan via a generated sub-flow, and finish with a loop that re-plans until no old calls remain. By the end you will have a complete, saveable flow you can point at any mechanical migration.
+
+<Callout type="info">
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+</Callout>
+
+## The problem
+
+Migrations are the canonical "you can't plan it up front" task. Three things are true at once:
+
+- **The scope is unknown.** You don't know which files call `legacyAuth()` until you grep. It could be 5 files; it could be 200.
+- **Each file is different.** Some are a clean `legacyAuth()` → `authorize()` rename. Others import the old helper in three places, or call it inside a try/catch that the new API handles differently.
+- **One pass is rarely enough.** The first plan fixes most files. A follow-up check finds three more — maybe a dynamic call site the grep missed, or a file the planner skipped because it looked hard.
+
+A static DAG — written once, run forever — cannot describe that. The plan has to be *discovered* at runtime. taskflow's answer is the `flow` phase with an inline `def`: a planner agent emits a sub-flow definition, the runtime validates and hardens it, then executes it as if you had authored it. Pair it with a `loop` and the plan can revise itself until the work is done.
+
+## Phase 1 — discover the affected files
+
+Everything downstream depends on knowing what to migrate. There are two ways to get the list, and the choice matters.
+
+### The cheap way: a `script` phase
+
+If the old call site is a literal string you can grep for, do not spend a token on it. A `script` phase runs a shell command at zero cost:
+
+```json title="discover with script"
+{
+  "id": "discover",
+  "type": "script",
+  "run": ["git", "grep", "-l", "legacyAuth(", "--", "src/"],
+  "timeout": 30000
+}
+```
+
+<Callout type="warn">
+  The array form of `run` is an `execvp`-style direct spawn — it does **not** go through a shell, so pipes and globs will not work. `git grep -l` here prints one path per line, which is fine for a human glance but not an array. If you need structured output, use the agent form below.
+</Callout>
+
+### The flexible way: an `agent` phase
+
+A `scout` agent can find the files *and* shape the output as JSON in one step. It costs a few tokens but it is robust to dynamic call sites (string concatenation, re-exports) that a literal grep misses:
+
+```json title="discover with an agent"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "Find every source file under src/ that calls legacyAuth(). Output ONLY a JSON array of {\"path\": \"<relative-path>\"} objects. No prose.",
+  "output": "json",
+  "expect": { "type": "array", "items": { "type": "object" } },
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+The `output: "json"` flag tells the runtime to parse the agent's output as JSON, so `{steps.discover.json}` resolves to the array directly. The `expect` contract fails the phase fast if the agent returns prose instead of JSON.
+
+## Phase 2 — plan the migration per file
+
+Now we have a list of affected files. A `planner` agent reads the list and emits a migration plan: for each file, what action to take.
+
+```json title="plan per file"
+{
+  "id": "plan",
+  "type": "agent",
+  "agent": "planner",
+  "dependsOn": ["discover"],
+  "task": "Given these files that call legacyAuth():\n{steps.discover.json}\n\nFor each file, emit a migration step: rename legacyAuth() to authorize(), update imports, and note any file that needs a deeper refactor. Output ONLY a JSON object {\"plan\": [{\"path\": \"...\", \"action\": \"rename\"|\"refactor\", \"note\": \"...\"}]}. No prose.",
+  "output": "json",
+  "expect": { "type": "object", "properties": { "plan": { "type": "array" } }, "required": ["plan"] },
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+The plan is now a structured JSON object — `{plan: [{path, action, note}, ...]}`. The `expect` contract requires a `plan` array, so a malformed plan fails the phase and is eligible for `retry`.
+
+<Callout type="info">
+  This `plan` phase emits a *description* of the work, not a taskflow definition. That is the right shape when you want to execute the steps yourself (e.g. via a downstream `map`). When you want the runtime to execute a model-authored DAG, the planner emits a full taskflow `{name, phases}` instead — see Phase 4.
+</Callout>
+
+## Phase 3 — validate the generated plan
+
+LLM-authored plans are untrusted input. Before a generated plan executes a single subagent, you want a check: is the plan structurally sound, and does it avoid anything dangerous?
+
+A `gate` phase does this. It runs an LLM check and can halt the run on `VERDICT: BLOCK`:
+
+```json title="plan gate"
+{
+  "id": "plan-gate",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["plan"],
+  "join": "all",
+  "task": "You are reviewing a generated migration plan.\n{steps.plan.json}\n\nIf the plan is structurally sound (an object with a 'plan' array, each entry has a path and an action of 'rename' or 'refactor', and no dangerous operations), end with: VERDICT: PASS. If it is malformed or unsafe, end with: VERDICT: BLOCK and explain in one line.",
+  "onBlock": "halt"
+}
+```
+
+<Callout type="info">
+  When you execute the plan via a `flow { def }` phase (Phase 4), the runtime runs its own validation *automatically* — structural checks, breadth caps, filesystem containment — and fails open with a `defError` if the plan is malformed. The `gate` here is an extra author-side check for when you want a human-style sanity pass before execution, or when you execute via `map` (which does not auto-validate a JSON plan).
+</Callout>
+
+For static, author-side checking of a saved flow before you ever run it, use `/tf verify` — it is zero-token:
+
+```bash title="Verify the migration flow"
+/tf verify iterative-migration
+```
+
+## Phase 4 — execute the plan
+
+Two ways to execute, depending on what the planner emitted.
+
+### Execute via `flow { def }` — the runtime runs a model-authored DAG
+
+If the planner emits a full taskflow definition (`{name, phases}`), hand it to a `flow` phase. The runtime interpolates `{steps.plan.json}`, JSON-parses it, validates and hardens it, then executes it as a sub-flow:
+
+```json title="execute via flow def"
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"],
+  "final": true
+}
+```
+
+The generated sub-flow is subject to **dynamic hardening** caps (see Phase 5): at most 100 phases, 200 map items, 16 concurrent subagents, 5 levels of nesting, no `script` phases, and its `cwd` must stay inside the run's working directory. On any validation failure the phase **fails open** — it resolves as `done` with empty output and a `defError` diagnostic, and the run continues. A bad plan never crashes the whole flow.
+
+### Execute via `map` — you fan out yourself
+
+If the planner emits a *list of steps* (as in Phase 2), fan out over it with a `map`. This gives you direct control of the per-file agent and concurrency, at the cost of writing the fan-out yourself:
+
+```json title="execute via map"
+{
+  "id": "apply-each",
+  "type": "map",
+  "over": "{steps.plan.json.plan}",
+  "as": "step",
+  "agent": "executor",
+  "dependsOn": ["plan"],
+  "concurrency": 4,
+  "task": "Apply this migration step to {step.path}: {step.action}. {step.note}. Edit the file in place. Return one line: the file path and 'done' or the blocker.",
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+Use `flow { def }` when you want the model to author the whole execution graph. Use `map` when the plan is a flat list and you want explicit control.
+
+## Phase 5 — loop plan → execute until done
+
+Real migrations rarely finish in one pass. The planner's first plan fixes most files, but a follow-up check finds three more — a dynamic call site, a file the planner skipped. You want to re-plan based on what's left, and repeat until nothing remains.
+
+A `loop` re-runs the planner each iteration, feeding the previous output back in. It stops when the planner reports `done: true` (nothing left) or when `maxIterations` is hit. A downstream `flow` then executes the final plan — but only if there's actually one to run.
+
+```json title="iterative-migration.json"
+{
+  "name": "iterative-migration",
+  "description": "Iteratively re-plan a legacyAuth() -> authorize() migration until no calls remain, then execute the final plan.",
+  "args": {
+    "oldApi": { "default": "legacyAuth()", "description": "The old API call to migrate away from." },
+    "newApi": { "default": "authorize()", "description": "The new API to migrate to." }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 4.0 },
+  "phases": [
+    {
+      "id": "refine",
+      "type": "loop",
+      "agent": "planner",
+      "task": "Inspect the codebase for remaining calls to {args.oldApi}. If any remain, output {\"plan\": <taskflow-definition that fixes the remaining files>, \"done\": false}. If none remain, output {\"done\": true}. The plan, when present, must be a JSON taskflow with a 'name' and a 'phases' array.",
+      "until": "{steps.refine.json.done} == true",
+      "maxIterations": 6,
+      "output": "json"
+    },
+    {
+      "id": "execute-final",
+      "type": "flow",
+      "def": "{steps.refine.json.plan}",
+      "when": "{steps.refine.json.done} == false",
+      "dependsOn": ["refine"],
+      "final": true
+    }
+  ]
+}
+```
+
+Reading the two phases together:
+
+- Each `refine` iteration inspects the codebase. When calls remain, it emits a fresh plan and `done: false`; when the codebase is clean, it emits `done: true` and the loop stops.
+- `{steps.refine.json}` always resolves to the **last** iteration's output, so `execute-final` sees whichever iteration finished the loop.
+- The `when` guard is what makes this safe. If the loop converged (`done: true`), the guard is false and `execute-final` is skipped — the work is already complete, so there is no plan to run. If the loop ran out of iterations (`done: false`), the guard is true and the remaining plan executes.
+
+<Callout type="info">
+  A `loop` body is a single agent call, not a sub-flow — so per-iteration *execution* happens inside that agent (it has file-editing tools), not via a nested `flow`. Use the `flow { def }` pattern above when you want a model-generated DAG run as a separate, hardened sub-flow.
+</Callout>
+
+### Loop safety
+
+A loop can never hang forever. Three guarantees hold:
+
+- **`maxIterations` is a hard cap.** The default is 10; the hard maximum is 100. Even if `until` never becomes truthy, the loop stops at the cap.
+- **Convergence detection is on by default.** If an iteration's output is identical to the previous one (a fixed point), the loop stops early — further iterations would not change anything.
+- **`until` parse errors stop the loop** (fail-safe), so a malformed condition never spins forever.
+
+Verify it before spending any tokens:
+
+```bash title="Verify the flow"
+/tf verify iterative-migration
+```
+
+Then run it:
+
+```bash title="Run the migration"
+/tf run iterative-migration oldApi=legacyAuth\(\) newApi=authorize\(\)
+```
+
+Only the `execute-final` phase's output returns to your conversation. Every intermediate plan the loop rejected, and every per-iteration inspection, stays inside the runtime.
+
+## What to tune
+
+The flow above is a sensible default. These are the knobs worth turning for your own migration.
+
+### Hardening caps
+
+A generated sub-flow (`flow { def }`) is LLM-authored and therefore untrusted. taskflow bounds its blast radius with caps that apply **only** to runtime-generated sub-flows — authored/saved flows are not subject to them:
+
+| Cap | Limit | What it stops |
+|---|---|---|
+| Max phases | 100 | A planner emits "one phase per file in the repo" and produces a 4,000-node graph. |
+| Max map items | 200 | A generated `map` fans out over a 10,000-element array. |
+| Max concurrency | 16 | A generated flow sets `concurrency: 500` and spawns hundreds of subagents at once. |
+| Nesting depth | 5 | A plan spawns a plan that spawns a plan, recursing without bound. |
+| No `script` | — | A generated flow runs `script` phases that execute arbitrary shell commands. |
+
+When a cap is exceeded, validation fails and the phase fails open with a `defError` explaining which cap was hit. You cannot raise these caps from a generated flow — they are hard limits. If your migration genuinely needs more than 100 phases, split it into multiple saved flows.
+
+### Budget clamping
+
+A generated sub-flow inherits the parent run's budget, but never exceeds it. The child's `budget` is clamped to the smaller of its own declared budget and the parent's **remaining** budget. A plan that declares `budget: { maxUSD: 50 }` inside a parent run that has $5 left runs with a $5 ceiling.
+
+This means a model cannot grant itself more spending room than the parent flow allowed. The parent's `budget: { maxUSD: 4.0 }` is the true ceiling — raise it if your migration is large, lower it if you want a hard stop on a risky run.
+
+### Cache the discover phase
+
+The `discover` phase is a pure function of the codebase state. Mark it `cross-run` so a re-run after a small change reuses the prior discovery when nothing relevant changed:
+
+```json title="cache the discover phase"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "Find every source file under src/ that calls legacyAuth(). Output ONLY a JSON array of {\"path\": \"<relative-path>\"} objects.",
+  "output": "json",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob!:src/**/*.ts"]
+  }
+}
+```
+
+The `git:HEAD` fingerprint folds the commit into the key, and `glob!:` content-hashes the matched files so a re-run after an unrelated commit still hits the cache. Use `/tf why-stale <runId>` to see exactly which fingerprint input changed.
+
+<Callout type="warn">
+  `loop` and `tournament` phases are never cached cross-run by design — each run deserves fresh iterations and fresh variants. Do not put a `cache` block on the `refine` loop; the validator will reject it. Cache the *upstream* discover phase instead, which is the expensive, pure part.
+</Callout>
+
+## Where to go next
+
+<Cards>
+  <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
+    The full dynamic-planning guide — validation, hardening, and the plan→execute→loop cycle.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `dependsOn`, `when`, `join`, and `retry` — the fields that shape the DAG.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization, fingerprints, and the `why-stale` / `recompute` toolkit.
+  </Card>
+</Cards>

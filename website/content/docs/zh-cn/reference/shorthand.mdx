@@ -1,0 +1,190 @@
+---
+title: 简写
+description: task、tasks 和 chain 快捷形式，用于快速委托。
+---
+
+有时候你不需要一个 DAG。你只是想委托一件事，或同时跑几个检查，或把两步串起来——其中第二步需要第一步的输出。为这种事写一个完整的 `phases` 数组是负担。
+
+taskflow 接受三种简写形式——`task`、`tasks` 和 `chain`——运行时在验证和执行之前会把它们**反糖化**（desugar）成正式的 flow。本页是一份友好的快速参考：每种形式产生什么、何时使用它、以及它展开成的精确完整 flow JSON。
+
+<Callout type="info">
+  简写用于快速委托。当你需要条件路由、循环、gate、缓存或跨会话续跑时，请迁移到完整的 `phases` DAG——简写无法表达这些。
+</Callout>
+
+## `task` —— 委托一件事
+
+你想把单块工作委托给一个 agent。这就是整个 flow。
+
+```json title="task-shorthand.json"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+运行时把它反糖化为一个带单个 `agent` 阶段的 flow，标记为 `final`，所以它的输出就是返回的东西：
+
+```json title="task-desugared.json"
+{
+  "name": "task",
+  "phases": [
+    {
+      "id": "main",
+      "type": "agent",
+      "task": "Summarize the architecture of src/",
+      "agent": "explorer",
+      "final": true
+    }
+  ]
+}
+```
+
+最适合：单次 agent 调用就是全部答案的一次性委托。
+
+## `tasks` —— 并行运行独立的检查
+
+你有一个固定的、希望同时被检查的事项列表。每一项都是独立的；你希望它们全部并发运行。
+
+```json title="tasks-shorthand.json"
+{
+  "tasks": [
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit input validation in src/api", "agent": "analyst" }
+  ]
+}
+```
+
+这反糖化为一个单一的 `parallel` 阶段，它的 `branches` 就是你的任务。输出被拼接起来；阶段是 `final`：
+
+```json title="tasks-desugared.json"
+{
+  "name": "parallel",
+  "phases": [
+    {
+      "id": "parallel",
+      "type": "parallel",
+      "branches": [
+        { "task": "Audit auth in src/api", "agent": "analyst" },
+        { "task": "Audit input validation in src/api", "agent": "analyst" }
+      ],
+      "final": true
+    }
+  ]
+}
+```
+
+<Callout type="warn">
+  `parallel` 不会综合——它只运行分支并拼接它们的输出。如果你想要单个合并的答案，请在完整 DAG 中改用下游的 `reduce` 阶段。
+</Callout>
+
+最适合：一个已知的、你想 fan-out 并收集的独立检查列表。
+
+## `chain` —— 需要上一步输出的步骤
+
+每一步依赖前一步。第二步需要看到第一步的结果。第三步需要第二步的。这是一条顺序链。
+
+```json title="chain-shorthand.json"
+{
+  "chain": [
+    { "task": "List the public API of src/lib", "agent": "scout" },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+每一步成为一个 `agent` 阶段（`step1`、`step2`、……），依赖前一步。最后一步是 `final`。在一步的 `task` 内，`{previous.output}` 解析为紧邻前一步的输出：
+
+```json title="chain-desugared.json"
+{
+  "name": "chain",
+  "phases": [
+    {
+      "id": "step1",
+      "type": "agent",
+      "task": "List the public API of src/lib",
+      "agent": "scout"
+    },
+    {
+      "id": "step2",
+      "type": "agent",
+      "task": "Write docs for:\n{previous.output}",
+      "agent": "writer",
+      "dependsOn": ["step1"],
+      "final": true
+    }
+  ]
+}
+```
+
+最适合：每一步消费上一步输出的流水线。`{previous.output}` 是完整 DAG 中 `{steps.X.output}` 的 chain 等价物。
+
+## 用 `context` 预读文件
+
+三种形式都支持 `context` 和 `contextLimit`——在任务运行前预读并注入的文件，这样 agent 就不会花轮次去探索。
+
+```json title="shorthand-context.json"
+{
+  "chain": [
+    {
+      "task": "List the public API",
+      "agent": "scout",
+      "context": ["src/lib/**/*.ts"]
+    },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+把 `context` 放在单个步骤上。在 `chain` 模式下，顶级的 `context` 会被**忽略**（带一个警告）——请改为在每个步骤上声明。在 `tasks` 模式下，顶级 `context` 与每个步骤 `context` 的并集在所有分支间共享。
+
+## 优先级
+
+如果你提供了不止一种形式，运行时按固定顺序选一个：**`chain` > `tasks` > `task`**。一个同时有 `chain` 和 `task` 的 spec 会被当作 chain 处理；`task` 被忽略。
+
+## 透传元数据
+
+简写 spec 接受与完整 flow 相同的顶级元数据。这些会透传到反糖化后的定义：
+
+| 字段 | 效果 |
+|---|---|
+| `name` | Flow 名称（默认为 `task`、`parallel` 或 `chain`）。 |
+| `description` | Flow 描述。 |
+| `concurrency` | 默认最大并发子代理数。 |
+| `agentScope` | Agent 发现范围（`user` / `project` / `both`）。 |
+| `args` | 声明的调用参数。 |
+| `budget` | 运行级成本 / token 上限。 |
+| `strictInterpolation` | 把未解析占位符的警告提升为错误。 |
+
+```json title="shorthand-with-meta.json"
+{
+  "name": "audit-api",
+  "description": "Quick parallel audit of the API layer.",
+  "concurrency": 2,
+  "tasks": [
+    { "task": "Audit auth", "agent": "analyst" },
+    { "task": "Audit validation", "agent": "analyst" }
+  ]
+}
+```
+
+## 从简写到完整 DAG
+
+简写让你快速起步。当你超出它的能力时，迁移路径是机械的——上面的反糖化 JSON 正是运行时看到的东西，所以你可以复制它，加上简写无法表达的字段，然后继续。
+
+<Callout type="tip">
+  一旦你需要以下任一项，就改用完整的 `phases` DAG：`when` 守卫、`join: "any"`、`retry`、`timeout`、`expect` 契约、`cache`、`loop`、`gate`、`map`（运行时 fan-out）、`tournament`、`flow` 子工作流，或跨会话续跑。简写都无法表达这些。
+</Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="命令" href="/zh-cn/docs/reference/commands">
+    Pi `/tf` 命令和 Codex MCP 工具。
+  </Card>
+  <Card title="Flow 定义" href="/zh-cn/docs/syntax/flow-definition">
+    简写展开成的完整 `phases` DAG。
+  </Card>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    在真实示例中看简写的使用。
+  </Card>
+</Cards>

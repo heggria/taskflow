@@ -1,0 +1,474 @@
+---
+title: 插值
+description: 数据如何在 taskflow 的阶段之间流动。
+---
+
+阶段的 `task`、`when`、`until`、`context` 和 script 的 `input` 都是**模板**。`{花括号}` 中的任何内容都会在阶段运行*之前*于运行时被解析，解析依据是上游阶段产出的数据、调用参数和循环状态。本页展示如何在阶段之间接线数据 —— 以及当占位符无法解析时运行时会怎么做。
+
+<Callout type="info">
+  插值是**零 token 且确定性的** —— 它运行在宿主进程中，从不在子代理中运行。格式错误的占位符永远不会让运行崩溃：它会被原样保留并以警告形式呈现。`when` / `until` 中的解析错误会 **fail-open**（阶段仍然运行）。这些保证是 fail-open 不变量的基石。
+</Callout>
+
+## 场景：把文件列表从一个阶段传给下一个
+
+想象你想让一个 agent 发现变更的文件，让第二个 agent 审查它们。第二个阶段需要第一个阶段产出的*列表*。下面是最小版本：
+
+```json title="pass-output.json"
+{
+  "phases": [
+    { "id": "discover", "task": "List changed source files. Output a JSON array of {path}." },
+    {
+      "id": "review",
+      "dependsOn": ["discover"],
+      "task": "Review these files for risks:\n{steps.discover.output}"
+    }
+  ]
+}
+```
+
+`{steps.discover.output}` 是一个**占位符**。在 `review` 运行之前，运行时用 `discover` 产出的原始文本替换它。`dependsOn` 是让这一切安全的原因 —— 它保证 `discover` 在 `review` 的 task 被插值之前已完成，也正是它让 `/tf verify` 能确认该引用是可达的。
+
+这是核心心智模型：**占位符从上游阶段拉取数据，`dependsOn` 保证顺序。** 本页其余部分讲其他占位符家族、JSON 提取策略、条件语言以及失败模式。
+
+<Cards>
+  <Card title="占位符家族" href="#占位符家族">
+    占位符能拉取数据的六个来源。
+  </Card>
+  <Card title="处理 JSON" href="#处理-json">
+    `safeParse`、`.json.field`，以及为 `map` fan-out 强制数组。
+  </Card>
+  <Card title="条件" href="#条件">
+    `when` / `until` 表达式语言。
+  </Card>
+  <Card title="失败模式" href="#失败模式">
+    缺失引用、转义和验证。
+  </Card>
+</Cards>
+
+---
+
+## 占位符家族
+
+有六个占位符家族，各自从不同来源拉取。
+
+| 占位符 | 解析为 | 可用于 |
+|---|---|---|
+| `{args.X}` | 一个调用参数 | 所有阶段 |
+| `{steps.ID.output}` | 先前阶段的最终文本输出 | 所有阶段（ID 必须是祖先） |
+| `{steps.ID.json}` | 先前阶段输出解析为 JSON | 所有阶段 |
+| `{previous.output}` | 紧接的已完成依赖 | 所有阶段 |
+| `{item}` | `map` fan-out 中的当前元素 | `map` 阶段 |
+| `{loop.X}` / `{reflexion}` | 循环迭代状态和失败反馈 | `loop` 阶段 |
+
+让我们逐个 walkthrough。
+
+### `{args.X}` —— 调用参数
+
+参数在流程定义中声明并带默认值，用 `{args.X}` 引用：
+
+```json title="args.json"
+{
+  "args": {
+    "dir": { "default": "src" },
+    "force": { "default": false }
+  },
+  "phases": [
+    { "id": "list", "task": "List files under {args.dir}." }
+  ]
+}
+```
+
+下降是深度的：`{args.user.id}` 遍历 `args.user.id`，并在任意环节缺失时优雅地返回 `undefined`。
+
+<Callout type="warn">
+  引用调用时未提供（且没有 `default`）的 `{args.X}` 是**验证警告**，而非错误 —— 占位符在 prompt 中保持字面值。在 flow 上设置 `strictInterpolation: true` 可将其提升为硬错误。
+</Callout>
+
+### `{steps.ID.output}` —— 先前文本输出
+
+子代理作为最终输出产出的原始字符串。`ID` 必须是当前阶段经由 `dependsOn`（或 `from`）可达的**传递祖先**；否则验证会以硬错误失败。
+
+```json title="steps-output.json"
+{
+  "phases": [
+    { "id": "name-gen", "task": "Generate a project name." },
+    {
+      "id": "scaffold",
+      "task": "Create a directory named {steps.name-gen.output} and init it.",
+      "dependsOn": ["name-gen"]
+    }
+  ]
+}
+```
+
+该值**原样**插入 —— 不引用、不重新序列化。`output` 之后的尾随路径段（如 `{steps.a.output.foo}`）不被允许：`output` 是字符串，不是对象。如果你要字段，用 `.json`。
+
+### `{steps.ID.json}` —— 解析 JSON
+
+解析先前阶段的输出并返回结果。如果解析值是对象或数组，插入前用 `JSON.stringify(value, null, 2)` 美化打印；如果是原始值，直接插入。
+
+```json title="steps-json.json"
+{
+  "phases": [
+    { "id": "triage", "output": "json", "task": "Classify severity. Output only JSON." },
+    {
+      "id": "deep",
+      "when": "{steps.triage.json.severity} == high",
+      "task": "Deep-dive. Context: {steps.triage.json}",
+      "dependsOn": ["triage"]
+    }
+  ]
+}
+```
+
+`{steps.ID.json.field}` 下降进入解析后的对象。在浅数据上的深路径解析为 `undefined`（一个 missing 警告），永不抛错 —— 因此在 `{"severity": "high"}` 上取 `{steps.triage.json.severity.label}` 会软失败。
+
+### `{previous.output}` —— 紧接上游
+
+解析为**最后完成的依赖**的输出，按**逆序**扫描 `dependsOn ∪ from`，返回第一个状态为 `done` 的阶段。
+
+| 情况 | 结果 |
+|---|---|
+| 单一依赖，已完成 | 该依赖的输出 |
+| 多个依赖，多个已完成 | 声明顺序中的**最后一个** |
+| `join: "any"` 且一个依赖完成 | 该依赖的输出 |
+| 未声明依赖，或都未完成 | `undefined` → missing 警告 |
+
+<Callout type="warn">
+  `{previous.output}` **不是**"文件中紧挨在上面的那个阶段" —— 而是"我声明的依赖中最后一个已完成的阶段"。如果你不声明 `dependsOn`，`{previous.output}` 无法解析。请使用 `dependsOn`，或改用显式的 `{steps.ID.output}`。
+</Callout>
+
+这个占位符正是简写 `chain` 能工作的原因 —— 每一步得到上一步的输出而无需命名它。
+
+### `{item}` —— 当前 map 元素
+
+在 `map` 阶段内部，每个分支将当前数组元素作为一个 **local** 接收。该 local 的名称是 `phase.as`（默认 `"item"`）。下降可用，因此 `{item.path}`、`{item.meta.title}` 以及裸 `{item}` 都能用。
+
+```json title="map-item.json"
+{
+  "id": "audit",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "task": "Audit {file.path}.",
+  "concurrency": 8
+}
+```
+
+自定义名称（上面的 `as: "file"`）完全替换 `item` —— 在该阶段中 `{item}` 将无法解析。当数组中的对象在概念上*不是*"items"（文件、路由、发现）时，使用自定义名称。`over` 必须是插值引用（如 `"{steps.scan.json}"`），不能是字面数组 —— 验证会拒绝字面数组，并要求你先从上游阶段产出它。
+
+### `{loop.X}` 与 `{reflexion}` —— 循环状态
+
+`loop` 阶段将一个 `loop` 对象绑定到上下文，在 body 的 `task` 和 `until` 条件中可用。
+
+| 占位符 | 类型 | 含义 |
+|---|---|---|
+| `{loop.iteration}` | `number` | 当前迭代，从 **1** 开始 |
+| `{loop.lastOutput}` | `string` | 上一次迭代的输出。第 1 次迭代时为空字符串。 |
+| `{loop.maxIterations}` | `number` | 配置的上限（默认 `10`，硬上限 `100`） |
+
+```json title="loop-locals.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "maxIterations": 4,
+  "until": "{loop.iteration} >= 3",
+  "task": "Iteration {loop.iteration}/{loop.maxIterations}. Previous draft: {loop.lastOutput}"
+}
+```
+
+`{reflexion}` 是一个裸占位符（无子路径），仅可用于带 `reflexion: true` 的 `loop` 阶段。第 1 次迭代时它解析为一个哨兵值；后续迭代中它携带上一次迭代的**结构化失败摘要** —— 输出片段、`expect` 契约诊断、错误文本，或未满足的 `until` 条件。
+
+```json title="reflexion.json"
+{
+  "id": "fix",
+  "type": "loop",
+  "reflexion": true,
+  "maxIterations": 3,
+  "until": "{steps.fix.json.passed} == true",
+  "output": "json",
+  "task": "Fix the failing test. {reflexion}"
+}
+```
+
+<Callout type="info">
+  `loop` 阶段可以合法地在 `until` 中通过 `{steps.<thisId>.output}` / `.json` 引用**自身**的输出 —— 验证对此做了特例处理。在其他任何阶段类型上，`{steps.<thisId>.*}` 都是硬错误。如果 `reflexion: true` 但 `task` 从未提及 `{reflexion}`，摘要会被**自动追加**到 prompt，并附一条警告提示你显式加入该占位符以便控制放置位置。
+</Callout>
+
+---
+
+## 处理 JSON
+
+LLM 很少产出干净的 JSON。它们把它裹在正文里、用代码围栏围起来，偶尔还附加杂散键。taskflow 的 `safeParse` 是为这种现实设计的多阶段恢复流水线。每个 `{steps.ID.json}` 占位符、每个 `map.over`、每个 gate 评分器 `target` 都流经它。
+
+### 四个阶段
+
+<Tabs items={['1. 直接解析', '2. 围栏代码块', '3. 平衡括号提取', '4. 反模式检测']}>
+<Tab value="1. 直接解析">
+
+**1. 直接解析** —— trim 文本并尝试 `JSON.parse`。成功则立即返回。这处理了 happy path：模型精确地输出 `{"severity": "high"}`。
+
+```json title="direct-parse.json"
+{"severity": "high", "reason": "missing auth check"}
+```
+
+</Tab>
+<Tab value="2. 围栏代码块">
+
+**2. 围栏代码块** —— 扫描三反引号围栏，尝试解析每个 body，**JSON 标记的围栏优先**，然后是未标记/其他语言的围栏。这能从如下响应中恢复 JSON：
+
+````text title="json-in-prose.txt"
+Here is the analysis:
+
+```typescript
+const x = compute();
+```
+
+```json
+{"severity": "high", "reason": "..."}
+```
+````
+
+该扫描在构造上是线性时间的 —— info-string 匹配器在第一个换行处停止，因此不会与 body 匹配器重叠。免受多项式/redos 回溯之害。
+
+</Tab>
+<Tab value="3. 平衡括号提取">
+
+**3. 平衡括号提取** —— 在 trim 后的文本中找到第一个 `[` 或 `{`，取匹配的 `]` 或 `}`，并解析该切片。这能从正文如 `The result is {"a":1,"b":2} as shown above.` 中恢复 JSON。
+
+</Tab>
+<Tab value="4. 反模式检测">
+
+**4. 反模式检测** —— 如果以上全部失败且输入看起来像一个 JSON 数组后跟一个杂散的顶层键，发出一个诊断。这捕获一种常见的 LLM 错误：
+
+```json title="stray-key.json"
+[
+  {"id": "D-001", "status": "open"}
+],
+"deferred": [
+  {"id": "D-002", "status": "deferred"}
+]
+```
+
+这**不是合法 JSON**，无法恢复。诊断会提示修复方法：将杂散数据折叠进数组成员，或拆分到单独的阶段。
+
+</Tab>
+</Tabs>
+
+如果每个阶段都失败，`safeParse` 返回 `undefined` —— 于是 `{steps.ID.json}` 成为 missing 警告，`{steps.ID.json.field}` 解析为 `undefined`。
+
+<Callout type="tip">
+  用 `output: "json"` + `expect`（在 `agent` / `gate` / `reduce` / `loop` 上）固定模型的输出形状。契约违反会以精确诊断让阶段失败并可用于 `retry` —— 远比寄望 `safeParse` 恢复一个畸形 blob 稳健。
+</Callout>
+
+### 为 `map.over` 强制数组
+
+`map.over` 和 gate 评分器 `target` 需要**数组**。当解析值不是数组时，`coerceArray` 查找一个便利的包裹键，顺序固定：
+
+| 输入 | 解析为 |
+|---|---|
+| `[...]` | 该数组本身 |
+| `{items: [...]}` | `items` |
+| `{results: [...]}` | `results` |
+| `{list: [...]}` | `list` |
+| `{data: [...]}` | `data` |
+| `{findings: [...]}` | `findings` |
+| 其他 | `null` → 阶段失败（"no array found"） |
+
+第一个匹配的数组胜出。因此一个产出 `{"results": [...]}` 的模型无论你要的是数组还是包裹器都能工作 —— 在模型包裹以添加元数据时很有用。
+
+---
+
+## 条件
+
+`when`（在任何阶段上）和 `until`（在 `loop` 上）接受一种微型的、**安全**的布尔表达式语言 —— 无 `eval` / `Function`，一个手写的递归下降解析器。Gate 的 `eval` 前置条件使用相同的语言**外加** `contains` 操作符。
+
+完整的运算符表、优先级、比较语义和真值规则文档在[控制流](/zh-cn/docs/syntax/control-flow#条件参考)页。这里我们只讲与插值相关的部分：操作数如何被解析。
+
+<Callout type="warn">
+  在条件内部，占位符解析为其**原始**值，而非 `task` 模板中使用的字符串化形式。因此当 `count` 是数字时，`{steps.x.json.count} > 5` 做的是数值比较。在 `task` 字符串中，同一占位符会被美化打印为 JSON。
+</Callout>
+
+这种拆分是有意为之：比较需要类型化的值（`5 > 3` 是数值，`"high" == "high"` 是字符串），而 task 模板需要可读文本。同一占位符语法服务于两者，但按上下文有不同的解析规则。
+
+### Gate `contains`
+
+Gate 的 `eval` 前置条件增加了一个 `when` / `until` 中没有的操作符：
+
+```json title="gate-contains.json"
+{
+  "id": "lint-gate",
+  "type": "gate",
+  "eval": ["{steps.lint.output} contains no errors"],
+  "task": "..."
+}
+```
+
+`contains` 在分词之前被**预处理**：左侧被插值为字符串，右侧为字面字符串，然后执行子串检查。这是基于正文输出做门控的惯用法（`{steps.lint.output} contains no errors`）。在 gate 前置条件之外，`contains` 不被识别。
+
+### Fail-open 与循环例外
+
+`when` 表达式中的解析错误会设置 `error`，且表达式求值为 **`true`** —— 一个破损的守卫永远不会静默丢弃阶段。错误会在运行记录中呈现。
+
+对于 `loop.until`，解析错误会**停止循环**（fail-safe）—— 继续下去会有无限循环的风险。
+
+---
+
+## 失败模式
+
+无法解析的占位符**绝不是**静默丢弃。运行时显式处理每种失败模式。
+
+### 缺失占位符
+
+当 `resolvePath` 返回 `undefined` 时，占位符在输出字符串中**保持原样**，其路径被推入 `missing[]`。运行时随后：
+
+<Steps>
+  <Step>
+    对缺失路径**去重**。
+  </Step>
+  <Step>
+    **构建一条警告**：`unresolved refs in task: {steps.x.output}, {args.foo} — left intact (check dependsOn / placeholder spelling)`。
+  </Step>
+  <Step>
+    将其**持久化**到 `PhaseState.warnings` 并记录日志。
+  </Step>
+</Steps>
+
+阶段**仍然运行** —— 模型看到字面的 `{steps.x.output}` 文本，这通常足以在运行记录中暴露 bug。这就是 fail-open 保证：一个拼写错误永远不会静默丢弃阶段。
+
+<Callout type="warn">
+  解析为 `undefined` 的占位符是"missing"。解析为 `null` 的占位符**不是** missing —— `null` 是合法的 JSON 值，会被字符串化为 `""`。这一区别对 `when` / `until` 的真值性很重要。
+</Callout>
+
+### 转义字面花括号
+
+**没有转义序列**（`\{` 没有特殊含义）。相反，占位符正则的严格字符集提供了隐式转义：任何 `{...}` 只要内容包含空格、引号、标点或 `[a-zA-Z0-9_-]` 之外的字符，就根本不是占位符，会原样透传。
+
+| 模板 | `{...}` 被匹配？ | 原因 |
+|---|---|---|
+| `See {steps.x.output} above.` | ✓ —— 匹配 | 仅路径合法字符 |
+| `Set {key: "value"}` | ✗ —— 字面 | 含 `:`、空格、`"` |
+| `Pick from {a, b, c}` | ✗ —— 字面 | 含空格和逗号 |
+| `Use the {item} slot` | ✓ —— 匹配 | 裸 local 引用 |
+| `Open the {  item  }` | ✗ —— 字面 | 花括号内有前导/尾随空格 |
+
+<Callout type="info">
+  如果你需要输出一个*本会*匹配占位符正则的字面字符串（例如希望模型看到字面 token `{steps.x.output}`），没有一等转义手段。实践中这极为罕见 —— 用 `script` 阶段或预读的 `context` 文件来注入这类 token，而非模板化。
+</Callout>
+
+---
+
+## 验证
+
+静态验证（`/tf verify`）在任何 agent 运行**之前**检查每个字符串字段中的占位符引用，并对照 DAG 校验。
+
+### 硬错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `task references {steps.X.*} but 'X' is not reachable via dependsOn` | `X` 不是经由 `dependsOn`/`from` 可达的传递祖先。该阶段会与 `X` 并行运行并看到字面占位符。 | 添加 `"dependsOn": ["X"]`（或一条传递路径）。 |
+| `references its own output via {steps.X.*}` | 非 `loop` 阶段引用了 `{steps.<自身 id>.*}`。 | 只有 `loop` 阶段可以自引用（用于 `until`）。重命名引用或重构。 |
+| `dependsOn unknown phase 'X'` | `dependsOn` 列出了不存在的阶段 id。 | 修正 id。 |
+| `id uses underscores` | 阶段 id 含 `_`。 | 使用连字符（与占位符字符集一致）。 |
+| `string 'run' must not contain interpolation placeholders` | `script` 阶段的字符串形式 `run` 含 `{...}`。 | 使用数组形式（execvp 风格，安全支持插值），或通过 `input` 管道传递动态数据。 |
+
+传递祖先检查使用 **对 `dependsOn ∪ from` 的 BFS**：若 C 依赖 B 而 B 依赖 A，C 可以引用 `{steps.A.*}`。带 `join: "any"` 的阶段**被豁免** —— 它们只需一个依赖完成，可作为信息性上下文引用其他阶段。
+
+### 警告
+
+| 警告 | 原因 | 修复 |
+|---|---|---|
+| `Taskflow references {args.X} but the invocation did not provide 'X'` | 一个 `args` 占位符没有运行时值也没有 `default`。 | 在调用时提供该参数，或加一个 `default`。 |
+| `unresolved refs in task: {steps.x.output}` | 一个占位符在运行时解析失败。 | 检查 `dependsOn`、上游阶段的 `output: "json"`，以及拼写。 |
+
+### 严格模式
+
+```json title="strict-interpolation.json"
+{
+  "name": "ci-gated",
+  "strictInterpolation": true,
+  "args": { "spec": { "default": "SPEC.md" } },
+  "phases": [ /* ... */ ]
+}
+```
+
+设 `strictInterpolation: true` 时，**所有警告都成为硬错误** —— 在 CI 中捕获任何漂移很有用。`strict` 也可按验证调用传入（`opts.strict`），为一次性检查覆盖 flow 的标志。
+
+---
+
+## 解析规则（参考）
+
+所有占位符都流经 `resolvePath` → `_resolvePath` → `dig`。这是详尽参考；日常编写用[占位符家族](#占位符家族)的表就够了。
+
+### `dig` —— 下降原语
+
+`dig` 按一串属性键遍历对象。它**永不抛错**。在浅数据末端走偏、下降中途命中原始值、或引用缺失的键，都会返回 `undefined`。
+
+```text title="dig-trace.txt"
+dig(obj, ["a", "b", "c"]):
+  cur = obj
+  for each part:
+    if cur is null/undefined → return undefined
+    if cur is not an object → return undefined
+    cur = cur[part]
+  return cur
+```
+
+这使得像 `{steps.scan.json.results.0.id}` 这样深层嵌套的占位符即使在数据比预期浅时也是安全的。
+
+### 字符串化
+
+当占位符解析为非 `undefined` 值时，在拼入模板前会被字符串化：
+
+| 值类型 | 插入为 |
+|---|---|
+| `string` | 原样 |
+| `null` / `undefined` | `""`（空）—— 但 `undefined` 在字符串化*之前*就短路为"missing" |
+| `number` / `boolean` | `JSON.stringify`（即 `true`、`42`、`3.14`） |
+| `object` / `array` | `JSON.stringify(value, null, 2)` —— 美化打印 |
+
+### 按 head 的解析顺序
+
+| Head | 行为 |
+|---|---|
+| `previous` | 仅 `previous.output` 有效；任何其他子路径 → `undefined` |
+| `reflexion` | 仅裸形式；若设置了 `ctx.reflexion` 则返回它，否则 `undefined` |
+| `args` | `dig(ctx.args, rest)` |
+| `steps` | 查找 `ctx.steps[ID]`。`.output` 返回字符串（无尾随段）。`.json` 先解析再 `dig`。其他 → `undefined` |
+| 任何其他（如 `item`、`loop`） | 视为 **local**：若 `head in ctx.locals`，则 `dig(ctx.locals[head], rest)`；否则 `undefined` |
+
+### 占位符语法（正则）
+
+占位符由如下正则匹配：
+
+```text title="placeholder-regex.txt"
+\{([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\}
+```
+
+一个 `{`，随后是若干由点号分隔的路径段（每段由字母 / 数字 / 连字符 / 下划线组成），最后是一个 `}`。第一段是 **head**（占位符家族）；其余是下降路径。
+
+后果：
+
+- `{steps.audit-each.output}` ✓ —— id 中允许连字符，与命名约定一致。
+- `{ args.x }` ✗ —— 花括号内的前导/尾随空格**不会被匹配器剥除**；head 会变成 ` args `，解析失败。（条件操作数*会* trim；任务占位符不会。）
+- `{"key": "value"}`、`{a b}`、`{$special}` ✗ —— 这些包含了 `[a-zA-Z0-9_-]` 之外的字符，因此它们**根本不是占位符**，会原样透传。
+
+### 观察到的 readSet
+
+每个**成功解析**的占位符都会触发 `onRead` 钩子（除非未设置）。未解析的引用**不会**触发它。运行时借此记录一个阶段*实际消费了*哪些上游阶段 —— 即其观察到的 readSet —— 这与它声明的 `dependsOn` 不同。一个阶段可能依赖三个阶段却只读取一个，运行记录会反映真相。
+
+---
+
+## 下一步
+
+<Cards>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `when`、`join`、`retry` 与路由 —— 条件操作符在上下文中的使用。
+  </Card>
+  <Card title="阶段类型参考" href="/zh-cn/docs/syntax/phase-types">
+    每种阶段类型上的每个字段，包括各占位符家族可用于何处。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    插值结果如何折入缓存指纹。
+  </Card>
+</Cards>

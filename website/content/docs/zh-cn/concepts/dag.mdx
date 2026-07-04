@@ -1,0 +1,229 @@
+---
+title: DAG 模型
+description: taskflow 如何把工作表示成一张由任务节点组成的有向无环图。
+---
+
+每个 taskflow 都是一张 **DAG**——有向无环图——由离散**任务**节点组成。你声明节点（阶段）和边（`dependsOn`），运行时替你走这张图。
+
+理解它最好的方式，是从所有人都会犯的那个错误开始。
+
+## 那个错误：顺序不是边
+
+下面这个 flow *看起来*像一条链。四个阶段，按顺序列出，没有 `dependsOn`：
+
+```json title="broken-chain.json — 不是一条链"
+{
+  "name": "broken-chain",
+  "phases": [
+    { "id": "discover", "type": "agent", "task": "List changed files." },
+    { "id": "audit",    "type": "agent", "task": "Audit the changes." },
+    { "id": "summarize","type": "agent", "task": "Summarize the audits." },
+    { "id": "report",   "type": "agent", "task": "Write the report." }
+  ]
+}
+```
+
+它们总该从上到下按顺序跑吧？
+
+并不会。**它们会一起开跑。**
+
+<Callout type="warn">
+  这是新用户最常见的错误。运行时不在乎 `phases[]` 数组里的顺序——它只在乎 `dependsOn`。四个没有 `dependsOn` 的阶段是四个**并行**阶段，不是一条链。
+</Callout>
+
+运行时完全从边来读这张图。没有声明任何边，每个阶段的未满足依赖都是零，所以它们都在第一批一起启动。`audit` 在 `discover` 还没产出任何东西之前就跑了，`summarize` 跑在空输入上，结果一塌糊涂——但运行时做的正是你声明出来的东西。
+
+## 声明你的边
+
+修法是说明谁等谁。`dependsOn` 是一条边："这个阶段在这些阶段完成之前不会开始。"
+
+```json title="real-chain.json — 一条真正的链"
+{
+  "name": "real-chain",
+  "phases": [
+    { "id": "discover",  "type": "agent", "task": "List changed files." },
+    { "id": "audit",     "type": "agent", "task": "Audit the changes.",          "dependsOn": ["discover"] },
+    { "id": "summarize", "type": "agent", "task": "Summarize the audits.",       "dependsOn": ["audit"] },
+    { "id": "report",    "type": "agent", "task": "Write the report.",           "dependsOn": ["summarize"], "final": true }
+  ]
+}
+```
+
+现在这张图是一条真正的链：
+
+```txt title="real-chain — 图"
+discover ─▶ audit ─▶ summarize ─▶ report
+```
+
+你可以在数组里以任意顺序列出这些阶段——`report` 在前、`discover` 在后——运行时仍然会按 `discover → audit → summarize → report` 执行。数组顺序是为了让人读着顺；边才是真相。
+
+## 运行时怎么看你的图：层
+
+运行时不是一次跑一个阶段。它把图切成**拓扑层**——彼此之间没有依赖的阶段集合——然后并发地跑每一层。
+
+看一个菱形：
+
+```json title="diamond.json"
+{
+  "name": "diamond",
+  "phases": [
+    { "id": "a", "type": "agent", "task": "Step A" },
+    { "id": "b", "type": "agent", "task": "Step B", "dependsOn": ["a"] },
+    { "id": "c", "type": "agent", "task": "Step C", "dependsOn": ["a"] },
+    { "id": "d", "type": "agent", "task": "Step D", "dependsOn": ["b", "c"], "final": true }
+  ]
+}
+```
+
+这张图：
+
+```txt title="diamond — 图"
+      a
+     ┌┴┐
+     b c
+     └┬┘
+      d
+```
+
+运行时把它解析成三层：
+
+```txt title="diamond — 执行层"
+Layer 0:  [ a ]        ← 没有任何东西依赖 a，所以它先跑
+Layer 1:  [ b, c ]     ← 两者都只依赖 a；它们并发跑
+Layer 2:  [ d ]        ← 等待 b 和 c 都完成
+```
+
+- `a` 先跑，独自一个。
+- `b` 和 `c` 并行跑，因为谁也不依赖谁。
+- `d` 最后跑，等两者都完成。
+
+<Callout type="info">
+  这和 Make、Bazel 或 Vite 的执行模型一样：一张依赖图被解析成层，每一层在并发上限内 fan-out。如果你推理过构建图，你就已经会推理 taskflow 了。
+</Callout>
+
+并发上限是 flow 级的 `concurrency` 字段（默认 `8`，最小 `1`）。一层之内，最多这么多阶段同时跑；其余排队。
+
+## 边不止来自 `dependsOn`
+
+还有第二个字段会创建边：`from`。`reduce` 阶段用它来命名自己聚合的上游输出。就图而言，一个阶段的依赖是 `dependsOn` **加上** `from`：
+
+```json title="from-creates-an-edge.json"
+{
+  "id": "summary",
+  "type": "reduce",
+  "from": ["audit-each"],
+  "agent": "writer",
+  "task": "Combine these audits:\n{steps.audit-each.output}"
+}
+```
+
+这里 `summary` 等待 `audit-each`，尽管 `dependsOn` 没设——`from` 就是边。你不需要在 `dependsOn` 里重复它；运行时取并集。
+
+## 合并上游结果
+
+默认情况下，一个阶段等它**所有**依赖都完成才开始（`join: "all"`）。这就是菱形里 `d` 等待 `b` 和 `c` 的原因。
+
+有时你要的是相反：只要若干分支里**任何一个**完成就开跑。那就是 `join: "any"`，也是你搭 if/else 路由的方式。
+
+```json title="if-else-routing.json"
+{
+  "name": "route-by-size",
+  "phases": [
+    { "id": "size",    "type": "agent", "task": "How big is the change? Output 'small' or 'large'.", "output": "json" },
+    { "id": "quick",   "type": "agent", "task": "Quick review.",        "dependsOn": ["size"], "when": "{steps.size.json} == 'small'" },
+    { "id": "deep",    "type": "agent", "task": "Deep review.",         "dependsOn": ["size"], "when": "{steps.size.json} == 'large'" },
+    { "id": "merge",   "type": "agent", "task": "Ship this review.",    "dependsOn": ["quick", "deep"], "join": "any", "final": true }
+  ]
+}
+```
+
+`quick` / `deep` 只有一个会跑——`when` 守卫压制了另一个。`merge` 把两者都声明为依赖，但设了 `join: "any"`，所以它在那一个*确实*跑了的分支完成的一刻就触发。如果你把 `join` 留在默认的 `"all"`，`merge` 会为那个被压制的分支永远等下去。
+
+<Callout type="tip">
+  经验法则：当若干分支里预计只有一个会产生结果时（if/else、fallback、first-wins），用 `join: "any"`。当每个依赖都该跑时，用默认的 `"all"`。
+</Callout>
+
+<Callout type="info">
+  当一个依赖成功完成时——或当它**失败**但被标记为 `optional` 时——才算"满足"。这让非关键分支可以失败而不阻塞它的依赖者。一个失败的非 optional 依赖会跳过依赖者。
+</Callout>
+
+## 循环会被拒绝，不会静默忽略
+
+DAG 必须无环。如果 `a` 依赖 `b` 而 `b` 依赖 `a`，你就写了一个运行时永远无法启动的循环——所以它拒绝运行：
+
+```json title="cycle.json — 在验证时被拒绝"
+{
+  "name": "cycle",
+  "phases": [
+    { "id": "a", "type": "agent", "task": "...", "dependsOn": ["b"] },
+    { "id": "b", "type": "agent", "task": "...", "dependsOn": ["a"] }
+  ]
+}
+```
+
+```txt title="验证输出"
+Dependency cycle detected: a -> b -> a
+```
+
+这会被 `/tf verify` 抓住——在任何 token 花出去之前。循环几乎总是 `dependsOn` id 里的笔误；改掉那条边再验证一次。
+
+<Callout type="warn">
+  如果你确实需要重复工作，那不是循环——那是 `loop` 阶段。`loop` 跑一个 body 直到满足条件，并有硬迭代上限。DAG 保持无环；重复生活在一个节点内部。
+</Callout>
+
+## 动态边：运行时生成的图
+
+静态 `dependsOn` 对大多数 flow 足够了。但有时工作的形状在你写 flow 时还不知道——由一个上游阶段决定下一步该跑什么。
+
+为此，`flow` 阶段跑一个**子 taskflow**，其定义可由上游阶段产出。生成的子流程被当作任何其他 flow 对待：它会被验证（无循环、无重复 id、无悬空引用），并在其中任何一个阶段跑之前先验证通过。
+
+```json title="dynamic-subflow.json"
+{
+  "name": "plan-then-execute",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "task": "Given the user's goal, output a taskflow JSON object with the phases needed to accomplish it.",
+      "output": "json"
+    },
+    {
+      "id": "execute",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"],
+      "final": true
+    }
+  ]
+}
+```
+
+这里 `execute` *内部*的边在父 flow 被验证时还不存在——它们由 `plan` 生成。运行时在 `execute` 开始的那一刻验证生成的图，所以一个有缺陷的计划只让那一个阶段干净地失败，而不会让整个运行崩溃或跑一张不安全的图。
+
+<Callout type="info">
+  递归子流程是有防护的：一个 `flow` 阶段不能重入自身或祖先，所以生成的计划无法造出一条无限长的子流程链。调用栈在执行时被检查。
+</Callout>
+
+## 拼到一起
+
+一张 taskflow 图就是三样东西：
+
+1. **节点**——有唯一 `id` 和 `type` 的阶段。
+2. **边**——`dependsOn`（和 `from`），显式声明，绝不从数组顺序推断。
+3. **Join 规则**——默认 `all`，路由时用 `any`。
+
+运行时把这些变成拓扑层，每一层在你的并发上限内 fan-out，在花 token 之前拒绝循环和悬空引用，并允许 `flow` 阶段在运行时扩展图。其他一切——fan-out、gate、loop、缓存、续跑——都建立在这之上。
+
+## 下一步
+
+<Cards>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    十种节点类型，以及何时用哪种。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `when` 守卫、`join`、`retry` 和路由。
+  </Card>
+  <Card title="验证" href="/zh-cn/docs/concepts/verification">
+    `/tf verify` 在花 token 之前抓住的一切。
+  </Card>
+</Cards>

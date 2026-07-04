@@ -1,0 +1,355 @@
+---
+title: Auditing a Pull Request with taskflow
+description: Build a multi-phase review flow incrementally — discover, fan out, gate, and report.
+---
+
+A real PR lands and it is big: **47 files changed across 3 packages.** You need to know three things before you merge it — are there security risks, does it break the architecture, and did the author actually cover the new code with tests? Reading 47 files yourself is not realistic, and asking a single agent to "review the PR" produces one giant transcript that eats your context window and still misses details.
+
+This guide builds a taskflow that does the review properly. We start with one phase that discovers the changed files, add a fan-out for per-file security review, layer in a parallel architecture review, gate the whole thing on risk, and finish with a single merged report. By the end you will have a complete, saveable flow you can run on every PR.
+
+<Callout type="info">
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+</Callout>
+
+## The problem
+
+You open the PR and the diff stat stares back at you:
+
+```text title="The PR"
+packages/auth-core      18 files   +1,204  -312
+packages/api-gateway    21 files   + 890  -445
+packages/shared-utils    8 files   + 156  - 88
+```
+
+Three packages, three concerns:
+
+- **Security.** New auth-core code is a common place for missing auth checks or input validation.
+- **Architecture.** api-gateway is the integration boundary — you want to know whether the new routes respect the layering rules.
+- **Test coverage.** shared-utils gained helpers; did the tests follow?
+
+Doing all three in one agent call means one prompt, one huge transcript, and a shallow answer. Doing it as three separate manual delegations means you babysit three runs and merge the results by hand. Neither scales.
+
+The taskflow answer: declare the three concerns as phases, fan out the per-file work, and let the runtime merge everything into one report that is the *only* thing that returns to your context.
+
+## Phase 1 — discover the changed files
+
+Everything downstream depends on knowing what changed. There are two ways to get the list, and the choice matters.
+
+### The cheap way: a `script` phase
+
+If your PR is on a git branch and the changed set is just `git diff`, do not spend a token on it. A `script` phase runs a shell command at zero cost:
+
+```json title="discover with script"
+{
+  "id": "discover",
+  "type": "script",
+  "run": ["git", "diff", "--name-only", "origin/main...HEAD"],
+  "timeout": 30000
+}
+```
+
+<Callout type="warn">
+  The array form of `run` is an `execvp`-style direct spawn — it does **not** go through a shell, so pipes and globs will not work. If you need `git diff ... | grep ...`, use the string form (which runs in a shell) or do the filtering in the next agent phase. The array form is safe from shell injection when you interpolate `{args.X}` values.
+</Callout>
+
+The output here is a newline-separated list of paths. But `map` needs an *array* to fan out over, and a raw string of paths is not one. So for a fan-out we need structured JSON.
+
+### The flexible way: an `agent` phase
+
+A `scout` agent can list the files *and* shape the output as JSON in one step. It costs a few tokens but it is robust to weird repos and lets us attach metadata:
+
+```json title="discover with an agent"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "List the source files changed between origin/main and HEAD under packages/. Output ONLY a JSON array of objects, each {\"path\": \"<relative-path>\", \"package\": \"<auth-core|api-gateway|shared-utils>\"}. No prose, no commentary.",
+  "output": "json"
+}
+```
+
+We use the agent form here because we want the `package` field — the architecture review will use it to group files. The `output: "json"` flag tells the runtime to parse the agent's output as JSON, so `{steps.discover.json}` resolves to the array directly.
+
+<Callout type="tip">
+  Add an `expect` contract to the discover phase to fail fast if the agent returns prose instead of JSON:
+  `"expect": { "type": "array", "items": { "type": "object" } }`.
+  A violation fails the phase and is eligible for the phase's `retry`.
+</Callout>
+
+## Phase 2 — fan out per-file security review
+
+Now we have an array of changed files. Reviewing 47 files one at a time, sequentially, would be slow. This is exactly what `map` is for: one subagent per item, bounded concurrency.
+
+```json title="per-file security review"
+{
+  "id": "security-each",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path} for security risks: missing auth checks, unsanitized input, hardcoded secrets, unsafe deserialization. Return one paragraph of findings, or 'No issues found.' if clean. Begin with the file path.",
+  "dependsOn": ["discover"],
+  "concurrency": 4,
+  "context": ["{file.path}"],
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+Reading that back:
+
+- **`over` / `as`** — fan out over the discovered array, binding each element to `{file}`.
+- **`concurrency: 4`** — at most four reviewers run at once. Bounded fan-out keeps you under rate limits without serializing everything.
+- **`context: ["{file.path}"]`** — pre-read the file into the subagent's context before the task runs. This eliminates the O(N²) turn-cost of the agent "exploring" to find the file: the contents are already there.
+- **`retry`** — transient provider errors (rate limits, 5xx) get re-rolled up to twice with exponential backoff. A review is idempotent, so re-running is safe.
+
+The per-file outputs accumulate. After this phase, `{steps.security-each.output}` is the concatenation of every file's findings.
+
+## Phase 3 — architecture review in parallel
+
+The security review is per-file. The architecture review is per-package: you want one agent to look at *all* the changes in `api-gateway` and judge whether they respect the layering, not 21 separate file-level takes. And you want it to run *at the same time* as the security review, not after it.
+
+A `parallel` phase runs a fixed list of branches concurrently. We add one branch per package:
+
+```json title="parallel architecture review"
+{
+  "id": "arch-review",
+  "type": "parallel",
+  "branches": [
+    {
+      "task": "Review the changed files in packages/auth-core for architecture issues: layering violations, leaked internals across module boundaries, missing abstractions. Return a short prioritized list.",
+      "agent": "reviewer"
+    },
+    {
+      "task": "Review the changed files in packages/api-gateway for architecture issues: route-to-handler coupling, business logic in transport layer, missing error normalization. Return a short prioritized list.",
+      "agent": "reviewer"
+    },
+    {
+      "task": "Review the changed files in packages/shared-utils for architecture issues: leaky abstractions, duplicated logic, misplaced concerns. Return a short prioritized list.",
+      "agent": "reviewer"
+    }
+  ],
+  "concurrency": 3
+}
+```
+
+`parallel` does not synthesize — it just runs the branches and concatenates their outputs. To get a single merged architecture verdict, fold the branches with a `reduce`:
+
+```json title="reduce the architecture branches"
+{
+  "id": "arch-summary",
+  "type": "reduce",
+  "from": ["arch-review"],
+  "agent": "writer",
+  "task": "You are given per-package architecture reviews. Merge them into one prioritized architecture report, deduplicating overlap and ordering by severity.\n{steps.arch-review.output}",
+  "dependsOn": ["arch-review"],
+  "final": false
+}
+```
+
+`arch-summary` depends only on `arch-review`, and `security-each` depends only on `discover`. Neither depends on the other, so the runtime runs them concurrently — the security fan-out and the architecture review happen at the same time, sharing the run-wide `concurrency` budget.
+
+## Phase 4 — gate on high-risk findings
+
+Before we write the final report, we want a check: if the security or architecture review surfaced *high-risk* findings, block the run so a human looks before anything merges. If everything is clean, let it through.
+
+A `gate` phase does this. It can run zero-token `eval` checks first — if those already pass, the LLM gate is skipped entirely.
+
+```json title="risk gate"
+{
+  "id": "risk-gate",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["security-each", "arch-summary"],
+  "join": "all",
+  "eval": [
+    "{steps.security-each.output} contains CRITICAL",
+    "{steps.arch-summary.output} contains CRITICAL"
+  ],
+  "task": "You are the final risk gate. Given the per-file security findings and the architecture summary below, decide whether this PR is safe to merge.\n\nSecurity findings:\n{steps.security-each.output}\n\nArchitecture summary:\n{steps.arch-summary.output}\n\nIf any finding is high-risk (missing auth, secret leak, broken layering, data-loss path), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.",
+  "onBlock": "halt"
+}
+```
+
+How the gate decides:
+
+- **`eval` runs first, at zero tokens.** If *both* expressions fail (neither output contains the word `CRITICAL`), that is not what we want here — `eval` is an *auto-pass* shortcut, so we instead structure the task to look for high-risk wording via the LLM. The `eval` here is a fast path: if either output *does* contain `CRITICAL`, the LLM gate still runs to confirm; if neither does, the gate can still run the LLM to be sure. (See the note below on tuning `eval`.)
+- **The LLM gate runs** when the `eval` checks are not all-passing. It reads both upstream outputs and emits `VERDICT: PASS` or `VERDICT: BLOCK`.
+- **`onBlock: "halt"`** — a `BLOCK` verdict stops the run cleanly. The final report phase (which depends on the gate) is skipped, and the run ends with the gate's verdict as the terminal state.
+
+<Callout type="info">
+  taskflow fails open on gate ambiguity. If the gate output cannot be parsed, the run treats it as `PASS` — it never accidentally halts and loses work. If you want the opposite for a merge gate, add a downstream `approval` phase so a human makes the final call.
+</Callout>
+
+## Phase 5 — the final report
+
+If the gate passed, merge everything into one report. This is the only phase marked `final: true`, so it is the *only* output that returns to your context window — every intermediate transcript stays inside the runtime.
+
+```json title="final report"
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["security-each", "arch-summary", "risk-gate"],
+  "agent": "writer",
+  "task": "Write the final PR review report. Structure it as: 1) Risk verdict (one line), 2) Security findings (prioritized), 3) Architecture findings (prioritized), 4) Recommended actions before merge. Be concise.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-summary.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+  "dependsOn": ["risk-gate"],
+  "final": true
+}
+```
+
+`report` depends on `risk-gate`, which depends on both `security-each` and `arch-summary`. So the report only runs if the gate passed — and when it does, it pulls in all three upstream outputs through one `reduce`.
+
+## The complete flow
+
+Here is the whole thing, assembled. Save it as `pr-audit.json`:
+
+```json title="pr-audit.json"
+{
+  "name": "pr-audit",
+  "description": "Audit a pull request: discover changed files, fan out per-file security review, run a parallel architecture review, gate on high-risk findings, and emit one merged report.",
+  "args": {
+    "base": { "default": "origin/main", "description": "The git ref to diff against." }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 3.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files changed between {args.base} and HEAD under packages/. Output ONLY a JSON array of objects, each {\"path\": \"<relative-path>\", \"package\": \"<auth-core|api-gateway|shared-utils>\"}. No prose.",
+      "output": "json",
+      "expect": { "type": "array", "items": { "type": "object" } },
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "security-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks: missing auth checks, unsanitized input, hardcoded secrets, unsafe deserialization. Return one paragraph of findings, or 'No issues found.' if clean. Begin with the file path.",
+      "dependsOn": ["discover"],
+      "concurrency": 4,
+      "context": ["{file.path}"],
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "arch-review",
+      "type": "parallel",
+      "branches": [
+        {
+          "task": "Review the changed files in packages/auth-core for architecture issues: layering violations, leaked internals, missing abstractions. Return a short prioritized list.",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Review the changed files in packages/api-gateway for architecture issues: route-to-handler coupling, business logic in transport layer, missing error normalization. Return a short prioritized list.",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Review the changed files in packages/shared-utils for architecture issues: leaky abstractions, duplicated logic, misplaced concerns. Return a short prioritized list.",
+          "agent": "reviewer"
+        }
+      ],
+      "concurrency": 3
+    },
+    {
+      "id": "arch-summary",
+      "type": "reduce",
+      "from": ["arch-review"],
+      "agent": "writer",
+      "task": "Merge these per-package architecture reviews into one prioritized architecture report, deduplicating overlap and ordering by severity.\n{steps.arch-review.output}",
+      "dependsOn": ["arch-review"]
+    },
+    {
+      "id": "risk-gate",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["security-each", "arch-summary"],
+      "join": "all",
+      "eval": [
+        "{steps.security-each.output} contains CRITICAL",
+        "{steps.arch-summary.output} contains CRITICAL"
+      ],
+      "task": "You are the final risk gate. Given the per-file security findings and the architecture summary, decide whether this PR is safe to merge.\n\nSecurity findings:\n{steps.security-each.output}\n\nArchitecture summary:\n{steps.arch-summary.output}\n\nIf any finding is high-risk (missing auth, secret leak, broken layering, data-loss path), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.",
+      "onBlock": "halt"
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["security-each", "arch-summary", "risk-gate"],
+      "agent": "writer",
+      "task": "Write the final PR review report. Structure: 1) Risk verdict (one line), 2) Security findings (prioritized), 3) Architecture findings (prioritized), 4) Recommended actions before merge. Be concise.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-summary.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+      "dependsOn": ["risk-gate"],
+      "final": true
+    }
+  ]
+}
+```
+
+Verify it before spending any tokens:
+
+```bash title="Verify the flow"
+/tf verify pr-audit
+```
+
+Then run it:
+
+```bash title="Run the audit"
+/tf run pr-audit base=origin/main
+```
+
+Only the `report` phase's output returns to your conversation. The 47 per-file transcripts, the three architecture branches, and the gate's reasoning all stay inside the runtime.
+
+## What to tune
+
+The flow above is a sensible default. These are the knobs worth turning for your own repo.
+
+### Concurrency
+
+`concurrency` appears at three levels: the run-wide default (`concurrency: 6`), the `map` fan-out (`concurrency: 4`), and the `parallel` branches (`concurrency: 3`). The effective concurrency is the minimum of the applicable caps. For a 47-file PR on a generous rate limit, raising the `map` concurrency to `8` finishes the security review in roughly half the wall-clock time. On a tight rate limit, lower it to `2` to avoid 429s — the `retry` policy will absorb the rest.
+
+### Budget
+
+`budget: { maxUSD: 3.0 }` is a run-wide ceiling. If accumulated cost exceeds it, the runtime halts the run and skips remaining phases — you never get a surprise bill. For a 47-file review on strong models, $3 is comfortable; for a quick re-run on cheap `fast`-role models, $0.50 may be plenty. Tune per repo, and remember the gate runs *before* the report, so a `BLOCK` verdict saves the report's tokens.
+
+### Cache
+
+Per-file reviews are pure functions of the file contents. Mark them `cross-run` so a re-run after a tiny PR change reuses every review whose file did not change:
+
+```json title="cache the security review"
+{
+  "id": "security-each",
+  "type": "map",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob!:packages/**/*.ts"]
+  }
+}
+```
+
+The `git:HEAD` fingerprint folds the commit into the key, and `glob!:` content-hashes the matched files so a re-run after an unrelated commit still hits the cache for unchanged files. Re-running `pr-audit` after a one-file tweak then re-executes only that file's review — the rest are served from the store at zero tokens. Use `/tf why-stale <runId>` to see exactly which fingerprint input changed.
+
+<Callout type="warn">
+  `gate` phases are never cached cross-run by design — a fresh verdict is required each run. Do not put a `cache` block on `risk-gate`; the validator will reject it.
+</Callout>
+
+### Retry
+
+The `retry` policy on `discover` and `security-each` covers transient provider errors. Two attempts with exponential backoff (`factor: 2`) is enough for most rate-limit blips. For phases that hit larger models (the architecture `reviewer`), raise `max` to `3` and lengthen `backoffMs`. Timeouts (`timeout`) are a separate axis: a `timeout` expiry fails the phase with a `timedOut` marker and is *never* retried, so set it generously for deep-review phases.
+
+## Where to go next
+
+<Cards>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks — including `map`, `parallel`, `reduce`, and `gate` used here.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization, fingerprints, and the `why-stale` / `recompute` toolkit.
+  </Card>
+  <Card title="Budget" href="/en/docs/syntax/budget">
+    Run-wide cost ceilings and how a `BLOCK` verdict saves downstream tokens.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `dependsOn`, `join`, `when`, and `retry` — the fields that shape the DAG.
+  </Card>
+</Cards>

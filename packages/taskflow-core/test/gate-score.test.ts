@@ -82,16 +82,16 @@ test("scorers: json-schema accepts fenced JSON (lenient parse, same as expect)",
 		0,
 		'Some preamble\n```json\n{"done": true}\n```',
 	);
-	assert.equal(r.passed, true, r.detail);
+	assert.ok(r.passed, r.detail ?? '');
 });
 
 test("scorers: code-compiles javascript pass and fail", async () => {
 	const good = await runCodeCompilesScorer({ type: "code-compiles", language: "javascript" }, 0, "const x = 1;\nconsole.log(x);");
-	assert.equal(good.passed, true, good.detail);
+	assert.ok(good.passed, good.detail ?? '');
 	const bad = await runCodeCompilesScorer({ type: "code-compiles", language: "javascript" }, 0, "const x = = 1;");
 	assert.equal(bad.passed, false);
 	const fenced = await runCodeCompilesScorer({ type: "code-compiles", language: "javascript" }, 0, "Here:\n```js\nconst y = 2;\n```");
-	assert.equal(fenced.passed, true, fenced.detail);
+	assert.ok(fenced.passed, fenced.detail ?? '');
 });
 
 // ---------------------------------------------------------------------------

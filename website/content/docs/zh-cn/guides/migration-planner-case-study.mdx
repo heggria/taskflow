@@ -1,0 +1,284 @@
+---
+title: 自动化一次有风险的代码迁移
+description: 在运行时规划迁移、验证计划、执行它，并循环到旧 API 彻底消失。
+---
+
+你需要把旧的 HTTP 客户端迁移到新的。旧调用点是 `legacyAuth()`，新的是 `authorize()`。难处在于：你不知道有多少文件在调这个旧 helper，而且每个文件可能只需一行改名，也可能需要更深的重构。你没法预先写好迁移计划——你得在运行时发现它、验证它、执行它，然后对第一轮漏掉的部分再来一遍。
+
+本指南构建一个 taskflow 来安全地完成这次迁移。我们从一个一次性的"发现+规划"开始，加一个 gate 对计划做健全性检查，通过生成的子 flow 执行计划，最后用一个循环重新规划，直到旧的调用彻底消失。读完之后，你会得到一个完整、可保存的 flow，可以指向任何机械式迁移。
+
+<Callout type="info">
+  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode（`taskflow_run`）上的行为完全一致。宿主相关的调用入口请参见 [Pi 指南](/zh-cn/docs/guides/pi)或 [Codex 指南](/zh-cn/docs/guides/codex)。
+</Callout>
+
+## 问题
+
+迁移是典型的"你没法预先规划"的任务。三件事同时成立：
+
+- **范围未知。** 在你 grep 之前，不知道哪些文件在调 `legacyAuth()`。可能是 5 个，也可能是 200 个。
+- **每个文件都不一样。** 有些是干净的 `legacyAuth()` → `authorize()` 改名。另一些在三个地方 import 了旧 helper，或者在一个 try/catch 里调用它，而新 API 的处理方式不同。
+- **一轮很少够。** 第一份计划修掉大部分文件。后续检查又发现三个——也许是一个 grep 漏掉的动态调用点，或者规划器觉得难而跳过的一个文件。
+
+静态 DAG——写一次、永远跑——没法描述这种情形。计划必须在运行时被*发现*。taskflow 的答案是带内联 `def` 的 `flow` 阶段：一个规划智能体发出一份子 flow 定义，运行时验证并加固它，然后像你自己写的一样执行它。配上一个 `loop`，计划可以自我修订，直到工作完成。
+
+## 阶段 1 —— 发现受影响的文件
+
+下游一切都依赖于"知道要迁移什么"。获取这份列表有两种方式，而这个选择很关键。
+
+### 廉价的方式：`script` 阶段
+
+如果旧调用点是一个你能 grep 的字面量字符串，那就别为它花一个 token。`script` 阶段以零成本运行一条 shell 命令：
+
+```json title="用 script 发现"
+{
+  "id": "discover",
+  "type": "script",
+  "run": ["git", "grep", "-l", "legacyAuth(", "--", "src/"],
+  "timeout": 30000
+}
+```
+
+<Callout type="warn">
+  数组形式的 `run` 是 `execvp` 风格的直接 spawn——它**不**经过 shell，所以管道和通配符不会生效。这里的 `git grep -l` 每行打印一个路径，人类扫一眼没问题，但不是一个数组。如果你需要结构化输出，用下面的 agent 形式。
+</Callout>
+
+### 灵活的方式：`agent` 阶段
+
+一个 `scout` 智能体可以找到文件*并*一步把输出整理成 JSON。它花几个 token，但对字面 grep 会漏掉的动态调用点（字符串拼接、re-export）很稳健：
+
+```json title="用 agent 发现"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "Find every source file under src/ that calls legacyAuth(). Output ONLY a JSON array of {\"path\": \"<relative-path>\"} objects. No prose.",
+  "output": "json",
+  "expect": { "type": "array", "items": { "type": "object" } },
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+`output: "json"` 标志告诉运行时把智能体的输出解析为 JSON，所以 `{steps.discover.json}` 直接解析成那个数组。`expect` 契约在智能体返回散文而不是 JSON 时快速失败该阶段。
+
+## 阶段 2 —— 按文件规划迁移
+
+现在我们有了一份受影响文件列表。一个 `planner` 智能体读取这份列表，发出一份迁移计划：每个文件采取什么动作。
+
+```json title="按文件规划"
+{
+  "id": "plan",
+  "type": "agent",
+  "agent": "planner",
+  "dependsOn": ["discover"],
+  "task": "Given these files that call legacyAuth():\n{steps.discover.json}\n\nFor each file, emit a migration step: rename legacyAuth() to authorize(), update imports, and note any file that needs a deeper refactor. Output ONLY a JSON object {\"plan\": [{\"path\": \"...\", \"action\": \"rename\"|\"refactor\", \"note\": \"...\"}]}. No prose.",
+  "output": "json",
+  "expect": { "type": "object", "properties": { "plan": { "type": "array" } }, "required": ["plan"] },
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+计划现在是一个结构化的 JSON 对象——`{plan: [{path, action, note}, ...]}`。`expect` 契约要求有一个 `plan` 数组，所以一份格式不对的计划会让阶段失败，并且 `retry` 适用。
+
+<Callout type="info">
+  这个 `plan` 阶段发出的是工作的*描述*，不是 taskflow 定义。当你想自己执行这些步骤（比如通过下游的 `map`）时，这是对的形状。当你想让运行时执行一个模型写的 DAG 时，规划器发出一个完整的 taskflow `{name, phases}`——见阶段 4。
+</Callout>
+
+## 阶段 3 —— 验证生成的计划
+
+LLM 写的计划是不受信的输入。在一份生成的计划执行哪怕一个子代理之前，你要做一个检查：它的结构是否健全，是否避开了任何危险的东西？
+
+`gate` 阶段做这件事。它跑一次 LLM 检查，并可以在 `VERDICT: BLOCK` 时停止运行：
+
+```json title="计划 gate"
+{
+  "id": "plan-gate",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["plan"],
+  "join": "all",
+  "task": "You are reviewing a generated migration plan.\n{steps.plan.json}\n\nIf the plan is structurally sound (an object with a 'plan' array, each entry has a path and an action of 'rename' or 'refactor', and no dangerous operations), end with: VERDICT: PASS. If it is malformed or unsafe, end with: VERDICT: BLOCK and explain in one line.",
+  "onBlock": "halt"
+}
+```
+
+<Callout type="info">
+  当你通过 `flow { def }` 阶段（阶段 4）执行计划时，运行时会*自动*跑自己的验证——结构检查、广度上限、文件系统 containment——并在计划格式不对时 fail-open，带一个 `defError`。这里的 `gate` 是一个额外的、作者侧的检查，用于你想在执行前做一次人类风格的健全性过堂，或者你通过 `map` 执行（`map` 不会自动验证一份 JSON 计划）时。
+</Callout>
+
+对于在运行之前对一份已保存 flow 做静态、作者侧检查，用 `/tf verify`——它是零 token 的：
+
+```bash title="验证迁移 flow"
+/tf verify iterative-migration
+```
+
+## 阶段 4 —— 执行计划
+
+根据规划器发出了什么，有两种执行方式。
+
+### 通过 `flow { def }` 执行 —— 运行时跑一个模型写的 DAG
+
+如果规划器发出一个完整的 taskflow 定义（`{name, phases}`），把它交给一个 `flow` 阶段。运行时插值 `{steps.plan.json}`、JSON 解析、验证并加固，然后作为子 flow 执行：
+
+```json title="通过 flow def 执行"
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"],
+  "final": true
+}
+```
+
+生成的子 flow 受**动态加固**上限约束（见阶段 5）：最多 100 个 phase、200 个 map item、16 并发子代理、5 层嵌套、不允许 `script` 阶段，且它的 `cwd` 必须留在运行的工作目录内。任何验证失败时，阶段都**fail-open**——它以 `done` 结束，带空输出和一个 `defError` 诊断，运行继续。一份坏计划绝不会搞崩整个 flow。
+
+### 通过 `map` 执行 —— 你自己扇出
+
+如果规划器发出的是*一份步骤列表*（如阶段 2），用 `map` 在它上面扇出。这让你直接控制按文件的智能体和并发，代价是你要自己写扇出：
+
+```json title="通过 map 执行"
+{
+  "id": "apply-each",
+  "type": "map",
+  "over": "{steps.plan.json.plan}",
+  "as": "step",
+  "agent": "executor",
+  "dependsOn": ["plan"],
+  "concurrency": 4,
+  "task": "Apply this migration step to {step.path}: {step.action}. {step.note}. Edit the file in place. Return one line: the file path and 'done' or the blocker.",
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+当你想让模型编写整个执行图时用 `flow { def }`。当计划是一个扁平列表、你想要显式控制时用 `map`。
+
+## 阶段 5 —— 循环 规划→执行 直到完成
+
+真实迁移很少一轮就完。规划器的第一份计划修掉大部分文件，但后续检查又发现三个——一个动态调用点，一个规划器跳过的文件。你想基于剩余的重新规划，并重复到什么都不剩。
+
+一个 `loop` 每轮重新跑规划器，把上一次输出喂回去。它在规划器报告 `done: true`（没剩余）或命中 `maxIterations` 时停止。下游的 `flow` 然后执行最终计划——但只在确实有计划可跑时。
+
+```json title="iterative-migration.json"
+{
+  "name": "iterative-migration",
+  "description": "Iteratively re-plan a legacyAuth() -> authorize() migration until no calls remain, then execute the final plan.",
+  "args": {
+    "oldApi": { "default": "legacyAuth()", "description": "The old API call to migrate away from." },
+    "newApi": { "default": "authorize()", "description": "The new API to migrate to." }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 4.0 },
+  "phases": [
+    {
+      "id": "refine",
+      "type": "loop",
+      "agent": "planner",
+      "task": "Inspect the codebase for remaining calls to {args.oldApi}. If any remain, output {\"plan\": <taskflow-definition that fixes the remaining files>, \"done\": false}. If none remain, output {\"done\": true}. The plan, when present, must be a JSON taskflow with a 'name' and a 'phases' array.",
+      "until": "{steps.refine.json.done} == true",
+      "maxIterations": 6,
+      "output": "json"
+    },
+    {
+      "id": "execute-final",
+      "type": "flow",
+      "def": "{steps.refine.json.plan}",
+      "when": "{steps.refine.json.done} == false",
+      "dependsOn": ["refine"],
+      "final": true
+    }
+  ]
+}
+```
+
+把两个阶段连起来读：
+
+- 每一轮 `refine` 检查代码库。还有调用时，它发出一份新鲜计划和 `done: false`；代码库干净时，它发出 `done: true`，循环停止。
+- `{steps.refine.json}` 总是解析为**最后一次**迭代的输出，所以 `execute-final` 看到的是结束循环的那一轮输出。
+- `when` 守卫是让这一切安全的关键。如果循环收敛了（`done: true`），守卫为假，`execute-final` 被跳过——工作已经完成，没有计划可跑。如果循环耗尽了迭代（`done: false`），守卫为真，剩余计划被执行。
+
+<Callout type="info">
+  `loop` 的 body 是单次智能体调用，不是子 flow——所以每轮的*执行*发生在那个智能体内部（它有文件编辑工具），而不是通过嵌套的 `flow`。当你想让一个模型生成的 DAG 作为独立的、加固过的子 flow 跑时，用上面的 `flow { def }` 模式。
+</Callout>
+
+### 循环安全
+
+一个循环绝不会永远挂起。三条保证成立：
+
+- **`maxIterations` 是硬上限。** 默认 10，硬上限 100。即使 `until` 永不为真，循环也会在上限停止。
+- **收敛检测默认开启。** 如果某轮输出和上一轮完全相同（一个不动点），循环提前停止——再跑也不会改变什么。
+- **`until` 解析错误会停止循环**（fail-safe），所以一个格式不对的条件绝不会无限旋转。
+
+在花任何 token 之前先验证它：
+
+```bash title="验证 flow"
+/tf verify iterative-migration
+```
+
+然后运行它：
+
+```bash title="运行迁移"
+/tf run iterative-migration oldApi=legacyAuth\(\) newApi=authorize\(\)
+```
+
+只有 `execute-final` 阶段的输出回到你的对话。循环拒绝的每一份中间计划、每一次按轮检查，全部留在运行时内部。
+
+## 该调什么
+
+上面的 flow 是一个合理的默认值。下面这些是为你自己的迁移值得拧一拧的旋钮。
+
+### 加固上限
+
+生成的子 flow（`flow { def }`）是 LLM 写的，因此不受信。taskflow 用一组上限约束它的爆炸半径，这些上限**只**适用于运行时生成的子 flow——作者写/保存的 flow 不受它们约束：
+
+| 上限 | 限制 | 阻止什么 |
+|---|---|---|
+| 最大 phase 数 | 100 | 规划器发出"仓库里每个文件一个 phase"，产出一张 4000 节点的图。 |
+| 最大 map item | 200 | 一个生成的 `map` 在一个 10000 元素的数组上扇出。 |
+| 最大并发 | 16 | 一个生成的 flow 设 `concurrency: 500`，一次扇出几百个子代理。 |
+| 嵌套深度 | 5 | 一个计划生成一个计划再生成一个计划，无界递归。 |
+| 禁止 `script` | — | 一个生成的 flow 跑 `script` 阶段，执行任意 shell 命令。 |
+
+当某个上限被超出，验证失败，阶段 fail-open，带一个 `defError` 说明命中了哪个上限。你没法从生成的 flow 里抬高这些上限——它们是硬限制。如果你的迁移确实需要超过 100 个 phase，把它拆成多个保存的 flow。
+
+### 预算钳制
+
+生成的子 flow 继承父运行的预算，但绝不会超过它。子的 `budget` 被钳制到它自己声明的预算和父运行**剩余**预算中较小的那个。一份在还剩 5 美元的父运行里声明 `budget: { maxUSD: 50 }` 的计划，会以 5 美元上限运行。
+
+这意味着模型没法给自己批比父 flow 所允许的更多的花费空间。父运行的 `budget: { maxUSD: 4.0 }` 才是真正的上限——迁移大就调高，想要对一次有风险的运行设硬停就调低。
+
+### 缓存 discover 阶段
+
+`discover` 阶段是代码库状态的纯函数。把它标成 `cross-run`，这样在相关内容没变时，一次小变更后的重跑会复用上一次的发现：
+
+```json title="缓存 discover 阶段"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "Find every source file under src/ that calls legacyAuth(). Output ONLY a JSON array of {\"path\": \"<relative-path>\"} objects.",
+  "output": "json",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob!:src/**/*.ts"]
+  }
+}
+```
+
+`git:HEAD` 指纹把 commit 折进 key，`glob!:` 对匹配的文件做内容哈希，这样在无关 commit 之后重跑仍然命中缓存。用 `/tf why-stale <runId>` 查看究竟是哪个指纹输入变了。
+
+<Callout type="warn">
+  `loop` 和 `tournament` 阶段按设计从不跨运行缓存——每次运行都值得新鲜的迭代和新鲜的变体。不要在 `refine` 循环上放 `cache` 块；校验器会拒绝它。改为缓存*上游*的 discover 阶段，那才是昂贵、纯函数的部分。
+</Callout>
+
+## 接下来去哪
+
+<Cards>
+  <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
+    完整的动态规划指南——验证、加固，以及 规划→执行→循环 周期。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `dependsOn`、`when`、`join` 和 `retry`——塑造 DAG 的字段。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    跨运行记忆化、指纹，以及 `why-stale` / `recompute` 工具。
+  </Card>
+</Cards>

@@ -1,0 +1,173 @@
+---
+title: Dynamic Planning
+description: Generate sub-flows at runtime and validate them before execution.
+---
+
+Some problems refuse to be planned in advance. You don't know how many files need fixing until you've inspected them, and each file may need a different kind of fix. A static DAG — written once, run forever — cannot describe that.
+
+taskflow's answer is the `flow` phase with an inline `def`. A planner agent emits a sub-flow definition at runtime, the runtime validates and hardens it, then executes it as if you had authored it yourself. Pair it with a `loop` and the plan can revise itself until the work is done.
+
+This guide walks through the full cycle: **plan → execute → validate → loop**.
+
+## The scenario
+
+Imagine a migration task: "find every file that calls the old `legacyAuth()` helper and update it to the new `authorize()` API." You cannot know up front which files are affected, or whether each one needs a one-line rename or a deeper refactor. The plan has to be discovered at runtime.
+
+## Plan, then execute
+
+The simplest dynamic flow is two phases. A `planner` agent inspects the situation and emits a taskflow definition as JSON. A `flow` phase takes that JSON as its `def` and runs it.
+
+```json title="plan-execute.json"
+{
+  "name": "plan-execute",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "output": "json",
+      "task": "Inspect the codebase for calls to legacyAuth(). Output a JSON taskflow definition with phases that fix each affected file. The definition must have a 'name' and a 'phases' array."
+    },
+    {
+      "id": "execute",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"]
+    }
+  ]
+}
+```
+
+The `{steps.plan.json}` placeholder is interpolated at runtime, then JSON-parsed. The result can be a full `{name, phases}` object, a bare `phases` array, or `{phases: [...]}` — the runtime wraps the bare forms automatically.
+
+That is the core idea: a model authors a plan, and another model executes it. The intermediate plan never enters your context window; only the final output of `execute` comes back.
+
+## Validation before execution
+
+LLM-authored plans are untrusted input. Before a generated sub-flow runs a single subagent, taskflow checks it with the same validator that gates author-written flows — plus a set of **dynamic hardening** checks that only apply to runtime-generated definitions.
+
+<Steps>
+  <Step>
+    **Structural checks.** Cycles, dangling `dependsOn` refs, duplicate ids, dead ends, and missing required fields are caught here. A plan with `dependsOn: ["fix-config"]` but no `fix-config` phase never runs.
+  </Step>
+  <Step>
+    **Breadth caps.** A generated sub-flow may have at most **100 phases**, fan out to at most **200 map items**, and run at most **16 concurrent** subagents. These bound the blast radius of a model that emits a graph with thousands of nodes.
+  </Step>
+  <Step>
+    **Nesting depth.** Inline `def` sub-flows may nest at most **5 levels** deep. A generated flow that itself spawns another generated flow is counted on the same counter, so neither axis can multiply the other.
+  </Step>
+  <Step>
+    **Capability restrictions.** A generated flow may not run `script` phases (arbitrary shell execution), may not use `code-compiles` or `regex` scorers in gates (compiler execution and ReDoS risk), and may not request isolated `cwd` keywords (`temp`, `dedicated`, `worktree`).
+  </Step>
+  <Step>
+    **Filesystem containment.** A generated phase's `cwd` must stay inside the run's working directory — it cannot escape to read or write elsewhere.
+  </Step>
+</Steps>
+
+### Fail-open on a bad plan
+
+What happens when the plan is malformed? taskflow **fails open**. The `flow` phase resolves as `done` with empty output and a `defError` diagnostic, and the run continues. A bad plan never crashes the whole flow.
+
+<Callout type="warn">
+  Fail-open is the safe default — it protects long-running flows from one bad model generation. If you want a malformed plan to be a hard failure instead, add a downstream `gate` that checks `{steps.execute.output}` for the `defError` marker.
+</Callout>
+
+## Hardening caps, concretely
+
+The caps exist to keep a runaway model from spending your budget on a graph it invented. Here is what each one prevents, with an example of the failure it stops:
+
+| Cap | Limit | What it stops |
+|---|---|---|
+| Max phases | 100 | A planner emits "one phase per file in the repo" and produces a 4,000-node graph. |
+| Max map items | 200 | A generated `map` fans out over a 10,000-element array returned by an upstream agent. |
+| Max concurrency | 16 | A generated flow sets `concurrency: 500` and spawns hundreds of subagents at once. |
+| Nesting depth | 5 | A plan spawns a plan that spawns a plan, recursing without bound. |
+| No `script` | — | A generated flow runs `script` phases that execute arbitrary shell commands. |
+
+When a cap is exceeded, the validation fails and the phase fails open with a `defError` explaining which cap was hit.
+
+<Callout type="info">
+  These caps apply **only** to runtime-generated sub-flows (`flow { def }` and `ctx_spawn` children). Flows you author and save are trusted — a human reviewed them — and are not subject to breadth caps.
+</Callout>
+
+## Budget clamping
+
+A generated sub-flow inherits the parent run's budget, but never exceeds it. The child's `budget` is clamped to the smaller of its own declared budget and the parent's remaining budget. A plan that declares `budget: { maxUSD: 50 }` inside a parent run that has $5 left will run with a $5 ceiling.
+
+This means a model cannot grant itself more spending room than the parent flow allowed.
+
+## Plan → execute → validate → loop
+
+Real migration work rarely finishes in one pass. The planner's first plan fixes most files, but a follow-up check finds three more. You want to re-plan based on what's left, and repeat until nothing remains — then execute the final plan.
+
+A `loop` re-runs the planner each iteration, feeding the previous output back in via `{loop.lastOutput}`. It stops when the planner reports `done: true` (nothing left) or when `maxIterations` is hit. A downstream `flow` then executes the final plan — but only if there's actually one to run.
+
+```json title="iterative-replan.json"
+{
+  "name": "iterative-replan",
+  "phases": [
+    {
+      "id": "refine",
+      "type": "loop",
+      "task": "Inspect the codebase for remaining legacyAuth() calls. If any remain, output {plan: <taskflow-definition>, done: false}. If none remain, output {done: true}.",
+      "until": "{steps.refine.json.done} == true",
+      "maxIterations": 6,
+      "output": "json"
+    },
+    {
+      "id": "execute-final",
+      "type": "flow",
+      "def": "{steps.refine.json.plan}",
+      "when": "{steps.refine.json.done} == false",
+      "dependsOn": ["refine"]
+    }
+  ]
+}
+```
+
+Reading the two phases together:
+
+- Each `refine` iteration inspects the codebase. When calls remain, it emits a fresh plan and `done: false`; when the codebase is clean, it emits `done: true` and the loop stops.
+- `{steps.refine.json}` always resolves to the **last** iteration's output, so `execute-final` sees whichever iteration finished the loop.
+- The `when` guard is what makes this safe. If the loop converged (`done: true`), the guard is false and `execute-final` is skipped — the work is already complete, so there is no plan to run. If the loop ran out of iterations (`done: false`), the guard is true and the remaining plan executes.
+
+<Callout type="info">
+  A `loop` body is a single agent call, not a sub-flow — so per-iteration *execution* happens inside that agent (it has file-editing tools), not via a nested `flow`. Use the `flow { def }` pattern above when you want a model-generated DAG run as a separate, hardened sub-flow.
+</Callout>
+
+### Loop safety
+
+A loop can never hang forever. Three guarantees hold:
+
+- **`maxIterations` is a hard cap.** The default is 10; the hard maximum is 100. Even if `until` never becomes truthy, the loop stops at the cap.
+- **`convergence` stops early.** By default, if an iteration's output is identical to the previous one, the loop stops — a fixed point means further iterations would change nothing.
+- **A parse error stops the loop.** If `until` cannot be evaluated, the loop ends immediately rather than spinning.
+
+<Callout type="tip">
+  For self-improving work where each iteration should learn from the last one's mistakes, set `reflexion: true` on the loop. Each iteration after the first receives a `{reflexion}` placeholder carrying a structured failure summary of the prior iteration — body failures become feedback instead of terminating the loop.
+</Callout>
+
+## When to reach for dynamic planning
+
+<Callout type="tip">
+  Reach for `flow { def }` when:
+  - The number or shape of steps depends on upstream results you can only discover at runtime.
+  - You want one model to author a plan and another to execute it.
+  - You need iterative replanning driven by feedback from the work itself.
+</Callout>
+
+Reach for a static authored DAG instead when the structure is known up front. Dynamic planning trades the safety of a human-reviewed graph for the flexibility of a model-generated one — use it where that flexibility earns its cost.
+
+## Next
+
+<Cards>
+  <Card title="Tournament Selection" href="/en/docs/guides/tournament">
+    Spawn competing variants and let a judge pick the best.
+  </Card>
+  <Card title="Loop Phase" href="/en/docs/syntax/phase-types">
+    Full reference for the `loop` phase and its safety guarantees.
+  </Card>
+  <Card title="Flow Phase" href="/en/docs/syntax/phase-types">
+    Reference for the `flow` phase, `use`, and `def`.
+  </Card>
+</Cards>

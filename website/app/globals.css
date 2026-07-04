@@ -1,0 +1,63 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/style.css';
+
+@layer base {
+  :root {
+    --fd-background: 40 33% 98%;
+    --fd-foreground: 30 10% 10%;
+    --fd-card: 40 30% 99%;
+    --fd-card-foreground: 30 10% 10%;
+    --fd-popover: 40 30% 99%;
+    --fd-popover-foreground: 30 10% 10%;
+    --fd-primary: 30 100% 48%;
+    --fd-primary-foreground: 0 0% 100%;
+    --fd-secondary: 40 20% 95%;
+    --fd-secondary-foreground: 30 10% 10%;
+    --fd-muted: 40 15% 95%;
+    --fd-muted-foreground: 30 5% 45%;
+    --fd-accent: 40 20% 95%;
+    --fd-accent-foreground: 30 10% 10%;
+    --fd-border: 40 15% 90%;
+    --fd-ring: 30 100% 48%;
+  }
+
+  .dark {
+    --fd-background: 30 10% 8%;
+    --fd-foreground: 40 20% 98%;
+    --fd-card: 30 10% 10%;
+    --fd-card-foreground: 40 20% 98%;
+    --fd-popover: 30 10% 10%;
+    --fd-popover-foreground: 40 20% 98%;
+    --fd-primary: 30 100% 52%;
+    --fd-primary-foreground: 0 0% 100%;
+    --fd-secondary: 30 10% 18%;
+    --fd-secondary-foreground: 40 20% 98%;
+    --fd-muted: 30 10% 18%;
+    --fd-muted-foreground: 40 10% 60%;
+    --fd-accent: 30 10% 18%;
+    --fd-accent-foreground: 40 20% 98%;
+    --fd-border: 30 10% 20%;
+    --fd-ring: 30 100% 52%;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, hsl(var(--fd-primary)) 0%, hsl(35 100% 55%) 100%);
+  }
+
+  .bg-grid {
+    background-size: 40px 40px;
+    background-image: linear-gradient(to right, hsl(var(--fd-border) / 0.4) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--fd-border) / 0.4) 1px, transparent 1px);
+  }
+
+  .bg-hero-glow {
+    background: radial-gradient(
+      ellipse 80% 60% at 50% -20%,
+      hsl(var(--fd-primary) / 0.12),
+      transparent
+    );
+  }
+}

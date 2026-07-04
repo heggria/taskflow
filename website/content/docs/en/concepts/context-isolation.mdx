@@ -1,0 +1,153 @@
+---
+title: Context Isolation
+description: Why only the final phase reaches your conversation.
+---
+
+Imagine a typical multi-step agent job: explore the codebase, audit twenty files, summarize the findings, draft a patch, review the patch. With raw subagents, each step hands its full transcript back to you. If every step produces four thousand tokens of reasoning, tool calls, and file dumps, your context window grows by twenty thousand tokens before you ever see a result. Repeat the workflow a few times and you hit the limit, lose earlier context, or pay to re-read the same files.
+
+taskflow exists to make that scaling problem disappear.
+
+## Your context versus the runtime
+
+The mental model is simple. There are two places work can land:
+
+```txt title="The isolation model"
+Your context                  Runtime (on disk)
+├─ final output  ◀────────    ├─ phase A output
+                              ├─ phase B output
+                              ├─ phase C output
+                              └─ phase D output (final)
+```
+
+Each phase runs in its **own isolated subagent process**. The runtime spawns it, collects its output, writes that output to the persisted run state on disk — and then stops. It does not push the intermediate transcript into your conversation. Only the phase marked `final` (or, by default, the last phase) has its output returned.
+
+The consequence is that the cost of a flow is **decoupled from the size of your context window**. You can fan out over fifty files in parallel, each producing a verbose transcript, and your conversation grows by exactly one summary.
+
+This is what makes taskflow safe to leave running. A long audit does not slowly poison the session it was launched from.
+
+## What stays isolated
+
+Everything except the final output. That includes:
+
+- The full task prompt each subagent received, after interpolation.
+- Every tool call and file the subagent read.
+- The raw output of every intermediate phase, including failed attempts.
+- Map and parallel fan-out: each item's individual result, not just the merged view.
+- Gate verdicts, approval notes, loop iteration logs, tournament judge reasoning.
+
+All of it is persisted to disk as part of the run state. None of it returns to your conversation unless you ask.
+
+## When you need to peek
+
+Sometimes a flow produces a surprising result and you want to know what an intermediate phase actually said. You do not need to re-run anything. Peek is the explicit, human-invoked escape hatch:
+
+```bash title="List the phases in a run"
+/tf peek nightly-audit-abc123
+```
+
+```txt title="Peek output"
+Run nightly-audit-abc123 (nightly-audit) — completed
+
+Phases:
+  discover [done · cache:run-only] — 412 chars
+  audit [done · 10/10 items] — 8831 chars
+  review [done] — 2104 chars
+  report [done] — 680 chars
+
+Peek one with: peek nightly-audit-abc123 <phaseId>
+```
+
+```bash title="Peek a specific phase"
+/tf peek nightly-audit-abc123 audit
+```
+
+Peek is **read-only**. It loads the persisted run state and prints one phase's output. It never mutates the run, never breaks resume, and never changes what the final output was.
+
+It is also **hard-truncated**. By default a peek caps at 4000 characters so a verbose phase can never flood your context — the very problem isolation exists to prevent. You can raise the cap up to 32000, or pull a single item out of a map fan-out:
+
+```bash title="Peek the third item of a map phase"
+/tf peek nightly-audit-abc123 audit --item 3 --limit 8000
+```
+
+```bash title="Peek the parsed JSON of a phase"
+/tf peek nightly-audit-abc123 discover --json
+```
+
+<Callout type="tip">
+  Peek is the debugging tool, not the default path. Normal runs stay fully isolated. You opt into seeing an intermediate result only when something is worth investigating.
+</Callout>
+
+## Sharing context between phases
+
+Isolation is the safe default, but some workflows fight it. Suppose ten security-reviewer subagents all need to read the same large architecture document. If each one reads it independently, you pay for the read ten times and the document enters ten separate transcripts.
+
+For those cases, a phase can opt into the **Shared Context Tree**:
+
+```json title="Opting into shared context"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path}."
+}
+```
+
+Set `shareContext: true` on a single phase, or `contextSharing: true` on the whole flow to enable it everywhere. When enabled, a subagent gets four tools that let it cooperate with its siblings and ancestors instead of working in a vacuum:
+
+- **`ctx_write(key, value)`** — publish a finding to a shared blackboard.
+- **`ctx_read(key?)`** — read findings others have published.
+- **`ctx_report(summary, structured?)`** — send a summary upward to the parent.
+- **`ctx_spawn(assignments[])`** — queue child tasks the runtime picks up.
+
+In the example above, the first reviewer to read the architecture document could `ctx_write("architecture", ...)` a summary; the next nine would `ctx_read("architecture")` and skip the read entirely.
+
+### How visibility works
+
+The tree is a blackboard with rules, not a free-for-all. A phase sees:
+
+- Its **own** findings, always.
+- The findings of its **ancestors** (parents, grandparents).
+- The findings of **completed siblings** — never a sibling that is still running.
+
+That last rule matters. You never read a half-written blackboard. A sibling's findings become visible only once it has reported completion, so you see a finished result, not a work-in-progress.
+
+### Staying bounded
+
+The Shared Context Tree is opt-in precisely because it punches a hole in isolation. To keep that hole small, every channel is capped:
+
+- A single finding value is capped at 256 KB.
+- A node may write at most 256 keys.
+- A single `ctx_spawn` may queue at most 16 assignments.
+- Keys must match `[A-Za-z0-9._-]` so two phases can't collide on a sanitized path.
+
+Everything is cleaned up with the run. Nothing leaks across runs or sessions.
+
+<Callout type="warn">
+  Shared context is a tradeoff. You gain efficiency and cooperation at the cost of phases no longer being fully independent. Leave it off until you have a concrete reason to turn it on — a shared expensive read, or a parent that needs to steer its children.
+</Callout>
+
+## The contract, restated
+
+The isolation guarantee has two halves, and both are load-bearing:
+
+1. **Nothing leaks out by default.** Intermediate transcripts stay on disk. Your context window receives only the final output.
+2. **Sharing is explicit and bounded.** When you opt into the Shared Context Tree, you decide which phases participate, and the runtime enforces size and depth limits so cooperation can't run away.
+
+Together they mean a flow can be large, long-running, and verbose without that verbosity ever reaching you — unless you ask for it with a peek.
+
+## Next
+
+<Cards>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    Isolation is what makes cross-session replay possible.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks, and how they isolate.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization builds on the same on-disk state.
+  </Card>
+</Cards>

@@ -1,0 +1,153 @@
+---
+title: 上下文隔离
+description: 为什么只有最终阶段会到达你的对话。
+---
+
+想象一个典型的多步骤智能体工作：探索代码库、审计二十个文件、总结发现、起草补丁、审查补丁。使用原始子代理时，每一步都把它的完整 transcript 交回给你。如果每一步产生四千 token 的推理、工具调用和文件转储，你在看到任何结果之前，上下文窗口就增长了四万 token。把这个工作流重复几次，你要么撞上限制、要么丢失早期上下文、要么为重复读取同样的文件付费。
+
+taskflow 的存在正是为了让这个扩展问题消失。
+
+## 你的上下文 vs 运行时
+
+心智模型很简单。工作只会落到两个地方之一：
+
+```txt title="隔离模型"
+你的上下文                    运行时（磁盘上）
+├─ 最终输出  ◀────────       ├─ 阶段 A 输出
+                              ├─ 阶段 B 输出
+                              ├─ 阶段 C 输出
+                              └─ 阶段 D 输出（final）
+```
+
+每个阶段都在它**自己的隔离子代理进程**中运行。运行时把它 spawn 出来、收集它的输出、把输出写入磁盘上持久化的运行状态——然后就停下了。它不会把中间 transcript 推入你的对话。只有标记为 `final` 的阶段（或默认情况下，最后一个阶段）的输出会被返回。
+
+由此带来的结果是：一个 flow 的成本与**你的上下文窗口大小解耦**。你可以并行 fan out 五十个文件，每个都产生冗长的 transcript，而你的对话只增长恰好一份摘要。
+
+这就是 taskflow 安全地挂着运行的原因。一次漫长的审计不会慢慢毒化启动它的那个会话。
+
+## 什么被隔离了
+
+除了最终输出之外的一切。包括：
+
+- 每个子代理收到的、插值后的完整 task 提示。
+- 子代理的每一次工具调用和读取的每一个文件。
+- 每一个中间阶段的原始输出，包括失败的尝试。
+- map 和 parallel 的 fan-out：每个条目的单独结果，而不只是合并后的视图。
+- gate 的裁决、approval 的备注、loop 的迭代日志、tournament 评委的推理。
+
+所有这些都作为运行状态的一部分持久化到磁盘。除非你主动要求，否则它们都不会回到你的对话里。
+
+## 当你需要窥视时
+
+有时一个 flow 产出了一个令人意外的结果，你想知道某个中间阶段到底说了什么。你不需要重新运行任何东西。peek 是显式的、人工调用的逃生舱：
+
+```bash title="列出一次运行中的阶段"
+/tf peek nightly-audit-abc123
+```
+
+```txt title="Peek 输出"
+Run nightly-audit-abc123 (nightly-audit) — completed
+
+Phases:
+  discover [done · cache:run-only] — 412 chars
+  audit [done · 10/10 items] — 8831 chars
+  review [done] — 2104 chars
+  report [done] — 680 chars
+
+Peek one with: peek nightly-audit-abc123 <phaseId>
+```
+
+```bash title="窥视某个特定阶段"
+/tf peek nightly-audit-abc123 audit
+```
+
+peek 是**只读的**。它加载持久化的运行状态并打印某一个阶段的输出。它从不修改运行、从不破坏续跑、也从不改变最终输出是什么。
+
+它也是**硬截断的**。默认情况下一次 peek 上限 4000 字符，这样一个冗长的阶段永远不会淹没你的上下文——这恰恰是隔离存在的目的。你可以把上限提高到 32000，或者从 map 的 fan-out 中单独取一个条目：
+
+```bash title="窥视 map 阶段的第三个条目"
+/tf peek nightly-audit-abc123 audit --item 3 --limit 8000
+```
+
+```bash title="窥视某个阶段解析后的 JSON"
+/tf peek nightly-audit-abc123 discover --json
+```
+
+<Callout type="tip">
+  peek 是调试工具，不是默认路径。正常运行的 flow 保持完全隔离。你只在某个中间结果值得调查时，才主动选择看到它。
+</Callout>
+
+## 在阶段之间共享上下文
+
+隔离是安全的默认值，但有些工作流和它相冲突。假设十个 security-reviewer 子代理都需要读取同一份大型架构文档。如果每个都独立读取，你为这次读取付十次钱，而文档还会进入十个独立的 transcript。
+
+对于这类情况，一个阶段可以 opt in 到**共享上下文树**：
+
+```json title="opt-in 共享上下文"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path}."
+}
+```
+
+在单个阶段上设 `shareContext: true`，或在整个 flow 上设 `contextSharing: true` 来到处启用。启用后，子代理获得四个工具，让它能与自己的兄弟和祖先协作，而不是在真空中工作：
+
+- **`ctx_write(key, value)`** —— 把一个发现发布到共享黑板。
+- **`ctx_read(key?)`** —— 读取别人发布的发现。
+- **`ctx_report(summary, structured?)`** —— 向父级发送一份摘要。
+- **`ctx_spawn(assignments[])`** —— 排队子任务，由运行时接管。
+
+在上面的例子里，第一个读取架构文档的 reviewer 可以 `ctx_write("architecture", ...)` 一份摘要；接下来九个会 `ctx_read("architecture")` 然后完全跳过这次读取。
+
+### 可见性如何运作
+
+这棵树是一个有规则的黑板，不是无约束的共享池。一个阶段能看到：
+
+- **自己的**发现，始终可见。
+- **祖先**（父、祖父）的发现。
+- **已完成的兄弟**的发现——绝不是一个还在运行的兄弟。
+
+最后这条规则很关键。你永远不会读到写了一半的黑板。一个兄弟的发现只有在它报告完成之后才变得可见，所以你看到的是一个完成的结果，而不是一个半成品。
+
+### 保持有界
+
+共享上下文树之所以是 opt-in，正是因为它在隔离上开了一个口子。为了让这个口子保持小，每个通道都有上限：
+
+- 单个发现值上限 256 KB。
+- 一个节点最多写 256 个 key。
+- 单次 `ctx_spawn` 最多排队 16 个分配。
+- key 必须匹配 `[A-Za-z0-9._-]`，这样两个阶段不会在经过 sanitize 的路径上撞车。
+
+一切都随运行一起清理。不会有任何东西跨运行或跨会话泄漏。
+
+<Callout type="warn">
+  共享上下文是一种权衡。你换来了效率与协作，代价是阶段不再是完全独立的。在有一个具体理由之前——一次共享的昂贵读取，或一个需要引导自己子代的父级——把它关着。
+</Callout>
+
+## 把契约再讲一遍
+
+隔离保证有两半，两半都是承重的：
+
+1. **默认情况下没有东西泄漏出去。** 中间 transcript 留在磁盘上。你的上下文窗口只接收最终输出。
+2. **共享是显式且有界的。** 当你 opt in 到共享上下文树时，你决定哪些阶段参与，运行时强制执行大小和深度上限，于是协作不会失控。
+
+两者合起来意味着：一个 flow 可以很大、运行很久、输出很冗长，而这份冗长永远不会到达你——除非你用一次 peek 主动要求。
+
+## 下一步
+
+<Cards>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    隔离正是让跨会话重放成为可能的基础。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    十个构建块，以及它们如何隔离。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    跨运行记忆化构建在同一份磁盘状态之上。
+  </Card>
+</Cards>

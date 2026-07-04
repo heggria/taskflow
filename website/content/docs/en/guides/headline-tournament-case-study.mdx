@@ -1,0 +1,246 @@
+---
+title: Writing a Release Note with Tournament Selection
+description: Spawn competing headline variants and let a judge pick the strongest one.
+---
+
+You shipped a feature and now you need one thing: the release-note headline. It has to be punchy, accurate, and short. One LLM answer might be bland — the model's first roll is often the most obvious phrasing, and "most obvious" is rarely the headline that earns a click. You could write it yourself, but you already delegated the rest of the release to agents.
+
+This guide builds a taskflow that does the headline properly. We start with the naive single-agent baseline, show why it is weak, then replace it with a `tournament` phase that spawns four competing variants and a judge that picks the winner. By the end you will have a complete, saveable flow you can run for every release.
+
+<Callout type="info">
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+</Callout>
+
+## The problem
+
+A release-note headline is small but high-stakes. It is the one line people actually read. You have three constraints:
+
+- **Punchy.** A bland headline ("Improved authentication performance") gets scrolled past.
+- **Accurate.** It must describe what the feature actually does — no overselling.
+- **Short.** Under 80 characters, so it fits in a changelog, a tweet, and a slack announcement.
+
+Asking a single agent to "write the headline" gives you one sample from the model's distribution. Sometimes that sample is great. Often it is the safe, generic phrasing the model reaches for first. You can re-roll by hand, but then you are babysitting the model and picking the winner yourself — which is exactly the subjective, low-stakes-per-roll work a tournament is built for.
+
+The taskflow answer: declare the headline as a `tournament` phase. The runtime spawns N independent variants, shows them all to a judge, and returns the winner. The variants that lose are discarded; only the survivor reaches your context.
+
+## Phase 1 — the naive baseline (and why it is weak)
+
+Start with what you would do without a tournament: one `agent` phase.
+
+```json title="naive single-agent headline"
+{
+  "id": "headline",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for {args.feature}. Keep it under 80 characters.",
+  "final": true
+}
+```
+
+That is a complete, valid taskflow (with a `name` and `phases` around it). It produces one headline. The problem is variance: run it five times and you get five different headlines, and you have no way to know which is best without reading all five. The first roll is the only one you see.
+
+A tournament turns that variance into an advantage. Instead of one roll, you take several — and instead of you picking, a judge does.
+
+## Phase 2 — the tournament
+
+Replace the single `agent` phase with a `tournament`. Give it a `task`, a number of `variants`, a `judge` rubric, and a `mode`.
+
+```json title="headline tournament"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for this feature: {args.feature}. It must be accurate to the feature description and under 80 characters. Return ONLY the headline, no quotes, no commentary.",
+  "variants": 4,
+  "judge": "Pick the headline that is the most punchy while staying accurate to the feature and under 80 characters. Prefer specific over generic.",
+  "judgeAgent": "final-arbiter",
+  "mode": "best",
+  "final": true
+}
+```
+
+Reading that back:
+
+- **`variants: 4`** — four independent copies of `task` run as separate subagent calls. Each one produces its own headline without seeing the others. The diversity comes from the model's sampling — each call is an independent draw.
+- **`agent: "writer"`** — the agent that runs each variant. The judge uses `judgeAgent` if you set it, otherwise the same `agent`.
+- **`judge`** — the rubric the judge is given. This is *your* criteria, in prose: punchy, accurate, under 80 chars, prefer specific.
+- **`judgeAgent: "final-arbiter"`** — a stronger model runs the judge step. Judging is harder than writing: the judge has to read four options and reason about which is best, so it earns a bigger model.
+- **`mode: "best"`** — the output is the winning variant, verbatim. The judge does not rewrite it; it just picks.
+- **`final: true`** — only the winning headline returns to your context. The three losers and the judge's reasoning stay inside the runtime.
+
+### How the judge is told to pick
+
+You do not write the verdict format — the runtime appends a directive to the judge's prompt for you. In `best` mode the directive is:
+
+> End your reply with a line exactly: `WINNER: <number>` (1–N), choosing the strongest eligible variant.
+
+The judge reads the rubric (`judge`), sees the variants labeled `### Variant 1` … `### Variant 4`, and emits its pick. The runtime parses `WINNER: <n>` flexibly (last match wins, so the judge can change its mind; it also accepts JSON like `{"winner": 3}`). Winner numbers are 1-based over the variants that actually ran.
+
+<Callout type="info">
+  You don't have to write the directive — the runtime appends it for you. Your `judge` field is the rubric ("pick the punchiest that stays accurate"); the runtime handles the mechanics of asking for a numbered pick.
+</Callout>
+
+## Phase 3 — feed the writer research first
+
+A headline is only as good as what the writer knows about the feature. Add a `research` phase before the tournament so every variant sees the same facts.
+
+```json title="research then tournament"
+{
+  "name": "release-note-headline",
+  "phases": [
+    {
+      "id": "research",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Read the diff and release notes for {args.feature}. Summarize in 5 bullets: what it does, who it helps, and the single most surprising benefit. Return bullets only.",
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "headline",
+      "type": "tournament",
+      "agent": "writer",
+      "dependsOn": ["research"],
+      "task": "Write a punchy release-note headline for this feature based on the research below. It must be accurate and under 80 characters. Return ONLY the headline.\n\n{steps.research.output}",
+      "variants": 4,
+      "judge": "Pick the headline that is the most punchy while staying accurate and under 80 characters. Prefer specific over generic.",
+      "judgeAgent": "final-arbiter",
+      "mode": "best",
+      "final": true
+    }
+  ]
+}
+```
+
+`headline` depends on `research`, so the research runs first. Its output is interpolated into every variant's task — all four writers see the same five bullets, which keeps the variants comparable (they differ in phrasing, not in facts).
+
+## The complete flow
+
+Here is the whole thing, assembled. Save it as `release-note-headline.json`:
+
+```json title="release-note-headline.json"
+{
+  "name": "release-note-headline",
+  "description": "Research a feature, then run a 4-variant tournament for the best release-note headline.",
+  "args": {
+    "feature": { "description": "The feature to write a headline for.", "required": true }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "research",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Read the diff and release notes for {args.feature}. Summarize in 5 bullets: what it does, who it helps, and the single most surprising benefit. Return bullets only.",
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "headline",
+      "type": "tournament",
+      "agent": "writer",
+      "dependsOn": ["research"],
+      "task": "Write a punchy release-note headline for this feature based on the research below. It must be accurate and under 80 characters. Return ONLY the headline.\n\n{steps.research.output}",
+      "variants": 4,
+      "judge": "Pick the headline that is the most punchy while staying accurate and under 80 characters. Prefer specific over generic.",
+      "judgeAgent": "final-arbiter",
+      "mode": "best",
+      "final": true
+    }
+  ]
+}
+```
+
+Verify it before spending any tokens:
+
+```bash title="Verify the flow"
+/tf verify release-note-headline
+```
+
+Then run it:
+
+```bash title="Run the tournament"
+/tf run release-note-headline feature="subagent context isolation"
+```
+
+Only the winning headline returns to your conversation. The research bullets, the four variant drafts, and the judge's reasoning all stay inside the runtime.
+
+## What to tune
+
+The flow above is a sensible default. These are the knobs worth turning for your own releases.
+
+### Number of variants
+
+`variants: 4` is a good balance of cost and diversity. A tournament costs **N+1** subagent calls (N variants plus the judge), so `variants: 4` is five calls; `variants: 8` is nine. Diminishing returns hit fast — the model's distribution only has so many genuinely different phrasings for one prompt, so beyond 5–6 you mostly re-sample the same ideas. The hard maximum is `20`. For a one-line headline, `3`–`5` is the sweet spot; reserve higher counts for longer creative work where the space of approaches is larger.
+
+### The judge model
+
+`judgeAgent: "final-arbiter"` runs the judge on a strong model. Judging is harder than writing — the judge has to hold four options in mind and reason about which is best — so it earns the bigger model. If you are cost-conscious, drop `judgeAgent` and the judge runs on the same `agent` as the variants (`writer`); that is cheaper but the judge is weaker, which matters more for subjective tasks. Don't go the other way and run the *variants* on the expensive model — the variants benefit from quantity, not from each one being a deep-reasoning pass.
+
+### `mode: "best"` vs `mode: "aggregate"`
+
+The `mode` field decides what comes back.
+
+| Mode | Output | Use when |
+|---|---|---|
+| `best` (default) | The winning variant, verbatim. | One of the variants is already great; you want it unchanged. |
+| `aggregate` | The judge's synthesized answer, combining the best parts. | No single variant is perfect; you want the judge to merge them. |
+
+For a one-line headline, `best` is almost always right — you want one of the four drafts to survive unchanged, because the judge rewriting a one-liner rarely improves it. Reach for `aggregate` when the output is longer (a paragraph, a summary) and no single variant captures everything:
+
+```json title="aggregate mode"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for {args.feature}. Under 80 characters. Return ONLY the headline.",
+  "variants": 4,
+  "judge": "Synthesize the strongest possible headline by combining the best qualities of the variants. Then indicate which variant contributed most.",
+  "judgeAgent": "final-arbiter",
+  "mode": "aggregate",
+  "final": true
+}
+```
+
+In `best` mode, the returned `model` is the model that produced the winning variant. In `aggregate` mode, it is the judge's model — because the judge authored the final output.
+
+### `branches` instead of `variants`
+
+`variants` re-rolls the *same* prompt. If you want genuinely different *angles* — bold vs benefit-driven vs curiosity-gap — use `branches`. Each branch is its own `{ task }`; the branches become the competitors and `variants` is ignored.
+
+```json title="branches instead of variants"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "branches": [
+    { "task": "Write a bold, provocative release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a clear, benefit-driven release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a curiosity-gap release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a one-number release-note headline for {args.feature} (e.g. '3x faster'). Under 80 chars." }
+  ],
+  "judge": "Pick the headline most likely to earn a click without overselling. Must be accurate and under 80 characters.",
+  "judgeAgent": "final-arbiter",
+  "mode": "best",
+  "final": true
+}
+```
+
+Use `branches` when you can enumerate the strategies up front. Use `variants` when you trust the prompt and just want more rolls.
+
+<Callout type="warn">
+  A tournament is never cached cross-run by design — each run deserves a fresh set of variants and a fresh judge. Do not put a `cache` block on a `tournament` phase; the validator will reject it. If you want the upstream `research` phase to be cached, that is fine and recommended.
+</Callout>
+
+## Where to go next
+
+<Cards>
+  <Card title="Tournament Selection" href="/en/docs/guides/tournament">
+    The full tournament guide — verdict parsing, fail-open guarantees, output modes.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/syntax/phase-types">
+    Full field reference for the `tournament` phase.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `dependsOn`, `when`, and `retry` — the fields that shape the DAG.
+  </Card>
+</Cards>

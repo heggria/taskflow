@@ -1,0 +1,342 @@
+---
+title: Phase Types
+description: The ten building blocks of a taskflow, and how to choose between them.
+---
+
+A **phase** is one unit of work in a taskflow. Each phase runs as an isolated subagent call, shell command, or control decision, and the runtime wires them into a DAG via `dependsOn`.
+
+The best way to understand the ten phase types is to watch a single problem evolve. Imagine you are building a tool that reviews a pull request.
+
+## Start simple: one agent
+
+At first, you ask one agent to do everything:
+
+```json title="review-simple.json"
+{
+  "name": "review-simple",
+  "phases": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agent": "security-reviewer",
+      "task": "Review every changed file in src/ for security risks and return a prioritized summary.",
+      "final": true
+    }
+  ]
+}
+```
+
+An `agent` phase is the default: one subagent, one task, one result. It is the right place to start. But for a large PR, a single agent has to read every file in one turn, produces a huge transcript, and may miss details.
+
+## Fan out over known checks: `parallel`
+
+You decide to split the review into several independent checks that can run at the same time:
+
+```json title="review-parallel.json"
+{
+  "name": "review-parallel",
+  "phases": [
+    {
+      "id": "checks",
+      "type": "parallel",
+      "context": ["src/**/*.ts"],
+      "branches": [
+        { "task": "Find missing auth checks.", "agent": "analyst" },
+        { "task": "Find missing input validation.", "agent": "analyst" },
+        { "task": "Find hardcoded secrets.", "agent": "analyst" }
+      ]
+    },
+    {
+      "id": "summary",
+      "type": "agent",
+      "agent": "writer",
+      "task": "Turn these findings into one prioritized report:\n{steps.checks.output}",
+      "dependsOn": ["checks"],
+      "final": true
+    }
+  ]
+}
+```
+
+Use `parallel` when:
+
+- You know the branches up front.
+- Each branch is independent.
+- You want the results concatenated, or you plan to merge them downstream.
+
+`parallel` does not synthesize — it just runs. If you need a single merged answer, add a downstream phase like the `summary` above.
+
+## Fan out over a runtime list: `map`
+
+Now suppose the PR changes a different number of files every time. You cannot hard-code branches. Instead, first discover the files, then review each one:
+
+```json title="review-map.json"
+{
+  "name": "review-map",
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the changed source files under src/. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summary",
+      "type": "agent",
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+Use `map` when:
+
+- The number of items is discovered at runtime.
+- Each item gets the same treatment.
+- You want bounded concurrency (`concurrency: 4` limits how many run at once).
+
+## Merge many results into one: `reduce`
+
+In the example above, `summary` is an `agent` phase that reads `{steps.review-each.output}`. That works, but taskflow has a dedicated type for merging upstream outputs: `reduce`.
+
+```json title="review-reduce.json"
+{
+  "id": "summary",
+  "type": "reduce",
+  "from": ["review-each"],
+  "agent": "writer",
+  "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+  "dependsOn": ["review-each"],
+  "final": true
+}
+```
+
+`reduce` is semantically the same as an `agent` phase that depends on several upstream phases — it exists to make aggregation explicit. Use it when a phase's whole job is to synthesize upstream results.
+
+## Add a quality gate: `gate`
+
+Your review tool now produces a summary, but sometimes the summary is wrong. You want a second agent to check the summary before it reaches the user. If the check fails, the run stops.
+
+```json title="review-gate.json"
+{
+  "name": "review-gate",
+  "phases": [
+    /* ... discover, review-each, summary ... */
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["summary"],
+      "task": "Does this summary accurately reflect the per-file reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+Use `gate` when:
+
+- A human or second agent must approve output before it flows downstream.
+- You want the run to end cleanly on a `BLOCK` verdict rather than crash.
+- You want zero-token pre-checks (`eval`) to skip the LLM gate when conditions are already met.
+
+If the gate output is ambiguous, taskflow fails open and treats it as `PASS` — it never accidentally loses work.
+
+## The full PR-review flow
+
+Putting it together:
+
+```json title="review-full.json"
+{
+  "name": "review-full",
+  "args": { "dir": { "default": "src" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List changed source files under {args.dir}. Output JSON array of {path}.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"]
+    },
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["summary"],
+      "task": "Does the summary match the reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+## The other five phase types
+
+The PR-review story used the five most common types. The remaining five solve specific problems:
+
+### `approval` — pause for a human
+
+Use when a human must explicitly approve before the flow continues. In CI or detached runs it auto-rejects.
+
+```json title="approval-example.json"
+{
+  "id": "ship-it",
+  "type": "approval",
+  "dependsOn": ["verify"],
+  "task": "Approve this fix for production?"
+}
+```
+
+### `flow` — run a sub-workflow
+
+Use when you want to reuse a saved flow or run a flow definition generated by another phase.
+
+```json title="flow-example.json"
+{
+  "id": "deep-dive",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+### `loop` — repeat until done
+
+Use when the number of iterations depends on the result of the work itself, not a runtime list.
+
+```json title="loop-example.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft. Return JSON {draft, done}.",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6
+}
+```
+
+### `tournament` — pick the best of several attempts
+
+Use for creative or subjective work where one shot might be bad. Spawn variants and let a judge pick.
+
+```json title="tournament-example.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the strongest hook.",
+  "mode": "best"
+}
+```
+
+### `script` — run a shell command
+
+Use for builds, tests, lint, or file transformations. Zero tokens.
+
+```json title="script-example.json"
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## Choosing a phase type
+
+| If your problem is... | Use | Why |
+|---|---|---|
+| "Do this one thing" | `agent` | Simplest. One call, one result. |
+| "Run these N known checks at once" | `parallel` | Branches are static and independent. |
+| "Do this for every item in a list I discover at runtime" | `map` | Dynamic fan-out with bounded concurrency. |
+| "Merge several upstream outputs into one" | `reduce` | Makes aggregation explicit. |
+| "Approve before continuing" | `gate` | Halts or passes based on verdict. |
+| "Wait for a human" | `approval` | Pauses interactive runs; auto-rejects in CI. |
+| "Reuse another flow" | `flow` | Composition and dynamic planning. |
+| "Repeat until a condition is met" | `loop` | Iterative refinement. |
+| "Pick the best of several attempts" | `tournament` | Competitive selection for subjective work. |
+| "Run a command, no LLM" | `script` | Builds, tests, file ops. |
+
+## Phase lifecycle
+
+Every phase moves through the same states:
+
+<Steps>
+  <Step>
+    **`pending`** — waiting for its dependencies to finish.
+  </Step>
+  <Step>
+    **`running`** — the subagent, shell command, or sub-flow is executing.
+  </Step>
+  <Step>
+    **`done`** — succeeded. Output is available as `{steps.<id>.output}`.
+  </Step>
+  <Step>
+    **`failed`** — errored or violated a contract. Non-optional failures abort the run.
+  </Step>
+  <Step>
+    **`skipped`** — never ran, because a `when` guard was falsy, a gate blocked, or the run already aborted.
+  </Step>
+</Steps>
+
+A `gate` that returns `BLOCK` does not `fail` downstream phases — it `skip`s them, and the run ends with status `blocked`.
+
+## Output: text or JSON
+
+Every phase produces text. Add `output: "json"` when the result needs to be parsed by downstream phases:
+
+```json title="json-output.json"
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "Classify severity. Output JSON {severity, reason}."
+}
+```
+
+Downstream phases can then read `{steps.triage.json.severity}`. Pair `output: "json"` with `expect` to validate shape and make contract violations retryable.
+
+## Next steps
+
+<Cards>
+  <Card title="The DAG Model" href="/en/docs/concepts/dag">
+    How phases connect into a graph.
+  </Card>
+  <Card title="Interpolation" href="/en/docs/concepts/interpolation">
+    How phases pass data to each other.
+  </Card>
+  <Card title="Phase Types Reference" href="/en/docs/syntax/phase-types">
+    Exhaustive field reference for each phase type.
+  </Card>
+</Cards>

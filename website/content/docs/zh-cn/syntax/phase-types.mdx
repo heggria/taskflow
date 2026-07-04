@@ -1,0 +1,711 @@
+---
+title: 阶段类型
+description: taskflow 的十个构建块，以及何时选用各自。
+---
+
+一个 taskflow 是由**阶段**组成的有向图。每个阶段是一个工作单元 —— 一次隔离的子代理调用、一次 shell 命令、或一个控制决策 —— 运行时通过 `dependsOn` 把它们连起来。本页按你实际会遇到它们的顺序，逐一讲解全部十种阶段类型：从你 80% 场景都会用的那个开始，再随着问题变复杂逐步加上能力。
+
+你可能在想：*我得先把十种全学会才能干活吗？* 不用。大多数 flow 只用三四种类型就建起来了。其余几种是给特定场景准备的 —— 人工审批、迭代精修、竞争草稿 —— 在你撞上那些场景之前，完全可以无视它们。
+
+## 何时用什么
+
+| 如果你的问题是…… | 用 | 一句话 |
+|---|---|---|
+| "做这一件事" | `agent` | 一个子代理，一个任务，一个结果。 |
+| "同时跑这 N 个已知检查" | `parallel` | 静态分支，彼此独立。 |
+| "对 N 个运行时发现的项各跑一遍同一检查" | `map` | 对上游阶段发现的列表 fan-out。 |
+| "把多个结果合成一个" | `reduce` | 一个子代理综合上游输出。 |
+| "结果发出去之前先核一遍" | `gate` | 第二个 agent 可以中止流程。 |
+| "需要人工审批" | `approval` | 暂停，直到有人点 approve。 |
+| "复用一个已保存的 flow" | `flow` | 把另一个 taskflow 当一个阶段跑。 |
+| "反复尝试直到足够好" | `loop` | 带停止条件地重复。 |
+| "生成多个方案，挑最好的" | `tournament` | 变体竞争，评委裁决。 |
+| "跑个 build / lint / 脚本" | `script` | shell 命令，零 token。 |
+
+<Callout type="tip">
+  拿不准时，从 `agent` 开始。其他每种类型都是你之后可以叠加的优化或控制流增强。运行时很乐意跑一个由三个普通 `agent` 阶段组成的 flow。
+</Callout>
+
+## 一个贯穿始终的示例
+
+本页剩下部分会构建一个真实、完整的 flow：**为一个 PR 做安全审查**。你会看到它从一个阶段长成一个完整 DAG —— 每引入一种新需求，就多一种阶段类型。
+
+把它存成 `review.json` —— 我们会不断扩展它：
+
+```json title="review.json — 起点"
+{
+  "name": "review",
+  "args": { "dir": { "default": "src" } },
+  "phases": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agent": "security-reviewer",
+      "task": "Review every changed file under {args.dir} for security risks and return a prioritized summary.",
+      "final": true
+    }
+  ]
+}
+```
+
+## 默认选择：`agent`
+
+`agent` 阶段正如其名：一个子代理接收一个 `task` prompt，返回一个结果。它是几乎所有场景的合适起点。
+
+```json title="一个基础的 agent 阶段"
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Summarize the architecture of src/ in two paragraphs."
+}
+```
+
+你通常会让 agent 产出可以拿来分支判断的结构化结果。设 `output: "json"` 并配上一个 `expect` 契约 —— 如果输出不匹配，阶段会以一条精确诊断失败，并且符合 `retry` 条件。
+
+```json title="带契约的结构化 JSON 输出"
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "Classify the severity of this issue. Output only JSON.",
+  "expect": {
+    "type": "object",
+    "required": ["severity", "reason"],
+    "properties": {
+      "severity": { "enum": ["low", "medium", "high", "critical"] },
+      "reason": { "type": "string" }
+    }
+  }
+}
+```
+
+一个常见的性能技巧：用 `context` 把文件预读进 prompt。没有它，agent 会烧一个回合去探索；有了它，任务开始时相关代码已经在 prompt 里了。
+
+```json title="预读 context"
+{
+  "id": "review-auth",
+  "type": "agent",
+  "agent": "risk-reviewer",
+  "context": ["src/auth/**/*.ts", "{args.spec}"],
+  "contextLimit": 12000,
+  "task": "Review the auth implementation against the spec. List every risk."
+}
+```
+
+<Callout type="info">
+  `contextLimit` 限制**每个文件**读取的字符数（默认 `8000`）。对那些你知道 agent 需要完整读取的大文件，把它调大。
+</Callout>
+
+回到 PR 审查的示例，一个 `agent` 对小 PR 没问题。但对大 PR，agent 得在一个回合里读完每个文件，产出巨大的 transcript，还可能漏掉细节。该 fan out 了。
+
+## 对已知检查 fan out：`parallel`
+
+你决定把审查拆成几个能同时跑的独立检查。你在编写时就知道这些检查 —— 正好三个 —— 所以 `parallel` 是对的。
+
+```json title="parallel — 固定分支"
+{
+  "id": "checks",
+  "type": "parallel",
+  "context": ["src/**/*.ts"],
+  "branches": [
+    { "task": "Find missing auth checks.", "agent": "analyst" },
+    { "task": "Find missing input validation.", "agent": "analyst" },
+    { "task": "Find hardcoded secrets.", "agent": "analyst" }
+  ]
+}
+```
+
+在以下情况用 `parallel`：
+
+- 你在编写时就知道这些分支。
+- 每个分支互相独立。
+- 你想要结果被拼接起来，或者打算下游再合并。
+
+<Callout type="warn">
+  `parallel` **不**做综合 —— 它只是跑。它的输出是所有分支输出的拼接。如果你需要一个合并后的单一答案，加一个下游 `reduce` 阶段。
+</Callout>
+
+一个共享的 `context` 数组只读取一次并在所有分支间共享，比每个分支各自重新读同样的文件更省。
+
+## 对运行时列表 fan out：`map`
+
+现在假设每次 PR 改的文件数量都不一样。你没法硬编码分支 —— 你得先**发现**列表，再审查每个项。这正是 `map` 的用途。
+
+```json title="map — 对发现的列表 fan out"
+{
+  "id": "review-each",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path} for security risks. Return one paragraph.",
+  "dependsOn": ["discover"],
+  "concurrency": 4
+}
+```
+
+`over` 表达式解析为一个数组 —— 通常来自上游一个返回 JSON 的 `agent` 阶段（`{steps.somePhase.json}`）。运行时随后为每个项目生成一个子代理，`concurrency: 4` 限制同时跑多少个。在 `task` 里，`{file.path}`（或你用 `as` 起的名字）插值当前项。
+
+<Callout type="info">
+  **`over` 是怎么解析的。** 表达式先被插值，需要时再解析为 JSON。如果值是对象，运行时会找 `items`、`results`、`list`、`data` 或 `findings` 键。你也可以直接下钻到嵌套字段：`"over": "{steps.discover.json.routes}"`。
+</Callout>
+
+和 `parallel` 一样，`map` 的输出是每项输出的拼接。要把它变成单一答案，用下一种类型。
+
+## 把多个结果合成一个：`reduce`
+
+`parallel` 和 `map` 都会产出多个输出。当你想要一份干净的总结时，加一个 `reduce` 阶段。它存在的唯一目的是让"聚合"这件事显式 —— 语义上它就是一个依赖了多个上游阶段的 `agent` 阶段，但 `reduce` 表达了意图："这阶段的全部职责就是综合。"
+
+```json title="reduce — 合并上游输出"
+{
+  "id": "summary",
+  "type": "reduce",
+  "from": ["review-each"],
+  "agent": "writer",
+  "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+  "dependsOn": ["review-each"],
+  "final": true
+}
+```
+
+<Callout type="warn">
+  `reduce` **不**会自动拼接。`task` prompt 必须告诉 agent 拿上游输出做什么 —— 通常用 `{steps.<id>.output}` 把它们插值进去。
+</Callout>
+
+这是我们的示例在用满三种阶段类型后的样子：
+
+```json title="review.json — discover、map、reduce"
+{
+  "name": "review",
+  "args": { "dir": { "default": "src" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List changed source files under {args.dir}. Output JSON array of {path}.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+## 加一道质量门：`gate`
+
+你的审查工具现在能产出总结了，但有时总结是错的。你想让第二个 agent 在它到达用户之前核一遍 —— 如果检查不过，运行应该干净地停下，而不是把坏总结发出去。
+
+```json title="gate — 第二个 agent 可以中止流程"
+{
+  "id": "verify",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["summary"],
+  "task": "Does the summary match the reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+}
+```
+
+gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止它。
+
+<Callout type="tip">
+  **设计上 fail-open。** 如果 gate 输出是模糊的 —— 既不是明确的 `PASS` 也不是 `BLOCK` —— taskflow 把它当作 `PASS`。gate 永远不会意外丢失你的工作。
+</Callout>
+
+你甚至可以一个 token 都不花：用 `eval`，一组零 token 的机器检查。如果**全部**通过，gate 无需 LLM 调用就自动通过。如果**任一**失败，LLM `task` 照常运行。
+
+```json title="带零 token eval 检查的 gate"
+{
+  "id": "lint-pass",
+  "type": "gate",
+  "dependsOn": ["lint"],
+  "eval": [
+    "{steps.lint.output} contains '0 errors'",
+    "{steps.lint.output} contains '0 warnings'"
+  ],
+  "task": "Confirm lint is clean. VERDICT: PASS or BLOCK."
+}
+```
+
+你可能在想 gate 阻塞时会发生什么。默认（`onBlock: "halt"`）运行结束。设 `onBlock: "retry"`，gate 会重新跑它的上游 `dependsOn` 阶段并重新评估 —— 一个自愈合循环，受 `retry.max` 约束：
+
+```json title="自愈合 gate"
+{
+  "id": "quality",
+  "type": "gate",
+  "onBlock": "retry",
+  "retry": { "max": 3 },
+  "dependsOn": ["implement"],
+  "task": "Does this satisfy all criteria? VERDICT: PASS or BLOCK."
+}
+```
+
+关于带可选 LLM 评委回退的确定性评分，见下方字段参考中的 `score` 字段。
+
+## 为人工暂停：`approval`
+
+有些决定根本不该交给 agent。一个 `approval` 阶段会暂停流程，直到人工点 **approve**、**reject** 或 **edit**。
+
+```json title="approval — 人在环中"
+{
+  "id": "approve-ship",
+  "type": "approval",
+  "dependsOn": ["verify"],
+  "task": "Review the fix before shipping."
+}
+```
+
+- **Approve** → 阶段输出为 `"approved"`，流程继续。
+- **Reject** → 阶段失败，流程中止（除非 `optional: true`）。
+- **Edit** → 键入的备注成为阶段输出，流程继续。
+
+<Callout type="warn">
+  approval 只在交互式宿主（Pi）中有效。在 CI 或分离运行中，`approval` 阶段会**自动 reject** —— 所以别把它放在你会无人值守运行的 flow 上。`timeout` 和 `cache.scope: "cross-run"` 在 approval 阶段上不被支持。
+</Callout>
+
+## 复用一个已保存的 flow：`flow`
+
+当你发现自己在多个 flow 里反复声明同一个多阶段块时，把它抽成一个保存的 flow，用 `flow` 调用。这也是**运行由另一个阶段生成的 flow** 的方式 —— 例如，一个 planner agent 产出一份 JSON DAG，下游一个 `flow` 阶段执行它。
+
+```json title="flow — 运行一个已保存的子流程"
+{
+  "id": "research",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+传 `def` 而非 `use` 可运行内联或运行时生成的定义：
+
+```json title="flow — 运行运行时生成的子流程"
+{
+  "id": "execute",
+  "type": "flow",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+<Callout type="info">
+  **生成的子流程会被加固。** 因为 LLM 写的计划是不可信的，运行时生成的 `def` 子流程受额外限制：最多 `100` 个阶段、最多 `200` 个 map 项、最多 `16` 并发、最多 `5` 层嵌套、不允许 `script` 阶段、`cwd` 不能逃逸出运行目录。如果校验失败，阶段报告 `defError` 且运行继续（对生成计划 fail-open）。
+</Callout>
+
+## 重复直到完成：`loop`
+
+有些工作需要迭代：反复精修草稿直到通过、反复修测试直到变绿。你不知道要试几次 —— 答案取决于工作本身。一个 `loop` 阶段重复它的 `task`，直到 `until` 变为真、输出收敛、或达到 `maxIterations`。
+
+```json title="loop — 反复精修直到完成"
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft. Return JSON {draft, done}.",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6,
+  "convergence": true
+}
+```
+
+`until` 条件通过 `{steps.<thisId>.json}` 检查当前迭代的输出。`convergence: true`（默认值）会在某次迭代输出与上一次完全相同时提前停止 —— 一个不动点，再做也不会改变什么。
+
+<Callout type="tip">
+  **用 `reflexion` 从失败中学习。** 设 `reflexion: true`，第一次迭代之后的每次迭代都会收到一个 `{reflexion}` 占位符，携带上一次迭代失败的结构化摘要 —— 未满足的 `until` 条件、`expect` 诊断、或错误片段。循环体把失败变成反馈而非终止：
+  ```json title="带 reflexion 的 loop"
+  {
+    "id": "fix-tests",
+    "type": "loop",
+    "task": "Fix the failing tests. Use {reflexion} to learn from prior failures. Return {patch, passes}.",
+    "until": "{steps.fix-tests.json.passes} == true",
+    "output": "json",
+    "maxIterations": 10,
+    "reflexion": true
+  }
+  ```
+</Callout>
+
+`maxIterations` 默认 `10`；硬上限 `100`。如果 `until` 始终不为真，循环在上限处停止，最后一次迭代的输出成为阶段输出。
+
+## 竞争并挑选：`tournament`
+
+创意性或主观性强的工作能从"生成多个方案再挑最好的"中受益。一个 `tournament` 生成竞争的变体，再由评委挑出赢家（或综合出一个聚合答案）。
+
+```json title="tournament — 变体"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the headline with the strongest hook and clearest promise.",
+  "mode": "best"
+}
+```
+
+如果变体应该在**思路**上而非仅仅是随机采样上不同，用 `branches` 给每个变体自己的 task：
+
+```json title="tournament — 各异的分支"
+{
+  "id": "headline",
+  "type": "tournament",
+  "branches": [
+    { "task": "Write a bold, provocative headline." },
+    { "task": "Write a clear, benefit-driven headline." },
+    { "task": "Write a question-based headline." }
+  ],
+  "judge": "Pick the best headline.",
+  "mode": "best"
+}
+```
+
+评委输出 `WINNER: <n>`（从 1 起）或 JSON `{"winner": n}`。`mode: "best"` 时获胜变体原样作为阶段输出；`mode: "aggregate"` 时评委综合的答案作为输出。`variants` 默认 `3`、上限 `20`。
+
+<Callout type="info">
+  **Fail-open。** 无法解析的评委裁决会回退到变体 `1` —— tournament 永远不会丢失你的工作。
+</Callout>
+
+## 跑一条 shell 命令：`script`
+
+对 build、测试、lint 或文件变换，用 `script`。它跑一条 shell 命令，**零 token** —— 没有子代理参与。
+
+```json title="script — 数组形式（推荐）"
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+数组形式是 `execvp` 式的直接 spawn —— 免于 shell 注入，是推荐的默认形式。字符串形式会经过一个 shell，对管道很方便，但**绝不能**含 `{...}` 占位符：
+
+```json title="script — 字符串形式"
+{
+  "id": "list",
+  "type": "script",
+  "run": "find src -name '*.ts' | head -20"
+}
+```
+
+要安全地把动态值传进脚本，通过 `input` 管道传入（它支持插值），而不是把值插值进 `run`：
+
+```json title="script — 管道 stdin"
+{
+  "id": "format",
+  "type": "script",
+  "run": ["npx", "prettier", "--stdin-filepath", "foo.ts"],
+  "input": "{steps.generate.output}"
+}
+```
+
+<Callout type="warn">
+  `script` 阶段不能用 `retry` 或 `output: "json"`。`timeout` 默认 `60000`、上限 `300000` ms。
+</Callout>
+
+## 完整的 PR 审查 flow
+
+把五种最常用的类型 —— `agent`、`map`、`reduce`、`gate`，加一个用于 lint 的 `script` —— 拼到一起，这就是你可以直接复制改造的完整审查 flow：
+
+```json title="review.json — 完整版"
+{
+  "name": "review",
+  "args": { "dir": { "default": "src" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "lint",
+      "type": "script",
+      "run": ["npm", "run", "lint"],
+      "timeout": 120000
+    },
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List changed source files under {args.dir}. Output JSON array of {path}.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"]
+    },
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["summary"],
+      "task": "Does the summary match the reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+<Steps>
+  <Step>
+    **`lint` 先跑** —— 一个零 token 的 shell 检查。（它没有 `dependsOn`，所以和 `discover` 一起在第一拓扑层。）
+  </Step>
+  <Step>
+    **`discover` 列出改动的文件**并返回 JSON，供 `map` fan out。
+  </Step>
+  <Step>
+    **`review-each` fan out** —— 最多四个安全审查 agent 同时跑，每个文件一个。
+  </Step>
+  <Step>
+    **`summary` 合并**每文件的审查，产出一份按优先级排序的报告。
+  </Step>
+  <Step>
+    **`verify` 在总结到达你的上下文窗口之前做门禁**。
+  </Step>
+</Steps>
+
+中间的 transcript 留在运行时内部。你的上下文窗口只收到最终输出。
+
+---
+
+## 字段参考
+
+上面覆盖的都是常见场景。本页剩下的是详尽参考 —— 每种阶段类型的每个字段、校验规则、以及按类型的必需字段矩阵。需要精确答案时再来查。
+
+### 公共字段
+
+每个阶段都接受这些字段。某些字段在特定阶段类型上会被忽略或禁用 —— 这些例外在各类型下单独列出。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `id` | `string` | — | **必需。** 唯一标识符，在 `dependsOn` 和 `{steps.<id>.output}` 中被引用。用连字符，不用下划线。 |
+| `type` | `string` | `"agent"` | 十种阶段类型之一。 |
+| `agent` | `string` | 第一个发现的 agent | agent 名称。必须用连字符。 |
+| `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches`）。 |
+| `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
+| `join` | `"all" \| "any"` | `"all"` | `"all"` 等待每个依赖；`"any"` 在任一完成后即运行。 |
+| `when` | `string` | — | 条件守卫。除非表达式为真，否则跳过阶段。解析错误 fail-open。 |
+| `retry` | `object` | — | `{ max, backoffMs?, factor? }`。显式重试策略。没有它时瞬态错误也会自动重试。 |
+| `timeout` | `number` | — | 每次调用超时毫秒数（`>= 1000`）。对 `script`，上限 `300000`、默认 `60000`。不支持 `approval`/`flow`。 |
+| `output` | `"text" \| "json"` | `"text"` | 把输出解析为 JSON。用 `expect` 时必需。 |
+| `expect` | `object` | — | 类 JSON-Schema 的输出契约。仅在 `agent`/`gate`/`reduce`/`loop` 上与 `output: "json"` 一起有效。 |
+| `context` | `string[]` | — | 预读到 prompt 中的文件或 `{steps.X}` 引用。 |
+| `contextLimit` | `number` | `8000` | 每个上下文文件读取的最大字符数。 |
+| `final` | `boolean` | `false` | 把此阶段输出标记为工作流结果。至多一个阶段可为 `final`；若都没有，最后一个阶段胜出。 |
+| `optional` | `boolean` | `false` | 为 `true` 时，失败不会中止运行。 |
+| `cache` | `object` | `{ scope: "run-only" }` | 缓存策略。见[缓存](/zh-cn/docs/syntax/caching)。 |
+| `idempotent` | `boolean` | `true` | 对不可逆副作用（部署、DB 写入）设 `false`。禁用瞬态自动重试和所有缓存；记录 `sideEffect: true`。 |
+| `model` | `string` | — | 此阶段的模型覆盖。 |
+| `thinking` | `string` | — | 此阶段的思考等级覆盖。 |
+| `tools` | `string[]` | — | 限制此阶段 agent 可用的工具。 |
+| `cwd` | `string` | — | 工作目录：字面路径，或 `temp` / `dedicated` / `worktree`。 |
+| `shareContext` | `boolean` | `false` | 把此阶段纳入共享上下文树。 |
+
+<Callout type="info">
+  **公共字段的校验规则。**
+  - `id` 在整个 flow 中必须唯一。
+  - `id` 和 `agent` 必须用连字符，不用下划线。
+  - 运行 agent 的阶段 `timeout` 必须 `>= 1000`；`script` 必须在 `1000` 到 `300000` 之间。
+  - `final: true` 至多出现在一个阶段上。
+  - `cache.scope: "cross-run"` 在 `gate`、`approval`、`loop`、`tournament`、`script` 上禁用。
+  - `retry.max` 必须 `<= 20`；`backoffMs` 在 `0` 到 `60000` 之间；`factor` 在 `1` 到 `10` 之间。
+</Callout>
+
+### 按类型的必需字段矩阵
+
+| 阶段 | `task` | `over` | `as` | `branches` | `from` | `use`/`def` | `with` | `run` | `input` | `until` | `maxIterations` | `variants` | `judge` | `eval` | `score` |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `agent` | 必需 | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `parallel` | 忽略 | — | — | 必需 | — | — | — | — | — | — | — | — | — | — | — |
+| `map` | 必需 | 必需 | 可选 | — | — | — | — | — | — | — | — | — | — | — | — |
+| `gate` | 必需¹ | — | — | — | — | — | — | — | — | — | — | — | — | 可选 | 可选 |
+| `reduce` | 必需 | — | — | — | 必需 | — | — | — | — | — | — | — | — | — | — |
+| `approval` | 可选 | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
+| `flow` | 忽略 | — | — | — | — | 必需² | 可选 | — | — | — | — | — | — | — | — |
+| `loop` | 必需 | — | — | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — |
+| `tournament` | 必需³ | — | — | 可选³ | — | — | — | — | — | — | — | 可选 | 可选 | — | — |
+| `script` | 忽略 | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — | — | — |
+
+¹ `gate` 在不用 `score` 时需要 `task`。² `flow` 需要 `use` 或 `def` 恰好其一。³ `tournament` 在不用 `branches` 时需要 `task`。
+
+### 按类型的字段细节
+
+<details>
+<summary><code>gate</code> — <code>eval</code>、<code>score</code>、<code>onBlock</code></summary>
+
+- **`eval`**（`string[]`）：在 LLM gate **之前**运行的零 token 机器检查。若全部通过，gate 自动通过。若任一失败，LLM `task` 照常运行。支持与 `when` 相同的运算符，外加用于子串检查的 `contains`。
+- **`score`**：带可选 LLM 评委回退的确定性评分器。`{ target?, scorers: [{type, ...}], combine?, weights?, threshold?, judge? }`。评分器零 token 运行；通过时 gate 无需 LLM 调用即自动通过。结构化结果通过 `{steps.<id>.json.combined}` / `.json.results` 暴露。
+- **`onBlock`**（`"halt"` | `"retry"`，默认 `"halt"`）：是停止流程，还是重跑上游阶段并重新评估。`"retry"` 需要一个 `retry` 策略。
+- 同时设 `eval` 和 `score` 是合法的（eval 先运行），但通常一个就够 —— 会产生一条警告。
+
+</details>
+
+<details>
+<summary><code>loop</code> — <code>until</code>、<code>convergence</code>、<code>reflexion</code></summary>
+
+- **`until`**（`string`，必需）：每次迭代后求值的停止条件。支持与 `when` 相同的运算符。解析错误会停止循环（fail-safe）。
+- **`maxIterations`**（`number`，默认 `10`）：硬上限。硬上限 `100`。非必需——省略时默认 `10`。
+- **`convergence`**（`boolean`，默认 `true`）：当某次迭代输出与上一次相同时提前停止。
+- **`reflexion`**（`boolean`，默认 `false`）：把上一次迭代失败的结构化摘要作为 `{reflexion}` 反馈进下一次迭代。若 `maxIterations` 耗尽且最后一次迭代失败，阶段失败。
+
+</details>
+
+<details>
+<summary><code>tournament</code> — <code>variants</code>、<code>branches</code>、<code>judge</code>、<code>mode</code></summary>
+
+- **`variants`**（`number`，默认 `3`、上限 `20`）：从 `task` 生成的副本数。提供 `branches` 时忽略。
+- **`branches`**（`{task, agent?}[]`）：各异的竞争任务。至少需要 2 个。
+- **`judge`**（`string`）：评委的评分标准/prompt。默认用一个内置标准。
+- **`judgeAgent`**（`string`）：运行评委的 agent（默认为阶段 `agent`）。
+- **`mode`**（`"best"` | `"aggregate"`，默认 `"best"`）：`"best"` 原样返回获胜变体；`"aggregate"` 返回评委综合的答案。
+- 评委输出 `WINNER: <n>`（从 1 起）或 JSON `{"winner": n}`。无法解析的裁决回退到变体 `1`。
+
+</details>
+
+<details>
+<summary><code>flow</code> — <code>use</code> vs <code>def</code>、<code>with</code></summary>
+
+- **`use`**（`string`）：要运行的已保存 flow 的名称。与 `def` 互斥。
+- **`def`**：内联或运行时生成的 flow 定义。字符串会被插值再 JSON 解析；对象直接使用。接受完整的 `Taskflow`、一个裸 phases 数组、或 `{phases:[...]}`（自动包装）。执行前会校验；失败时阶段报告 `defError` 且运行继续。
+- **`with`**（`Record<string, unknown>`）：传给子流程的参数。字符串值支持插值。
+- 运行时生成的 `def` 子流程会被加固：最多 `100` 阶段、`200` map 项、`16` 并发、`5` 层嵌套、不允许 `script`、`cwd` 必须在运行目录内。
+
+</details>
+
+### 按阶段类型的常见错误
+
+<details>
+<summary><code>agent</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `Phase 'x' (agent) requires 'task'` | `task` 缺失或为空。 | 加一个 `task` 字符串。 |
+| `expect requires output:"json"` | 设了 `expect` 但 `output` 是 `"text"`。 | 设 `output: "json"`。 |
+| `agent 'x' uses underscores` | agent 名含 `_`。 | 改用连字符。 |
+
+</details>
+
+<details>
+<summary><code>parallel</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `parallel requires non-empty 'branches'` | `branches` 缺失或为空。 | 至少加一个带 `task` 的分支。 |
+| `branches[i].task must be a string` | 某分支缺 `task`。 | 确保每个分支都有 `task: "..."`。 |
+
+</details>
+
+<details>
+<summary><code>map</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `map requires 'over'` | `over` 缺失。 | 提供一个解析为数组的插值表达式。 |
+| `over must be a string interpolation ref` | `over` 是字面数组。 | 用引号包裹：`"over": "{steps.x.json}"`。 |
+| `Dynamic sub-flow phase 'x': concurrency too high` | 生成的子流程超过最大并发。 | 把 `concurrency` 降到 `<= 16`。 |
+
+</details>
+
+<details>
+<summary><code>gate</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `gate requires 'task' (or 'score')` | 既没 `task` 也没 `score`。 | 加一个。 |
+| `cache.scope 'cross-run' is not allowed for gate` | 试图跨运行缓存 gate。 | 用 `run-only` 或省略 `cache`。 |
+| `both 'eval' and 'score' are set` | 警告：两者都在。 | 通常选一个；`eval` 先运行。 |
+
+</details>
+
+<details>
+<summary><code>reduce</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `reduce requires 'from'` | `from` 缺失或为空。 | 至少列一个上游阶段 id。 |
+| `from unknown phase 'x'` | `from` 中某 id 不存在。 | 修正 id 或补上缺失的阶段。 |
+
+</details>
+
+<details>
+<summary><code>flow</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `flow requires 'use' or 'def'` | 两者都没提供。 | 恰好提供一个。 |
+| `use and def are mutually exclusive` | 两者都提供了。 | 选一个。 |
+| `Dynamic sub-flow has too many phases` | 生成的计划太大。 | 收紧 planner 的 prompt。 |
+
+</details>
+
+<details>
+<summary><code>loop</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `loop requires 'task'` | 缺 `task`。 | 加上迭代体的 prompt。 |
+| `loop requires 'until'` | 缺停止条件。 | 加一个 `until` 表达式。 |
+| `maxIterations must be <= 100` | 超过硬上限。 | 调低上限。 |
+
+</details>
+
+<details>
+<summary><code>tournament</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `tournament requires 'task' or non-empty 'branches'` | 两者都缺。 | 提供一个。 |
+| `variants must be a number >= 2` | `variants` < 2。 | 至少用 2。 |
+| `variants must be <= 20` | 变体太多。 | 调低上限。 |
+
+</details>
+
+<details>
+<summary><code>script</code></summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `script requires 'run'` | 缺命令。 | 加上 `run`。 |
+| `script: 'run' array must be non-empty` | 空数组。 | 提供一条命令。 |
+| `script: string 'run' must not contain interpolation` | 在字符串 `run` 里用了 `{args.x}`。 | 用数组形式或 `input`。 |
+| `retry is not supported for script phases` | 加了 `retry`。 | 去掉它。 |
+
+</details>
+
+## 下一步
+
+<Cards>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    深入 `when`、`join`、`retry` 与 gate。
+  </Card>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    把阶段包成一个 taskflow 的顶层字段。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    `cache` 与 `idempotent` 如何交互。
+  </Card>
+</Cards>

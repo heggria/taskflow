@@ -1,0 +1,246 @@
+---
+title: 用锦标赛选择写出更好的发布说明
+description: 生成多个竞争的标题变体，让裁判挑出最强的一条。
+---
+
+你发布了一个功能，现在只需要一样东西：发布说明的标题。它得有冲击力、准确、简短。单个 LLM 的回答可能很平淡——模型第一次采样往往是最大白话的措辞，而“最大白话”很少是能换来点击的标题。你可以自己写，但发布的其余部分你已经委托给智能体了。
+
+本指南构建一个 taskflow 来正确地完成标题。我们先从朴素的单智能体基线开始，说明它为什么弱，再用一个 `tournament` 阶段替换它——它扇出四个竞争变体，由裁判选出赢家。读完之后，你会得到一个完整、可保存的 flow，可以在每次发布时运行。
+
+<Callout type="info">
+  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode（`taskflow_run`）上的行为完全一致。宿主相关的调用入口请参见 [Pi 指南](/zh-cn/docs/guides/pi)或 [Codex 指南](/zh-cn/docs/guides/codex)。
+</Callout>
+
+## 问题
+
+发布说明的标题虽小，但分量很重。它是人们真正会读的那一行。你有三个约束：
+
+- **有冲击力。** 平淡的标题（"Improved authentication performance"）会被直接划过去。
+- **准确。** 它必须描述功能实际做的事——不能夸大。
+- **简短。** 80 字符以内，这样能塞进 changelog、tweet 和 slack 公告。
+
+让单个智能体"写标题"，你拿到的是模型分布里的一个样本。有时那个样本很好。多数时候它是模型首选的安全、通用的措辞。你可以手动重滚，但那意味着你要盯着模型、自己挑赢家——而这正是锦标赛为之而生的那种主观、每次低风险的活儿。
+
+taskflow 的答案：把标题声明成一个 `tournament` 阶段。运行时扇出 N 个独立变体，把它们全部交给一个裁判，然后返回赢家。输掉的变体被丢弃；只有幸存者回到你的上下文。
+
+## 阶段 1 —— 朴素基线（以及它为什么弱）
+
+先从没有锦标赛时你会做的事开始：一个 `agent` 阶段。
+
+```json title="朴素单智能体标题"
+{
+  "id": "headline",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for {args.feature}. Keep it under 80 characters.",
+  "final": true
+}
+```
+
+这是一个完整、合法的 taskflow（外面套一个 `name` 和 `phases`）。它产出一个标题。问题在于方差：跑五次你会拿到五个不同的标题，而你没法知道哪个最好——除非把五个都读了。你只看到第一次采样。
+
+锦标赛把这种方差变成优势。不再是取一次样，而是取好几次——而且不再由你来挑，而是由裁判来挑。
+
+## 阶段 2 —— 锦标赛
+
+把单个 `agent` 阶段替换成一个 `tournament`。给它一个 `task`、一个 `variants` 数量、一个 `judge` 评分标准，以及一个 `mode`。
+
+```json title="标题锦标赛"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for this feature: {args.feature}. It must be accurate to the feature description and under 80 characters. Return ONLY the headline, no quotes, no commentary.",
+  "variants": 4,
+  "judge": "Pick the headline that is the most punchy while staying accurate to the feature and under 80 characters. Prefer specific over generic.",
+  "judgeAgent": "final-arbiter",
+  "mode": "best",
+  "final": true
+}
+```
+
+逐行解读：
+
+- **`variants: 4`** —— 四个独立的 `task` 副本作为分开的子代理调用运行。每个产出自己的标题，互不可见。多样性来自模型的采样——每次调用是一次独立抽样。
+- **`agent: "writer"`** —— 运行每个变体的智能体。裁判在设了 `judgeAgent` 时用它，否则用同一个 `agent`。
+- **`judge`** —— 给裁判的评分标准。这是*你的*判据，用自然语言写：有冲击力、准确、80 字符以内、偏好具体。
+- **`judgeAgent: "final-arbiter"`** —— 用一个更强的模型跑裁判。裁判比写作更难——它得读四个选项并推理哪个最好——所以它配得上更大的模型。
+- **`mode: "best"`** —— 输出是获胜变体的逐字原文。裁判不重写它；它只是挑。
+- **`final: true`** —— 只有获胜标题回到你的上下文。三个输家和裁判的推理都留在运行时内部。
+
+### 裁判被告知如何挑选
+
+你不用写判决格式——运行时会替你把一条指令追加到裁判的 prompt 里。在 `best` 模式下，这条指令是：
+
+> End your reply with a line exactly: `WINNER: <number>` (1–N), choosing the strongest eligible variant.
+
+裁判读评分标准（`judge`），看到被标为 `### Variant 1` … `### Variant 4` 的变体，然后给出它的选择。运行时灵活地解析 `WINNER: <n>`（最后一次匹配生效，所以裁判可以改主意；它也接受 JSON 如 `{"winner": 3}`）。获胜编号是基于实际运行的变体的 1-based 编号。
+
+<Callout type="info">
+  你不用写那条指令——运行时替你追加。你的 `judge` 字段是评分标准（"挑出最有冲击力又保持准确的"）；运行时负责要求编号选择的那套机制。
+</Callout>
+
+## 阶段 3 —— 先给写作智能体喂研究
+
+一个标题的好坏，取决于写作智能体对这个功能知道多少。在锦标赛之前加一个 `research` 阶段，让每个变体看到同样的事实。
+
+```json title="先研究再锦标赛"
+{
+  "name": "release-note-headline",
+  "phases": [
+    {
+      "id": "research",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Read the diff and release notes for {args.feature}. Summarize in 5 bullets: what it does, who it helps, and the single most surprising benefit. Return bullets only.",
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "headline",
+      "type": "tournament",
+      "agent": "writer",
+      "dependsOn": ["research"],
+      "task": "Write a punchy release-note headline for this feature based on the research below. It must be accurate and under 80 characters. Return ONLY the headline.\n\n{steps.research.output}",
+      "variants": 4,
+      "judge": "Pick the headline that is the most punchy while staying accurate and under 80 characters. Prefer specific over generic.",
+      "judgeAgent": "final-arbiter",
+      "mode": "best",
+      "final": true
+    }
+  ]
+}
+```
+
+`headline` 依赖 `research`，所以研究先跑。它的输出被插值进每个变体的 task——四个写作智能体看到的是同样的五条 bullet，这让变体之间可比（它们在措辞上不同，而不是在事实上不同）。
+
+## 完整的 flow
+
+下面是组装好的完整版本。把它存为 `release-note-headline.json`：
+
+```json title="release-note-headline.json"
+{
+  "name": "release-note-headline",
+  "description": "Research a feature, then run a 4-variant tournament for the best release-note headline.",
+  "args": {
+    "feature": { "description": "The feature to write a headline for.", "required": true }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "research",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Read the diff and release notes for {args.feature}. Summarize in 5 bullets: what it does, who it helps, and the single most surprising benefit. Return bullets only.",
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "headline",
+      "type": "tournament",
+      "agent": "writer",
+      "dependsOn": ["research"],
+      "task": "Write a punchy release-note headline for this feature based on the research below. It must be accurate and under 80 characters. Return ONLY the headline.\n\n{steps.research.output}",
+      "variants": 4,
+      "judge": "Pick the headline that is the most punchy while staying accurate and under 80 characters. Prefer specific over generic.",
+      "judgeAgent": "final-arbiter",
+      "mode": "best",
+      "final": true
+    }
+  ]
+}
+```
+
+在花任何 token 之前先验证它：
+
+```bash title="验证 flow"
+/tf verify release-note-headline
+```
+
+然后运行它：
+
+```bash title="运行锦标赛"
+/tf run release-note-headline feature="subagent context isolation"
+```
+
+只有获胜标题回到你的对话。研究 bullet、四个变体草稿、裁判的推理，全部留在运行时内部。
+
+## 该调什么
+
+上面的 flow 是一个合理的默认值。下面这些是为你自己的发布值得拧一拧的旋钮。
+
+### 变体数量
+
+`variants: 4` 是成本与多样性的一个好平衡。一次锦标赛的成本是 **N+1** 次子代理调用（N 个变体加裁判），所以 `variants: 4` 是五次调用；`variants: 8` 是九次。边际收益递减很快——模型分布对一个 prompt 真正不同的措辞就那么多，超过 5–6 个你基本是在重复采样同样的想法。硬上限是 `20`。对于一行标题，`3`–`5` 是甜区；更高的数量留给更长的创意工作，那里策略空间更大。
+
+### 裁判模型
+
+`judgeAgent: "final-arbiter"` 用一个强模型跑裁判。裁判比写作更难——它得同时在心里记住四个选项并推理哪个最好——所以它配得上更大的模型。如果你在意成本，去掉 `judgeAgent`，裁判就和变体用同一个 `agent`（`writer`）跑；那更便宜但裁判更弱，这对主观任务更关键。反过来，不要把*变体*放到贵的模型上跑——变体受益于数量，而不是每个都来一遍深度推理。
+
+### `mode: "best"` vs `mode: "aggregate"`
+
+`mode` 字段决定返回什么。
+
+| 模式 | 输出 | 适用场景 |
+|---|---|---|
+| `best`（默认） | 获胜变体，逐字原文。 | 某个变体已经很好；你想让它原样保留。 |
+| `aggregate` | 裁判综合后的答案，合并了最好的部分。 | 没有单个变体完美；你想让裁判合并它们。 |
+
+对于一行标题，`best` 几乎总是对的——你想要四个草稿之一原样存活，因为裁判重写一行很少能改进它。当输出更长（一段话、一份摘要）且没有单个变体能抓住一切时，再考虑 `aggregate`：
+
+```json title="aggregate 模式"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "task": "Write a punchy release-note headline for {args.feature}. Under 80 characters. Return ONLY the headline.",
+  "variants": 4,
+  "judge": "Synthesize the strongest possible headline by combining the best qualities of the variants. Then indicate which variant contributed most.",
+  "judgeAgent": "final-arbiter",
+  "mode": "aggregate",
+  "final": true
+}
+```
+
+在 `best` 模式下，返回的 `model` 是产出获胜变体的模型。在 `aggregate` 模式下，它是裁判的模型——因为最终输出是裁判写的。
+
+### 用 `branches` 代替 `variants`
+
+`variants` 是对*同一个* prompt 重滚。如果你想要真正不同的*角度*——大胆 vs 利益驱动 vs 好奇心缺口——用 `branches`。每个分支是自己的 `{ task }`；分支就是竞争者，`variants` 被忽略。
+
+```json title="用 branches 代替 variants"
+{
+  "id": "headline",
+  "type": "tournament",
+  "agent": "writer",
+  "branches": [
+    { "task": "Write a bold, provocative release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a clear, benefit-driven release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a curiosity-gap release-note headline for {args.feature}. Under 80 chars." },
+    { "task": "Write a one-number release-note headline for {args.feature} (e.g. '3x faster'). Under 80 chars." }
+  ],
+  "judge": "Pick the headline most likely to earn a click without overselling. Must be accurate and under 80 characters.",
+  "judgeAgent": "final-arbiter",
+  "mode": "best",
+  "final": true
+}
+```
+
+当你能预先枚举策略时用 `branches`。当你信任 prompt、只是想要更多次采样时用 `variants`。
+
+<Callout type="warn">
+  锦标赛按设计从不跨运行缓存——每次运行都值得一组新鲜的变体和一个新鲜的裁判。不要在 `tournament` 阶段上放 `cache` 块；校验器会拒绝它。如果你想让上游的 `research` 阶段被缓存，那没问题，而且推荐。
+</Callout>
+
+## 接下来去哪
+
+<Cards>
+  <Card title="锦标赛选择" href="/zh-cn/docs/guides/tournament">
+    完整的锦标赛指南——判决解析、fail-open 保证、输出模式。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    `tournament` 阶段的完整字段参考。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `dependsOn`、`when` 和 `retry`——塑造 DAG 的字段。
+  </Card>
+</Cards>

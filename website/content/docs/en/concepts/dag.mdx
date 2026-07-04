@@ -1,0 +1,229 @@
+---
+title: The DAG Model
+description: How taskflow represents work as a directed acyclic graph of task nodes.
+---
+
+Every taskflow is a **DAG** — a directed acyclic graph — of discrete **task** nodes. You declare the nodes (phases) and the edges (`dependsOn`), and the runtime walks that graph for you.
+
+The best way to understand it is to start with the mistake everyone makes first.
+
+## The mistake: order is not an edge
+
+Here is a flow that *looks* like a chain. Four phases, listed in order, no `dependsOn`:
+
+```json title="broken-chain.json — not a chain"
+{
+  "name": "broken-chain",
+  "phases": [
+    { "id": "discover", "type": "agent", "task": "List changed files." },
+    { "id": "audit",    "type": "agent", "task": "Audit the changes." },
+    { "id": "summarize","type": "agent", "task": "Summarize the audits." },
+    { "id": "report",   "type": "agent", "task": "Write the report." }
+  ]
+}
+```
+
+Surely they run in order, top to bottom?
+
+They do not. **They all run at once.**
+
+<Callout type="warn">
+  This is the most common mistake for new users. The runtime does not care about the order of phases in the `phases[]` array — it cares about `dependsOn`. Four phases with no `dependsOn` are four **parallel** phases, not a chain.
+</Callout>
+
+The runtime reads the graph purely from edges. With no edges declared, every phase has zero unmet dependencies, so they all start in the first batch. `audit` runs before `discover` has produced anything, `summarize` runs on empty input, and the result is nonsense — but the runtime did exactly what you declared.
+
+## Declare your edges
+
+The fix is to say what waits for what. `dependsOn` is an edge: "this phase does not start until these phases finish."
+
+```json title="real-chain.json — a real chain"
+{
+  "name": "real-chain",
+  "phases": [
+    { "id": "discover",  "type": "agent", "task": "List changed files." },
+    { "id": "audit",     "type": "agent", "task": "Audit the changes.",          "dependsOn": ["discover"] },
+    { "id": "summarize", "type": "agent", "task": "Summarize the audits.",       "dependsOn": ["audit"] },
+    { "id": "report",    "type": "agent", "task": "Write the report.",           "dependsOn": ["summarize"], "final": true }
+  ]
+}
+```
+
+Now the graph is a real chain:
+
+```txt title="real-chain — graph"
+discover ─▶ audit ─▶ summarize ─▶ report
+```
+
+You can list those phases in any order in the array — `report` first, `discover` last — and the runtime will still execute them `discover → audit → summarize → report`. The array order is for human readability; the edges are the truth.
+
+## How the runtime sees your graph: layers
+
+The runtime does not run your graph one phase at a time. It slices it into **topological layers** — sets of phases that have no dependencies on each other — and runs each layer's phases concurrently.
+
+Take a diamond:
+
+```json title="diamond.json"
+{
+  "name": "diamond",
+  "phases": [
+    { "id": "a", "type": "agent", "task": "Step A" },
+    { "id": "b", "type": "agent", "task": "Step B", "dependsOn": ["a"] },
+    { "id": "c", "type": "agent", "task": "Step C", "dependsOn": ["a"] },
+    { "id": "d", "type": "agent", "task": "Step D", "dependsOn": ["b", "c"], "final": true }
+  ]
+}
+```
+
+The graph:
+
+```txt title="diamond — graph"
+      a
+     ┌┴┐
+     b c
+     └┬┘
+      d
+```
+
+The runtime resolves this into three layers:
+
+```txt title="diamond — execution layers"
+Layer 0:  [ a ]        ← nothing depends on a, so it goes first
+Layer 1:  [ b, c ]     ← both depend only on a; they run concurrently
+Layer 2:  [ d ]        ← waits for both b and c
+```
+
+- `a` runs first, alone.
+- `b` and `c` run in parallel, because neither depends on the other.
+- `d` runs last, once both are done.
+
+<Callout type="info">
+  This is the same execution model as Make, Bazel, or Vite: a dependency graph resolved into layers, each layer fanned out up to a concurrency limit. If you have ever reasoned about a build graph, you already know how to reason about a taskflow.
+</Callout>
+
+The concurrency limit is the flow-level `concurrency` field (default `8`, minimum `1`). Within a layer, up to that many phases run at once; the rest queue.
+
+## Edges come from more than `dependsOn`
+
+There is a second field that creates edges: `from`. It is used by `reduce` phases to name the upstream outputs they aggregate. For graph purposes, a phase's dependencies are `dependsOn` **plus** `from`:
+
+```json title="from-creates-an-edge.json"
+{
+  "id": "summary",
+  "type": "reduce",
+  "from": ["audit-each"],
+  "agent": "writer",
+  "task": "Combine these audits:\n{steps.audit-each.output}"
+}
+```
+
+Here `summary` waits for `audit-each` even though `dependsOn` is not set — `from` is the edge. You do not need to repeat it in `dependsOn`; the runtime unions them.
+
+## Joining upstream results
+
+By default, a phase waits for **all** of its dependencies before it starts (`join: "all"`). That is what made `d` wait for both `b` and `c` in the diamond.
+
+Sometimes you want the opposite: run as soon as **one** of several branches finishes. That is `join: "any"`, and it is how you build if/else routing.
+
+```json title="if-else-routing.json"
+{
+  "name": "route-by-size",
+  "phases": [
+    { "id": "size",    "type": "agent", "task": "How big is the change? Output 'small' or 'large'.", "output": "json" },
+    { "id": "quick",   "type": "agent", "task": "Quick review.",        "dependsOn": ["size"], "when": "{steps.size.json} == 'small'" },
+    { "id": "deep",    "type": "agent", "task": "Deep review.",         "dependsOn": ["size"], "when": "{steps.size.json} == 'large'" },
+    { "id": "merge",   "type": "agent", "task": "Ship this review.",    "dependsOn": ["quick", "deep"], "join": "any", "final": true }
+  ]
+}
+```
+
+Only one of `quick` / `deep` will run — the `when` guard suppresses the other. `merge` declares both as dependencies but sets `join: "any"`, so it fires the moment the one that *did* run completes. If you left `join` at its default `"all"`, `merge` would wait forever for the suppressed branch.
+
+<Callout type="tip">
+  Rule of thumb: use `join: "any"` whenever exactly one of several branches is expected to produce a result (if/else, fallback, first-wins). Use the default `"all"` whenever every dependency is supposed to run.
+</Callout>
+
+<Callout type="info">
+  A dependency counts as "satisfied" when it finishes successfully — or when it **fails** but is marked `optional`. That lets a non-critical branch fail without blocking its dependents. A failed non-optional dependency skips the dependent instead.
+</Callout>
+
+## Cycles are rejected, not silently ignored
+
+A DAG must be acyclic. If `a` depends on `b` and `b` depends on `a`, you have written a loop the runtime can never start — so it refuses to run it:
+
+```json title="cycle.json — rejected at verification"
+{
+  "name": "cycle",
+  "phases": [
+    { "id": "a", "type": "agent", "task": "...", "dependsOn": ["b"] },
+    { "id": "b", "type": "agent", "task": "...", "dependsOn": ["a"] }
+  ]
+}
+```
+
+```txt title="Verification output"
+Dependency cycle detected: a -> b -> a
+```
+
+This is caught by `/tf verify` — before any tokens are spent. Cycles are almost always a typo in a `dependsOn` id; fix the edge and verify again.
+
+<Callout type="warn">
+  If you genuinely need to repeat work, that is not a cycle — it is a `loop` phase. `loop` runs a body until a condition is met, with a hard cap on iterations. The DAG stays acyclic; the repetition lives inside one node.
+</Callout>
+
+## Dynamic edges: a graph generated at runtime
+
+Static `dependsOn` is enough for most flows. But sometimes the shape of the work is not known when you write the flow — an upstream phase decides what should run next.
+
+For that, a `flow` phase runs a **sub-taskflow** whose definition can be produced by an upstream phase. The generated sub-flow is treated like any other flow: it is validated (no cycles, no duplicate ids, no dangling refs) and verified before a single phase in it runs.
+
+```json title="dynamic-subflow.json"
+{
+  "name": "plan-then-execute",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "task": "Given the user's goal, output a taskflow JSON object with the phases needed to accomplish it.",
+      "output": "json"
+    },
+    {
+      "id": "execute",
+      "type": "flow",
+      "def": "{steps.plan.json}",
+      "dependsOn": ["plan"],
+      "final": true
+    }
+  ]
+}
+```
+
+Here the edges *inside* `execute` do not exist when the parent flow is verified — they are generated by `plan`. The runtime validates the generated graph at the moment `execute` starts, so a malformed plan fails that one phase cleanly instead of crashing the run or running an unsafe graph.
+
+<Callout type="info">
+  Recursive sub-flows are guarded: a `flow` phase cannot re-enter itself or an ancestor, so a generated plan cannot create an infinite chain of sub-flows. The stack is checked at execution time.
+</Callout>
+
+## Putting it together
+
+A taskflow graph is just three things:
+
+1. **Nodes** — phases with unique `id`s and `type`s.
+2. **Edges** — `dependsOn` (and `from`), declared explicitly, never inferred from array order.
+3. **Join rules** — `all` by default, `any` for routing.
+
+The runtime turns those into topological layers, fans each layer out up to your concurrency limit, rejects cycles and dangling refs before spending tokens, and lets a `flow` phase extend the graph at runtime. Everything else — fan-out, gates, loops, caching, resume — is built on top of that.
+
+## Next
+
+<Cards>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten node types and when to reach for each.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `when` guards, `join`, `retry`, and routing.
+  </Card>
+  <Card title="Verification" href="/en/docs/concepts/verification">
+    Everything `/tf verify` catches before a token is spent.
+  </Card>
+</Cards>

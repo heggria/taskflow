@@ -1,0 +1,77 @@
+---
+title: Introduction
+description: A declarative, verifiable graph of task nodes for coding-agent subagents.
+---
+
+Welcome to the **taskflow** docs. taskflow is a declarative, verifiable *graph of tasks* for coding-agent subagents — you describe multi-step agent work as a DAG, the runtime verifies it before a single token is spent, and only the final result ever reaches your context window.
+
+Here is the whole idea in four lines of JSON:
+
+```json title="A complete taskflow"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+That is a complete taskflow. The runtime turns it into a graph, runs one subagent, and returns the result. Add more phases, wire them with `dependsOn`, and the same shape scales to fan-out over hundreds of files — with retries, gates, loops, and cross-session resume handled for you.
+
+## Who is this for?
+
+taskflow is for anyone who delegates multi-step work to a coding agent and has hit one of these:
+
+- **Context-window pressure.** Every subagent transcript floods your conversation, and a five-step audit eats your context before you ever see a result.
+- **Plans that only exist while they run.** You describe a workflow in prose, the model re-derives it every run, and there is nothing to diff, reuse, or hand to a reviewer.
+- **No recovery.** A run dies at the last step and you start over from scratch — paying for every subagent call again.
+- **Reusable pipelines.** You want to name a workflow once and invoke it by name, on Pi, Codex, Claude Code, or OpenCode.
+
+If any of that sounds familiar, taskflow was built for you.
+
+## How to read these docs
+
+The docs are organized as a learning path. Read them in order the first time; jump around once you know what you are looking for.
+
+<Steps>
+  <Step>
+    **[What is taskflow?](/en/docs/what-is-taskflow)** — the *why*. The problem with imperative subagent scripts, and the one trade that makes a declarative graph worth it.
+  </Step>
+  <Step>
+    **[Getting Started](/en/docs/getting-started)** — the *how*. Run your first taskflow in under five minutes, then meet a real fan-out example.
+  </Step>
+  <Step>
+    **[Core Concepts](/en/docs/concepts)** — the *model*. The DAG, phase types, interpolation, verification, context isolation, and resume.
+  </Step>
+  <Step>
+    **[Syntax Reference](/en/docs/syntax)** — the *details*. Every field on every phase type, control flow, caching, and budget.
+  </Step>
+  <Step>
+    **[Guides](/en/docs/guides)** — the *practice*. Per-host walkthroughs (Pi, Codex) and pattern guides (dynamic planning, tournament).
+  </Step>
+</Steps>
+
+<Callout type="tip">
+  In a hurry? Skim [Getting Started](/en/docs/getting-started), then keep the [Syntax Reference](/en/docs/syntax) open as you write your first real flow. Run `/tf verify` early and often — it is zero-token.
+</Callout>
+
+## The chapters
+
+<Cards>
+  <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
+    Why a declarative graph beats an imperative script.
+  </Card>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first taskflow in five minutes.
+  </Card>
+  <Card title="Core Concepts" href="/en/docs/concepts">
+    The DAG model, phases, interpolation, verification, isolation, resume.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax">
+    Every field, every phase type, exhaustively.
+  </Card>
+  <Card title="Guides" href="/en/docs/guides">
+    Per-host walkthroughs and pattern guides.
+  </Card>
+  <Card title="Reference" href="/en/docs/reference">
+    Commands and shorthand, at a glance.
+  </Card>
+</Cards>

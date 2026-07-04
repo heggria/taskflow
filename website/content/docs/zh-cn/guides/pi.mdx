@@ -1,0 +1,210 @@
+---
+title: 在 Pi 上使用 taskflow
+description: 在 Pi 编程智能体上安装、运行、保存和续跑 taskflow。
+---
+
+如果你已经在用 [Pi](https://pi.dev) 把工作委托给子代理，taskflow 把这些一次性的委托变成有名字、可续跑、多步骤的工作流。你把工作描述成一个图——fan-out、gate、loop，你需要什么就写什么——只有最终结果回到你的上下文里。
+
+本页走完整个弧线：安装、运行你的第一个 flow、保存它、按名字运行它，以及接好模型角色。读完时你会有一个一行就能干一件实事的可复用命令。
+
+## 安装
+
+taskflow 是一个 Pi 扩展。装一次就行：
+
+```bash title="安装 pi-taskflow"
+pi install npm:pi-taskflow
+```
+
+就这样。这个扩展注册了一个模型可以自动调用的 `taskflow` 工具，外加一个给你的 `/tf` 命令。启动不需要任何模型侧的配置。
+
+<Callout type="info">
+  这个扩展住在你的 Pi agent 目录里。如果安装时 Pi 会话已经在运行，重启一下你的 Pi 会话。
+</Callout>
+
+## 运行你的第一个 flow
+
+咱们从一件实事开始：审查一个项目里改过的文件，返回一份单一的风险摘要。把这个存成 `review-changes.json`，放在你运行 Pi 的地方旁边：
+
+```json title="review-changes.json"
+{
+  "name": "review-changes",
+  "description": "Review changed files and return a single risk summary.",
+  "args": {
+    "dir": { "default": "." }
+  },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files under {args.dir} that have been changed recently. Output ONLY a JSON array of objects with a 'path' field. No prose.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph of findings or 'No issues found.'.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine the following per-file reviews into a single prioritized risk summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+这里有三个阶段，连成一个小 DAG。`discover` 列出文件。`review-each` fan out——每个文件一个 security reviewer，最多同时四个。`summarize` 把各文件的审查折成一份报告，而因为它标了 `final: true`，那份报告是唯一回到你对话里的东西。
+
+现在运行它。你有两种问法。
+
+### 直接描述工作
+
+你不需要记住一个命令。在 Pi 会话里，用自然语言描述你想要的：
+
+<Callout type="tip">
+  试试：*"在这个 repo 里运行 review-changes flow，dir 设成 src。"*
+</Callout>
+
+模型识别出意图，加载 `taskflow` 工具，执行 DAG。来自 `discover`、`review-each` 和 `summarize` 的中间 transcript 留在运行时内部——你的上下文窗口只收到最终摘要。
+
+### 直接用命令
+
+如果你想明确一点，`/tf` 命令随时可用：
+
+```bash title="按名字运行一个已保存的 flow"
+/tf run review-changes dir=src
+```
+
+两条路径运行的是同一个 flow。当你确切知道自己想要什么、不想花一个模型回合去谈判时，命令形式很方便。
+
+<Callout type="info">
+  不确定你的 flow 在花 token 之前是否靠谱？运行 `/tf verify review-changes`——它静态检查循环、悬空的 `dependsOn`、未知的阶段引用和格式错误的配置，零成本。
+</Callout>
+
+## 把 flow 存下来以后用
+
+从 JSON 文件运行适合试验，但真正的回报是把一个你喜欢的 flow 变成一个单词命令。
+
+一次运行之后，直接告诉 Pi 把它存下来：
+
+<Callout type="tip">
+  试试：*"把那个 flow 存成 review-changes。"*
+</Callout>
+
+或者直接用命令从一个文件存：
+
+```bash title="保存一个 flow 定义"
+/tf save review-changes
+```
+
+taskflow 把定义写进你项目的 flow store。从那时起，这个 flow 就有了一个快捷方式：
+
+```bash title="用快捷方式运行一个已保存的 flow"
+/tf:review-changes dir=src
+```
+
+这个 `/tf:<name>` 形式是调用一个你已经塑好形的 flow 的最快方式。它和 `/tf run <name>` 一样——只是更短。
+
+<Callout type="info">
+  已保存的 flow 按项目分作用域。运行 `/tf list` 查看当前目录下所有可用的 flow。
+</Callout>
+
+## 当一次运行暂停或失败时
+
+真实的工作流并不总是第一次就跑完。一个 `approval` 阶段可能为人工暂停，一个子代理可能撞上瞬时错误，或者你可能中止一个长运行之后再回来。
+
+每次运行都有一个 `runId`，运行时持久化它的状态。要继续一个暂停或失败的运行：
+
+```bash title="续跑一个暂停或失败的运行"
+/tf resume <runId>
+```
+
+要浏览你运行过的东西，包括进行中和暂停的运行：
+
+```bash title="浏览运行历史"
+/tf runs
+```
+
+而如果你需要在事后检查某个阶段的中间输出——比如调试一个 gate 为什么 block 了——`peek` 不用重新运行任何东西就能显示它：
+
+```bash title="窥视某个阶段存储的输出"
+/tf peek <runId> summarize
+```
+
+<Callout type="warn">
+  `peek` 仅供调试。按设计，它把中间输出拉进你的上下文——那是 taskflow 隔离保证的唯一例外，而且是 opt-in 的。
+</Callout>
+
+## 模型角色
+
+taskflow 自带十八个内置 agent（scout、security-reviewer、writer 等等），每一个都打了一个映射到模型的**角色**标签。开箱即用时，这些角色可能解析到一个默认模型——但你会想把它们指向你自己的模型。
+
+运行交互式设置：
+
+```bash title="配置模型角色"
+/tf init
+```
+
+你会得到一个选择器，带你走过每个角色并推荐合理的默认值。角色如下：
+
+| 角色 | 用途 | 典型 agent |
+|---|---|---|
+| `fast` | 便宜且快速——大体积、低风险的工作。 | executor, scout, verifier, doc-writer |
+| `strong` | 平衡的规划和审查。 | planner, reviewer, executor-code |
+| `thinker` | 深度分析和歧义检测。 | analyst, critic |
+| `arbiter` | 最终判断和裁决。 | plan-arbiter, final-arbiter |
+| `vision` | 多模态——UI 工作、设计阅读。 | executor-ui, visual-explorer |
+| `reasoner` | 谨慎推理——安全和风险。 | risk-reviewer, security-reviewer |
+
+<Callout type="tip">
+  如果你跳过这一步，taskflow 会提示角色未配置，agent 会回退到默认模型。它能用，但你把成本和质量留在桌上了——`fast` 角色用一个便宜模型，时间长了能省很多 token。
+</Callout>
+
+配置写到你的 Pi `settings.json` 里的 `modelRoles` 下。你可以随时重新运行 `/tf init` 来改单个角色，或接受推荐的默认值。
+
+## 命令参考
+
+这是完整的 `/tf` 表面，供你确切知道自己需要什么时用：
+
+| 命令 | 说明 |
+|---|---|
+| `/tf list` | 列出当前项目里已保存的 flow。 |
+| `/tf run <name> [args]` | 运行一个已保存的 flow，可选地带上参数。 |
+| `/tf:<name> [args]` | `/tf run <name>` 的快捷方式。 |
+| `/tf show <name>` | 打印一个已保存 flow 的 JSON 定义。 |
+| `/tf verify <name>` | 静态验证一个 flow（循环、引用、配置）。 |
+| `/tf compile <name>` | 把 DAG 渲染成 Mermaid 图。 |
+| `/tf save <name>` | 把一个 flow 定义保存到项目 store。 |
+| `/tf runs` | 浏览运行历史（进行中、暂停、已完成）。 |
+| `/tf resume <runId>` | 继续一个暂停或失败的运行。 |
+| `/tf peek <runId> [phaseId]` | 检查一个存储阶段的输出用于调试。 |
+| `/tf init` | 交互式配置模型角色。 |
+
+<Callout type="info">
+  还有几个高级子命令用于缓存和来源工作（`ir`、`provenance`、`why-stale`、`recompute`、`cache-clear`）。你会在需要它们时遇到它们——详见参考文档。
+</Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    如果你还没看过，这里是五分钟导览。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    你可以组合进一个 DAG 的十个构建块。
+  </Card>
+  <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
+    同一个运行时，接入 OpenAI Codex。
+  </Card>
+</Cards>

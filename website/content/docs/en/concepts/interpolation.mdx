@@ -1,0 +1,474 @@
+---
+title: Interpolation
+description: How data flows between phases in a taskflow.
+---
+
+A phase's `task`, `when`, `until`, `context`, and script `input` are **templates**. Anything in `{curly braces}` is resolved at runtime, *before* the phase runs, against the data produced by upstream phases, invocation arguments, and loop state. This page shows how to wire data between phases — and what the runtime does when a placeholder can't be resolved.
+
+<Callout type="info">
+  Interpolation is **zero-token and deterministic** — it runs in the host process, never in a subagent. A malformed placeholder never crashes a run: it is left intact and surfaced as a warning. Parse errors in `when` / `until` fail **open** (the phase still runs). These guarantees are load-bearing for the fail-open invariants.
+</Callout>
+
+## The scenario: pass a list of files from one phase to the next
+
+Imagine you want one agent to discover changed files, and a second agent to review them. The second phase needs the *list* the first phase produced. Here is the smallest version:
+
+```json title="pass-output.json"
+{
+  "phases": [
+    { "id": "discover", "task": "List changed source files. Output a JSON array of {path}." },
+    {
+      "id": "review",
+      "dependsOn": ["discover"],
+      "task": "Review these files for risks:\n{steps.discover.output}"
+    }
+  ]
+}
+```
+
+`{steps.discover.output}` is a **placeholder**. Before `review` runs, the runtime replaces it with the raw text `discover` produced. The `dependsOn` is what makes this safe — it guarantees `discover` has finished before `review`'s task is interpolated, and it's what lets `/tf verify` confirm the reference is reachable.
+
+This is the core mental model: **placeholders pull data from upstream phases, and `dependsOn` guarantees the order.** The rest of this page is about the other placeholder families, the JSON extraction strategy, the condition language, and the failure modes.
+
+<Cards>
+  <Card title="Placeholder families" href="#placeholder-families">
+    The six places a placeholder can pull data from.
+  </Card>
+  <Card title="Working with JSON" href="#working-with-json">
+    `safeParse`, `.json.field`, and coercing arrays for `map` fan-out.
+  </Card>
+  <Card title="Conditions" href="#conditions">
+    The `when` / `until` expression language.
+  </Card>
+  <Card title="Failure modes" href="#failure-modes">
+    Missing refs, escaping, and validation.
+  </Card>
+</Cards>
+
+---
+
+## Placeholder families
+
+There are six families of placeholder, each pulling from a different source.
+
+| Placeholder | Resolves to | Available in |
+|---|---|---|
+| `{args.X}` | An invocation argument | All phases |
+| `{steps.ID.output}` | A prior phase's final text output | All phases (ID must be an ancestor) |
+| `{steps.ID.json}` | A prior phase's output parsed as JSON | All phases |
+| `{previous.output}` | The immediately-preceding completed dependency | All phases |
+| `{item}` | The current element in a `map` fan-out | `map` phases |
+| `{loop.X}` / `{reflexion}` | Loop iteration state and failure feedback | `loop` phases |
+
+Let's walk through each.
+
+### `{args.X}` — invocation arguments
+
+Arguments are declared in the flow definition with defaults, and referenced with `{args.X}`:
+
+```json title="args.json"
+{
+  "args": {
+    "dir": { "default": "src" },
+    "force": { "default": false }
+  },
+  "phases": [
+    { "id": "list", "task": "List files under {args.dir}." }
+  ]
+}
+```
+
+Descent is deep: `{args.user.id}` walks `args.user.id` and returns `undefined` gracefully if any link is missing.
+
+<Callout type="warn">
+  Referencing `{args.X}` that the invocation did not supply (and that has no `default`) is a **validation warning**, not an error — the placeholder stays literal in the prompt. Set `strictInterpolation: true` on the flow to promote these to hard errors.
+</Callout>
+
+### `{steps.ID.output}` — prior text output
+
+The raw string the subagent produced as its final output. `ID` must be a **transitive ancestor** of the current phase via `dependsOn` (or `from`); otherwise validation fails with a hard error.
+
+```json title="steps-output.json"
+{
+  "phases": [
+    { "id": "name-gen", "task": "Generate a project name." },
+    {
+      "id": "scaffold",
+      "task": "Create a directory named {steps.name-gen.output} and init it.",
+      "dependsOn": ["name-gen"]
+    }
+  ]
+}
+```
+
+The value is inserted **as-is** — no quoting, no re-serialization. Trailing path segments after `output` (like `{steps.a.output.foo}`) are not allowed: `output` is a string, not an object. If you want a field, use `.json`.
+
+### `{steps.ID.json}` — parsed JSON
+
+Parses the prior phase's output and returns the result. If the parsed value is an object or array, it is pretty-printed with `JSON.stringify(value, null, 2)` before insertion; if it is a primitive, it is inserted directly.
+
+```json title="steps-json.json"
+{
+  "phases": [
+    { "id": "triage", "output": "json", "task": "Classify severity. Output only JSON." },
+    {
+      "id": "deep",
+      "when": "{steps.triage.json.severity} == high",
+      "task": "Deep-dive. Context: {steps.triage.json}",
+      "dependsOn": ["triage"]
+    }
+  ]
+}
+```
+
+`{steps.ID.json.field}` descends into the parsed object. Deep paths on shallow data resolve to `undefined` (a missing warning), never throw — so `{steps.triage.json.severity.label}` on `{"severity": "high"}` fails softly.
+
+### `{previous.output}` — immediately upstream
+
+Resolves to the output of the **last completed dependency**, scanning `dependsOn ∪ from` in reverse order and returning the first phase whose status is `done`.
+
+| Situation | Result |
+|---|---|
+| Single dependency, done | That dependency's output |
+| Multiple deps, several done | The **last** one in declaration order |
+| `join: "any"` with one dep done | That dep's output |
+| No deps declared, or none done | `undefined` → missing warning |
+
+<Callout type="warn">
+  `{previous.output}` is **not** "the phase directly above in the file" — it is "the last completed phase among my declared dependencies". If you declare no `dependsOn`, `{previous.output}` is unresolved. Use `dependsOn`, or switch to an explicit `{steps.ID.output}`.
+</Callout>
+
+This placeholder is what makes the shorthand `chain` work — each step gets the previous step's output without naming it.
+
+### `{item}` — the current map element
+
+Inside a `map` phase, each branch receives the current array element as a **local**. The local's name is `phase.as` (default `"item"`). Descent works on it, so `{item.path}`, `{item.meta.title}`, and bare `{item}` all work.
+
+```json title="map-item.json"
+{
+  "id": "audit",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "task": "Audit {file.path}.",
+  "concurrency": 8
+}
+```
+
+The custom name (`as: "file"` above) replaces `item` entirely — `{item}` would be unresolved in that phase. Use a custom name when the array contains objects that are conceptually *not* "items" (files, routes, findings). `over` must be an interpolation ref (e.g. `"{steps.scan.json}"`), not a literal array — validation rejects a literal array and tells you to emit it from an upstream phase first.
+
+### `{loop.X}` and `{reflexion}` — loop state
+
+`loop` phases bind a `loop` object into the context, available in the body `task` and the `until` condition.
+
+| Placeholder | Type | Meaning |
+|---|---|---|
+| `{loop.iteration}` | `number` | Current iteration, starting at **1** |
+| `{loop.lastOutput}` | `string` | The previous iteration's output. Empty string on iteration 1. |
+| `{loop.maxIterations}` | `number` | The configured cap (default `10`, hard max `100`) |
+
+```json title="loop-locals.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "maxIterations": 4,
+  "until": "{loop.iteration} >= 3",
+  "task": "Iteration {loop.iteration}/{loop.maxIterations}. Previous draft: {loop.lastOutput}"
+}
+```
+
+`{reflexion}` is a bare placeholder (no sub-paths) available only on `loop` phases with `reflexion: true`. On iteration 1 it resolves to a sentinel; on later iterations it carries a **structured failure summary** of the prior iteration — an output snippet, `expect`-contract diagnostics, error text, or the unmet `until` condition.
+
+```json title="reflexion.json"
+{
+  "id": "fix",
+  "type": "loop",
+  "reflexion": true,
+  "maxIterations": 3,
+  "until": "{steps.fix.json.passed} == true",
+  "output": "json",
+  "task": "Fix the failing test. {reflexion}"
+}
+```
+
+<Callout type="info">
+  A `loop` phase may legitimately reference its **own** output via `{steps.<thisId>.output}` / `.json` in `until` — validation special-cases this. `{steps.<thisId>.*}` on any other phase type is a hard error. If `reflexion: true` but the `task` never mentions `{reflexion}`, the summary is **auto-appended** to the prompt with a warning nudging you to add the placeholder explicitly for placement control.
+</Callout>
+
+---
+
+## Working with JSON
+
+LLMs rarely emit clean JSON. They wrap it in prose, surround it with code fences, and occasionally append stray keys. taskflow's `safeParse` is a multi-stage recovery pipeline designed for that reality. Every `{steps.ID.json}` placeholder, every `map.over`, and every gate scorer `target` runs through it.
+
+### The four stages
+
+<Tabs items={['1. Direct parse', '2. Fenced code blocks', '3. Balanced bracket extraction', '4. Anti-pattern detection']}>
+<Tab value="1. Direct parse">
+
+**1. Direct parse** — trim the text and attempt `JSON.parse`. Success returns immediately. This handles the happy path: a model that emits exactly `{"severity": "high"}`.
+
+```json title="direct-parse.json"
+{"severity": "high", "reason": "missing auth check"}
+```
+
+</Tab>
+<Tab value="2. Fenced code blocks">
+
+**2. Fenced code blocks** — scan for triple-backtick fences, try to parse each body, **JSON-tagged fences first**, then untagged or other-language fences. This recovers JSON from responses like:
+
+````text title="json-in-prose.txt"
+Here is the analysis:
+
+```typescript
+const x = compute();
+```
+
+```json
+{"severity": "high", "reason": "..."}
+```
+````
+
+The scan is linear-time by construction — the info-string matcher stops at the first newline, so it cannot overlap with the body matcher. Safe from polynomial/redos backtracking.
+
+</Tab>
+<Tab value="3. Balanced bracket extraction">
+
+**3. Balanced bracket extraction** — find the first `[` or `{` in the trimmed text, take the matching `]` or `}`, and parse the slice. This recovers JSON embedded in prose like `The result is {"a":1,"b":2} as shown above.`
+
+</Tab>
+<Tab value="4. Anti-pattern detection">
+
+**4. Anti-pattern detection** — if all of the above fail and the input looks like a JSON array followed by a stray top-level key, emit a diagnostic. This catches a common LLM mistake:
+
+```json title="stray-key.json"
+[
+  {"id": "D-001", "status": "open"}
+],
+"deferred": [
+  {"id": "D-002", "status": "deferred"}
+]
+```
+
+This is **not valid JSON** and cannot be recovered. The diagnostic hints the fix: fold the stray data into array members, or split into a separate phase.
+
+</Tab>
+</Tabs>
+
+If every stage fails, `safeParse` returns `undefined` — and `{steps.ID.json}` becomes a missing warning, `{steps.ID.json.field}` resolves to `undefined`.
+
+<Callout type="tip">
+  Pin the model's output shape with `output: "json"` + `expect` (on `agent` / `gate` / `reduce` / `loop`). A contract violation fails the phase with a precise diagnostic and is retryable — far more robust than hoping `safeParse` recovers a malformed blob.
+</Callout>
+
+### Coercing arrays for `map.over`
+
+`map.over` and gate scorer `target`s need an **array**. When the parsed value isn't already an array, `coerceArray` looks for a convenience wrapper key, in this fixed order:
+
+| Input | Resolves to |
+|---|---|
+| `[...]` | the array itself |
+| `{items: [...]}` | `items` |
+| `{results: [...]}` | `results` |
+| `{list: [...]}` | `list` |
+| `{data: [...]}` | `data` |
+| `{findings: [...]}` | `findings` |
+| anything else | `null` → phase fails ("no array found") |
+
+The first matching array wins. So a model that emits `{"results": [...]}` works whether you asked for an array or a wrapper — useful when the model wraps to add metadata.
+
+---
+
+## Conditions
+
+`when` (on any phase) and `until` (on `loop`) accept a tiny, **safe** boolean expression language — no `eval` / `Function`, a hand-written recursive-descent parser. Gate `eval` preconditions use the same language **plus** the `contains` operator.
+
+The full operator table, precedence, comparison semantics, and truthiness rules are documented on the [Control Flow](/en/docs/syntax/control-flow#condition-reference) page. Here we cover the part that is specific to interpolation: how operands are resolved.
+
+<Callout type="warn">
+  Inside conditions, placeholders resolve to their **raw** value, not the stringified form used in `task` templates. So `{steps.x.json.count} > 5` does a numeric comparison when `count` is a number. In a `task` string, the same placeholder would be pretty-printed JSON.
+</Callout>
+
+This split is intentional: comparisons need typed values (`5 > 3` is numeric, `"high" == "high"` is string), while task templates need readable text. The same placeholder syntax serves both, with different resolution rules per context.
+
+### Gate `contains`
+
+Gate `eval` preconditions add one operator not present in `when` / `until`:
+
+```json title="gate-contains.json"
+{
+  "id": "lint-gate",
+  "type": "gate",
+  "eval": ["{steps.lint.output} contains no errors"],
+  "task": "..."
+}
+```
+
+`contains` is **preprocessed** before tokenization: the left side is interpolated to a string, the right side to a literal string, and a substring check runs. It is the idiomatic way to gate on prose output (`{steps.lint.output} contains no errors`). Outside gate preconditions, `contains` is not recognized.
+
+### Fail-open, and the loop exception
+
+A parse error in a `when` expression sets `error` and the expression evaluates to **`true`** — a broken guard never silently drops a phase. The error is surfaced in the run record.
+
+For `loop.until` specifically, a parse error **stops the loop** (fail-safe) — continuing would risk an unbounded loop.
+
+---
+
+## Failure modes
+
+A placeholder that cannot be resolved is **never** a silent drop. The runtime handles each failure mode explicitly.
+
+### Missing placeholders
+
+When `resolvePath` returns `undefined`, the placeholder is **left intact** in the output string and its path is pushed onto `missing[]`. The runtime then:
+
+<Steps>
+  <Step>
+    **Deduplicates** the missing paths.
+  </Step>
+  <Step>
+    **Builds a warning**: `unresolved refs in task: {steps.x.output}, {args.foo} — left intact (check dependsOn / placeholder spelling)`.
+  </Step>
+  <Step>
+    **Persists** it to `PhaseState.warnings` and logs it.
+  </Step>
+</Steps>
+
+The phase **still runs** — the model sees the literal `{steps.x.output}` text, which is usually enough to surface the bug in the run record. This is the fail-open guarantee: a typo never silently drops a phase.
+
+<Callout type="warn">
+  A placeholder that resolves to `undefined` is "missing". A placeholder that resolves to `null` is **not** missing — `null` is a valid JSON value and is stringified to `""`. The distinction matters for `when` / `until` truthiness.
+</Callout>
+
+### Escaping literal braces
+
+There is **no escape sequence** (`\{` is not special). Instead, the placeholder regex's strict charset provides implicit escaping: any `{...}` whose contents include a space, quote, punctuation, or a character outside `[a-zA-Z0-9_-]` is simply not a placeholder and passes through verbatim.
+
+| Template | `{...}` matched? | Why |
+|---|---|---|
+| `See {steps.x.output} above.` | ✓ — matches | valid path chars only |
+| `Set {key: "value"}` | ✗ — literal | contains `:`, space, `"` |
+| `Pick from {a, b, c}` | ✗ — literal | contains space and commas |
+| `Use the {item} slot` | ✓ — matches | bare local ref |
+| `Open the {  item  }` | ✗ — literal | leading/trailing spaces inside braces |
+
+<Callout type="info">
+  To emit a literal string that *would* match the placeholder regex (e.g. you want the model to see exactly `{steps.x.output}` as a literal token), there is no first-class escape. In practice this is vanishingly rare — use a `script` phase or a `context` file pre-read to inject such tokens without templating.
+</Callout>
+
+---
+
+## Validation
+
+Static validation (`/tf verify`) inspects every string field for placeholder references and checks them against the DAG, **before** any agent runs.
+
+### Hard errors
+
+| Error | Cause | Fix |
+|---|---|---|
+| `task references {steps.X.*} but 'X' is not reachable via dependsOn` | `X` is not a transitive ancestor via `dependsOn` / `from`. | Add `"dependsOn": ["X"]` (or a transitive path). |
+| `references its own output via {steps.X.*}` | A non-`loop` phase references `{steps.<its own id>.*}`. | Only `loop` phases may self-reference (for `until`). Rename the ref or restructure. |
+| `dependsOn unknown phase 'X'` | `dependsOn` lists a phase id that doesn't exist. | Fix the id. |
+| `id uses underscores` | Phase id contains `_`. | Use hyphens (consistency with placeholder charset). |
+| `string 'run' must not contain interpolation placeholders` | A `script` phase's string-form `run` has `{...}`. | Use the array form (execvp-style, supports interpolation safely) or pipe dynamic data through `input`. |
+
+The transitive-ancestor check uses **BFS over `dependsOn ∪ from`**: if C depends on B and B depends on A, C may reference `{steps.A.*}`. Phases with `join: "any"` are **exempt** — they only need one dep done and may reference other phases as informational context.
+
+### Warnings
+
+| Warning | Cause | Fix |
+|---|---|---|
+| `Taskflow references {args.X} but the invocation did not provide 'X'` | An `args` placeholder has no runtime value and no `default`. | Supply the arg at invocation, or add a `default`. |
+| `unresolved refs in task: {steps.x.output}` | A placeholder failed to resolve at runtime. | Check `dependsOn`, the upstream phase's `output: "json"`, and spelling. |
+
+### Strict mode
+
+```json title="strict-interpolation.json"
+{
+  "name": "ci-gated",
+  "strictInterpolation": true,
+  "args": { "spec": { "default": "SPEC.md" } },
+  "phases": [ /* ... */ ]
+}
+```
+
+With `strictInterpolation: true`, **all warnings become hard errors** — useful in CI to catch any drift. `strict` can also be passed per-validation-call (`opts.strict`) to override the flow's flag for a one-off check.
+
+---
+
+## Resolution rules (reference)
+
+All placeholders funnel through `resolvePath` → `_resolvePath` → `dig`. This is the exhaustive reference; for everyday authoring, the [placeholder families](#placeholder-families) table is enough.
+
+### `dig` — the descent primitive
+
+`dig` walks an object by a sequence of property keys. It **never throws**. A path that walks off the end of shallow data, hits a primitive mid-descent, or references a missing key all return `undefined`.
+
+```text title="dig-trace.txt"
+dig(obj, ["a", "b", "c"]):
+  cur = obj
+  for each part:
+    if cur is null/undefined → return undefined
+    if cur is not an object → return undefined
+    cur = cur[part]
+  return cur
+```
+
+This makes deeply-nested placeholders like `{steps.scan.json.results.0.id}` safe even when the data is shallower than expected.
+
+### Stringification
+
+When a placeholder resolves to a non-`undefined` value, it is stringified before splicing into a template:
+
+| Value type | Inserted as |
+|---|---|
+| `string` | as-is |
+| `null` / `undefined` | `""` (empty) — but `undefined` short-circuits to "missing" *before* stringify |
+| `number` / `boolean` | `JSON.stringify` (so `true`, `42`, `3.14`) |
+| `object` / `array` | `JSON.stringify(value, null, 2)` — pretty-printed |
+
+### Resolution order by head
+
+| Head | Action |
+|---|---|
+| `previous` | Only `previous.output` is valid; any other sub-path → `undefined` |
+| `reflexion` | Bare only; returns `ctx.reflexion` if set, else `undefined` |
+| `args` | `dig(ctx.args, rest)` |
+| `steps` | Look up `ctx.steps[ID]`. `.output` returns the string (no trailing segments). `.json` parses then `dig`s. Anything else → `undefined` |
+| any other (e.g. `item`, `loop`) | Treated as a **local**: if `head in ctx.locals`, `dig(ctx.locals[head], rest)`; else `undefined` |
+
+### Placeholder syntax (regex)
+
+A placeholder is matched by:
+
+```text title="placeholder-regex.txt"
+\{([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\}
+```
+
+A `{`, then one or more path segments of letters / digits / hyphens / underscores separated by dots, then a `}`. The first segment is the **head** (the placeholder family); the rest are a descent path.
+
+Consequences:
+
+- `{steps.audit-each.output}` ✓ — hyphens allowed in ids, matching the naming convention.
+- `{ args.x }` ✗ — leading/trailing spaces inside the braces are not stripped by the matcher; the head would be ` args ` and resolution fails. (Condition operands *do* trim; task placeholders do not.)
+- `{"key": "value"}`, `{a b}`, `{$special}` ✗ — these contain characters outside `[a-zA-Z0-9_-]`, so they are **not placeholders at all** and pass through verbatim.
+
+### Observed readSet
+
+Every **successfully resolved** placeholder fires an `onRead` hook (unless unset). Unresolved refs do **not** fire it. The runtime uses this to record which upstream phases a phase *actually consumed* — its observed readSet — distinct from its declared `dependsOn`. A phase may depend on three phases but only read one, and the run record reflects the truth.
+
+---
+
+## Next
+
+<Cards>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `when`, `join`, `retry`, and routing — the condition operators in context.
+  </Card>
+  <Card title="Phase Types Reference" href="/en/docs/syntax/phase-types">
+    Every field on every phase type, including where each placeholder family is available.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    How interpolation results fold into the cache fingerprint.
+  </Card>
+</Cards>

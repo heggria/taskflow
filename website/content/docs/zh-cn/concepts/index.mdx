@@ -1,0 +1,67 @@
+---
+title: 核心概念
+description: taskflow 声明式 DAG 模型背后的思想。
+---
+
+这一章是 taskflow 背后的*心智模型*。它不列举每个字段——那是[语法参考](/zh-cn/docs/syntax)的事——也不带你走某个宿主的安装——那是[指南](/zh-cn/docs/guides)的事。它解释的是让 taskflow 不同于你手写命令式脚本的六个理念：
+
+- 工作是一张**图**，而不是一串调用；
+- 图由十种**阶段类型**搭建而成；
+- 数据通过**插值**在阶段之间流动；
+- 整张图在任何 token 花出去之前就被**验证**过；
+- 中间输出与你的上下文**隔离**；
+- 一次运行可以跨会话**续跑**。
+
+把这些读一遍，剩下的文档就自然顺下来了。
+
+## 建议阅读顺序
+
+这些概念环环相扣。第一次请从上往下读：
+
+<Steps>
+  <Step>
+    **[DAG 模型](/zh-cn/docs/concepts/dag)** —— 为什么工作是一张由 `dependsOn` 边构成的图，以及为什么数组顺序*不是*一条边。
+  </Step>
+  <Step>
+    **[阶段类型](/zh-cn/docs/concepts/phases)** —— 十个构建块（`agent`、`map`、`gate`、`loop`……）以及何时该用哪一个。
+  </Step>
+  <Step>
+    **[插值](/zh-cn/docs/concepts/interpolation)** —— `{steps.X.output}` 之类的东西如何零 token、确定性地在阶段之间搬运数据。
+  </Step>
+  <Step>
+    **[验证](/zh-cn/docs/concepts/verification)** —— 在任何智能体运行之前，先捕获环、死胡同和悬空引用的静态分析。
+  </Step>
+  <Step>
+    **[上下文隔离](/zh-cn/docs/concepts/context-isolation)** —— 为什么只有 `final` 阶段会进入你的对话，以及需要时如何窥探中间结果。
+  </Step>
+  <Step>
+    **[续跑](/zh-cn/docs/concepts/resume)** —— 一次失败的运行如何从它停下处继续，以及跨运行记忆化如何复用上周的工作。
+  </Step>
+</Steps>
+
+<Callout type="info">
+  已经对 DAG 和 Make、Bazel 这类构建系统很熟了？前两页可以略读，直接从[验证](/zh-cn/docs/concepts/verification)开始——那才是 taskflow 安全故事真正开始的地方。
+</Callout>
+
+## 概念
+
+<Cards>
+  <Card title="DAG 模型" href="/zh-cn/docs/concepts/dag">
+    为什么使用任务节点图，以及 `dependsOn` 如何构建它。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    每个 taskflow 的 10 个构建块。
+  </Card>
+  <Card title="插值" href="/zh-cn/docs/concepts/interpolation">
+    数据如何在阶段之间流动。
+  </Card>
+  <Card title="验证" href="/zh-cn/docs/concepts/verification">
+    在消耗 token 之前捕获错误。
+  </Card>
+  <Card title="上下文隔离" href="/zh-cn/docs/concepts/context-isolation">
+    为什么只有最终结果会到达你这里。
+  </Card>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    跨会话重放如何工作。
+  </Card>
+</Cards>

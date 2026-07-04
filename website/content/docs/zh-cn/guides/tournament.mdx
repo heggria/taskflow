@@ -1,0 +1,206 @@
+---
+title: 锦标赛选择
+description: 生成竞争变体，让评委选出最佳结果。
+---
+
+一个标题可能很糟。四个标题加上一个评委就可靠多了。
+
+这就是 `tournament` 阶段的全部前提。对于创意性或主观性的工作——命名、摘要、营销文案，任何一次尝试可能落空的任务——你生成几个独立的尝试，把它们全部展示给一个评委，让评委选出最强的（或综合成一个答案）。没有获胜的工作被丢弃；只有幸存者返回。
+
+本指南走完两种定义竞争者的方式、评委如何选出获胜者、两种输出模式，以及保证你永远不会丢失工作的 fail-open 机制。
+
+## 基本的锦标赛
+
+给它一个 `task`、一个 `variants` 数量，和一个 `judge` 评分准则。运行时生成 `variants` 份独立的任务副本，然后运行一个看到每个变体并选出获胜者的评委。
+
+```json title="headline-best.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the headline with the strongest hook and the clearest promise.",
+  "mode": "best"
+}
+```
+
+这就是一个完整的阶段。默认的 `mode` 是 `"best"`，所以你可以省略它。默认的 `variants` 是 `3`，硬性最大值是 `20`。
+
+## 它如何运行
+
+<Steps>
+  <Step>
+    **生成竞争者。** `variants` 份 `task` 副本作为独立的子代理调用运行，一起 fan-out。每一个在看不到其他副本的情况下产生自己的答案。
+  </Step>
+  <Step>
+    **标记并呈现。** 运行时把每个幸存的变体标记为 `### Variant 1`、`### Variant 2`、…… 并把它们拼接成一个提示给评委。
+  </Step>
+  <Step>
+    **评委决定。** 一个评委 agent——默认与阶段相同，或你设置了 `judgeAgent` 时用它——阅读评分准则和每个变体，然后发出它的选择。
+  </Step>
+  <Step>
+    **返回结果。** 在 `best` 模式下，输出是获胜变体的逐字原文。在 `aggregate` 模式下，输出是评委综合的答案。
+  </Step>
+</Steps>
+
+## 两种定义竞争者的方式
+
+### `variants` —— 相同提示，不同采样
+
+当你使用 `variants` 时，每个竞争者得到相同的 `task`。多样性来自模型的采样——每次调用都是独立的，所以你能得到真正不同的尝试。当一个好的提示可能产生一个很棒的答案、你只是想要更多机会时，这是正确的选择。
+
+```json title="variants-mode.json"
+{
+  "id": "tagline",
+  "type": "tournament",
+  "task": "Write a one-line tagline for a developer tool that saves context-window tokens.",
+  "variants": 5,
+  "judge": "Pick the tagline that is most memorable and most specific.",
+  "mode": "best"
+}
+```
+
+### `branches` —— 不同提示，不同角度
+
+当你想要真正不同的*方法*——而不只是相同骰子的不同投掷——使用 `branches`。每个分支是它自己的 `{ task, agent? }`。分支成为竞争者；`variants` 被忽略。
+
+```json title="branches-mode.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "branches": [
+    { "task": "Write a bold, provocative headline." },
+    { "task": "Write a clear, benefit-driven headline." },
+    { "task": "Write a question-based headline that creates curiosity." }
+  ],
+  "judge": "Pick the headline most likely to earn a click without overselling.",
+  "mode": "best"
+}
+```
+
+当你能事先枚举出策略并希望每一种都被代表时，使用 `branches`。当你信任提示、只想要数量时，使用 `variants`。
+
+## 评委的裁决
+
+评委会被告知如何格式化它的选择。附加到它提示上的指令取决于模式：
+
+- **`best`** — *"End your reply with a line exactly: `WINNER: <number>` (1–N), choosing the strongest eligible variant."*
+- **`aggregate`** — *"Synthesize the strongest possible answer by combining the best parts of the eligible variants. Then end with a line: `WINNER: <number>` indicating which variant contributed most."*
+
+运行时灵活地解析裁决。它接受：
+
+- 输出中任意位置的 `WINNER: <n>` 行（最后一个匹配胜出，所以评委可以改变主意）。
+- 像 `{"winner": 3}` 这样的 JSON——它也接受 `"best"` 或 `"choice"` 作为键名。
+
+获胜者编号是**1 起始、基于实际运行的变体**（被预算跳过的竞争者从评委看到的编号中排除）。该数字被钳制到有效范围内。
+
+<Callout type="info">
+  你不需要自己写指令——运行时会为你附加。你的 `judge` 字段是评分准则（"选择最强的钩子"）；运行时处理要求编号选择的机制。
+</Callout>
+
+## `best` 与 `aggregate`
+
+`mode` 字段决定阶段返回什么。
+
+| 模式 | 输出 | 何时使用 |
+|---|---|---|
+| `best`（默认） | 获胜变体，逐字原文。 | 你想让其中一个原始尝试原样保留。 |
+| `aggregate` | 评委综合的答案，结合最佳部分。 | 没有单个变体完美，你希望评委合并它们。 |
+
+在 `best` 模式下，返回的 `model` 是产生获胜变体的模型。在 `aggregate` 模式下，它是评委的模型——因为评委编写了最终输出。
+
+```json title="aggregate-mode.json"
+{
+  "id": "summary",
+  "type": "tournament",
+  "task": "Summarize the attached research notes in three sentences.",
+  "variants": 4,
+  "judge": "Synthesize the most accurate and complete summary from the variants below.",
+  "mode": "aggregate"
+}
+```
+
+## Fail-open：工作永远不会丢失
+
+一个锦标赛在每个变体上花费 token。taskflow 保证这笔花费永远不会因评委的小故障而浪费。
+
+<Callout type="warn">
+  如果评委的裁决无法被解析，锦标赛回退到**变体 1**。如果评委本身失败，它回退到第一个符合条件的幸存变体。工作永远不会被静默丢弃。
+</Callout>
+
+完整的回退集合，按顺序：
+
+<Steps>
+  <Step>
+    **所有变体都失败了。** 没有任何东西幸存到让评委评判。锦标赛本身失败——确实没有任何东西可返回。
+  </Step>
+  <Step>
+    **恰好一个变体幸存。** 评委被跳过，返回那个变体，并带有一个 `reason: "only surviving variant"` 备注。
+  </Step>
+  <Step>
+    **运行被中止或超出预算。** 评委被跳过；返回第一个幸存变体并带有一个警告。
+  </Step>
+  <Step>
+    **评委调用失败。** 返回第一个符合条件的变体，并带有一个命名失败的警告。
+  </Step>
+  <Step>
+    **裁决无法解析。** 返回变体 1，并带有一个 `reason: "no parseable winner; defaulted to variant 1"` 备注。
+  </Step>
+  <Step>
+    **评委选了一个不符合条件的变体**（一个失败的）。运行时回退到第一个符合条件的变体并记录一个警告。
+  </Step>
+</Steps>
+
+每个锦标赛结果在它的阶段状态上携带一个 `tournament` 对象——`{ variants, winner, mode, reason }`——所以你总能看到哪个变体获胜以及为什么。
+
+## 一个完整的示例
+
+一个尝试三个角度并综合最佳的命名锦标赛：
+
+```json title="naming-tournament.json"
+{
+  "name": "name-the-feature",
+  "phases": [
+    {
+      "id": "pick-name",
+      "type": "tournament",
+      "branches": [
+        { "task": "Propose a name that emphasizes speed." },
+        { "task": "Propose a name that emphasizes simplicity." },
+        { "task": "Propose a name that emphasizes reliability." }
+      ],
+      "judge": "Combine the best qualities of the proposals into one final feature name. Pick the single best variant as the winner.",
+      "judgeAgent": "final-arbiter",
+      "mode": "aggregate",
+      "final": true
+    }
+  ]
+}
+```
+
+评委以 `final-arbiter` 运行（通过 `judgeAgent`），看到全部三个提案，并返回一个综合的名字。因为阶段是 `final: true`，只有那个名字到达你的上下文。
+
+## 何时使用锦标赛
+
+<Callout type="tip">
+  在以下情况使用锦标赛：
+  - 工作是创意性或主观性的，一次尝试不可靠。
+  - 你能枚举出几个不同的策略（`branches`），或只想要更多次采样（`variants`）。
+  - 你希望评委要么选出最佳，要么合并最佳部分。
+</Callout>
+
+当任务是确定性的时候，改用普通的 `agent` 阶段——一个锦标赛花费 N+1 次子代理调用（N 个变体加评委），所以把它留给方差值得的工作。
+
+## 下一步
+
+<Cards>
+  <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
+    在运行时生成子流程，并在执行前验证它们。
+  </Card>
+  <Card title="Tournament 阶段" href="/zh-cn/docs/syntax/phase-types">
+    `tournament` 阶段的完整字段参考。
+  </Card>
+  <Card title="Gate 阶段" href="/zh-cn/docs/syntax/phase-types">
+    `gate` 使用相同的裁决解析机制做质量门。
+  </Card>
+</Cards>

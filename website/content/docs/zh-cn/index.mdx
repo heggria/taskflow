@@ -1,0 +1,77 @@
+---
+title: 简介
+description: 面向编程智能体子代理的声明式、可验证任务节点图。
+---
+
+欢迎来到 **taskflow** 文档。taskflow 是面向编程智能体子代理的声明式、可验证的*任务图*——你把多步骤的智能体工作描述成一个 DAG，运行时会在花费一个 token 之前先验证它，并且只有最终结果会进入你的上下文窗口。
+
+整个想法用四行 JSON 就能说清：
+
+```json title="一个完整的 taskflow"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+这就是一个完整的 taskflow。运行时把它变成一张图，跑一个子代理，然后返回结果。再加上更多阶段，用 `dependsOn` 把它们连起来，同样的结构就能扩展到对上百个文件做 fan-out——重试、gate、loop、跨会话续跑都替你处理好。
+
+## 它是为谁准备的？
+
+taskflow 是为那些把多步骤工作委托给编程智能体、并且遇到以下情况的人准备的：
+
+- **上下文窗口压力。** 每个子代理的中间记录都涌入你的对话，一次五步审计还没看到结果就把上下文吃光了。
+- **计划只存在于运行时。** 你用自然语言描述一个工作流，模型每次运行都重新推导一遍，既没有东西可以 diff、复用，也没有东西可以交给评审者。
+- **没有恢复能力。** 一次运行死在最后一步，你只能从头再来——每个子代理调用都得重新付费。
+- **可复用的流水线。** 你想给一个工作流命名一次，然后按名称调用它，无论在 Pi、Codex、Claude Code 还是 OpenCode 上。
+
+如果其中任何一条听起来耳熟，taskflow 就是为你做的。
+
+## 如何阅读这些文档
+
+这些文档按学习路径组织。第一次请按顺序阅读；熟悉之后就可以跳着看了。
+
+<Steps>
+  <Step>
+    **[什么是 taskflow？](/zh-cn/docs/what-is-taskflow)** —— *为什么*。命令式子代理脚本的问题，以及那一个让声明式图值得做的权衡。
+  </Step>
+  <Step>
+    **[开始使用](/zh-cn/docs/getting-started)** —— *怎么做*。五分钟内跑起你的第一个 taskflow，然后见一个真实的 fan-out 例子。
+  </Step>
+  <Step>
+    **[核心概念](/zh-cn/docs/concepts)** —— *模型*。DAG、阶段类型、插值、验证、上下文隔离和续跑。
+  </Step>
+  <Step>
+    **[语法参考](/zh-cn/docs/syntax)** —— *细节*。每种阶段类型的每个字段、控制流、缓存和预算。
+  </Step>
+  <Step>
+    **[指南](/zh-cn/docs/guides)** —— *实践*。各宿主（Pi、Codex）的走查和模式指南（动态规划、锦标赛）。
+  </Step>
+</Steps>
+
+<Callout type="tip">
+  时间紧？浏览一下[开始使用](/zh-cn/docs/getting-started)，然后写第一个真实 flow 时把[语法参考](/zh-cn/docs/syntax)放在手边。尽早、经常运行 `/tf verify`——它不消耗 token。
+</Callout>
+
+## 章节
+
+<Cards>
+  <Card title="什么是 taskflow？" href="/zh-cn/docs/what-is-taskflow">
+    为什么声明式图胜过命令式脚本。
+  </Card>
+  <Card title="开始使用" href="/zh-cn/docs/getting-started">
+    五分钟内跑起你的第一个 taskflow。
+  </Card>
+  <Card title="核心概念" href="/zh-cn/docs/concepts">
+    DAG 模型、阶段、插值、验证、隔离、续跑。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax">
+    每个字段、每种阶段类型，详尽列出。
+  </Card>
+  <Card title="指南" href="/zh-cn/docs/guides">
+    各宿主走查和模式指南。
+  </Card>
+  <Card title="参考" href="/zh-cn/docs/reference">
+    命令和简写一览。
+  </Card>
+</Cards>

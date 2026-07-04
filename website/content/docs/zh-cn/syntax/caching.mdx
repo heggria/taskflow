@@ -1,0 +1,447 @@
+---
+title: 缓存
+description: 运行内续跑与跨运行记忆化。
+---
+
+你每天早上运行同一个代码审计。大多数文件自昨天以来没变 —— auth 模块一样、配置加载器一样，只有一个 PR 动了计费服务。然而每天早上你都要为重新分析全部内容付费。
+
+taskflow 的缓存正是为了解决这个。它有两层在不同时间尺度上工作的机制，合起来确保你只为输入真正变化的工作付费。
+
+<Callout type="info">
+  每个阶段都是**内容寻址的**。在一个阶段运行之前，taskflow 把所有可能改变其输出的东西 —— task 文本、解析后的 agent、模型、预读的 context、上游输出 —— 哈希为一个 16 字符的 `inputHash`。如果该哈希匹配先前结果，工作就被跳过。下面两层的区别仅在于*从哪里*查找先前结果。
+</Callout>
+
+## 两层一览
+
+<Cards>
+  <Card title="运行内续跑" href="#运行内续跑是免费的">
+    默认机制。从**同一次运行**中复用阶段自身先前的结果 —— 例如在你中止后续跑时。零配置，零成本。
+  </Card>
+  <Card title="跨运行记忆化" href="#跨运行记忆化">
+    可选项。从该 flow 的**任意一次先前运行**复用阶段结果。一行配置。跨会话为未变阶段花费 $0。
+  </Card>
+</Cards>
+
+## 运行内续跑是免费的
+
+你运行 flow 的那一刻，运行内续跑就已经开了。你不需要配置任何东西。
+
+它做的是：如果一个阶段的 `inputHash` 匹配同一次运行中先前 `done` 的阶段，该阶段被跳过，复用其先前输出。阶段被标记为 `cacheHit: "run-only"`，且其先前的 `usage` 被保留，这样运行摘要可以告诉你这次复用原本会花费多少。
+
+这正是 `resume` 之所以廉价的原因。中止一个进行中的运行，修一个拼写错误，再重新运行 —— 只有输入真正变化的阶段重新执行。其余的都是一次哈希比较。
+
+```json title="run-only-default.json"
+{
+  "name": "audit",
+  "phases": [
+    {
+      "id": "scan",
+      "type": "agent",
+      "task": "List the changed files under src/."
+    }
+  ]
+}
+```
+
+就这样。没有 `cache` 字段，没有标志。该阶段已经是内容寻址的、可在运行内续跑的。
+
+<Callout type="tip">
+  因为插值发生在**哈希之前**，一个对 `{steps.discover.json}` fan-out 的 `map` 阶段会在 `discover` 输出变化时自动获得不同的逐项键。你不需要为此配置 fingerprint —— 变化已经在哈希里了。
+</Callout>
+
+## 跨运行记忆化
+
+运行内续跑只在一次运行内查找。如果你*明天*运行同一个 flow，它会从零开始 —— 即使什么都没变。
+
+跨运行记忆化修复了这点。设 `cache.scope` 为 `"cross-run"`，阶段的结果就存储在 `.pi/taskflows/cache/` 下的磁盘上。下一次运行 —— 明天、下周、在另一个会话中 —— 用相同的 `inputHash` 对照那个存储检查。命中意味着零 token、零成本。
+
+这是 80% 场景：一个只要 git 提交没动就该复用结果的阶段。
+
+```json title="cross-run-basic.json"
+{
+  "id": "analyze-auth",
+  "type": "agent",
+  "task": "Summarize how auth works in src/auth/.",
+  "context": ["src/auth/**/*.ts"],
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD"]
+  }
+}
+```
+
+运行一次，它花费 agent 的成本。在相同提交下再运行一次，它花费为零。推送一个新提交，`git:HEAD` 指纹变化、键变化，阶段重新执行 —— 这正是你想要的。
+
+跨运行命中时，**完整的阶段状态被恢复**（保留 `gate` 裁决、`approval` 状态、`reads`、loop/tournament 元数据、警告），`usage` 被清零，阶段被标记为 `cacheHit: "cross-run"`。
+
+### 何时该用跨运行？
+
+| 场景 | 用 cross-run？ | 原因 |
+|---|---|---|
+| 你针对很少变化的代码库重复运行同一个 flow | ✅ 是 | 跨会话为未变阶段花费 $0。 |
+| 一个阶段读取经常变化的 `context` 文件 | ✅ 是，配 `file:` 或 `glob!:` 指纹 | 指纹让缓存在文件变化时未命中。 |
+| 一个阶段产生副作用（部署、webhook、DB 写入） | ❌ 否 | 改用 `idempotent: false` —— 副作用绝不能从缓存重放。 |
+| 阶段是 `gate`、`approval`、`loop`、`tournament` 或 `script` | ❌ 否 | 这些被阻止跨运行（见[下方](#被阻止的阶段类型)）。 |
+| 你只需要中止后的廉价续跑 | ❌ 不需要 | 默认的 `run-only` 已经覆盖这个。 |
+
+<Callout type="warn">
+  `"cross-run"` 在 `gate`、`approval`、`loop`、`tournament` 和 `script` 阶段上被**拒绝**。gate 的裁决必须反映*当前*的上游输出；一个缓存的 `PASS` 可能让损坏的工作通过。schema 在 verify 时捕获这个；运行时作为纵深防御将其降级。
+</Callout>
+
+## `cache` 字段
+
+三个可选字段。空的 `cache: {}` 合法且等价于默认值。
+
+| 字段 | 默认值 | 作用 |
+|---|---|---|
+| `scope` | `"run-only"` | 从哪里查找先前结果：`"run-only"`（同一次运行）、`"cross-run"`（任意先前运行）或 `"off"`（永不复用）。 |
+| `ttl` | *（无）* | 跨运行命中的最大年龄，如 `"6h"`、`"7d"`。省略表示无时间界限（90 天硬性兜底始终适用）。对 `run-only`/`off` 忽略。 |
+| `fingerprint` | *（无）* | 折叠进键的额外世界状态信号 —— git 提交、文件内容、环境变量。仅当 `scope === "cross-run"` 时被查询。 |
+
+### 三个作用域
+
+| 作用域 | 运行内续跑 | 跨运行读 | 跨运行写 | 何时使用 |
+|---|---|---|---|---|
+| `"run-only"` *（默认）* | ✅ | ❌ | ❌ | 你想要廉价续跑但每次运行从零开始。 |
+| `"cross-run"` | ✅ | ✅ | ✅ | 你针对未变代码库重复运行同一个 flow。 |
+| `"off"` | ❌ | ❌ | ❌ | 阶段必须始终重新执行，即使在一次运行内。也是 `idempotent: false` 的有效作用域。 |
+
+## TTL：当过期结果危险时
+
+有时"输入没变"还不够 —— 结果本身会过期。两周前写的安全摘要可能不反映昨天引入的漏洞，即使 task 文本和 context 文件逐字节相同。
+
+`ttl` 给跨运行命中加一个时间界限：
+
+```json title="ttl-example.json"
+{
+  "id": "security-summary",
+  "type": "agent",
+  "task": "Summarize known security risks in src/.",
+  "cache": {
+    "scope": "cross-run",
+    "ttl": "6h",
+    "fingerprint": ["git:HEAD"]
+  }
+}
+```
+
+这个阶段在首次计算后的最多六小时内复用其结果。之后，该条目被视为未命中，阶段重新执行。
+
+语法是一个数字后跟可选单位：
+
+| 单位 | 倍数 | 示例 |
+|---|---|---|
+| `ms` | 1 | `"500ms"` |
+| `s` | 1,000 | `"90s"` |
+| `m` | 60,000 | `"30m"` |
+| `h` | 3,600,000 | `"6h"` |
+| `d` | 86,400,000 | `"7d"` |
+| *（省略）* | 1（毫秒） | `"60000"` |
+
+<Callout type="info">
+  省略 `ttl` 表示**无时间界限** —— 但 **90 天硬性兜底**始终适用。超过 90 天的条目无论 TTL 都被淘汰。TTL 是*最大值*；兜底是下限。
+</Callout>
+
+格式错误或非正的 `ttl` 是硬验证错误。运行 `/tf verify` 在花费任何 token 之前捕获它。
+
+## 指纹：告诉缓存关于世界的事
+
+没有指纹时，`cross-run` 阶段只在其*声明*输入变化时失效 —— task 文本、`context` 文件、`args`、上游输出。这通常够了。但有时应该让缓存失效的东西住在 flow 定义之外：当前 git 提交、一个配置文件的内容、一个环境变量的值。
+
+`fingerprint` 把那些外部信号折叠进缓存键。每项是一个字符串 `<前缀><值>`。运行时把每项解析为一个确定性字符串，将拼接结果哈希，并把摘要折叠进键。
+
+### 五个前缀
+
+| 前缀 | 解析为 | 成本 | 何时未命中 |
+|---|---|---|---|
+| `git:HEAD` *（或 `git:<ref>`）* | 来自 `git rev-parse` 的提交 SHA | 一次 git 调用 | 你推送了新提交。 |
+| `glob:<pattern>` | 每个匹配文件的 `size:mtime`（仅 stat） | 廉价 | 一个匹配文件被修改。 |
+| `glob!:pattern` | 每个匹配文件内容的 SHA-256 | 读取文件字节 | 一个匹配文件的*内容*变化（经受 mtime 重置）。 |
+| `file:<path>` | 单个文件的 SHA-256 | 读取文件字节 | 该文件内容变化。 |
+| `env:<NAME>` | `process.env[NAME]` 的值 | 免费 | 环境变量变化。 |
+
+<Callout type="info">
+  所有指纹解析都是**失败容错且确定性的**。缺失的文件、非 git 仓库或不可读路径都解析为一个稳定的哨兵字符串。如果该资源后来*出现*，哨兵变为真实值，键变化，缓存未命中 —— 安全的方向。
+</Callout>
+
+### `glob:` vs `glob!:`
+
+<Tabs items={['glob: (stat)', 'glob!: (内容)']}>
+  <Tab value="glob: (stat)">
+    当对匹配文件的*修改*应该让缓存失效，但你不想付出读取文件内容的 I/O 时，用 **`glob:`**。这是最廉价的选项，适用于 `mtime` 是"有东西变了"良好代理的大型文件树。
+
+    ```json title="fingerprint-glob-stat.json"
+    "fingerprint": ["glob:src/**/*.ts"]
+    ```
+
+    陷阱：`git checkout` 重置 mtime，CI 可能非确定性地恢复它们。如果你在 checkout 后看到假缓存命中，切到 `glob!:`。
+  </Tab>
+  <Tab value="glob!: (内容)">
+    当 mtime 不可靠时，用 **`glob!:`**。它读取并哈希每个匹配文件（每个至多 10 MB），因此即使 mtime 被重置，缓存也会在真实内容变化时未命中。
+
+    ```json title="fingerprint-glob-content.json"
+    "fingerprint": ["glob!:src/**/*.ts"]
+    ```
+
+    I/O 成本更高，但在 `git checkout` 之后或 CI 中是正确选择。
+  </Tab>
+</Tabs>
+
+### 一个真实的指纹
+
+```json title="fingerprint-realistic.json"
+{
+  "id": "lint-summary",
+  "type": "agent",
+  "task": "Summarize the lint findings across the repo.",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob:src/**/*.ts", "glob!:package.json"]
+  }
+}
+```
+
+这在提交移动、任意 TypeScript 文件被修改、或 `package.json` 内容变化时未命中 —— 三个独立信号，全部折叠进一个摘要。
+
+<Callout type="warn">
+  指纹项由 `/tf verify` 零成本校验。没有已知前缀的项，或前缀后值为空的项，是硬错误 —— flow 不会运行。
+</Callout>
+
+## 让整个 flow 加入：`incremental: true`
+
+如果你的大多数阶段都该跨运行缓存，在 flow 级设 `incremental: true`。它把每个阶段的缓存作用域默认为 `"cross-run"`。
+
+```json title="incremental-flow.json"
+{
+  "name": "code-review",
+  "incremental": true,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "task": "List the changed files.",
+      "cache": { "fingerprint": ["git:HEAD"] }
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "task": "Review {steps.discover.output}.",
+      "dependsOn": ["discover"]
+    }
+  ]
+}
+```
+
+现在重新运行 flow 会跨运行和会话复用未变阶段。优先级规则很简单：
+
+<Steps>
+  <Step title="调用参数优先">
+    运行时 `incremental` 参数覆盖 flow 自身的字段。省略它以使用 flow 的设置。
+  </Step>
+  <Step title="逐阶段作用域优先于 flow 默认">
+    显式设置 `cache.scope` 的阶段保留该作用域。将阶段设为 `"run-only"` 或 `"off"` 以将其排除。
+  </Step>
+  <Step title="被阻止的类型仍被阻止">
+    `gate`/`approval`/`loop`/`tournament`/`script` 即使在 `incremental` 下也被降级为 `"run-only"`。
+  </Step>
+  <Step title="副作用仍优先">
+    `idempotent: false` 阶段被降级为 `"off"` —— 它们每次调用都重新运行，即使在 `incremental` 下。
+  </Step>
+</Steps>
+
+## 值得知道的边界情况
+
+### `idempotent: false` 禁用所有缓存
+
+执行不可逆副作用（部署、webhook POST、DB 写入）的阶段绝不能从缓存重放。设 `idempotent: false`，有效作用域变为 `"off"` —— 一次赋值覆盖每条缓存路径，包括 `map` 的逐项路径。
+
+| 行为 | 效果 |
+|---|---|
+| 运行内续跑 | ❌ 禁用 |
+| 跨运行读 | ❌ 禁用 |
+| 跨运行写 | ❌ 禁用 |
+| 瞬态自动重试 | ❌ 禁用（部署中途的 429 绝不能触发副作用两次） |
+| 显式 `retry {}` | ✅ 仍被遵守 —— 作者已声明重复可接受 |
+
+<Callout type="warn">
+  `idempotent: false` 在 `approval` 和 `flow` 阶段上是**空操作** —— 它们不运行子代理，因此没有瞬态重试可禁用，且已被排除在跨运行缓存之外。验证会发出警告。
+</Callout>
+
+### 被阻止的阶段类型
+
+这些阶段类型**不能**使用 `cache.scope: "cross-run"`：
+
+| 阶段类型 | 为何被阻止 |
+|---|---|
+| `gate` | gate 的裁决必须反映*当前*的上游输出；过期的 PASS/BLOCK 可能让损坏的工作通过，或中止已修复的 flow。 |
+| `approval` | 人工决定每次运行都必须重新获得。 |
+| `loop` | 收敛是有状态的 —— loop 必须针对当前输入重新走其迭代轨迹。 |
+| `tournament` | 变体与评委必须重新生成。 |
+| `script` | Shell 命令经常有副作用；缓存它们不可靠。 |
+
+这被**两次**强制执行：schema 校验在 `/tf verify`（零成本）拒绝它，运行时作为纵深防御将其降级为 `"run-only"`。
+
+### 当 flow 定义无法被哈希时
+
+如果 flow 定义哈希计算失败（`flowDefHash === "failed"`），该次运行中**所有** cross-run 阶段都被降级为 `"run-only"`。没有 flow 哈希，键会退化为仅 flow 名称，重新打开跨 flow 碰撞。运行 `/tf verify` 诊断哈希为何失败。
+
+## 缓存键如何计算
+
+`cross-run` 阶段的完整身份是一个 SHA-256，截断为 16 个十六进制字符：
+
+```text title="cache-key-composition"
+key = sha256(
+  "flow:" + flowName,
+  "v3:phasefp:" + (phaseFp ?? flowDefHash),   // 每阶段结构子指纹
+  phaseId,
+  agentName,
+  model,
+  resolvedTaskText,          // 插值之后
+  "think:" + thinking,
+  "tools:" + JSON(tools),
+  "ctx:" + preRead,          // 解析后的 context 文件内容
+  fingerprintDigest          // 仅当 scope === "cross-run"
+).slice(0, 16)
+```
+
+几点值得注意：
+
+- **插值发生在哈希之前。** 一个对 `{steps.discover.json}` fan-out 的 `map` 阶段在 `discover` 输出变化时获得不同的逐项键 —— 无需 fingerprint。
+- **`context` 文件内容是身份的一部分。** 编辑 `context` 文件总让阶段失效，无论 task 文本是否提及它。
+- **指纹摘要仅对 `cross-run` 阶段解析。** 对 `run-only` 它是空字符串 —— 运行内续跑已捕获声明输入的变化。
+- **编辑阶段 B 只让 B 及其传递依赖失效**，而不是整个 flow。这就是每阶段结构子指纹（`v3:phasefp:`）。
+
+### 各阶段类型的额外项
+
+每个阶段类型把多一点折叠进键：
+
+| 阶段类型 | 折叠进哈希的额外输入 |
+|---|---|
+| `agent` | —（使用上方的通用输入） |
+| `parallel` | `JSON.stringify(branches)`（每分支解析后的 task + agent） |
+| `map` | **逐项**：每个项目从 `[phase.id, item.agent, model, item.task]` 获得自己的键。阶段级键额外折叠 `JSON.stringify(tasks)`。 |
+| `script` | 插值后的 `run` 命令 + `input` stdin |
+| `flow` | Flow 身份 + `preRead` + `JSON.stringify(subArgs)` |
+| `gate` | Eval-skip / score-skip / judge / gate-task 变体（每条 gate 路径都有自己的键） |
+| `loop` | `until` + 首次 body + `maxIters` + reflexion 标志 |
+| `tournament` | 解析后的竞争者（嵌入变体 task 提示词） |
+| `reduce` | 通用输入（`from` 输出即上游 `inputHash`） |
+| `approval` | 阶段 `id` + `model` + `"approval"` + 消息 |
+
+### 向后兼容：四个键，一次写入
+
+`cacheKeys()` 为每个阶段生成**四个**键。只有 `key` 被写入；其余为只读回退项，确保升级不会引发未命中风暴：
+
+| 键形态 | 时期 | 角色 |
+|---|---|---|
+| `v3:phasefp:<subfp>` | 当前 | 写入键。每阶段结构子指纹。 |
+| `v2:flowdef:<flowDefHash>` | pre-M6 | 只读。全 flow 指纹。 |
+| `flowdef:<flowDefHash>`（裸） | pre-H1 | 只读。无版本号。 |
+| *（省略 flowdef 行）* | pre-flowDefHash | 只读。 |
+
+任意层级的命中都作为缓存命中恢复。taskflow **不**写穿，因此缓存大小保持稳定，遗留条目会自然老化淘汰。
+
+## 缓存在哪里
+
+跨运行缓存是项目下 `.pi/taskflows/cache/` 目录中的 `.json` 文件集合 —— 从 `cwd` 向上查找最近的 `.pi` 目录，从不到 `~/.pi/`。
+
+| 属性 | 值 |
+|---|---|
+| 位置 | `.pi/taskflows/cache/`（每项目、每 cwd） |
+| 文件格式 | 每个 `<key>.json` 一个 `CacheEntry` |
+| 最大条目数 | `1000`（按 `createdAt` 的类 LRU 淘汰） |
+| 硬性最大年龄 | `90 天`（无论 `ttl` 都适用） |
+| 写入原子性 | `writeFileAtomic` + 文件锁 |
+| 键格式 | `/^[0-9a-f]{8,64}$/`（防止路径穿越） |
+| 失败容错 | 尽力而为，从不抛出 —— 损坏的缓存从不破坏运行 |
+
+淘汰是**机会式的**：在每次写入时触发。超过 90 天兜底的条目被丢弃；如果存活数超过 1000，最旧的先被淘汰。
+
+<Callout type="warn">
+  防御性上限：单个 `glob:` / `glob!:` 项至多哈希 **5000** 个匹配文件；大于 **10 MB** 的文件被跳过（保留在匹配列表中但不哈希）。Glob 匹配被排序，因此键跨平台稳定。
+</Callout>
+
+## 调试
+
+### 阅读复用摘要
+
+每次运行结果都带有一个 `reuse` 摘要：
+
+| 字段 | 含义 |
+|---|---|
+| `executed` | 本次运行运行了子代理的阶段。 |
+| `reusedRunOnly` | 由运行内续跑提供的阶段。保留先前 `usage`。 |
+| `reusedCrossRun` | 从跨运行存储恢复的阶段。`usage` 清零。 |
+| `done` | `executed + reusedRunOnly + reusedCrossRun`。 |
+| `savedUSD` | 运行内续用阶段原本会花费的 USD。跨运行命中不计（成本不可恢复）。 |
+
+每个阶段状态带有一个 `cacheHit` 标记：`"run-only"`、`"cross-run"` 或 `undefined`（全新执行）。
+
+### 强制重新运行
+
+`forceRerun` 种子对单个阶段**同时**绕过运行内先前结果**和**跨运行存储。下游阶段**不**被强制 —— 它们自然重新评估：如果种子的新输出改变了它们的 `inputHash`，它们未命中并重新运行；否则命中。
+
+### 检查缓存
+
+```bash title="inspect-cache.sh"
+# 缓存在哪里？
+ls .pi/taskflows/cache/
+
+# 有多少条目？
+ls .pi/taskflows/cache/*.json | wc -l
+
+# 检查具体条目（来源：flowName、phaseId、runId、createdAt）
+cat .pi/taskflows/cache/<key>.json | jq '{flowName, phaseId, runId, createdAt, output}'
+```
+
+### 常见陷阱
+
+| 症状 | 可能原因 | 修复 |
+|---|---|---|
+| 设置了 `cross-run` 但阶段重新运行 | 无 `fingerprint`，且某个声明输入变化了（例如 `{args.X}`） | 预期行为 —— 若该变化不应失效，添加 fingerprint。 |
+| 输入未变但阶段重新运行 | `git checkout` 重置了 mtime 且你用了 `glob:` | 改用 `glob!:`（内容哈希）。 |
+| 跨运行从不命中 | `idempotent: false`（有效作用域 `"off"`） | 移除它，或接受它必须重新运行。 |
+| 跨运行从不命中 | 阶段是被阻止的类型（`gate`/`approval`/`loop`/`tournament`/`script`） | 预期行为 —— 这些不能跨运行缓存。 |
+| 跨运行从不命中 | `flowDefHash === "failed"`（全 flow 降级） | 运行 `/tf verify` 检查 flow 定义错误。 |
+| 编辑 flow 后结果过期 | 旧条目仍匹配遗留键形态 | 四级读取回退到遗留键；结构性地编辑阶段以移动其 `phaseFp`，或清空缓存。 |
+| TTL 似乎被忽略 | 条目在 90 天兜底之内但 TTL 更长 | TTL 是*最大值*；90 天兜底始终适用。 |
+| 缓存无限增长 | 清理是机会式的（在写入时） | 运行任意 flow 触发清理，或手动 `rm` 文件。 |
+
+### 清空缓存
+
+DSL 中没有清空命令 —— 存储只是文件：
+
+```bash title="clear-cache.sh"
+rm -rf .pi/taskflows/cache/
+```
+
+<Callout type="warn">
+  清空缓存是安全的。最坏情况是下次运行重新执行一切。不会丢失运行状态 —— 运行状态位于 `.pi/taskflows/runs/`，而非 `cache/`。
+</Callout>
+
+## 常见错误
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `unknown cache.scope '...'` | 作用域不是 `run-only`、`cross-run`、`off` 之一。 | 使用有效作用域。 |
+| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script` | 被阻止的阶段类型选择了 `cross-run`。 | 使用 `"run-only"`（默认）或重构 flow。 |
+| `invalid cache.fingerprint entry '...'` | 项缺少已知前缀或值为空。 | 使用 `git:`、`glob:`、`glob!:`、`file:` 或 `env:` 后接非空值。 |
+| `invalid cache.ttl '...'` | TTL 不匹配 `<数字>[<单位>]` 语法或非正。 | 使用例如 `"30m"`、`"6h"`、`"7d"`。 |
+| `'cache' must be an object` | `cache` 被设为非对象。 | 将 `cache` 设为对象 `{ ... }`。 |
+
+## 下一步
+
+<Cards>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    运行内续跑如何在中止后复用阶段。
+  </Card>
+  <Card title="验证" href="/zh-cn/docs/concepts/verification">
+    `/tf verify` 零成本捕获无效缓存配置。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    每种阶段类型上的 `cache` 字段。
+  </Card>
+  <Card title="流程定义" href="/zh-cn/docs/syntax/flow-definition">
+    flow 级的 `incremental` 设置。
+  </Card>
+</Cards>

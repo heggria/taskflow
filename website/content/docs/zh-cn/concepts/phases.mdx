@@ -1,0 +1,342 @@
+---
+title: 阶段类型
+description: taskflow 的十个构建块，以及如何在它们之间做选择。
+---
+
+**阶段**是 taskflow 中的一个工作单元。每个阶段作为一次隔离的子代理调用、一条 shell 命令或一个控制决策运行，运行时通过 `dependsOn` 把它们连成一张 DAG。
+
+理解这十种阶段类型最好的方式，是看同一个问题如何一步步演化。想象你在做一个审查 pull request 的工具。
+
+## 从简单开始：一个 agent
+
+一开始，你让一个 agent 做所有事：
+
+```json title="review-simple.json"
+{
+  "name": "review-simple",
+  "phases": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agent": "security-reviewer",
+      "task": "Review every changed file in src/ for security risks and return a prioritized summary.",
+      "final": true
+    }
+  ]
+}
+```
+
+`agent` 阶段是默认选项：一个子代理，一个任务，一个结果。它通常是正确的起点。但对于一个大型 PR，单个 agent 必须在一轮里读完所有文件，产生庞大的对话记录，还可能漏掉细节。
+
+## 对已知检查做 fan-out：`parallel`
+
+你决定把审查拆成几个可以同时运行的独立检查：
+
+```json title="review-parallel.json"
+{
+  "name": "review-parallel",
+  "phases": [
+    {
+      "id": "checks",
+      "type": "parallel",
+      "context": ["src/**/*.ts"],
+      "branches": [
+        { "task": "Find missing auth checks.", "agent": "analyst" },
+        { "task": "Find missing input validation.", "agent": "analyst" },
+        { "task": "Find hardcoded secrets.", "agent": "analyst" }
+      ]
+    },
+    {
+      "id": "summary",
+      "type": "agent",
+      "agent": "writer",
+      "task": "Turn these findings into one prioritized report:\n{steps.checks.output}",
+      "dependsOn": ["checks"],
+      "final": true
+    }
+  ]
+}
+```
+
+在以下情况使用 `parallel`：
+
+- 你事先就知道有哪些分支。
+- 每个分支相互独立。
+- 你希望结果被拼接，或打算在下游把它们合并。
+
+`parallel` 不会做合成——它只是运行。如果你需要一个合并后的单一答案，就像上面的 `summary` 那样加一个下游阶段。
+
+## 对运行时列表做 fan-out：`map`
+
+现在假设每次 PR 改动的文件数量都不一样。你没法硬编码分支。相反，先发现文件，再逐个审查：
+
+```json title="review-map.json"
+{
+  "name": "review-map",
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the changed source files under src/. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summary",
+      "type": "agent",
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+在以下情况使用 `map`：
+
+- 项目数量是在运行时发现的。
+- 每个项目都走相同的处理。
+- 你希望有界并发（`concurrency: 4` 限制同时运行多少个）。
+
+## 把多个结果合并为一个：`reduce`
+
+在上面的例子里，`summary` 是一个读取 `{steps.review-each.output}` 的 `agent` 阶段。这能工作，但 taskflow 有一个专门用来合并上游输出的类型：`reduce`。
+
+```json title="review-reduce.json"
+{
+  "id": "summary",
+  "type": "reduce",
+  "from": ["review-each"],
+  "agent": "writer",
+  "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+  "dependsOn": ["review-each"],
+  "final": true
+}
+```
+
+`reduce` 在语义上和一个依赖多个上游阶段的 `agent` 阶段相同——它存在的意义是让"聚合"这件事变得显式。当一个阶段的全部职责就是合成上游结果时，就用它。
+
+## 加一道质量门：`gate`
+
+你的审查工具现在能产出摘要了，但有时候摘要是错的。你想让第二个 agent 在摘要到达用户之前先检查一下。如果检查没过，运行就停下。
+
+```json title="review-gate.json"
+{
+  "name": "review-gate",
+  "phases": [
+    /* ... discover, review-each, summary ... */
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["summary"],
+      "task": "Does this summary accurately reflect the per-file reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+在以下情况使用 `gate`：
+
+- 必须由人或第二个 agent 在输出流向下游之前批准。
+- 你希望在 `BLOCK` 裁决时让运行干净地结束，而不是崩溃。
+- 你希望用零 token 的预检查（`eval`）在条件已满足时跳过 LLM gate。
+
+如果 gate 的输出有歧义，taskflow 会 fail-open，把它当作 `PASS`——它绝不会意外丢失工作。
+
+## 完整的 PR 审查 flow
+
+把它们拼起来：
+
+```json title="review-full.json"
+{
+  "name": "review-full",
+  "args": { "dir": { "default": "src" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List changed source files under {args.dir}. Output JSON array of {path}.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"]
+    },
+    {
+      "id": "verify",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["summary"],
+      "task": "Does the summary match the reviews? End with VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+## 另外五种阶段类型
+
+PR 审查的故事用到了最常见的五种类型。剩下的五种用来解决特定问题：
+
+### `approval` —— 为人工暂停
+
+当必须由人工明确批准后流程才能继续时使用。在 CI 或分离运行中会自动拒绝。
+
+```json title="approval-example.json"
+{
+  "id": "ship-it",
+  "type": "approval",
+  "dependsOn": ["verify"],
+  "task": "Approve this fix for production?"
+}
+```
+
+### `flow` —— 运行一个子工作流
+
+当你想复用一个已保存的 flow，或运行由另一个阶段生成的 flow 定义时使用。
+
+```json title="flow-example.json"
+{
+  "id": "deep-dive",
+  "type": "flow",
+  "use": "deep-research",
+  "with": { "topic": "{args.topic}" }
+}
+```
+
+### `loop` —— 重复直到完成
+
+当迭代次数取决于工作本身的结果、而非一个运行时列表时使用。
+
+```json title="loop-example.json"
+{
+  "id": "refine",
+  "type": "loop",
+  "task": "Improve this draft. Return JSON {draft, done}.",
+  "until": "{steps.refine.json.done} == true",
+  "output": "json",
+  "maxIterations": 6
+}
+```
+
+### `tournament` —— 从多次尝试中挑最好的
+
+用于一次可能做不好的创意性或主观性工作。生成多个变体，让评委挑选。
+
+```json title="tournament-example.json"
+{
+  "id": "headline",
+  "type": "tournament",
+  "task": "Write a punchy headline for this launch post.",
+  "variants": 4,
+  "judge": "Pick the strongest hook.",
+  "mode": "best"
+}
+```
+
+### `script` —— 运行 shell 命令
+
+用于构建、测试、lint 或文件转换。零 token。
+
+```json title="script-example.json"
+{
+  "id": "build",
+  "type": "script",
+  "run": ["npm", "run", "build"],
+  "timeout": 120000
+}
+```
+
+## 如何选择阶段类型
+
+| 如果你的问题是…… | 用 | 原因 |
+|---|---|---|
+| "做这一件事" | `agent` | 最简单。一次调用，一个结果。 |
+| "同时跑这 N 个已知检查" | `parallel` | 分支是静态且独立的。 |
+| "对运行时发现的列表里每个项目都做这件事" | `map` | 有界并发的动态 fan-out。 |
+| "把多个上游输出合并成一个" | `reduce` | 让聚合变得显式。 |
+| "继续之前先批准" | `gate` | 根据裁决中止或放行。 |
+| "等一个人来决定" | `approval` | 暂停交互式运行；CI 中自动拒绝。 |
+| "复用另一个 flow" | `flow` | 组合与动态规划。 |
+| "重复直到某个条件满足" | `loop` | 迭代式精炼。 |
+| "从多次尝试里挑最好的" | `tournament` | 针对主观工作的竞争式选择。 |
+| "跑一条命令，不用 LLM" | `script` | 构建、测试、文件操作。 |
+
+## 阶段生命周期
+
+每个阶段都会经历相同的状态：
+
+<Steps>
+  <Step>
+    **`pending`** —— 等待其依赖完成。
+  </Step>
+  <Step>
+    **`running`** —— 子代理、shell 命令或子流程正在执行。
+  </Step>
+  <Step>
+    **`done`** —— 成功。输出可通过 `{steps.<id>.output}` 访问。
+  </Step>
+  <Step>
+    **`failed`** —— 出错或违反契约。非 optional 的失败会中止运行。
+  </Step>
+  <Step>
+    **`skipped`** —— 从未运行，因为 `when` 守卫为假、gate 阻止了，或运行已经中止。
+  </Step>
+</Steps>
+
+返回 `BLOCK` 的 `gate` 不会让下游阶段 `fail`——而是让它们 `skip`，运行以 `blocked` 状态结束。
+
+## 输出：文本还是 JSON
+
+每个阶段都会产出文本。当结果需要被下游阶段解析时，加上 `output: "json"`：
+
+```json title="json-output.json"
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "Classify severity. Output JSON {severity, reason}."
+}
+```
+
+下游阶段随后就能读取 `{steps.triage.json.severity}`。把 `output: "json"` 和 `expect` 配对使用，可以校验形状并让契约违反变得可重试。
+
+## 下一步
+
+<Cards>
+  <Card title="DAG 模型" href="/zh-cn/docs/concepts/dag">
+    阶段如何连成一张图。
+  </Card>
+  <Card title="插值" href="/zh-cn/docs/concepts/interpolation">
+    阶段之间如何传递数据。
+  </Card>
+  <Card title="阶段类型参考" href="/zh-cn/docs/syntax/phase-types">
+    每种阶段类型的详尽字段参考。
+  </Card>
+</Cards>

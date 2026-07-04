@@ -1,0 +1,355 @@
+---
+title: 用 taskflow 审查一次 Pull Request
+description: 逐步构建一个多阶段审查 flow——发现、扇出、gate、汇总报告。
+---
+
+一个真实的 PR 合进来，而且很大：**跨 3 个包改动了 47 个文件。** 在合并之前你需要知道三件事——有没有安全风险、是否破坏了架构、作者有没有为新代码补测试。自己读 47 个文件不现实，而让单个智能体"审查这个 PR"会产生一份巨大的中间记录，既吃光你的上下文窗口，又仍然会漏掉细节。
+
+本指南构建一个 taskflow 来正确地完成这次审查。我们从一个发现变更文件的阶段开始，加入按文件扇出的安全审查，再并行叠加一个架构审查，用 gate 对风险把关，最后产出一份合并的报告。读完之后，你会得到一个完整、可保存的 flow，可以在每个 PR 上运行。
+
+<Callout type="info">
+  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode（`taskflow_run`）上的行为完全一致。宿主相关的调用入口请参见 [Pi 指南](/zh-cn/docs/guides/pi)或 [Codex 指南](/zh-cn/docs/guides/codex)。
+</Callout>
+
+## 问题
+
+你打开 PR，diff 统计就这么摆在你面前：
+
+```text title="这个 PR"
+packages/auth-core      18 files   +1,204  -312
+packages/api-gateway    21 files   + 890  -445
+packages/shared-utils    8 files   + 156  - 88
+```
+
+三个包，三个关注点：
+
+- **安全。** auth-core 的新代码是缺少鉴权检查或输入校验的高发区。
+- **架构。** api-gateway 是集成边界——你想知道新路由是否遵守了分层规则。
+- **测试覆盖。** shared-utils 增加了若干 helper；测试有没有跟上？
+
+把这三件事塞进一次智能体调用，意味着一个 prompt、一份巨大的中间记录、一个浅薄的答案。把它们拆成三次手动委托，又意味着你要盯着三个运行、自己手动合并结果。两种做法都没法扩展。
+
+taskflow 的答案：把这三个关注点声明成阶段，把按文件的工作扇出去，再由运行时把一切合并成一份报告——而这份报告是*唯一*返回到你上下文里的东西。
+
+## 阶段 1 —— 发现变更文件
+
+下游一切都依赖于"知道改了什么"。获取这份列表有两种方式，而这个选择很关键。
+
+### 廉价的方式：`script` 阶段
+
+如果你的 PR 在一个 git 分支上，变更集合就是 `git diff`，那就别为它花一个 token。`script` 阶段以零成本运行一条 shell 命令：
+
+```json title="用 script 发现"
+{
+  "id": "discover",
+  "type": "script",
+  "run": ["git", "diff", "--name-only", "origin/main...HEAD"],
+  "timeout": 30000
+}
+```
+
+<Callout type="warn">
+  数组形式的 `run` 是 `execvp` 风格的直接 spawn——它**不**经过 shell，所以管道和通配符不会生效。如果你需要 `git diff ... | grep ...`，请用字符串形式（在 shell 中运行），或者把过滤放到下一个 agent 阶段里做。当你插值 `{args.X}` 时，数组形式对 shell 注入是安全的。
+</Callout>
+
+这里的输出是一个按换行分隔的路径列表。但 `map` 需要一个*数组*才能扇出，而原始的路径字符串并不是数组。所以为了扇出，我们需要结构化的 JSON。
+
+### 灵活的方式：`agent` 阶段
+
+一个 `scout` 智能体可以一步列出文件*并*把输出整理成 JSON。它花几个 token，但对奇怪的仓库很稳健，还能让我们附带元数据：
+
+```json title="用 agent 发现"
+{
+  "id": "discover",
+  "type": "agent",
+  "agent": "scout",
+  "task": "List the source files changed between origin/main and HEAD under packages/. Output ONLY a JSON array of objects, each {\"path\": \"<relative-path>\", \"package\": \"<auth-core|api-gateway|shared-utils>\"}. No prose, no commentary.",
+  "output": "json"
+}
+```
+
+这里用 agent 形式，是因为我们需要 `package` 字段——架构审查会用它来给文件分组。`output: "json"` 标志告诉运行时把智能体的输出解析为 JSON，所以 `{steps.discover.json}` 直接解析成那个数组。
+
+<Callout type="tip">
+  给 discover 阶段加一个 `expect` 契约，如果智能体返回了散文而不是 JSON，就能快速失败：
+  `"expect": { "type": "array", "items": { "type": "object" } }`。
+  违约会失败该阶段，并且该阶段的 `retry` 适用。
+</Callout>
+
+## 阶段 2 —— 按文件扇出安全审查
+
+现在我们有了一个变更文件数组。一次审查一个文件、串行地审查 47 个文件，会很慢。这正是 `map` 的用途：每个 item 一个子代理，并发有上限。
+
+```json title="按文件安全审查"
+{
+  "id": "security-each",
+  "type": "map",
+  "over": "{steps.discover.json}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path} for security risks: missing auth checks, unsanitized input, hardcoded secrets, unsafe deserialization. Return one paragraph of findings, or 'No issues found.' if clean. Begin with the file path.",
+  "dependsOn": ["discover"],
+  "concurrency": 4,
+  "context": ["{file.path}"],
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+逐行解读：
+
+- **`over` / `as`** —— 在发现到的数组上扇出，把每个元素绑定到 `{file}`。
+- **`concurrency: 4`** —— 同时最多四个审查器在跑。有上限的扇出让你不超速率限制，又不必把一切都串行化。
+- **`context: ["{file.path}"]`** —— 在任务运行前把文件预读到子代理的上下文里。这消除了智能体"探索"找文件的 O(N²) 轮次成本：内容已经在那儿了。
+- **`retry`** —— 瞬时 provider 错误（速率限制、5xx）最多重滚两次，带指数退避。审查是幂等的，所以重跑是安全的。
+
+按文件的输出会累积起来。这个阶段之后，`{steps.security-each.output}` 就是每个文件发现项的拼接。
+
+## 阶段 3 —— 并行的架构审查
+
+安全审查是按文件的。架构审查是按包的：你想要一个智能体去看 `api-gateway` 里*所有*的变更，判断它们是否遵守分层，而不是 21 份分开的文件级意见。而且你想让它*同时*和安全审查一起跑，而不是在它之后。
+
+`parallel` 阶段并发地运行一个固定的分支列表。我们每个包加一个分支：
+
+```json title="并行架构审查"
+{
+  "id": "arch-review",
+  "type": "parallel",
+  "branches": [
+    {
+      "task": "Review the changed files in packages/auth-core for architecture issues: layering violations, leaked internals across module boundaries, missing abstractions. Return a short prioritized list.",
+      "agent": "reviewer"
+    },
+    {
+      "task": "Review the changed files in packages/api-gateway for architecture issues: route-to-handler coupling, business logic in transport layer, missing error normalization. Return a short prioritized list.",
+      "agent": "reviewer"
+    },
+    {
+      "task": "Review the changed files in packages/shared-utils for architecture issues: leaky abstractions, duplicated logic, misplaced concerns. Return a short prioritized list.",
+      "agent": "reviewer"
+    }
+  ],
+  "concurrency": 3
+}
+```
+
+`parallel` 不做综合——它只运行分支并拼接它们的输出。要拿到一份合并的架构结论，用 `reduce` 折叠这些分支：
+
+```json title="折叠架构分支"
+{
+  "id": "arch-summary",
+  "type": "reduce",
+  "from": ["arch-review"],
+  "agent": "writer",
+  "task": "You are given per-package architecture reviews. Merge them into one prioritized architecture report, deduplicating overlap and ordering by severity.\n{steps.arch-review.output}",
+  "dependsOn": ["arch-review"],
+  "final": false
+}
+```
+
+`arch-summary` 只依赖 `arch-review`，而 `security-each` 只依赖 `discover`。两者互不依赖，所以运行时会并发地执行它们——安全扇出和架构审查同时进行，共享运行级的 `concurrency` 预算。
+
+## 阶段 4 —— 对高风险发现把关
+
+在写最终报告之前，我们要做一个检查：如果安全或架构审查浮现了*高风险*发现，就阻断这次运行，让一个人在合并前先看一眼。如果一切干净，就放行。
+
+`gate` 阶段做这件事。它可以先跑零 token 的 `eval` 检查——如果那些已经通过，LLM gate 就被完全跳过。
+
+```json title="风险 gate"
+{
+  "id": "risk-gate",
+  "type": "gate",
+  "agent": "reviewer",
+  "dependsOn": ["security-each", "arch-summary"],
+  "join": "all",
+  "eval": [
+    "{steps.security-each.output} contains CRITICAL",
+    "{steps.arch-summary.output} contains CRITICAL"
+  ],
+  "task": "You are the final risk gate. Given the per-file security findings and the architecture summary below, decide whether this PR is safe to merge.\n\nSecurity findings:\n{steps.security-each.output}\n\nArchitecture summary:\n{steps.arch-summary.output}\n\nIf any finding is high-risk (missing auth, secret leak, broken layering, data-loss path), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.",
+  "onBlock": "halt"
+}
+```
+
+gate 如何决策：
+
+- **`eval` 先跑，零 token。** 如果*两条*表达式都失败（两个输出都不含 `CRITICAL` 这个词），在这里并不是我们想要的——`eval` 是一个*自动通过*的捷径，所以我们改为通过 LLM 来查找高风险措辞。这里的 `eval` 是一条快路径：如果任一输出*确实*包含 `CRITICAL`，LLM gate 仍然会跑来确认；如果都不包含，gate 仍然可以让 LLM 跑一遍以确保万无一失。（关于调优 `eval` 的说明见下。）
+- **LLM gate 在 `eval` 检查并非全部通过时运行。** 它读取两个上游输出，并给出 `VERDICT: PASS` 或 `VERDICT: BLOCK`。
+- **`onBlock: "halt"`** —— 一个 `BLOCK` 判决干净地停止运行。最终报告阶段（依赖于 gate）被跳过，运行以 gate 的判决作为终态结束。
+
+<Callout type="info">
+  taskflow 对 gate 的歧义 fail-open。如果 gate 的输出无法解析，运行时把它当作 `PASS`——它绝不会意外地阻断、丢失工作。如果你希望一个合并 gate 反过来，可以在下游加一个 `approval` 阶段，让一个人来做最终决定。
+</Callout>
+
+## 阶段 5 —— 最终报告
+
+如果 gate 通过了，把一切合并成一份报告。这是唯一标记了 `final: true` 的阶段，所以它是*唯一*返回到你上下文窗口的输出——每一条中间记录都留在运行时内部。
+
+```json title="最终报告"
+{
+  "id": "report",
+  "type": "reduce",
+  "from": ["security-each", "arch-summary", "risk-gate"],
+  "agent": "writer",
+  "task": "Write the final PR review report. Structure it as: 1) Risk verdict (one line), 2) Security findings (prioritized), 3) Architecture findings (prioritized), 4) Recommended actions before merge. Be concise.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-summary.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+  "dependsOn": ["risk-gate"],
+  "final": true
+}
+```
+
+`report` 依赖于 `risk-gate`，而后者依赖于 `security-each` 和 `arch-summary` 两者。所以报告只在 gate 通过时才运行——而当它运行时，它通过一个 `reduce` 拉取全部三个上游输出。
+
+## 完整的 flow
+
+下面是组装好的完整版本。把它存为 `pr-audit.json`：
+
+```json title="pr-audit.json"
+{
+  "name": "pr-audit",
+  "description": "Audit a pull request: discover changed files, fan out per-file security review, run a parallel architecture review, gate on high-risk findings, and emit one merged report.",
+  "args": {
+    "base": { "default": "origin/main", "description": "The git ref to diff against." }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 3.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files changed between {args.base} and HEAD under packages/. Output ONLY a JSON array of objects, each {\"path\": \"<relative-path>\", \"package\": \"<auth-core|api-gateway|shared-utils>\"}. No prose.",
+      "output": "json",
+      "expect": { "type": "array", "items": { "type": "object" } },
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "security-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks: missing auth checks, unsanitized input, hardcoded secrets, unsafe deserialization. Return one paragraph of findings, or 'No issues found.' if clean. Begin with the file path.",
+      "dependsOn": ["discover"],
+      "concurrency": 4,
+      "context": ["{file.path}"],
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "arch-review",
+      "type": "parallel",
+      "branches": [
+        {
+          "task": "Review the changed files in packages/auth-core for architecture issues: layering violations, leaked internals, missing abstractions. Return a short prioritized list.",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Review the changed files in packages/api-gateway for architecture issues: route-to-handler coupling, business logic in transport layer, missing error normalization. Return a short prioritized list.",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Review the changed files in packages/shared-utils for architecture issues: leaky abstractions, duplicated logic, misplaced concerns. Return a short prioritized list.",
+          "agent": "reviewer"
+        }
+      ],
+      "concurrency": 3
+    },
+    {
+      "id": "arch-summary",
+      "type": "reduce",
+      "from": ["arch-review"],
+      "agent": "writer",
+      "task": "Merge these per-package architecture reviews into one prioritized architecture report, deduplicating overlap and ordering by severity.\n{steps.arch-review.output}",
+      "dependsOn": ["arch-review"]
+    },
+    {
+      "id": "risk-gate",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["security-each", "arch-summary"],
+      "join": "all",
+      "eval": [
+        "{steps.security-each.output} contains CRITICAL",
+        "{steps.arch-summary.output} contains CRITICAL"
+      ],
+      "task": "You are the final risk gate. Given the per-file security findings and the architecture summary, decide whether this PR is safe to merge.\n\nSecurity findings:\n{steps.security-each.output}\n\nArchitecture summary:\n{steps.arch-summary.output}\n\nIf any finding is high-risk (missing auth, secret leak, broken layering, data-loss path), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.",
+      "onBlock": "halt"
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["security-each", "arch-summary", "risk-gate"],
+      "agent": "writer",
+      "task": "Write the final PR review report. Structure: 1) Risk verdict (one line), 2) Security findings (prioritized), 3) Architecture findings (prioritized), 4) Recommended actions before merge. Be concise.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-summary.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+      "dependsOn": ["risk-gate"],
+      "final": true
+    }
+  ]
+}
+```
+
+在花任何 token 之前先验证它：
+
+```bash title="验证 flow"
+/tf verify pr-audit
+```
+
+然后运行它：
+
+```bash title="运行审查"
+/tf run pr-audit base=origin/main
+```
+
+只有 `report` 阶段的输出会返回到你的对话。那 47 份按文件的中间记录、三个架构分支、gate 的推理，全部留在运行时内部。
+
+## 该调什么
+
+上面的 flow 是一个合理的默认值。下面这些是为你自己的仓库值得拧一拧的旋钮。
+
+### 并发
+
+`concurrency` 出现在三个层级：运行级默认（`concurrency: 6`）、`map` 扇出（`concurrency: 4`）、`parallel` 分支（`concurrency: 3`）。有效并发是适用上限中的最小值。对于一个 47 文件的 PR，在宽裕的速率限制下，把 `map` 并发提到 `8` 能让安全审查的挂钟时间缩短大约一半。在紧张的速率限制下，把它降到 `2` 以避免 429——`retry` 策略会吸收余下的部分。
+
+### 预算
+
+`budget: { maxUSD: 3.0 }` 是一个运行级的上限。如果累计成本超过它，运行时会停止运行并跳过剩余阶段——你绝不会收到一张意外的账单。对于一个 47 文件的审查、用强模型，3 美元很宽裕；用便宜的 `fast` 角色模型快速重跑，0.50 美元可能就够。按仓库调整，并记住 gate 在报告*之前*运行，所以一个 `BLOCK` 判约会省下报告的 token。
+
+### 缓存
+
+按文件的审查是文件内容的纯函数。把它们标记为 `cross-run`，这样在一次小 PR 变更之后的重跑会复用每一个未变更文件的审查：
+
+```json title="缓存安全审查"
+{
+  "id": "security-each",
+  "type": "map",
+  "cache": {
+    "scope": "cross-run",
+    "fingerprint": ["git:HEAD", "glob!:packages/**/*.ts"]
+  }
+}
+```
+
+`git:HEAD` 指纹把 commit 折进 key，`glob!:` 对匹配的文件做内容哈希，这样在无关 commit 之后重跑，仍然对未变更的文件命中缓存。在一次单文件微调之后重跑 `pr-audit`，只会重新执行那个文件的审查——其余的以零 token 从 store 中提供。用 `/tf why-stale <runId>` 查看究竟是哪个指纹输入变了。
+
+<Callout type="warn">
+  `gate` 阶段按设计从不跨运行缓存——每次运行都需要一个新鲜的判决。不要在 `risk-gate` 上放 `cache` 块；校验器会拒绝它。
+</Callout>
+
+### 重试
+
+`discover` 和 `security-each` 上的 `retry` 策略覆盖瞬时 provider 错误。两次尝试带指数退避（`factor: 2`）对大多数速率限制抖动足够了。对于命中更大模型的阶段（架构 `reviewer`），把 `max` 提到 `3` 并加长 `backoffMs`。超时（`timeout`）是另一条轴：一次 `timeout` 到期会让阶段带 `timedOut` 标记失败，且*绝不*重试，所以对深度审查阶段要设得宽裕些。
+
+## 接下来去哪
+
+<Cards>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    十种构建块——包括这里用到的 `map`、`parallel`、`reduce` 和 `gate`。
+  </Card>
+  <Card title="缓存" href="/zh-cn/docs/syntax/caching">
+    跨运行记忆化、指纹，以及 `why-stale` / `recompute` 工具。
+  </Card>
+  <Card title="预算" href="/zh-cn/docs/syntax/budget">
+    运行级成本上限，以及 `BLOCK` 判决如何省下下游 token。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    `dependsOn`、`join`、`when` 和 `retry`——塑造 DAG 的字段。
+  </Card>
+</Cards>

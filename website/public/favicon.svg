@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff7ed"/>
+      <stop offset="100%" stop-color="#ffedd5"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fdba74"/>
+      <stop offset="100%" stop-color="#f97316"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-color="#c2410c" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+  <rect width="100" height="100" rx="24" fill="url(#bg)"/>
+  <g transform="translate(50, 52)" filter="url(#shadow)" stroke-linecap="round" stroke-linejoin="round">
+    <!-- top bar edge -->
+    <line x1="-26" y1="-24" x2="26" y2="-24" stroke="url(#edge)" stroke-width="7"/>
+    <!-- downstroke edges -->
+    <line x1="-26" y1="-24" x2="0" y2="18" stroke="url(#edge)" stroke-width="7"/>
+    <line x1="26" y1="-24" x2="0" y2="18" stroke="url(#edge)" stroke-width="7"/>
+    <!-- top-left node -->
+    <circle cx="-26" cy="-24" r="9" fill="url(#node)"/>
+    <!-- top-right node -->
+    <circle cx="26" cy="-24" r="9" fill="url(#node)"/>
+    <!-- bottom node -->
+    <circle cx="0" cy="20" r="12" fill="url(#node)"/>
+  </g>
+</svg>

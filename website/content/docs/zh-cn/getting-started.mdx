@@ -1,0 +1,214 @@
+---
+title: 开始使用
+description: 五分钟内运行你的第一个 taskflow。
+---
+
+taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不需要写一个一个调用子代理的脚本，只需声明节点和边——运行时会替你处理 fan-out、重试、缓存和续跑。
+
+要最快地感受它，先跑一个看看。
+
+## 一个最小的 taskflow
+
+把它保存为 `hello.json`：
+
+```json title="hello.json"
+{
+  "name": "hello",
+  "phases": [
+    {
+      "id": "greet",
+      "type": "agent",
+      "task": "Write a one-sentence welcome message for a taskflow user."
+    }
+  ]
+}
+```
+
+然后运行它。
+
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run hello
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash title="在 Codex 上运行"
+    taskflow_run { "name": "hello", "def": { "name": "hello", "phases": [{ "id": "greet", "type": "agent", "task": "Write a one-sentence welcome message for a taskflow user." }] } }
+    ```
+  </Tab>
+</Tabs>
+
+你应该会看到运行时执行一个阶段并返回最终输出。这就是一个 taskflow：一个带名字的、只有一个阶段的图。
+
+## 安装
+
+如果你还没有安装 taskflow，选择你的宿主：
+
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash title="安装 pi-taskflow"
+    pi install npm:pi-taskflow
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash title="安装 Codex 插件"
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
+  </Tab>
+</Tabs>
+
+## 一个真实例子：审查改动的文件
+
+单个 agent 调用用来打招呼挺好。但当工作有好几个相互依赖的步骤时，taskflow 才真正派上用场。想象你想：
+
+1. 列出一个 PR 里改动的文件。
+2. 对每个改动的文件做安全风险审查。
+3. 把各文件的审查合并成一份摘要。
+
+下面是这个 flow：
+
+```json title="review-changes.json"
+{
+  "name": "review-changes",
+  "description": "Review changed files and return a single risk summary.",
+  "args": {
+    "dir": { "default": "." }
+  },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files under {args.dir} that have been changed recently. Output ONLY a JSON array of objects with a 'path' field. No prose.",
+      "output": "json"
+    },
+    {
+      "id": "review-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph of findings or 'No issues found.'.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["review-each"],
+      "agent": "writer",
+      "task": "Combine the following per-file reviews into a single prioritized risk summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+运行它：
+
+```bash title="运行审查 flow"
+/tf run review-changes dir=src
+```
+
+### 刚刚发生了什么？
+
+<Steps>
+  <Step>
+    **`discover` 先运行。** 它让一个 scout agent 列出改动的文件并返回 JSON。
+  </Step>
+  <Step>
+    **`review-each` 展开 fan-out。** 对 `discover` 返回的每个文件，一个独立的安全审查 agent 检查该文件。由于 `concurrency: 4`，最多同时运行四个。
+  </Step>
+  <Step>
+    **`summarize` 合并结果。** 一个 writer agent 拿到所有单独的审查，产出一份干净的摘要。因为它被标记为 `final: true`，只有这份摘要会返回到你的对话。
+  </Step>
+</Steps>
+
+中间的对话记录留在运行时内部。你的上下文窗口只会收到最终摘要。
+
+## 同一件事的三种写法
+
+对于小任务，你不需要完整的 DAG。taskflow 接受三种简写形式，运行时会将它们展开成完整 flow。
+
+### 单个任务
+
+```json title="single-task.json"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+最适合：一次性的委派。
+
+### 并行任务
+
+```json title="parallel-tasks.json"
+{
+  "tasks": [
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit validation in src/api", "agent": "analyst" }
+  ]
+}
+```
+
+最适合：一个你想同时检查的固定列表。
+
+### 顺序链
+
+```json title="chain-tasks.json"
+{
+  "chain": [
+    { "task": "List the public API of src/lib", "agent": "scout" },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+最适合：每一步都需要上一步输出的场景。`{previous.output}` 是紧邻前一步的结果。
+
+<Callout type="tip">
+  简写很适合做实验。当你需要条件路由、循环、gate、缓存或跨会话续跑时，再迁移到完整的 `phases` DAG。
+</Callout>
+
+## 花费 token 之前先验证
+
+完整的 DAG 可以在任何 agent 运行之前做静态检查：
+
+```bash title="验证一个已保存的 flow"
+/tf verify review-changes
+```
+
+这能在零成本下捕获循环、缺失的 `dependsOn`、未知的阶段引用、畸形的缓存配置以及其他结构性问题。
+
+## 留着以后用
+
+当你跑完一个 flow 觉得不错，说一句：
+
+```bash title="保存 flow"
+/tf save review-changes
+```
+
+之后你就可以按名字运行它：
+
+```bash title="运行已保存的 flow"
+/tf:review-changes dir=src
+```
+
+## 下一步
+
+<Cards>
+  <Card title="什么是 taskflow？" href="/zh-cn/docs/what-is-taskflow">
+    为什么声明式图比命令式脚本更好。
+  </Card>
+  <Card title="核心概念" href="/zh-cn/docs/concepts">
+    理解 DAG 模型和十种阶段类型。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax/flow-definition">
+    flow 定义和阶段字段的完整参考。
+  </Card>
+</Cards>
