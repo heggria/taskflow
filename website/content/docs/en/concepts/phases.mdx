@@ -1,112 +1,263 @@
 ---
 title: Phase Types
-description: The ten building blocks of every taskflow.
+description: The ten building blocks of every taskflow — what each does, when to use it, and how phases behave at runtime.
 ---
 
 # Phase Types
 
-A phase is a single node in the DAG. taskflow provides ten phase types, each for a different kind of work.
-
-## Overview
+A **phase** is a single node in the taskflow DAG. Every flow is an ordered list of phases wired together by `dependsOn`; the runtime resolves them into a topological execution graph, runs each phase as an isolated unit, and returns only the marked `final` phase's output to the host.
 
 <Callout type="info">
-  Every phase has a unique `id`, a `type`, and optional `dependsOn`. The runtime wires them into a DAG and executes them in topological order.
+  This page is the **conceptual guide**: what each phase type is for and how to choose between them. For the exhaustive field-by-field reference, see [Phase Types Reference](/en/docs/syntax/phase-types).
 </Callout>
 
-| Type | Purpose |
+## What a phase is
+
+Each phase is one of:
+
+- a single **subagent call** (`agent`),
+- a **fan-out** of several subagent calls sharing one prompt shape (`parallel`, `map`, `tournament`),
+- an **aggregation** of upstream outputs (`reduce`),
+- a **control node** that decides whether to continue (`gate`, `approval`, `loop`),
+- a **sub-workflow invocation** (`flow`), or
+- a **zero-token shell command** (`script`).
+
+Regardless of type, every phase shares the same lifecycle, the same `id`, the same dependency edges, and the same output slot (`{steps.<id>.output}`) that downstream phases can interpolate. The type only changes *how the work inside the phase is produced* — the DAG plumbing is identical.
+
+<Callout type="tip">
+  Phases are the **only** place tokens are spent. Flow-level fields (`name`, `args`, `concurrency`, `budget`) are metadata; phases are where subagents run. If you want to cut cost or latency, you cut phases.
+</Callout>
+
+## The ten types at a glance
+
+| Type | Spends tokens? | Fan-out? | Can halt the flow? | When to reach for it |
+|---|---|---|---|---|
+| `agent` | yes | no | no | The default — one delegation, one result. |
+| `parallel` | yes | static | no | Run N known branches concurrently. |
+| `map` | yes | dynamic | no | Fan out over a runtime-discovered array. |
+| `gate` | yes (or zero) | no | yes | Quality gate; can `BLOCK` downstream. |
+| `reduce` | yes | no | no | Synthesize several upstream outputs into one. |
+| `approval` | no | no | yes | Human-in-the-loop pause. |
+| `flow` | yes (sub-flow) | no | no | Reuse a saved or generated sub-workflow. |
+| `loop` | yes | no | no | Iterate until a condition, convergence, or cap. |
+| `tournament` | yes | yes (variants) | no | N competing variants + a judge. |
+| `script` | **no** | no | no | Run a shell command — zero tokens. |
+
+<Callout type="info">
+  `parallel` vs `map` vs `tournament` all spawn multiple subagents. The difference is **how the count is known**: `parallel` branches are authored up front, `map` items come from an upstream array, `tournament` variants are `N` copies of the *same* prompt competing for a judge.
+</Callout>
+
+## Phase lifecycle
+
+Every phase moves through the same state machine. The status values are the literal strings stored in the run's persisted `PhaseState`:
+
+<Steps>
+  <Step>**`pending`** — the phase exists in the DAG but its dependencies have not all completed (or `join: "any"` is waiting for the first dep). No subagent is running.</Step>
+  <Step>**`running`** — dependencies are satisfied and the subagent (or shell command, or sub-flow) is executing. For fan-out phases, `subProgress` tracks `{done, total, running, failed}` live.</Step>
+  <Step>**`done`** — completed successfully. Output is captured into `{steps.<id>.output}` (and `.json` if `output: "json"`). Downstream phases may now start.</Step>
+  <Step>**`failed`** — the subagent returned an error, the `expect` contract was violated, `timeout` expired, or the budget was exceeded. Unless the phase is `optional: true`, the run aborts.</Step>
+  <Step>**`skipped`** — the phase never ran. This happens when (a) `when` evaluated falsy, (b) an upstream `gate` returned `BLOCK`, (c) the run was already aborted, or (d) the budget was exhausted before the phase started.</Step>
+</Steps>
+
+<Callout type="warn">
+  A `gate` `BLOCK` does not `fail` downstream phases — it `skip`s them. The run itself ends with status `blocked`, not `failed`. This distinction matters for resume logic and for the final output you receive.
+</Callout>
+
+### Terminal run states
+
+The run as a whole ends in one of:
+
+| Run status | Meaning |
 |---|---|
-| `agent` | One subagent runs a single task. |
-| `parallel` | Run `branches[]` concurrently. |
-| `map` | Fan out over an array — one subagent per item. |
-| `gate` | Quality/review step that can halt the flow. |
-| `reduce` | Aggregate upstream phase outputs into one. |
-| `approval` | Human-in-the-loop pause. |
-| `flow` | Run a saved or runtime-generated sub-flow. |
-| `loop` | Repeat a task until a condition or cap. |
-| `tournament` | N variants compete; a judge picks best. |
-| `script` | Run a shell command — zero tokens. |
+| `completed` | The final phase reached `done`. |
+| `failed` | A non-`optional` phase reached `failed` and aborted the run. |
+| `blocked` | A `gate` returned `VERDICT: BLOCK` (or `approval` was rejected) — downstream phases were skipped. |
+| `paused` | An `approval` phase is waiting for a human decision. Detached/CI runs auto-reject instead. |
 
-## `agent`
+---
 
-The simplest phase: one subagent, one task.
+## Output formats: `text` vs `json`
 
-```json title="agent-example.json"
+Every phase produces a string `output`. The `output` field controls whether the runtime *also* parses it as JSON:
+
+| `output` | `.output` | `.json` | When to use |
+|---|---|---|---|
+| `"text"` (default) | raw subagent text | `undefined` | Prose, reports, free-form answers. |
+| `"json"` | raw subagent text | parsed JSON | Structured data downstream phases will read via `{steps.X.json}`. |
+
+### How downstream phases consume output
+
+```json title="downstream-consumption.json"
 {
-  "id": "summarize",
-  "type": "agent",
-  "agent": "writer",
-  "task": "Summarize the architecture of src/.",
-  "final": true
-}
-```
-
-## `parallel`
-
-Run several tasks concurrently. Similar to the shorthand `tasks`.
-
-```json title="parallel-example.json"
-{
-  "id": "audit",
-  "type": "parallel",
-  "branches": [
-    { "task": "Audit auth", "agent": "analyst" },
-    { "task": "Audit validation", "agent": "analyst" }
+  "phases": [
+    { "id": "triage", "type": "agent", "output": "json", "task": "Classify the issue. Output JSON {severity,reason}." },
+    {
+      "id": "route",
+      "type": "agent",
+      "dependsOn": ["triage"],
+      "task": "Severity is {steps.triage.json.severity}. Reason: {steps.triage.json.reason}. Draft a response."
+    }
   ]
 }
 ```
 
-## `map`
+<Callout type="tip">
+  Pair `output: "json"` with an `expect` contract so a malformed answer fails the phase *with a precise diagnostic* and becomes eligible for `retry` — rather than silently producing `undefined` JSON downstream.
+</Callout>
 
-Dynamic fan-out. The `over` expression must resolve to an array. One subagent is spawned per item.
+`expect` is a small JSON-Schema-like shape (`{type, properties, required, items, enum}`) and is valid on `agent`, `gate`, `reduce`, and `loop` phases only.
 
-```json title="map-example.json"
+---
+
+## Per-type guide
+
+### `agent` — one subagent, one task
+
+**Purpose.** The default and most common phase. Delegate one piece of work to one subagent and capture its output.
+
+**Inputs.** A `task` prompt (supports interpolation). Optionally an `agent` name, `context` files to pre-read, `model`/`thinking`/`tools` overrides.
+
+**Output.** The subagent's final text (or parsed JSON with `output: "json"`).
+
+**Key behavior.** Defaults to the first discovered agent if `agent` is omitted. Honors `retry`, `timeout`, `expect`, `cache`. This is the only phase type where `task` alone is sufficient.
+
+```json title="agent-basic.json"
+{
+  "id": "summarize",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Summarize the architecture of src/ in two paragraphs.",
+  "final": true
+}
+```
+
+```json title="agent-with-contract.json"
+{
+  "id": "triage",
+  "type": "agent",
+  "output": "json",
+  "task": "Classify severity. Output only JSON.",
+  "expect": {
+    "type": "object",
+    "required": ["severity"],
+    "properties": { "severity": { "enum": ["low", "medium", "high", "critical"] } }
+  },
+  "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+}
+```
+
+### `parallel` — static concurrent branches
+
+**Purpose.** Run several *known* tasks at once inside a single phase, then concatenate their outputs.
+
+**Inputs.** `branches`: an array of `{ task, agent? }`. Optionally `concurrency` to cap fan-out.
+
+**Output.** Concatenation of all branch outputs, in branch order. No automatic synthesis — use a downstream `reduce` if you need a single merged answer.
+
+**Key behavior.** The phase-level `context` array is read **once** and shared across every branch. Per-branch `agent` overrides the phase agent.
+
+<Callout type="warn">
+  `parallel` is for when you know the branches at authoring time. If the list comes from a prior phase's output, you want `map` — `parallel` cannot fan out over a runtime array.
+</Callout>
+
+```json title="parallel-audit.json"
+{
+  "id": "audit",
+  "type": "parallel",
+  "context": ["src/api/**/*.ts"],
+  "branches": [
+    { "task": "Find missing auth checks", "agent": "analyst" },
+    { "task": "Find missing rate limits", "agent": "analyst" },
+    { "task": "Find missing input validation", "agent": "analyst" }
+  ],
+  "concurrency": 3
+}
+```
+
+### `map` — dynamic fan-out over an array
+
+**Purpose.** Spawn one subagent per item in an array discovered at runtime — the count is not known when you write the flow.
+
+**Inputs.** `over`: an interpolation expression that resolves to an array (e.g. `{steps.discover.json}`). `task` (the per-item prompt). `as`: the loop variable name (default `"item"`).
+
+**Output.** Concatenation of per-item outputs, in input order.
+
+**Key behavior.** The `over` value is interpolated, then parsed as JSON if needed. If it resolves to an object, the runtime auto-detects common collection keys (`items`, `results`, `list`, `data`, `findings`). Use `{item.field}` inside `task` to address the current element. `concurrency` throttles fan-out.
+
+```json title="map-files.json"
 {
   "id": "summarize",
   "type": "map",
   "over": "{steps.discover.json}",
-  "as": "item",
+  "as": "file",
   "agent": "scout",
-  "task": "Read {item.file} and summarize."
+  "task": "Read {file.path} and give a one-sentence summary.",
+  "concurrency": 8
 }
 ```
 
-Use `concurrency` to throttle parallelism.
+<Callout type="info">
+  `over` must be a **string interpolation ref**, never a literal array. To fan out over a fixed list, emit it from an upstream phase and reference that phase's `.json`.
+</Callout>
 
-## `gate`
+### `gate` — quality checkpoint that can halt
 
-A quality gate reviews upstream output and can block downstream work.
+**Purpose.** A review step that inspects upstream output and decides whether the flow may continue.
 
-```json title="gate-example.json"
+**Inputs.** `task` (the review prompt) — or `score` for a zero-token deterministic scorer with optional LLM-judge fallback. The gate `dependsOn` the phases whose output it reviews.
+
+**Output.** The gate's reasoning text; the verdict is parsed from a trailing `VERDICT: PASS` / `VERDICT: BLOCK` line (or returned as JSON `{"winner": ...}` style).
+
+**Key behavior.** On `VERDICT: BLOCK`, downstream phases are `skipped` and the run ends `blocked`. **Ambiguous output fails open** (treated as `PASS`) — a gate never accidentally halts the flow. `onBlock: "retry"` re-runs upstream phases then re-evaluates the gate (bounded by `retry.max`). `eval` runs zero-token condition checks before the LLM gate; if all pass, the gate is skipped entirely.
+
+```json title="gate-review.json"
 {
   "id": "verify",
   "type": "gate",
   "agent": "reviewer",
   "dependsOn": ["fix"],
-  "task": "Review the diff. End with VERDICT: PASS or BLOCK."
+  "task": "Review the diff. End with VERDICT: PASS or VERDICT: BLOCK.",
+  "onBlock": "retry",
+  "retry": { "max": 2 }
 }
 ```
 
-On `VERDICT: BLOCK`, downstream phases skip and the run ends as `blocked`. Ambiguous output fails open (treated as PASS).
+<Callout type="warn">
+  Gates are **never cached cross-run** — they must produce a fresh verdict every run. `cache.scope: "cross-run"` is rejected on `gate`, `approval`, `loop`, `tournament`, and `script`.
+</Callout>
 
-## `reduce`
+### `reduce` — aggregate upstream outputs
 
-Aggregate outputs from upstream phases into one final summary.
+**Purpose.** Take several upstream phase outputs and synthesize them into a single result via one subagent call.
 
-```json title="reduce-example.json"
+**Inputs.** `from`: an array of phase ids whose outputs to aggregate. `task`: the synthesis prompt (typically interpolates `{steps.X.output}` for each `from` phase).
+
+**Output.** The synthesizer's single merged answer.
+
+**Key behavior.** Unlike `parallel` (which just concatenates), `reduce` runs an LLM to merge. Use `parallel` + `reduce` together when you want concurrent exploration followed by a single synthesis.
+
+```json title="reduce-report.json"
 {
   "id": "report",
   "type": "reduce",
-  "from": ["summarize"],
+  "from": ["summarize", "audit", "triage"],
   "agent": "writer",
-  "task": "Combine into one report:\n{steps.summarize.output}"
+  "task": "Combine these findings into one report:\n{steps.summarize.output}\n{steps.audit.output}\n{steps.triage.output}",
+  "final": true
 }
 ```
 
-## `approval`
+### `approval` — human-in-the-loop pause
 
-Pause for a human decision.
+**Purpose.** Pause the flow for a human decision before continuing.
 
-```json title="approval-example.json"
+**Inputs.** `task` describing what to review. `dependsOn` the phase(s) whose output needs sign-off.
+
+**Output.** The reviewer's decision: **approve** (continue), **reject** (halt → run ends `blocked`), or **edit** (the typed note becomes the phase output).
+
+**Key behavior.** No subagent runs — zero tokens. Detached/CI runs auto-reject so a background flow never hangs waiting for a human. `timeout` and `retry` are **not supported** on `approval`.
+
+```json title="approval-ship.json"
 {
   "id": "approve",
   "type": "approval",
@@ -115,28 +266,26 @@ Pause for a human decision.
 }
 ```
 
-- **Approve** → continue.
-- **Reject** → halt.
-- **Edit** → typed note becomes the phase output.
+### `flow` — run a sub-workflow as one phase
 
-Detached/CI runs auto-reject.
+**Purpose.** Compose flows: run a saved taskflow (or an inline definition) as a single node, returning only its final output.
 
-## `flow`
+**Inputs.** Either `use` (a saved flow name) **or** `def` (an inline definition — a string is interpolated then JSON-parsed; an object is used directly). Mutually exclusive. `with` passes args to the sub-flow.
 
-Run a sub-flow as one phase.
+**Output.** The sub-flow's `final` phase output.
 
-```json title="flow-saved-example.json"
+**Key behavior.** A `def` sub-flow is validated and verified before execution; on any failure the phase **fails open** (records `defError`) without aborting the run. Dynamic nesting is capped (`MAX_DYNAMIC_NESTING = 5`) to prevent runaway LLM-generated sub-flows. `timeout` is not supported.
+
+```json title="flow-saved.json"
 {
-  "id": "sub",
+  "id": "research",
   "type": "flow",
   "use": "deep-research",
   "with": { "topic": "{args.topic}" }
 }
 ```
 
-Or generate it at runtime:
-
-```json title="flow-runtime-example.json"
+```json title="flow-runtime.json"
 {
   "id": "execute",
   "type": "flow",
@@ -145,11 +294,21 @@ Or generate it at runtime:
 }
 ```
 
-## `loop`
+<Callout type="info">
+  Runtime-generated (`flow { def }`) sub-flows are treated as **untrusted**: `script` phases, `code-compiles`/`regex` scorers, and reserved `cwd` keywords are rejected in them. Only author-written flows may use those.
+</Callout>
 
-Iterate until done, convergence, or `maxIterations`.
+### `loop` — iterate until done
 
-```json title="loop-example.json"
+**Purpose.** Repeat a task body until a stop condition is met, the output converges, or a hard iteration cap is reached.
+
+**Inputs.** `task` (the iteration body), `until` (a condition expression evaluated after each iteration). Optional `maxIterations` (default 10, hard max 100), `convergence` (default `true` — stop early on a fixed point), `reflexion` (inject a failure summary into the next iteration).
+
+**Output.** The final iteration's output. The current iteration is exposed as `{steps.<thisId>.output}` / `.json` so `until` can inspect it.
+
+**Key behavior.** A `until` **parse error stops the loop** (fail-safe, never spins forever). `convergence: true` stops early if an iteration's output is byte-identical to the previous one. With `reflexion: true`, body failures become feedback for the next iteration instead of terminating the loop; if `maxIterations` exhausts with the last iteration failed, the phase fails.
+
+```json title="loop-refine.json"
 {
   "id": "refine",
   "type": "loop",
@@ -161,26 +320,38 @@ Iterate until done, convergence, or `maxIterations`.
 }
 ```
 
-## `tournament`
+### `tournament` — N variants compete
 
-Spawn variants and let a judge pick the best.
+**Purpose.** Spawn `N` variants of the same prompt, then let a judge pick the best (or synthesize an aggregate).
 
-```json title="tournament-example.json"
+**Inputs.** `task` (the competitor prompt) **or** `branches` (explicit variant tasks). `variants` (default 3, max 20) — ignored when `branches` is given. `judge` (judge prompt), `judgeAgent`, `mode` (`"best"` or `"aggregate"`).
+
+**Output.** In `mode: "best"`: the winning variant verbatim. In `mode: "aggregate"`: the judge's synthesized answer.
+
+**Key behavior.** The judge receives the numbered variant outputs and must end with `WINNER: <n>` or return JSON `{"winner": <n>`. **Unparseable winner fails open** to variant 1 — work is never lost. With `branches`, you need at least 2 competitors.
+
+```json title="tournament-headline.json"
 {
   "id": "headline",
   "type": "tournament",
-  "task": "Write a punchy headline.",
+  "task": "Write a punchy headline for: {args.topic}",
   "variants": 4,
-  "judge": "Pick the strongest hook.",
+  "judge": "Pick the strongest hook. End with WINNER: <n>.",
   "mode": "best"
 }
 ```
 
-## `script`
+### `script` — zero-token shell command
 
-Run a shell command. Zero tokens.
+**Purpose.** Run a shell command with no LLM. Use it for builds, tests, file transforms, or any deterministic step that shouldn't spend tokens.
 
-```json title="script-example.json"
+**Inputs.** `run`: the command. String form is passed to the shell (**no interpolation** — use array form or `input` for dynamic values). Array form is `execvp`-style direct spawn and supports interpolation safely. Optional `input` (piped to stdin, supports interpolation), `timeout` (default 60000, max 300000).
+
+**Output.** The command's stdout.
+
+**Key behavior.** `retry`, `output: "json"`, and `expect` are **not supported**. `timeout` must be between 1000 and 300000 ms. A string `run` containing `{...}` placeholders is rejected — use the array form to pass dynamic values without injection risk.
+
+```json title="script-build.json"
 {
   "id": "build",
   "type": "script",
@@ -189,13 +360,54 @@ Run a shell command. Zero tokens.
 }
 ```
 
+```json title="script-with-input.json"
+{
+  "id": "format",
+  "type": "script",
+  "run": ["prettier", "--stdin-filepath", "out.md"],
+  "input": "{steps.draft.output}",
+  "dependsOn": ["draft"]
+}
+```
+
+---
+
+## Common anti-patterns
+
+<Callout type="warn">
+  These are the mistakes the validator catches — or worse, that silently do the wrong thing.
+</Callout>
+
+| Anti-pattern | Why it breaks | What to do instead |
+|---|---|---|
+| **Referencing `{steps.X.output}` without `dependsOn: ["X"]`** | The phase runs in parallel with `X` and the model sees the literal placeholder string. | Add `X` to `dependsOn` (the validator fails fast on this with a precise message). |
+| **Using `parallel` when the branch list is runtime-discovered** | `parallel` branches are static; you can't fan out over `{steps.discover.json}`. | Use `map` with `over`. |
+| **Expecting `parallel` to synthesize** | `parallel` only concatenates; there's no merge agent. | Add a downstream `reduce` phase with `from: ["the-parallel-phase"]`. |
+| **Passing a literal array to `map.over`** | `over` must be a string interpolation ref, not an array. | Emit the list from an upstream `agent` phase with `output: "json"`, then reference `{steps.that.json}`. |
+| **Caching a `gate` cross-run** | A gate must produce a fresh verdict every run. | Leave `gate` at the default `run-only` scope (the validator rejects `cross-run` on gates). |
+| **Setting `idempotent: false` on an `approval` or `flow`** | Those phases run no subagent and are already excluded from cross-run cache — the flag is a no-op. | Omit `idempotent` on those types (the validator warns). |
+| **Using a string `script.run` with `{...}` placeholders** | String-form `run` is not interpolated (injection-safe), so the placeholder leaks literally into the shell. | Use the array form, or pipe the dynamic value through `input`. |
+| **Relying on a `gate` `BLOCK` to `fail` downstream** | `BLOCK` `skip`s downstream and ends the run `blocked`, not `failed`. | If you need a hard failure, raise it upstream or mark the gate phase itself `optional: false` and let its own failure abort. |
+| **Marking more than one phase `final: true`** | Only one phase may be the workflow result. | Pick one; if none is marked, the last phase becomes final automatically. |
+| **Forgetting `output: "json"` when using `expect`** | The contract validates *parsed* JSON; without `output: "json"` there's nothing to parse. | Always pair `expect` with `output: "json"`. |
+
+<Callout type="tip">
+  Run `/tf verify` before executing a flow. It performs zero-token structural analysis — cycle detection, unreachable phases, dead-ends, missing `dependsOn` for `{steps.X}` refs, and contract shape checks — so most anti-patterns above are caught before any tokens are spent.
+</Callout>
+
 ## Next
 
 <Cards>
-  <Card title="Flow Definition" href="/en/docs/syntax/flow-definition">
-    Top-level fields.
-  </Card>
   <Card title="Phase Types Reference" href="/en/docs/syntax/phase-types">
-    Exhaustive per-type reference.
+    Exhaustive per-type field reference.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    `dependsOn`, `join`, `when`, `retry`, `timeout` — the DAG wiring.
+  </Card>
+  <Card title="Interpolation" href="/en/docs/concepts/interpolation">
+    `{steps.X.output}`, `{args.X}`, `{item.field}` — how phases talk to each other.
+  </Card>
+  <Card title="The DAG Model" href="/en/docs/concepts/dag">
+    How phases compose into a graph and execute in topological order.
   </Card>
 </Cards>
