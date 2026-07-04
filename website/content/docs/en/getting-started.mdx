@@ -1,158 +1,216 @@
 ---
 title: Getting Started
-description: Run your first taskflow on Pi or Codex.
+description: Run your first taskflow in under five minutes.
 ---
 
 # Getting Started
 
-<Callout type="info">
-  taskflow runs on [Pi](https://pi.dev) and [OpenAI Codex](https://github.com/openai/codex). Pick your host below.
-</Callout>
+taskflow lets you describe multi-step agent work as a declarative graph. Instead of writing a script that calls subagents one by one, you declare the nodes and edges — and the runtime handles fan-out, retries, caching, and resume.
 
-## Install
+The fastest way to see it is to run something.
+
+## A minimal taskflow
+
+Save this as `hello.json`:
+
+```json title="hello.json"
+{
+  "name": "hello",
+  "phases": [
+    {
+      "id": "greet",
+      "type": "agent",
+      "task": "Write a one-sentence welcome message for a taskflow user."
+    }
+  ]
+}
+```
+
+Then run it.
 
 <Tabs groupId="host" items={['Pi', 'Codex']}>
   <Tab value="Pi">
-    ```bash
+    ```bash title="Run on Pi"
+    /tf run hello
+    ```
+  </Tab>
+  <Tab value="Codex">
+    ```bash title="Run on Codex"
+    taskflow_run { "name": "hello", "def": { "name": "hello", "phases": [{ "id": "greet", "type": "agent", "task": "Write a one-sentence welcome message for a taskflow user." }] } }
+    ```
+  </Tab>
+</Tabs>
+
+You should see the runtime execute one phase and return the final output. That is a taskflow: a named graph with one phase.
+
+## Install
+
+If you have not installed taskflow yet, pick your host:
+
+<Tabs groupId="host" items={['Pi', 'Codex']}>
+  <Tab value="Pi">
+    ```bash title="Install pi-taskflow"
     pi install npm:pi-taskflow
     ```
   </Tab>
   <Tab value="Codex">
-    ```bash
+    ```bash title="Install Codex plugin"
     codex plugin marketplace add heggria/taskflow
     codex plugin add taskflow@taskflow
     ```
   </Tab>
 </Tabs>
 
-## Run your first flow
+## A real example: review changed files
 
-<Steps>
-  <Step>
-    ### Describe the work
+A single agent call is fine for greetings. taskflow becomes useful when the work has several dependent steps. Imagine you want to:
 
-    In a Pi or Codex session, just say what you want:
+1. List the files changed in a PR.
+2. Review each changed file for security risks.
+3. Combine the individual reviews into one summary.
 
-    > Run a chain: first explore the auth flow, then summarize the findings.
-  </Step>
-  <Step>
-    ### Watch the runtime
+Here is the flow:
 
-    The model calls the `taskflow` tool automatically. You get live progress, per-step timing, token cost, and a saved run record.
-  </Step>
-  <Step>
-    ### Save it
-
-    Say **"save it"** and you have `/tf:<name>` forever.
-  </Step>
-</Steps>
-
-## Optional Pi setup
-
-Run `/tf init` once to map the 18 built-in agents' model roles (`fast`, `strong`, `thinker`, …) to your own models. Skip it and agents just use Pi's default model.
-
-## The shorthand
-
-You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. taskflow speaks the same shape:
-
-<Tabs items={['task', 'tasks', 'chain']}>
-  <Tab value="task">
-    ```json
-    {
-      "task": "Summarize the architecture of src/",
-      "agent": "explorer"
-    }
-    ```
-  </Tab>
-  <Tab value="tasks">
-    ```json
-    {
-      "tasks": [
-        { "task": "Audit auth in src/api", "agent": "analyst" },
-        { "task": "Audit input validation in src/api", "agent": "analyst" }
-      ]
-    }
-    ```
-  </Tab>
-  <Tab value="chain">
-    ```json
-    {
-      "chain": [
-        { "task": "List the public API of src/lib", "agent": "scout" },
-        { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
-      ]
-    }
-    ```
-  </Tab>
-</Tabs>
-
-`agent` is optional (defaults to the first discovered agent). Add a `name` to label the run and unlock saving it as a command.
-
-## Go declarative
-
-When you outgrow the shorthand, the full DSL gives you a real DAG:
-
-```json title="summarize-files.json"
+```json title="review-changes.json"
 {
-  "name": "summarize-files",
-  "description": "Discover files, summarize each, produce one report",
-  "args": { "dir": { "default": "." } },
-  "concurrency": 8,
+  "name": "review-changes",
+  "description": "Review changed files and return a single risk summary.",
+  "args": {
+    "dir": { "default": "." }
+  },
+  "concurrency": 4,
   "phases": [
     {
       "id": "discover",
       "type": "agent",
       "agent": "scout",
-      "task": "List source files under {args.dir} (non-recursive).\nOutput ONLY a JSON array [{\"file\":\"\"}]. No prose.",
+      "task": "List the source files under {args.dir} that have been changed recently. Output ONLY a JSON array of objects with a 'path' field. No prose.",
       "output": "json"
     },
     {
-      "id": "summarize",
+      "id": "review-each",
       "type": "map",
       "over": "{steps.discover.json}",
-      "as": "item",
-      "agent": "scout",
-      "task": "Read {item.file} and give a one-sentence summary.",
-      "dependsOn": ["discover"]
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks. Return one paragraph of findings or 'No issues found.'.",
+      "dependsOn": ["discover"],
+      "concurrency": 4
     },
     {
-      "id": "report",
+      "id": "summarize",
       "type": "reduce",
-      "from": ["summarize"],
+      "from": ["review-each"],
       "agent": "writer",
-      "task": "Combine into a short overview:\n{steps.summarize.output}",
-      "dependsOn": ["summarize"],
+      "task": "Combine the following per-file reviews into a single prioritized risk summary:\n{steps.review-each.output}",
+      "dependsOn": ["review-each"],
       "final": true
     }
   ]
 }
 ```
 
-How it runs:
+Run it:
 
-1. `discover` lists files and emits JSON.
-2. `summarize` fans out one subagent per file, throttled to 8 concurrent.
-3. `report` merges every summary into one clean overview.
-
-Only the report reaches your context.
-
-## Verify before running
-
-For any non-trivial flow, verify it first:
-
-```bash
-/tf verify <name>
+```bash title="Run the review flow"
+/tf run review-changes dir=src
 ```
 
-This catches cycles, missing deps, undefined refs, and contract typos — zero tokens.
+### What just happened?
+
+<Steps>
+  <Step>
+    **`discover` ran first.** It asked a scout agent to list changed files and return JSON.
+  </Step>
+  <Step>
+    **`review-each` fanned out.** For every file returned by `discover`, a separate security reviewer inspected the file. Up to four ran at once because of `concurrency: 4`.
+  </Step>
+  <Step>
+    **`summarize` merged the results.** A writer agent took all the individual reviews and produced one clean summary. Because it is marked `final: true`, only this summary returns to your conversation.
+  </Step>
+</Steps>
+
+The intermediate transcripts stay inside the runtime. Your context window only receives the final summary.
+
+## Three ways to write the same thing
+
+For small tasks you do not need a full DAG. taskflow accepts three shorthand shapes that the runtime expands into full flows.
+
+### One task
+
+```json title="single-task.json"
+{
+  "task": "Summarize the architecture of src/",
+  "agent": "explorer"
+}
+```
+
+Best for: one-off delegations.
+
+### Parallel tasks
+
+```json title="parallel-tasks.json"
+{
+  "tasks": [
+    { "task": "Audit auth in src/api", "agent": "analyst" },
+    { "task": "Audit validation in src/api", "agent": "analyst" }
+  ]
+}
+```
+
+Best for: a fixed list of things you want checked at the same time.
+
+### Sequential chain
+
+```json title="chain-tasks.json"
+{
+  "chain": [
+    { "task": "List the public API of src/lib", "agent": "scout" },
+    { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
+  ]
+}
+```
+
+Best for: steps where each step needs the previous step's output. `{previous.output}` is the immediately preceding result.
+
+<Callout type="tip">
+  Shorthand is great for experimentation. Move to the full `phases` DAG when you need conditional routing, loops, gates, caching, or cross-session resume.
+</Callout>
+
+## Verify before you spend tokens
+
+A full DAG can be checked statically before any agent runs:
+
+```bash title="Verify a saved flow"
+/tf verify review-changes
+```
+
+This catches cycles, missing `dependsOn`, unknown phase refs, malformed cache configs, and other structural problems at zero cost.
+
+## Save it for later
+
+After you run a flow and like it, say:
+
+```bash title="Save the flow"
+/tf save review-changes
+```
+
+From then on you can run it by name:
+
+```bash title="Run a saved flow"
+/tf:review-changes dir=src
+```
 
 ## Next steps
 
 <Cards>
+  <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
+    Why a declarative graph beats an imperative script.
+  </Card>
   <Card title="Core Concepts" href="/en/docs/concepts">
-    Understand the DAG model.
+    Understand the DAG model and the ten phase types.
   </Card>
   <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
-    Full DSL reference.
+    Full reference for flow definitions and phase fields.
   </Card>
 </Cards>
