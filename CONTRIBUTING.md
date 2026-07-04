@@ -35,7 +35,7 @@ I review issues and PRs ~weekly. If you need a faster turnaround, mention why in
 
 ## Architecture
 
-See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of six published packages:
+See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of seven published packages:
 
 | Package / directory | What |
 |---------------------|------|

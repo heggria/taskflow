@@ -1,0 +1,60 @@
+{
+  "name": "taskflow-hosts",
+  "version": "0.1.5",
+  "description": "Shared host-runner collection for taskflow — the codex, claude, and opencode SubagentRunner implementations + their argv builders and event-stream parsers. The per-host MCP servers, plugin scaffolds, and bins live in codex-taskflow / claude-taskflow / opencode-taskflow; this package holds just the runners so a new host can be added in one place.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./codex": {
+      "development": "./src/codex-runner.ts",
+      "types": "./dist/codex-runner.d.ts",
+      "default": "./dist/codex-runner.js"
+    },
+    "./claude": {
+      "development": "./src/claude-runner.ts",
+      "types": "./dist/claude-runner.d.ts",
+      "default": "./dist/claude-runner.js"
+    },
+    "./opencode": {
+      "development": "./src/opencode-runner.ts",
+      "types": "./dist/opencode-runner.d.ts",
+      "default": "./dist/opencode-runner.js"
+    },
+    "./*": {
+      "development": "./src/*.ts",
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "taskflow-core": "0.1.5"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  },
+  "keywords": [
+    "taskflow",
+    "subagent",
+    "codex",
+    "claude",
+    "opencode",
+    "orchestration"
+  ],
+  "license": "MIT"
+}

@@ -19,7 +19,7 @@
     "build:skills": "node scripts/build-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",
-    "test:core": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-core/test/*.test.ts'",
+    "test:hosts": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-hosts/test/*.test.ts'",
     "test:pi": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/pi-taskflow/test/*.test.ts'",
     "test:codex": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/codex-taskflow/test/*.test.ts'",
     "test:claude": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/claude-taskflow/test/*.test.ts'",

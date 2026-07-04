@@ -26,8 +26,20 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "main": "./dist/codex-runner.js",
-  "types": "./dist/codex-runner.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp/server": {
+      "development": "./src/mcp/server.ts",
+      "types": "./dist/mcp/server.d.ts",
+      "default": "./dist/mcp/server.js"
+    }
+  },
   "bin": {
     "codex-taskflow-mcp": "./dist/mcp/bin.js"
   },
@@ -43,6 +55,7 @@
   },
   "dependencies": {
     "taskflow-core": "0.1.5",
+    "taskflow-hosts": "0.1.5",
     "taskflow-mcp": "0.1.5"
   }
 }

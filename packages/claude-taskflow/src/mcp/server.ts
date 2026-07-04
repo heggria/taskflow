@@ -13,7 +13,7 @@ import {
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp/server";
 import type { RpcHandler } from "taskflow-mcp/jsonrpc";
-import { claudeSubagentRunner } from "../claude-runner.ts";
+import { claudeSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with claude subagent execution bound in. */
 export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {

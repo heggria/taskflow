@@ -865,23 +865,24 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 
 ## Development
 
-`taskflow` is a pnpm-workspace monorepo of six published packages:
+`taskflow` is a pnpm-workspace monorepo of seven published packages:
 
 | Package | Role |
 |---------|------|
 | [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine (zero host-SDK deps; only `typebox`) — runtime, DSL, cache, verify |
 | [`taskflow-mcp`](./packages/taskflow-mcp) | Host-neutral MCP server (stdio JSON-RPC + `taskflow_*` tools + DAG renderer); depends on core |
+| [`taskflow-hosts`](./packages/taskflow-hosts) | Shared host-runner collection — the codex/claude/opencode `SubagentRunner` impls + their argv builders + event-stream parsers; depends on core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi extension adapter — `taskflow` tool + `/tf` commands (what `pi install npm:pi-taskflow` gives you) |
-| [`codex-taskflow`](./packages/codex-taskflow) | Codex subagent runner + MCP bin, plus the [Codex plugin](./packages/codex-taskflow/plugin) ([guide](./docs/codex-mcp.md)) |
-| [`claude-taskflow`](./packages/claude-taskflow) | Claude Code subagent runner + MCP bin, plus the [Claude Code plugin](./packages/claude-taskflow/plugin) ([guide](./docs/claude-mcp.md)) |
-| [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode subagent runner + MCP bin, plus the [OpenCode config scaffold](./packages/opencode-taskflow/plugin) ([guide](./docs/opencode-mcp.md)) |
+| [`codex-taskflow`](./packages/codex-taskflow) | Codex MCP server + bin + [Codex plugin](./packages/codex-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/codex-mcp.md)) |
+| [`claude-taskflow`](./packages/claude-taskflow) | Claude Code MCP server + bin + [Claude Code plugin](./packages/claude-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/claude-mcp.md)) |
+| [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode MCP server + bin + [OpenCode config scaffold](./packages/opencode-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/opencode-mcp.md)) |
 
 ```bash
 pnpm install
 pnpm run typecheck     # tsc --noEmit across all packages (no build needed)
 pnpm test              # unit tests — no network, no process spawning
 pnpm run test:core     # engine tests only  (also: test:pi, test:codex, test:claude, test:opencode)
-pnpm run build         # emit dist/*.js + .d.ts for all six packages
+pnpm run build         # emit dist/*.js + .d.ts for all seven packages
 pnpm run test:e2e-codex      # codex executor e2e (needs `codex` + model access)
 pnpm run test:e2e-codex-mcp  # codex MCP server e2e
 ```

@@ -27,7 +27,17 @@ bug waiting to happen (the original 3-way copy-paste already diverged on
 
 ---
 
-## Decision A — one npm package per host adapter (current), with a migration path
+## Decision A — taskflow-hosts: a shared host-runner package (DONE)
+
+### Status
+**Implemented.** The three host runners (codex / claude / opencode) now live
+in a single `taskflow-hosts` package. The three legacy delivery packages
+(`codex-taskflow` / `claude-taskflow` / `opencode-taskflow`) keep their npm
+names, install paths, version pins, and plugin scaffolds, and import their
+runner from `taskflow-hosts`; each also re-exports the runner so its existing
+public surface (`import ... from "codex-taskflow"`) is unchanged. A 4th host
+now lands as one `<host>-runner.ts` in `taskflow-hosts`, not a whole new
+runner-owning package.
 
 ### Context
 codex-taskflow, claude-taskflow, and opencode-taskflow are each published as a
@@ -78,10 +88,8 @@ taskflow-hosts
   commands users already have.
 
 ### Trigger to act
-Open the `taskflow-hosts` package when adding the **4th MCP host** (i.e. the
-1st host beyond codex/claude/opencode). Until then the current 3-package cost
-is acceptable and renaming/merging them would break existing installs for no
-gain.
+✅ Done at 3 hosts (the moment adoption is lowest, so the migration is
+cheapest). `taskflow-hosts` now exists; future hosts go here.
 
 ### What we explicitly reject
 - **A unified `HostConfig` interface / generic command-builder.** Each host's

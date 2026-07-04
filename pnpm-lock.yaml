@@ -35,6 +35,9 @@ importers:
       taskflow-core:
         specifier: 0.1.5
         version: link:../taskflow-core
+      taskflow-hosts:
+        specifier: 0.1.5
+        version: link:../taskflow-hosts
       taskflow-mcp:
         specifier: 0.1.5
         version: link:../taskflow-mcp
@@ -44,6 +47,9 @@ importers:
       taskflow-core:
         specifier: 0.1.5
         version: link:../taskflow-core
+      taskflow-hosts:
+        specifier: 0.1.5
+        version: link:../taskflow-hosts
       taskflow-mcp:
         specifier: 0.1.5
         version: link:../taskflow-mcp
@@ -53,6 +59,9 @@ importers:
       taskflow-core:
         specifier: 0.1.5
         version: link:../taskflow-core
+      taskflow-hosts:
+        specifier: 0.1.5
+        version: link:../taskflow-hosts
       taskflow-mcp:
         specifier: 0.1.5
         version: link:../taskflow-mcp
@@ -83,6 +92,16 @@ importers:
       typebox:
         specifier: '*'
         version: 1.3.3
+
+  packages/taskflow-hosts:
+    dependencies:
+      taskflow-core:
+        specifier: 0.1.5
+        version: link:../taskflow-core
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
 
   packages/taskflow-mcp:
     dependencies:
