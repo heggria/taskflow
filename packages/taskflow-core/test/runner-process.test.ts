@@ -142,3 +142,53 @@ test("unknownAgentResult: lists available agents + classifies as error", () => {
 test("DEFAULT_IDLE_TIMEOUT_MS is 5 minutes", () => {
 	assert.equal(DEFAULT_IDLE_TIMEOUT_MS, 5 * 60_000);
 });
+
+test("runSubagentProcess: PI_TASKFLOW_RUN_LOG emits a structured header to STDERR only (never stdout)", async () => {
+	// The header is an operator diagnostic. MCP stdio reserves stdout for
+	// JSON-RPC, so the header MUST go to stderr only. Default is off; the env
+	// flag turns it on. We capture both streams to pin this.
+	const prev = process.env.PI_TASKFLOW_RUN_LOG;
+	const stderrChunks: string[] = [];
+	const origStderrWrite = process.stderr.write.bind(process.stderr);
+	const origStdoutWrite = process.stdout.write.bind(process.stdout);
+	const stdoutChunks: string[] = [];
+	try {
+		process.env.PI_TASKFLOW_RUN_LOG = "1";
+		process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+		process.stdout.write = ((chunk: any) => { stdoutChunks.push(String(chunk)); return true; }) as any;
+		await runSubagentProcess({
+			agent: "executor", task: "t", model: "gpt-5.5",
+			bin: "node", args: ["-e", `process.stdout.write("ok\\n");`], cwd: process.cwd(),
+			acc: makeAcc(), foldLine,
+		});
+	} finally {
+		process.stderr.write = origStderrWrite;
+		process.stdout.write = origStdoutWrite;
+		if (prev === undefined) delete process.env.PI_TASKFLOW_RUN_LOG;
+		else process.env.PI_TASKFLOW_RUN_LOG = prev;
+	}
+	const hostStderr = stderrChunks.join("");
+	assert.match(hostStderr, /^\[taskflow:run\] agent=executor bin=node/, "structured header on stderr");
+	assert.match(hostStderr, /model=gpt-5\.5/, "header includes the model");
+	assert.equal(stdoutChunks.some((c) => c.includes("[taskflow:run]")), false, "header must NEVER touch stdout (MCP JSON-RPC channel)");
+});
+
+test("runSubagentProcess: no PI_TASKFLOW_RUN_LOG → no header written (default-off)", async () => {
+	const prev = process.env.PI_TASKFLOW_RUN_LOG;
+	const stderrChunks: string[] = [];
+	const origStderrWrite = process.stderr.write.bind(process.stderr);
+	try {
+		delete process.env.PI_TASKFLOW_RUN_LOG;
+		process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
+		await runSubagentProcess({
+			agent: "executor", task: "t", model: undefined,
+			bin: "node", args: ["-e", `process.stdout.write("ok\\n");`], cwd: process.cwd(),
+			acc: makeAcc(), foldLine,
+		});
+	} finally {
+		process.stderr.write = origStderrWrite;
+		if (prev === undefined) delete process.env.PI_TASKFLOW_RUN_LOG;
+		else process.env.PI_TASKFLOW_RUN_LOG = prev;
+	}
+	assert.equal(stderrChunks.some((c) => c.includes("[taskflow:run]")), false, "default-off: no header");
+});

@@ -344,6 +344,21 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	let killedBySignal: string | undefined;
 	const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
 
+	// Structured run-log header, opt-in via PI_TASKFLOW_RUN_LOG. Written to the
+	// HOST process's stderr (the MCP stdio log channel; pi's subagent diagnostic
+	// stream) — never to stdout (stdout is JSON-RPC for MCP). One line per spawn
+	// so an operator tailing stderr can see which agent/bin produced the
+	// following child output. Default-off to avoid surprising users who capture
+	// stderr; set PI_TASKFLOW_RUN_LOG=1 to enable.
+	if (process.env.PI_TASKFLOW_RUN_LOG) {
+		const flag = String(process.env.PI_TASKFLOW_RUN_LOG).toLowerCase();
+		if (flag && flag !== "0" && flag !== "false") {
+			process.stderr.write(
+				`[taskflow:run] agent=${agent} bin=${bin} model=${model ?? "-"} args=${JSON.stringify(args)}\n`,
+			);
+		}
+	}
+
 	const exitCode = await new Promise<number>((resolve) => {
 		const proc = spawn(bin, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env });
 		if (proc.pid) activeChildren.add(proc.pid);
