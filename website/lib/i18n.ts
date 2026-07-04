@@ -4,6 +4,7 @@ import { defineI18nUI } from 'fumadocs-ui/i18n';
 const coreI18n = defineI18n({
   languages: ['en', 'zh-cn'],
   defaultLanguage: 'en',
+  parser: 'dir',
 });
 
 export const i18n = defineI18nUI(coreI18n, {
