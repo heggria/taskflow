@@ -39,6 +39,8 @@ jobs:
 
       - name: Build
         run: npm run build -w taskflow-website
+        env:
+          TASKFLOW_BASE_PATH: /taskflow
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

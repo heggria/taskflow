@@ -3,8 +3,6 @@ title: Context Isolation
 description: Why only the final phase reaches your conversation.
 ---
 
-# Context Isolation
-
 Imagine a typical multi-step agent job: explore the codebase, audit twenty files, summarize the findings, draft a patch, review the patch. With raw subagents, each step hands its full transcript back to you. If every step produces four thousand tokens of reasoning, tool calls, and file dumps, your context window grows by twenty thousand tokens before you ever see a result. Repeat the workflow a few times and you hit the limit, lose earlier context, or pay to re-read the same files.
 
 taskflow exists to make that scaling problem disappear.

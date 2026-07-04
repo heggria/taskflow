@@ -3,8 +3,6 @@ title: Control Flow
 description: Conditional routing, joins, retries, and self-healing gates.
 ---
 
-# Control Flow
-
 A taskflow DAG is static topology — edges are fixed at definition time. But real workflows need *dynamic* behavior: skip a phase when severity is low, route to a fallback when the first attempt fails, retry a flaky model, or rework output that fails a quality gate. The fields on this page add that dynamic layer on top of the topology.
 
 <Callout type="info">

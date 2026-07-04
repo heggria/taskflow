@@ -3,8 +3,6 @@ title: Phase Types
 description: The ten building blocks of a taskflow, and how to choose between them.
 ---
 
-# Phase Types
-
 A **phase** is one unit of work in a taskflow. Each phase runs as an isolated subagent call, shell command, or control decision, and the runtime wires them into a DAG via `dependsOn`.
 
 The best way to understand the ten phase types is to watch a single problem evolve. Imagine you are building a tool that reviews a pull request.

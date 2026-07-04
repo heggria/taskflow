@@ -21,3 +21,6 @@ dist
 
 # OS
 .DS_Store
+
+# Visual review artifacts
+.visual-review/

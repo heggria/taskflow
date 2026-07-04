@@ -143,7 +143,14 @@ export default async function HomePage({
   ] as const;
 
   return (
-    <HomeLayout i18n githubUrl="https://github.com/heggria/taskflow">
+    <HomeLayout
+      i18n
+      githubUrl="https://github.com/heggria/taskflow"
+      nav={{
+        title: 'taskflow',
+        url: `/${lang}`,
+      }}
+    >
       <div className="relative overflow-hidden">
         <div className="bg-hero-glow absolute inset-x-0 top-0 h-[600px]" />
         <div className="bg-grid absolute inset-0 opacity-50" />

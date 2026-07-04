@@ -8,7 +8,7 @@ const withMDX = createMDX({
 const nextConfig: NextConfig = {
   output: 'export',
   distDir: 'dist',
-  basePath: '/taskflow',
+  basePath: process.env.TASKFLOW_BASE_PATH || '',
   images: {
     unoptimized: true,
   },

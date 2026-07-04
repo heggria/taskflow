@@ -3,8 +3,6 @@ title: Interpolation
 description: How data flows between phases in a taskflow.
 ---
 
-# Interpolation
-
 A phase's `task`, `when`, `until`, `context`, and script `input` are **templates**. Anything in `{curly braces}` is resolved at runtime, *before* the phase runs, against the data produced by upstream phases, invocation arguments, and loop state. This page shows how to wire data between phases — and what the runtime does when a placeholder can't be resolved.
 
 <Callout type="info">

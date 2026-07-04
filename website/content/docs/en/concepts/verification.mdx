@@ -3,8 +3,6 @@ title: Verification
 description: How taskflow validates a DAG before spending tokens.
 ---
 
-# Verification
-
 You are about to run a flow that fans out over 500 files. Before you hit enter, a reasonable question is: *how do you know it won't loop forever, reference a phase that doesn't exist, or spend an hour discovering a typo in the last step?*
 
 taskflow answers that question before a single token is spent. The `verify` action runs a static analysis pass over your flow definition — no agents spawn, no models run, nothing touches the network. It is the safety net between "I wrote some JSON" and "I'm paying for a hundred subagent calls."

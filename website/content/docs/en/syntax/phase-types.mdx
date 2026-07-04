@@ -3,8 +3,6 @@ title: Phase Types
 description: The ten building blocks of a taskflow, and when to reach for each one.
 ---
 
-# Phase Types
-
 A taskflow is a directed graph of **phases**. Each phase is one unit of work — an isolated subagent call, a shell command, or a control decision — and the runtime wires them together with `dependsOn`. This page walks through all ten phase types the way you will actually meet them: starting with the one you will use 80% of the time, then adding power as the problem demands.
 
 You might be wondering: *do I need to learn all ten before I can do anything useful?* No. Most flows are built from three or four types. The rest exist for specific situations — human approval, iterative refinement, competing drafts — and you can ignore them until you meet one of those situations.

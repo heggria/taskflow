@@ -3,8 +3,6 @@ title: Budget
 description: Run-wide cost and token caps.
 ---
 
-# Budget
-
 You point a `map` phase at your repo and ask a scout agent to list the changed files. The scout returns 500 of them. Each one spawns a security reviewer. Four run at once. By the time you notice, you've spent twelve dollars on a flow that was supposed to cost forty cents.
 
 A `budget` is the one field that prevents this. It's a run-wide ceiling on accumulated cost or tokens. When the cap is exceeded, taskflow halts the run, preserves every partial output produced so far, and returns a diagnostic. Set it on **any** flow that can fan out unboundedly — `map`, `parallel`, `loop`, `tournament` — and it becomes the only thing standing between a mis-discovered array and runaway spend.

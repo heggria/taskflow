@@ -3,8 +3,6 @@ title: Auditing a Pull Request with taskflow
 description: Build a multi-phase review flow incrementally — discover, fan out, gate, and report.
 ---
 
-# Auditing a Pull Request with taskflow
-
 A real PR lands and it is big: **47 files changed across 3 packages.** You need to know three things before you merge it — are there security risks, does it break the architecture, and did the author actually cover the new code with tests? Reading 47 files yourself is not realistic, and asking a single agent to "review the PR" produces one giant transcript that eats your context window and still misses details.
 
 This guide builds a taskflow that does the review properly. We start with one phase that discovers the changed files, add a fan-out for per-file security review, layer in a parallel architecture review, gate the whole thing on risk, and finish with a single merged report. By the end you will have a complete, saveable flow you can run on every PR.

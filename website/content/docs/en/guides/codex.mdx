@@ -3,8 +3,6 @@ title: Using taskflow on Codex
 description: Install taskflow as a Codex plugin and orchestrate multi-phase workflows via MCP.
 ---
 
-# Using taskflow on Codex
-
 [Codex](https://github.com/openai/codex) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Codex, taskflow ships as a plugin that registers an MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
 
 This page walks through the whole arc: install the plugin, confirm the MCP server is live, run a flow through a tool call, and configure things for long-running work.

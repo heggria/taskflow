@@ -3,8 +3,6 @@ title: 在 Codex 上使用 taskflow
 description: 把 taskflow 作为 Codex 插件安装，通过 MCP 编排多阶段工作流。
 ---
 
-# 在 Codex 上使用 taskflow
-
 [Codex](https://github.com/openai/codex) 是 taskflow 的天然归宿：它已经在用子代理的方式思考，而 taskflow 给那些子代理一个声明式图来在里面运行。在 Codex 上，taskflow 以插件形式发布，注册一个 MCP 服务器加一个路由 skill，于是模型一看到多步骤任务就能调用它。
 
 本页走完整个弧线：安装插件、确认 MCP 服务器活了、通过一次工具调用运行一个 flow，以及为长时间运行的工作做配置。

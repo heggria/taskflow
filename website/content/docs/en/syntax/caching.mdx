@@ -3,8 +3,6 @@ title: Caching
 description: Within-run resume and cross-run memoization.
 ---
 
-# Caching
-
 You run the same code audit every morning. Most of the files haven't changed since yesterday — the auth module is the same, the config loader is the same, only one PR touched the billing service. And yet every morning you pay to re-analyze all of it.
 
 taskflow's caching exists to fix exactly this. It has two layers that work at different time scales, and together they make sure you only pay for work whose inputs actually changed.

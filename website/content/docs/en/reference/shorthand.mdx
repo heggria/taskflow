@@ -3,8 +3,6 @@ title: Shorthand
 description: The task, tasks, and chain shortcuts for quick delegations.
 ---
 
-# Shorthand
-
 Sometimes you don't need a DAG. You just want to delegate one thing, or run a few checks at once, or chain two steps where the second needs the first's output. Writing a full `phases` array for that is overhead.
 
 taskflow accepts three shorthand shapes — `task`, `tasks`, and `chain` — that the runtime **desugars** into proper flows before validation and execution. This page is a friendly quick reference: what each shape produces, when to reach for it, and the exact full-flow JSON it expands into.

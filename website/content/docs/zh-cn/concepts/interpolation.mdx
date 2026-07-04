@@ -3,8 +3,6 @@ title: 插值
 description: 数据如何在 taskflow 的阶段之间流动。
 ---
 
-# 插值
-
 阶段的 `task`、`when`、`until`、`context` 和 script 的 `input` 都是**模板**。`{花括号}` 中的任何内容都会在阶段运行*之前*于运行时被解析，解析依据是上游阶段产出的数据、调用参数和循环状态。本页展示如何在阶段之间接线数据 —— 以及当占位符无法解析时运行时会怎么做。
 
 <Callout type="info">

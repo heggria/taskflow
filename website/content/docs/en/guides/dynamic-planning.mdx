@@ -3,8 +3,6 @@ title: Dynamic Planning
 description: Generate sub-flows at runtime and validate them before execution.
 ---
 
-# Dynamic Planning
-
 Some problems refuse to be planned in advance. You don't know how many files need fixing until you've inspected them, and each file may need a different kind of fix. A static DAG — written once, run forever — cannot describe that.
 
 taskflow's answer is the `flow` phase with an inline `def`. A planner agent emits a sub-flow definition at runtime, the runtime validates and hardens it, then executes it as if you had authored it yourself. Pair it with a `loop` and the plan can revise itself until the work is done.

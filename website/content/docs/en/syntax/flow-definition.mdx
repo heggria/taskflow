@@ -3,8 +3,6 @@ title: Flow Definition
 description: The top-level fields that wrap phases into a taskflow.
 ---
 
-# Flow Definition
-
 A **flow definition** is a single JSON object that declares a multi-phase workflow: its name, the arguments it accepts, how aggressively it should parallelize, what it is allowed to cost, and the ordered array of phases that form its DAG. Every taskflow — whether saved to disk or passed inline as a one-liner — desugars into the same shape before the runtime validates and executes it.
 
 You might be wondering: *do I need all these fields?* No. Only `phases` is structurally required (and `name` for saved flows). Everything else tunes behavior — concurrency, cost ceilings, caching defaults, strictness. This page introduces each one in the order you will actually need it, then collects the exhaustive reference material at the end.
