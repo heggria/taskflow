@@ -1,6 +1,28 @@
 @import 'tailwindcss';
 @import 'fumadocs-ui/style.css';
 
+/*
+ * Shiki dual-theme support.
+ *
+ * Fumadocs renders code blocks with Shiki using `defaultColor: false`, so each
+ * token <span> carries inline `--shiki-light` / `--shiki-dark` (and -bg)
+ * custom properties instead of a hardcoded color. These rules swap which set
+ * is applied based on the `.dark` class on <html>. Declared unlayered so they
+ * win over any layered fumadocs defaults and the inline token colors resolve
+ * correctly in both light and dark mode.
+ */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
 @layer base {
   :root {
     --fd-background: 40 33% 98%;
@@ -184,38 +206,6 @@
   .hover-lift:hover {
     transform: translateY(-4px);
     box-shadow: 0 20px 40px -12px hsl(var(--fd-foreground) / 0.12);
-  }
-
-  .json-key {
-    color: hsl(var(--fd-primary));
-  }
-
-  .json-string {
-    color: hsl(35 90% 42%);
-  }
-
-  .json-number {
-    color: hsl(160 75% 34%);
-  }
-
-  .json-bool {
-    color: hsl(260 70% 58%);
-  }
-
-  .json-punct {
-    color: hsl(var(--fd-muted-foreground));
-  }
-
-  .dark .json-string {
-    color: hsl(40 95% 68%);
-  }
-
-  .dark .json-number {
-    color: hsl(160 70% 55%);
-  }
-
-  .dark .json-bool {
-    color: hsl(260 80% 74%);
   }
 
   @media (prefers-reduced-motion: no-preference) {

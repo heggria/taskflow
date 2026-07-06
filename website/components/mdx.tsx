@@ -5,6 +5,7 @@ import {
 } from 'fumadocs-ui/components/accordion';
 import { Callout } from 'fumadocs-ui/components/callout';
 import { Card, Cards } from 'fumadocs-ui/components/card';
+import { CodeBlock, Pre } from 'fumadocs-ui/components/codeblock';
 import { File, Files, Folder } from 'fumadocs-ui/components/files';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
@@ -25,6 +26,11 @@ export function getMDXComponents(components?: MDXComponents): MDXComponents {
     Steps,
     Tab,
     Tabs,
+    pre: ({ ref: _ref, ...props }) => (
+      <CodeBlock {...props} keepBackground>
+        <Pre>{props.children}</Pre>
+      </CodeBlock>
+    ),
     ...components,
   } satisfies MDXComponents;
 }
