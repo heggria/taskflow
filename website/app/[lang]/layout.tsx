@@ -20,6 +20,10 @@ const site = {
   },
 } as const;
 
+// Replace this with the actual content from Google Search Console HTML tag verification.
+// Example: 'abc123...'
+const GOOGLE_SITE_VERIFICATION = process.env.GOOGLE_SITE_VERIFICATION || '';
+
 export async function generateMetadata({
   params,
 }: {
@@ -45,6 +49,9 @@ export async function generateMetadata({
     icons: {
       icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
     },
+    verification: GOOGLE_SITE_VERIFICATION
+      ? { google: GOOGLE_SITE_VERIFICATION }
+      : undefined,
   };
 }
 
