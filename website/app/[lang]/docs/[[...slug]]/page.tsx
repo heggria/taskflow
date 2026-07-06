@@ -3,6 +3,7 @@ import {
 	DocsDescription,
 	DocsPage,
 	DocsTitle,
+	PageLastUpdate,
 } from "fumadocs-ui/layouts/docs/page";
 import { MessageSquare, Pencil } from "lucide-react";
 import { notFound } from "next/navigation";
@@ -179,11 +180,20 @@ export default async function Page({
 				type="application/ld+json"
 				dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
 			/>
-			<DocsPage toc={page.data.toc} full={page.data.full} className="relative">
+			<DocsPage
+				toc={page.data.toc}
+				full={page.data.full}
+				className="relative"
+				breadcrumb={{ includeRoot: true, includePage: true }}
+				tableOfContent={{ style: "clerk" }}
+			>
 				<DocsTitle>{page.data.title}</DocsTitle>
 				<DocsDescription>{page.data.description}</DocsDescription>
 				<DocsBody>
 					<MDX components={getMDXComponents()} />
+					{page.data.lastModified ? (
+						<PageLastUpdate date={page.data.lastModified} />
+					) : null}
 				</DocsBody>
 				<DocsFeedbackFooter
 					editUrl={editUrl}
