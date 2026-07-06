@@ -1,6 +1,28 @@
 @import 'tailwindcss';
 @import 'fumadocs-ui/style.css';
 
+/*
+ * Shiki dual-theme support.
+ *
+ * Fumadocs renders code blocks with Shiki using `defaultColor: false`, so each
+ * token <span> carries inline `--shiki-light` / `--shiki-dark` (and -bg)
+ * custom properties instead of a hardcoded color. These rules swap which set
+ * is applied based on the `.dark` class on <html>. Declared unlayered so they
+ * win over any layered fumadocs defaults and the inline token colors resolve
+ * correctly in both light and dark mode.
+ */
+.shiki,
+.shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+}
+
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+}
+
 @layer base {
   :root {
     --fd-background: 40 33% 98%;
