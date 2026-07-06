@@ -1,0 +1,133 @@
+---
+title: Community
+description: Contribute templates, ask questions, and shape the future of taskflow.
+---
+
+taskflow is built in the open, and the best flows come from the people who run them every day. Whether you have a workflow that solved a real problem, a question about a tricky phase, or an idea for a new pattern — there is a place for it here.
+
+This page is the short tour: where to talk, how to share a template, what the contribution rules are, and how to ask a question that gets answered fast.
+
+## Where the community lives
+
+The single hub for everything is [GitHub Discussions](https://github.com/heggria/taskflow/discussions). It is the help desk, the template gallery, and the RFC room all at once.
+
+<Cards>
+  <Card title="GitHub Discussions" href="https://github.com/heggria/taskflow/discussions">
+    Ask questions, share flows, propose patterns, and follow release planning.
+  </Card>
+  <Card title="Issue Tracker" href="https://github.com/heggria/taskflow/issues">
+    File bugs and request features with a reproducible example.
+  </Card>
+  <Card title="examples/ directory" href="https://github.com/heggria/taskflow/tree/main/examples">
+    The canonical home for reusable flow definitions.
+  </Card>
+</Cards>
+
+<Callout type="tip">
+  Not sure where to post? When in doubt, start a Discussion. A maintainer will help you turn it into an issue, a PR, or a saved example — whichever fits.
+</Callout>
+
+## Share a template
+
+A *template* is a saved taskflow that solves a recurring problem — a release-readiness check, a PR review, a migration planner. The bar to share one is low: a real problem, a working flow, and a short note on how to run it.
+
+<Steps>
+  <Step>
+    **Write the flow.** Start from a real job you already ran. Give it a `name`, a one-line `description`, and the smallest set of `phases` that does the work. Trim anything you added "just in case" — a template is a starting point, not a kitchen sink.
+  </Step>
+  <Step>
+    **Name it.** File names are `kebab-case` (`release-check.json`, not `ReleaseCheck.json` or `release_check.json`). The `name` field inside should match the file name. Phase IDs are kebab-case too (`audit-each`, `final-report`).
+  </Step>
+  <Step>
+    **Add required fields.** Every template must include `name`, `description`, and `phases`. Declare any inputs as `args` with a `description` and `required` flag so callers know what to pass. Set `concurrency` and a `budget` if the flow fans out.
+  </Step>
+  <Step>
+    **Verify it runs.** Run `/tf verify <name>` (zero-token) to catch structural errors, then `/tf run <name>` on a small input to confirm it produces the output you expect. A template that does not run is a bug, not a contribution.
+  </Step>
+  <Step>
+    **Open a PR to `examples/`.** Drop the `.json` file under `examples/`, add a short line to the directory's README describing what it does, and open the PR. Alternatively, start a Discussion with the flow pasted in — either path works, and a maintainer can move it into `examples/` for you.
+  </Step>
+</Steps>
+
+<Callout type="info">
+  No PR is too small. A five-phase flow that solves a real problem for one team is exactly as welcome as a twenty-phase flow that generalizes across projects.
+</Callout>
+
+### What a good template looks like
+
+```json title="examples/release-check.json"
+{
+  "name": "release-check",
+  "description": "Audit changed files and return a single release-readiness summary.",
+  "args": {
+    "since": { "description": "Git ref to diff against (e.g. a tag or branch).", "default": "last-tag" }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 1.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files changed since {args.since}. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["discover"],
+      "agent": "writer",
+      "task": "Combine these changes into one release-readiness summary:\n{steps.discover.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+## Contribution guidelines
+
+A few conventions keep the ecosystem navigable. They are light — most of them are things you would do anyway.
+
+- **Naming is kebab-case.** File names, the `name` field, and phase IDs all use hyphens (`risk-review`, `audit-each`). This matches the interpolation syntax (`{steps.risk-review.output}`) and the host conventions.
+- **Required fields are non-negotiable.** `name`, `description`, and `phases` on every flow. `args` must declare `description` (and `required` where the flow cannot run without them). A template without these fails `/tf verify` and will not be merged.
+- **Phases have a clear purpose.** Each phase does one thing. If a `task` prompt tries to do discovery *and* review *and* summarize in one call, split it — that is exactly what `map` and `reduce` are for.
+- **Tests are expected.** Add an example invocation in the README (the `args` to pass and the shape of the result you got). If your flow exercises an unusual branch — a `loop`, a `gate`, a `flow { def }` — add a short note on the input that triggers it. You do not need a full test suite; you need a reproducible run.
+- **Fail open, stay safe.** Follow the runtime's own posture: `when` parse errors run the phase, gate ambiguity passes, tournament judge failure falls back to variant 1. A template should never silently halt a run on a soft error.
+- **Cost is a first-class concern.** Set a `budget` on any flow that fans out. A template that can spend unbounded tokens is a footgun for the next person who runs it.
+
+<Callout type="warn">
+  Don't ship secrets. A template should never hardcode tokens, API keys, or internal URLs. Use `env:` fingerprint entries or `{args.X}` for anything sensitive — and prefer `script` phases for shell work where the array form is safe from injection.
+</Callout>
+
+## Ask for help
+
+Questions are welcome, and a well-asked question gets a fast answer. Before you post, a quick checklist:
+
+<Steps>
+  <Step>
+    **Search first.** Scan [existing Discussions](https://github.com/heggria/taskflow/discussions) and the [Syntax Reference](/en/docs/syntax) for the phase type or field you are stuck on. Most "why does this not work" answers are already written down.
+  </Step>
+  <Step>
+    **Run `/tf verify`.** It is zero-token and catches the majority of authoring mistakes — dangling `dependsOn`, unreachable placeholders, cycles. If verify passes and the run still misbehaves, that is the interesting case to bring.
+  </Step>
+  <Step>
+    **Include the flow and the run id.** Paste the smallest flow that reproduces the problem (trim phases until removing one makes it go away), the exact `args` you passed, and the run id if you have one. The run state on disk is the fastest path to a diagnosis.
+  </Step>
+  <Step>
+    **Say what you expected and what you got.** "I expected the `map` to fan out over 4 items, but only 2 ran" is actionable. "It didn't work" is not. Include the host (Pi, Codex, Claude Code, OpenCode) and the agent name if relevant.
+  </Step>
+</Steps>
+
+<Callout type="info">
+  Found a bug rather than a usage question? Open an [issue](https://github.com/heggria/taskflow/issues) with the same reproduction info — flow, args, run id, expected vs actual. A maintainer will triage it from there.
+</Callout>
+
+## Roadmap and RFCs
+
+Bigger ideas — a new phase type, a change to the caching model, a host port — start as a Discussion tagged `rfc`. The bar is the same as a template: describe the real problem, sketch the smallest shape that solves it, and note what you would give up. RFCs that survive a round of discussion get a design doc under `docs/` and a tracking issue.
+
+Read the [design docs](https://github.com/heggria/taskflow/tree/main/docs) for the thinking behind decisions already made — cross-run memoization, dynamic hardening caps, the shared-context tree. They are the best way to understand not just *what* taskflow does but *why*.
+
+<Callout type="tip">
+  The fastest way to influence the roadmap is to ship a template that demonstrates the need. A working flow that five people star is a stronger argument than any spec.
+</Callout>

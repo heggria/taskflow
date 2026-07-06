@@ -1,0 +1,131 @@
+---
+title: 为什么用 taskflow？
+description: 一份具体的前后对比——声明式 DAG 带来了什么，附 token 成本数字。
+---
+
+[什么是 taskflow？](/zh-cn/docs/what-is-taskflow) 在抽象层面给出了理由：声明式图是可验证、可观察、可重放、且可安全交给模型生成的。本页把它落到具体。我们取一个任务——审查一个 47 文件的 pull request——用两种方式核算：手写的命令式脚本，和声明成 taskflow 的同一个任务。数字是假设但真实的，取自 [PR 审查案例研究](/zh-cn/docs/guides/code-audit-case-study) 里的形状。
+
+<Callout type="info">
+  下面的数字是示例性的，不是基准测试。它们反映的是命令式脚本与声明式 DAG 之间的*结构性*差异——完整中间记录涌回你的上下文、没有续跑、没有验证。具体数字随模型和提示词变化，但差距的形状是稳定的。
+</Callout>
+
+## 这个任务
+
+一个 PR 合进来：**跨 3 个包改动了 47 个文件。** 你想要一份覆盖安全、架构、测试覆盖率的合并报告。有两条路。
+
+### 命令式做法
+
+你在宿主里写脚本。每个 `subagent(...)` 调用把它的完整推理返回到你的对话里。你遍历文件、按包分支、最后自己写汇总。
+
+```js title="imperative-pr-audit.js (pseudocode)"
+const files = await subagent("列出 47 个改动文件");
+const audits = [];
+for (const file of files) {
+  audits.push(await subagent(`审查 ${file} 的安全风险`));   // 47 份完整中间记录
+}
+const arch = await subagent("按包审查架构");
+const report = await subagent(`汇总成一份报告:\n${audits.join("\n")}\n${arch}`);
+return report;
+```
+
+### taskflow 做法
+
+你把同样的形状声明成 DAG。运行时负责扇出、在内部持有中间记录，只返回最终报告。
+
+```json title="pr-audit.json"
+{
+  "name": "pr-audit",
+  "concurrency": 4,
+  "phases": [
+    { "id": "discover", "type": "agent", "agent": "scout", "output": "json",
+      "task": "列出改动文件。只输出一个由 {path, package} 对象组成的 JSON 数组。" },
+    { "id": "security-each", "type": "map", "over": "{steps.discover.json}", "as": "file",
+      "agent": "security-reviewer", "dependsOn": ["discover"], "concurrency": 4,
+      "task": "审查 {file.path} 的安全风险。返回一段话。" },
+    { "id": "report", "type": "reduce", "from": ["security-each"], "agent": "writer",
+      "dependsOn": ["security-each"], "final": true,
+      "task": "把这些审查汇总成一份按优先级排序的报告:\n{steps.security-each.output}" }
+  ]
+}
+```
+
+## 前后对比
+
+结构性差异表现为可度量的差距。同一个任务，两种做法：
+
+| 维度 | 命令式脚本 | taskflow | 差异来源 |
+|---|---|---|---|
+| 花 token 前能看到计划？ | 否——bug 在运行时才暴露 | 是——`/tf verify` 零 token | 图是数据，所以能检查 |
+| 进入你上下文的中间记录 | **47** 份完整审查记录 + 3 份 | **1** 份最终报告 | 只有 `final: true` 返回宿主 |
+| 消耗的上下文 token（宿主侧） | 约 470,000 | 约 2,500 | 每份记录约 10k token；taskflow 在内部持有 |
+| 崩溃后续跑 | 从头重跑；47 份再付一遍 | 缓存阶段自动跳过；只付未完成的部分 | 每个完成的阶段都持久化了 |
+| 下个 PR 复用 | 复制粘贴脚本 | `/tf run pr-audit since=v1.5.0` | flow 按名保存 |
+| 可安全交给 LLM 生成 | 有风险——它是任意代码 | 安全——图在运行前先验证 | 畸形 DAG 失败时 fail-open，绝不执行 |
+| 结构性 bug 早发现 | 在运行时，付完钱之后 | 在任何模型调用之前 | 验证先跑 |
+
+<Callout type="tip">
+  头号数字是"上下文"那行。命令式脚本把每份审查记录都倒进*你的*窗口——而你恰恰需要这个窗口来读最终报告。taskflow 把 47 份记录留在运行时内部；你的上下文只看到那一份汇总。
+</Callout>
+
+## 一份 token 成本走查
+
+我们给 PR 审查算点真实的数字。假设一个中端模型，**输入 $3 / 1M token**、**输出 $15 / 1M token**，每次逐文件审查读约 8,000 输入 token（文件加一点上下文）、写约 500 输出 token。
+
+### 单次审查成本
+
+```text title="一次审查调用的成本"
+input:   8,000 tokens  ×  $3.00 / 1M   =   $0.0240
+output:    500 tokens  ×  $15.00 / 1M  =   $0.0075
+                                  合计 =   $0.0315  每文件
+```
+
+47 个文件每个 $0.0315，安全扇出合计 **$1.48**。加上发现调用（约 $0.05）、架构审查（约 $0.10）、最终合并（约 $0.08），整条 flow 端到端约 **$1.71**。
+
+这笔成本无论你写脚本还是声明都*一样*——模型干的活一样。区别在于你用它换到了什么。
+
+### 同样的 $1.71 换到了什么
+
+| | 命令式脚本 | taskflow |
+|---|---|---|
+| 模型成本 | $1.71 | $1.71 |
+| 跑完之后你的上下文 | 约 470k token 的记录没了 | 约 2.5k token——一份报告 |
+| 若在合并步骤崩了 | 再付约 $1.66 重做 47 份审查 | 只付约 $0.08——只有合并重跑 |
+| 下周再跑一次 | 又是完整 $1.71 | 缓存阶段跳过；常常几分钱 |
+| 花钱前先验证 | 不可能 | `/tf verify` 免费 |
+
+成本那行一模一样。其他每一行都倒向声明式图——而且差距随规模拉大。一个 200 文件的审查形状一样，但涌进你上下文的记录是十倍，而 taskflow 这边仍然只返回一份报告。
+
+<Callout type="warn">
+  命令式脚本最贵的失败模式不是顺利跑完——而是在第 48/50 步崩掉。没有续跑，你得把整个扇出*再付一遍*。用 taskflow，47 份缓存的审查跳过，你只为那个没完成的阶段付钱。在大扇出上，这一项差异就可能是一个数量级。
+</Callout>
+
+## 差距小的时候（以及不小的时候）
+
+结构性优势随任务规模放大。一次性的单步委派从 taskflow 几乎得不到好处——宿主自带的 subagent 工具本来就是对的工具，声明一张图的额外开销换不回来。
+
+| 任务形状 | 命令式也行 | taskflow 值得这开销 |
+|---|---|---|
+| 一次委派，无后续 | ✅ | — |
+| 两步，第二步依赖第一步 | 边界 | ✅ |
+| 对很多项扇出 | — | ✅ |
+| 输出前需要质量门 | — | ✅ |
+| 需要续跑 / 重放 | — | ✅ |
+| 计划由模型生成 | — | ✅（运行前先验证） |
+
+<Callout type="info">
+  经验法则：一旦出现*依赖第一步的第二步*，taskflow 就挣回它的开销。低于这条线，直接用宿主的 subagent 工具。
+</Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="审查一次 Pull Request" href="/zh-cn/docs/guides/code-audit-case-study">
+    看 47 文件审查如何逐阶段搭起来。
+  </Card>
+  <Card title="什么是 taskflow？" href="/zh-cn/docs/what-is-taskflow">
+    这份对比的概念版。
+  </Card>
+  <Card title="快速上手" href="/zh-cn/docs/getting-started">
+    五分钟跑起你的第一个 flow。
+  </Card>
+</Cards>

@@ -1,0 +1,54 @@
+---
+title: Showcase
+description: End-to-end case studies — real problems solved with taskflow, built up phase by phase.
+---
+
+The Showcase is where the pieces come together. Each case study starts from a concrete problem you have probably already hit, builds a taskflow one phase at a time, and explains *why* each phase looks the way it does. By the end of each one you have a complete, saveable flow you can run yourself.
+
+They are not host walkthroughs — the same flow runs identically on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). They are *pattern* guides: read them to learn the shape, then adapt the shape to your own problem.
+
+<Callout type="tip">
+  New here? The [What is taskflow?](/en/docs/what-is-taskflow) page explains the model in one page, and [Getting Started](/en/docs/getting-started) gets a flow running in five minutes. Come back here when you want to see the model stretched across a real problem.
+</Callout>
+
+## The case studies
+
+Three problems, three shapes. Each one motivates a different part of the runtime — fan-out, tournament selection, and dynamic planning with loops.
+
+<Cards>
+  <Card title="Auditing a Pull Request" href="/en/docs/guides/code-audit-case-study">
+    A 47-file PR across three packages. Discover the changed files, fan out a per-file security review, run an architecture review in parallel, gate on risk, and merge into one report.
+  </Card>
+  <Card title="Writing a Release Note" href="/en/docs/guides/headline-tournament-case-study">
+    One high-stakes headline. Start from the naive single-agent baseline, then replace it with a four-variant tournament whose judge picks the winner.
+  </Card>
+  <Card title="Automating a Codebase Migration" href="/en/docs/guides/migration-planner-case-study">
+    A migration you cannot plan up front. Discover the call sites, generate a plan at runtime, gate it, execute it as a sub-flow, and loop until the old API is gone.
+  </Card>
+</Cards>
+
+## What you will take away
+
+Each case study is structured the same way so you can map the lessons onto your own work:
+
+1. **The problem.** Why the obvious approach (one big agent call, or three manual delegations) does not scale.
+2. **Phase by phase.** Each new phase is added with a reason — fan-out for throughput, a gate for safety, a loop for convergence. You see the flow grow, not just the finished artifact.
+3. **The complete flow.** The assembled JSON, ready to save and run.
+
+<Callout type="info">
+  Want the short version of *why* a declarative graph beats an imperative script — with concrete before/after numbers? See [Why taskflow?](/en/docs/showcase/why-taskflow).
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Why taskflow?" href="/en/docs/showcase/why-taskflow">
+    A concise before/after comparison with a token-cost walkthrough.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks the case studies compose with.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
+    Every field, one place.
+  </Card>
+</Cards>

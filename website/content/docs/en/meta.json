@@ -26,9 +26,18 @@
     "guides/dynamic-planning",
     "guides/tournament",
     "guides/code-audit-case-study",
+    "guides/headline-tournament-case-study",
+    "guides/migration-planner-case-study",
+    "---Showcase---",
+    "showcase/index",
+    "showcase/why-taskflow",
+    "---Templates---",
+    "templates",
     "---Reference---",
     "reference",
     "reference/shorthand",
-    "reference/commands"
+    "reference/commands",
+    "---Community---",
+    "community"
   ]
 }
