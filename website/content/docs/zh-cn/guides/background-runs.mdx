@@ -318,7 +318,7 @@ I'm acting as a risk-reviewer for documentation changes. Since this is a documen
 
 6. **Why-Stale** - `formatWhyStale` in `stale.ts:147` annotates declared-only edges with `(declared)`.
 
-7. **Recompute (M5)** - `recomputeTaskflow` in `runtime.ts:2738` defaults to `dryRun: true` (fail-safe). Guards against unobserved deps (shareContext, flow phases, context files, {previous.output}, {args.*}, {item.*}) in `hasUnobservedDependencies`. Uses `structuredClone` to avoid mutation.
+7. **Recompute (M5)** - `recomputeTaskflow` in `runtime.ts:2738` defaults to `dryRun: true` (fail-safe). Guards against unobserved deps (shareContext, flow phases, context files, `{previous.output}`, `{args.*}`, `{item.*}`) in `hasUnobservedDependencies`. Uses `structuredClone` to avoid mutation.
 
 8. **Early Cutoff** - In `runtime.ts:2877`: phases whose `inputHash` didn't move after upstream re-ran hit their cached result (no re-execution).
 
