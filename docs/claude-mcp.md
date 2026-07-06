@@ -35,7 +35,7 @@ Verify:
 
 ```sh
 claude plugin list   # → claude-taskflow@taskflow  installed, enabled
-claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.1.5 claude-taskflow-mcp)
+claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.1.6 claude-taskflow-mcp)
 ```
 
 The bundled skill tells Claude Code *when* to reach for the tools (multi-phase

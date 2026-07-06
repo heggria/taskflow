@@ -33,7 +33,7 @@ pnpm whoami --registry=https://registry.npmjs.org/   # expect: heggria (or the o
 ```sh
 pnpm install            # links the workspaces
 pnpm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
-pnpm test               # 1092/1092 green
+pnpm test               # 1140/1140 green
 pnpm run build          # emit dist/ for all seven packages (tsc → .js + .d.ts)
 ```
 
@@ -81,7 +81,7 @@ pnpm publish --filter opencode-taskflow --registry=https://registry.npmjs.org/ -
 
 > **Note on `taskflow-core` as a dependency.** `taskflow-mcp`, `taskflow-hosts`, and the host adapters
 > (`pi-taskflow` / `codex-taskflow` / `claude-taskflow` / `opencode-taskflow`)
-> declare `"taskflow-core": "0.1.5"` (an exact version, not `workspace:*`), so the
+> declare `"taskflow-core": "0.1.6"` (an exact version, not `workspace:*`), so the
 > published tarballs resolve the real npm package once it exists. Always publish
 > `taskflow-core` first and bump all seven in lockstep. (`taskflow-mcp` and `taskflow-hosts` are the
 > other internal dependencies: the MCP host adapters pin `"taskflow-mcp"`; the codex/claude/opencode
@@ -94,7 +94,7 @@ seven package versions match the tag, publishes them in order, and cuts a GitHub
 Release from the matching `CHANGELOG.md` section.
 
 ```sh
-git tag v0.1.5 && git push origin v0.1.5
+git tag v0.1.6 && git push origin v0.1.6
 ```
 
 ## Verify after publish

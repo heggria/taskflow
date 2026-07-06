@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow-monorepo",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "description": "Monorepo for taskflow-core, taskflow-mcp, taskflow-hosts, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, and the documentation website.",
   "type": "module",

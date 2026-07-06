@@ -8,7 +8,7 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-0E8A66?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1092-4B4ACF?style=flat-square" alt="1092 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1140-4B4ACF?style=flat-square" alt="1140 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, and OpenCode"></a>
 </p>
@@ -730,16 +730,18 @@ provided files. Report violations grouped by file. No fixes.
 
 将其中一份复制到 `.pi/taskflows/<name>.json`（或 `~/.pi/agent/taskflows/`），它就会注册为 `/tf:<name>`——或者直接让模型指向它。
 
+<a id="whats-inside"></a>
+
 ## 内部构成
 
 <div align="center">
 
-**0 个运行时依赖** · **1045 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
+**0 个运行时依赖** · **1140 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
 
 </div>
 
 - **零运行时依赖。** 没有 `dependencies` 字段——运行时完全基于 Node 内置模块（`fs` / `path` / `os` / `child_process` / `crypto`）。文件锁是 `fs.openSync("wx")`，不是第三方库。
-- **1045 个测试分布在 64 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
+- **1140 个测试分布在 70 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
 - **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
 - **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
 
@@ -764,7 +766,7 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
-**v0.1.5**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**七个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp` MCP 服务器、共享宿主运行器的 `taskflow-hosts`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（后三者为交付包，通过 `taskflow-hosts` 复用 runner + MCP bin + 插件/配置），共享 `taskflow-mcp` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+**v0.1.6**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **库 Phase 1**（先搜后写 + 可复用流程资产）、**`defineFile` 参数**（从磁盘路径 verify/compile/run 流程）、以及流程定义文件的 **JSONC 注释支持**（`//` 与 `/* */` 注释 + 尾逗号，由零依赖的 `parseJsonc` 解析）。**v0.1.5** 新增了 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**七个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp` MCP 服务器、共享宿主运行器的 `taskflow-hosts`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（后三者为交付包，通过 `taskflow-hosts` 复用 runner + MCP bin + 插件/配置），共享 `taskflow-mcp` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 
