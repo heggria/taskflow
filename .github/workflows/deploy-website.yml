@@ -42,7 +42,21 @@ jobs:
 
       - name: Install dependencies
         working-directory: website
-        run: npm ci --ignore-scripts
+        run: |
+          # npm ci intermittently crashes with "Exit handler never called!"
+          # (a known npm bug under runner memory pressure). Retry up to 3 times,
+          # falling back to `npm install` which is more tolerant of lockfile
+          # state. --ignore-scripts avoids running postinstall (prepare-source
+          # runs the build steps explicitly below).
+          for i in 1 2 3; do
+            if npm ci --ignore-scripts; then break; fi
+            echo "npm ci attempt $i failed; retrying in 10s…"
+            sleep 10
+            if [ "$i" = "3" ]; then
+              echo "npm ci failed 3 times; falling back to npm install"
+              npm install --ignore-scripts
+            fi
+          done
 
       - name: Generate MDX source
         working-directory: website
