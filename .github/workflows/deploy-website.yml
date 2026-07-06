@@ -27,6 +27,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history so the lastModified remark plugin can read accurate
+          # git timestamps for every docs page (shallow clone would leave
+          # most pages without a last-updated date).
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
