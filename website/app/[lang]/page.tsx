@@ -655,7 +655,7 @@ export default async function HomePage({
 						<span>{t.badge}</span>
 					</div>
 
-					<h1 className="animate-fade-in animate-fade-in-delay-1 mt-10 text-8xl font-extrabold tracking-tighter sm:text-8xl md:text-9xl">
+					<h1 className="animate-fade-in animate-fade-in-delay-1 mt-10 text-5xl font-extrabold tracking-tighter sm:text-7xl md:text-8xl lg:text-9xl">
 						<span className="text-gradient text-glow">{t.title}</span>
 					</h1>
 
