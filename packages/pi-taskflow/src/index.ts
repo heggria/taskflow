@@ -44,6 +44,7 @@ import {
 	saveRun,
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
+	readDefineFile,
 } from "taskflow-core";
 import { CacheStore } from "taskflow-core";
 import { safeParse } from "taskflow-core";
@@ -98,6 +99,12 @@ const TaskflowParams = Type.Object({
 		Type.Unknown({
 			description:
 				"Inline taskflow definition (JSON object matching the taskflow DSL). Use to run or save a new flow.",
+		}),
+	),
+	defineFile: Type.Optional(
+		Type.String({
+			description:
+				"Path to a file holding the taskflow definition (raw JSON, or Markdown with a ```json fence). Lets verify/compile/ir/run/save share ONE persisted draft (e.g. in the OS tmp dir) — edit the file between calls instead of re-sending the whole definition each time. Precedence: define (inline) > defineFile (disk) > name (saved flow).",
 		}),
 	),
 	// --- Shorthand (non-DAG) modes, like the subagent tool. No DSL required. ---
@@ -657,9 +664,14 @@ export default function (pi: ExtensionAPI) {
 
 			if (action === "verify") {
 				const { verifyTaskflow } = await import("taskflow-core");
-				// Load definition: inline define takes priority, then saved name
+				// Load definition: inline define takes priority, then defineFile, then saved name
 				let def: Taskflow | undefined;
 				let resolvedDefine: unknown = params.define;
+				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+					const fromFile = readDefineFile(params.defineFile);
+					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
+					resolvedDefine = fromFile;
+				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
 					if (parsed && typeof parsed === "object") resolvedDefine = parsed;
@@ -709,9 +721,14 @@ export default function (pi: ExtensionAPI) {
 
 			if (action === "compile") {
 				const { compileTaskflow } = await import("taskflow-core");
-				// Resolve definition: inline define (object or JSON/fenced string) then saved name.
+				// Resolve definition: inline define (object or JSON/fenced string), defineFile, then saved name.
 				let def: Taskflow | undefined;
 				let resolvedDefine: unknown = params.define;
+				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+					const fromFile = readDefineFile(params.defineFile);
+					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
+					resolvedDefine = fromFile;
+				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
 					if (parsed && typeof parsed === "object") resolvedDefine = parsed;
@@ -750,9 +767,14 @@ export default function (pi: ExtensionAPI) {
 			if (action === "ir") {
 				const { compileTaskflowToIR } = await import("taskflow-core");
 				// Resolve definition: inline define (object or JSON/fenced string), shorthand,
-				// or saved name. Mirrors action=compile / action=verify.
+				// or defineFile, then saved name. Mirrors action=compile / action=verify.
 				let def: Taskflow | undefined;
 				let resolvedDefine: unknown = params.define;
+				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+					const fromFile = readDefineFile(params.defineFile);
+					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
+					resolvedDefine = fromFile;
+				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
 					if (parsed && typeof parsed === "object") resolvedDefine = parsed;
@@ -866,7 +888,13 @@ export default function (pi: ExtensionAPI) {
 
 			// Auto-parse string `define` — LLMs sometimes pass a JSON string
 			// instead of a parsed object. safeParse handles markdown fences too.
+			// `defineFile` lets verify/run share ONE on-disk draft (e.g. in /tmp).
 			let resolvedDefine: unknown = params.define;
+			if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+				const fromFile = readDefineFile(params.defineFile);
+				if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
+				resolvedDefine = fromFile;
+			}
 			if (typeof resolvedDefine === "string") {
 				const parsed = safeParse(resolvedDefine);
 				if (parsed && typeof parsed === "object") {

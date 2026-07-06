@@ -35,6 +35,7 @@ import {
 	saveRun,
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
+	readDefineFile,
 	compileTaskflow,
 	verifyTaskflow,
 	desugar,
@@ -159,6 +160,7 @@ const TOOLS: McpTool[] = [
 			properties: {
 				name: { type: "string", description: "Name of a saved flow to run." },
 				define: { type: "object", description: "Inline flow definition (full DAG or shorthand)." },
+				defineFile: { type: "string", description: "Path to a file holding the flow definition (raw JSON, or Markdown with a ```json fence). Lets you verify/compile/run share ONE persisted draft (e.g. in the OS tmp dir) — edit the file between calls instead of re-sending the whole definition. Precedence: define > defineFile > name." },
 				args: { type: "object", description: "Invocation arguments interpolated as {args.X}." },
 				incremental: { type: "boolean", description: "Default every phase to cross-run cache reuse." },
 			},
@@ -184,26 +186,28 @@ const TOOLS: McpTool[] = [
 	{
 		name: "taskflow_verify",
 		title: "Verify a taskflow",
-		description: "Statically verify a flow (cycles, missing deps, undefined refs, …) WITHOUT executing it. Provide `name` or `define`.",
+		description: "Statically verify a flow (cycles, missing deps, undefined refs, …) WITHOUT executing it. Provide `name`, `define`, or `defineFile`.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
 			properties: {
 				name: { type: "string" },
 				define: { type: "object" },
+				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file. See taskflow_run.defineFile." },
 			},
 		},
 	},
 	{
 		name: "taskflow_compile",
 		title: "Compile a taskflow to a diagram",
-		description: "Render a flow's DAG as a diagram (an inline SVG image) with issues overlaid (red=error, amber=warning, green=final), plus a compact status line. No execution. Provide `name` or `define`.",
+		description: "Render a flow's DAG as a diagram (an inline SVG image) with issues overlaid (red=error, amber=warning, green=final), plus a compact status line. No execution. Provide `name`, `define`, or `defineFile`.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
 			properties: {
 				name: { type: "string" },
 				define: { type: "object" },
+				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file. See taskflow_run.defineFile." },
 			},
 		},
 	},
@@ -227,8 +231,13 @@ const TOOLS: McpTool[] = [
 	},
 ];
 
-/** Resolve a flow from params: inline `define` (desugared) or saved `name`. */
-function resolveFlow(cwd: string, params: { name?: string; define?: unknown }): Taskflow {
+/** Resolve a flow from params: inline `define` (desugared), `defineFile` (disk), or saved `name`. */
+function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
+	if (params.define === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+		const fromFile = readDefineFile(params.defineFile);
+		if (fromFile === null) throw new RpcError(RPC.INVALID_PARAMS, `defineFile not found or unparseable: ${params.defineFile}`);
+		params = { ...params, define: fromFile };
+	}
 	if (params.define !== undefined && params.define !== null) {
 		return isShorthand(params.define) ? desugar(params.define) : (params.define as Taskflow);
 	}

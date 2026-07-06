@@ -20,6 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
+import { safeParse } from "./interpolate.ts";
 import type { Taskflow } from "./schema.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
@@ -611,6 +612,26 @@ function findProjectFlowsDirInternal(cwd: string, create = false): string | null
 		dir = parent;
 	}
 	return create ? path.join(cwd, ".pi", "taskflows") : null;
+}
+
+/**
+ * Read a flow definition from a file on disk. Supports raw JSON or a Markdown
+ * document with a fenced ```json block (reuses safeParse). Used by the
+ * `defineFile` parameter so verify/compile/run can share one persisted draft
+ * (e.g. in the OS temp dir) without saving it into the project's .pi/taskflows.
+ *
+ * Returns the parsed definition (object/array/shorthand), or null if the file
+ * can't be read or parsed. Callers surface an explicit error in that case.
+ */
+export function readDefineFile(filePath: string): unknown {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(filePath, "utf-8");
+	} catch {
+		return null;
+	}
+	const parsed = safeParse(raw);
+	return parsed ?? null;
 }
 
 function readFlowFile(filePath: string, scope: "user" | "project"): SavedFlow | null {

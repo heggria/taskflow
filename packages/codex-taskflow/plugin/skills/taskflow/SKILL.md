@@ -114,6 +114,26 @@ Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
 **Before running a non-trivial flow, `taskflow_verify` it — zero tokens,
 catches cycles / missing deps / undefined refs / contract typos.**
 
+### Iterating on a big flow? Use `defineFile` (write once, verify / edit / run by path)
+
+For a non-trivial flow you'll iterate on, **write the definition to a file**
+(typically in the OS tmp dir) and point every call at it with `defineFile`:
+
+```jsonc
+// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
+// 2. verify, iterate, run — all reference the SAME file by path:
+{ "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
+{ "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
+{ "name": "taskflow_run",    "arguments": { "defineFile": "/tmp/audit.json" } }
+```
+
+The file can be raw JSON **or** a Markdown doc with a fenced ```json block
+(`write` the JSON form, or paste the flow into a note and fence it). Between
+calls, edit the file (not the call) and re-`verify`. This avoids re-sending a
+large definition on every call and keeps a durable draft you can diff. Falls
+back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
+(saved flow).
+
 ### DSL shape
 
 ```jsonc
