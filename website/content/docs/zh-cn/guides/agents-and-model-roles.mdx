@@ -1,0 +1,487 @@
+---
+title: Agents 与 Model Roles
+description: taskflow 如何从三层发现 agents、将它们映射到六个 model roles，并为每个 phase 解析出正确的 agent。
+---
+
+taskflow 中的每个 phase 都作为 subagent 运行——一个独立的 LLM 进程，拥有自己的 context window、system prompt 和工具集。正是这种隔离让中间的 transcript 不进入你的对话：只有最终的 phase 输出会返回。
+
+但是哪个 agent 运行哪个 phase？这个 agent 又用哪个模型？taskflow 用一套分层发现系统和基于角色的模型映射来回答这两个问题。你可以直接使用 18 个内置 agent、用项目专用的版本覆盖它们，或者编写完全自定义的 agent——所有这些都不需要改动任何 flow 定义。
+
+本指南涵盖完整图景：agent 如何被发现、内置 agent 做什么、model role 如何工作，以及如何自定义这一切。
+
+## Agent 发现
+
+taskflow 从三层加载 agent，顺序如下：
+
+<Steps>
+  <Step>
+    **内置 agent。** taskflow 包内置了十八个 agent。它们覆盖完整的软件开发生命周期：规划、执行、审查、安全、测试和恢复。除非显式禁用，这些 agent 始终可用。
+  </Step>
+  <Step>
+    **用户 agent。** 位于 `~/.pi/agent/agents/`（或由 `TASKFLOW_AGENT_DIR` / `PI_CODING_AGENT_DIR` 设置的目录）。这些是你的个人 agent，在你所有项目间共享。
+  </Step>
+  <Step>
+    **项目 agent。** 位于项目根目录（或任意父目录）的 `.pi/agents/`。taskflow 从当前工作目录向上遍历目录树，找到最近的 `.pi/agents/` 文件夹。这些是项目专用的 agent，与你的代码库一起版本化。
+  </Step>
+</Steps>
+
+各层之间按名称相互覆盖。如果你有一个名为 `executor` 的项目 agent，同时内置 agent 也叫 `executor`，则项目版本胜出。这让你可以在不 fork 整个 agent 集合的情况下自定义行为。
+
+<Callout type="info">
+  Agent 名称使用连字符，而不是下划线：`executor-code` 是正确的，`executor_code` 是错误的。运行时会校验这一点，并在你使用下划线时发出警告。
+</Callout>
+
+### `agentScope` 字段
+
+并非每个 flow 都需要全部三层。taskflow 上的 `agentScope` 字段控制哪些层处于激活状态：
+
+| Scope | 加载内容 | 使用场景 |
+|---|---|---|
+| `"user"`（默认） | 内置 + 用户 agent | 不依赖项目专用 agent 的个人工作流。 |
+| `"project"` | 内置 + 项目 agent | 项目 agent 覆盖用户偏好的团队工作流。 |
+| `"both"` | 内置 + 用户 + 项目 agent | 完整解析：项目覆盖用户覆盖内置。 |
+
+在 taskflow 顶层设置 `agentScope`：
+
+```json title="project-scoped.json"
+{
+  "name": "project-review",
+  "agentScope": "project",
+  "phases": [...]
+}
+```
+
+<Callout type="tip">
+  如果你要构建一个会在队友机器上运行的 flow，请使用 `agentScope: "project"`，这样它就不会依赖对方个人的 `~/.pi/agent/agents/` 目录。
+</Callout>
+
+## 18 个内置 agent
+
+taskflow 内置了 18 个 agent，按四类组织。每个 agent 都是一个带 YAML frontmatter 的 markdown 文件，指定其名称、描述、工具、model role 和 thinking 级别。
+
+### 规划与分析
+
+这些 agent 在代码编写之前分析需求、创建计划并挑战假设。
+
+| Agent | Role | Thinking | 用途 |
+|---|---|---|---|
+| `analyst` | `{{thinker}}` | high | 分析需求，暴露歧义，识别隐藏约束。只读。 |
+| `critic` | `{{thinker}}` | xhigh | 挑战计划和结论，在承诺之前发现矛盾。只读。 |
+| `planner` | `{{strong}}` | high | 创建带文件级细节的具体实现计划。只读。 |
+| `plan-arbiter` | `{{arbiter}}` | high | 在执行开始之前审查并挑战计划。只读。 |
+
+`analyst` 在复杂流水线中率先运行以澄清需求。`planner` 把这些需求转化为可执行的计划。`critic` 和 `plan-arbiter` 充当质量门控——它们在昂贵的执行开始之前对薄弱的计划推回。
+
+### 执行
+
+这些 agent 编写代码。它们在范围和复杂度上有所不同。
+
+| Agent | Role | Thinking | 用途 |
+|---|---|---|---|
+| `executor` | `{{fast}}` | high | 默认 executor，用于有清晰计划的 1–4 文件改动。 |
+| `executor-fast` | `{{fast}}` | off | 琐碎改动：≤2 文件、≤50 行、不涉及架构决策。 |
+| `executor-code` | `{{strong}}` | high | 复杂的多文件改动：≥5 文件、跨模块、结构性重构。 |
+| `executor-ui` | `{{vision}}` | high | UI/前端改动：组件、样式、布局、响应式设计。 |
+
+默认的 `executor` 处理大部分工作。机械清理用 `executor-fast`，结构性重构用 `executor-code`，当你需要视觉能力来理解设计意图时用 `executor-ui`。
+
+### 审查与质量
+
+这些 agent 审查代码、评估风险并验证结果。它们都不编辑文件。
+
+| Agent | Role | Thinking | 用途 |
+|---|---|---|---|
+| `reviewer` | `{{strong}}` | high | 通用代码审查：质量、架构、测试覆盖。 |
+| `risk-reviewer` | `{{reasoner}}` | high | 后端/基础设施风险：数据完整性、并发、迁移。 |
+| `security-reviewer` | `{{reasoner}}` | high | 安全漏洞：认证、注入、密钥、信任边界。 |
+| `final-arbiter` | `{{arbiter}}` | xhigh | 在多个审查者意见冲突时裁决。决胜者。 |
+
+`reviewer` 处理通用质量。`risk-reviewer` 和 `security-reviewer` 专注于高风险领域，并在领域边界处互相推让。`final-arbiter` 在审查冲突时打破平局。
+
+### 支持
+
+这些 agent 处理辅助任务：测试、文档、探索和恢复。
+
+| Agent | Role | Thinking | 用途 |
+|---|---|---|---|
+| `test-engineer` | `{{fast}}` | high | 设计和实现测试策略，检测不稳定模式。 |
+| `verifier` | `{{fast}}` | off | 运行校验命令，复现失败，检查日志。只读。 |
+| `scout` | `{{fast}}` | off | 快速代码库探索，为其他 agent 返回结构化发现。 |
+| `doc-writer` | `{{fast}}` | off | 编写和编辑文档文件（README、指南、changelog）。 |
+| `visual-explorer` | `{{vision}}` | high | 分析 Figma 设计，提取颜色、token 和组件规格。 |
+| `recover` | `{{fast}}` | low | 在 context compaction 之后恢复工作，从交接文件接续。 |
+
+`scout` 做快速侦察，让其他 agent 不必重新读取所有内容。`test-engineer` 和 `verifier` 处理验证。`visual-explorer` 解析设计文件。`recover` agent 在 context window 重置之后接续工作。
+
+## Model roles
+
+每个内置 agent 在其 frontmatter 中指定一个 model role——不是具体的模型 ID，而是用双花括号包裹的角色名：`{{fast}}`、`{{strong}}`、`{{thinker}}`、`{{arbiter}}`、`{{vision}}` 或 `{{reasoner}}`。
+
+这种间接存在是因为不同用户可用的模型不同。一个 role 是一个语义契约（"这个 agent 需要快速、廉价的推理"），它会在运行时根据你的配置解析为具体的模型 ID。
+
+### 六个 roles
+
+| Role | 语义契约 | 默认模型 | 使用者 |
+|---|---|---|---|
+| `{{fast}}` | 便宜且快速，高吞吐低风险 | `openrouter/deepseek/deepseek-v4-flash` | `executor`、`executor-fast`、`scout`、`verifier`、`doc-writer`、`test-engineer`、`recover` |
+| `{{strong}}` | 均衡能力，中等复杂度 | `openrouter/xiaomi/mimo-v2.5-pro` | `planner`、`reviewer`、`executor-code` |
+| `{{thinker}}` | 深度推理，高 thinking 预算 | `openrouter/deepseek/deepseek-v4-pro` | `analyst`、`critic` |
+| `{{arbiter}}` | 高风险判断，决胜 | `openrouter/qwen/qwen3.7-max` | `plan-arbiter`、`final-arbiter` |
+| `{{vision}}` | 多模态，图像理解 | `minimax/MiniMax-M3` | `executor-ui`、`visual-explorer` |
+| `{{reasoner}}` | 谨慎推理，安全敏感 | `z-ai/glm-5.1` | `risk-reviewer`、`security-reviewer` |
+
+默认值开箱即用效果良好。但你可能想替换它们——例如，如果你有 Claude Pro 订阅，想把 `{{strong}}` 换成 `anthropic/claude-3.5-sonnet`。
+
+### Roles 如何解析
+
+当一个 phase 生成一个 subagent 时，运行时会检查 agent 的 `model` 字段。如果它匹配 `{{roleName}}` 模式，运行时会查找该 role 的设置并替换为具体的模型 ID。如果不存在映射，则 model 字段留空，并使用宿主的默认模型。
+
+```text
+Agent frontmatter:  model: "{{strong}}"
+                       ↓
+settings.json:      modelRoles: { "strong": "anthropic/claude-3.5-sonnet" }
+                       ↓
+Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
+```
+
+带有字面模型 ID（无花括号）的 agent 完全绕过 role 解析。这对于必须始终使用特定模型的自定义 agent 很有用。
+
+## 使用 `/tf init` 配置
+
+`/tf init` 命令会交互式地引导你完成 role 配置。它读取你当前的设置，从你的 provider registry 显示可用模型，并以原子方式写回你的选择。
+
+<Callout type="tip">
+  首次安装 taskflow 时运行 `/tf init`。推荐的默认值对大多数用户效果良好，但你可能想把 `vision` role 换成另一个多模态模型，或把 `arbiter` role 换成更强的推理模型。
+</Callout>
+
+### 操作菜单
+
+当你运行 `/tf init` 时，会看到一个操作菜单：
+
+1. **使用推荐默认值** —— 应用上表中的默认模型。
+2. **逐个配置 role** —— 依次遍历全部六个 role。
+3. **编辑单个 role** —— 只改一个 role，不动其他。
+4. **配置 taskflow 偏好** —— 调整内置 agent 设置。
+5. **显示当前 roles** —— 不做改动地显示当前配置。
+
+对于每个 role，选择器会从你的 registry 显示可用模型，并带有能力标签（多模态 `image ✓`、推理能力 `reasoning ✓`），以及你当前选择和推荐默认值的标记。
+
+### 自定义模型标识符
+
+你也可以在 `provider/model-id` 格式中输入自定义模型标识符。运行时会根据你的模型 registry 校验它，并在模型不存在时发出警告——一个拼写错误会静默破坏使用该 role 的每个 flow。确认提示可防止拼写错误。
+
+### 设置存储位置
+
+所有配置都保存到 `~/.pi/agent/settings.json`（或由 `TASKFLOW_AGENT_DIR` / `PI_CODING_AGENT_DIR` 设置的路径）：
+
+```json title="settings.json"
+{
+  "modelRoles": {
+    "fast": "openrouter/deepseek/deepseek-v4-flash",
+    "strong": "openrouter/xiaomi/mimo-v2.5-pro",
+    "thinker": "openrouter/deepseek/deepseek-v4-pro",
+    "arbiter": "openrouter/qwen/qwen3.7-max",
+    "vision": "minimax/MiniMax-M3",
+    "reasoner": "z-ai/glm-5.1"
+  },
+  "taskflow": {
+    "builtInAgents": true,
+    "syncBuiltinAgentsToProject": false,
+    "maxKeptRuns": 100,
+    "maxRunAgeDays": 30
+  }
+}
+```
+
+### Taskflow 偏好
+
+`/tf init` 中的"配置 taskflow 偏好"选项调整四个设置：
+
+| 设置 | 默认值 | 说明 |
+|---|---|---|
+| `builtInAgents` | `true` | 启用或禁用 18 个内置 agent。如果你只想要自己的 agent，请禁用。 |
+| `syncBuiltinAgentsToProject` | `false` | 在会话开始时把内置 agent 复制到项目的 `.pi/agents/`，以便原生 Pi `@agent` 语法也能发现它们。 |
+| `maxKeptRuns` | `100` | 保留的已完成/失败运行的最大数量。设为 `0` 禁用按数量清理。 |
+| `maxRunAgeDays` | `30` | 已完成/失败运行的最大保留天数。设为 `0` 禁用按时间清理。 |
+
+<Callout type="info">
+  清理自动运行，节流为每分钟一次。它只移除终态（已完成或失败）的运行——活跃的运行永远不会被触碰。
+</Callout>
+
+## 自定义 agent
+
+你可以通过编写带 YAML frontmatter 的 markdown 文件来创建自定义 agent。自定义 agent 位于用户范围（`~/.pi/agent/agents/`）或项目范围（`.pi/agents/`）。
+
+### Agent 文件格式
+
+每个 agent 文件有三部分：`---` 分隔符之间的 YAML frontmatter、一个空行，以及 system prompt 正文。
+
+```markdown title="~/.pi/agent/agents/code-reviewer.md"
+---
+name: code-reviewer
+description: Review code for quality and best practices
+tools: read, grep, find, ls, bash
+model: "{{strong}}"
+thinking: high
+---
+
+You are a code reviewer focused on quality and best practices.
+
+Review the provided code for:
+- Code style and consistency
+- Performance implications
+- Error handling
+- Test coverage
+
+Be specific and actionable. Don't just say "this could be better" — explain why and how.
+```
+
+### Frontmatter 字段
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `name` | 是 | 唯一标识符，用于在 flow 中引用该 agent。使用连字符。 |
+| `description` | 是 | 简短描述，显示在 agent 列表和选择器 UI 中。 |
+| `tools` | 否 | 逗号分隔的工具列表：`read`、`write`、`edit`、`bash`、`grep`、`find`、`ls`。省略时默认为全部工具。 |
+| `model` | 否 | 模型 ID 或 role 引用（如 `openai/gpt-4o` 或 `"{{strong}}"`）。回退到宿主默认模型。 |
+| `thinking` | 否 | Thinking 级别：`off`、`low`、`high`、`xhigh`。回退到 `globalThinking` 设置。 |
+
+<Callout type="info">
+  格式错误的 agent 文件永远不会破坏发现过程。运行时会捕获解析错误并跳过坏文件（附带警告），因此其余 agent 仍正常加载。
+</Callout>
+
+### 覆盖内置 agent
+
+要覆盖内置 agent，请在用户或项目 agent 目录中创建同名自定义 agent。层级顺序决定哪个版本胜出：
+
+```markdown title=".pi/agents/executor.md"
+---
+name: executor
+description: Custom executor with project-specific conventions
+tools: read, grep, find, ls, bash, edit, write
+model: "{{strong}}"
+thinking: high
+---
+
+You are the executor agent for the Acme Corp codebase.
+
+Always follow these project-specific rules:
+- Use TypeScript strict mode
+- Prefer functional patterns over classes
+- Write tests for all public functions
+- Run `pnpm typecheck` before committing
+```
+
+这个项目级 `executor` 会替换内置 `executor`，对在此项目中运行的任何 flow 生效。`~/.pi/agent/agents/executor.md` 中的用户级覆盖则会在你所有项目中生效。
+
+<Callout type="warn">
+  覆盖按精确名称匹配。`my-executor` 不会覆盖 `executor`。如果你想要一个变体，请给它起不同的名字，并在你的 flow 中显式引用。
+</Callout>
+
+## Flow 中的 agent 解析
+
+当一个 phase 运行时，运行时通过一个特定过程解析其 agent：
+
+<Steps>
+  <Step>
+    **检查 phase 的 `agent` 字段。** 如果 phase 指定了 agent 名称，在发现结果中查找它。
+  </Step>
+  <Step>
+    **对未知 agent 发出警告。** 如果指定的 agent 在发现结果中不存在，记录一条警告（每个未知 agent 每次运行一次），并回退到默认 agent。
+  </Step>
+  <Step>
+    **回退到默认 agent。** 默认值是发现结果中的第一个 agent——通常是按字母序的第一个内置 agent，除非用户或项目 agent 覆盖了它。如果根本没有任何 agent，则使用名称 `"default"`。
+  </Step>
+</Steps>
+
+### 在 phase 中指定 agent
+
+大多数 phase 显式指定 agent：
+
+```json title="phase-with-agent.json"
+{
+  "id": "review",
+  "type": "agent",
+  "agent": "reviewer",
+  "task": "Review the code changes for quality issues."
+}
+```
+
+你也可以省略 `agent` 字段。该 phase 会使用默认 agent：
+
+```json title="phase-without-agent.json"
+{
+  "id": "review",
+  "type": "agent",
+  "task": "Review the code changes for quality issues."
+}
+```
+
+<Callout type="info">
+  默认 agent 取决于你的 `agentScope` 以及每层中存在哪些 agent。为了在不同环境下行为可预测，请显式指定 agent。
+</Callout>
+
+### Phase 级别覆盖
+
+Phase 可以覆盖 agent 的 model、thinking 级别和工具访问，而无需修改 agent 文件：
+
+```json title="phase-with-overrides.json"
+{
+  "id": "deep-review",
+  "type": "agent",
+  "agent": "reviewer",
+  "model": "anthropic/claude-3.5-sonnet",
+  "thinking": "xhigh",
+  "tools": ["read", "grep"],
+  "task": "Deep review of the authentication module."
+}
+```
+
+这些覆盖只对该次 phase 调用生效。未覆盖的 phase 仍使用 agent frontmatter 的设置。
+
+| 覆盖 | 效果 |
+|---|---|
+| `model` | 替换该 phase 的 agent 模型。接受 role（`"{{strong}}"`）或字面模型 ID。 |
+| `thinking` | 覆盖 thinking 级别：`off`、`low`、`high`、`xhigh`。 |
+| `tools` | 限制工具集。对不应修改文件的只读 phase 很有用。 |
+
+### 分支与子 phase
+
+带多个分支的 phase 类型（`parallel`、`tournament`）允许每个分支指定自己的 agent：
+
+```json title="parallel-with-per-branch-agents.json"
+{
+  "id": "review-all",
+  "type": "parallel",
+  "branches": [
+    {
+      "agent": "security-reviewer",
+      "task": "Review for security vulnerabilities."
+    },
+    {
+      "agent": "risk-reviewer",
+      "task": "Review for data integrity risks."
+    },
+    {
+      "agent": "reviewer",
+      "task": "Review for general code quality."
+    }
+  ]
+}
+```
+
+未指定 agent 的分支继承父 phase 的 agent。Tournament phase 还支持 `judgeAgent` 字段用于 judge 步骤，默认为 phase 的主 agent。
+
+### 子 flow 中的继承
+
+当一个 `flow` phase 生成一个内联子 flow 时，未指定自己 agent 的内部 phase 会继承父 phase 的 `defaultAgent`（或 `agent` 字段）。这意味着父层级的单次 agent 赋值会级联到每个未覆盖的子 phase。
+
+## 实用示例
+
+### 多阶段审查流水线
+
+不同的 agent 处理不同的审查关注点，最后的 arbiter 综合结果：
+
+```json title="multi-stage-review.json"
+{
+  "name": "review-pipeline",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "task": "Analyze the code changes and create a review plan."
+    },
+    {
+      "id": "security-review",
+      "type": "agent",
+      "agent": "security-reviewer",
+      "dependsOn": ["plan"],
+      "task": "Review for security issues based on this plan: {steps.plan.output}"
+    },
+    {
+      "id": "quality-review",
+      "type": "agent",
+      "agent": "reviewer",
+      "dependsOn": ["plan"],
+      "task": "Review for code quality: {steps.plan.output}"
+    },
+    {
+      "id": "synthesis",
+      "type": "agent",
+      "agent": "final-arbiter",
+      "dependsOn": ["security-review", "quality-review"],
+      "task": "Synthesize these reviews and resolve any conflicts:\n\nSecurity: {steps.security-review.output}\n\nQuality: {steps.quality-review.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+### 自定义领域 agent
+
+为你的领域创建一个专用 agent，然后在 flow 中引用它：
+
+```markdown title=".pi/agents/api-designer.md"
+---
+name: api-designer
+description: Design RESTful APIs following OpenAPI 3.0 spec
+tools: read, grep, find, ls, write
+model: "{{strong}}"
+thinking: high
+---
+
+You are an API designer specializing in RESTful APIs.
+
+Follow these principles:
+- Use nouns for resource names, verbs for actions
+- Return appropriate HTTP status codes
+- Include pagination for list endpoints
+- Version APIs in the URL path (e.g., /v1/users)
+- Write OpenAPI 3.0 specs in YAML format
+```
+
+```json title="api-design-flow.json"
+{
+  "id": "design-api",
+  "type": "agent",
+  "agent": "api-designer",
+  "output": "text",
+  "task": "Design a REST API for a task management system with projects, tasks, and users."
+}
+```
+
+### 项目范围的团队工作流
+
+使用 `agentScope: "project"`，让每个团队成员获得相同的 agent 行为：
+
+```json title="team-review.json"
+{
+  "name": "team-review",
+  "agentScope": "project",
+  "phases": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agent": "team-reviewer",
+      "task": "Review the code using team standards documented in .pi/agents/team-reviewer.md."
+    }
+  ]
+}
+```
+
+配合 `.pi/agents/team-reviewer.md` 中编码了你们团队特定审查标准的项目 agent。这个 flow 对团队中的每个人运行方式相同，不受他们个人 agent 目录的影响。
+
+## 下一步
+
+<Cards>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    了解全部 10 种 phase 类型以及何时使用每一种。
+  </Card>
+  <Card title="Tournament 选择" href="/zh-cn/docs/guides/tournament">
+    生成竞争变体并让 judge 挑选最佳结果。
+  </Card>
+  <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
+    在运行时生成子 flow 并在执行前校验它们。
+  </Card>
+</Cards>

@@ -23,6 +23,7 @@
     "---指南---",
     "guides/pi",
     "guides/codex",
+    "guides/agents-and-model-roles",
     "guides/dynamic-planning",
     "guides/tournament",
     "guides/background-runs",
