@@ -692,7 +692,7 @@ export default async function HomePage({
 						</a>
 					</div>
 
-					<div className="animate-fade-in animate-fade-in-delay-3 relative z-10 -mt-6 w-full max-w-3xl md:-mt-12">
+					<div className="animate-fade-in animate-fade-in-delay-3 relative z-10 mt-10 w-full max-w-3xl md:mt-14">
 						<figure
 							className="code-window relative w-full overflow-hidden rounded-2xl glass gradient-border"
 							aria-label={t.code.label}
