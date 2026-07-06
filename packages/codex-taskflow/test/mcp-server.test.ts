@@ -138,6 +138,44 @@ test("mcp: tools/call taskflow_verify flags a cycle as an error", async () => {
 	assert.match(res.result.content[0].text, /FAILED/);
 });
 
+test("mcp: tools/call taskflow_verify validates a flow from defineFile (shared on-disk draft)", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const def = { name: "from-file", phases: [{ id: "a", type: "agent", agent: "executor", task: "do", final: true }] };
+	const f = path.join(os.tmpdir(), `tf-definefile-${process.pid}-${Date.now()}.json`);
+	fs.writeFileSync(f, JSON.stringify(def));
+	try {
+		const [res] = await rpcRoundtrip([
+			{
+				jsonrpc: "2.0",
+				id: 99,
+				method: "tools/call",
+				params: { name: "taskflow_verify", arguments: { defineFile: f } },
+			},
+		]);
+		assert.ok(res.result.content[0].text.includes("verification"), "verify reads the flow from defineFile");
+	} finally {
+		fs.unlinkSync(f);
+	}
+});
+
+test("mcp: taskflow_verify with a missing defineFile returns a clear error", async () => {
+	const [res] = await rpcRoundtrip([
+		{
+			jsonrpc: "2.0",
+			id: 100,
+			method: "tools/call",
+			params: {
+				name: "taskflow_verify",
+				arguments: { defineFile: "/tmp/taskflow-definitely-missing-xyz.json" },
+			},
+		},
+	]);
+	assert.equal(res.error.code, -32602);
+	assert.match(res.error.message, /defineFile not found or unparseable/);
+});
+
 test("mcp: tools/call unknown tool returns invalid-params", async () => {
 	const [res] = await rpcRoundtrip([
 		{ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "nope", arguments: {} } },
