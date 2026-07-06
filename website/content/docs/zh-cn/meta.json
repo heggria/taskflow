@@ -10,6 +10,8 @@
     "concepts/interpolation",
     "concepts/verification",
     "concepts/context-isolation",
+    "concepts/shared-context-tree",
+    "concepts/workspace-isolation",
     "concepts/resume",
     "---语法参考---",
     "syntax/flow-definition",

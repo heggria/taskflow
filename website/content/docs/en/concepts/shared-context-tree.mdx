@@ -1,0 +1,339 @@
+---
+title: Shared Context Tree
+description: How isolated subagents cooperate without breaking context isolation.
+---
+
+Imagine a security audit flow: ten parallel subagents review ten different files, but all need the same architecture diagram the first agent already read. Without coordination, each agent reads the diagram independently—ten times the tokens, ten times the cost. Or imagine a parent agent that needs to steer its children mid-flight: "skip module X, we found a critical bug there." Without an upward channel, the parent can only watch and hope.
+
+taskflow solves both problems with the Shared Context Tree.
+
+## Two problems, one substrate
+
+The Shared Context Tree is the IPC layer that lets isolated subagent processes cooperate while preserving the context isolation guarantee (intermediate transcripts never enter your conversation). It solves two distinct problems:
+
+**Horizontal coordination** (the blackboard): sibling subagents share findings with each other. The first agent to read an expensive document publishes a summary; the next nine read the summary instead of the original.
+
+**Vertical supervision** (the tree): child subagents report upward to their parent, and parents can spawn new children dynamically. A parent reviews its children's work and decides whether to escalate, retry, or move on.
+
+```txt title="The two channels"
+Horizontal (blackboard)          Vertical (supervision)
+                                 
+Agent A ——writes——┐              Agent Parent
+                  │                   │
+Agent B ——reads——─┤              ┌────┴────┐
+                  │              │         │
+Agent C ——reads——─┘           Child 1   Child 2
+                                │         │
+                              report    report
+                                │         │
+                                └────┬────┘
+                                     ▼
+                                   Parent
+```
+
+Both channels live in the same on-disk directory, guarded by the same atomic-write and file-lock primitives as the run store. Both are opt-in and bounded.
+
+## The four tools
+
+When a phase opts into shared context, its subagent receives four tools:
+
+```json title="Opting in per-phase"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json.files}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path} for vulnerabilities."
+}
+```
+
+The subagent can now call:
+
+- **`ctx_write(key, value)`** — publish a finding to the shared blackboard.
+- **`ctx_read(key?)`** — read findings from the blackboard (optionally a single key).
+- **`ctx_report(summary, structured?)`** — send a summary upward to the parent.
+- **`ctx_spawn(assignments[])`** — queue child tasks the runtime picks up after this agent finishes.
+
+<Steps>
+  <Step title="Publish a finding">
+    The first reviewer reads the architecture diagram and publishes a summary:
+    
+    ```json title="ctx_write call"
+    {
+      "key": "architecture-summary",
+      "value": {
+        "pattern": "microservices",
+        "critical_paths": ["/auth", "/payment"],
+        "trust_boundaries": ["api-gateway", "service-mesh"]
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Read findings">
+    The next nine reviewers read the summary instead of re-reading the diagram:
+    
+    ```json title="ctx_read call"
+    {
+      "key": "architecture-summary"
+    }
+    ```
+    
+    Each saves the tokens the first agent spent on the full read.
+  </Step>
+  
+  <Step title="Report upward">
+    When a reviewer finishes, it reports its verdict:
+    
+    ```json title="ctx_report call"
+    {
+      "summary": "Found 2 critical issues in /auth/oauth.ts",
+      "structured": {
+        "severity": "critical",
+        "issues": ["CSRF-token-leak", "SQL-injection"]
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="Spawn children">
+    A reviewer discovers a submodule that needs deeper inspection and queues child tasks:
+    
+    ```json title="ctx_spawn call"
+    {
+      "assignments": [
+        {
+          "task": "Deep-audit /auth/oauth.ts for token handling",
+          "agent": "security-reviewer"
+        },
+        {
+          "task": "Check /auth/session.ts for session fixation",
+          "agent": "security-reviewer"
+        }
+      ]
+    }
+    ```
+    
+    The runtime picks up these assignments after the parent agent finishes and runs them as child nodes in the supervision tree.
+  </Step>
+</Steps>
+
+## Who sees what
+
+The blackboard is not a free-for-all. Visibility is scoped to prevent reading half-written work:
+
+**A node sees:**
+
+- Its **own** findings, always (even while still running).
+- The findings of its **ancestors** (parent, grandparent, etc.).
+- The findings of **completed siblings** — never a sibling that is still running.
+
+That last rule is load-bearing. You never read a half-written blackboard. A sibling's findings become visible only once it has reported completion (`status: "done"` or `"failed"`), so you see a finished result, not a work-in-progress.
+
+```txt title="Visibility in a fan-out"
+Parent (done)
+  ├─ writes: "architecture-summary"
+  │
+  └─ Children (parallel map):
+      ├─ child-1 (running) → sees: parent's findings + own findings
+      ├─ child-2 (done)    → sees: parent's findings + own findings + child-2's findings
+      └─ child-3 (running) → sees: parent's findings + own findings
+                             (child-2 is visible because it is done)
+```
+
+**Key conflicts:** when two nodes write the same key, nearer scope wins. A node's own findings override its ancestors', and ancestors override completed siblings. This matches the intuition that a node trusts its own notes most.
+
+## On-disk layout
+
+The Shared Context Tree lives in a per-run directory under `<runs-root>/ctx/<run-id>/`:
+
+```txt title="Directory structure"
+<ctxDir>/
+├── tree.json                  the node tree (who spawned whom + status)
+├── tree.json.lock             lock guarding tree.json RMW cycles
+├── findings/
+│   ├── <nodeId>.json          findings written by one node (last-write-wins per key)
+│   └── <nodeId>.json.lock     per-node lock (siblings never contend)
+├── reports/
+│   └── <nodeId>.json          a node's upward report ({summary, structured?})
+└── pending/
+    └── <nodeId>-<seq>.json    a ctx_spawn intent the runtime will pick up
+```
+
+**Why per-node findings files** (not one shared `findings.json`): sibling subagents run concurrently. Giving each node its own file means concurrent writers never contend on the same lock—a node only locks its own file. A reader unions the relevant nodes' files (its ancestors plus completed siblings). This is the same "shard by writer" trick the run index uses to avoid a global write bottleneck.
+
+**Atomic writes and locks:** every file operation uses `writeFileAtomic` (write to temp, then `renameSync`) and `withLock` (file-based lock with stale-lock steal), the same primitives as `store.ts`. The tree inherits the project's "all file ops are atomic" invariant for free.
+
+## Limits and safety
+
+The Shared Context Tree is opt-in precisely because it punches a hole in context isolation. To keep that hole small, every channel is capped:
+
+| Channel | Limit | Rationale |
+|---------|-------|-----------|
+| Single finding value | 256 KB | Prevent a runaway tool call from filling the disk |
+| Single report summary | 256 KB | Same |
+| Report structured payload | 256 KB | Same |
+| Keys per node | 256 | Bound the size of one node's blackboard |
+| Spawn assignments per call | 16 | Prevent unbounded fan-out |
+| Spawn task prompt | 64 KB | Cap the size of a dynamically queued task |
+| Spawn subflow payload | 256 KB | Cap the size of an inline sub-DAG |
+| Key charset | `[A-Za-z0-9._-]` (≤128 chars) | Prevent path traversal and collisions |
+
+**What happens when you hit a limit:** the tool call throws an error that the subagent sees as a tool failure. The agent can retry with a smaller value, skip the write, or fail the phase—the runtime does not crash.
+
+**What is cleaned up:** the entire `<ctxDir>` is scoped to one run. When the run is cleaned up (per your retention policy), the context tree goes with it. Nothing leaks across runs or sessions.
+
+## Enabling shared context
+
+You can opt in at two levels:
+
+### Per-phase: `shareContext`
+
+Enable shared context for a single phase:
+
+```json title="Per-phase opt-in"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json.files}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "Review {file.path}."
+}
+```
+
+### Flow-wide: `contextSharing`
+
+Enable shared context for every phase in the flow:
+
+```json title="Flow-wide opt-in"
+{
+  "name": "security-audit",
+  "contextSharing": true,
+  "phases": [
+    { "id": "discover", "type": "agent", "agent": "scout", "task": "..." },
+    { "id": "review-each", "type": "map", "over": "...", "task": "..." },
+    { "id": "summarize", "type": "agent", "agent": "auditor", "task": "..." }
+  ]
+}
+```
+
+**Precedence:** `shareContext` takes precedence over `contextSharing`. If you set `contextSharing: true` on the flow but `shareContext: false` on one phase, that phase is excluded. This lets you enable sharing globally and carve out exceptions.
+
+<Callout type="warn">
+  Shared context is a tradeoff. You gain efficiency and cooperation at the cost of phases no longer being fully independent. Leave it off until you have a concrete reason to turn it on—a shared expensive read, or a parent that needs to steer its children.
+</Callout>
+
+## Concrete use cases
+
+### Deduplicating expensive reads
+
+Ten parallel reviewers all need the same 50-page architecture document. The first reviewer reads it and publishes a 2-page summary to the blackboard. The next nine read the summary instead of the original, saving ~48 pages of context per agent.
+
+```json title="Dedup pattern"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.list-files.json}",
+  "as": "file",
+  "agent": "reviewer",
+  "task": "If ctx_read('architecture-summary') is empty, read ARCHITECTURE.md and ctx_write('architecture-summary', <2-page summary>). Then review {file.path} using the summary."
+}
+```
+
+### Parent steering children
+
+A parent agent reviews its children's work and decides mid-flight to skip a module:
+
+```json title="Steering pattern"
+{
+  "id": "parent",
+  "type": "agent",
+  "shareContext": true,
+  "agent": "coordinator",
+  "task": "Review the initial scan. If /auth is broken, ctx_write('skip-auth', true) so your children skip it."
+}
+```
+
+Children check the blackboard before starting work:
+
+```json title="Child checks parent's finding"
+{
+  "id": "children",
+  "type": "map",
+  "shareContext": true,
+  "dependsOn": ["parent"],
+  "over": "{steps.list-modules.json}",
+  "as": "module",
+  "agent": "auditor",
+  "task": "If ctx_read('skip-auth') and {module.path} starts with '/auth', skip. Otherwise audit {module.path}."
+}
+```
+
+### Dynamic fan-out with ctx_spawn
+
+A reviewer discovers a submodule that needs deeper inspection and spawns child tasks dynamically:
+
+```json title="Dynamic spawn pattern"
+{
+  "id": "reviewer",
+  "type": "agent",
+  "shareContext": true,
+  "agent": "security-reviewer",
+  "task": "Review /auth. If you find submodules that need deep-audit, ctx_spawn them as child tasks."
+}
+```
+
+The runtime picks up the spawn intents after the reviewer finishes and runs them as child nodes in the supervision tree. Each child inherits the parent's context (it sees the parent's findings) and can itself spawn grandchildren.
+
+### Aggregating reports
+
+A parent collects structured reports from its children and decides whether to escalate:
+
+```json title="Aggregation pattern"
+{
+  "id": "parent",
+  "type": "reduce",
+  "shareContext": true,
+  "dependsOn": ["children"],
+  "agent": "coordinator",
+  "task": "Read ctx_report() from each child. If any report has severity='critical', escalate to the user. Otherwise summarize."
+}
+```
+
+## Resume safety
+
+The Shared Context Tree is resume-safe. When a run resumes:
+
+- **Tree nodes are upserted** by `nodeId`, so a re-run does not duplicate tree entries (which would double-count ancestor findings).
+- **`dedicated` workspaces** (if you use worktree isolation alongside shared context) reuse the same directory path per `(runId, phaseId)`.
+- **Findings persist** across resume, so a phase that already published findings does not need to re-publish them.
+
+This means you can resume a long-running flow without losing the cooperation state its phases built up.
+
+## The contract, restated
+
+The Shared Context Tree has two load-bearing guarantees:
+
+1. **Opt-in and bounded.** Shared context is disabled by default. When enabled, every channel is capped so cooperation cannot run away.
+2. **Atomic and isolated.** Every write is atomic and locked. Siblings never contend on the same lock. Nothing leaks across runs.
+
+Together they mean you can coordinate complex multi-agent workflows without sacrificing the safety and predictability that context isolation provides.
+
+## Next
+
+<Cards>
+  <Card title="Context Isolation" href="/en/docs/concepts/context-isolation">
+    The default behavior shared context builds on.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    How the ten phase types use shared context.
+  </Card>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    How shared context survives across sessions.
+  </Card>
+</Cards>

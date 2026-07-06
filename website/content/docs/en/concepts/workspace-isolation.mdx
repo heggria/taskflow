@@ -1,0 +1,281 @@
+---
+title: Workspace Isolation
+description: How taskflow gives each phase its own working directory — and cleans up afterwards.
+---
+
+Most phases run in the directory where you launched the flow. That is fine when the subagent is reading code, but it becomes a liability the moment a phase writes files, runs a build, or makes git commits. Two parallel branches editing the same `src/index.ts` will clobber each other. A failed experiment leaves artifacts in your tree that the next phase has to work around. A `script` phase that runs `npm install` pollutes your `node_modules` with packages only one subagent needed.
+
+Workspace isolation solves all of this with one field on the phase definition: `cwd`.
+
+## The three reserved keywords
+
+Set a phase's `cwd` to one of three reserved keywords and the runtime allocates an isolated working directory for it before execution, then tears it down afterwards. Leave `cwd` as a literal path (or omit it entirely) and the phase runs in the default directory as before — isolation is opt-in.
+
+```txt title="The three workspace modes"
+cwd: "temp"        →  /tmp/pi-tf-ws-<phase>-XXXXXX   (removed after phase)
+cwd: "dedicated"   →  <runs>/ws/<runId>/<phaseId>    (kept for inspection)
+cwd: "worktree"    →  git worktree on throwaway branch (removed after phase)
+```
+
+Each mode trades isolation against persistence. The right choice depends on whether the phase's side effects should survive the run.
+
+### `temp` — ephemeral scratch space
+
+A `temp` workspace is an OS-level temporary directory created via `fs.mkdtempSync` under the system's `os.tmpdir()`. The prefix `pi-tf-ws-<phaseId>-` makes the directory identifiable in `/tmp` listings; the random suffix guarantees uniqueness across concurrent phases.
+
+```json title="A phase that drafts code without touching your tree"
+{
+  "id": "draft-patch",
+  "type": "agent",
+  "cwd": "temp",
+  "task": "Write a patch for the issue described below.\n{steps.analyze.output}"
+}
+```
+
+**Cleanup:** The directory is recursively deleted when the phase finishes — on success or failure. The deletion is best-effort and contained: the runtime refuses to remove anything outside the OS tmpdir, so a future bug in path construction can never delete your project.
+
+**When to use:** Drafting experiments, code generation, intermediate file transforms, anything that produces files you do not need after the phase completes. If the phase's value is its text output (captured by the runtime), not its filesystem artifacts, `temp` is the right choice.
+
+### `dedicated` — persistent per-phase directory
+
+A `dedicated` workspace is a directory under the run's state tree at `<runsRoot>/ws/<runId>/<phaseId>`. It is created with `mkdirSync({ recursive: true })` and — critically — **never deleted** by the runtime.
+
+```json title="A phase whose artifacts you want to inspect afterwards"
+{
+  "id": "generate-report",
+  "type": "agent",
+  "cwd": "dedicated",
+  "task": "Generate a full HTML report from the audit data.\n{steps.audit.json}"
+}
+```
+
+**Cleanup:** None. The directory persists alongside the run state. It is cleaned up only when the run itself is pruned by the retention policy (`maxKeptRuns` / `maxRunAgeDays`).
+
+**Resume behavior:** The path is deterministic per `(runId, phaseId)`. If you resume a failed run, the same directory is reused — existing artifacts from the prior attempt are still there. This is by design: a `dedicated` workspace is the one mode where the runtime assumes you want to inspect or accumulate artifacts across attempts.
+
+**When to use:** Phases that produce files you want to review after the run (reports, generated code, test fixtures). Also useful for phases whose downstream siblings need to read artifacts from disk rather than through the interpolation system.
+
+### `worktree` — a real git worktree on a throwaway branch
+
+A `worktree` workspace is a genuine `git worktree add -b <branch> <dir> HEAD` invocation. The branch is named `tf/<runId>/<phaseId>-<timestamp>` (base-36 timestamp for compactness) and the working directory is allocated under the OS tmpdir, then populated by git with a full checkout of `HEAD`.
+
+```json title="A phase that makes isolated git commits"
+{
+  "id": "apply-migration",
+  "type": "agent",
+  "cwd": "worktree",
+  "task": "Apply the database migration plan from the previous step. Commit each migration file separately."
+}
+```
+
+**Cleanup:** On phase completion, the runtime runs `git worktree remove --force <dir>` (with a 30-second timeout), then `rmrf`s the directory as defense-in-depth, then `git branch -D <branch>` (with a 10-second timeout). Every step is best-effort: a leftover worktree or branch is harmless and does not fail the phase.
+
+**The fail-open fallback:** A worktree requires the phase's base directory to be inside a git work tree. When it is not — the base directory has no `.git`, or `git rev-parse --is-inside-work-tree` fails — the runtime degrades gracefully to a `temp` workspace. The phase still runs in an isolated directory; it just loses git semantics. A warning is attached to the phase's `warnings` array:
+
+```txt title="Warning on a degraded worktree"
+workspace:temp — worktree requested but base cwd is not a git work tree; used a temp dir instead
+```
+
+The same fallback applies if `git worktree add` itself fails (e.g. a conflicting branch name, a detached HEAD, or a 60-second timeout). The runtime cleans up the failed allocation and retries with `temp`.
+
+**When to use:** Phases that need to make git commits, run diffs, apply patches, or operate on a copy of the repository that can be discarded without affecting the main working tree. A tournament with N variants, each making independent commits, is the canonical use case.
+
+## How the runtime integrates
+
+The lifecycle is straightforward:
+
+```txt title="Workspace lifecycle in the runtime"
+1. phase.cwd is a keyword?
+   NO  → run phase in deps.cwd (default path). Done.
+   YES ↓
+2. allocateWorkspace(keyword, {baseCwd, runId, phaseId, runsRoot})
+   → Workspace { dir, kind, teardown, branch?, note? }
+3. Override deps.cwd → ws.dir for the phase's subagent(s)
+4. Execute the phase
+5. Attach workspace diagnostics to PhaseState.warnings (if degraded)
+6. ws.teardown() in a finally block (best-effort)
+```
+
+The teardown runs in a `finally` block, so it fires whether the phase succeeds, fails, or is aborted. The teardown itself is wrapped in `try/catch` — a cleanup error never replaces the phase's real outcome (the "safe emit" invariant from the project's error-handling conventions).
+
+## Fail-open, always
+
+Every workspace mode degrades rather than fails. The full degradation ladder:
+
+| Failure | Degradation |
+|---|---|
+| `temp`: `mkdtempSync` throws | Falls back to `baseCwd` (the run's default directory) with a warning |
+| `dedicated`: `mkdirSync` throws | Falls back to `baseCwd` with a warning |
+| `worktree`: base is not a git repo | Falls back to `temp` (still isolated, no git) |
+| `worktree`: temp dir allocation fails | Falls back to `temp` retry, then `baseCwd` |
+| `worktree`: `git worktree add` fails | Falls back to `temp` (with git stderr in the warning) |
+| Any teardown error | Silently swallowed; best-effort cleanup |
+
+In every case, the phase still runs. The runtime attaches a `note` to the workspace handle that surfaces as a `PhaseState.warnings` entry, so the degradation is visible in `/tf peek` but never blocks the run.
+
+```txt title="Example warning from a degraded workspace"
+workspace — dedicated workspace alloc failed: EACCES: permission denied
+```
+
+<Callout type="info">
+  The fail-open design is deliberate: a workspace is an isolation enhancement, not a correctness requirement. A phase that runs in the base directory instead of an isolated one may leave artifacts behind, but it still produces a correct result. The alternative — failing the phase because `/tmp` is full — would be strictly worse.
+</Callout>
+
+## Resume safety
+
+Resume (the cross-session replay system documented in [Resume](/en/docs/concepts/resume)) interacts with workspaces in specific ways:
+
+- **`temp`** and **`worktree`** are re-allocated from scratch on every run. If a phase is resumed (its input changed, or you forced a re-run), a fresh directory is created. The old temp/worktree directory was already torn down when the prior attempt finished.
+- **`dedicated`** is deterministic: the path `<runs>/ws/<runId>/<phaseId>` is the same across resume attempts. If the prior attempt left files behind, they are still there when the re-run starts. This is intentional — a `dedicated` workspace is the accumulation mode.
+- A phase that was cached (input hash unchanged, result restored) never triggers workspace allocation at all. The cached result is reused without re-running the subagent, so no directory is created or touched.
+
+<Callout type="warn">
+  A `dedicated` workspace accumulates across resume attempts. If a phase writes `output.json` on attempt 1, then fails and is re-run on attempt 2, the file from attempt 1 is still in the directory when attempt 2 starts. Design `dedicated` phases to be idempotent or to check for existing artifacts.
+</Callout>
+
+## Path containment
+
+The runtime enforces containment at two levels:
+
+1. **`dedicated` dirs are rooted under the run state.** The path `<runsRoot>/ws/<runId>/<phaseId>` is constructed from sanitized segments — phase ids are run through `safeSegment()`, which strips anything outside `[A-Za-z0-9._-]`, collapses leading dots, and caps at 100 characters. A phase id like `../../etc` becomes `______etc`.
+
+2. **`temp` and `worktree` deletion is root-restricted.** The `rmrf` helper refuses to delete anything outside the OS tmpdir and the run's own `ws/` tree. Even if a future bug produced a wrong path, the containment check prevents deletion of project files.
+
+3. **Dynamic sub-flows cannot use workspace keywords at all.** A generated sub-flow (one authored by an LLM via `flow { def }` or `ctx_spawn`) is rejected by validation if any phase sets `cwd` to `temp`, `dedicated`, or `worktree`. LLM-authored plans must not allocate isolated directories or create git worktrees that mutate the repository. Only author-written flows may use workspace isolation.
+
+## Choosing the right mode
+
+```txt title="Decision tree"
+Does the phase write files you need after it finishes?
+  YES → dedicated
+  NO  ↓
+Does the phase need git (commits, diffs, branches)?
+  YES → worktree
+  NO  → temp
+```
+
+| Mode | Isolated | Persistent | Git | Cleanup | Resume |
+|---|---|---|---|---|---|
+| `temp` | ✓ | ✗ | ✗ | Removed on finish | Re-allocated |
+| `dedicated` | ✓ | ✓ | ✗ | Kept until run pruned | Same dir reused |
+| `worktree` | ✓ | ✗ | ✓ | Worktree + branch removed | Re-allocated |
+
+## Examples
+
+### Parallel experiments without conflicts
+
+Two phases that each generate a full implementation, running in parallel. Without isolation they would write to the same files:
+
+```json title="Parallel isolated drafts"
+{
+  "name": "compare-approaches",
+  "phases": [
+    {
+      "id": "approach-a",
+      "type": "agent",
+      "cwd": "temp",
+      "task": "Implement the feature using approach A."
+    },
+    {
+      "id": "approach-b",
+      "type": "agent",
+      "cwd": "temp",
+      "task": "Implement the feature using approach B."
+    },
+    {
+      "id": "judge",
+      "type": "agent",
+      "task": "Compare:\nA: {steps.approach-a.output}\nB: {steps.approach-b.output}",
+      "dependsOn": ["approach-a", "approach-b"],
+      "final": true
+    }
+  ]
+}
+```
+
+Each draft runs in its own temp directory. Neither can see or overwrite the other's files.
+
+### A tournament with git commits
+
+Each variant makes independent commits on its own branch, then the judge picks the best:
+
+```json title="Tournament with worktree isolation"
+{
+  "name": "refactor-tournament",
+  "phases": [
+    {
+      "id": "variant-1",
+      "type": "agent",
+      "cwd": "worktree",
+      "task": "Refactor the auth module using strategy pattern. Commit each file change."
+    },
+    {
+      "id": "variant-2",
+      "type": "agent",
+      "cwd": "worktree",
+      "task": "Refactor the auth module using middleware chain. Commit each file change."
+    },
+    {
+      "id": "judge",
+      "type": "gate",
+      "task": "Review both refactor approaches. Output VERDICT: PASS for the better one with justification.",
+      "dependsOn": ["variant-1", "variant-2"],
+      "final": true
+    }
+  ]
+}
+```
+
+Each variant gets its own worktree on a throwaway branch (`tf/<runId>/variant-1-<ts>` and `tf/<runId>/variant-2-<ts>`). Commits are real git commits, fully isolated from the main tree. Both worktrees and branches are cleaned up when their phases finish.
+
+### An audit that leaves artifacts for review
+
+```json title="Dedicated workspace for inspectable output"
+{
+  "name": "security-audit",
+  "phases": [
+    {
+      "id": "scan",
+      "type": "agent",
+      "cwd": "dedicated",
+      "task": "Scan the codebase for vulnerabilities. Write a findings.json file with all issues found."
+    },
+    {
+      "id": "report",
+      "type": "agent",
+      "task": "Read the scan results:\n{steps.scan.output}\nWrite a human-readable summary.",
+      "dependsOn": ["scan"],
+      "final": true
+    }
+  ]
+}
+```
+
+The `scan` phase's `dedicated` workspace keeps `findings.json` on disk after the run completes. You can inspect it with `/tf peek` or find it directly under the run's `ws/` directory.
+
+## Warnings and diagnostics
+
+When a workspace degrades or encounters an issue, the runtime attaches a warning to the phase state. These are visible in `/tf peek <runId>` and in the persisted run record:
+
+```txt title="Workspace warning examples"
+workspace:temp at /tmp/pi-tf-ws-draft-patch-a1b2c3/
+workspace:temp — worktree requested but base cwd is not a git work tree; used a temp dir instead
+workspace — dedicated workspace alloc failed: EACCES: permission denied
+workspace:worktree at /tmp/pi-tf-wt-apply-migration-x4y5z6/ (branch: tf/abc123/apply-migration-m3k2j1)
+```
+
+A warning that says `workspace:<kind> at <path>` is informational — the workspace was allocated successfully. A warning with `—` after the kind indicates degradation.
+
+## Next
+
+<Cards>
+  <Card title="Context Isolation" href="/en/docs/concepts/context-isolation">
+    Workspace isolation handles the filesystem; context isolation handles the transcript.
+  </Card>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    How cached phases skip workspace allocation entirely.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The `script` phase type and when workspace isolation matters most.
+  </Card>
+</Cards>
