@@ -24,6 +24,13 @@ const site = {
 // Example: 'abc123...'
 const GOOGLE_SITE_VERIFICATION = process.env.GOOGLE_SITE_VERIFICATION || '';
 
+// The site is deployed under a GitHub Pages subpath (/taskflow), so every
+// metadata asset URL (favicon, apple-touch-icon, manifest, icon PNGs) must be
+// prefixed with the configured basePath. Next.js does NOT apply basePath to
+// <link rel="icon"> / <link rel="manifest"> under `output: export`, so we do
+// it explicitly here. Locally (TASKFLOW_BASE_PATH unset) this is just ''.
+const base = process.env.TASKFLOW_BASE_PATH || '';
+
 export async function generateMetadata({
   params,
 }: {
@@ -48,8 +55,22 @@ export async function generateMetadata({
       },
     },
     icons: {
-      icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
+      // Explicit basePath — Next.js omits it for <link> under output:export.
+      icon: [{ url: `${base}/favicon.svg`, type: 'image/svg+xml' }],
+      apple: [{ url: `${base}/apple-icon`, sizes: '180x180', type: 'image/png' }],
     },
+    // themeColor + appleWebApp pair with app/manifest.ts and app/apple-icon.tsx
+    // so Safari/iOS/Android render a branded tab, splash, and home-screen icon.
+    themeColor: [
+      { media: '(prefers-color-scheme: light)', color: '#fff7ed' },
+      { media: '(prefers-color-scheme: dark)', color: '#1c1917' },
+    ],
+    appleWebApp: {
+      title: 'taskflow',
+      statusBarStyle: 'default',
+      capable: true,
+    },
+    manifest: `${base}/manifest.webmanifest`,
     verification: GOOGLE_SITE_VERIFICATION
       ? { google: GOOGLE_SITE_VERIFICATION }
       : undefined,

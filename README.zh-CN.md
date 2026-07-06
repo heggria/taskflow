@@ -24,6 +24,10 @@
   <a href="./docs/i18n/README.ru.md">Русский</a>
 </p>
 
+<p align="center">
+  <a href="https://heggria.github.io/taskflow/zh-cn"><img src="https://img.shields.io/badge/📖_阅读文档-heggria.github.io%2Ftaskflow-4B4ACF?style=for-the-badge&labelColor=2D2F5A" alt="阅读文档 — heggria.github.io/taskflow"></a>
+</p>
+
 <p><strong>面向编码智能体子代理（subagent）的声明式、可验证的「任务图」。</strong><br/>
 不是你要去「写脚本」的 workflow——而是你去「声明」的一张 DAG。并发分发（fan out）· 门控（gate）· 恢复（resume）· 保存为命令——中间结果始终远离你的上下文窗口（context window）。<br/>
 可运行于 <a href="https://pi.dev">Pi</a> 编码智能体、<a href="https://github.com/openai/codex">OpenAI Codex</a>、<a href="https://claude.com/product/claude-code">Claude Code</a> 与 <a href="https://opencode.ai">OpenCode</a>。</p>

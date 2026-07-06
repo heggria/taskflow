@@ -91,7 +91,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   and saved flows from the library. `safeParse()` for LLM output remains
   strict. Re-exported from the `taskflow-core` barrel as `parseJsonc`.
 
-## [0.1.6] — 2026-07-06
+## [0.1.5] — 2026-07-03
 
 ### Added
 - **Scoring gates (`score` on `gate` phases).** Deterministic, composable,
