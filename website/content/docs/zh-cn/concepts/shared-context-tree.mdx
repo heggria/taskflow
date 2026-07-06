@@ -1,0 +1,339 @@
+---
+title: 共享上下文树
+description: 隔离的子代理如何在不破坏上下文隔离的前提下进行协作。
+---
+
+想象一个安全审计流程：十个并行的子代理审查十个不同的文件，但都需要读取第一个代理已经读过的同一份架构图。如果没有协调机制，每个代理都会独立读取该图——花费十倍的 token，付出十倍的成本。再想象一个父代理需要在运行过程中引导其子代理："跳过模块 X，我们在那里发现了一个关键 bug。"如果没有向上通道，父代理只能旁观并希望一切顺利。
+
+taskflow 通过共享上下文树（Shared Context Tree）解决了这两个问题。
+
+## 两个问题，一个基础设施
+
+共享上下文树是一个 IPC 层，让隔离的子代理进程能够协作，同时保持上下文隔离保证（中间转录永远不会进入你的对话）。它解决两个不同的问题：
+
+**水平协调**（黑板）：兄弟子代理彼此共享发现。第一个读取昂贵文档的代理发布一个摘要；后面九个代理读取摘要而不是原文。
+
+**垂直监督**（树）：子代理向上报告给其父代理，父代理可以动态生成新的子代理。父代理审查其子代理的工作并决定是升级、重试还是继续。
+
+```txt title="两个通道"
+水平（黑板）                  垂直（监督）
+                                 
+代理 A ——写入——┐              父代理
+               │                 │
+代理 B ——读取——┤              ┌——┴——┐
+               │              │     │
+代理 C ——读取——┘           子1   子2
+                              │     │
+                            报告   报告
+                              │     │
+                              └──┬——┘
+                                 ▼
+                               父代理
+```
+
+两个通道都位于同一个磁盘目录中，由与运行存储相同的原子写入和文件锁原语保护。两者都是可选的且有界的。
+
+## 四个工具
+
+当一个阶段选择加入共享上下文时，其子代理会收到四个工具：
+
+```json title="按阶段选择加入"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json.files}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "审查 {file.path} 中的漏洞。"
+}
+```
+
+子代理现在可以调用：
+
+- **`ctx_write(key, value)`** — 向共享黑板发布发现。
+- **`ctx_read(key?)`** — 从黑板读取发现（可选单个键）。
+- **`ctx_report(summary, structured?)`** — 向上向父代理发送摘要。
+- **`ctx_spawn(assignments[])`** — 排队子任务，运行时在此代理完成后接收。
+
+<Steps>
+  <Step title="发布发现">
+    第一个审查者读取架构图并发布摘要：
+    
+    ```json title="ctx_write 调用"
+    {
+      "key": "architecture-summary",
+      "value": {
+        "pattern": "微服务",
+        "critical_paths": ["/auth", "/payment"],
+        "trust_boundaries": ["api-gateway", "service-mesh"]
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="读取发现">
+    后面九个审查者读取摘要而不是重新读取图表：
+    
+    ```json title="ctx_read 调用"
+    {
+      "key": "architecture-summary"
+    }
+    ```
+    
+    每个审查者都节省了第一个代理完整读取所花费的 token。
+  </Step>
+  
+  <Step title="向上报告">
+    当审查者完成时，它报告其结论：
+    
+    ```json title="ctx_report 调用"
+    {
+      "summary": "在 /auth/oauth.ts 中发现 2 个关键问题",
+      "structured": {
+        "severity": "critical",
+        "issues": ["CSRF-token-leak", "SQL-injection"]
+      }
+    }
+    ```
+  </Step>
+  
+  <Step title="生成子代理">
+    审查者发现一个需要更深入检查的子模块并排队子任务：
+    
+    ```json title="ctx_spawn 调用"
+    {
+      "assignments": [
+        {
+          "task": "深度审计 /auth/oauth.ts 的令牌处理",
+          "agent": "security-reviewer"
+        },
+        {
+          "task": "检查 /auth/session.ts 的会话固定",
+          "agent": "security-reviewer"
+        }
+      ]
+    }
+    ```
+    
+    运行时在父代理完成后接收这些分配，并将它们作为监督树中的子节点运行。
+  </Step>
+</Steps>
+
+## 谁能看到什么
+
+黑板不是自由放养的。可见性受到限制以防止读取半完成的工作：
+
+**一个节点可以看到：**
+
+- 它**自己的**发现，始终（即使在运行时）。
+- 它的**祖先**的发现（父、祖父等）。
+- **已完成的兄弟**的发现——永远不会看到仍在运行的兄弟。
+
+最后一条规则至关重要。你永远不会读取半完成的黑板。兄弟的发现只有在它报告完成（`status: "done"` 或 `"failed"`）后才可见，所以你看到的是完成的结果，而不是进行中的工作。
+
+```txt title="扇出中的可见性"
+父代理（完成）
+  ├─ 写入: "architecture-summary"
+  │
+  └─ 子代理（并行映射）：
+      ├─ child-1（运行中）→ 看到：父的发现 + 自己的发现
+      ├─ child-2（完成）  → 看到：父的发现 + 自己的发现 + child-2 的发现
+      └─ child-3（运行中）→ 看到：父的发现 + 自己的发现
+                           （child-2 可见因为它已完成）
+```
+
+**键冲突：** 当两个节点写入相同的键时，更近的作用域获胜。节点自己的发现覆盖其祖先的，祖先覆盖已完成的兄弟。这符合节点最信任自己笔记的直觉。
+
+## 磁盘布局
+
+共享上下文树位于每个运行的目录 `<runs-root>/ctx/<run-id>/` 下：
+
+```txt title="目录结构"
+<ctxDir>/
+├── tree.json                  节点树（谁生成了谁 + 状态）
+├── tree.json.lock             保护 tree.json RMW 循环的锁
+├── findings/
+│   ├── <nodeId>.json          一个节点写入的发现（每个键最后写入获胜）
+│   └── <nodeId>.json.lock     每节点锁（兄弟永远不会争用）
+├── reports/
+│   └── <nodeId>.json          节点的向上报告（{summary, structured?}）
+└── pending/
+    └── <nodeId>-<seq>.json    运行时将接收的 ctx_spawn 意图
+```
+
+**为什么是每节点发现文件**（而不是一个共享的 `findings.json`）：兄弟子代理并发运行。给每个节点自己的文件意味着并发写入者永远不会争用同一个锁——一个节点只锁定自己的文件。读取者联合相关节点的文件（其祖先加上已完成的兄弟）。这是运行索引用来避免全局写入瓶颈的相同"按写入者分片"技巧。
+
+**原子写入和锁：** 每个文件操作都使用 `writeFileAtomic`（写入临时文件，然后 `renameSync`）和 `withLock`（基于文件的锁，带有过期锁接管），与 `store.ts` 相同的原语。树免费继承了项目的"所有文件操作都是原子的"不变量。
+
+## 限制和安全
+
+共享上下文树是可选的，正是因为它在上下文隔离中打了一个洞。为了保持这个洞小，每个通道都有上限：
+
+| 通道 | 限制 | 理由 |
+|------|------|------|
+| 单个发现值 | 256 KB | 防止失控的工具调用填满磁盘 |
+| 单个报告摘要 | 256 KB | 同上 |
+| 报告结构化负载 | 256 KB | 同上 |
+| 每节点键数 | 256 | 限制一个节点黑板的大小 |
+| 每次调用生成分配数 | 16 | 防止无限扇出 |
+| 生成任务提示 | 64 KB | 限制动态排队任务的大小 |
+| 生成子流程负载 | 256 KB | 限制内联子 DAG 的大小 |
+| 键字符集 | `[A-Za-z0-9._-]`（≤128 字符） | 防止路径遍历和冲突 |
+
+**当你达到限制时会发生什么：** 工具调用抛出错误，子代理将其视为工具失败。代理可以用更小的值重试、跳过写入或使阶段失败——运行时不会崩溃。
+
+**什么被清理：** 整个 `<ctxDir>` 作用于一个运行。当运行被清理时（根据你的保留策略），上下文树也随之清理。没有东西会跨运行或会话泄漏。
+
+## 启用共享上下文
+
+你可以在两个级别选择加入：
+
+### 按阶段：`shareContext`
+
+为单个阶段启用共享上下文：
+
+```json title="按阶段选择加入"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.discover.json.files}",
+  "as": "file",
+  "agent": "security-reviewer",
+  "task": "审查 {file.path}。"
+}
+```
+
+### 流程范围：`contextSharing`
+
+为流程中的每个阶段启用共享上下文：
+
+```json title="流程范围选择加入"
+{
+  "name": "security-audit",
+  "contextSharing": true,
+  "phases": [
+    { "id": "discover", "type": "agent", "agent": "scout", "task": "..." },
+    { "id": "review-each", "type": "map", "over": "...", "task": "..." },
+    { "id": "summarize", "type": "agent", "agent": "auditor", "task": "..." }
+  ]
+}
+```
+
+**优先级：** `shareContext` 优先于 `contextSharing`。如果你在流程上设置 `contextSharing: true` 但在一个阶段上设置 `shareContext: false`，该阶段将被排除。这让你可以全局启用共享并创建例外。
+
+<Callout type="warn">
+  共享上下文是一种权衡。你以获得效率和协作的代价是阶段不再是完全独立的。在你有具体理由启用它之前保持关闭——共享昂贵的读取，或父代理需要引导其子代理。
+</Callout>
+
+## 具体用例
+
+### 去重昂贵读取
+
+十个并行审查者都需要同一份 50 页的架构文档。第一个审查者读取它并向黑板发布 2 页摘要。后面九个读取摘要而不是原文，每个代理节省约 48 页的上下文。
+
+```json title="去重模式"
+{
+  "id": "review-each",
+  "type": "map",
+  "shareContext": true,
+  "over": "{steps.list-files.json}",
+  "as": "file",
+  "agent": "reviewer",
+  "task": "如果 ctx_read('architecture-summary') 为空，读取 ARCHITECTURE.md 并 ctx_write('architecture-summary', <2页摘要>)。然后使用摘要审查 {file.path}。"
+}
+```
+
+### 父代理引导子代理
+
+父代理审查其子代理的工作并在运行中决定跳过模块：
+
+```json title="引导模式"
+{
+  "id": "parent",
+  "type": "agent",
+  "shareContext": true,
+  "agent": "coordinator",
+  "task": "审查初始扫描。如果 /auth 有问题，ctx_write('skip-auth', true) 让你的子代理跳过它。"
+}
+```
+
+子代理在开始工作前检查黑板：
+
+```json title="子代理检查父代理的发现"
+{
+  "id": "children",
+  "type": "map",
+  "shareContext": true,
+  "dependsOn": ["parent"],
+  "over": "{steps.list-modules.json}",
+  "as": "module",
+  "agent": "auditor",
+  "task": "如果 ctx_read('skip-auth') 且 {module.path} 以 '/auth' 开头，跳过。否则审计 {module.path}。"
+}
+```
+
+### 使用 ctx_spawn 动态扇出
+
+审查者发现需要更深入检查的子模块并动态生成子任务：
+
+```json title="动态生成模式"
+{
+  "id": "reviewer",
+  "type": "agent",
+  "shareContext": true,
+  "agent": "security-reviewer",
+  "task": "审查 /auth。如果你发现需要深度审计的子模块，ctx_spawn 它们作为子任务。"
+}
+```
+
+运行时在审查者完成后接收生成意图，并将它们作为监督树中的子节点运行。每个子代理继承其父代理的上下文（它看到父代理的发现）并且本身可以生成孙代理。
+
+### 聚合报告
+
+父代理从其子代理收集结构化报告并决定是否升级：
+
+```json title="聚合模式"
+{
+  "id": "parent",
+  "type": "reduce",
+  "shareContext": true,
+  "dependsOn": ["children"],
+  "agent": "coordinator",
+  "task": "从每个子代理读取 ctx_report()。如果任何报告的 severity='critical'，升级给用户。否则总结。"
+}
+```
+
+## 恢复安全
+
+共享上下文树是恢复安全的。当运行恢复时：
+
+- **树节点按 `nodeId` 进行 upsert**，所以重新运行不会重复树条目（这会重复计算祖先发现）。
+- **`dedicated` 工作区**（如果你在工作区隔离的同时使用共享上下文）每个 `(runId, phaseId)` 重用相同的目录路径。
+- **发现在恢复期间持久化**，所以已经发布发现的阶段不需要重新发布。
+
+这意味着你可以恢复长时间运行的流程而不会丢失其阶段建立的协作状态。
+
+## 契约重申
+
+共享上下文树有两个关键保证：
+
+1. **可选且有界。** 默认情况下禁用共享上下文。启用时，每个通道都有上限，所以协作不会失控。
+2. **原子且隔离。** 每个写入都是原子的且有锁的。兄弟永远不会争用同一个锁。没有东西会跨运行泄漏。
+
+它们共同意味着你可以协调复杂的多代理工作流，而不会牺牲上下文隔离提供的安全性和可预测性。
+
+## 下一步
+
+<Cards>
+  <Card title="上下文隔离" href="/zh-cn/docs/concepts/context-isolation">
+    共享上下文构建的默认行为。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    十种阶段类型如何使用共享上下文。
+  </Card>
+  <Card title="恢复" href="/zh-cn/docs/concepts/resume">
+    共享上下文如何跨会话存活。
+  </Card>
+</Cards>

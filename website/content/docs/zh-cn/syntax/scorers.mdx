@@ -1,0 +1,617 @@
+---
+title: 评分门控
+description: 零 token 评分器的确定性输出校验、可选的 LLM 裁判与 fail-open 语义。
+---
+
+评分门控（scoring gate）是一个质量检查点：在为 LLM 花费哪怕一个 token 之前，先用一组确定性规则校验上游输出。你只需声明"合格"长什么样——包含某个子串、匹配某个正则、满足某个 JSON schema、长度落在区间内，或者代码能通过编译——taskflow 会以零成本完成每一项检查。当所有检查通过时，门控自动放行；当检查失败时，可选的 LLM 裁判可以决定是让流程继续还是终止它。
+
+你可能会想：*为什么不直接用一个带 LLM 的普通门控？* 因为确定性检查更快、更便宜、也更可预测。一个正则要么匹配、要么不匹配——不存在幻觉风险。评分器在裁判之前运行，所以如果你的检查足够充分，你完全不需要为任何 token 付费。
+
+## 何时使用评分门控
+
+| 如果你的问题是…… | 使用 | 一句话说明 |
+|---|---|---|
+| "输出是否包含某个必需的短语？" | `contains` | 子串搜索。 |
+| "是否匹配某个模式？" | `regex` | 正则表达式，可选取反。 |
+| "是否精确等于这个字符串？" | `exact-match` | 逐字节相等。 |
+| "JSON 是否匹配某个 schema？" | `json-schema` | TypeBox 风格的契约校验。 |
+| "输出长度是否合理？" | `length-range` | 闭区间字符数边界。 |
+| "代码能否通过编译？" | `code-compiles` | 在隔离环境中启动真实编译器。 |
+| "确定性检查失败了，但也许仍然可以接受" | `judge` | LLM 作为裁判的兜底方案。 |
+
+<Callout type="tip">
+  从确定性评分器开始。只有当检查不够充分时才添加裁判——例如主观质量、语气，或无法用模式表达的正确性。
+</Callout>
+
+## 一个贯穿全文的示例
+
+本页剩余部分会构建一个真实的流程：**在发布前校验生成的 API 响应**。你会看到这个门控从单一检查逐步成长为一个带裁判兜底的多评分器门控——每出现一种新需求就引入一种新的评分器类型。
+
+把它保存为 `validate.json`——我们会不断扩展它：
+
+```json title="validate.json — 起始版本"
+{
+  "name": "validate",
+  "phases": [
+    {
+      "id": "generate",
+      "type": "agent",
+      "agent": "executor",
+      "task": "Generate a JSON API response for GET /users. Include status, data, and message fields.",
+      "output": "json"
+    },
+    {
+      "id": "check-response",
+      "type": "gate",
+      "dependsOn": ["generate"],
+      "score": {
+        "scorers": [
+          { "type": "contains", "value": "\"status\"" }
+        ]
+      },
+      "task": "Is this a valid API response? VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+## 六种评分器类型
+
+每个评分器都是一个确定性检查，返回 `passed: true` 或 `passed: false` 以及一条可选的 detail 消息。评分器是纯函数（`code-compiles` 除外），并且永不抛出异常——错误的配置会让评分器以一条诊断信息失败，而不是让整个运行崩溃。
+
+### `exact-match`
+
+测试目标字符串是否与 `value` 逐字节相等。
+
+```json title="exact-match 评分器"
+{
+  "type": "exact-match",
+  "value": "PASS"
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `value` | `string` | 是 | 用于比较的字符串。 |
+
+**通过语义：** `target === value`。大小写敏感，不做 trim。
+
+**何时使用：** 精确的哨兵值、固定的状态码、已知的正确输出。
+
+### `contains`
+
+测试目标字符串是否将 `value` 作为子串包含。
+
+```json title="contains 评分器"
+{
+  "type": "contains",
+  "value": "0 errors"
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `value` | `string` | 是 | 要搜索的子串。 |
+
+**通过语义：** `target.includes(value)`。大小写敏感。
+
+**何时使用：** 检查必需的短语、错误计数、状态标记。
+
+<Callout type="info">
+  `contains` 评分器大小写敏感。如果你需要大小写不敏感的匹配，请使用带 `i` 标志的 `regex`：`{"type": "regex", "pattern": "success", "negate": false}`。
+</Callout>
+
+### `regex`
+
+测试目标是否匹配某个 JavaScript 正则表达式。
+
+```json title="regex 评分器"
+{
+  "type": "regex",
+  "pattern": "\"status\"\\s*:\\s*\"success\"",
+  "negate": false
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `pattern` | `string` | 是 | JavaScript RegExp 源码（不带分隔符）。 |
+| `negate` | `boolean` | 否 | 对匹配结果取反。默认为 `false`。 |
+
+**通过语义：** `new RegExp(pattern).test(target)`，当 `negate: true` 时取反。
+
+**错误处理：** 无效的 pattern 会让评分器以一条 detail 消息失败（例如 `"invalid pattern: Invalid regular expression"`）。随后门控回落到裁判或 task——它不会崩溃。
+
+**何时使用：** 模式匹配、格式校验、否定检查（例如"不包含 ERROR"）。
+
+### `json-schema`
+
+将解析后的目标与一个 TypeBox 风格的契约进行校验（与 `expect` 使用的 schema 语言相同）。
+
+```json title="json-schema 评分器"
+{
+  "type": "json-schema",
+  "schema": {
+    "type": "object",
+    "required": ["status", "data"],
+    "properties": {
+      "status": { "enum": ["success", "error"] },
+      "data": { "type": "object" }
+    }
+  }
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `schema` | `object` | 是 | 一个 TypeBox 风格的 JSON schema。 |
+
+**通过语义：** 目标用与 `output: "json"` 相同的宽松 JSON 解析器解析（会提取围栏代码块）。如果解析失败，评分器失败。否则，`contractViolations` 会用 schema 检查解析后的值。
+
+**何时使用：** 校验结构化输出、强制响应形状、检查枚举值。
+
+<Callout type="tip">
+  `json-schema` 评分器使用与 `expect` 契约相同的宽松解析器，所以如果你的 agent 把 JSON 包在代码围栏里，它会自动被提取出来。
+</Callout>
+
+### `length-range`
+
+测试目标的字符数是否落在某个闭区间内。
+
+```json title="length-range 评分器"
+{
+  "type": "length-range",
+  "min": 100,
+  "max": 10000
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `min` | `number` | 至少一个 | 最小字符数（含，`>= 0`）。 |
+| `max` | `number` | 至少一个 | 最大字符数（含，`>= 0`）。 |
+
+**通过语义：** `len >= min && len <= max`。如果只提供 `min`，则没有上限。如果只提供 `max`，则下限为 `0`。
+
+**校验：** 当 `min` 与 `max` 同时存在时，`min` 必须 `<= max`。两者都必须 `>= 0`。
+
+**何时使用：** 对输出大小做合理性检查、防止空响应、限制冗长输出。
+
+### `code-compiles`
+
+在一个隔离的临时目录中启动真实的编译器，检查目标是否能解析或编译通过。
+
+```json title="code-compiles 评分器"
+{
+  "type": "code-compiles",
+  "language": "typescript"
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `language` | `"javascript"` \| `"typescript"` | 是 | 运行哪个编译器。 |
+
+**通过语义：**
+
+- **`javascript`：** 运行 `node --check <file>`。仅做语法检查——不执行、不引入依赖。
+- **`typescript`：** 运行 `npx --no-install tsc --noEmit --skipLibCheck <file>`。要求环境中能解析到 `tsc`。如果不存在，评分器以一条 detail 失败。
+
+**代码提取：** 如果目标恰好包含一个围栏代码块，则编译其正文。多个围栏或没有围栏时，编译原始目标。
+
+**安全模型：** 编译器在隔离的临时目录（`mkdtempSync`，`0700` 权限）中运行，而不是阶段的 working directory。这能阻止它解析仓库中植入的 `node_modules/.bin/tsc` 或访问项目文件。`--no-install` 标志阻止 `npx` 下载包。
+
+**超时：** 每次编译器调用 30 秒。超时会让评分器以一条 detail 失败。
+
+**错误处理：** 编译器不可用、spawn 出错或超时都属于评分器失败（不是崩溃）。随后由门控的 fail-open 路径决定一次失败的检查意味着什么。
+
+**何时使用：** 校验生成的代码、在发布前捕获语法错误、对 TypeScript 输出做类型检查。
+
+<Callout type="warn">
+  `code-compiles` 是唯一的非纯评分器——它会 spawn 子进程。所有其他评分器都是纯的，并在进程内求值。
+</Callout>
+
+## 组合评分器
+
+一个 `score` 块声明一个评分器列表，以及一个 `combine` 模式来决定如何聚合它们的结果。默认是 `all`，要求每个评分器都通过。
+
+### `all`（默认）
+
+每个评分器都必须通过。组合得分为 `1`（全部通过）或 `0`（任一失败）。
+
+```json title="combine: all"
+{
+  "scorers": [
+    { "type": "contains", "value": "\"status\"" },
+    { "type": "regex", "pattern": "\"status\"\\s*:\\s*\"success\"" }
+  ],
+  "combine": "all"
+}
+```
+
+**语义：** `results.every(r => r.passed)`。二元结果。
+
+### `any`
+
+至少一个评分器通过即可。组合得分为 `1`（任一通过）或 `0`（全部失败）。
+
+```json title="combine: any"
+{
+  "scorers": [
+    { "type": "contains", "value": "PASS" },
+    { "type": "contains", "value": "OK" }
+  ],
+  "combine": "any"
+}
+```
+
+**语义：** `results.some(r => r.passed)`。二元结果。
+
+### `weighted`
+
+每个评分器向总分贡献一个加权分数，再与一个阈值比较。
+
+```json title="combine: weighted"
+{
+  "scorers": [
+    { "type": "contains", "value": "\"status\"" },
+    { "type": "json-schema", "schema": { "type": "object" } }
+  ],
+  "combine": "weighted",
+  "weights": [0.3, 0.7],
+  "threshold": 0.5
+}
+```
+
+**字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `weights` | `number[]` | 是 | 与 `scorers` 对齐。每一项都必须 `> 0`。 |
+| `threshold` | `number` | 否 | 组合得分的截止线，范围 `(0, 1]`。默认 `0.5`。 |
+
+**语义：** 每个评分器的得分为 `0`（失败）或 `1`（通过）。组合得分为 `sum(score[i] * weight[i]) / sum(weight[i])`。当存在裁判时，它的权重会被追加到 weights 数组末尾，其得分也并入组合。
+
+**提前截断（early cutoff）：** 当配置了裁判但它还没运行时，仅基于确定性检查的组合得分是一个下界。如果它已经越过阈值，裁判的得分也无法改变结果，于是门控在不花费裁判 token 的情况下自动放行。
+
+<Callout type="info">
+  **权重对齐。** 当没有裁判时，`weights` 必须恰好有 `scorers.length` 项；当存在裁判时，必须有 `scorers.length + 1` 项（最后一项是裁判的权重）。校验会强制这一点。
+</Callout>
+
+## 裁判兜底
+
+当确定性评分器失败时，可选的 LLM 裁判可以决定是否让流程继续。裁判只在评分器未通过时才运行——如果通过了，门控会自动放行，裁判上不花一个 token。
+
+```json title="带裁判兜底的门控"
+{
+  "id": "quality",
+  "type": "gate",
+  "dependsOn": ["generate"],
+  "score": {
+    "scorers": [
+      { "type": "json-schema", "schema": { "type": "object", "required": ["status"] } }
+    ],
+    "judge": {
+      "agent": "reviewer",
+      "task": "Is this a reasonable API response even if it doesn't match the schema exactly?"
+    }
+  }
+}
+```
+
+**裁判字段：**
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `task` | `string` | 是 | 裁判的 prompt。评分器报告会被自动追加。 |
+| `agent` | `string` | 否 | 裁判使用的 agent 名称。默认为门控的 `agent`。 |
+
+**裁判输出解析：** 裁判可以用三种格式响应：
+
+1. **JSON：** `{"score": 0.0-1.0, "verdict": "pass"|"block", "reason": "..."}`
+2. **裸 verdict：** `{"verdict": "pass"}` 或 `{"verdict": "block"}`
+3. **文本标记：** `SCORE: 0.8` 和/或 `VERDICT: PASS`（大小写不敏感，最后匹配的生效）
+
+**Fail-open 语义：** 无法解析的裁判输出以 `score: 1`、`verdict: "pass"` 放行。歧义决不能阻断流程。
+
+**与评分器组合：**
+
+- **`weighted` 模式：** 裁判的得分用 `weights` 中的最后一项权重并入加权组合。阈值决定 verdict。
+- **`all` 或 `any` 模式：** 裁判的 verdict 是权威的。如果裁判说 `pass`，无论评分器结果如何，门控都放行。
+
+<Callout type="tip">
+  裁判的 prompt 会自动包含确定性评分器报告，所以 LLM 能看到究竟哪些检查失败以及为什么。你不需要手动插值这些结果。
+</Callout>
+
+## `target` 字段
+
+默认情况下，评分器评估的是上游阶段的输出——即 `dependsOn` 中列出的阶段产生的文本。你可以用 `target` 字段覆盖它，该字段接受一个插值表达式。
+
+```json title="自定义 target"
+{
+  "id": "check-json",
+  "type": "gate",
+  "dependsOn": ["generate"],
+  "score": {
+    "target": "{steps.generate.json.response}",
+    "scorers": [
+      { "type": "contains", "value": "\"status\"" }
+    ]
+  }
+}
+```
+
+**默认：** `"{previous.output}"`——紧邻的上游阶段的输出。
+
+**插值：** `target` 在评分器运行之前被插值，所以你可以用 `{steps.<id>.json.<field>}` 访问 JSON 字段，或使用任何其他占位符。
+
+## 完整的评分门控
+
+下面是那个贯穿全文的示例，在添加了多个评分器、加权组合和裁判兜底之后的完整版本：
+
+```json title="validate.json — 完整的评分门控"
+{
+  "name": "validate",
+  "phases": [
+    {
+      "id": "generate",
+      "type": "agent",
+      "agent": "executor",
+      "task": "Generate a JSON API response for GET /users. Include status, data, and message fields.",
+      "output": "json"
+    },
+    {
+      "id": "check-response",
+      "type": "gate",
+      "dependsOn": ["generate"],
+      "score": {
+        "target": "{steps.generate.output}",
+        "scorers": [
+          { "type": "contains", "value": "\"status\"", "name": "has-status-field" },
+          { "type": "regex", "pattern": "\"status\"\\s*:\\s*\"success\"", "name": "status-is-success" },
+          { "type": "json-schema", "schema": { "type": "object", "required": ["status", "data"] }, "name": "valid-schema" },
+          { "type": "length-range", "min": 50, "max": 5000, "name": "reasonable-length" }
+        ],
+        "combine": "weighted",
+        "weights": [0.2, 0.3, 0.4, 0.1],
+        "threshold": 0.7,
+        "judge": {
+          "agent": "reviewer",
+          "task": "Is this a reasonable API response even if some checks failed?"
+        }
+      }
+    }
+  ]
+}
+```
+
+这个门控以零 token 评估四个评分器。如果加权组合越过 `0.7`，它自动放行；否则裁判运行并作出决定。
+
+## 评分器命名
+
+每个评分器可以带一个可选的 `name` 字段。如果省略，运行时会生成一个默认标签：`<type>-<index>`（例如 `contains-0`、`regex-1`）。
+
+```json title="具名评分器"
+{
+  "scorers": [
+    { "type": "contains", "value": "PASS", "name": "contains-pass-marker" },
+    { "type": "regex", "pattern": "\\d+", "name": "has-numeric-id" }
+  ]
+}
+```
+
+这些名称会出现在追加到裁判 prompt 的评分器报告中，让 LLM 更容易理解是哪些检查失败了。
+
+## Fail-open 语义
+
+评分门控遵循与 taskflow 其余部分相同的 fail-open 原则：歧义决不能阻断流程。
+
+| 场景 | 行为 |
+|---|---|
+| 无效的正则 pattern | 评分器以 detail 失败；门控回落到裁判或 task。 |
+| 目标不是合法 JSON（对 `json-schema`） | 评分器以 `"target is not valid JSON"` 失败。 |
+| 编译器不可用（对 `code-compiles`） | 评分器以 `"compiler unavailable: <error>"` 失败。 |
+| 编译器超时（对 `code-compiles`） | 评分器以 `"compiler timed out after 30000ms"` 失败。 |
+| 无法解析的裁判输出 | 裁判以 `score: 1`、`verdict: "pass"` 放行。 |
+| `length-range` 中 `min > max` | 在流程定义时即报校验错误。 |
+| 未知的评分器类型 | 在流程定义时即报校验错误。 |
+
+<Callout type="warn">
+  评分器失败不等于门控失败。只有当组合（评分器 + 裁判）未能越过阈值时，门控才会 block。如果你希望失败的评分器总是 block，请使用 `combine: "all"` 并省略裁判。
+</Callout>
+
+## 在下游访问评分器结果
+
+门控的结构化结果以 `PhaseState.json` 暴露，可通过插值访问：
+
+| 路径 | 值 |
+|---|---|
+| `{steps.<gate>.json.verdict}` | `"pass"` 或 `"block"` |
+| `{steps.<gate>.json.combined}` | 组合得分（`[0, 1]` 中的数字） |
+| `{steps.<gate>.json.results}` | `{name, type, passed, score, detail?}` 数组 |
+| `{steps.<gate>.json.threshold}` | 阈值（仅 `weighted` 模式） |
+| `{steps.<gate>.json.judge}` | `{score, reason?}`（仅当裁判运行过时） |
+
+```json title="在下游使用评分器结果"
+{
+  "id": "report",
+  "type": "agent",
+  "dependsOn": ["check-response"],
+  "task": "The gate verdict was {steps.check-response.json.verdict} with a combined score of {steps.check-response.json.combined}. Summarize."
+}
+```
+
+## 与 `eval` 和 `task` 的交互
+
+一个门控可以同时拥有 `eval`、`score` 和 `task` 字段。它们按如下顺序运行：
+
+1. **`eval`**（如果存在）：零 token 的机器检查。如果全部通过，门控自动放行。如果任一失败，继续到第 2 步。
+2. **`score`**（如果存在）：确定性评分器。如果它们通过（依据 `combine` 和 `threshold`），门控自动放行。如果它们失败且配置了裁判，裁判运行。如果它们失败且没有配置裁判，继续到第 3 步。
+3. **`task`**（如果存在）：LLM 门控照常运行，解析一个 `VERDICT:` 标记。
+
+<Callout type="info">
+  同时设置 `eval` 和 `score` 是合法的，但通常冗余——选其一即可。如果两者都存在，`eval` 先运行。当两者同时设置时，校验会发出一条警告。
+</Callout>
+
+## 安全限制
+
+`code-compiles` 评分器是唯一会 spawn 子进程的评分器。它在严格的隔离下运行：
+
+- **隔离的临时目录：** 用 `mkdtempSync` 创建（原子操作，`0700` 权限）。关闭了共享 `/tmp` 上可预测名称的符号链接/TOCTOU 竞争。
+- **无项目访问：** 编译器以临时目录为 working directory 运行，而不是阶段的 `cwd`。它无法解析仓库中植入的 `node_modules/.bin/tsc`。
+- **无网络：** `npx --no-install` 阻止下载包。编译器只能检查来自标准库的语法和类型。
+- **超时：** 每次调用 30 秒墙上时间上限。超时会用 `SIGKILL` 杀掉进程。
+- **清理：** 临时目录在 `finally` 块中用 `rmSync({recursive: true, force: true})` 移除。尽力清理——删除失败会被吞掉。
+
+所有其他评分器都是纯的，在进程内运行，没有文件系统或网络访问。
+
+## 字段参考
+
+### `score` 对象
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `target` | `string` | `"{previous.output}"` | 被评分字符串的插值引用。 |
+| `scorers` | `Scorer[]` | — | **必需。** 非空的评分器数组。 |
+| `combine` | `"all"` \| `"any"` \| `"weighted"` | `"all"` | 如何聚合评分器结果。 |
+| `weights` | `number[]` | — | `weighted` 必需。与 `scorers` 对齐（裁判再 +1）。 |
+| `threshold` | `number` | `0.5` | `weighted` 的组合得分截止线。必须在 `(0, 1]` 内。 |
+| `judge` | `object` | — | 可选的 LLM-as-judge 兜底。`{agent?, task}`。 |
+
+### 评分器对象
+
+每个评分器都有这些公共字段：
+
+| 字段 | 类型 | 必需 | 说明 |
+|---|---|---|---|
+| `type` | `string` | 是 | 六种评分器类型之一。 |
+| `name` | `string` | 否 | 结果标签。默认为 `<type>-<index>`。 |
+
+按类型的字段：
+
+| 类型 | 字段 |
+|---|---|
+| `exact-match` | `value`（必需 string） |
+| `contains` | `value`（必需 string） |
+| `regex` | `pattern`（必需 string），`negate`（可选 boolean） |
+| `json-schema` | `schema`（必需 object） |
+| `length-range` | `min` 和/或 `max`（至少一个必需，两者都 `>= 0`） |
+| `code-compiles` | `language`（必需：`"javascript"` 或 `"typescript"`） |
+
+**校验：** 在某个评分器上设置了其类型会忽略的字段，属于形状错误。例如，`{type: "contains", negate: true}` 会被拒绝——静默丢弃 `negate` 会让作者以为取反生效了。
+
+### 门控 verdict 语法
+
+一个门控阶段（无论是否有 `score`）按如下语法把输出解析为 verdict：
+
+**JSON 格式：**
+
+```json
+{"continue": true}  → pass
+{"continue": false} → block
+{"pass": true}      → pass
+{"pass": false}     → block
+{"verdict": "PASS"} → pass
+{"verdict": "BLOCK"} → block
+{"verdict": "pass"} → pass (case-insensitive)
+{"verdict": "block"} → block
+{"verdict": "anything-else"} → pass (fail-open)
+```
+
+**文本格式：**
+
+```
+VERDICT: PASS    → pass
+VERDICT: BLOCK   → block
+VERDICT: FAIL    → block
+VERDICT: STOP    → block
+VERDICT: OK      → pass
+VERDICT: REJECT  → block
+VERDICT: HALT    → block
+```
+
+- 大小写不敏感。
+- 最后一次出现生效（如果输出包含多行 `VERDICT:`）。
+- 同时支持 `:` 和 `=` 分隔符：`VERDICT=PASS` 也可用。
+
+**Fail-open：** 歧义输出（没有 JSON、没有 `VERDICT:` 标记）放行。门控绝不会意外丢失你的工作成果。
+
+### Tournament 胜者语法
+
+tournament 裁判按如下语法选出获胜变体：
+
+**JSON 格式：**
+
+```json
+{"winner": 2}     → variant 2
+{"best": 3}       → variant 3
+{"choice": 1}     → variant 1
+```
+
+**文本格式：**
+
+```
+WINNER: 2         → variant 2
+WINNER: #3        → variant 3 (hash prefix optional)
+WINNER=1          → variant 1 (supports = separator)
+```
+
+- 从 1 开始的索引。
+- 最后一次出现生效。
+- 钳制到 `[1, variant-count]`：verdict 为 `0` 会变成 `1`，verdict 为 `99` 会变成最后一个变体。
+
+**Fail-open：** 无法解析的 verdict 默认为变体 `1`，原因为 `"no parseable winner; defaulted to variant 1"`。tournament 绝不会丢失你的工作成果。
+
+### 常见错误
+
+<details>
+<summary>校验错误</summary>
+
+| 错误 | 原因 | 修复 |
+|---|---|---|
+| `score.scorers: must be a non-empty array` | `scorers` 为空或缺失。 | 至少添加一个评分器。 |
+| `score.scorers[i].type: must be one of ...` | 未知的评分器类型。 | 使用六种受支持类型之一。 |
+| `score.scorers[i].value: required string for 'contains'` | 缺少必需字段。 | 添加该字段。 |
+| `score.scorers[i].negate: not applicable to 'contains'` | 在错误的评分器类型上设置了字段。 | 移除该字段或改用其他评分器。 |
+| `score.weights: required array for combine:"weighted"` | `weighted` 模式缺少 weights。 | 添加与评分器对齐的 `weights`。 |
+| `score.weights: expected N entries, got M` | 权重数量不匹配。 | 调整数组长度。如果存在裁判，再增加一个权重。 |
+| `score.threshold: must be a number in (0, 1]` | 无效的 threshold。 | 使用 `(0, 1]` 范围内的值。 |
+| `score.judge.task: required non-empty string` | 裁判缺少 task。 | 添加一个 `task` 字符串。 |
+
+</details>
+
+<details>
+<summary>运行时错误（评分器失败）</summary>
+
+| 错误 | 原因 | 行为 |
+|---|---|---|
+| `invalid pattern: <message>` | `regex` 评分器中的正则无效。 | 评分器失败；门控回落到裁判或 task。 |
+| `target is not valid JSON` | 对非 JSON 目标使用 `json-schema` 评分器。 | 评分器失败；门控回落。 |
+| `compiler unavailable: <error>` | 找不到 `tsc` 或 `node`。 | 评分器失败；门控回落。 |
+| `compiler timed out after 30000ms` | 编译器超过时间上限。 | 评分器失败；门控回落。 |
+| `length N outside [min, max]` | 目标长度超出范围。 | 评分器失败；门控回落。 |
+
+</details>
+
+## 下一步
+
+<Cards>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    taskflow 的十个构建块，包括 gate 类型。
+  </Card>
+  <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
+    深入了解 `when`、`join`、`retry` 与门控。
+  </Card>
+</Cards>

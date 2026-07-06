@@ -1,0 +1,487 @@
+---
+title: Agents and Model Roles
+description: How taskflow discovers agents from three layers, maps them to six model roles, and resolves the right agent for each phase.
+---
+
+Every phase in a taskflow runs as a subagent — an isolated LLM process with its own context window, system prompt, and tool set. That isolation is what keeps intermediate transcripts out of your conversation: only the final phase output comes back.
+
+But which agent runs which phase? And which model does that agent use? taskflow answers both questions with a layered discovery system and a role-based model mapping. You can use the 18 built-in agents as-is, override them with project-specific versions, or write entirely custom agents — all without changing a single flow definition.
+
+This guide covers the full picture: how agents are discovered, what the built-in agents do, how model roles work, and how to customize everything.
+
+## Agent discovery
+
+taskflow loads agents from three layers, in order:
+
+<Steps>
+  <Step>
+    **Built-in agents.** Eighteen agents ship with the taskflow package. They cover the full software development lifecycle: planning, execution, review, security, testing, and recovery. These agents are always available unless explicitly disabled.
+  </Step>
+  <Step>
+    **User agents.** Agents in `~/.pi/agent/agents/` (or the directory set by `TASKFLOW_AGENT_DIR` or `PI_CODING_AGENT_DIR`). These are your personal agents, shared across all your projects.
+  </Step>
+  <Step>
+    **Project agents.** Agents in `.pi/agents/` at the root of your project (or any parent directory). taskflow walks up the directory tree from the current working directory to find the nearest `.pi/agents/` folder. These are project-specific agents, versioned with your codebase.
+  </Step>
+</Steps>
+
+The layers override each other by name. If you have a project agent called `executor` and a built-in agent also called `executor`, the project version wins. This lets you customize behavior without forking the entire agent set.
+
+<Callout type="info">
+  Agent names use hyphens, not underscores: `executor-code` is correct, `executor_code` is not. The runtime validates this and will warn you if you use underscores.
+</Callout>
+
+### The `agentScope` field
+
+Not every flow needs all three layers. The `agentScope` field on a taskflow controls which layers are active:
+
+| Scope | What's loaded | Use case |
+|---|---|---|
+| `"user"` (default) | Built-in + user agents | Personal workflows that don't depend on project-specific agents. |
+| `"project"` | Built-in + project agents | Team workflows where project agents override user preferences. |
+| `"both"` | Built-in + user + project agents | Full resolution: project overrides user overrides built-in. |
+
+Set `agentScope` at the top level of your taskflow:
+
+```json title="project-scoped.json"
+{
+  "name": "project-review",
+  "agentScope": "project",
+  "phases": [...]
+}
+```
+
+<Callout type="tip">
+  If you're building a flow that will run on a teammate's machine, use `agentScope: "project"` so it doesn't depend on their personal `~/.pi/agent/agents/` directory.
+</Callout>
+
+## The 18 built-in agents
+
+taskflow ships with 18 agents organized into four categories. Each agent is defined as a markdown file with YAML frontmatter specifying its name, description, tools, model role, and thinking level.
+
+### Planning and analysis
+
+These agents analyze requirements, create plans, and challenge assumptions before code is written.
+
+| Agent | Role | Thinking | Purpose |
+|---|---|---|---|
+| `analyst` | `{{thinker}}` | high | Analyze requirements, surface ambiguity, identify hidden constraints. Read-only. |
+| `critic` | `{{thinker}}` | xhigh | Challenge plans and conclusions, find contradictions before commitment. Read-only. |
+| `planner` | `{{strong}}` | high | Create concrete implementation plans with file-level detail. Read-only. |
+| `plan-arbiter` | `{{arbiter}}` | high | Review and challenge plans before execution begins. Read-only. |
+
+The `analyst` runs first in complex pipelines to clarify requirements. The `planner` turns those requirements into actionable plans. The `critic` and `plan-arbiter` act as quality gates — they push back on weak plans before expensive execution begins.
+
+### Execution
+
+These agents write code. They differ in scope and complexity.
+
+| Agent | Role | Thinking | Purpose |
+|---|---|---|---|
+| `executor` | `{{fast}}` | high | Default executor for 1–4 files with a clear plan. |
+| `executor-fast` | `{{fast}}` | off | Trivial changes: ≤2 files, ≤50 lines, no architecture decisions. |
+| `executor-code` | `{{strong}}` | high | Complex multi-file changes: ≥5 files, cross-module, structural refactors. |
+| `executor-ui` | `{{vision}}` | high | UI/frontend changes: components, styling, layout, responsive design. |
+
+The default `executor` handles most work. Use `executor-fast` for mechanical cleanups, `executor-code` for structural refactors, and `executor-ui` when you need vision capabilities to understand design intent.
+
+### Review and quality
+
+These agents review code, assess risk, and verify outcomes. None of them edit files.
+
+| Agent | Role | Thinking | Purpose |
+|---|---|---|---|
+| `reviewer` | `{{strong}}` | high | General code review: quality, architecture, test coverage. |
+| `risk-reviewer` | `{{reasoner}}` | high | Backend/infrastructure risk: data integrity, concurrency, migrations. |
+| `security-reviewer` | `{{reasoner}}` | high | Security vulnerabilities: auth, injection, secrets, trust boundaries. |
+| `final-arbiter` | `{{arbiter}}` | xhigh | Resolve conflicts when multiple reviewers disagree. Tiebreaker. |
+
+The `reviewer` handles general quality. The `risk-reviewer` and `security-reviewer` specialize in high-stakes domains and defer to each other at domain boundaries. The `final-arbiter` breaks ties when reviews conflict.
+
+### Support
+
+These agents handle auxiliary tasks: testing, documentation, exploration, and recovery.
+
+| Agent | Role | Thinking | Purpose |
+|---|---|---|---|
+| `test-engineer` | `{{fast}}` | high | Design and implement test strategies, detect flaky patterns. |
+| `verifier` | `{{fast}}` | off | Run validation commands, reproduce failures, check logs. Read-only. |
+| `scout` | `{{fast}}` | off | Fast codebase exploration, return structured findings for other agents. |
+| `doc-writer` | `{{fast}}` | off | Author and edit documentation files (READMEs, guides, changelogs). |
+| `visual-explorer` | `{{vision}}` | high | Analyze Figma designs, extract colors, tokens, and component specs. |
+| `recover` | `{{fast}}` | low | Resume work after context compaction, pick up from handoff files. |
+
+The `scout` does quick recon so other agents don't have to re-read everything. The `test-engineer` and `verifier` handle validation. The `visual-explorer` parses design files. The `recover` agent picks up work after a context window reset.
+
+## Model roles
+
+Each built-in agent specifies a model role in its frontmatter — not a concrete model ID, but a role name wrapped in double braces: `{{fast}}`, `{{strong}}`, `{{thinker}}`, `{{arbiter}}`, `{{vision}}`, or `{{reasoner}}`.
+
+This indirection exists because different users have different models available. A role is a semantic contract ("this agent needs fast, cheap inference") that gets resolved to a concrete model based on your configuration.
+
+### The six roles
+
+| Role | Semantic contract | Default model | Used by |
+|---|---|---|---|
+| `{{fast}}` | Cheap and quick, high-volume low-stakes | `openrouter/deepseek/deepseek-v4-flash` | `executor`, `executor-fast`, `scout`, `verifier`, `doc-writer`, `test-engineer`, `recover` |
+| `{{strong}}` | Balanced capability, moderate complexity | `openrouter/xiaomi/mimo-v2.5-pro` | `planner`, `reviewer`, `executor-code` |
+| `{{thinker}}` | Deep reasoning, high thinking budget | `openrouter/deepseek/deepseek-v4-pro` | `analyst`, `critic` |
+| `{{arbiter}}` | High-stakes judgment, tie-breaking | `openrouter/qwen/qwen3.7-max` | `plan-arbiter`, `final-arbiter` |
+| `{{vision}}` | Multimodal, image understanding | `minimax/MiniMax-M3` | `executor-ui`, `visual-explorer` |
+| `{{reasoner}}` | Cautious reasoning, security-sensitive | `z-ai/glm-5.1` | `risk-reviewer`, `security-reviewer` |
+
+The defaults work well out of the box. But you might want to swap them — for example, if you have a Claude Pro subscription and want to use `anthropic/claude-3.5-sonnet` for `{{strong}}` instead of the default.
+
+### How roles are resolved
+
+When a phase spawns a subagent, the runtime checks the agent's `model` field. If it matches the pattern `{{roleName}}`, the runtime looks up that role in your settings and substitutes the concrete model ID. If no mapping exists, the model field is left empty and the host's default model is used.
+
+```text
+Agent frontmatter:  model: "{{strong}}"
+                       ↓
+settings.json:      modelRoles: { "strong": "anthropic/claude-3.5-sonnet" }
+                       ↓
+Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
+```
+
+An agent with a literal model ID (no braces) bypasses role resolution entirely. This is useful for custom agents that must always use a specific model.
+
+## Configuring with `/tf init`
+
+The `/tf init` command walks you through role configuration interactively. It reads your current settings, shows you the available models from your provider's registry, and writes your choices back atomically.
+
+<Callout type="tip">
+  Run `/tf init` the first time you install taskflow. The recommended defaults work well for most users, but you may want to swap the `vision` role to a different multimodal model or the `arbiter` role to a stronger reasoning model.
+</Callout>
+
+### The action menu
+
+When you run `/tf init`, you see an action menu:
+
+1. **Use recommended defaults** — Apply the default models from the table above.
+2. **Configure each role** — Walk through all six roles one by one.
+3. **Edit one role** — Change a single role without touching the others.
+4. **Configure taskflow preferences** — Adjust built-in agent settings.
+5. **Show current roles** — Display your current configuration without changes.
+
+For each role, the picker shows available models from your registry with capability tags (`image ✓` for multimodal, `reasoning ✓` for reasoning-capable models), plus markers for your current choice and the recommended default.
+
+### Custom model identifiers
+
+You can also type a custom model identifier in `provider/model-id` format. The runtime validates it against your model registry and warns you if the model doesn't exist — a typo here would silently break every flow that uses the role.
+
+### Where settings are stored
+
+All configuration is saved to `~/.pi/agent/settings.json` (or the path set by `TASKFLOW_AGENT_DIR` / `PI_CODING_AGENT_DIR`):
+
+```json title="settings.json"
+{
+  "modelRoles": {
+    "fast": "openrouter/deepseek/deepseek-v4-flash",
+    "strong": "openrouter/xiaomi/mimo-v2.5-pro",
+    "thinker": "openrouter/deepseek/deepseek-v4-pro",
+    "arbiter": "openrouter/qwen/qwen3.7-max",
+    "vision": "minimax/MiniMax-M3",
+    "reasoner": "z-ai/glm-5.1"
+  },
+  "taskflow": {
+    "builtInAgents": true,
+    "syncBuiltinAgentsToProject": false,
+    "maxKeptRuns": 100,
+    "maxRunAgeDays": 30
+  }
+}
+```
+
+### Taskflow preferences
+
+The "Configure taskflow preferences" option in `/tf init` adjusts four settings:
+
+| Setting | Default | Description |
+|---|---|---|
+| `builtInAgents` | `true` | Enable or disable the 18 built-in agents. Disable this if you only want your own agents. |
+| `syncBuiltinAgentsToProject` | `false` | Copy built-in agents into your project's `.pi/agents/` on session start, so native Pi `@agent` syntax can discover them too. |
+| `maxKeptRuns` | `100` | Maximum completed/failed runs to keep. Set to `0` to disable count-based cleanup. |
+| `maxRunAgeDays` | `30` | Maximum age (days) for completed/failed runs. Set to `0` to disable age-based cleanup. |
+
+<Callout type="info">
+  Cleanup runs automatically, throttled to once per minute. It only removes terminal (completed or failed) runs — active runs are never touched.
+</Callout>
+
+## Custom agents
+
+You can create custom agents by writing markdown files with YAML frontmatter. Custom agents live in user scope (`~/.pi/agent/agents/`) or project scope (`.pi/agents/`).
+
+### Agent file format
+
+Every agent file has three parts: YAML frontmatter between `---` delimiters, a blank line, and the system prompt body.
+
+```markdown title="~/.pi/agent/agents/code-reviewer.md"
+---
+name: code-reviewer
+description: Review code for quality and best practices
+tools: read, grep, find, ls, bash
+model: "{{strong}}"
+thinking: high
+---
+
+You are a code reviewer focused on quality and best practices.
+
+Review the provided code for:
+- Code style and consistency
+- Performance implications
+- Error handling
+- Test coverage
+
+Be specific and actionable. Don't just say "this could be better" — explain why and how.
+```
+
+### Frontmatter fields
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Unique identifier, used to reference the agent in flows. Use hyphens. |
+| `description` | Yes | Brief description shown in agent listings and picker UIs. |
+| `tools` | No | Comma-separated tool list: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`. Defaults to all tools if omitted. |
+| `model` | No | Model ID or role reference (e.g., `openai/gpt-4o` or `"{{strong}}"`). Falls back to the host's default model. |
+| `thinking` | No | Thinking level: `off`, `low`, `high`, `xhigh`. Falls back to the `globalThinking` setting. |
+
+<Callout type="info">
+  A malformed agent file never breaks discovery. The runtime catches parse errors and skips the bad file with a warning, so the rest of your agents load normally.
+</Callout>
+
+### Overriding built-in agents
+
+To override a built-in agent, create a custom agent with the same name in your user or project agents directory. The layer order determines which version wins:
+
+```markdown title=".pi/agents/executor.md"
+---
+name: executor
+description: Custom executor with project-specific conventions
+tools: read, grep, find, ls, bash, edit, write
+model: "{{strong}}"
+thinking: high
+---
+
+You are the executor agent for the Acme Corp codebase.
+
+Always follow these project-specific rules:
+- Use TypeScript strict mode
+- Prefer functional patterns over classes
+- Write tests for all public functions
+- Run `pnpm typecheck` before committing
+```
+
+This project-level `executor` replaces the built-in `executor` for any flow run in this project. A user-level override in `~/.pi/agent/agents/executor.md` would apply across all your projects.
+
+<Callout type="warn">
+  Overrides are matched by exact name. `my-executor` does not override `executor`. If you want a variant, give it a different name and reference it explicitly in your flows.
+</Callout>
+
+## Agent resolution in flows
+
+When a phase runs, the runtime resolves its agent through a specific process:
+
+<Steps>
+  <Step>
+    **Check the phase's `agent` field.** If the phase specifies an agent name, look it up in the discovery result.
+  </Step>
+  <Step>
+    **Warn on unknown agents.** If the named agent doesn't exist in the discovery result, log a warning (once per unknown agent per run) and fall back to the default agent.
+  </Step>
+  <Step>
+    **Fall back to the default agent.** The default is the first agent in the discovery result — typically the first built-in agent alphabetically, unless user or project agents override it. If no agents exist at all, the name `"default"` is used.
+  </Step>
+</Steps>
+
+### Specifying agents in phases
+
+Most phases specify an agent explicitly:
+
+```json title="phase-with-agent.json"
+{
+  "id": "review",
+  "type": "agent",
+  "agent": "reviewer",
+  "task": "Review the code changes for quality issues."
+}
+```
+
+You can omit the `agent` field. The phase will use the default agent:
+
+```json title="phase-without-agent.json"
+{
+  "id": "review",
+  "type": "agent",
+  "task": "Review the code changes for quality issues."
+}
+```
+
+<Callout type="info">
+  The default agent depends on your `agentScope` and which agents exist in each layer. For predictable behavior across different environments, specify agents explicitly.
+</Callout>
+
+### Phase-level overrides
+
+Phases can override an agent's model, thinking level, and tool access without modifying the agent file:
+
+```json title="phase-with-overrides.json"
+{
+  "id": "deep-review",
+  "type": "agent",
+  "agent": "reviewer",
+  "model": "anthropic/claude-3.5-sonnet",
+  "thinking": "xhigh",
+  "tools": ["read", "grep"],
+  "task": "Deep review of the authentication module."
+}
+```
+
+These overrides apply only to this phase invocation. The agent's frontmatter settings are still used for other phases that don't override them.
+
+| Override | Effect |
+|---|---|
+| `model` | Replace the agent's model for this phase. Accepts a role (`"{{strong}}"`) or a literal model ID. |
+| `thinking` | Override the thinking level: `off`, `low`, `high`, `xhigh`. |
+| `tools` | Restrict the tool set. Useful for read-only phases that should not modify files. |
+
+### Branches and sub-phases
+
+Phase types with multiple branches (`parallel`, `tournament`) let each branch specify its own agent:
+
+```json title="parallel-with-per-branch-agents.json"
+{
+  "id": "review-all",
+  "type": "parallel",
+  "branches": [
+    {
+      "agent": "security-reviewer",
+      "task": "Review for security vulnerabilities."
+    },
+    {
+      "agent": "risk-reviewer",
+      "task": "Review for data integrity risks."
+    },
+    {
+      "agent": "reviewer",
+      "task": "Review for general code quality."
+    }
+  ]
+}
+```
+
+Branches that don't specify an agent inherit the parent phase's agent. Tournament phases also support a `judgeAgent` field for the judge step, which defaults to the phase's main agent.
+
+### Inheritance in sub-flows
+
+When a `flow` phase spawns an inline sub-flow, inner phases that don't specify their own agent inherit the parent phase's `defaultAgent` (or `agent` field). This means a single agent assignment at the parent level cascades to every child phase that doesn't override it.
+
+## Practical examples
+
+### Multi-stage review pipeline
+
+Different agents handle different review concerns, and a final arbiter synthesizes the results:
+
+```json title="multi-stage-review.json"
+{
+  "name": "review-pipeline",
+  "phases": [
+    {
+      "id": "plan",
+      "type": "agent",
+      "agent": "planner",
+      "task": "Analyze the code changes and create a review plan."
+    },
+    {
+      "id": "security-review",
+      "type": "agent",
+      "agent": "security-reviewer",
+      "dependsOn": ["plan"],
+      "task": "Review for security issues based on this plan: {steps.plan.output}"
+    },
+    {
+      "id": "quality-review",
+      "type": "agent",
+      "agent": "reviewer",
+      "dependsOn": ["plan"],
+      "task": "Review for code quality: {steps.plan.output}"
+    },
+    {
+      "id": "synthesis",
+      "type": "agent",
+      "agent": "final-arbiter",
+      "dependsOn": ["security-review", "quality-review"],
+      "task": "Synthesize these reviews and resolve any conflicts:\n\nSecurity: {steps.security-review.output}\n\nQuality: {steps.quality-review.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+### Custom domain agent
+
+Create a specialized agent for your domain, then reference it in flows:
+
+```markdown title=".pi/agents/api-designer.md"
+---
+name: api-designer
+description: Design RESTful APIs following OpenAPI 3.0 spec
+tools: read, grep, find, ls, write
+model: "{{strong}}"
+thinking: high
+---
+
+You are an API designer specializing in RESTful APIs.
+
+Follow these principles:
+- Use nouns for resource names, verbs for actions
+- Return appropriate HTTP status codes
+- Include pagination for list endpoints
+- Version APIs in the URL path (e.g., /v1/users)
+- Write OpenAPI 3.0 specs in YAML format
+```
+
+```json title="api-design-flow.json"
+{
+  "id": "design-api",
+  "type": "agent",
+  "agent": "api-designer",
+  "output": "text",
+  "task": "Design a REST API for a task management system with projects, tasks, and users."
+}
+```
+
+### Project-scoped team workflow
+
+Use `agentScope: "project"` so every team member gets the same agent behavior:
+
+```json title="team-review.json"
+{
+  "name": "team-review",
+  "agentScope": "project",
+  "phases": [
+    {
+      "id": "review",
+      "type": "agent",
+      "agent": "team-reviewer",
+      "task": "Review the code using team standards documented in .pi/agents/team-reviewer.md."
+    }
+  ]
+}
+```
+
+With a project agent in `.pi/agents/team-reviewer.md` that encodes your team's specific review criteria. This flow runs the same way for everyone on the team, regardless of their personal agent directory.
+
+## Next
+
+<Cards>
+  <Card title="Phase Types" href="/en/docs/syntax/phase-types">
+    Learn about all 10 phase types and when to use each one.
+  </Card>
+  <Card title="Tournament Selection" href="/en/docs/guides/tournament">
+    Spawn competing variants and let a judge pick the best result.
+  </Card>
+  <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
+    Generate sub-flows at runtime and validate them before execution.
+  </Card>
+</Cards>

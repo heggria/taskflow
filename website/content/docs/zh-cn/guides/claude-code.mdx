@@ -1,0 +1,240 @@
+---
+title: 在 Claude Code 上使用 taskflow
+description: 将 taskflow 作为 Claude Code 插件安装，通过 MCP 编排多阶段工作流。
+---
+
+[Claude Code](https://claude.com/product/claude-code) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。在 Claude Code 上，taskflow 以插件形式发布，注册一个零依赖的 MCP 服务器外加一个路由 skill，这样模型一看到多步骤任务就能调用它。
+
+本页带你走完整个流程：安装插件、确认 MCP 服务器已就绪、通过工具调用运行一个 flow，并理解权限与长时运行 flow 的模型。
+
+## 安装
+
+taskflow 通过共享的插件市场分发。先添加市场，再安装插件：
+
+```bash title="安装 taskflow 插件"
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+```
+
+这一条 `plugin install` 同时完成三件事：
+
+<Steps>
+  <Step>
+    **注册 MCP 服务器。** 插件声明了一个通过 `npx -y -p claude-taskflow claude-taskflow-mcp` 启动的 `taskflow` 服务器，让 Claude Code 能通过 stdio 访问运行时。`npx` 的版本锁定绑定了确切运行的代码——无需全局安装任何东西。
+  </Step>
+  <Step>
+    **安装路由 skill。** 一个内置 skill 教会 Claude Code 何时该调用 taskflow 工具，这样你不必记住它们的名字。
+  </Step>
+  <Step>
+    **保持零运行时依赖。** MCP 服务器在 Node 内置能力上通过 stdio 讲 JSON-RPC 2.0——不需要 `@modelcontextprotocol/sdk`，taskflow 因此保持了零依赖承诺。
+  </Step>
+</Steps>
+
+如果 Claude Code 会话已经在运行，重启它以加载新插件。
+
+## 验证安装
+
+在运行任何东西之前，确认插件及其 MCP 服务器都干净地注册了：
+
+```bash title="验证插件和 MCP 服务器"
+claude plugin list   # 应出现 claude-taskflow@taskflow，enabled
+claude mcp list      # 应出现 taskflow，enabled
+```
+
+如果任一缺失，说明 `plugin install` 步骤未完成——重新运行并检查错误。
+
+## 运行你的第一个 flow
+
+在 Claude Code 上，你不通过斜杠命令调用 taskflow——你通过 MCP 工具调用它。模型在路由 skill 的引导下决定何时调用。所以最自然的开始方式就是直接描述工作。
+
+### 直接问
+
+在 Claude Code 会话中试试这些：
+
+```text title="用自然语言描述工作"
+> List my saved taskflows.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+skill 会把请求路由到正确的工具。如果当前项目保存了一个 flow，模型会带保存的名称调用 `taskflow_run`；如果你粘贴了内联定义，它则传递定义。
+
+### 直接调用工具
+
+如果你想显式调用——在脚本里或你确切知道结构时很有用——工具是 `taskflow_run`。它接受保存的 flow `name` 或内联 `define`：
+
+```json title="通过 taskflow_run 运行保存的 flow"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+```json title="通过 taskflow_run 运行内联 flow"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
+两种形式运行同一个 DAG。工具只返回最终输出——`discover`、`review-each` 和 `summarize` 的中间 transcript 留在运行时内，永远不会进入你的上下文。
+
+<Callout type="info">
+  只有标记了 `final: true` 的阶段会被返回。其余一切在设计上就是上下文隔离的。
+</Callout>
+
+## 在花费 token 之前检查 flow
+
+在运行 DAG 之前，你可以让 Claude Code 静态校验它。这能捕获环、悬空的 `dependsOn`、未知的阶段引用以及格式错误的配置——全部零 token 成本：
+
+```json title="通过 taskflow_verify 校验 flow"
+{
+  "name": "review-changes"
+}
+```
+
+或者把 DAG 渲染成图来目测其形状：
+
+```json title="通过 taskflow_compile 把 flow 编译成图"
+{
+  "name": "review-changes"
+}
+```
+
+`taskflow_compile` 返回按拓扑层分组的 DAG 文本大纲，外加一个内联 SVG 图像（供能渲染图像的客户端使用）。
+
+## subagent 如何运行
+
+每个阶段的 subagent 作为隔离的 `claude -p` 会话运行——一个真正的 Claude Code headless 进程，不是 pi 进程。服务器从其**启动 cwd** 发现已保存的 flow 和 agent，所以你在哪个项目启动它决定了哪些 flow 可见。
+
+### 权限映射
+
+Claude Code 在 headless（`-p`）模式下没有 OS 级沙箱——一个工具调用要么被白名单允许，要么被拒绝。运行时把每个阶段的工具白名单映射到一个权限模式：
+
+| 阶段工具 | 权限模式 | 含义 |
+|---|---|---|
+| 只读（无 `write`/`edit`/`bash`） | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | 变更类工具被直接拒绝。注意没有只读 shell——`Bash` 不会授予只读阶段。 |
+| 变更（或无白名单） | `--permission-mode bypassPermissions` | subagent 可以运行任何工具。只运行你信任的 flow，在一个你能 `git reset` 的仓库里。 |
+
+<Callout type="warn">
+  变更阶段以 `bypassPermissions` 运行，没有 OS 沙箱兜底。对涉及文件系统的 flow，优先使用一次性 worktree（`cwd: "worktree"`），并只运行你信任的 flow。
+</Callout>
+
+## 长时运行的 flow
+
+关于在 Claude Code 上运行 taskflow，你需要知道一件事：**`taskflow_run` 是同步的。** 工具调用在**整个 DAG 完成**之前不会返回——每个阶段、每个 subagent。对三阶段审查这没问题；对五十个文件的扇出加末尾的 tournament，可能要花一阵子。
+
+如果一个 flow 确实很大，考虑把它拆成几个较小的 `taskflow_run` 调用，让每个都能及时返回，或者从普通 shell 在后台运行：
+
+```bash title="在后台运行 flow"
+claude -p "run the nightly-audit taskflow" &
+```
+
+然后用 `taskflow_peek` 事后检查运行：
+
+```json title="通过 taskflow_peek 查看某阶段的存储输出"
+{
+  "runId": "run_2026-07-04_abc123",
+  "phaseId": "summarize"
+}
+```
+
+省略 `phaseId` 可列出每个阶段及其状态和输出大小。输出会被硬截断（默认 4000 字符），所以 peek 永远不会淹没你的上下文。
+
+<Callout type="warn">
+  `taskflow_peek` 是 taskflow 上下文隔离的唯一有意例外。它把中间输出拉进你的对话——只用于调试，不要作为正常流程的一部分。
+</Callout>
+
+## MCP 模式下的审批
+
+MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**（fail-open）。在你通过 `taskflow_*` 工具运行的 flow 中，优先使用 `gate`（agent 审查）；`approval` 只用在人工交互运行的 flow 中。
+
+## 工具参考
+
+以下是插件暴露的完整 MCP 接口：
+
+| 工具 | 用途 |
+|---|---|
+| `taskflow_run` | 运行保存的 flow（按 `name`）或内联定义（按 `define`）。返回最终输出 + 一个 `runId`。 |
+| `taskflow_list` | 列出从 cwd 可发现的保存 flow，附带库元数据（如有）。 |
+| `taskflow_show` | 显示保存 flow 的定义及其库 sidecar 元数据。 |
+| `taskflow_save` | 把 flow 保存到库，可选 `purpose`、`tags`、`notes`。 |
+| `taskflow_search` | 在编写前搜索库。返回排序后的可复用 flow。 |
+| `taskflow_verify` | 静态校验 flow（环、引用、配置），零成本。 |
+| `taskflow_compile` | 把 DAG 渲染为文本大纲 + 内联 SVG。 |
+| `taskflow_peek` | 查看某次运行中某阶段的存储输出，用于事后调试。 |
+
+<Callout type="tip">
+  你很少需要记住这些。内置 skill 会告诉 Claude Code 哪个工具适合请求——"verify this flow"、"show me the diagram"、"run it" 都能自动正确路由。
+</Callout>
+
+## 备选：手动注册 MCP 服务器
+
+如果你不想用插件，可以安装包并自行注册它的 `claude-taskflow-mcp` bin：
+
+```bash title="手动注册 MCP"
+pnpm add -g claude-taskflow
+claude mcp add taskflow -- claude-taskflow-mcp
+```
+
+验证注册：
+
+```bash title="验证手动注册"
+claude mcp list   # taskflow … enabled
+```
+
+服务器的行为与插件版完全相同——只是不带路由 skill，也没有一键更新路径。
+
+## 卸载
+
+如果你需要从某台机器移除 taskflow：
+
+```bash title="移除 taskflow 插件"
+claude plugin uninstall claude-taskflow@taskflow   # 如果以插件形式安装
+claude mcp remove taskflow                          # 如果手动注册
+```
+
+这会取消注册 MCP 服务器并移除 skill。磁盘上任何已保存的 flow 定义都不受影响。
+
+## 下一步
+
+<Cards>
+  <Card title="快速开始" href="/zh-cn/docs/getting-started">
+    五分钟速览（如果你还没看过）。
+  </Card>
+  <Card title="阶段" href="/zh-cn/docs/concepts/phases">
+    可组合成 DAG 的十个构建块。
+  </Card>
+  <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
+    同一个运行时，接入 OpenAI Codex。
+  </Card>
+</Cards>

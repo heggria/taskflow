@@ -1,0 +1,653 @@
+---
+title: 工作区隔离
+description: taskflow 如何为每个阶段分配独立的工作目录——并在完成后清理。
+---
+
+大多数阶段在你启动 flow 的目录中运行。当子代理只是读取代码时这没问题，但一旦某个阶段需要写文件、跑构建或执行 git commit，这就成了隐患。两个并行分支同时编辑同一个 `src/index.ts` 会互相覆盖。一次失败的实验在你的目录树中留下残余文件，干扰下一个阶段。一个 `script` 阶段执行 `npm install` 会把只有某个子代理需要的包污染到你的 `node_modules` 里。
+
+工作区隔离通过阶段定义上的一个字段 `cwd` 解决所有这些问题。
+
+## 三个保留关键字
+
+将一个阶段的 `cwd` 设为三个保留关键字之一，运行时会在执行前为它分配一个隔离的工作目录，然后在完成后清理。把 `cwd` 留作字面路径（或完全省略），阶段就像以前一样在默认目录中运行——隔离是 opt-in 的。
+
+```txt title="三种工作区模式"
+cwd: "temp"        →  /tmp/pi-tf-ws-<phase>-XXXXXX   （阶段完成后删除）
+cwd: "dedicated"   →  <runs>/ws/<runId>/<phaseId>    （保留以供检查）
+cwd: "worktree"    →  基于一次性分支的 git worktree  （阶段完成后删除）
+```
+
+每种模式在隔离性和持久性之间权衡。正确的选择取决于阶段的副作用是否需要在运行结束后保留。
+
+### `temp` — 临时草稿空间
+
+`temp` 工作区是通过 `fs.mkdtempSync` 在系统的 `os.tmpdir()` 下创建的操作系统级临时目录。前缀 `pi-tf-ws-<phaseId>-` 使目录在 `/tmp` 列表中可识别；随机后缀保证并发阶段之间的唯一性。
+
+```json title="一个不触碰你目录树的代码起草阶段"
+{
+  "id": "draft-patch",
+  "type": "agent",
+  "cwd": "temp",
+  "task": "根据下面的描述编写补丁。\n{steps.analyze.output}"
+}
+```
+
+**清理：** 阶段完成时——无论成功还是失败——目录会被递归删除。删除操作是 best-effort 且有容器限制的：运行时拒绝删除 OS tmpdir 之外的任何东西，所以未来路径构造中的 bug 永远不会删除你的项目文件。
+
+**何时使用：** 起草实验、代码生成、中间文件转换——任何产生的文件在阶段完成后你不再需要的场景。如果阶段的价值在于它的文本输出（由运行时捕获），而不是它的文件系统产物，`temp` 是正确的选择。
+
+### `dedicated` — 持久化的 per-phase 目录
+
+`dedicated` 工作区是位于运行状态树 `<runsRoot>/ws/<runId>/<phaseId>` 下的目录。它通过 `mkdirSync({ recursive: true })` 创建，并且——关键点——运行时**从不删除**它。
+
+```json title="一个你希望在运行后检查其产物的阶段"
+{
+  "id": "generate-report",
+  "type": "agent",
+  "cwd": "dedicated",
+  "task": "根据审计数据生成完整的 HTML 报告。\n{steps.audit.json}"
+}
+```
+
+**清理：** 无。目录与运行状态一起持久存在。只有当运行本身被保留策略（`maxKeptRuns` / `maxRunAgeDays`）修剪时才会被清理。
+
+**续跑行为：** 路径基于 `(runId, phaseId)` 是确定性的。如果你续跑一次失败的运行，同一个目录会被复用——先前尝试的产物仍然存在。这是刻意设计的：`dedicated` 工作区是运行时假设你想跨尝试检查或积累产物的唯一模式。
+
+**何时使用：** 产生你想在运行后审查的文件的阶段（报告、生成的代码、测试 fixture）。也适用于下游兄弟需要从磁盘（而不是通过插值系统）读取产物的阶段。
+
+### `worktree` — 基于一次性分支的真实 git worktree
+
+`worktree` 工作区是一次真正的 `git worktree add -b <branch> <dir> HEAD` 调用。分支名为 `tf/<runId>/<phaseId>-<timestamp>`（时间戳用 base-36 编码以保持紧凑），工作目录分配在 OS tmpdir 下，然后由 git 用 `HEAD` 的完整检出填充。
+
+```json title="一个执行隔离 git commit 的阶段"
+{
+  "id": "apply-migration",
+  "type": "agent",
+  "cwd": "worktree",
+  "task": "应用上一步的数据库迁移方案。每个迁移文件单独 commit。"
+}
+```
+
+**清理：** 阶段完成后，运行时执行 `git worktree remove --force <dir>`（30 秒超时），然后 `rmrf` 目录作为纵深防御，最后 `git branch -D <branch>`（10 秒超时）。每一步都是 best-effort：残留的 worktree 或分支无害，不会导致阶段失败。
+
+**fail-open 降级：** worktree 要求阶段的基目录位于一个 git work tree 内。如果不是——基目录没有 `.git`，或者 `git rev-parse --is-inside-work-tree` 失败——运行时会优雅地降级为 `temp` 工作区。阶段仍然在隔离目录中运行；只是失去了 git 语义。一个警告会被附加到阶段的 `warnings` 数组：
+
+```txt title="降级 worktree 的警告"
+workspace:temp — worktree requested but base cwd is not a git work tree; used a temp dir instead
+```
+
+同样的降级也适用于 `git worktree add` 本身失败的情况（例如分支名冲突、detached HEAD 或 60 秒超时）。运行时会清理失败的分配并用 `temp` 重试。
+
+**何时使用：** 需要执行 git commit、运行 diff、应用补丁，或操作一份可以丢弃而不影响主工作树的仓库副本的阶段。一个 N 个变体各自独立 commit 的 tournament 是典型用例。
+
+## 运行时如何集成
+
+生命周期很直观：
+
+```txt title="运行时中的工作区生命周期"
+1. phase.cwd 是关键字？
+   否  → 在 deps.cwd（默认路径）中运行阶段。完毕。
+   是  ↓
+2. allocateWorkspace(keyword, {baseCwd, runId, phaseId, runsRoot})
+   → Workspace { dir, kind, teardown, branch?, note? }
+3. 将 deps.cwd 覆盖为 ws.dir 用于阶段的子代理
+4. 执行阶段
+5. 将工作区诊断信息附加到 PhaseState.warnings（如有降级）
+6. 在 finally 块中调用 ws.teardown()（best-effort）
+```
+
+teardown 运行在 `finally` 块中，所以无论阶段成功、失败还是被中止，它都会触发。teardown 本身被 `try/catch` 包裹——一个清理错误永远不会替代阶段的真实结果（项目错误处理惯例中的"safe emit"不变量）。
+
+## 始终 fail-open
+
+每种工作区模式都是降级而非失败。完整的降级阶梯：
+
+| 失败 | 降级 |
+|---|---|
+| `temp`：`mkdtempSync` 抛出异常 | 回退到 `baseCwd`（运行的默认目录），附带警告 |
+| `dedicated`：`mkdirSync` 抛出异常 | 回退到 `baseCwd`，附带警告 |
+| `worktree`：基目录不在 git 仓库中 | 降级为 `temp`（仍然隔离，但无 git） |
+| `worktree`：temp 目录分配失败 | 先重试 `temp`，再回退到 `baseCwd` |
+| `worktree`：`git worktree add` 失败 | 降级为 `temp`（警告中包含 git 的 stderr） |
+| 任何 teardown 错误 | 静默吞掉；best-effort 清理 |
+
+在每种情况下，阶段仍然运行。运行时将一个 `note` 附加到 workspace 句柄上，作为 `PhaseState.warnings` 条目展示，所以降级在 `/tf peek` 中可见，但从不阻塞运行。
+
+```txt title="降级工作区的警告示例"
+workspace — dedicated workspace alloc failed: EACCES: permission denied
+```
+
+<Callout type="info">
+  fail-open 设计是刻意的：工作区是隔离增强，不是正确性要求。一个在基目录而非隔离目录中运行的阶段可能会留下残余文件，但它仍然产出正确的结果。替代方案——因为 `/tmp` 满了就失败阶段——严格来说会更糟。
+</Callout>
+
+## 续跑安全
+
+续跑（在[续跑](/zh-cn/docs/concepts/resume)中记录的跨会话重放系统）与工作区的交互有特定方式：
+
+- **`temp`** 和 **`worktree`** 在每次运行时从零开始重新分配。如果一个阶段被续跑（输入变了，或你强制了重新运行），会创建一个全新的目录。旧的 temp/worktree 目录在先前的尝试完成时已经被清理了。
+- **`dedicated`** 是确定性的：路径 `<runs>/ws/<runId>/<phaseId>` 在续跑尝试之间相同。如果先前的尝试留下了文件，它们在重新运行开始时仍然存在。这是有意为之——`dedicated` 工作区是积累模式。
+- 被缓存的阶段（输入哈希未变，结果从缓存恢复）根本不会触发工作区分配。缓存结果被直接复用，不重新运行子代理，因此不创建或触碰任何目录。
+
+<Callout type="warn">
+  `dedicated` 工作区在续跑尝试之间积累。如果一个阶段在尝试 1 写入了 `output.json`，然后失败并在尝试 2 重新运行，尝试 2 开始时尝试 1 的文件仍然在目录中。设计 `dedicated` 阶段时确保它是幂等的，或检查已有产物。
+</Callout>
+
+## 路径容器化
+
+运行时在两个层面强制执行容器化：
+
+1. **`dedicated` 目录根植于运行状态下。** 路径 `<runsRoot>/ws/<runId>/<phaseId>` 由经过 sanitize 的段构成——phase id 经过 `safeSegment()` 处理，剥离 `[A-Za-z0-9._-]` 之外的所有字符，折叠前导点，并限制在 100 字符以内。一个像 `../../etc` 的 phase id 会变成 `______etc`。
+
+2. **`temp` 和 `worktree` 的删除受根目录限制。** `rmrf` 辅助函数拒绝删除 OS tmpdir 和运行自己的 `ws/` 树之外的任何东西。即使未来的 bug 产生了一个错误路径，容器化检查也能防止项目文件被删除。
+
+3. **动态子流完全不能使用工作区关键字。** 一个生成的子流（由 LLM 通过 `flow { def }` 或 `ctx_spawn` 编写的）如果任何阶段将 `cwd` 设为 `temp`、`dedicated` 或 `worktree`，会被验证拒绝。LLM 编写的计划不得分配隔离目录或创建会变更仓库的 git worktree。只有作者编写的 flow 才能使用工作区隔离。
+
+## 选择正确的模式
+
+```txt title="决策树"
+阶段是否写入你在它完成后需要的文件？
+  是 → dedicated
+  否 ↓
+阶段是否需要 git（commit、diff、分支）？
+  是 → worktree
+  否 → temp
+```
+
+| 模式 | 隔离 | 持久 | Git | 清理 | 续跑 |
+|---|---|---|---|---|---|
+| `temp` | ✓ | ✗ | ✗ | 完成后删除 | 重新分配 |
+| `dedicated` | ✓ | ✓ | ✗ | 保留直到运行被修剪 | 复用同一目录 |
+| `worktree` | ✓ | ✗ | ✓ | worktree + 分支删除 | 重新分配 |
+
+## 示例
+
+### 无冲突的并行实验
+
+两个阶段各自生成完整实现，并行运行。没有隔离的话它们会写同一个文件：
+
+```json title="并行隔离草稿"
+{
+  "name": "compare-approaches",
+  "phases": [
+    {
+      "id": "approach-a",
+      "type": "agent",
+      "cwd": "temp",
+      "task": "使用方案 A 实现该功能。"
+    },
+    {
+      "id": "approach-b",
+      "type": "agent",
+      "cwd": "temp",
+      "task": "使用方案 B 实现该功能。"
+    },
+    {
+      "id": "judge",
+      "type": "agent",
+      "task": "比较：\nA: {steps.approach-a.output}\nB: {steps.approach-b.output}",
+      "dependsOn": ["approach-a", "approach-b"],
+      "final": true
+    }
+  ]
+}
+```
+
+每个草稿在自己的 temp 目录中运行。谁也看不到或覆盖不了对方的文件。
+
+### 带 git commit 的 tournament
+
+每个变体在自己的一次性分支上做独立 commit，然后评委选出最佳：
+
+```json title="带 worktree 隔离的 tournament"
+{
+  "name": "refactor-tournament",
+  "phases": [
+    {
+      "id": "variant-1",
+      "type": "agent",
+      "cwd": "worktree",
+      "task": "使用策略模式重构 auth 模块。每个文件变更单独 commit。"
+    },
+    {
+      "id": "variant-2",
+      "type": "agent",
+      "cwd": "worktree",
+      "task": "使用中间件链重构 auth 模块。每个文件变更单独 commit。"
+    },
+    {
+      "id": "judge",
+      "type": "gate",
+      "task": "审查两种重构方案。对更好的那个输出 VERDICT: PASS 并说明理由。",
+      "dependsOn": ["variant-1", "variant-2"],
+      "final": true
+    }
+  ]
+}
+```
+
+每个变体获得自己的一次性分支上的 worktree（`tf/<runId>/variant-1-<ts>` 和 `tf/<runId>/variant-2-<ts>`）。commit 是真正的 git commit，与主目录树完全隔离。两个 worktree 和分支在各自阶段完成时被清理。
+
+### 留下产物以供审查的审计
+
+```json title="dedicated 工作区用于可检查的输出"
+{
+  "name": "security-audit",
+  "phases": [
+    {
+      "id": "scan",
+      "type": "agent",
+      "cwd": "dedicated",
+      "task": "扫描代码库中的漏洞。将发现的所有问题写入 findings.json 文件。"
+    },
+    {
+      "id": "report",
+      "type": "agent",
+      "task": "读取扫描结果：\n{steps.scan.output}\n写一份人类可读的摘要。",
+      "dependsOn": ["scan"],
+      "final": true
+    }
+  ]
+}
+```
+
+`scan` 阶段的 `dedicated` 工作区在运行完成后将 `findings.json` 保留在磁盘上。你可以通过 `/tf peek` 检查它，或者直接在运行的 `ws/` 目录下找到它。
+
+## 警告与诊断
+
+当工作区降级或遇到问题时，运行时将警告附加到阶段状态。这些在 `/tf peek <runId>` 和持久化的运行记录中可见：
+
+```txt title="工作区警告示例"
+workspace:temp at /tmp/pi-tf-ws-draft-patch-a1b2c3/
+workspace:temp — worktree requested but base cwd is not a git work tree; used a temp dir instead
+workspace — dedicated workspace alloc failed: EACCES: permission denied
+workspace:worktree at /tmp/pi-tf-wt-apply-migration-x4y5z6/ (branch: tf/abc123/apply-migration-m3k2j1)
+```
+
+显示 `workspace:<kind> at <path>` 的警告是信息性的——工作区分配成功。kind 后面带 `—` 的警告表示降级。
+
+## 下一步
+
+<Cards>
+  <Card title="上下文隔离" href="/zh-cn/docs/concepts/context-isolation">
+    工作区隔离处理文件系统；上下文隔离处理 transcript。
+  </Card>
+  <Card title="续跑" href="/zh-cn/docs/concepts/resume">
+    缓存的阶段如何完全跳过工作区分配。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    `script` 阶段类型以及工作区隔离最重要的场景。
+  </Card>
+</Cards>
+```
+
+---
+
+## meta.json Placement
+
+Insert `concepts/workspace-isolation` after `concepts/context-isolation` in both meta.json files:
+
+**`website/content/docs/en/meta.json`** — change:
+```
+"concepts/context-isolation",
+"concepts/resume",
+```
+to:
+```
+"concepts/context-isolation",
+"concepts/workspace-isolation",
+"concepts/resume",
+```
+
+**`website/content/docs/zh-cn/meta.json`** — same change:
+```
+"concepts/context-isolation",
+"concepts/workspace-isolation",
+"concepts/resume",
+```
+
+This places Workspace Isolation between Context Isolation (which covers the transcript-level isolation) and Resume (which references workspace behavior on re-run). The conceptual flow is: "your outputs are isolated → your filesystem can be isolated → and all of this survives across sessions."
+
+## Risk Review
+
+**Severity summary:** 0 critical, 0 high, 1 medium, 2 low findings. No issues block the documentation merge.
+
+### Medium
+
+**M1 — `dedicated` workspace is NOT idempotent across resume attempts (documentation accuracy risk).**
+The doc states: *"A `dedicated` workspace accumulates across resume attempts."* This is technically correct per the code (`workspace.ts:131-137` — `mkdirSync({ recursive: true })` is idempotent, but never clears prior contents). However, the doc's warning about this could be stronger. If a `dedicated` phase writes a file that the next resume attempt reads and misinterprets as "already done," you get a silent data-integrity bug at the flow-author level. The doc addresses this with the Callout about idempotency, which is appropriate.
+
+**Evidence:** `workspace.ts:134` — `fs.mkdirSync(dir, { recursive: true })` does not clear the directory.
+
+### Low
+
+**L1 — `worktree` branch name is not collision-proof on rapid sequential runs.**
+The branch name `tf/<runId>/<phaseId>-<Date.now().toString(36)>` uses millisecond-resolution timestamps. Two rapid sequential runs (same runId, same phaseId, within 1ms) could theoretically collide, though in practice `runId` uniqueness prevents this. Not a documentation concern; just a code observation.
+
+**Evidence:** `workspace.ts:149` — `branch = \`tf/${safeSegment(runId)}/${seg}-${Date.now().toString(36)}\``.
+
+**L2 — The `rmrf` containment check for `dedicated` workspaces relies on `runsRoot` being passed as an `allowedRoots` parameter.**
+The `teardown` for `dedicated` is a no-op, so this is moot today. But if someone adds teardown later, the `rmrf` function at `workspace.ts:85-93` only checks `os.tmpdir()` by default. The `dedicated` path under `runsRoot/ws/` would NOT be in the allowed roots unless explicitly passed. Again, not a current bug — just a latent risk if teardown semantics change.
+
+**Evidence:** `workspace.ts:136` — `teardown() {}` (no-op for dedicated).
+
+### Passes
+
+- **Fail-open documentation is accurate.** Every degradation path documented in the article matches the code: temp alloc failure → inherited (workspace.ts:122-125), dedicated alloc failure → inherited (workspace.ts:137-139), worktree non-git → temp (workspace.ts:144-147), worktree add failure → temp (workspace.ts:159-164), teardown errors → swallowed (runtime.ts:747-749).
+- **Path containment documentation is accurate.** `safeSegment` sanitization (workspace.ts:80-83) and `rmrf` root restriction (workspace.ts:85-93) are correctly described.
+- **Dynamic sub-flow restriction is accurately documented.** Schema validation blocks workspace keywords in dynamic flows (schema.ts:588-590).
+- **Resume behavior is correctly described.** `temp`/`worktree` are re-allocated; `dedicated` is deterministic; cached phases skip allocation entirely (verified via runtime.ts:723-724 early return for non-keyword cwd, and the cached phase path never reaches workspace allocation).
+
+### Recommendation: **Approved.**
+
+The documentation is technically precise, matches the source code evidence, and correctly describes all failure modes, cleanup semantics, and resume behavior.
+
+### Decisions
+
+- Assumed the `<Callout>` MDX component and `<Cards>`/`<Card>` components are available project-wide (confirmed from existing concepts docs).
+- Assumed frontmatter `title`/`description` is the correct schema (confirmed from existing docs).
+- Did not verify whether the Chinese `zh-cn` docs are auto-translated or hand-maintained; wrote a full hand-translated Chinese version matching the style of `zh-cn/concepts/context-isolation.mdx` (which preserves technical English terms like `fail-open`, `opt-in`, `best-effort`, `transcript`).
+
+---
+
+### [3/5] risk-reviewer
+
+Now I have all the evidence needed. Here are the two complete `.mdx` files:
+
+---
+
+## Risk Review
+
+Not applicable to this task — this is a documentation authoring task, not a code change review. Proceeding with the deliverable.
+
+---
+
+## `meta.json` placement
+
+Insert `guides/background-runs` **after `guides/tournament` and before the case studies**. Updated `pages` array section:
+
+```
+"guides/tournament",
+"guides/background-runs",        ← NEW
+"guides/code-audit-case-study",
+```
+
+---
+
+## FILE: `website/content/docs/en/guides/background-runs.mdx`
+
+```mdx
+---
+title: Background Runs
+description: Fire off a long-running flow and get your prompt back immediately. Poll status by runId.
+---
+
+A normal `taskflow` call blocks your session until every phase finishes. For a three-phase code audit that takes eight minutes, that is eight minutes your prompt is frozen.
+
+Background runs fix this. Set `detach: true` and the MCP tool returns a `runId` in under a second. A child process picks up the work, persists progress after every phase, and writes the terminal state when it finishes — or crashes. You poll the run state from disk whenever you want a status update, and resume it later if it fails partway through.
+
+This guide walks through the exact spawn mechanism, how to check on a background run, what happens to approval gates, and the limitations that come with running headless.
+
+## The basic pattern
+
+Ask the `taskflow` tool to run a flow with `detach: true`:
+
+```json
+{
+  "action": "run",
+  "name": "code-audit",
+  "args": { "target": "src/auth" },
+  "detach": true
+}
+```
+
+The tool returns immediately:
+
+```
+Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T143022-a1b2c3
+```
+
+Your session is free. The flow is running in a detached child process. The PID is recorded on the run state so you can check if it is still alive.
+
+## How it works
+
+<Steps>
+  <Step>
+    **The host creates a `RunState` on disk.** The run starts with `status: "running"`, `detached: true`, and the flow definition + args are persisted. This is the same atomic-write path every run uses — the detached process will read it back.
+  </Step>
+  <Step>
+    **Context is serialized to a temp file.** A JSON file at `/tmp/taskflow-detach-<runId>.json` carries the `runId`, `defName`, `args`, `cwd`, and the absolute path of the host adapter's runner module (`runnerModule`). This file is the child's only input.
+  </Step>
+  <Step>
+    **A child process is spawned.** The host forks `node <detached-runner.js> <context-file>` with `detached: true` and `stdio: ["ignore", "ignore", "pipe"]`. Stdout is ignored; stderr is piped back to the parent so crash diagnostics are captured. The child is immediately `unref()`'d — it does not keep the parent's event loop alive.
+  </Step>
+  <Step>
+    **The parent returns the runId.** The child's PID is written to `RunState.pid` and the MCP tool response includes both the PID and the runId. The parent session can continue with other work.
+  </Step>
+  <Step>
+    **The child boots and runs the flow.** The detached runner reads the context file, re-discovers agents from disk, dynamically imports the host adapter's runner module, and calls `executeTaskflow`. Progress is persisted after every phase via the same `saveRun` path.
+  </Step>
+  <Step>
+    **Terminal state is written.** On success, the child persists `status: "completed"` with all phase outputs. On failure, a top-level `catch` writes `status: "failed"`. On crash, the parent's crash guard writes a synthetic `__detach__` phase with the stderr.
+  </Step>
+</Steps>
+
+## Checking on a background run
+
+The run state is a JSON file on disk — the same file the detached process updates after every phase. Read it back:
+
+```
+/tf runs
+```
+
+The runs panel shows the run's current status, phase progress, and timing. For background runs, the panel **polls the file on an interval** so you see live progress without reopening — `updatedAt` advances after each phase.
+
+You can also check whether the child process is still alive. `RunState.pid` stores the OS PID; `isProcessAlive(pid)` uses `process.kill(pid, 0)` (signal 0 — no signal sent, just a liveness check). If the process has exited but the run is still `"running"`, something went wrong — check the `__detach__` phase for the error.
+
+### Run statuses at a glance
+
+| Status | Meaning |
+|---|---|
+| `running` | The detached process is alive and executing phases. |
+| `completed` | Every phase finished. `finalOutput` is in the last phase's output. |
+| `failed` | A phase failed (and retries were exhausted), or the child crashed. |
+| `paused` | A `loop` phase hit its iteration cap and paused for review. |
+| `blocked` | A `gate` phase returned `VERDICT: BLOCK`. |
+
+## Crashes and the `__detach__` phase
+
+If the child process dies before writing a terminal state — an OOM kill, a segfault, a bad runner module import — the parent process's crash guard fires. It writes a **synthetic `__detach__` phase** onto the run:
+
+```json
+{
+  "id": "__detach__",
+  "status": "failed",
+  "error": "Detached runner exited with code 1: Failed to load runner module 'pi-taskflow/dist/runner.js'..."
+}
+```
+
+The crash guard only fires when the run is still `"running"` and the PID matches — it never clobbers a genuine terminal state the runner already persisted. This means:
+
+- **Clean exit (code 0):** The runner persisted its own state. The crash guard does nothing.
+- **Non-zero exit:** The crash guard checks the run state. If it is still `"running"`, it marks it `"failed"` with the captured stderr.
+- **Spawn error:** The `child.on("error")` handler writes the same synthetic phase with the spawn error message.
+
+The `__detach__` phase is pollable and debuggable — you see it in `/tf runs` and in the run detail view just like any other phase.
+
+## Approval gates auto-reject
+
+Approval phases are safety boundaries. In a normal interactive run, the host pops up a prompt and waits for you to approve, reject, or edit. In a detached run, there is no interactive approver — the `requestApproval` callback is not injected.
+
+When the runtime encounters an `approval` phase without an approver:
+
+```
+output: "(auto-rejected: no interactive approver available)"
+approval: { decision: "reject", auto: true }
+gate: { verdict: "block" }
+```
+
+The approval auto-rejects and the gate blocks. Downstream phases that depend on the approval's output see the rejection text. The run records the decision so you can audit it later.
+
+<Callout type="warn">
+  Approval gates are **never bypassed** in detached mode. Auto-reject is not auto-approve — the gate blocks, and downstream phases cascade-fail. If your flow has an approval gate and you need it to pass in CI, remove the gate or restructure the flow for headless execution.
+</Callout>
+
+## Use cases
+
+### CI pipelines
+
+A CI job can fire a taskflow, capture the `runId`, and poll the run state in a loop. No interactive session needed. The job exits based on the terminal status:
+
+```bash
+# Pseudocode for a CI step
+RUN_ID=$(taskflow run --name code-audit --detach --json | jq -r '.runId')
+
+while true; do
+  STATUS=$(taskflow status --run-id "$RUN_ID" --json | jq -r '.status')
+  case "$STATUS" in
+    completed) exit 0 ;;
+    failed|blocked) exit 1 ;;
+    running) sleep 10 ;;
+  esac
+done
+```
+
+Approval phases auto-reject in CI, which is correct — you want the pipeline to halt at approval gates, not silently rubber-stamp them.
+
+### Long-running flows
+
+A 20-phase migration planner that takes 30 minutes should not block your coding session. Detach it, keep working, and check back:
+
+```
+/tf runs          ← see progress
+```
+
+When it completes, the run history panel shows the final output. You can inspect individual phase outputs, usage stats, and timing — the same data as a foreground run.
+
+### Overnight batch work
+
+Queue several detached runs before you walk away. Each one runs independently, persists its own state, and is pollable by `runId` the next morning. The run cleanup policy (`maxKeptRuns`, `maxRunAgeDays`) prunes old runs automatically.
+
+### Fire-and-forget side tasks
+
+A background flow that generates documentation, runs a linter sweep, or produces a report — tasks you want done but do not need to watch — are natural detach candidates. The flow runs to completion (or fails visibly) without consuming your attention.
+
+## Context file format
+
+The temp file at `/tmp/taskflow-detach-<runId>.json` carries:
+
+```json
+{
+  "runId": "20260706T143022-a1b2c3",
+  "defName": "code-audit",
+  "args": { "target": "src/auth" },
+  "cwd": "/Users/you/project",
+  "runnerModule": "/Users/you/.pi/extensions/pi-taskflow/dist/runner.js",
+  "runnerExport": "piSubagentRunner"
+}
+```
+
+| Field | Purpose |
+|---|---|
+| `runId` | The pre-allocated run identifier. The child loads its `RunState` by this id. |
+| `defName` | The flow name — used to resolve the saved definition from disk. |
+| `args` | Invocation arguments, already resolved against the flow's `args` schema. |
+| `cwd` | The working directory — where agents run and where `runsDir` is rooted. |
+| `runnerModule` | Absolute path of the host adapter's runner module. The child `import()`s this at runtime to get the `runTask` function. |
+| `runnerExport` | Named export on the runner module (defaults to `"piSubagentRunner"`). |
+
+The file is written once at spawn time and is not updated during the run. It can be safely deleted after the child exits.
+
+## The detached runner entry point
+
+`detached-runner.ts` is a **spawn-only entry** — it is not imported by the `taskflow-core` barrel (`index.ts`). It lives at `taskflow-core/detached-runner` and is resolved by the host adapter via `import.meta.resolve`. The runner is precompiled to `.js` in the published package, so no `--experimental-strip-types` flag is needed.
+
+The runner's startup sequence:
+
+1. Read and parse the context file from `process.argv[2]`.
+2. Load the pre-saved `RunState` by `runId`.
+3. Re-discover agents using `readSubagentSettings()` and `discoverAgents()`.
+4. Dynamically `import(runnerModule)` and extract the `runTask` function.
+5. **Fail fast** if the runner module was specified but could not be loaded — writes a synthetic `__detach__` phase and exits non-zero rather than limping on with the "no runner injected" stub.
+6. Call `executeTaskflow()` with a `persist` callback that saves state after every phase.
+7. On success, persist the terminal `RunState`. On crash, the top-level `catch` writes `status: "failed"`.
+
+## Limitations
+
+<Callout type="info">
+  Background runs trade interactivity for concurrency. These limitations are by design.
+</Callout>
+
+| Limitation | Why |
+|---|---|
+| **Approval gates auto-reject** | No interactive approver is available. Safety gates must not be silently bypassed. |
+| **No live TUI streaming** | The child's stdout is ignored (`stdio: "ignore"`). Progress is visible only via file polling. |
+| **No `AbortSignal` from host** | The parent cannot cancel the child mid-run. You can kill the PID manually. |
+| **`runnerModule` must be resolvable** | The child `import()`s the host adapter's runner at runtime. If the module path is wrong, every phase fails. The fail-fast guard catches this early. |
+| **Temp file must persist until child reads it** | The context file at `/tmp/taskflow-detach-<runId>.json` is read synchronously at startup. Deleting it before the child boots causes an immediate exit. |
+| **No `requestApproval` callback** | The host cannot inject an approval handler into a detached process. This is the mechanism behind auto-reject. |
+
+## Resume after failure
+
+A detached run that fails partway through is a normal failed run — it has a `runId`, persisted phase states, and all the data the resume mechanism needs. Resume it the same way:
+
+```json
+{
+  "action": "resume",
+  "runId": "20260706T143022-a1b2c3"
+}
+```
+
+Completed phases are skipped (their outputs are cached). Only the failed phase and its downstream dependents re-execute. Resume can itself be detached — set `detach: true` on the resume call to fire it in the background again.
+
+## Cross-run caching
+
+Detached runs participate in the same cross-run cache as foreground runs. If a phase's fingerprint (input hash + flow definition hash) matches a previously cached result, the detached runner skips it — no tokens spent. This means re-running a detached flow after fixing one phase's input only pays for the changed work.
+
+Set `incremental: true` on the tool call to opt every phase into cross-run caching by default:
+
+```json
+{
+  "action": "run",
+  "name": "code-audit",
+  "detach": true,
+  "incremental": true
+}
+```
+
+## Process lifecycle
+
+```
+Parent (host session)                    Child (detached runner)
+│                                        │
+├─ saveRun(state, detached:true)         │
+├─ write context JSON to /tmp            │
+├─ spawn(node, [runner, tmpFile])  ───►  ├─ readFileSync(contextPath)
+│                                        ├─ loadRun(runId)
+├─ child.on("exit", crashGuard)          ├─ import(runnerModule)
+├─ child.unref()                         ├─ executeTaskflow(...)
+├─ return { runId, pid }                 │   ├─ phase 1 → saveRun
+│                                        │   ├─ phase 2 → saveRun
+│   ... session continues ...            │   ├─ phase 3 → saveRun
+│                                        │   └─ persist terminal state
+│                                        └─ exit(0)
+│
+├─ (crash guard: exit code 0 → no-op)
+└─ user polls /tf runs → sees "completed"
+```
+
+If the child exits non-zero before writing a terminal state, the crash guard fires between the `exit` event and the next `saveRun` from the user's poll, marking the run as `"failed"` with the captured stderr.
+
+## Next
+
+<Cards>
+  <Card title="Resume & Caching" href="/en/docs/concepts/resume">
+    How within-run resume and cross-run caching skip work on re-execution.
+  </Card>
+  <Card title="Gate Phase" href="/en/docs/syntax/phase-types">
+    Quality gates and the verdict-parsing machinery that interacts with approval auto-reject.
+  </Card>
+  <Card title="Tournament Guide" href="/en/docs/guides/tournament">
+    Run competing variants and let a judge pick the best — also works in detached mode.
+  </Card>
+</Cards>

@@ -10,6 +10,8 @@
     "concepts/interpolation",
     "concepts/verification",
     "concepts/context-isolation",
+    "concepts/shared-context-tree",
+    "concepts/workspace-isolation",
     "concepts/resume",
     "---Syntax Reference---",
     "syntax/flow-definition",
@@ -17,11 +19,16 @@
     "syntax/control-flow",
     "syntax/caching",
     "syntax/budget",
+    "syntax/scorers",
     "---Guides---",
     "guides/pi",
     "guides/codex",
+    "guides/claude-code",
+    "guides/opencode",
+    "guides/agents-and-model-roles",
     "guides/dynamic-planning",
     "guides/tournament",
+    "guides/background-runs",
     "guides/code-audit-case-study",
     "guides/headline-tournament-case-study",
     "guides/migration-planner-case-study",
@@ -31,6 +38,7 @@
     "---Reference---",
     "reference/shorthand",
     "reference/commands",
+    "reference/incremental-recompute",
     "community"
   ]
 }
