@@ -1,8 +1,9 @@
 name: Publish & Release
 
-# Publishes taskflow-core + pi-taskflow + codex-taskflow to npmjs.com and
-# creates a GitHub Release, when a v* tag is pushed (e.g. `git tag v0.1.0 &&
-# git push origin v0.1.0`). All three workspace versions must equal the tag.
+# Publishes taskflow-core + taskflow-mcp + taskflow-hosts + pi-taskflow + codex-taskflow +
+# claude-taskflow + opencode-taskflow to npmjs.com and creates a GitHub Release, when a v* tag is
+# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All seven workspace
+# versions must equal the tag.
 
 on:
   push:
@@ -18,23 +19,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-          cache: "npm"
+          cache: "pnpm"
 
       - name: Install dependencies
-        run: npm ci --registry https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: pnpm test
 
       - name: Build all packages (emit dist)
-        run: npm run build
+        run: pnpm run build
 
       - name: Verify tag matches workspace versions
         run: |
@@ -44,24 +46,41 @@ jobs:
             echo "::error::Tag $TAG does not match root version $EXPECT"
             exit 1
           fi
-          for pkg in taskflow-core pi-taskflow codex-taskflow; do
+          for pkg in taskflow-core taskflow-mcp taskflow-hosts pi-taskflow codex-taskflow claude-taskflow opencode-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
               exit 1
             fi
           done
-          # The Codex plugin pins the exact MCP package version it launches
-          # (codex-taskflow@X.Y.Z in .mcp.json) so the plugin version binds the
-          # executed code. That pin must equal the release tag.
-          PLUGIN_V="v$(node -p "require('./packages/codex-taskflow/plugin/.codex-plugin/plugin.json').version")"
-          if [ "$PLUGIN_V" != "$TAG" ]; then
-            echo "::error::Tag $TAG does not match plugin.json version $PLUGIN_V"
+          # Each plugin pins the exact MCP package version it launches
+          # (codex-taskflow@X.Y.Z / claude-taskflow@X.Y.Z in .mcp.json) so the
+          # plugin version binds the executed code. Those pins must equal the tag.
+          CODEX_PLUGIN_V="v$(node -p "require('./packages/codex-taskflow/plugin/.codex-plugin/plugin.json').version")"
+          if [ "$CODEX_PLUGIN_V" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match codex plugin.json version $CODEX_PLUGIN_V"
             exit 1
           fi
-          PINNED="v$(node -p "require('./packages/codex-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('codex-taskflow@')).split('@')[1]")"
-          if [ "$PINNED" != "$TAG" ]; then
-            echo "::error::.mcp.json pins codex-taskflow@${PINNED#v} but tag is $TAG"
+          CLAUDE_PLUGIN_V="v$(node -p "require('./packages/claude-taskflow/plugin/.claude-plugin/plugin.json').version")"
+          if [ "$CLAUDE_PLUGIN_V" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match claude plugin.json version $CLAUDE_PLUGIN_V"
+            exit 1
+          fi
+          CODEX_PINNED="v$(node -p "require('./packages/codex-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('codex-taskflow@')).split('@')[1]")"
+          if [ "$CODEX_PINNED" != "$TAG" ]; then
+            echo "::error::codex .mcp.json pins codex-taskflow@${CODEX_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
+          CLAUDE_PINNED="v$(node -p "require('./packages/claude-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('claude-taskflow@')).split('@')[1]")"
+          if [ "$CLAUDE_PINNED" != "$TAG" ]; then
+            echo "::error::claude .mcp.json pins claude-taskflow@${CLAUDE_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
+          # OpenCode has no plugin manifest; its scaffold opencode.json pins the
+          # npx package version the same way, so that pin must equal the tag too.
+          OPENCODE_PINNED="v$(node -p "require('./packages/opencode-taskflow/plugin/opencode.json').mcp.taskflow.command.find(a => a.startsWith('opencode-taskflow@')).split('@')[1]")"
+          if [ "$OPENCODE_PINNED" != "$TAG" ]; then
+            echo "::error::opencode.json pins opencode-taskflow@${OPENCODE_PINNED#v} but tag is $TAG"
             exit 1
           fi
 
@@ -76,16 +95,20 @@ jobs:
             local name version
             name="$(node -p "require('./packages/$pkg/package.json').name")"
             version="$(node -p "require('./packages/$pkg/package.json').version")"
-            if npm view "$name@$version" version >/dev/null 2>&1; then
+            if pnpm view "$name@$version" version >/dev/null 2>&1; then
               echo "::notice::$name@$version already published — skipping"
             else
               echo "Publishing $name@$version"
-              npm publish -w "$pkg" --provenance --access public
+              pnpm publish --filter "$pkg" --provenance --access public --no-git-checks
             fi
           }
           publish_one taskflow-core
+          publish_one taskflow-mcp
+          publish_one taskflow-hosts
           publish_one pi-taskflow
           publish_one codex-taskflow
+          publish_one claude-taskflow
+          publish_one opencode-taskflow
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -106,7 +129,7 @@ jobs:
               }
             } catch {}
             const text = body.join('\n').trim();
-            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, pi-taskflow, codex-taskflow.'));
+            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp, taskflow-hosts, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow.'));
           " "$VERSION"
           gh release create "$GITHUB_REF_NAME" \
             --notes-file /tmp/release-notes.md \

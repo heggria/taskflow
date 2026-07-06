@@ -2,35 +2,37 @@
   "name": "pi-taskflow-monorepo",
   "version": "0.1.5",
   "private": true,
-  "description": "Monorepo for taskflow-core, pi-taskflow, codex-taskflow, and the documentation website.",
+  "description": "Monorepo for taskflow-core, taskflow-mcp, taskflow-hosts, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, and the documentation website.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
-  "workspaces": [
-    "packages/taskflow-core",
-    "packages/pi-taskflow",
-    "packages/codex-taskflow",
-    "website"
-  ],
+  "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "build": "npm run build:skills && npm run build -w taskflow-core && npm run build -w pi-taskflow && npm run build -w codex-taskflow",
-    "build:website": "npm run build -w taskflow-website",
+    "build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter taskflow-mcp build && pnpm --filter taskflow-hosts build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build",
+    "build:website": "cd website && npm run build",
     "build:skills": "node scripts/build-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",
-    "test:core": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-core/test/*.test.ts'",
+    "test:hosts": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-hosts/test/*.test.ts'",
     "test:pi": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/pi-taskflow/test/*.test.ts'",
     "test:codex": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/codex-taskflow/test/*.test.ts'",
+    "test:claude": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/claude-taskflow/test/*.test.ts'",
+    "test:opencode": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/opencode-taskflow/test/*.test.ts'",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
     "test:e2e-codex-mcp": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts",
-    "test:e2e-codex-mcp-full": "npm run build && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts"
+    "test:e2e-codex-mcp-full": "pnpm run build && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts",
+    "test:e2e-claude": "node --conditions=development --experimental-strip-types packages/claude-taskflow/test/e2e-claude.mts",
+    "test:e2e-claude-mcp": "node --conditions=development --experimental-strip-types packages/claude-taskflow/test/e2e-claude-mcp.mts",
+    "test:e2e-opencode": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode.mts",
+    "test:e2e-opencode-mcp": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode-mcp.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",
     "@earendil-works/pi-ai": "^0.80.3",
     "@earendil-works/pi-coding-agent": "^0.80.3",
     "@earendil-works/pi-tui": "^0.80.3",
+    "@types/node": "^22",
     "typebox": "^1.3.3",
     "typescript": "^6.0.3"
   }

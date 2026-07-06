@@ -8,9 +8,9 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-0E8A66?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-918-4B4ACF?style=flat-square" alt="918 tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1092-4B4ACF?style=flat-square" alt="1092 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
-  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex-4B4ACF?style=flat-square" alt="runs on Pi and Codex"></a>
+  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, and OpenCode"></a>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 <p><strong>面向编码智能体子代理（subagent）的声明式、可验证的「任务图」。</strong><br/>
 不是你要去「写脚本」的 workflow——而是你去「声明」的一张 DAG。并发分发（fan out）· 门控（gate）· 恢复（resume）· 保存为命令——中间结果始终远离你的上下文窗口（context window）。<br/>
-可运行于 <a href="https://pi.dev">Pi</a> 编码智能体与 <a href="https://github.com/openai/codex">OpenAI Codex</a>。</p>
+可运行于 <a href="https://pi.dev">Pi</a> 编码智能体、<a href="https://github.com/openai/codex">OpenAI Codex</a>、<a href="https://claude.com/product/claude-code">Claude Code</a> 与 <a href="https://opencode.ai">OpenCode</a>。</p>
 
 </div>
 
@@ -37,13 +37,20 @@ pi install npm:pi-taskflow
 # Codex
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
+
+# Claude Code
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+
+# OpenCode — 向 opencode.json 添加 MCP server（见 OpenCode 指南）
+opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 ```
 
 ---
 
 **`workflow` 是在「流动」，而 `taskflow` 是一张「图」。** 其他编排框架让模型去「写脚本」——命令式的代码逐步流动，而那张图藏在控制流里。`taskflow` 恰恰相反：你把工作**声明**为一张由离散、具名的**任务（task）节点**、通过 `dependsOn` 边连接而成的图——而运行时会在花掉一个 token 之前，*先验证这张图。*
 
-你已经熟悉内置子代理（subagent）工具的 `task` / `tasks` / `chain` 了。`taskflow` 使用**完全相同的简写语法**——所以你现有的委托立刻就能变成**可追踪、可恢复、可按名保存**的流程（在 Pi 上，已保存的流程会变成一条 `/tf:<name>` 命令；在 Codex 上，用 `taskflow_run` 按名运行）。当你超越简写语法时，完整的 DSL 为你提供真正的 DAG：针对数十个项目的动态并发分发、条件路由、质量门控、人工审批、重试，以及硬性费用上限。
+你已经熟悉内置子代理（subagent）工具的 `task` / `tasks` / `chain` 了。`taskflow` 使用**完全相同的简写语法**——所以你现有的委托立刻就能变成**可追踪、可恢复、可按名保存**的流程（在 Pi 上，已保存的流程会变成一条 `/tf:<name>` 命令；在 Codex、Claude Code、OpenCode 上，用 `taskflow_run` 按名运行）。当你超越简写语法时，完整的 DSL 为你提供真正的 DAG：针对数十个项目的动态并发分发、条件路由、质量门控、人工审批、重试，以及硬性费用上限。
 
 而且自始至终，**只有最终阶段（final phase）才会进入你的对话。** 每一个中间转录都留在运行时中，永远不会进入你的上下文窗口。
 
@@ -80,7 +87,7 @@ codex plugin add taskflow@taskflow
 | **拓扑结构** | 链式 / 平面并行 | **带分层并发 + 路由的 DAG** |
 | **中间结果** | 在你的上下文窗口中 | **在运行时中——不在你的上下文里** |
 | **规模** | 少量任务 | **动态 `map` 并发分发，覆盖数十个项目** |
-| **可复用** | 每次重新描述 | **按名保存（Pi 上为 `/tf:<name>`；Codex 上用 `taskflow_run` 按名运行）** |
+| **可复用** | 每次重新描述 | **按名保存（Pi 上为 `/tf:<name>`；Codex、Claude Code、OpenCode 上用 `taskflow_run` 按名运行）** |
 | **可恢复** | ✗ | **✓ 跨会话（cross-session）——已缓存的阶段自动跳过** |
 | **质量门控** | ✗ | **`gate` 阶段，在 `VERDICT: BLOCK` 时停止** |
 | **条件路由** | ✗ | **`when` 守卫 + `join: any` 或连接（OR-join）** |
@@ -113,7 +120,7 @@ codex plugin add taskflow@taskflow
 
 ## 与其他 Pi 扩展的对比
 
-> 本节为 **Pi 专属** ——它将 `pi-taskflow` 与 Pi 生态中的其他包对比。如果你在 Codex 上，可直接跳到[阶段类型](#阶段类型)；引擎与 DSL 完全相同。
+> 本节为 **Pi 专属** ——它将 `pi-taskflow` 与 Pi 生态中的其他包对比。如果你在 Codex、Claude Code 或 OpenCode 上，可直接跳到[阶段类型](#阶段类型)；引擎与 DSL 完全相同。
 
 Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在各自领域都很出色。以下是一份诚实的定位图（已对照每个包截至 2026 年 6 月的最新 npm 发布版核实）。完整的对比——每个包的优缺点——请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。更广泛的非 Pi 生态对比（LangGraph、Temporal、CrewAI、Mastra……）请参见 [`COMPETITORS.md`](./docs/internal/COMPETITORS.md)。
 
@@ -178,6 +185,27 @@ codex plugin add taskflow@taskflow
 ```
 
 插件通过 `npx`（`codex-taskflow`）声明其 MCP server，按需拉起，全局无需再装任何东西。随后只要让 Codex 执行多阶段或扇出任务，它就会调用这些工具。参见 [Codex 指南](./docs/codex-mcp.md)。
+
+### 在 Claude Code 上
+
+taskflow 同样以 Claude Code **插件** 的形式发布——安装一次，`taskflow_*` MCP 工具与路由 skill 便自动生效：
+
+```bash
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+```
+
+插件通过 `npx`（`claude-taskflow`）声明其 MCP server；每个阶段的子代理以隔离的 `claude -p` 会话运行。参见 [Claude Code 指南](./docs/claude-mcp.md)。
+
+### 在 OpenCode 上
+
+OpenCode 通过同一个 MCP server 接入。注册一次即可——用 CLI，或在 `opencode.json` 里加一条 `mcp`：
+
+```bash
+opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+```
+
+服务器通过 `npx`（`opencode-taskflow`）拉起，每个阶段的子代理以隔离的 `opencode run` 会话运行；OpenCode 还会自动发现随包的路由 skill（`**/SKILL.md`）。参见 [OpenCode 指南](./docs/opencode-mcp.md)。
 
 ### 简写语法（与内置工具相同的格式）
 
@@ -409,7 +437,7 @@ codex plugin add taskflow@taskflow
 {
   "id": "build",
   "type": "script",
-  "run": "npm run build",              // 字符串 → 在 shell 中运行
+  "run": "pnpm run build",              // 字符串 → 在 shell 中运行
   "timeout": 120000                     // 可选毫秒上限（1000–300000，默认 60000）
 },
 {
@@ -481,7 +509,7 @@ Review the audit below. If any endpoint is missing auth, end with
 
 ## 命令
 
-保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex 上改用 `taskflow_*` MCP 工具——`taskflow_list` / `taskflow_show` / `taskflow_run`（按 `name`）/ `taskflow_verify` / `taskflow_compile`。
+保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode 上改用 `taskflow_*` MCP 工具——`taskflow_list` / `taskflow_show` / `taskflow_run`（按 `name`）/ `taskflow_verify` / `taskflow_compile` / `taskflow_peek`。
 
 | 命令 | 功能 |
 |---|---|
@@ -494,7 +522,7 @@ Review the audit below. If any endpoint is missing auth, end with
 | `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
 | `/tf:<name> [args]` | 快捷方式——一键运行流程 |
 
-工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`why-stale`、`recompute`、`cache-clear`。在 Codex 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile`。
+工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`why-stale`、`recompute`、`cache-clear`。在 Codex、Claude Code、OpenCode 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`。
 
 ## 后台（detached）执行
 
@@ -706,12 +734,12 @@ provided files. Report violations grouped by file. No fixes.
 
 <div align="center">
 
-**0 个运行时依赖** · **918 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
+**0 个运行时依赖** · **1045 个测试** · **10 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
 
 </div>
 
 - **零运行时依赖。** 没有 `dependencies` 字段——运行时完全基于 Node 内置模块（`fs` / `path` / `os` / `child_process` / `crypto`）。文件锁是 `fs.openSync("wx")`，不是第三方库。
-- **918 个测试分布在 52 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
+- **1045 个测试分布在 64 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
 - **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
 - **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
 
@@ -736,7 +764,7 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
-**v0.1.3**——当前发布版。完整历史（含修复 issue #3 执行问题的 v0.1.1）详见 [CHANGELOG](./CHANGELOG.md)。本版新增 Codex MCP `taskflow_compile` 的 SVG 图表，以及针对 `validate`/`verify`/`compile` 的全面畸形输入加固。基线：**多宿主 monorepo**——引擎拆分为宿主无关的 `taskflow-core`，加上 `pi-taskflow`（Pi 适配器）与 `codex-taskflow`（Codex 运行器 + MCP 服务器 + 即插即用的 Codex 插件）。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+**v0.1.5**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**七个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp` MCP 服务器、共享宿主运行器的 `taskflow-hosts`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（后三者为交付包，通过 `taskflow-hosts` 复用 runner + MCP bin + 插件/配置），共享 `taskflow-mcp` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 
@@ -750,22 +778,28 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 开发
 
-`taskflow` 是一个 npm-workspaces monorepo，包含三个发布包：
+`taskflow` 是一个 pnpm-workspace monorepo，包含七个发布包：
 
 | 包 | 角色 |
 |----|------|
-| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`） |
+| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`）——运行时、DSL、缓存、验证 |
+| [`taskflow-mcp`](./packages/taskflow-mcp) | 宿主无关的 MCP 服务器（stdio JSON-RPC + `taskflow_*` 工具 + DAG 渲染）；依赖 core |
+| [`taskflow-hosts`](./packages/taskflow-hosts) | 共享宿主 runner 集合（codex / claude / opencode 的 `SubagentRunner` + argv 构建器 + 事件流解析器）；依赖 core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi 扩展适配器——`taskflow` 工具 + `/tf` 命令（即 `pi install npm:pi-taskflow` 安装的内容） |
-| [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + 零依赖 MCP 服务器（[指南](./docs/codex-mcp.md)） |
+| [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + MCP bin，及 [Codex 插件](./packages/codex-taskflow/plugin)（[指南](./docs/codex-mcp.md)） |
+| [`claude-taskflow`](./packages/claude-taskflow) | Claude Code 子代理运行器 + MCP bin，及 [Claude Code 插件](./packages/claude-taskflow/plugin)（[指南](./docs/claude-mcp.md)） |
+| [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode 子代理运行器 + MCP bin，及 [OpenCode 配置脚手架](./packages/opencode-taskflow/plugin)（[指南](./docs/opencode-mcp.md)） |
 
 ```bash
-npm install
-npm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
-npm test              # 单元测试——无网络，无进程派生
-npm run test:core     # 仅引擎测试（另有 test:pi、test:codex）
-npm run build         # 为三个包生成 dist/*.js + .d.ts
-npm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
-npm run test:e2e-codex-mcp  # codex MCP 服务器端到端
+pnpm install
+pnpm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
+pnpm test              # 单元测试——无网络，无进程派生
+pnpm run test:hosts    # 仅 taskflow-hosts 测试（另有 test:pi、test:codex、test:claude、test:opencode）
+pnpm run build         # 为七个包生成 dist/*.js + .d.ts
+pnpm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
+pnpm run test:e2e-codex-mcp  # codex MCP 服务器端到端
+pnpm run test:e2e-claude-mcp # claude MCP 服务器端到端（无需实时 claude）
+pnpm run test:e2e-opencode-mcp # opencode MCP 服务器端到端（无需实时 opencode）
 ```
 
 Pi 的端到端套件会派生真实 `pi` 子代理，直接运行（使用 `.mts` 扩展名，单元测试 glob 会跳过），例如：

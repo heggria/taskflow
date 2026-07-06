@@ -5,13 +5,13 @@ both built on the host-neutral `SubagentRunner` seam
 (`packages/taskflow-core/src/host/runner-types.ts`):
 
 1. **Codex as the executor** — a taskflow's subagents run as `codex exec`
-   sessions (`packages/codex-taskflow/src/codex-runner.ts`).
+   sessions (`packages/taskflow-hosts/src/codex-runner.ts`).
 2. **Codex as the caller** — taskflow is exposed to a Codex user as an **MCP
    server**, so the `taskflow_*` tools appear inside codex
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
 The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/codex-taskflow/src/mcp/jsonrpc.ts`), so taskflow keeps its
+built-ins (`packages/taskflow-mcp/src/mcp/jsonrpc.ts`), so taskflow keeps its
 **zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
 
 ## Install (recommended): the Codex plugin
@@ -31,7 +31,7 @@ globally, and the plugin version binds the exact code that runs. Verify:
 
 ```sh
 codex plugin list   # → taskflow@taskflow  installed, enabled
-codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.1.3 codex-taskflow-mcp)
+codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.1.5 codex-taskflow-mcp)
 ```
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
@@ -53,7 +53,7 @@ To stop large flows from being cut off, the plugin's `.mcp.json` ships a
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.1.3", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.1.5", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }
@@ -77,14 +77,14 @@ If you'd rather not use the plugin, install the package and register its
 `codex-taskflow-mcp` bin yourself:
 
 ```sh
-npm install -g codex-taskflow
+pnpm add -g codex-taskflow
 codex mcp add taskflow -- codex-taskflow-mcp
 ```
 
 From a checkout of this repo (no install), point Codex at the built bin instead:
 
 ```sh
-npm run build
+pnpm run build
 codex mcp add taskflow -- \
   node /abs/path/to/taskflow/packages/codex-taskflow/dist/mcp/bin.js
 ```
@@ -166,9 +166,9 @@ codex mcp remove taskflow               # if registered manually
 
 ## Proof / tests
 
-- `npm run test:e2e-codex-mcp` — spawns `bin.ts` as codex would and drives the
+- `pnpm run test:e2e-codex-mcp` — spawns `bin.ts` as codex would and drives the
   full MCP handshake + tool calls over a real subprocess pipe.
-- `npm run test:e2e-codex` — runs a 2-phase flow whose subagents are real codex
+- `pnpm run test:e2e-codex` — runs a 2-phase flow whose subagents are real codex
   sessions (proves Codex-as-executor; data flows phase A → B).
 - `test/mcp-server.test.ts` — protocol + dispatch unit tests (in-memory streams).
 - `test/codex-runner.test.ts` — codex JSONL parser pinned against real captured

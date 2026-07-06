@@ -1,0 +1,416 @@
+<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/configuration.md (npm run build:skills) -->
+
+# Taskflow Configuration Reference
+
+Every knob you can set on a taskflow, where it lives, and how the values are
+resolved. Read this when you need fine control over models, concurrency, agent
+discovery, working directories, tool restrictions, or storage.
+
+> Companion files: `SKILL.md` (core DSL + actions), `patterns.md` (flow
+> archetypes + production checklist), `advanced.md` (context sharing, dynamic
+> sub-flows, workspace isolation, incremental recompute).
+
+Configuration lives in **five layers**, from most local to most global:
+
+| Layer | Where | Sets |
+|-------|-------|------|
+| Phase | a phase object in the DSL | per-step model/thinking/tools/cwd/output/concurrency |
+| Flow | the top-level DSL object | name, args, default concurrency, agent scope |
+| Agent | `~/.pi/agent/agents/*.md`, `.pi/agents/*.md` frontmatter | per-agent default model/thinking/tools + system prompt |
+| Settings | `~/.pi/agent/settings.json` | `modelRoles`, global thinking |
+| Environment | shell env | `PI_TASKFLOW_PI_BIN` |
+
+---
+
+## 1. Flow-level options
+
+Top-level keys of the taskflow definition object.
+
+```jsonc
+{
+  "name": "audit-endpoints",        // required — also becomes /tf:<name> when saved
+  "description": "Audit API auth",  // shown in /tf list and the command palette
+  "concurrency": 8,                 // default max concurrent subagents (default: 8)
+  "agentScope": "user",             // user | project | both (default: user)
+  "args": { /* see §3 */ },
+  "phases": [ /* see §2 */ ]        // required, at least one phase
+}
+```
+
+| Key | Type | Default | Notes |
+|-----|------|---------|-------|
+| `name` | string | — | **Required.** Saved as `/tf:<name>`. |
+| `description` | string | — | Surfaced in `/tf list` and the slash-command. |
+| `concurrency` | number | `8` | Default fan-out / same-layer parallelism cap. See §4. |
+| `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
+| `args` | record | `{}` | Declared invocation arguments. See §3. |
+| `phases` | array | — | **Required.** The phase DAG. See §2. |
+| `version` | number | `1` | ⚠️ Declared in schema but **not yet used** by the runtime. |
+
+---
+
+## 2. Phase-level options
+
+Keys of each object in `phases[]`. Some only apply to specific `type`s.
+
+```jsonc
+{
+  "id": "audit",            // required, unique — referenced via {steps.audit.output}
+  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script (default: agent)
+  "agent": "analyst",       // agent name to run this phase
+  "task": "Audit {item.route}…",
+  "dependsOn": ["discover"],// DAG edges
+  "over": "{steps.discover.json}",  // [map] array to fan out over
+  "as": "item",             // [map] loop var name (default: item)
+  "branches": [ /* … */ ],  // [parallel] static task list
+  "from": ["audit"],        // [reduce] phase ids to aggregate
+  "output": "json",         // text | json (default: text)
+  "model": "claude-sonnet-4-5",   // per-phase model override
+  "thinking": "high",       // per-phase thinking override
+  "tools": ["read","bash"], // restrict tools for this phase's subagent
+  "cwd": "packages/api",    // working directory for this phase's subagent
+  "concurrency": 4,         // [map/parallel] fan-out cap for THIS phase
+  "final": true             // mark this phase's output as the workflow result
+}
+```
+
+| Key | Applies to | Default | Notes |
+|-----|-----------|---------|-------|
+| `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
+| `type` | all | `agent` | One of the 10 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script). |
+| `agent` | all | first available | Agent name; resolved from the scoped pool. |
+| `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types. |
+| `over` | map | — | **Required for map.** Must resolve to an array. |
+| `as` | map | `item` | Loop variable bound per item. |
+| `branches` | parallel | — | **Required for parallel.** `[{task, agent?}]`. |
+| `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
+| `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
+| `input` | script | — | Text piped to the command's stdin; supports interpolation. |
+| `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. |
+| `dependsOn` | all | `[]` | DAG edges. `from` also implies a dependency. |
+| `output` | all | `text` | `json` parses output so `{steps.id.json}` / map `over` work. |
+| `model` | all | agent/global | Per-phase model override. See §5. |
+| `thinking` | all | agent/global | Per-phase thinking level. See §5. |
+| `tools` | all | agent default | Whitelist of tools for the subagent. See §5. |
+| `cwd` | all | flow cwd | Run this phase's subagent in a different directory. |
+| `concurrency` | map, parallel | flow concurrency | Fan-out cap for this phase only. See §4. |
+| `context` | all | — | File paths / `{steps.X}` refs to **pre-read and inject** before the task. See §2.1. |
+| `contextLimit` | all | `8000` | Max characters read **per file** in `context`. See §2.1. |
+| `cache` | all | `run-only` | Per-phase cache policy (`scope`/`ttl`/`fingerprint`). See §11. |
+| `final` | all | last phase | Exactly one phase may be `final`; its output is returned. |
+
+> Gate-only control fields (`eval`, `onBlock`), the loop/tournament control
+> fields (`until`/`maxIterations`/`convergence`, `variants`/`judge`/`judgeAgent`/`mode`),
+> the script fields (`run`/`input`/`timeout`), and the cross-phase contract
+> fields (`expect`, `timeout`, `optional`, `strictInterpolation`) are documented
+> in `SKILL.md` next to their phase types. `shareContext` and the workspace
+> `cwd` keywords (`temp`/`dedicated`/`worktree`) are in `advanced.md`.
+
+---
+
+## 2.1 Context pre-reading (`context` / `contextLimit`)
+
+Instead of making a subagent *discover* files by exploring (an O(N²) turn-cost
+spiral), you can **pre-read** known files and inject their contents ahead of the
+task prompt. List file paths and/or `{steps.X}` refs in `context`; the runtime
+resolves interpolated refs first, then reads each file and prepends labeled
+blocks to the task.
+
+```jsonc
+{
+  "id": "review",
+  "type": "agent",
+  "agent": "reviewer",
+  "context": ["src/auth.ts", "src/middleware.ts", "{steps.spec.output}"],
+  "contextLimit": 12000,
+  "task": "Review the auth flow against the spec above. VERDICT: PASS or BLOCK.",
+  "dependsOn": ["spec"]
+}
+```
+
+**Behavior & limits (all enforced in the runtime):**
+
+| Aspect | Rule |
+|--------|------|
+| Resolution order | interpolate `{steps.X}` / `{args.X}` refs **first**, then read file paths. |
+| Per-file cap | `contextLimit` characters per file (default **8000**); longer files are truncated with a marker. |
+| Total cap | the combined injected block is hard-capped at **200,000 chars**; overflow is truncated with a notice. |
+| Unreadable file | skipped with a `console.warn` (never aborts the phase). |
+| JSON-looking entry | a value that looks like a JSON blob (not a path) is diagnosed and skipped, not read as a file. |
+
+Use `context` for **known, bounded** inputs (a handful of source files, an
+upstream phase's output). For large/unknown exploration, let the agent use its
+`read`/`grep` tools instead — pre-reading hundreds of files just hits the total
+cap.
+
+---
+
+## 3. Declaring & passing arguments
+
+Declare arguments on the flow, then reference them with `{args.X}`.
+
+```jsonc
+"args": {
+  "dir":   { "default": "src", "description": "Directory to scan" },
+  "depth": { "default": 2 },
+  "token": { "required": true, "description": "API token" }
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `default` | Used when the caller omits the arg. |
+| `description` | Documentation only. |
+| `required` | ⚠️ Declared but **not enforced** at runtime — treat as documentation for now. |
+
+**Resolution:** for each declared arg, the provided value wins, else its
+`default`. Any extra provided keys are also passed through (so undeclared args
+still reach `{args.X}`).
+
+**Passing args:**
+
+Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
+
+---
+
+## 4. Concurrency model
+
+There are **two independent concurrency limits**:
+
+1. **Same-layer parallelism** — phases with no dependency between them sit in the
+   same topological layer and run concurrently, bounded by **`flow.concurrency`**
+   (default `8`).
+2. **Fan-out within a `map`/`parallel` phase** — bounded by
+   **`phase.concurrency ?? flow.concurrency ?? 8`**.
+
+```jsonc
+{
+  "concurrency": 6,                 // ≤6 sibling phases run at once
+  "phases": [
+    { "id": "scan", "type": "map", "over": "{steps.list.json}",
+      "concurrency": 3,             // …but this map only fans out 3 at a time
+      "task": "…", "dependsOn": ["list"] }
+  ]
+}
+```
+
+Set a low `phase.concurrency` to protect rate-limited models or heavy bash work;
+keep `flow.concurrency` higher to let independent phases overlap.
+
+---
+
+## 5. Model, thinking & tools resolution
+
+For any phase, the effective value is resolved in this **precedence order**
+(first defined wins):
+
+| Setting | Precedence (high → low) |
+|---------|-------------------------|
+| **model** | `phase.model` → agent frontmatter `model` (resolved via `modelRoles`) → pi default |
+| **thinking** | `phase.thinking` → agent frontmatter `thinking` → `settings` global thinking → pi default |
+| **tools** | `phase.tools` → agent frontmatter `tools` → all tools |
+
+Notes:
+- `tools` is a **whitelist**. Omit it to allow all.
+- Each phase runs as an isolated `claude -p --output-format stream-json`
+  session. A model id that still looks like a pi-provider path (contains `/`)
+  or an unresolved `{{placeholder}}` is dropped so claude falls back to its
+  configured default. Read-only phases get a `--allowedTools` whitelist;
+  mutating phases run under `--permission-mode bypassPermissions` (no OS
+  sandbox — see the README security note).
+- The agent's markdown body becomes the subagent's appended system prompt.
+
+---
+
+## 6. Agent discovery & scope
+
+`flow.agentScope` controls which agent directories are loaded:
+
+| Scope | Loads from |
+|-------|-----------|
+| `user` (default) | `~/.pi/agent/agents/*.md` |
+| `project` | nearest `.pi/agents/*.md` found walking up from cwd |
+| `both` | user **then** project (project overrides on name collision) |
+
+- Agents are `.md` files with frontmatter `name` + `description` (required), plus
+  optional `model`, `thinking`, `tools`. The body is the system prompt.
+- Reference agents in phases by their `name`. An unknown name fails that phase
+  with the list of available agents.
+- If a phase omits `agent`, the **first discovered agent** is used.
+
+---
+
+## 7. settings.json
+
+Taskflow shares the subagent settings file at `~/.pi/agent/settings.json`:
+
+```jsonc
+{
+  "modelRoles": {
+    "fast": "openrouter/deepseek/deepseek-v4-flash",
+    "strong": "openrouter/xiaomi/mimo-v2.5-pro"
+  },
+  "subagents": {
+    "globalThinking": "medium"              // fallback thinking for all subagents
+  },
+  "defaultThinkingLevel": "low"          // used if subagents.globalThinking is absent
+}
+```
+
+- `modelRoles` — maps `{{role}}` references in agent frontmatter to actual model identifiers.
+- `subagents.globalThinking` (or top-level `defaultThinkingLevel`) — global
+  thinking fallback.
+
+---
+
+## 8. Cross-run caching (`cache`)
+
+By default every phase is **`run-only`**: completed phases are reused only when
+you *resume the same run* (the historical behavior). Opt a phase into the
+persistent **cross-run** memoization store to reuse an identical-input result
+from *any prior run* — instant, zero tokens. See `docs/rfc-cross-run-memoization.md`
+for the design.
+
+```jsonc
+{
+  "id": "summarize-deps",
+  "type": "agent",
+  "agent": "writer",
+  "task": "Summarize the dependency tree of this repo.",
+  "cache": {
+    "scope": "cross-run",
+    "ttl": "6h",
+    "fingerprint": ["git:HEAD", "file:package-lock.json"]
+  }
+}
+```
+
+### `scope`
+
+| Value | Meaning |
+|-------|---------|
+| `run-only` (default) | Reuse only within a resumed run — exactly the historical behavior. |
+| `cross-run` | Reuse an identical-input result from **any** prior run (the persistent store). |
+| `off` | Never reuse, even within a run (force re-execution every time). |
+
+### Flow-wide opt-in: `incremental`
+
+Rather than annotating every phase with `cache: { "scope": "cross-run" }`, set
+`incremental: true` at the **flow** level (or pass `incremental: true` as the
+`run` tool argument) to default *every* phase to cross-run reuse:
+
+```jsonc
+{
+  "name": "audit",
+  "incremental": true,          // ← every phase defaults to scope:"cross-run"
+  "phases": [ /* ... */ ]
+}
+```
+
+Precedence: the invocation `incremental` argument wins over the flow's
+`incremental` field, which is in turn overridden by any **per-phase** `cache`
+setting. The cross-run-blocked phase types (`gate`/`approval`/`loop`/
+`tournament`/`script`) and all per-phase soundness fallbacks still apply. The default
+remains `run-only` (each run starts fresh unless something opts in), because
+cross-run reuse silently persists outputs and can serve stale results for phases
+whose agents read files at runtime.
+
+### `ttl` (cross-run only)
+
+Max age before a cross-run hit is treated as a miss: e.g. `"30m"`, `"6h"`, `"7d"`.
+Omit for no time bound. A hit older than the TTL re-executes the phase. Cross-run cache entries are hard-evicted after 90 days regardless of per-entry TTL. This ceiling is not configurable.
+
+### `fingerprint` (cross-run only)
+
+The cache key is normally `phaseId + agent + model + interpolated-task`. A
+fingerprint folds **“did the world change?”** signals into that key, so an
+external change becomes a cache **miss** even when the task text is identical.
+Each entry is one of:
+
+| Entry | Becomes a miss when… | Resolves to |
+|-------|----------------------|-------------|
+| `git:HEAD` / `git:<ref>` | the commit moves | the resolved SHA (30s timeout → `<timeout>`; no git → `<no-git>`) |
+| `glob:<pattern>` | the **set of matching paths** or their metadata changes | sorted path list with size + mtime (content-hashed globs use `glob!:` instead, which is mtime-independent) |
+| `glob!:<pattern>` | the **contents** of matching files change | content hashes (capped at 5000 matches) |
+| `file:<path>` | that file's content changes | sha256 of the file (>10 MB or missing → `<skip>`/`<missing>`) |
+| `env:<NAME>` | the env var changes | the env value |
+
+### What is cached, and when
+
+- Only phases whose **`status` is `done`** and that **were not themselves a cache
+  hit** are written to the store (no re-storing a value just read).
+- The store is keyed by the full input hash + fingerprint, tagged with
+  `flowName`/`phaseId`/`runId`/`model` for inspection and LRU eviction.
+- Cross-run reuse is **safe by construction**: a different agent, model, task, or
+  fingerprint produces a different key, so stale results are never served.
+
+> **When to use it:** expensive, deterministic phases whose inputs rarely change
+> (dependency summaries, doc generation, repeated audits of the same tree). For
+> phases that *should* re-run every time (anything reading live external state
+> without a fingerprint), leave the default `run-only` or set `off`.
+
+---
+
+## 9. Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
+| `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
+| `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
+| `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
+| `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+
+---
+
+## 10. Storage & file locations
+
+| What | Path | Commit? |
+|------|------|---------|
+| User-scoped flow | `~/.pi/agent/taskflows/<name>.json` | personal |
+| Project-scoped flow | `<nearest .pi>/taskflows/<name>.json` | ✅ commit to share |
+| Run state (resume) | `<project .pi>/taskflows/runs/<flowName>/<runId>.json` | ❌ gitignore |
+
+- `action: "save"` takes `scope: "project"` (default) or `"user"`.
+- Project flows override user flows on a name collision.
+- Add `.pi/taskflows/runs/` to `.gitignore`.
+
+---
+
+## 11. Quick recipes
+
+**Pin a strong model only for the review gate:**
+```jsonc
+{ "id": "review", "type": "gate", "agent": "reviewer",
+  "model": "claude-opus-4", "thinking": "high",
+  "task": "…\nVERDICT:", "dependsOn": ["audit"] }
+```
+
+**Sandbox a phase to read-only in a subdirectory:**
+```jsonc
+{ "id": "scan", "type": "agent", "agent": "scout",
+  "cwd": "packages/api", "tools": ["read", "grep", "ls"],
+  "task": "List route files. Output ONLY a JSON array.", "output": "json" }
+```
+
+**Throttle a rate-limited fan-out:**
+```jsonc
+{ "id": "summarize", "type": "map", "over": "{steps.scan.json}",
+  "concurrency": 2, "agent": "writer",
+  "task": "Summarize {item.file}.", "dependsOn": ["scan"] }
+```
+
+**Project-only agents:**
+```jsonc
+{ "name": "ci-audit", "agentScope": "project", "phases": [ /* … */ ] }
+```
+
+---
+
+## Caveats (declared but not yet enforced)
+
+These keys validate but the runtime does **not** act on them yet — don't rely on
+them for behavior:
+
+- `arg.required` — missing required args are not rejected.
+- `flow.version` — informational only.

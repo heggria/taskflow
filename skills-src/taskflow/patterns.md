@@ -12,7 +12,7 @@ Before running a flow you designed, check it against this list. Every item is
 cheap to add and each one has prevented a real failure class:
 
 - [ ] **`verify` first.** Run the static verifier (pi: `action: "verify"` /
-      Codex: `taskflow_verify`) — zero tokens,
+      Codex / Claude Code / OpenCode: `taskflow_verify`) — zero tokens,
       catches cycles / missing deps / ref typos / contract mismatches.
 - [ ] **Every JSON-emitting phase has `expect` + `retry`.** "Output ONLY JSON"
       in the task text is a request; `expect` is enforcement. Without it, a
@@ -102,7 +102,7 @@ without you writing a loop.
       "task": "Implement the feature per the spec in docs/spec.md. Run nothing; just edit." },
 
     { "id": "build-test", "type": "script",
-      "run": "npx tsc --noEmit && npm test 2>&1 | tail -20",
+      "run": "npx tsc --noEmit && pnpm test 2>&1 | tail -20",
       "timeout": 180000, "dependsOn": ["implement"] },
 
     { "id": "spec-gate", "type": "gate", "agent": "reviewer",
@@ -145,11 +145,12 @@ Prefer a `script` phase whenever the check is a command — exact, free, fast.
 Use for: anything expensive or destructive where a human should see the plan
 before the spend. The approval's **Edit** option injects mid-run guidance.
 
-<!-- host:codex -->
-> **Codex caveat:** approval phases auto-reject in MCP-driven (non-interactive)
-> runs. This archetype only works when a human runs the flow interactively;
-> for tool-driven runs, replace the approval with a strict `gate`.
-<!-- /host:codex -->
+<!-- host:codex,claude,opencode -->
+> **MCP-host caveat (Codex / Claude Code / OpenCode):** approval phases auto-reject in
+> MCP-driven (non-interactive) runs. This archetype only works when a human
+> runs the flow interactively; for tool-driven runs, replace the approval with
+> a strict `gate`.
+<!-- /host:codex,claude,opencode -->
 
 ```jsonc
 {
@@ -166,7 +167,7 @@ before the spend. The approval's **Edit** option injects mid-run guidance.
       "task": "Execute the migration plan:\n{steps.plan.output}\n\nOperator guidance (if any): {steps.checkpoint.output}",
       "dependsOn": ["checkpoint"] },
 
-    { "id": "verify", "type": "script", "run": "npx tsc --noEmit && npm test 2>&1 | tail -5",
+    { "id": "verify", "type": "script", "run": "npx tsc --noEmit && pnpm test 2>&1 | tail -5",
       "timeout": 180000, "dependsOn": ["execute"], "final": true }
   ]
 }

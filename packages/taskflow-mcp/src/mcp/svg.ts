@@ -17,11 +17,13 @@
  * frontend connects with the same MCP client id, `codex-mcp-client`), so
  * `taskflow_compile` returns BOTH blocks: the desktop app shows the image and
  * ignores the trailing text, while the CLI/TUI shows the text and renders the
- * image as a harmless placeholder. One payload, correct on every host.
+ * image as a harmless placeholder. One payload, correct on every host. Claude
+ * Code behaves like the CLI case: the text outline is what the model reads.
  *
- * This is host presentation, so it lives in the codex adapter — core keeps its
- * portable Mermaid/markdown artifact (`compileTaskflow`) and its zero-runtime
- * -deps guarantee. Both renderers reuse core's exported `topoLayers` (layout)
+ * This is MCP presentation shared by every MCP host adapter (codex, claude),
+ * so it lives in core next to the MCP server — core keeps its portable
+ * Mermaid/markdown artifact (`compileTaskflow`) and its zero-runtime-deps
+ * guarantee. Both renderers reuse core's exported `topoLayers` (layout)
  * and `dependenciesOf` (edges) so they share the engine's exact DAG semantics.
  * Pure functions, no I/O.
  */

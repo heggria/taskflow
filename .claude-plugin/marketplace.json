@@ -1,7 +1,7 @@
 {
   "name": "taskflow",
   "metadata": {
-    "description": "Declarative, verifiable DAG orchestration for coding agents. Taskflow lets you define multi-phase subagent workflows (fan-out, gates, loops, tournaments, approvals, sub-flow composition) as JSON, verify them before they run, and keep intermediate transcripts out of your context — exposed to Codex as the taskflow_* MCP tools plus a routing skill."
+    "description": "Declarative, verifiable DAG orchestration for coding agents. Taskflow lets you define multi-phase subagent workflows (fan-out, gates, loops, tournaments, approvals, sub-flow composition) as JSON, verify them before they run, and keep intermediate transcripts out of your context — exposed to Codex, Claude Code, and OpenCode as the taskflow_* MCP tools plus a routing skill."
   },
   "owner": {
     "name": "heggria",
@@ -12,6 +12,13 @@
       "name": "taskflow",
       "description": "Multi-phase subagent orchestration for Codex: the taskflow_* MCP tools (run/list/show/verify/compile) plus a skill that routes multi-phase or fan-out work to them. The MCP server runs via npx (codex-taskflow) — no separate global install required.",
       "source": "./packages/codex-taskflow/plugin",
+      "category": "developer-tools",
+      "homepage": "https://github.com/heggria/taskflow"
+    },
+    {
+      "name": "claude-taskflow",
+      "description": "Multi-phase subagent orchestration for Claude Code: the taskflow_* MCP tools (run/list/show/verify/compile/peek) plus a skill that routes multi-phase or fan-out work to them. The MCP server runs via npx (claude-taskflow) — no separate global install required.",
+      "source": "./packages/claude-taskflow/plugin",
       "category": "developer-tools",
       "homepage": "https://github.com/heggria/taskflow"
     }

@@ -1,0 +1,61 @@
+{
+  "name": "claude-taskflow",
+  "version": "0.1.5",
+  "description": "Run taskflow on Claude Code: a Claude subagent runner plus an MCP server (and a plug-and-play Claude Code plugin) that exposes the taskflow_* tools to Claude Code users.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "mcp",
+    "taskflow",
+    "orchestration",
+    "subagents",
+    "workflow"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/taskflow#readme",
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/claude-taskflow"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp/server": {
+      "development": "./src/mcp/server.ts",
+      "types": "./dist/mcp/server.d.ts",
+      "default": "./dist/mcp/server.js"
+    }
+  },
+  "bin": {
+    "claude-taskflow-mcp": "./dist/mcp/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs claude-taskflow",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "taskflow-core": "0.1.5",
+    "taskflow-hosts": "0.1.5",
+    "taskflow-mcp": "0.1.5"
+  }
+}

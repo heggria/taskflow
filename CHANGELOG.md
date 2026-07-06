@@ -4,6 +4,62 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Changed
+- **Extracted the MCP server into its own `taskflow-mcp` package** (sixth
+  package). The stdio JSON-RPC server + `taskflow_*` tool handlers + DAG
+  SVG/outline renderer moved out of `taskflow-core` into `taskflow-mcp`, so
+  core is again purely the portable engine (DSL/runtime/cache/verify) and the
+  MCP presentation layer is an independently-publishable unit. The host
+  adapters (codex/claude/opencode) now depend on `taskflow-mcp` and import it
+  via `taskflow-mcp/server` / `taskflow-mcp/jsonrpc`. `pi-taskflow` is
+  unaffected (it never used the MCP server).
+- **De-duplicated the three host runners.** The codex/claude/opencode runners
+  each copy-pasted ~82 lines of identical process-handling boilerplate
+  (spawn / idle watchdog / abort / signal-kill detection / stderr cap / post-exit
+  classification), which had already caused one divergence bug. The shared
+  block — plus `unknownAgentResult` and a centralized `activeChildren` set —
+  is now a single `runSubagentProcess` in `taskflow-core`'s `runner-core.ts`,
+  parameterized by a per-host `SubagentAccumulator` + `foldLine`. Each host
+  runner shrank to just its host-specific bits (argv, model-id rule,
+  permission mapping, event parser): codex 366→217, claude 417→266, opencode
+  397→247 lines. Behavior is identical (1092/1092 tests pass); adding a new
+  host can no longer drift the process/classify contract.
+
+### Added
+- **OpenCode as a fourth host.** New `opencode-taskflow` package: an OpenCode
+  subagent runner (`opencode run --format json`) plus an `opencode.json` MCP
+  config scaffold, mirroring the Codex/Claude adapters. A flow's subagents can
+  now execute as isolated `opencode run` sessions, and taskflow is exposed to
+  OpenCode via the same `taskflow_*` MCP tools. Register with
+  `opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp`
+  (or an `opencode.json` `mcp` entry). See `docs/opencode-mcp.md`.
+  - Read-only phases inject a deny-mutations permission policy via
+    `OPENCODE_CONFIG_CONTENT` (genuinely enforced); mutating phases run with
+    `--auto`.
+  - OpenCode model ids are `provider/model`, so the runner uses a different
+    drop rule than codex/claude (drops only `{{placeholder}}`, `:thinking`
+    suffixes, and multi-segment openrouter paths).
+  - Verified end-to-end: a 2-phase flow with real `opencode run` subagents
+    (data flows A→B) on a free `opencode/` model.
+
+- **Claude Code as a third host.** New `claude-taskflow` package: a Claude Code
+  subagent runner (`claude -p --output-format stream-json`) plus a
+  plug-and-play Claude Code plugin, mirroring the Codex adapter. The engine and
+  DSL are unchanged — a flow's subagents can now execute as isolated `claude -p`
+  sessions, and taskflow is exposed to Claude Code users via the same
+  `taskflow_*` MCP tools (`run`/`list`/`show`/`verify`/`compile`/`peek`).
+  Install: `claude plugin marketplace add heggria/taskflow && claude plugin
+  install claude-taskflow@taskflow`. See `docs/claude-mcp.md`.
+  - Read-only phases map to a `--allowedTools` whitelist; mutating phases run
+    under `--permission-mode bypassPermissions` (the codex workspace-write
+    analogue, no OS sandbox — documented).
+  - The MCP server (JSON-RPC stdio transport, `taskflow_*` tool schemas +
+    handlers, DAG SVG/outline renderer) moved into host-neutral
+    `taskflow-core/src/mcp/`, parameterized by a `SubagentRunner`; the codex and
+    claude adapters are now thin bindings. No behavior change for Codex.
+  - Skills are single-sourced for all hosts (`skills-src/taskflow/` with
+    comma-list host blocks, e.g. `<!-- host:codex,claude,opencode -->`).
+
 ## [0.1.5] — 2026-07-03
 
 ### Added
@@ -35,7 +91,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   (rendered as ⚡), and a re-execution on resume surfaces a warning.
 - **Single-source skills.** The pi and codex skill docs are now authored once
   in `skills-src/taskflow/` and compiled per host by `scripts/build-skills.mjs`
-  (`npm run build:skills`); a drift guard (`skills-build.test.ts`) fails CI if a
+  (`pnpm run build:skills`); a drift guard (`skills-build.test.ts`) fails CI if a
   generated file is edited directly. Codex reaches feature parity with pi
   automatically.
 
@@ -220,7 +276,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   plugin version binds the exact code executed. The publish workflow verifies the
   pin (and `plugin.json`'s version) equals the release tag.
 - **CI matured for the multi-host monorepo.** Node `22`/`24` test matrix,
-  cross-platform `npm install`, a `build` (dist-emit) job, the network-free Codex
+  cross-platform `pnpm install`, a `build` (dist-emit) job, the network-free Codex
   MCP e2e suites (stdio handshake + comprehensive rendering/injection), CodeQL,
   Dependabot, and least-privilege permissions.
 - **Rebrand: `pi-taskflow` → taskflow.** The project is now presented as a
@@ -238,7 +294,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - **Codex plugin** (`packages/codex-taskflow/plugin/`) for zero-config,
   plug-and-play install: `codex plugin marketplace add heggria/taskflow` then
   `codex plugin add taskflow@taskflow`. Ships a `.codex-plugin/plugin.json`
-  manifest, a `.mcp.json` that launches the MCP server via `npx codex-taskflow`
+  manifest, a `.mcp.json` that launches the MCP server via `npx -y -p codex-taskflow@<version> codex-taskflow-mcp`
   (no separate global install), and a routing `SKILL.md` so Codex reaches for the
   `taskflow_*` tools on multi-phase / fan-out work automatically. A repo-root
   `.claude-plugin/marketplace.json` makes the plugin discoverable.

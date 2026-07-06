@@ -2625,7 +2625,7 @@ export function parseTournamentWinner(output: string, count: number): { winner: 
 		const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
 		if (Number.isFinite(n)) return { winner: clamp(n), reason: asReason(o.reason) };
 	}
-	const matches = [...output.matchAll(/WINNER\s*[:=]\s*#?\s*(\d+)/gi)];
+	const matches = [...output.matchAll(/WINNER\s{0,20}[:=]\s{0,20}#?\s{0,20}(\d+)/gi)];
 	if (matches.length) {
 		const n = Number(matches[matches.length - 1][1]);
 		if (Number.isFinite(n)) return { winner: clamp(n) };

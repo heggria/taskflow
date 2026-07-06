@@ -7,9 +7,9 @@ Thanks for your interest. `taskflow` is a fast-moving project maintained primari
 ```bash
 git clone git@github.com:heggria/taskflow.git
 cd taskflow
-npm install
-npm run typecheck   # TypeScript checks (no build needed)
-npm test            # 918 tests, all passing
+pnpm install
+pnpm run typecheck   # TypeScript checks (no build needed)
+pnpm test            # ~1090 tests, all passing
 ```
 
 > The pi end-to-end suites (`packages/pi-taskflow/test/e2e*.mts`) spawn live Pi subagents and are run directly with `node --conditions=development --experimental-strip-types <file>`. They need `pi` installed and model access configured. CI runs the unit tests plus the network-free Codex MCP e2e suites (the live-model e2e stays manual).
@@ -25,7 +25,7 @@ npm test            # 918 tests, all passing
 
 1. **Open an issue first** to discuss the change. PRs without a linked issue may sit un-reviewed.
 2. Keep the diff focused — one concern per PR.
-3. All existing tests must pass (`npm test`).
+3. All existing tests must pass (`pnpm test`).
 4. Add tests for new behavior (each package keeps its tests under `packages/<pkg>/test/`).
 5. Format is whatever Prettier with default settings would do. No strict config enforced.
 
@@ -35,14 +35,17 @@ I review issues and PRs ~weekly. If you need a faster turnaround, mention why in
 
 ## Architecture
 
-See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is an npm-workspaces monorepo of three published packages:
+See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of seven published packages:
 
 | Package / directory | What |
 |---------------------|------|
 | `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store (zero host-SDK deps) |
 | `packages/taskflow-core/src/agents/` | 18 built-in agent definitions (`.md` with YAML frontmatter) |
+| `packages/taskflow-mcp/` | Host-neutral MCP server: stdio JSON-RPC + `taskflow_*` tools + DAG SVG/outline renderer (depends on taskflow-core) |
 | `packages/pi-taskflow/` | Pi extension adapter (`taskflow` tool + `/tf` commands, TUI) + `skills/` |
-| `packages/codex-taskflow/` | Codex subagent runner + dependency-free MCP server |
+| `packages/codex-taskflow/` | Codex subagent runner + MCP bin + Codex plugin |
+| `packages/claude-taskflow/` | Claude Code subagent runner + MCP bin + Claude Code plugin |
+| `packages/opencode-taskflow/` | OpenCode subagent runner + MCP bin + opencode.json scaffold |
 | `examples/` | Runnable flow definitions (`.json`) |
 | `docs/` | Design docs, RFCs, dogfooding reports |
 

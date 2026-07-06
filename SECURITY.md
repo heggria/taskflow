@@ -27,7 +27,7 @@ The runtime has intentional hardening: `realpath`-based path containment, runId 
 
 | Version | Support |
 |---------|---------|
-| v0.1.3 (latest) | ✅ Active |
+| v0.1.5 (latest) | ✅ Active |
 | Earlier versions | ❌ Unsupported — upgrade to latest |
 
 ## Disclosure

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Executable entry for the pi-taskflow MCP server (the `codex-taskflow-mcp` bin).
+ * Executable entry for the taskflow MCP server, codex-bound (the
+ * `codex-taskflow-mcp` bin).
  *
  * Register with Codex:
  *   npm install -g codex-taskflow
@@ -23,6 +24,6 @@ startMcpServer(process.cwd())
 	.catch((e) => {
 		// Never write non-JSON to stdout (it would corrupt the MCP stream); log to
 		// stderr and exit non-zero so the client sees the transport drop.
-		process.stderr.write(`pi-taskflow mcp server fatal: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
+		process.stderr.write(`taskflow mcp server fatal: ${e instanceof Error ? e.stack ?? e.message : String(e)}\n`);
 		process.exit(1);
 	});

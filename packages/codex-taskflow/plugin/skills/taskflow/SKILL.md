@@ -289,9 +289,10 @@ The (interpolated) `task` is the prompt shown.
 - **Background (detached)** runs **auto-reject** (no interactive approver);
   downstream sees the rejection; the flow continues (fail-open).
 
-> **Codex caveat:** MCP-driven runs are non-interactive, so an `approval` phase
-> **auto-rejects**. Prefer a `gate` (agent review) in flows you run through the
-> `taskflow_*` tools; use `approval` only in flows a human runs interactively.
+> **MCP-host caveat (Codex / Claude Code / OpenCode):** MCP-driven runs are
+> non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
+> (agent review) in flows you run through the `taskflow_*` tools; use `approval`
+> only in flows a human runs interactively.
 
 ### Sub-flows (composition) — summary
 
@@ -402,7 +403,7 @@ output is exact.
   side effects). Not allowed inside LLM-generated dynamic sub-flows (RCE guard).
 
 ```jsonc
-{ "id": "build", "type": "script", "run": "npm run build", "timeout": 120000 },
+{ "id": "build", "type": "script", "run": "pnpm run build", "timeout": 120000 },
 { "id": "score", "type": "script", "run": ["python", "score.py"],
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```

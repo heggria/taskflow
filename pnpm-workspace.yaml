@@ -1,0 +1,11 @@
+# pnpm workspace — the six published packages.
+# (Replaces the npm `workspaces` field in the root package.json; pnpm ignores
+# that field and requires this file instead.)
+packages:
+  - "packages/taskflow-core"
+  - "packages/taskflow-mcp"
+  - "packages/taskflow-hosts"
+  - "packages/pi-taskflow"
+  - "packages/codex-taskflow"
+  - "packages/claude-taskflow"
+  - "packages/opencode-taskflow"
