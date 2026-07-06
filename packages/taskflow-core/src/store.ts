@@ -18,6 +18,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import type { Taskflow } from "./schema.ts";
 import type { UsageStats } from "./usage.ts";
@@ -615,7 +616,11 @@ function findProjectFlowsDirInternal(cwd: string, create = false): string | null
 function readFlowFile(filePath: string, scope: "user" | "project"): SavedFlow | null {
 	try {
 		const raw = fs.readFileSync(filePath, "utf-8");
-		const def = JSON.parse(raw) as Taskflow;
+		// Flow definition files are hand-authored and may contain JSONC-style
+		// comments (// line and /* block */) for readability. parseJsonc strips
+		// them before handing off to JSON.parse. LLM/subagent output is NOT
+		// routed through here — see interpolate.ts#safeParse (kept strict).
+		const def = parseJsonc(raw) as Taskflow;
 		if (!def?.name) return null;
 		return { name: def.name, scope, filePath, def };
 	} catch {

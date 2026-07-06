@@ -217,6 +217,38 @@ test("saveFlow: overwrites existing flow with same name", () => {
 	}
 });
 
+test("getFlow: reads a JSONC flow file with comments and trailing commas", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const flowDir = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(flowDir, { recursive: true });
+		const filePath = path.join(flowDir, "jsonc-flow.json");
+		fs.writeFileSync(
+			filePath,
+			`{\n` +
+				`  // this flow has comments\n` +
+				`  "name": "jsonc-flow",\n` +
+				`  /* block comment is allowed */\n` +
+				`  "phases": [\n` +
+				`    {\n` +
+				`      "id": "p1", // inline comment\n` +
+				`      "type": "agent",\n` +
+				`      "agent": "executor",\n` +
+				`      "task": "do it",\n` +
+				`    },\n` +
+				`  ],\n` +
+				`}\n`,
+		);
+		const loaded = getFlow(cwd, "jsonc-flow");
+		assert.ok(loaded, "getFlow should parse JSONC flow files");
+		assert.equal(loaded?.name, "jsonc-flow");
+		assert.equal(loaded?.def.phases.length, 1);
+		assert.equal((loaded?.def.phases[0] as { id: string }).id, "p1");
+	} finally {
+		cleanup(cwd);
+	}
+});
+
 test("getFlow: returns null for nonexistent flow", () => {
 	const cwd = makeTmpCwd();
 	try {
