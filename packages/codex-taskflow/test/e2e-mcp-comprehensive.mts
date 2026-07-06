@@ -86,7 +86,7 @@ send({ jsonrpc: "2.0", method: "notifications/initialized" });
 send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 const list = await waitFor(2, "tools/list");
 const toolNames = list.result.tools.map((t: any) => t.name).sort();
-assert.deepEqual(toolNames, ["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"]);
+assert.deepEqual(toolNames, ["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"]);
 for (const t of list.result.tools) {
 	assert.equal(t.inputSchema.type, "object", `${t.name} has object schema`);
 	assert.equal(typeof t.description, "string");

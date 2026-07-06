@@ -26,6 +26,19 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   host can no longer drift the process/classify contract.
 
 ### Added
+- **Library Phase 1: search-before-author + reusable-flow assets.** A new
+  reusable-flow asset layer with sidecar `.meta.json` metadata
+  (`purpose`, `tags`, `phaseSignature`, `generality`, `agentUsage`, `reuseCount`).
+  Save reusable flows with `action=save` (Pi) or `taskflow_save` (MCP) and search
+  them before authoring a new flow with `action=search` / `taskflow_search`.
+  Search combines structural similarity (`agent→map→reduce` signature + phase
+  count) and CJK-aware keyword matching, and degrades gracefully to purely
+  structural/keyword scoring when no embedder is configured (Phase 2). The
+  `reusedFromSearch` flag on `taskflow_run` / `action=run` increments
+  `reuseCount`, so high-quality reusable flows surface higher over time. See
+  `docs/rfc-library-reuse.md` for the full design and `skills-src/taskflow/library.md`
+  for the agent-facing workflow.
+
 - **OpenCode as a fourth host.** New `opencode-taskflow` package: an OpenCode
   subagent runner (`opencode run --format json`) plus an `opencode.json` MCP
   config scaffold, mirroring the Codex/Claude adapters. A flow's subagents can

@@ -31,6 +31,9 @@ export * from "./compile.ts";
 // spawns it directly by file path.
 export * from "./store.ts";
 export * from "./agents.ts";
+export * from "./library/types.ts";
+export * from "./library/meta.ts";
+export * from "./library/search.ts";
 export * from "./runner-core.ts";
 export * from "./host/runner-types.ts";
 export * from "./flowir/index.ts";

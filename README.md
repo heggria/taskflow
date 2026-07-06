@@ -455,6 +455,46 @@ with the run — flows that don't opt in behave exactly as before.
   "task": "ctx_read 'endpoints' for shared context, then audit {item} for missing auth." }
 ```
 
+### Library: search before author
+
+A flow that took work to generalize is an asset — but only if you can find it
+again. Phase 1 of the **taskflow library** adds sidecar `.meta.json` metadata
+(`purpose`, `tags`, `phaseSignature`, `generality`, `reuseCount`) to saved
+flows, plus a search tool that surfaces reusable flows before you write a new
+one:
+
+```jsonc
+// MCP
+{ "name": "taskflow_search", "arguments": { "query": "audit API endpoints for missing auth" } }
+// Pi tool
+{ "action": "search", "query": "审计接口鉴权" }
+```
+
+Search is **structural + keyword** by default (zero dependencies, zero tokens):
+`phaseSignature` (`agent→map→reduce`) and phase-count similarity are blended
+with keyword overlap. It is **CJK-aware**, so a Chinese query like
+`"检查接口安全性 鉴权 缺失"` still matches a purpose containing
+`"审计...是否缺少鉴权检查"`. Embedding-based semantic search is Phase 2 —
+the `embedder` seam is already in place and search degrades gracefully when it
+is not configured.
+
+When you run a flow you discovered via search, pass `reusedFromSearch: true`
+(`taskflow_run` MCP, or `action=run` in Pi). That bumps the flow's
+`reuseCount`, so high-quality reusable patterns rank higher over time. When you
+write a new reusable flow, save it with metadata:
+
+```jsonc
+{ "name": "taskflow_save",
+  "arguments": {
+    "name": "audit-endpoints",
+    "definition": { ... },
+    "purpose": "Audit API endpoints for missing auth checks",
+    "tags": ["audit", "security", "auth"] } }
+```
+
+See `docs/rfc-library-reuse.md` for the design and `skills-src/taskflow/library.md`
+for the agent-facing search→reuse→generalize→re-save workflow.
+
 ### Control flow & reliability
 
 - **`when`** — skip a phase unless an expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& || !`, parentheses, and quoted strings/numbers. Pair with `join: "any"` on the merge phase for real if/else routing. Parse errors **fail open** (the phase runs — never silently dropped).
@@ -826,7 +866,7 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 </div>
 
 - **Zero runtime dependencies.** No `dependencies` field — the runtime is built entirely on Node built-ins (`fs` / `path` / `os` / `child_process` / `crypto`). The file lock is `fs.openSync("wx")`, not a third-party library.
-- **1092 tests across 67 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), backward-compatible cache-key migration (4-tier legacy fallback), per-phase structural sub-fingerprint (v3:phasefp — editing one phase invalidates only it and its dependents), per-item map caching (one changed item re-executes, N−1 cache hits), the `incremental` flag (run-wide cross-run default), reuse reporting, the FlowIR compile seam (determinism, declared-plane synthesis), incremental recompute (early-cutoff propagation, partial cascade strictly < full, observed ∪ declared union frontier), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, the shared context tree (blackboard reuse, supervision spawn, subflow validation/nesting), workspace isolation (temp/dedicated/worktree lifecycle, fail-open degrade, dynamic-flow rejection), dynamic sub-flow security hardening, detached execution (PID persistence, stale detection, crash→failed, resume after failure), live run-history refresh, callback isolation, the idle watchdog, model-role init config, parseModelFromLabel with parenthesized-model-name regression, multi-fence `safeParse` recovery, host argv-contract locking (codex/claude/opencode `buildXxxArgs`), plus the `compile` Mermaid renderer (id-collision disambiguation, markdown-injection hardening, and full verify-overlay category coverage).
+- **1123 tests across 70 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), backward-compatible cache-key migration (4-tier legacy fallback), per-phase structural sub-fingerprint (v3:phasefp — editing one phase invalidates only it and its dependents), per-item map caching (one changed item re-executes, N−1 cache hits), the `incremental` flag (run-wide cross-run default), reuse reporting, the FlowIR compile seam (determinism, declared-plane synthesis), incremental recompute (early-cutoff propagation, partial cascade strictly < full, observed ∪ declared union frontier), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, the shared context tree (blackboard reuse, supervision spawn, subflow validation/nesting), workspace isolation (temp/dedicated/worktree lifecycle, fail-open degrade, dynamic-flow rejection), dynamic sub-flow security hardening, detached execution (PID persistence, stale detection, crash→failed, resume after failure), live run-history refresh, callback isolation, the idle watchdog, model-role init config, parseModelFromLabel with parenthesized-model-name regression, multi-fence `safeParse` recovery, host argv-contract locking (codex/claude/opencode `buildXxxArgs`), the `compile` Mermaid renderer (id-collision disambiguation, markdown-injection hardening, and full verify-overlay category coverage), plus the library Phase 1 metadata/search/store layer (phaseSignature, generality, CJK text scoring, staleness detection, sidecar persistence, A1 ghost-flow guard).
 - **Hardened by design.** Path-traversal defense (lexical + `realpath` containment check), runId validation, HTML/error sanitization, atomic writes, stale-lock stealing via `rename`, and an idle watchdog that kills wedged subagents (SIGTERM → SIGKILL after 5 minutes of silence). Dynamic sub-flows additionally get breadth caps, `cwd` containment, budget clamping, nesting depth caps, and prototype-pollution defense.
 - **Dogfooded.** Every new feature has to survive the project's own `self-improve` taskflow before it ships.
 
@@ -851,7 +891,7 @@ Our `self-improve` flow is a 10-phase DAG — it audits the codebase, patches de
 
 ## Status & limits
 
-**v0.1.5** — the current release. See [CHANGELOG](./CHANGELOG.md) for the full history. This release adds **Claude Code and OpenCode as hosts**, **extracts the MCP server into its own `taskflow-mcp` package**, and **de-duplicates the three host runners** into a shared `runSubagentProcess`. Baseline: **multi-host monorepo of seven packages** — the host-neutral `taskflow-core` engine, the host-neutral `taskflow-mcp` MCP server, the shared host-runner `taskflow-hosts`, plus `pi-taskflow` (Pi adapter), `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` (the three delivery packages re-export their runners from `taskflow-hosts` and each ships an MCP bin + plugin/config), all sharing the host-neutral MCP server in `taskflow-mcp`. **Shared Context Tree**: opt-in (`shareContext` / `contextSharing`) blackboard + supervision tools (`ctx_read`/`ctx_write` horizontal reuse, `ctx_report`/`ctx_spawn` vertical supervision); `ctx_spawn` accepts a flat task **or** a dependency-bearing `subflow` (a runtime-validated nested DAG), depth-capped on a unified nesting counter with budget accounting. **Workspace isolation**: a phase's `cwd` accepts reserved keywords `temp`/`dedicated`/`worktree` — the runtime allocates an isolated dir (or a git worktree on a throwaway branch) and tears it down after the phase, fail-open, rejected in LLM-authored sub-flows. **Detached execution**: runs can execute in the background, detached from the Pi session. Prior: loop-until-done (`loop`), tournament (best-of-N with a judge), cross-run memoization (content-addressed cache with git/file/glob/env fingerprints and TTL), interactive `/tf init`, configurable built-in agents, 18 built-in agents with 6 model roles. Full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, `onBlock: "retry"`, `eval` machine gates, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`). Inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
+**Unreleased (post-v0.1.5)** — adds **library Phase 1** (search-before-author + reusable-flow sidecar metadata) on top of the v0.1.5 baseline. **v0.1.5** added **Claude Code and OpenCode as hosts**, **extracted the MCP server into its own `taskflow-mcp` package**, and **de-duplicated the three host runners** into a shared `runSubagentProcess`. See [CHANGELOG](./CHANGELOG.md) for the full history. Baseline: **multi-host monorepo of seven packages** — the host-neutral `taskflow-core` engine, the host-neutral `taskflow-mcp` MCP server, the shared host-runner `taskflow-hosts`, plus `pi-taskflow` (Pi adapter), `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` (the three delivery packages re-export their runners from `taskflow-hosts` and each ships an MCP bin + plugin/config), all sharing the host-neutral MCP server in `taskflow-mcp`. **Library Phase 1**: save flows with `purpose`+`tags` via `taskflow_save` (MCP) or `action=save` (Pi), search them with structural + CJK-aware keyword scoring via `taskflow_search`/`action=search`, and track `reuseCount` via `reusedFromSearch`. **Shared Context Tree**: opt-in (`shareContext` / `contextSharing`) blackboard + supervision tools (`ctx_read`/`ctx_write` horizontal reuse, `ctx_report`/`ctx_spawn` vertical supervision); `ctx_spawn` accepts a flat task **or** a dependency-bearing `subflow` (a runtime-validated nested DAG), depth-capped on a unified nesting counter with budget accounting. **Workspace isolation**: a phase's `cwd` accepts reserved keywords `temp`/`dedicated`/`worktree` — the runtime allocates an isolated dir (or a git worktree on a throwaway branch) and tears it down after the phase, fail-open, rejected in LLM-authored sub-flows. **Detached execution**: runs can execute in the background, detached from the Pi session. Prior: loop-until-done (`loop`), tournament (best-of-N with a judge), cross-run memoization (content-addressed cache with git/file/glob/env fingerprints and TTL), interactive `/tf init`, configurable built-in agents, 18 built-in agents with 6 model roles. Full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, `onBlock: "retry"`, `eval` machine gates, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`). Inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
 
 Known boundaries (tracked, bounded — no surprises mid-flow):
 

@@ -40,11 +40,17 @@ import {
 	newRunId,
 	peekRun,
 	type RunState,
-	saveFlow,
 	saveRun,
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
+	readMeta,
+	saveFlowWithMeta,
+	bumpReuseInSidecar,
+	deriveMeta,
+	searchLibrary,
+	type LibraryDeps,
+	type SearchInput,
 } from "taskflow-core";
 import { CacheStore } from "taskflow-core";
 import { safeParse } from "taskflow-core";
@@ -90,7 +96,7 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "why-stale", "recompute", "cache-clear"] as const, {
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "why-stale", "recompute", "cache-clear", "search"] as const, {
 		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
 		default: "run",
 	}),
@@ -141,6 +147,16 @@ const TaskflowParams = Type.Object({
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
 	),
+	// --- Library (RFC: docs/rfc-library-reuse.md) ---
+	purpose: Type.Optional(Type.String({ description: "action=save: one-line purpose for the flow, used by search & embedding. Strongly recommended for reusable flows." })),
+	tags: Type.Optional(Type.Array(Type.String(), { description: "action=save: 2-4 reuse tags (e.g. audit, fan-out, migration). Improves search recall." })),
+	notes: Type.Optional(Type.String({ description: "action=save: free-form reuse notes shown on show/list." })),
+	query: Type.Optional(Type.String({ description: "action=search: natural-language purpose string to find a reusable flow." })),
+	limit: Type.Optional(Type.Number({ description: "action=search: max results (default 5, max 20)." })),
+	structureOnly: Type.Optional(Type.Boolean({ description: "action=search: skip embedding, use keyword+structural ranking only (zero latency)." })),
+	minScore: Type.Optional(Type.Number({ description: "action=search: drop results below this score (0-1)." })),
+	searchScope: Type.Optional(Type.String({ description: "action=search: 'project' | 'user' | 'both' (default from settings)." })),
+	reusedFromSearch: Type.Optional(Type.Boolean({ description: "action=run: set true when this run was chosen because of a prior action=search → bumps the flow's reuseCount (the reuse flywheel). Default false; direct run-by-name does not bump." })),
 	mode: Type.Optional(
 		StringEnum(["show", "apply-defaults", "interactive"] as const, {
 			description:
@@ -657,9 +673,51 @@ export default function (pi: ExtensionAPI) {
 			if (action === "list") {
 				const flows = listFlows(ctx.cwd);
 				const text = flows.length
-					? flows.map((f) => `- ${f.name} (${f.scope}): ${f.def.description ?? ""}`).join("\n")
+					? flows
+							.map((f) => {
+								const meta = readMeta(ctx.cwd, f.name);
+								const base = `- ${f.name} (${f.scope}): ${f.def.description ?? ""} — ${f.def.phases?.length ?? 0} phase(s)`;
+								if (meta?.purpose) {
+									const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
+									return `${base} · ${purpose} · g=${meta.generality?.toFixed(2) ?? "?"} · used ${meta.reuseCount ?? 0}×`;
+								}
+								return base;
+							})
+							.join("\n")
 					: "No saved taskflows.";
 				return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+			}
+
+			if (action === "search") {
+				const query = typeof params.query === "string" ? params.query.trim() : "";
+				if (!query) return errorResult(action, "action=search requires 'query' (a short purpose string).");
+				const settings = readSubagentSettings();
+				if (!settings.taskflow.library.enabled) {
+					return errorResult(action, "Library is disabled (settings.json → taskflow.library.enabled = false).");
+				}
+				const deps: LibraryDeps = { settings: settings.taskflow.library, cwd: ctx.cwd };
+				const input: SearchInput = {
+					query,
+					limit: typeof params.limit === "number" ? params.limit : undefined,
+					structureOnly: params.structureOnly === true,
+					minScore: typeof params.minScore === "number" ? params.minScore : undefined,
+					scope: typeof params.searchScope === "string" ? (params.searchScope as "project" | "user" | "both") : undefined,
+				};
+				const res = await searchLibrary(deps, input);
+				const lines: string[] = [];
+				lines.push(`# Library search — ${res.counts.scanned} flow(s) scanned · ${res.searchMode} mode${res.embedder ? ` · ${res.embedder}` : ""}`);
+				if (res.results.length === 0) {
+					lines.push("No matches. Consider authoring a new flow and saving it (action=save with purpose+tags).");
+				} else {
+					for (const r of res.results) {
+						lines.push(`- **${r.name}** (${r.scope}) — score ${r.score.toFixed(2)} · ${r.phaseSignature || "?"} · g=${r.generality.toFixed(2)} · v${r.version} · used ${r.reuseCount}×`);
+						if (r.purpose) lines.push(`    purpose: ${r.purpose}`);
+						if (r.tags?.length) lines.push(`    tags: ${r.tags.join(", ")}`);
+						lines.push(`    why: ${r.why}`);
+						lines.push(`    → ${r.reuseHint}`);
+					}
+				}
+				return { content: [{ type: "text", text: lines.join("\n") }], details: { action } satisfies TaskflowDetails };
 			}
 
 			if (action === "verify") {
@@ -957,7 +1015,18 @@ export default function (pi: ExtensionAPI) {
 			if (action === "save") {
 				const v = validateTaskflow(def);
 				if (!v.ok) return errorResult(action, `Invalid taskflow:\n- ${v.errors.join("\n- ")}`);
-				const { filePath } = saveFlow(ctx.cwd, def, params.scope ?? "project");
+				const scope = params.scope ?? "project";
+				// RFC library: write a sidecar .meta.json alongside the flow so search can
+				// retrieve it. Structural fields are derived; purpose/tags/notes come
+				// from the caller. (Phase 1: no embedding yet — embedded later.)
+				const prevMeta = readMeta(ctx.cwd, def.name) ?? undefined;
+				const meta = deriveMeta(def, {
+					purpose: typeof params.purpose === "string" ? params.purpose : undefined,
+					tags: Array.isArray(params.tags) ? (params.tags as string[]).filter((t) => typeof t === "string") : undefined,
+					notes: typeof params.notes === "string" ? params.notes : undefined,
+					prevMeta,
+				});
+				const { filePath } = saveFlowWithMeta(ctx.cwd, def, meta, scope);
 				// Make the shortcut available immediately this session.
 				pi.registerCommand(`tf:${def.name}`, {
 					description: def.description || `Run taskflow '${def.name}'`,
@@ -1095,6 +1164,17 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const result = await runFlow(def, args, ctx, signal, onUpdate as any, undefined, params.incremental as boolean | undefined);
+			// RFC library reuse flywheel: if this run was chosen because of a prior
+			// action=search (reusedFromSearch=true), bump the flow's reuseCount. We
+			// only bump for run-by-name of a SAVED flow (not inline define). Failures
+			// here must never replace the run's outcome (safeEmit principle).
+			if (result.ok && params.reusedFromSearch === true && typeof params.name === "string" && params.name.trim()) {
+				try {
+					bumpReuseInSidecar(ctx.cwd, params.name);
+				} catch {
+					/* fail-open: reuse bookkeeping is best-effort */
+				}
+			}
 			// Surface the validation warnings in the tool result so the model
 			// can acknowledge or fix them, and the user sees them in the chat.
 			if (v.warnings.length) {
@@ -1171,7 +1251,13 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify(`Flow not found: ${arg}`, "error");
 					return;
 				}
-				ctx.ui.notify(JSON.stringify(flow.def, null, 2), "info");
+				const meta = readMeta(ctx.cwd, arg);
+				if (meta) {
+					const out = { definition: flow.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
+					ctx.ui.notify(JSON.stringify(out, null, 2), "info");
+				} else {
+					ctx.ui.notify(JSON.stringify(flow.def, null, 2), "info");
+				}
 				return;
 			}
 

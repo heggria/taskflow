@@ -42,6 +42,13 @@ import {
 	isShorthand,
 	validateTaskflow,
 	readSubagentSettings,
+	readMeta,
+	saveFlowWithMeta,
+	bumpReuseInSidecar,
+	deriveMeta,
+	searchLibrary,
+	type LibraryDeps,
+	type SearchInput,
 	type RuntimeDeps,
 	type RunState,
 	type Taskflow,
@@ -163,6 +170,7 @@ const TOOLS: McpTool[] = [
 				defineFile: { type: "string", description: "Path to a file holding the flow definition (raw JSON, or Markdown with a ```json fence). Lets you verify/compile/run share ONE persisted draft (e.g. in the OS tmp dir) — edit the file between calls instead of re-sending the whole definition. Precedence: define > defineFile > name." },
 				args: { type: "object", description: "Invocation arguments interpolated as {args.X}." },
 				incremental: { type: "boolean", description: "Default every phase to cross-run cache reuse." },
+				reusedFromSearch: { type: "boolean", description: "Set true when this run was chosen because of a prior taskflow_search → bumps the flow's reuseCount (the reuse flywheel). Default false; direct run-by-name does not bump." },
 			},
 		},
 	},
@@ -227,6 +235,43 @@ const TOOLS: McpTool[] = [
 				limit: { type: "number", description: "Truncation cap in chars (default 4000, max 32000)." },
 			},
 			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_save",
+		title: "Save a reusable taskflow",
+		description:
+			"Save a flow as a reusable library asset: persists the flow AND a sidecar .meta.json with purpose/tags/notes + auto-derived structural metadata (phase signature, generality score) so taskflow_search can retrieve it later. Pass purpose + 2-4 tags for any flow you expect to reuse — this is what makes search recall work.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				name: { type: "string", description: "Flow name (also the filename stem)." },
+				definition: { type: "object", description: "Full taskflow DSL object ({name, phases:[...]}) or shorthand ({task}|{tasks}|{chain})." },
+				purpose: { type: "string", description: "One-line purpose — the single most important field for search recall. Write what the flow DOES and WHEN to use it." },
+				tags: { type: "array", items: { type: "string" }, description: "2-4 reuse tags (e.g. audit, fan-out, migration, security)." },
+				notes: { type: "string", description: "Free-form reuse notes (when NOT to use, required args, gotchas)." },
+				scope: { type: "string", enum: ["project", "user"], description: "project (default) or user-global." },
+			},
+			required: ["name", "definition"],
+		},
+	},
+	{
+		name: "taskflow_search",
+		title: "Search the taskflow library",
+		description:
+			"Search saved flows by purpose BEFORE authoring a new one — the reuse flywheel. Returns ranked matches with a score, why it matched, and a reuse hint (direct-reuse / copy-and-generalize / write-fresh). Falls back to keyword+structural ranking when no embedding backend is configured (structural mode); uses cosine similarity when one is (semantic/mixed mode).",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				query: { type: "string", description: "Natural-language purpose string (what you want the flow to do)." },
+				limit: { type: "number", description: "Max results (default 5, max 20)." },
+				structureOnly: { type: "boolean", description: "Skip embedding, use keyword+structural ranking only (zero latency)." },
+				minScore: { type: "number", description: "Drop results below this score (0-1)." },
+				scope: { type: "string", enum: ["project", "user", "both"], description: "Which scopes to search (default from settings: both)." },
+			},
+			required: ["query"],
 		},
 	},
 ];
@@ -314,6 +359,13 @@ export function makeToolHandlers(
 					/* fail-open */
 				}
 			});
+			if (res.ok && args.reusedFromSearch === true && typeof args.name === "string" && args.name.trim()) {
+				try {
+					bumpReuseInSidecar(cwd, args.name);
+				} catch {
+					/* fail-open: reuse bookkeeping is best-effort */
+				}
+			}
 			const header = res.ok ? "✓ taskflow complete" : "✗ taskflow did not fully succeed";
 			const u = res.totalUsage;
 			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;
@@ -335,7 +387,14 @@ export function makeToolHandlers(
 		taskflow_list: async () => {
 			const flows = listFlows(cwd);
 			if (flows.length === 0) return textContent("No saved taskflows found from this directory.");
-			const lines = flows.map((f) => `- ${f.name} (${f.scope}) — ${f.def.phases.length} phase(s)`);
+			const lines = flows.map((f) => {
+				const meta = readMeta(cwd, f.name);
+				if (meta?.purpose) {
+					const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
+					return `- ${f.name} (${f.scope}) — ${f.def.phases.length} phase(s) · ${purpose} · g=${meta.generality?.toFixed(2) ?? "?"} · used ${meta.reuseCount ?? 0}×`;
+				}
+				return `- ${f.name} (${f.scope}) — ${f.def.phases.length} phase(s)`;
+			});
 			return textContent(`Saved taskflows:\n${lines.join("\n")}`);
 		},
 
@@ -343,9 +402,73 @@ export function makeToolHandlers(
 			const name = String(args.name ?? "");
 			const saved = getFlow(cwd, name);
 			if (!saved) return textContent(`No saved flow named "${name}".`, true);
+			const meta = readMeta(cwd, name);
+			if (meta) {
+				const out = { definition: saved.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
+				return textContent(JSON.stringify(out, null, 2));
+			}
 			// No ```json``` fence: Codex shows text blocks as raw plaintext, so a fence
 			// would render as literal backticks. The JSON is already monospaced there.
 			return textContent(JSON.stringify(saved.def, null, 2));
+		},
+
+		taskflow_save: async (args) => {
+			const name = String(args.name ?? "");
+			if (!name.trim()) return textContent("taskflow_save requires `name`.", true);
+			if (!args.definition) return textContent("taskflow_save requires `definition` (the DSL object or shorthand).", true);
+			// Resolve + validate the definition (mirrors resolveFlow + run's validation).
+			let def: Taskflow;
+			try {
+				def = resolveFlow(cwd, { define: args.definition });
+			} catch (e) {
+				return textContent(`Invalid flow definition: ${e instanceof Error ? e.message : String(e)}`, true);
+			}
+			// Force the name to match the argument (resolveFlow/shorthand may synthesize one).
+			def = { ...def, name };
+			const v = validateTaskflow(def);
+			if (!v.ok) return textContent(`Flow is invalid:\n- ${v.errors.join("\n- ")}`, true);
+			const scope = args.scope === "user" ? "user" : "project";
+			const prevMeta = readMeta(cwd, name) ?? undefined;
+			const meta = deriveMeta(def, {
+				purpose: typeof args.purpose === "string" ? args.purpose : undefined,
+				tags: Array.isArray(args.tags) ? args.tags.filter((t): t is string => typeof t === "string") : undefined,
+				notes: typeof args.notes === "string" ? args.notes : undefined,
+				prevMeta,
+			});
+			const { filePath } = saveFlowWithMeta(cwd, def, meta, scope);
+			return textContent(`Saved taskflow '${name}' → ${filePath}\n  purpose: ${meta.purpose ?? "(none)"}\n  tags: ${(meta.tags ?? []).join(", ") || "(none)"}\n  phaseSignature: ${meta.phaseSignature}\n  generality: ${meta.generality.toFixed(2)}`);
+		},
+
+		taskflow_search: async (args) => {
+			const query = String(args.query ?? "").trim();
+			if (!query) return textContent("taskflow_search requires `query`.", true);
+			const settings = readSubagentSettings();
+			if (!settings.taskflow.library.enabled) {
+				return textContent("Library is disabled (settings.json → taskflow.library.enabled = false).", true);
+			}
+			const deps: LibraryDeps = { settings: settings.taskflow.library, cwd };
+			const input: SearchInput = {
+				query,
+				limit: typeof args.limit === "number" ? args.limit : undefined,
+				structureOnly: args.structureOnly === true,
+				minScore: typeof args.minScore === "number" ? args.minScore : undefined,
+				scope: args.scope === "project" || args.scope === "user" || args.scope === "both" ? args.scope : undefined,
+			};
+			const res = await searchLibrary(deps, input);
+			const lines: string[] = [];
+			lines.push(`Library search — ${res.counts.scanned} flow(s) scanned · ${res.searchMode} mode${res.embedder ? ` · ${res.embedder}` : ""}`);
+			if (res.results.length === 0) {
+				lines.push("No matches. Consider authoring a new flow and saving it (taskflow_save with purpose+tags).");
+			} else {
+				for (const r of res.results) {
+					lines.push(`- ${r.name} (${r.scope}) — score ${r.score.toFixed(2)} · ${r.phaseSignature || "?"} · g=${r.generality.toFixed(2)} · v${r.version} · used ${r.reuseCount}×`);
+					if (r.purpose) lines.push(`    purpose: ${r.purpose}`);
+					if (r.tags?.length) lines.push(`    tags: ${r.tags.join(", ")}`);
+					lines.push(`    why: ${r.why}`);
+					lines.push(`    → ${r.reuseHint}`);
+				}
+			}
+			return textContent(lines.join("\n"));
 		},
 
 		taskflow_verify: async (args) => {
