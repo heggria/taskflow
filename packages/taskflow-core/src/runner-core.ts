@@ -32,7 +32,7 @@ export function isFailed(r: RunResult): boolean {
  * agent tends to re-invoke the whole tool, producing duplicate progress blocks.
  */
 const TRANSIENT_ERROR_RE =
-	/rate[_\s-]?limit|too\s+many\s+requests|overloaded|\b429\b|\b503\b|\b502\b|\b504\b|service\s+unavailable|temporarily\s+unavailable|timeout|timed?\s+out|econnreset|etimedout|socket\s+hang\s*up/i;
+	/rate[_\s-]?limit|too[ \t\n\r]+many[ \t\n\r]+requests|overloaded|\b429\b|\b503\b|\b502\b|\b504\b|service[ \t\n\r]+unavailable|temporarily[ \t\n\r]+unavailable|timeout|timed?[ \t\n\r]+out|econnreset|etimedout|socket[ \t\n\r]+hang[ \t\n\r]*up/i;
 export function isTransientError(r: RunResult): boolean {
 	if (r.stopReason === "aborted") return false;
 	// Idle timeout is a deterministic stall — retrying won't help.
@@ -56,7 +56,7 @@ export function looksLikeHtmlOrJson(s: string): boolean {
 	if (!t) return false;
 	if (t.startsWith("<")) {
 		// HTML/XML/Cloudflare challenge pages
-		return /^<(?:!doctype\s+html|html|head|body|script|svg|div|iframe|span|p)\b/i.test(t);
+		return /^<(?:!doctype[ \t\n\r]+html|html|head|body|script|svg|div|iframe|span|p)\b/i.test(t);
 	}
 	if (t.startsWith("{")) {
 		// Truncated JSON. A genuine JSON envelope is fine to keep; an unwrapped
@@ -73,7 +73,7 @@ export function looksLikeHtmlOrJson(s: string): boolean {
  */
 export function sanitizeErrorMessage(raw: string | undefined): string {
 	if (!raw) return "";
-	const cleaned = raw.replace(/\s+/g, " ").trim();
+	const cleaned = raw.replace(/[ \t\n\r]+/g, " ").trim();
 	if (!cleaned) return "";
 	// Decide the sanitization branch on the RAW length, not the whitespace-
 	// collapsed length — otherwise an HTML page padded with spaces would slip
@@ -89,8 +89,8 @@ export function sanitizeErrorMessage(raw: string | undefined): string {
 		// gateway error pages) is a strong signal the upstream returned a page
 		// instead of JSON. Summarize it instead of letting HTML pollute the
 		// phase's error and downstream interpolation contexts.
-		const title = cleaned.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
-		const stripped = cleaned.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+		const title = cleaned.match(/<title\b[^>]*>([^<]{0,500})<\/title>/i)?.[1]?.trim();
+		const stripped = cleaned.replace(/<[^>]{1,2000}>/g, " ").replace(/[ \t\n\r]+/g, " ").trim();
 		const m = stripped.match(/(?:Unable to load site|Ray ID[: ]+([A-Za-z0-9]+)|[A-Z][a-z]+Error[: ]+(.{0,200}))/i);
 		const hint = title || (m ? (m[1] || m[0]).trim() : stripped.slice(0, 200));
 		return `Upstream returned non-JSON response (${rawLen} chars). Hint: ${hint}`;
@@ -180,7 +180,7 @@ function describeActivity(msg: CoreMessage): string {
 		else if (part.type === "toolCall") lastTool = summarizeToolCall(part.name, part.arguments ?? {});
 	}
 	const chosen = lastText || lastTool;
-	return chosen.replace(/\s+/g, " ").trim();
+	return chosen.replace(/[ \t\n\r]+/g, " ").trim();
 }
 
 function summarizeToolCall(name: string, args: Record<string, unknown>): string {
