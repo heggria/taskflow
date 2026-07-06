@@ -564,11 +564,17 @@
  * Mobile overflow fix.
  *
  * Fumadocs renders <main> as `flex flex-col`, so top-level section children
- * are flex items. Flex items default to `min-width: auto`, which means wide
- * content (e.g. a `min-w-[640px]` comparison table) stretches the section
- * beyond the viewport and causes horizontal page scroll on mobile.
- * Forcing `min-width: 0` lets `overflow-x-auto` containers do their job.
+ * are flex items. Two issues combine to cause horizontal page scroll on
+ * mobile:
+ *   1. `min-width: auto` lets wide content stretch the flex item.
+ *   2. `mx-auto` on a flex item disables the default `align-items: stretch`,
+ *      so the item sizes to its content width (e.g. a `min-w-[640px]`
+ *      comparison table stretches the section to 690px) and then centers,
+ *      overflowing the viewport.
+ * Forcing `min-width: 0` + `width: 100%` restores full-width sections so
+ * `overflow-x-auto` containers can scroll internally instead.
  */
 main > * {
   min-width: 0;
+  width: 100%;
 }
