@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://heggria.github.io/taskflow/sitemap.xml
