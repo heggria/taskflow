@@ -1,4 +1,12 @@
 User-agent: *
 Allow: /
 
+# Disallow internal Next.js assets and build metadata
+Disallow: /_next/
+Disallow: /dev/
+Disallow: /404/
+Disallow: /_not-found/
+Disallow: /google-site-verification.html
+
+# Sitemaps
 Sitemap: https://heggria.github.io/taskflow/sitemap.xml
