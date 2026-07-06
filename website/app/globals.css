@@ -47,17 +47,188 @@
     background-image: linear-gradient(135deg, hsl(var(--fd-primary)) 0%, hsl(35 100% 55%) 100%);
   }
 
+  .text-balance {
+    text-wrap: balance;
+  }
+
   .bg-grid {
-    background-size: 40px 40px;
-    background-image: linear-gradient(to right, hsl(var(--fd-border) / 0.4) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--fd-border) / 0.4) 1px, transparent 1px);
+    background-size: 44px 44px;
+    background-image: linear-gradient(to right, hsl(var(--fd-border) / 0.35) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--fd-border) / 0.35) 1px, transparent 1px);
   }
 
   .bg-hero-glow {
     background: radial-gradient(
-      ellipse 80% 60% at 50% -20%,
-      hsl(var(--fd-primary) / 0.12),
+      ellipse 120% 80% at 50% -10%,
+      hsl(var(--fd-primary) / 0.22),
+      transparent 55%
+    );
+  }
+
+  .bg-hero-glow-strong {
+    background: radial-gradient(
+      ellipse 140% 90% at 50% -5%,
+      hsl(var(--fd-primary) / 0.14),
+      transparent 60%
+    );
+  }
+
+  .animate-fade-in {
+    animation: fade-in 1s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-fade-in-delay-1 {
+    animation-delay: 0.12s;
+  }
+
+  .animate-fade-in-delay-2 {
+    animation-delay: 0.24s;
+  }
+
+  .animate-fade-in-delay-3 {
+    animation-delay: 0.4s;
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+      filter: blur(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-10px);
+    }
+  }
+
+  .glass {
+    @apply border shadow-sm;
+    background-color: hsl(var(--fd-card) / 0.72);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  .gradient-border {
+    position: relative;
+    isolation: isolate;
+  }
+
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      hsl(var(--fd-primary) / 0.5),
+      hsl(var(--fd-border) / 0.85) 50%,
+      hsl(var(--fd-primary) / 0.25)
+    );
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  .gradient-top-border {
+    position: relative;
+  }
+
+  .gradient-top-border::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 10%;
+    right: 10%;
+    height: 1.5px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      hsl(var(--fd-primary) / 0.6),
       transparent
     );
+    border-radius: 999px;
+  }
+
+  .shine {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .shine::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      105deg,
+      transparent 38%,
+      hsl(var(--fd-primary) / 0.12) 50%,
+      transparent 62%
+    );
+    transform: translateX(-100%) skewX(-12deg);
+    transition: transform 0.8s ease;
+    pointer-events: none;
+  }
+
+  .shine:hover::before {
+    transform: translateX(100%) skewX(-12deg);
+  }
+
+  .hover-lift {
+    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease;
+  }
+
+  .hover-lift:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 20px 40px -12px hsl(var(--fd-foreground) / 0.12);
+  }
+
+  .json-key {
+    color: hsl(var(--fd-primary));
+  }
+
+  .json-string {
+    color: hsl(35 90% 42%);
+  }
+
+  .json-number {
+    color: hsl(160 75% 34%);
+  }
+
+  .json-bool {
+    color: hsl(260 70% 58%);
+  }
+
+  .json-punct {
+    color: hsl(var(--fd-muted-foreground));
+  }
+
+  .dark .json-string {
+    color: hsl(40 95% 68%);
+  }
+
+  .dark .json-number {
+    color: hsl(160 70% 55%);
+  }
+
+  .dark .json-bool {
+    color: hsl(260 80% 74%);
   }
 }
