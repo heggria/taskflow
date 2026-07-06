@@ -26,14 +26,11 @@
     "guides/headline-tournament-case-study",
     "guides/migration-planner-case-study",
     "---案例展示---",
-    "showcase",
     "showcase/why-taskflow",
-    "---模板---",
     "templates",
     "---参考---",
     "reference/shorthand",
     "reference/commands",
-    "---社区---",
     "community"
   ]
 }
