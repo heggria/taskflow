@@ -2,7 +2,7 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [Unreleased]
+## [0.1.6] — 2026-07-06
 
 ### Changed
 - **Extracted the MCP server into its own `taskflow-mcp` package** (sixth
@@ -73,7 +73,25 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - Skills are single-sourced for all hosts (`skills-src/taskflow/` with
     comma-list host blocks, e.g. `<!-- host:codex,claude,opencode -->`).
 
-## [0.1.5] — 2026-07-03
+- **`defineFile`: verify/compile/run a flow from a path on disk.** `action=run`
+  (Pi) and `taskflow_run` / `taskflow_verify` / `taskflow_compile` (MCP) accept
+  a `defineFile` (string) or `{defineFile, name}` in place of an inline
+  `define`. The engine resolves the path, reads it once, and substitutes it as
+  the flow definition — so a flow can live in a `.json` file (e.g.
+  `examples/review-changes.json`) and be invoked by reference without pasting
+  the JSON into the tool call. Pairs naturally with the JSONC support below.
+  See `skills-src/taskflow/core.md`.
+
+- **JSONC comments and trailing commas in flow definition files.** Flow
+  definitions are hand-authored `.json` files; authors can now annotate them
+  with `//` and `/* */` comments and leave trailing commas (JSONC/JSON5
+  style). A new zero-dependency `parseJsonc()` (in `taskflow-core`'s `jsonc.ts`)
+  strips comments only outside string literals and tolerates trailing commas
+  before `}` / `]`, used by `readFlowFile()` when loading `defineFile` flows
+  and saved flows from the library. `safeParse()` for LLM output remains
+  strict. Re-exported from the `taskflow-core` barrel as `parseJsonc`.
+
+## [0.1.6] — 2026-07-06
 
 ### Added
 - **Scoring gates (`score` on `gate` phases).** Deterministic, composable,
