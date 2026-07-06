@@ -26,14 +26,11 @@
     "guides/headline-tournament-case-study",
     "guides/migration-planner-case-study",
     "---Showcase---",
-    "showcase",
     "showcase/why-taskflow",
-    "---Templates---",
     "templates",
     "---Reference---",
     "reference/shorthand",
     "reference/commands",
-    "---Community---",
     "community"
   ]
 }
