@@ -42,7 +42,11 @@ jobs:
 
       - name: Install dependencies
         working-directory: website
-        run: npm ci
+        run: npm ci --ignore-scripts
+
+      - name: Generate MDX source
+        working-directory: website
+        run: npm run prepare-source
 
       - name: Build
         working-directory: website
