@@ -18,6 +18,10 @@
   <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
+<p align="center">
+  <a href="https://heggria.github.io/taskflow/en"><img src="https://img.shields.io/badge/📖_Read_the_docs-heggria.github.io%2Ftaskflow-4B4ACF?style=for-the-badge&labelColor=2D2F5A" alt="Read the docs — heggria.github.io/taskflow"></a>
+</p>
+
 <p><strong>A declarative, verifiable <em>graph of tasks</em> for coding-agent subagents.</strong><br/>
 Not a workflow you script — a DAG you declare. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.<br/>
 Runs on the <a href="https://pi.dev">Pi</a> coding agent, on <a href="https://github.com/openai/codex">OpenAI Codex</a>, on <a href="https://claude.com/product/claude-code">Claude Code</a>, and on <a href="https://opencode.ai">OpenCode</a>.</p>
