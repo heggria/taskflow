@@ -1,0 +1,862 @@
+---
+title: 后台运行
+description: 启动长时间运行的流程并立即返回提示符。通过 runId 轮询状态。
+---
+
+普通的 `taskflow` 调用会阻塞你的会话，直到所有阶段完成。一个三阶段的代码审计如果耗时八分钟，你的提示符就冻结八分钟。
+
+后台运行解决了这个问题。设置 `detach: true`，MCP 工具在一秒内返回一个 `runId`。一个子进程接管工作，在每个阶段完成后持久化进度，并在结束时写入最终状态——或者在崩溃时写入失败状态。你可以随时从磁盘轮询运行状态来获取进度更新，也可以在中途失败后恢复它。
+
+本指南详细说明具体的 spawn 机制、如何检查后台运行的状态、审批（approval）阶段会发生什么，以及无头运行的限制。
+
+## 基本模式
+
+在调用 `taskflow` 工具时设置 `detach: true`：
+
+```json
+{
+  "action": "run",
+  "name": "code-audit",
+  "args": { "target": "src/auth" },
+  "detach": true
+}
+```
+
+工具立即返回：
+
+```
+Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T143022-a1b2c3
+```
+
+你的会话已释放。流程在一个分离的子进程中运行。PID 记录在运行状态上，你可以检查它是否仍然存活。
+
+## 工作原理
+
+<Steps>
+  <Step>
+    **宿主在磁盘上创建 `RunState`。** 运行以 `status: "running"`、`detached: true` 开始，流程定义和参数被持久化。这与所有运行使用的原子写入路径相同——分离进程会把它读回来。
+  </Step>
+  <Step>
+    **上下文序列化到临时文件。** `/tmp/taskflow-detach-<runId>.json` 的 JSON 文件携带 `runId`、`defName`、`args`、`cwd` 以及宿主适配器运行模块的绝对路径（`runnerModule`）。这个文件是子进程的唯一输入。
+  </Step>
+  <Step>
+    **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true` 和 `stdio: ["ignore", "ignore", "pipe"]`。stdout 被忽略；stderr 被管道回父进程以捕获崩溃诊断信息。子进程立即 `unref()`——它不会保持父进程的事件循环存活。
+  </Step>
+  <Step>
+    **父进程返回 runId。** 子进程的 PID 写入 `RunState.pid`，MCP 工具响应同时包含 PID 和 runId。父会话可以继续其他工作。
+  </Step>
+  <Step>
+    **子进程启动并运行流程。** 分离运行器读取上下文文件，从磁盘重新发现 agent 配置，动态导入宿主适配器的运行模块，然后调用 `executeTaskflow`。每个阶段完成后通过同一个 `saveRun` 路径持久化进度。
+  </Step>
+  <Step>
+    **写入终态。** 成功时，子进程持久化 `status: "completed"` 和所有阶段输出。失败时，顶层 `catch` 写入 `status: "failed"`。崩溃时，父进程的崩溃保护写入合成的 `__detach__` 阶段和 stderr 信息。
+  </Step>
+</Steps>
+
+## 检查后台运行状态
+
+运行状态是磁盘上的 JSON 文件——与分离进程在每个阶段完成后更新的文件相同。读回来：
+
+```
+/tf runs
+```
+
+运行面板显示运行的当前状态、阶段进度和时间。对于后台运行，面板**定时轮询文件**，你无需重新打开即可看到实时进度——`updatedAt` 在每个阶段完成后推进。
+
+你也可以检查子进程是否仍然存活。`RunState.pid` 存储操作系统 PID；`isProcessAlive(pid)` 使用 `process.kill(pid, 0)`（信号 0——不发送信号，仅做存活检查）。如果进程已退出但运行仍为 `"running"`，说明出了问题——检查 `__detach__` 阶段获取错误信息。
+
+### 运行状态一览
+
+| 状态 | 含义 |
+|---|---|
+| `running` | 分离进程存活并正在执行阶段。 |
+| `completed` | 所有阶段完成。`finalOutput` 在最后一个阶段的输出中。 |
+| `failed` | 某个阶段失败（重试已耗尽），或子进程崩溃。 |
+| `paused` | `loop` 阶段达到迭代上限并暂停以供审查。 |
+| `blocked` | `gate` 阶段返回 `VERDICT: BLOCK`。 |
+
+## 崩溃与 `__detach__` 阶段
+
+如果子进程在写入终态之前死亡——OOM kill、段错误、运行模块导入失败——父进程的崩溃保护会触发。它在运行上写入一个**合成的 `__detach__` 阶段**：
+
+```json
+{
+  "id": "__detach__",
+  "status": "failed",
+  "error": "Detached runner exited with code 1: Failed to load runner module 'pi-taskflow/dist/runner.js'..."
+}
+```
+
+崩溃保护仅在运行仍为 `"running"` 且 PID 匹配时触发——它永远不会覆盖运行器已持久化的真正终态。这意味着：
+
+- **正常退出（code 0）：** 运行器已持久化自己的状态。崩溃保护不执行操作。
+- **非零退出：** 崩溃保护检查运行状态。如果仍为 `"running"`，则标记为 `"failed"` 并附上捕获的 stderr。
+- **Spawn 错误：** `child.on("error")` 处理器用 spawn 错误信息写入相同的合成阶段。
+
+`__detach__` 阶段可轮询、可调试——你可以在 `/tf runs` 和运行详情视图中看到它，就像任何其他阶段一样。
+
+## 审批阶段自动拒绝
+
+审批阶段是安全边界。在正常的交互式运行中，宿主弹出提示并等待你批准、拒绝或编辑。在分离运行中，没有交互式审批者——`requestApproval` 回调未被注入。
+
+当运行时遇到没有审批者的 `approval` 阶段时：
+
+```
+output: "(auto-rejected: no interactive approver available)"
+approval: { decision: "reject", auto: true }
+gate: { verdict: "block" }
+```
+
+审批自动拒绝，门控阻塞。依赖审批输出的下游阶段会看到拒绝文本。运行记录该决策，你以后可以审计它。
+
+<Callout type="warn">
+  审批门控在分离模式下**永远不会被绕过**。自动拒绝不是自动批准——门控阻塞，下游阶段级联失败。如果你的流程有审批门控且需要在 CI 中通过，请移除该门控或重构流程以支持无头执行。
+</Callout>
+
+## 使用场景
+
+### CI 流水线
+
+CI 任务可以触发 taskflow、捕获 `runId`，并在循环中轮询运行状态。无需交互式会话。任务根据终态退出：
+
+```bash
+# CI 步骤的伪代码
+RUN_ID=$(taskflow run --name code-audit --detach --json | jq -r '.runId')
+
+while true; do
+  STATUS=$(taskflow status --run-id "$RUN_ID" --json | jq -r '.status')
+  case "$STATUS" in
+    completed) exit 0 ;;
+    failed|blocked) exit 1 ;;
+    running) sleep 10 ;;
+  esac
+done
+```
+
+审批阶段在 CI 中自动拒绝，这是正确的行为——你希望流水线在审批门控处暂停，而不是静默地盖章通过。
+
+### 长时间运行的流程
+
+一个耗时 30 分钟的 20 阶段迁移规划器不应该阻塞你的编码会话。分离它，继续工作，然后回来看：
+
+```
+/tf runs          ← 查看进度
+```
+
+完成后，运行历史面板显示最终输出。你可以检查各个阶段的输出、使用统计和时间——与前台运行相同的数据。
+
+### 过夜批处理
+
+在离开前排队几个分离运行。每个运行独立执行，持久化自己的状态，第二天早上可以通过 `runId` 轮询。运行清理策略（`maxKeptRuns`、`maxRunAgeDays`）自动修剪旧运行。
+
+### 即发即忘的辅助任务
+
+生成文档、运行 linter 扫描或生成报告的后台流程——你想完成但不需要监视的任务——是天然的分离候选。流程运行到完成（或可见地失败），不消耗你的注意力。
+
+## 上下文文件格式
+
+`/tmp/taskflow-detach-<runId>.json` 的临时文件携带：
+
+```json
+{
+  "runId": "20260706T143022-a1b2c3",
+  "defName": "code-audit",
+  "args": { "target": "src/auth" },
+  "cwd": "/Users/you/project",
+  "runnerModule": "/Users/you/.pi/extensions/pi-taskflow/dist/runner.js",
+  "runnerExport": "piSubagentRunner"
+}
+```
+
+| 字段 | 用途 |
+|---|---|
+| `runId` | 预分配的运行标识符。子进程通过此 id 加载其 `RunState`。 |
+| `defName` | 流程名称——用于从磁盘解析已保存的定义。 |
+| `args` | 调用参数，已根据流程的 `args` 模式解析。 |
+| `cwd` | 工作目录——agent 运行的位置以及 `runsDir` 的根目录。 |
+| `runnerModule` | 宿主适配器运行模块的绝对路径。子进程在运行时 `import()` 此模块以获取 `runTask` 函数。 |
+| `runnerExport` | 运行模块上的命名导出（默认为 `"piSubagentRunner"`）。 |
+
+文件在 spawn 时写入一次，运行期间不更新。子进程退出后可安全删除。
+
+## 分离运行器入口点
+
+`detached-runner.ts` 是一个**仅 spawn 的入口**——它不被 `taskflow-core` 的 barrel（`index.ts`）导入。它位于 `taskflow-core/detached-runner`，由宿主适配器通过 `import.meta.resolve` 解析。运行器在发布的包中已预编译为 `.js`，因此不需要 `--experimental-strip-types` 标志。
+
+运行器的启动序列：
+
+1. 从 `process.argv[2]` 读取并解析上下文文件。
+2. 通过 `runId` 加载预保存的 `RunState`。
+3. 使用 `readSubagentSettings()` 和 `discoverAgents()` 重新发现 agent 配置。
+4. 动态 `import(runnerModule)` 并提取 `runTask` 函数。
+5. **快速失败**——如果指定了运行模块但无法加载，写入合成的 `__detach__` 阶段并以非零退出码退出，而不是带着"未注入运行器"的存根继续跛行。
+6. 调用 `executeTaskflow()`，带有在每个阶段完成后保存状态的 `persist` 回调。
+7. 成功时持久化终态 `RunState`。崩溃时，顶层 `catch` 写入 `status: "failed"`。
+
+## 限制
+
+<Callout type="info">
+  后台运行以交互性换取并发性。这些限制是有意为之。
+</Callout>
+
+| 限制 | 原因 |
+|---|---|
+| **审批门控自动拒绝** | 没有交互式审批者可用。安全门控不得被静默绕过。 |
+| **无实时 TUI 流式传输** | 子进程的 stdout 被忽略（`stdio: "ignore"`）。进度仅通过文件轮询可见。 |
+| **宿主无法发送 `AbortSignal`** | 父进程无法在运行中途取消子进程。你可以手动 kill PID。 |
+| **`runnerModule` 必须可解析** | 子进程在运行时 `import()` 宿主适配器的运行器。如果模块路径错误，每个阶段都会失败。快速失败保护会提前捕获此问题。 |
+| **临时文件必须在子进程读取前保持存在** | `/tmp/taskflow-detach-<runId>.json` 的上下文文件在启动时同步读取。在子进程启动前删除它会导致立即退出。 |
+| **无 `requestApproval` 回调** | 宿主无法将审批处理器注入分离进程。这是自动拒绝背后的机制。 |
+
+## 失败后恢复
+
+中途失败的分离运行是一个普通的失败运行——它有 `runId`、持久化的阶段状态，以及恢复机制所需的所有数据。以相同的方式恢复它：
+
+```json
+{
+  "action": "resume",
+  "runId": "20260706T143022-a1b2c3"
+}
+```
+
+已完成的阶段被跳过（它们的输出已缓存）。只有失败的阶段及其下游依赖项重新执行。恢复本身也可以是分离的——在恢复调用上设置 `detach: true` 再次在后台触发它。
+
+## 跨运行缓存
+
+分离运行与前台运行共享同一个跨运行缓存。如果阶段的指纹（输入哈希 + 流程定义哈希）匹配之前缓存的结果，分离运行器会跳过它——不消耗 token。这意味着在修复一个阶段的输入后重新运行分离流程，只需为变更的工作付费。
+
+在工具调用上设置 `incremental: true` 以默认让每个阶段选择跨运行缓存：
+
+```json
+{
+  "action": "run",
+  "name": "code-audit",
+  "detach": true,
+  "incremental": true
+}
+```
+
+## 进程生命周期
+
+```
+父进程（宿主会话）                        子进程（分离运行器）
+│                                        │
+├─ saveRun(state, detached:true)         │
+├─ 写上下文 JSON 到 /tmp                  │
+├─ spawn(node, [runner, tmpFile])  ───►  ├─ readFileSync(contextPath)
+│                                        ├─ loadRun(runId)
+├─ child.on("exit", crashGuard)          ├─ import(runnerModule)
+├─ child.unref()                         ├─ executeTaskflow(...)
+├─ 返回 { runId, pid }                   │   ├─ 阶段 1 → saveRun
+│                                        │   ├─ 阶段 2 → saveRun
+│   ... 会话继续 ...                      │   ├─ 阶段 3 → saveRun
+│                                        │   └─ 持久化终态
+│                                        └─ exit(0)
+│
+├─（崩溃保护：退出码 0 → 无操作）
+└─ 用户轮询 /tf runs → 看到 "completed"
+```
+
+如果子进程在写入终态之前以非零退出码退出，崩溃保护在 `exit` 事件和用户下一次轮询的 `saveRun` 之间触发，将运行标记为 `"failed"` 并附上捕获的 stderr。
+
+## 下一步
+
+<Cards>
+  <Card title="恢复与缓存" href="/zh-cn/docs/concepts/resume">
+    运行内恢复和跨运行缓存如何在重新执行时跳过工作。
+  </Card>
+  <Card title="Gate 阶段" href="/zh-cn/docs/syntax/phase-types">
+    质量门控和与审批自动拒绝交互的裁决解析机制。
+  </Card>
+  <Card title="锦标赛指南" href="/zh-cn/docs/guides/tournament">
+    运行竞争变体并让裁判选出最佳结果——也适用于分离模式。
+  </Card>
+</Cards>
+```
+
+---
+
+## `meta.json` update
+
+For both `en` and `zh-cn`, insert `guides/background-runs` in the `pages` array. The relevant section becomes:
+
+```json
+"guides/tournament",
+"guides/background-runs",
+"guides/code-audit-case-study",
+"guides/headline-tournament-case-study",
+"guides/migration-planner-case-study",
+```
+
+This places it after the tournament guide (the last "feature deep-dive" guide) and before the case studies, which is the natural reading order: users learn the feature mechanics first, then see real-world examples.
+
+---
+
+### [4/5] risk-reviewer
+
+Based on my analysis of the source files (stale.ts, flowir/index.ts, flowir/translate.ts, flowir/hash.ts, flowir/meta.ts, flowir/phasefp.ts, runtime.ts recompute section, and context-store.ts), I'll now write the two complete reference pages.
+
+---
+
+## Risk Review
+
+I'm acting as a risk-reviewer for documentation changes. Since this is a documentation task (not backend logic/DB/API contracts), this falls outside my primary domain. However, I can assess **technical accuracy** of the documentation against the source code.
+
+### Evidence Verification
+
+**Critical facts extracted from source:**
+
+1. **FlowIR Compilation (M1)** - `compileTaskflowToIR(def)` in `flowir/index.ts:48` returns `TaskflowIR` with `hash`, `meta.declaredDeps`, `usedFallbackHash` (always true in stub).
+
+2. **Hash Algorithm** - `flowDefHash` in `flowir/hash.ts:64` = `hashCanonical(canonicalJson(def))` = SHA-256 truncated to 16 bytes hex. Vendored from overstory for byte-identical contract.
+
+3. **Per-Phase Fingerprinting (M6)** - `phaseFingerprint` in `flowir/phasefp.ts:68` returns `undefined` when soundness breaks (shareContext, flow phases, join:"any"), caller falls back to whole-flow hash. Strips policy fields (cache, retry, concurrency, final).
+
+4. **Observed Read-Sets (M3)** - `PhaseState.reads` in `store.ts:105` = `Array<{stepId, version}>`. Captured at runtime via `onRead` callback in `buildInterpolationContext` (runtime.ts).
+
+5. **Stale Frontier (M4)** - `computeStaleFrontier` in `stale.ts:89` uses **union semantics** (observed ∪ declared). O(phases + read-edges). Cycles terminate.
+
+6. **Why-Stale** - `formatWhyStale` in `stale.ts:147` annotates declared-only edges with `(declared)`.
+
+7. **Recompute (M5)** - `recomputeTaskflow` in `runtime.ts:2738` defaults to `dryRun: true` (fail-safe). Guards against unobserved deps (shareContext, flow phases, context files, {previous.output}, {args.*}, {item.*}) in `hasUnobservedDependencies`. Uses `structuredClone` to avoid mutation.
+
+8. **Early Cutoff** - In `runtime.ts:2877`: phases whose `inputHash` didn't move after upstream re-ran hit their cached result (no re-execution).
+
+9. **Topological Order** - `runtime.ts:2838`: frontier phases executed in topological order respecting observed + declared deps (union).
+
+Now I'll write the two .mdx files:
+
+---
+
+## FILE: website/content/docs/en/reference/incremental-recompute.mdx
+
+```mdx
+---
+title: Incremental Recompute
+description: FlowIR compilation, observed read-sets, stale frontier, and minimal re-execution.
+---
+
+When a phase's upstream changes, taskflow can **recompute only the affected phases** instead of re-running the entire flow. This is the incremental-recompute system: a compile-time dependency graph (FlowIR), runtime provenance tracking (observed read-sets), conservative transitive invalidation (stale frontier), and minimal re-execution with early cutoff (recompute).
+
+This page is the technical reference. For the user-facing commands (`/tf why-stale`, `/tf recompute`), see [Commands](/en/docs/reference/commands). For the cross-run cache that recompute builds on, see [Caching](/en/docs/syntax/caching).
+
+## Architecture
+
+The incremental-recompute system has four layers:
+
+| Layer | Milestone | Purpose |
+|---|---|---|
+| **FlowIR compilation** | M1 | Project the flow definition into a content-addressed IR with declared dependencies. |
+| **Observed read-sets** | M3 | Track which upstream outputs a phase actually interpolated at runtime. |
+| **Stale frontier** | M4 | Compute the transitive closure of phases invalidated by a changed seed. |
+| **Recompute** | M5 | Re-execute only the frontier, with early cutoff for phases whose inputs didn't move. |
+
+Two additional refinements:
+
+- **Per-phase fingerprinting (M6)** — invalidates only the affected phase + its dependents, not independent siblings.
+- **Declared-plane derivation (M2)** — synthesizes the declared read-map from the flow definition so staleness uses **union semantics** (observed ∪ declared).
+
+## FlowIR compilation (M1)
+
+`compileTaskflowToIR(def)` projects a desugared `Taskflow` into a `FlowIR` shape:
+
+```typescript
+interface TaskflowIR {
+  ir?: FlowIR;                    // The compiled IR (nodes with inject/emits)
+  meta: TaskflowIRMeta;           // Compile-time metadata
+  hash?: string;                  // Content fingerprint (32 hex chars)
+  warnings: CompileWarning[];     // Non-fatal advisories
+  errors: CompileError[];         // Hard errors (none in stub)
+  usedFallbackHash: boolean;      // true in stub (hash is flowDefHash, not IR-canonical)
+}
+```
+
+### The IR projection
+
+Each phase becomes one `FlowIRNode`:
+
+```typescript
+interface FlowIRNode {
+  id: string;
+  kind: string;       // Phase type (agent, parallel, map, gate, ...)
+  inject: string[];   // Declared reads: {steps.X} refs from collectRefs
+  emits: string[];    // [phase.id] (1:1 projection)
+  when?: string;      // Raw when guard passthrough
+}
+```
+
+The stub is a **structural mirror**, not a compile to overstory's native inject/emits model (which expects explicit `emit` declarations pi-taskflow doesn't have). Each phase's `inject` is synthesized from `{steps.X}` interpolation refs; `emits` is `[phase.id]`.
+
+### Content hashing
+
+`flowDefHash` is a content fingerprint of the desugared definition:
+
+```typescript
+async function flowDefHash(def: Taskflow): Promise<string> {
+  return hashCanonical(canonicalJson(def));
+}
+```
+
+- **`canonicalJson`** — recursively key-sorted (UTF-16 code units), no whitespace, `undefined` dropped, arrays ordered.
+- **`hashCanonical`** — SHA-256, first 16 bytes, lowercase hex (32 chars).
+- **Vendored from overstory** — byte-identical to `packages/core/src/ir/hash.ts` (pinned commit).
+
+The hash folds into the cross-run cache key (`v3:phasefp:<subfp>`) so two flows with the same name but different structures never collide.
+
+### Declared dependencies (M2)
+
+`meta.declaredDeps` is the **declared plane** — the static dependency footprint synthesized at compile time:
+
+```typescript
+interface DeclaredDeps {
+  reads: string[];   // Upstream step ids referenced by {steps.X} interpolation
+  writes: string[];  // [phase.id] (what this phase emits)
+}
+```
+
+Derived from `collectRefs(phase)` which scans `task`, `when`, `branches`, `with`, `context`, `until`, `eval` for `{steps.X.*}` placeholders. Self-refs are excluded (a loop `until` checking `{steps.thisId.output}` doesn't create a self-edge).
+
+### Per-phase fingerprinting (M6)
+
+`phaseFingerprint(def, phaseId)` produces a **structural sub-fingerprint** of only the phase + its transitive dependency closure:
+
+```typescript
+async function phaseFingerprint(def: Taskflow, phaseId: string): Promise<string | undefined>
+```
+
+- **Soundness gate** — returns `undefined` when per-phase invalidation is unsound:
+  - `def.contextSharing === true` or any closure member has `shareContext === true` (cross-sibling reads outside declared deps)
+  - `type === "flow"` in the closure (sub-structure resolved at runtime)
+  - `phase.join === "any"` (may read phases outside declared dependsOn)
+- **Policy fields stripped** — `cache`, `retry`, `concurrency`, `final` are removed before hashing (they don't affect subagent output).
+- **Fallback** — caller uses the whole-flow `flowDefHash` when `undefined` is returned.
+
+Editing phase B invalidates only B + its transitive dependents; independent sibling A keeps its cache hit.
+
+### Stub status
+
+`usedFallbackHash` is **always true** in the stub: the hash is `flowDefHash` (the definition fingerprint), not the overstory-IR-canonical hash. It flips to `false` once the genuine overstory compiler is vendored.
+
+## Observed read-sets (M3)
+
+At runtime, `buildInterpolationContext` tracks which `{steps.X.*}` refs a phase actually resolves via an `onRead` callback:
+
+```typescript
+interface PhaseState {
+  // ...
+  reads?: Array<{ stepId: string; version?: string }>;
+}
+```
+
+- **`stepId`** — the upstream phase id (e.g., `"scout"` from `{steps.scout.output}`).
+- **`version`** — the upstream's `inputHash` at the time of the read (for provenance).
+
+Captured only for `steps.*` refs; `args.*`, `item.*`, `previous.*` are invocation/loop values, not upstream dependencies.
+
+### Read map
+
+`readMapOf(phases)` folds a run's `PhaseState` into a dependency graph:
+
+```typescript
+type ReadMap = Map<string, readonly string[]>;  // phaseId → upstream stepIds
+
+function readMapOf(phases: Record<string, PhaseState>): ReadMap {
+  const m: ReadMap = new Map();
+  for (const [id, ps] of Object.entries(phases)) {
+    const deps = (ps.reads ?? []).map((r) => r.stepId);
+    if (deps.length) m.set(id, deps);
+  }
+  return m;
+}
+```
+
+Phases with no reads are dropped (they have no upstream dependencies).
+
+## Stale frontier (M4)
+
+`computeStaleFrontier(reads, seeds, declared)` returns the **transitive closure** of phases invalidated if `seeds` change:
+
+```typescript
+function computeStaleFrontier(
+  reads: ReadMap,
+  seeds: Iterable<string>,
+  declared?: ReadMap
+): Set<string>
+```
+
+### Union semantics (observed ∪ declared)
+
+When `declared` is provided, the read graph is the **union** of:
+
+- **Observed** (`reads`) — what the phase actually interpolated at runtime (M3).
+- **Declared** (`declared`) — what the phase statically references per `collectRefs` (M2).
+
+A declared-but-unobserved edge (e.g., a `when` ref that never fired) still propagates staleness. This is the **conservative** choice: when in doubt, assume dependency.
+
+### Algorithm
+
+BFS from `seeds`, following dependents (phases that read the seed):
+
+```typescript
+const stale = new Set<string>();
+const queue: string[] = [...seeds];
+while (queue.length) {
+  const s = queue.shift() as string;
+  if (stale.has(s)) continue;  // Cycle termination: each phase enqueued at most once
+  stale.add(s);
+  for (const dep of dependentsOf(reads, s, declared)) {
+    if (!stale.has(dep)) queue.push(dep);
+  }
+}
+return stale;
+```
+
+- **O(phases + read-edges)** — linear in the size of the dependency graph.
+- **Cycles terminate** — a correct DAG can't produce them, but a pathological one could; the `stale.has(s)` guard prevents infinite loops.
+- **Includes seeds** — the changed phases themselves are in the frontier.
+
+### Declared-plane derivation
+
+`declaredReadMapOfDef(def)` synthesizes the declared read-map from the flow definition:
+
+```typescript
+function declaredReadMapOfDef(def: Taskflow): ReadMap {
+  const m: ReadMap = new Map();
+  for (const p of def.phases) {
+    const refs = collectRefs(p);
+    const reads = refs.steps.filter((id) => id !== p.id);  // Exclude self-refs
+    if (reads.length) m.set(p.id, reads);
+  }
+  return m;
+}
+```
+
+Pure. Used by `recomputeTaskflow` so old runs (pre-H1, no persisted `declaredDeps`) also get union semantics.
+
+## Why-stale semantics
+
+`formatWhyStale` renders the stale frontier for human consumption:
+
+```typescript
+function formatWhyStale(
+  runId: string,
+  flowName: string,
+  reads: ReadMap,
+  seeds: readonly string[],
+  declared?: ReadMap
+): string
+```
+
+### No seeds (dependency graph)
+
+When `seeds.length === 0`, shows the full observed dependency graph:
+
+```
+why-stale — run abc123 · flow "review-changes"
+
+Observed dependency graph (who reads what):
+
+■ lint  reads: scout
+■ test  reads: scout
+■ summary  reads: lint, test
+```
+
+### With seeds (stale frontier)
+
+When seeds are provided, shows the transitive closure with "why" annotations:
+
+```
+why-stale — run abc123 · flow "review-changes"
+
+Assuming changed: scout
+
+Stale frontier (transitive, 4 phases):
+  ■ scout  (changed — seed)
+  ■ lint  ← reads scout
+  ■ test  ← reads scout
+  ■ summary  ← reads lint, test
+```
+
+### Declared-only edges
+
+Edges present only in the declared plane (not observed at runtime) are annotated with `(declared)`:
+
+```
+■ summary  ← reads lint, test (declared)
+```
+
+This happens when a phase statically references an upstream via `{steps.X}` but the interpolation never fired (e.g., a `when` guard evaluated to false, so the task with the ref was never executed).
+
+## Recompute (M5)
+
+`recomputeTaskflow` minimally re-executes a stale run:
+
+```typescript
+async function recomputeTaskflow(
+  state: RunState,
+  deps: RuntimeDeps,
+  seeds: readonly string[],
+  opts: { dryRun?: boolean } = { dryRun: true }
+): Promise<{ report: RecomputeReport; state: RunState }>
+```
+
+### Fail-safe default
+
+`dryRun: true` by default — computes the worst-case frontier **without spending a token**. A real recompute (`dryRun: false`) overwrites the run and spends tokens.
+
+### Dry-run report
+
+```typescript
+interface RecomputeReport {
+  readonly dryRun: boolean;
+  readonly aborted: boolean;
+  readonly seeds: readonly string[];
+  readonly rerun: readonly string[];      // Phases that would be (or were) re-executed
+  readonly reused: readonly string[];     // Phases outside the frontier (untouched)
+  readonly cutoff: readonly string[];     // Phases in frontier whose inputHash didn't move (early cutoff)
+  readonly decisions: readonly RecomputeDecision[];  // Per-phase "why"
+}
+
+interface RecomputeDecision {
+  readonly phaseId: string;
+  readonly outcome: "rerun" | "cutoff" | "reused" | "failed";
+  readonly reason: string;
+  readonly causedBy?: readonly string[];
+}
+```
+
+Dry-run `cutoff` is always empty (unknowable without execution).
+
+### Unobserved dependency guard
+
+`dryRun: false` throws when the flow has dependencies the observed read-set can't track:
+
+```typescript
+function hasUnobservedDependencies(state: RunState): boolean {
+  // Scans for:
+  // - shareContext / contextSharing (Shared Context Tree)
+  // - type === "flow" (sub-flows)
+  // - context: [...] (file pre-reads)
+  // - {previous.output}, {args.*}, {item.*} (interpolation outside steps.*)
+}
+```
+
+These dependencies are **invisible** to the observed read-set. Recomputing with `dryRun: false` could silently skip phases whose deps changed outside the observed frontier, corrupting the run. Use `dryRun: true` to inspect the frontier, or re-run the whole flow.
+
+### Topological order
+
+Frontier phases are executed in topological order respecting **observed + declared deps** (union):
+
+```typescript
+const augmentedPhases = newState.def.phases.map((p) => ({
+  ...p,
+  dependsOn: [...new Set([...(p.dependsOn ?? []), ...depsFor(p.id)])],
+}));
+const order = topoLayers(augmentedPhases)
+  .flat()
+  .map((p) => p.id)
+  .filter((id) => frontier.has(id));
+```
+
+This ensures a downstream always sees its (already-refreshed) upstreams when it re-evaluates its cache key. A declared-but-unobserved edge (e.g., a `when` ref that never fired) still orders the reader after its upstream, preventing false early-cutoff.
+
+### Early cutoff
+
+A phase in the frontier whose `inputHash` didn't move (because its upstream's new output happened to equal the old) hits its cached result — no re-execution:
+
+```typescript
+const ps = await executePhase(phase, newState, deps, prior, noop, 0, execOpts);
+if (isSeed || ps.inputHash !== before) {
+  rerun.push(id);
+  outputMoved.add(id);
+} else {
+  cutoff.push(id);  // Early cutoff: input unchanged, cached result reused
+}
+```
+
+This is the **prize** — early cutoff makes recompute cheaper than a full re-run.
+
+### Seed forcing
+
+Seeds are always re-executed (`execOpts = { forceRerun: true }`), bypassing the cache:
+
+```typescript
+const isSeed = seedSet.has(id);
+const execOpts = isSeed ? { forceRerun: true } : undefined;
+```
+
+### Abort safety
+
+A partial recompute is never persisted over the original run:
+
+```typescript
+if (deps.signal?.aborted) {
+  aborted = true;
+  break;  // Caller discards state when aborted
+}
+```
+
+### State isolation
+
+`recomputeTaskflow` uses `structuredClone(state)` to avoid mutating the caller's `RunState`. Recompute is a speculative replay; only the caller decides whether to persist the new state.
+
+## The incremental loop
+
+The three commands form a diagnostic workflow:
+
+```
+/tf ir <flow>           → inspect the FlowIR + content hash
+/tf why-stale <runId> [phaseId]  → inspect the stale frontier
+/tf recompute <runId> <phaseId> [--apply]  → minimally re-execute
+```
+
+### Step 1: Inspect the IR
+
+```bash
+/tf ir review-changes
+```
+
+Shows the compiled FlowIR, the content hash, and declared dependencies. Useful for understanding what the runtime sees as the flow's structure.
+
+### Step 2: Diagnose staleness
+
+```bash
+/tf why-stale abc123
+```
+
+No seed → shows the full dependency graph (who reads what).
+
+```bash
+/tf why-stale abc123 scout
+```
+
+With seed → shows the stale frontier if `scout` changed.
+
+### Step 3: Recompute
+
+```bash
+/tf recompute abc123 scout
+```
+
+Dry-run by default — shows what would be re-executed without spending tokens.
+
+```bash
+/tf recompute abc123 scout --apply
+```
+
+Real recompute — re-executes the frontier, with early cutoff for phases whose inputs didn't move.
+
+## Concrete walkthrough
+
+A 4-phase flow: `scout` → `lint` → `test` → `summary`. You've run it once; everything is cached.
+
+### Scenario 1: Upstream changed
+
+You edit the `scout` phase's task. Re-run the flow:
+
+```bash
+/tf run review-changes
+```
+
+- `scout` re-executes (task text changed → `inputHash` moved).
+- `lint` reads `scout` → in the stale frontier. Re-executes, but its `inputHash` moved (scout's output changed) → no early cutoff.
+- `test` reads `scout` → same as `lint`.
+- `summary` reads `lint` and `test` → in the frontier. Re-executes.
+
+All 4 phases re-run. No early cutoff because the upstream change propagated.
+
+### Scenario 2: Mid-flow changed
+
+You edit the `lint` phase's task. Re-run:
+
+```bash
+/tf run review-changes
+```
+
+- `scout` unchanged → cache hit (cross-run memoization).
+- `lint` re-executes (task text changed).
+- `test` unchanged, but reads `scout` (not `lint`) → cache hit.
+- `summary` reads `lint` (changed) and `test` (unchanged) → in the frontier. Re-executes, but its `inputHash` moved (lint's output changed) → no early cutoff.
+
+3 phases re-run (`lint`, `summary`, and `scout`/`test` from cache). `test` is an independent sibling — not invalidated.
+
+### Scenario 3: Early cutoff
+
+You edit `scout`'s task, but the new task produces **identical output** (e.g., you added a comment). Re-run:
+
+```bash
+/tf run review-changes
+```
+
+- `scout` re-executes (task text changed).
+- `lint` reads `scout` → in the frontier. Re-executes, but `scout`'s output is identical → `lint`'s `inputHash` is unchanged → **early cutoff**. Cache hit.
+- `test` same as `lint` → early cutoff.
+- `summary` reads `lint` and `test` → in the frontier, but both upstreams hit early cutoff → `summary`'s `inputHash` is unchanged → early cutoff.
+
+Only `scout` re-runs. The rest hit early cutoff (0 tokens).
+
+### Scenario 4: Manual recompute
+
+You want to force `scout` to re-run without changing its task:
+
+```bash
+/tf recompute <runId> scout --apply
+```
+
+- `scout` is the seed → forced re-execution.
+- `lint`, `test`, `summary` are in the frontier → re-execute, with early cutoff if inputs didn't move.
+
+Useful when an external factor changed (e.g., the repo `scout` reads was updated outside the flow).
+
+## Cache-clear
+
+`cache-clear` wipes the cross-run memoization cache:
+
+```bash
+# Pi
+/tf cache-clear
+
+# MCP
+taskflow_cache_clear
+```
+
+Use when:
+
+- You've edited the flow definition and want to ensure a clean re-run (though `flowDefHash` should invalidate automatically).
+- You suspect a cache corruption (rare; the cache uses atomic writes).
+- You want to measure the true cost of a flow without cache reuse.
+
+## Limitations
+
+### Unobserved dependencies
+
+The observed read-set tracks only `{steps.X.*}` interpolation refs. These are **invisible**:
+
+- **Shared Context Tree** (`shareContext`, `contextSharing`) — phases can read sibling blackboard writes outside declared deps.
+- **Sub-flows** (`type === "flow"`) — sub-structure resolved at runtime or from a saved flow.
+- **File pre-reads** (`context: [...]`) — files read before the phase runs.
+- **Loop locals** (`{args.*}`, `{item.*}`, `{previous.output}`) — not upstream phase dependencies.
+
+Flows with these dependencies cannot be safely recomputed with `dryRun: false`. Use `dryRun: true` to inspect the frontier, or re-run the whole flow.
+
+### Stub hash
+
+The current hash (`flowDefHash`) is the **definition fingerprint**, not the overstory-IR-canonical hash. Two flows with the same structure but different `when` guards hash differently (even if the guards never fire). This is conservative — it over-invalidates rather than under-invalidates.
+
+### No early cutoff for seeds
+
+Seeds are always re-executed (`forceRerun: true`), even if their task text is unchanged. This is by design — a seed is an explicit "re-run this" request.
+
+## Next
+
+<Cards>
+  <Card title="Commands" href="/en/docs/reference/commands">
+    Pi /tf commands and MCP tools for why-stale and recompute.
+  </Card>
+  <Card title="Caching" href="/en/docs/syntax/caching">
+    Cross-run memoization and the cache key structure.
+  </Card>
+  <Card title="Resume" href="/en/docs/concepts/resume">
+    Within-run resume for interrupted flows.
+  </Card>
+</Cards>

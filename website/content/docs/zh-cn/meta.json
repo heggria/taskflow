@@ -19,11 +19,13 @@
     "syntax/control-flow",
     "syntax/caching",
     "syntax/budget",
+    "syntax/scorers",
     "---指南---",
     "guides/pi",
     "guides/codex",
     "guides/dynamic-planning",
     "guides/tournament",
+    "guides/background-runs",
     "guides/code-audit-case-study",
     "guides/headline-tournament-case-study",
     "guides/migration-planner-case-study",
@@ -33,6 +35,7 @@
     "---参考---",
     "reference/shorthand",
     "reference/commands",
+    "reference/incremental-recompute",
     "community"
   ]
 }

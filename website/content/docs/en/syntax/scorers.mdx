@@ -1,0 +1,620 @@
+---
+title: Scoring Gates
+description: Deterministic output validation with zero-token scorers, optional LLM judges, and fail-open semantics.
+---
+
+A scoring gate is a quality checkpoint that validates upstream output against a list of deterministic rules before spending a single token on an LLM. You declare what "good" looks like — a substring present, a regex matched, a JSON schema satisfied, a length in range, or code that compiles — and taskflow evaluates every check at zero cost. When all checks pass, the gate auto-passes. When they fail, an optional LLM judge can decide whether to let the flow continue or halt it.
+
+You might be wondering: *why not just use a regular gate with an LLM?* Because deterministic checks are faster, cheaper, and more predictable. A regex either matches or it doesn't — there's no hallucination risk. Scorers run before the judge, so if your checks are sufficient, you never pay for a token at all.
+
+## When to reach for scoring gates
+
+| If your problem is… | Use | In one line |
+|---|---|---|
+| "Does the output contain a required phrase?" | `contains` | Substring search. |
+| "Does it match a pattern?" | `regex` | Regular expression with optional negation. |
+| "Is it exactly this string?" | `exact-match` | Byte-for-byte equality. |
+| "Does the JSON match a schema?" | `json-schema` | TypeBox-style contract validation. |
+| "Is the output length reasonable?" | `length-range` | Inclusive character count bounds. |
+| "Does the code compile?" | `code-compiles` | Spawn a real compiler in isolation. |
+| "Deterministic checks failed, but maybe it's still okay" | `judge` | LLM-as-judge fallback. |
+
+<Callout type="tip">
+  Start with deterministic scorers. Add a judge only when the checks are insufficient — for subjective quality, tone, or correctness that can't be expressed as a pattern.
+</Callout>
+
+## A running example
+
+The rest of this page builds a single, realistic flow: **validate a generated API response before shipping it**. You will see the gate grow from a single check into a multi-scorer gate with a judge fallback as each new need introduces a new scorer type.
+
+Save this as `validate.json` — we will keep extending it:
+
+```json title="validate.json — starting point"
+{
+  "name": "validate",
+  "phases": [
+    {
+      "id": "generate",
+      "type": "agent",
+      "agent": "executor",
+      "task": "Generate a JSON API response for GET /users. Include status, data, and message fields.",
+      "output": "json"
+    },
+    {
+      "id": "check-response",
+      "type": "gate",
+      "dependsOn": ["generate"],
+      "score": {
+        "scorers": [
+          { "type": "contains", "value": "\"status\"" }
+        ]
+      },
+      "task": "Is this a valid API response? VERDICT: PASS or VERDICT: BLOCK."
+    }
+  ]
+}
+```
+
+## The six scorer types
+
+Each scorer is a deterministic check that returns `passed: true` or `passed: false` with an optional detail message. Scorers are pure (except `code-compiles`) and never throw — a bad configuration fails the scorer with a diagnostic rather than crashing the run.
+
+### `exact-match`
+
+Tests whether the target string is byte-for-byte equal to the `value`.
+
+```json title="exact-match scorer"
+{
+  "type": "exact-match",
+  "value": "PASS"
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `value` | `string` | yes | The string to compare against. |
+
+**Pass semantics:** `target === value`. Case-sensitive, no trimming.
+
+**When to use:** Exact sentinel values, fixed status codes, known-good outputs.
+
+### `contains`
+
+Tests whether the target string includes the `value` as a substring.
+
+```json title="contains scorer"
+{
+  "type": "contains",
+  "value": "0 errors"
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `value` | `string` | yes | The substring to search for. |
+
+**Pass semantics:** `target.includes(value)`. Case-sensitive.
+
+**When to use:** Checking for required phrases, error counts, status markers.
+
+<Callout type="info">
+  The `contains` scorer is case-sensitive. If you need case-insensitive matching, use `regex` with the `i` flag: `{"type": "regex", "pattern": "success", "negate": false}`.
+</Callout>
+
+### `regex`
+
+Tests whether the target matches a JavaScript regular expression.
+
+```json title="regex scorer"
+{
+  "type": "regex",
+  "pattern": "\"status\"\\s*:\\s*\"success\"",
+  "negate": false
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pattern` | `string` | yes | JavaScript RegExp source (no delimiters). |
+| `negate` | `boolean` | no | Invert the match result. Default `false`. |
+
+**Pass semantics:** `new RegExp(pattern).test(target)`, inverted when `negate: true`.
+
+**Error handling:** An invalid pattern fails the scorer with a detail message (e.g., `"invalid pattern: Invalid regular expression"`). The gate then falls through to the judge or task — it does not crash.
+
+**When to use:** Pattern matching, format validation, negative checks (e.g., "does not contain ERROR").
+
+### `json-schema`
+
+Validates the parsed target against a TypeBox-style contract (the same schema language used by `expect`).
+
+```json title="json-schema scorer"
+{
+  "type": "json-schema",
+  "schema": {
+    "type": "object",
+    "required": ["status", "data"],
+    "properties": {
+      "status": { "enum": ["success", "error"] },
+      "data": { "type": "object" }
+    }
+  }
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `schema` | `object` | yes | A TypeBox-style JSON schema. |
+
+**Pass semantics:** The target is parsed with the same lenient JSON parser used by `output: "json"` (fenced code blocks are extracted). If parsing fails, the scorer fails. Otherwise, `contractViolations` checks the parsed value against the schema.
+
+**When to use:** Validating structured output, enforcing response shapes, checking enum values.
+
+<Callout type="tip">
+  The `json-schema` scorer uses the same lenient parser as the `expect` contract, so if your agent wraps JSON in a code fence, it's extracted automatically.
+</Callout>
+
+### `length-range`
+
+Tests whether the target's character count falls within an inclusive range.
+
+```json title="length-range scorer"
+{
+  "type": "length-range",
+  "min": 100,
+  "max": 10000
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `min` | `number` | at least one | Minimum character count (inclusive, `>= 0`). |
+| `max` | `number` | at least one | Maximum character count (inclusive, `>= 0`). |
+
+**Pass semantics:** `len >= min && len <= max`. If only `min` is provided, there's no upper bound. If only `max` is provided, the lower bound is `0`.
+
+**Validation:** `min` must be `<= max` when both are present. Both must be `>= 0`.
+
+**When to use:** Sanity checks on output size, preventing empty responses, capping verbosity.
+
+### `code-compiles`
+
+Spawns a real compiler in an isolated temp directory and checks whether the target parses or compiles.
+
+```json title="code-compiles scorer"
+{
+  "type": "code-compiles",
+  "language": "typescript"
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `language` | `"javascript"` \| `"typescript"` | yes | Which compiler to run. |
+
+**Pass semantics:**
+
+- **`javascript`:** Runs `node --check <file>`. Syntax check only — no execution, no dependencies.
+- **`typescript`:** Runs `npx --no-install tsc --noEmit --skipLibCheck <file>`. Requires a resolvable `tsc` in the environment. Its absence fails the scorer with a detail.
+
+**Code extraction:** If the target contains exactly one fenced code block, its body is compiled. Multiple fences or no fences means the raw target is compiled.
+
+**Security model:** The compiler runs in an isolated temp directory (`mkdtempSync` with `0700` permissions), not the phase's working directory. This prevents it from resolving a repo-planted `node_modules/.bin/tsc` or accessing project files. The `--no-install` flag prevents `npx` from downloading packages.
+
+**Timeout:** 30 seconds per compiler invocation. A timeout fails the scorer with a detail.
+
+**Error handling:** An unavailable compiler, a spawn error, or a timeout is a failed scorer (not a crash). The gate's fail-open path then decides what a failed check means.
+
+**When to use:** Validating generated code, catching syntax errors before shipping, type-checking TypeScript output.
+
+<Callout type="warn">
+  `code-compiles` is the only impure scorer — it spawns a child process. All other scorers are pure and evaluated in-process.
+</Callout>
+
+## Combining scorers
+
+A `score` block declares a list of scorers and a `combine` mode that decides how their results are aggregated. The default is `all`, which requires every scorer to pass.
+
+### `all` (default)
+
+Every scorer must pass. The combined score is `1` if all pass, `0` if any fail.
+
+```json title="combine: all"
+{
+  "scorers": [
+    { "type": "contains", "value": "\"status\"" },
+    { "type": "regex", "pattern": "\"status\"\\s*:\\s*\"success\"" }
+  ],
+  "combine": "all"
+}
+```
+
+**Semantics:** `results.every(r => r.passed)`. Binary outcome.
+
+### `any`
+
+At least one scorer must pass. The combined score is `1` if any pass, `0` if all fail.
+
+```json title="combine: any"
+{
+  "scorers": [
+    { "type": "contains", "value": "PASS" },
+    { "type": "contains", "value": "OK" }
+  ],
+  "combine": "any"
+}
+```
+
+**Semantics:** `results.some(r => r.passed)`. Binary outcome.
+
+### `weighted`
+
+Each scorer contributes a weighted score to a total, which is compared against a threshold.
+
+```json title="combine: weighted"
+{
+  "scorers": [
+    { "type": "contains", "value": "\"status\"" },
+    { "type": "json-schema", "schema": { "type": "object" } }
+  ],
+  "combine": "weighted",
+  "weights": [0.3, 0.7],
+  "threshold": 0.5
+}
+```
+
+**Fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `weights` | `number[]` | yes | Aligned to `scorers`. Each must be `> 0`. |
+| `threshold` | `number` | no | Combined score cutoff in `(0, 1]`. Default `0.5`. |
+
+**Semantics:** Each scorer's score is `0` (fail) or `1` (pass). The combined score is `sum(score[i] * weight[i]) / sum(weight[i])`. When a judge is present, its weight is appended to the weights array and its score folds into the combination.
+
+**Early cutoff:** When a judge is configured but hasn't run yet, the deterministic-only combination is a lower bound. If it already clears the threshold, the judge's score could not change the outcome and the gate auto-passes without spending judge tokens.
+
+<Callout type="info">
+  **Weight alignment.** `weights` must have exactly `scorers.length` entries when there's no judge, or `scorers.length + 1` entries when a judge is present (the last weight is the judge's). Validation enforces this.
+</Callout>
+
+## The judge fallback
+
+When deterministic scorers fail, an optional LLM judge can decide whether to let the flow continue. The judge runs only when the scorers don't pass — if they do, the gate auto-passes with zero tokens spent on the judge.
+
+```json title="gate with judge fallback"
+{
+  "id": "quality",
+  "type": "gate",
+  "dependsOn": ["generate"],
+  "score": {
+    "scorers": [
+      { "type": "json-schema", "schema": { "type": "object", "required": ["status"] } }
+    ],
+    "judge": {
+      "agent": "reviewer",
+      "task": "Is this a reasonable API response even if it doesn't match the schema exactly?"
+    }
+  }
+}
+```
+
+**Judge fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `task` | `string` | yes | The judge's prompt. The scorer report is appended automatically. |
+| `agent` | `string` | no | Agent name for the judge. Defaults to the gate's `agent`. |
+
+**Judge output parsing:** The judge can respond in three formats:
+
+1. **JSON:** `{"score": 0.0-1.0, "verdict": "pass"|"block", "reason": "..."}`
+2. **Bare verdict:** `{"verdict": "pass"}` or `{"verdict": "block"}`
+3. **Text markers:** `SCORE: 0.8` and/or `VERDICT: PASS` (case-insensitive, last match wins)
+
+**Fail-open semantics:** An unparseable judge output passes with `score: 1` and `verdict: "pass"`. Ambiguity must not block the flow.
+
+**Combining with scorers:**
+
+- **`weighted` mode:** The judge's score folds into the weighted combination using the last weight in `weights`. The threshold decides the verdict.
+- **`all` or `any` mode:** The judge's verdict is authoritative. If the judge says `pass`, the gate passes regardless of scorer results.
+
+<Callout type="tip">
+  The judge's prompt automatically includes the deterministic scorer report, so the LLM sees exactly which checks failed and why. You don't need to manually interpolate the results.
+</Callout>
+
+## The `target` field
+
+By default, scorers evaluate the upstream phase's output — the text produced by the phase listed in `dependsOn`. You can override this with the `target` field, which accepts an interpolation expression.
+
+```json title="Custom target"
+{
+  "id": "check-json",
+  "type": "gate",
+  "dependsOn": ["generate"],
+  "score": {
+    "target": "{steps.generate.json.response}",
+    "scorers": [
+      { "type": "contains", "value": "\"status\"" }
+    ]
+  }
+}
+```
+
+**Default:** `"{previous.output}"` — the output of the immediately upstream phase.
+
+**Interpolation:** The `target` is interpolated before scorers run, so you can reach into JSON fields with `{steps.<id>.json.<field>}` or use any other placeholder.
+
+## Complete gate with scoring
+
+Here's the running example after adding multiple scorers, a weighted combination, and a judge fallback:
+
+```json title="validate.json — complete scoring gate"
+{
+  "name": "validate",
+  "phases": [
+    {
+      "id": "generate",
+      "type": "agent",
+      "agent": "executor",
+      "task": "Generate a JSON API response for GET /users. Include status, data, and message fields.",
+      "output": "json"
+    },
+    {
+      "id": "check-response",
+      "type": "gate",
+      "dependsOn": ["generate"],
+      "score": {
+        "target": "{steps.generate.output}",
+        "scorers": [
+          { "type": "contains", "value": "\"status\"", "name": "has-status-field" },
+          { "type": "regex", "pattern": "\"status\"\\s*:\\s*\"success\"", "name": "status-is-success" },
+          { "type": "json-schema", "schema": { "type": "object", "required": ["status", "data"] }, "name": "valid-schema" },
+          { "type": "length-range", "min": 50, "max": 5000, "name": "reasonable-length" }
+        ],
+        "combine": "weighted",
+        "weights": [0.2, 0.3, 0.4, 0.1],
+        "threshold": 0.7,
+        "judge": {
+          "agent": "reviewer",
+          "task": "Is this a reasonable API response even if some checks failed?"
+        }
+      }
+    }
+  ]
+}
+```
+
+The gate evaluates four scorers at zero tokens. If the weighted combination clears `0.7`, it auto-passes. Otherwise, the judge runs and decides.
+
+## Scorer naming
+
+Each scorer can carry an optional `name` field. If omitted, the runtime generates a default label: `<type>-<index>` (e.g., `contains-0`, `regex-1`).
+
+```json title="Named scorers"
+{
+  "scorers": [
+    { "type": "contains", "value": "PASS", "name": "contains-pass-marker" },
+    { "type": "regex", "pattern": "\\d+", "name": "has-numeric-id" }
+  ]
+}
+```
+
+Names appear in the scorer report that's appended to the judge's prompt, making it easier for the LLM to understand which checks failed.
+
+## Fail-open semantics
+
+Scoring gates follow the same fail-open principle as the rest of taskflow: ambiguity must not block the flow.
+
+| Scenario | Behavior |
+|---|---|
+| Invalid regex pattern | Scorer fails with detail; gate falls through to judge or task. |
+| Target is not valid JSON (for `json-schema`) | Scorer fails with `"target is not valid JSON"`. |
+| Compiler unavailable (for `code-compiles`) | Scorer fails with `"compiler unavailable: <error>"`. |
+| Compiler timeout (for `code-compiles`) | Scorer fails with `"compiler timed out after 30000ms"`. |
+| Unparseable judge output | Judge passes with `score: 1`, `verdict: "pass"`. |
+| `min > max` in `length-range` | Validation error at flow definition time. |
+| Unknown scorer type | Validation error at flow definition time. |
+
+<Callout type="warn">
+  A failed scorer is not a failed gate. The gate only blocks when the combination (scorers + judge) fails to clear the threshold. If you want a failed scorer to always block, use `combine: "all"` and omit the judge.
+</Callout>
+
+## Accessing scorer results downstream
+
+The gate's structured result is exposed as `PhaseState.json`, reachable via interpolation:
+
+| Path | Value |
+|---|---|
+| `{steps.<gate>.json.verdict}` | `"pass"` or `"block"` |
+| `{steps.<gate>.json.combined}` | Combined score (number in `[0, 1]`) |
+| `{steps.<gate>.json.results}` | Array of `{name, type, passed, score, detail?}` |
+| `{steps.<gate>.json.threshold}` | Threshold (only for `weighted` mode) |
+| `{steps.<gate>.json.judge}` | `{score, reason?}` (only when judge ran) |
+
+```json title="Using scorer results downstream"
+{
+  "id": "report",
+  "type": "agent",
+  "dependsOn": ["check-response"],
+  "task": "The gate verdict was {steps.check-response.json.verdict} with a combined score of {steps.check-response.json.combined}. Summarize."
+}
+```
+
+## Interaction with `eval` and `task`
+
+A gate can have `eval`, `score`, and `task` fields. They run in this order:
+
+1. **`eval`** (if present): Zero-token machine checks. If all pass, the gate auto-passes. If any fail, continue to step 2.
+2. **`score`** (if present): Deterministic scorers. If they pass (per `combine` and `threshold`), the gate auto-passes. If they fail and a judge is configured, the judge runs. If they fail and no judge is configured, continue to step 3.
+3. **`task`** (if present): The LLM gate runs as normal, parsing a `VERDICT:` marker.
+
+<Callout type="info">
+  Setting both `eval` and `score` is valid but usually redundant — pick one. If both are present, `eval` runs first. Validation emits a warning when both are set.
+</Callout>
+
+## Security restrictions
+
+The `code-compiles` scorer is the only scorer that spawns a child process. It runs under strict isolation:
+
+- **Isolated temp directory:** Created with `mkdtempSync` (atomic, `0700` permissions). Closed the predictable-name symlink/TOCTOU race on shared `/tmp`.
+- **No project access:** The compiler runs with the temp dir as its working directory, not the phase's `cwd`. It cannot resolve a repo-planted `node_modules/.bin/tsc`.
+- **No network:** `npx --no-install` prevents downloading packages. The compiler can only check syntax and types from the standard library.
+- **Timeout:** 30-second wall-clock cap per invocation. A timeout kills the process with `SIGKILL`.
+- **Cleanup:** The temp directory is removed with `rmSync({recursive: true, force: true})` in a `finally` block. Best-effort cleanup — a failure to delete is swallowed.
+
+All other scorers are pure and run in-process with no filesystem or network access.
+
+## Field reference
+
+### `score` object
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `target` | `string` | `"{previous.output}"` | Interpolation ref for the scored string. |
+| `scorers` | `Scorer[]` | — | **Required.** Non-empty array of scorers. |
+| `combine` | `"all"` \| `"any"` \| `"weighted"` | `"all"` | How to aggregate scorer results. |
+| `weights` | `number[]` | — | Required for `weighted`. Aligned to `scorers` (+1 for judge). |
+| `threshold` | `number` | `0.5` | Combined score cutoff for `weighted`. Must be in `(0, 1]`. |
+| `judge` | `object` | — | Optional LLM-as-judge fallback. `{agent?, task}`. |
+
+### Scorer object
+
+Every scorer has these common fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `type` | `string` | yes | One of the six scorer types. |
+| `name` | `string` | no | Result label. Defaults to `<type>-<index>`. |
+
+Per-type fields:
+
+| Type | Fields |
+|---|---|
+| `exact-match` | `value` (required string) |
+| `contains` | `value` (required string) |
+| `regex` | `pattern` (required string), `negate` (optional boolean) |
+| `json-schema` | `schema` (required object) |
+| `length-range` | `min` and/or `max` (at least one required, both `>= 0`) |
+| `code-compiles` | `language` (required: `"javascript"` or `"typescript"`) |
+
+**Validation:** A field set on a scorer whose type ignores it is a shape error. For example, `{type: "contains", negate: true}` is rejected — silently dropping `negate` would let the author believe negation happened.
+
+### Gate verdict grammar
+
+A gate phase (with or without `score`) parses its output into a verdict using this grammar:
+
+**JSON format:**
+
+```json
+{"continue": true}  → pass
+{"continue": false} → block
+{"pass": true}      → pass
+{"pass": false}     → block
+{"verdict": "PASS"} → pass
+{"verdict": "BLOCK"} → block
+{"verdict": "pass"} → pass (case-insensitive)
+{"verdict": "block"} → block
+{"verdict": "anything-else"} → pass (fail-open)
+```
+
+**Text format:**
+
+```
+VERDICT: PASS    → pass
+VERDICT: BLOCK   → block
+VERDICT: FAIL    → block
+VERDICT: STOP    → block
+VERDICT: OK      → pass
+VERDICT: REJECT  → block
+VERDICT: HALT    → block
+```
+
+- Case-insensitive.
+- Last occurrence wins (if the output contains multiple `VERDICT:` lines).
+- Supports both `:` and `=` separators: `VERDICT=PASS` works.
+
+**Fail-open:** Ambiguous output (no JSON, no `VERDICT:` marker) passes. A gate never accidentally loses your work.
+
+### Tournament winner grammar
+
+A tournament judge picks the winning variant using this grammar:
+
+**JSON format:**
+
+```json
+{"winner": 2}     → variant 2
+{"best": 3}       → variant 3
+{"choice": 1}     → variant 1
+```
+
+**Text format:**
+
+```
+WINNER: 2         → variant 2
+WINNER: #3        → variant 3 (hash prefix optional)
+WINNER=1          → variant 1 (supports = separator)
+```
+
+- 1-based index.
+- Last occurrence wins.
+- Clamped to `[1, variant-count]`: a verdict of `0` becomes `1`, a verdict of `99` becomes the last variant.
+
+**Fail-open:** An unparseable verdict defaults to variant `1` with reason `"no parseable winner; defaulted to variant 1"`. The tournament never loses your work.
+
+### Common errors
+
+<details>
+<summary>Validation errors</summary>
+
+| Error | Cause | Fix |
+|---|---|---|
+| `score.scorers: must be a non-empty array` | Empty or missing `scorers`. | Add at least one scorer. |
+| `score.scorers[i].type: must be one of ...` | Unknown scorer type. | Use one of the six supported types. |
+| `score.scorers[i].value: required string for 'contains'` | Missing required field. | Add the field. |
+| `score.scorers[i].negate: not applicable to 'contains'` | Field set on wrong scorer type. | Remove the field or use a different scorer. |
+| `score.weights: required array for combine:"weighted"` | `weighted` mode without weights. | Add `weights` aligned to scorers. |
+| `score.weights: expected N entries, got M` | Weight count mismatch. | Adjust the array length. If a judge is present, add one more weight. |
+| `score.threshold: must be a number in (0, 1]` | Invalid threshold. | Use a value in `(0, 1]`. |
+| `score.judge.task: required non-empty string` | Judge without a task. | Add a `task` string. |
+
+</details>
+
+<details>
+<summary>Runtime errors (scorer failures)</summary>
+
+| Error | Cause | Behavior |
+|---|---|---|
+| `invalid pattern: <message>` | Bad regex in `regex` scorer. | Scorer fails; gate falls through to judge or task. |
+| `target is not valid JSON` | `json-schema` scorer on non-JSON target. | Scorer fails; gate falls through. |
+| `compiler unavailable: <error>` | `tsc` or `node` not found. | Scorer fails; gate falls through. |
+| `compiler timed out after 30000ms` | Compiler exceeded the time cap. | Scorer fails; gate falls through. |
+| `length N outside [min, max]` | Target length out of range. | Scorer fails; gate falls through. |
+
+</details>
+
+## Next
+
+<Cards>
+  <Card title="Phase Types" href="/en/docs/syntax/phase-types">
+    The ten building blocks of a taskflow, including the gate type.
+  </Card>
+  <Card title="Control Flow" href="/en/docs/syntax/control-flow">
+    Deep dive into `when`, `join`, `retry`, and gates.
+  </Card>
+  <Card title="Output Contracts" href="/en/docs/syntax/contracts">
+    The `expect` field for validating JSON output.
+  </Card>
+</Cards>
