@@ -44,6 +44,7 @@ export async function generateMetadata({
       languages: {
         en: '/en/',
         'zh-CN': '/zh-cn/',
+        'x-default': '/en/',
       },
     },
     icons: {
@@ -52,6 +53,17 @@ export async function generateMetadata({
     verification: GOOGLE_SITE_VERIFICATION
       ? { google: GOOGLE_SITE_VERIFICATION }
       : undefined,
+    openGraph: {
+      title: meta.title,
+      description: meta.description,
+      images: '/opengraph-image',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: meta.title,
+      description: meta.description,
+      images: '/opengraph-image',
+    },
   };
 }
 
