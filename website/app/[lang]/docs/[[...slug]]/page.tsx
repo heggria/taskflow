@@ -137,8 +137,33 @@ export async function generateMetadata({
   const page = source.getPage(slug, lang);
   if (!page) return {};
 
+  const canonicalUrl = `${SITE_URL}${page.url}/`;
+  // page.url already includes the locale prefix, e.g. /en/docs/getting-started
+  // Derive the locale-agnostic path by stripping the leading locale segment.
+  const pathWithoutLocale = page.url.replace(/^\/(en|zh-cn)/, '');
+
   return {
     title: page.data.title,
     description: page.data.description,
+    alternates: {
+      canonical: canonicalUrl,
+      languages: {
+        en: `${SITE_URL}/en${pathWithoutLocale}/`,
+        'zh-CN': `${SITE_URL}/zh-cn${pathWithoutLocale}/`,
+        'x-default': `${SITE_URL}/en${pathWithoutLocale}/`,
+      },
+    },
+    openGraph: {
+      title: page.data.title,
+      description: page.data.description,
+      url: canonicalUrl,
+      images: '/opengraph-image',
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: page.data.title,
+      description: page.data.description,
+      images: '/opengraph-image',
+    },
   };
 }
