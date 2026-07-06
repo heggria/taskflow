@@ -84,6 +84,8 @@ const translations = {
   },
 };
 
+const SITE_URL = 'https://heggria.github.io/taskflow';
+
 const codeExample = `{
   "name": "review-changes",
   "concurrency": 4,
@@ -142,6 +144,26 @@ export default async function HomePage({
     },
   ] as const;
 
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'SoftwareApplication',
+    name: 'taskflow',
+    description: t.valueProp,
+    applicationCategory: 'DeveloperApplication',
+    operatingSystem: 'Any',
+    url: `${SITE_URL}/${lang}/`,
+    offers: {
+      '@type': 'Offer',
+      price: '0',
+      priceCurrency: 'USD',
+    },
+    author: {
+      '@type': 'Organization',
+      name: 'heggria',
+      url: 'https://github.com/heggria',
+    },
+  };
+
   return (
     <HomeLayout
       i18n
@@ -151,6 +173,10 @@ export default async function HomePage({
         url: `/${lang}`,
       }}
     >
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <div className="relative overflow-hidden">
         <div className="bg-hero-glow absolute inset-x-0 top-0 h-[600px]" />
         <div className="bg-grid absolute inset-0 opacity-50" />
