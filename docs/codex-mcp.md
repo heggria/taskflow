@@ -103,8 +103,10 @@ subagent a flow spawns is itself a `codex exec` process — no pi process needed
 | Tool | What it does |
 |------|--------------|
 | `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output. |
-| `taskflow_list` | List saved flows discoverable from the cwd. |
-| `taskflow_show` | Show a saved flow's definition as JSON. |
+| `taskflow_list` | List saved flows discoverable from the cwd, now with library metadata (`purpose`, `generality`, `reuseCount`) when available. |
+| `taskflow_show` | Show a saved flow as `{definition, library}` — the `library` object holds the sidecar metadata (`purpose`, `tags`, `generality`, `reuseCount`, `phaseSignature`, …). |
+| `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. Writes the flow JSON plus a sidecar `.meta.json`. |
+| `taskflow_search` | Search the library before authoring. Returns ranked reusable flows with score, why, and a reuse hint. Structural + CJK-aware keyword scoring; embedding is Phase 2. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
 | `taskflow_compile` | Render a flow's DAG as a **diagram** (an inline SVG image, shown by the desktop app) **plus a text outline** (shown by the CLI/TUI, which can't render images) + a compact status line. Very large graphs return the text outline alone. |
 

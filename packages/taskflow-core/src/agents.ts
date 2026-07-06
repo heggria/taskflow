@@ -20,23 +20,31 @@ export interface TaskflowSettings {
 	maxKeptRuns: number;
 	/** Maximum age (days) for completed/failed runs. 0 disables age cleanup. */
 	maxRunAgeDays: number;
+	/** Library (reusable-flow asset layer) settings. RFC: docs/rfc-library-reuse.md */
+	library: LibrarySettings;
+	/** Optional embedding backend for semantic search (Phase 2). Undefined = structural/keyword fallback. */
+	embedder?: EmbedderConfig;
 }
 
 import { DEFAULT_KEPT_RUNS, DEFAULT_RUN_AGE_DAYS, writeFileAtomic } from "./store.ts";
+import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "./library/types.ts";
 
 export const DEFAULT_TASKFLOW_SETTINGS: TaskflowSettings = {
 	builtInAgents: true,
 	syncBuiltinAgentsToProject: false,
 	maxKeptRuns: DEFAULT_KEPT_RUNS,
 	maxRunAgeDays: DEFAULT_RUN_AGE_DAYS,
+	library: { ...DEFAULT_LIBRARY_SETTINGS },
 };
 
 export function normalizeTaskflowSettings(raw: unknown): TaskflowSettings {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		return { ...DEFAULT_TASKFLOW_SETTINGS };
+		const base: TaskflowSettings = { ...DEFAULT_TASKFLOW_SETTINGS, library: { ...DEFAULT_LIBRARY_SETTINGS } };
+		return base;
 	}
 	const rec = raw as Record<string, unknown>;
-	return {
+	const embedder = normalizeEmbedderConfig(rec.embedder);
+	const base: TaskflowSettings = {
 		builtInAgents:
 			typeof rec.builtInAgents === "boolean"
 				? rec.builtInAgents
@@ -53,7 +61,56 @@ export function normalizeTaskflowSettings(raw: unknown): TaskflowSettings {
 			typeof rec.maxRunAgeDays === "number" && rec.maxRunAgeDays >= 0 && Number.isInteger(rec.maxRunAgeDays)
 				? rec.maxRunAgeDays
 				: DEFAULT_TASKFLOW_SETTINGS.maxRunAgeDays,
+		library: normalizeLibrarySettings(rec.library),
 	};
+	if (embedder) base.embedder = embedder;
+	return base;
+}
+
+/** RFC §4.2 config shapes: { kind: "http", url, model, apiKey?, dimensions? } or
+ *  { kind: "command", command: string[], timeoutMs? }. */
+export type EmbedderConfig =
+	| { kind: "http"; url: string; model: string; apiKey?: string; dimensions?: number }
+	| { kind: "command"; command: string[]; timeoutMs?: number };
+
+export function normalizeLibrarySettings(raw: unknown): LibrarySettings {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return { ...DEFAULT_LIBRARY_SETTINGS };
+	}
+	const rec = raw as Record<string, unknown>;
+	const scope = rec.scope === "project" || rec.scope === "user" || rec.scope === "both" ? rec.scope : "both";
+	const searchWeights =
+		rec.searchWeights && typeof rec.searchWeights === "object"
+			? (rec.searchWeights as { semantic: number; structural: number; textual: number })
+			: undefined;
+	const maxFlows = typeof rec.maxFlows === "number" && rec.maxFlows > 0 ? rec.maxFlows : undefined;
+	return {
+		enabled: typeof rec.enabled === "boolean" ? rec.enabled : true,
+		scope,
+		searchWeights,
+		maxFlows,
+	};
+}
+
+export function normalizeEmbedderConfig(raw: unknown): EmbedderConfig | undefined {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+	const rec = raw as Record<string, unknown>;
+	if (rec.kind === "http" && typeof rec.url === "string" && typeof rec.model === "string") {
+		const cfg: { kind: "http"; url: string; model: string; apiKey?: string; dimensions?: number } = {
+			kind: "http",
+			url: rec.url,
+			model: rec.model,
+		};
+		if (typeof rec.apiKey === "string") cfg.apiKey = rec.apiKey;
+		if (typeof rec.dimensions === "number") cfg.dimensions = rec.dimensions;
+		return cfg;
+	}
+	if (rec.kind === "command" && Array.isArray(rec.command) && rec.command.every((c) => typeof c === "string")) {
+		const cfg: { kind: "command"; command: string[]; timeoutMs?: number } = { kind: "command", command: rec.command as string[] };
+		if (typeof rec.timeoutMs === "number") cfg.timeoutMs = rec.timeoutMs;
+		return cfg;
+	}
+	return undefined;
 }
 
 export function shouldLoadBuiltinAgents(settings: TaskflowSettings = DEFAULT_TASKFLOW_SETTINGS): boolean {

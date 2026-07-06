@@ -52,7 +52,7 @@ test("opencode mcp: tools/list exposes the same six taskflow tools", async () =>
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -78,10 +78,10 @@ test("opencode mcp: taskflow_verify dispatches through the opencode binding (no 
 	assert.equal(res.result.isError, false);
 });
 
-test("opencode mcp: makeToolHandlers exposes the six tools", () => {
+test("opencode mcp: makeToolHandlers exposes the eight tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
 });

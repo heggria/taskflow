@@ -47,12 +47,12 @@ test("claude mcp: initialize returns the protocol version + serverInfo", async (
 	assert.equal(res.result.serverInfo.name, "taskflow");
 });
 
-test("claude mcp: tools/list exposes the same six taskflow tools as codex", async () => {
+test("claude mcp: tools/list exposes the same eight taskflow tools as codex", async () => {
 	const [res] = await rpcRoundtrip([{ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }]);
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -78,10 +78,10 @@ test("claude mcp: taskflow_verify dispatches through the claude binding (no exec
 	assert.equal(res.result.isError, false);
 });
 
-test("claude mcp: makeToolHandlers exposes the six tools", () => {
+test("claude mcp: makeToolHandlers exposes the eight tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
 });

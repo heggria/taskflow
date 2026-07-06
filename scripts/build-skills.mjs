@@ -32,7 +32,7 @@ const root = join(here, "..");
 const srcDir = join(root, "skills-src", "taskflow");
 
 const HOSTS = ["pi", "codex", "claude", "opencode"];
-const COMPANIONS = ["patterns.md", "advanced.md", "configuration.md"];
+const COMPANIONS = ["patterns.md", "advanced.md", "configuration.md", "library.md"];
 const OUT_DIRS = {
 	pi: join(root, "packages", "pi-taskflow", "skills", "taskflow"),
 	codex: join(root, "packages", "codex-taskflow", "plugin", "skills", "taskflow"),

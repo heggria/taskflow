@@ -100,6 +100,7 @@ test("normalizeTaskflowSettings: accepts only boolean preference values", () => 
 		syncBuiltinAgentsToProject: true,
 		maxKeptRuns: DEFAULT_TASKFLOW_SETTINGS.maxKeptRuns,
 		maxRunAgeDays: DEFAULT_TASKFLOW_SETTINGS.maxRunAgeDays,
+		library: { enabled: true, scope: "both" },
 	});
 	assert.deepEqual(normalizeTaskflowSettings({ builtInAgents: "false", syncBuiltinAgentsToProject: "true" }), DEFAULT_TASKFLOW_SETTINGS);
 });
@@ -481,7 +482,7 @@ test("readSubagentSettings: parses taskflow preferences from settings.json", () 
 	);
 
 	const settings = readSubagentSettings();
-	assert.deepEqual(settings.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30 });
+	assert.deepEqual(settings.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30, library: { enabled: true, scope: "both" } });
 });
 
 test("readSubagentSettings: malformed taskflow preferences fall back to defaults", () => {

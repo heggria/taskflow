@@ -873,7 +873,7 @@ test("runInteractiveInit: 'Configure taskflow preferences' → disable built-ins
 
 	// Verify the settings were actually written to disk
 	const saved = readSettings();
-	assert.deepEqual(saved.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30 });
+	assert.deepEqual(saved.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30, library: { enabled: true, scope: "both" } });
 });
 
 test("runInteractiveInit: 'Configure taskflow preferences' → enable + sync → preferences-saved", async () => {

@@ -53,7 +53,7 @@ test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -183,12 +183,55 @@ test("mcp: tools/call unknown tool returns invalid-params", async () => {
 	assert.equal(res.error.code, -32602);
 });
 
-test("mcp: makeToolHandlers exposes the six tools", () => {
+test("mcp: makeToolHandlers exposes the eight tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
 	);
+});
+
+test("mcp: taskflow_save + taskflow_search round-trip (the reuse flywheel)", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	// Isolated project cwd with a .pi marker so listFlows finds it.
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-lib-mcp-"));
+	fs.mkdirSync(path.join(cwd, ".pi", "taskflows"), { recursive: true });
+	const tools = makeToolHandlers(cwd);
+	try {
+		// Save a reusable flow WITH purpose + tags (the recommended workflow).
+		const save = (await tools.taskflow_save({
+			name: "audit-auth",
+			definition: {
+				name: "audit-auth",
+				args: { dir: { default: "src/routes" } },
+				phases: [
+					{ id: "d", type: "agent", agent: "executor", task: "List endpoints under {args.dir}.", output: "json", final: true },
+				],
+			},
+			purpose: "审计 API endpoint 是否缺少鉴权",
+			tags: ["audit", "auth", "security"],
+		})) as { content: { text: string }[] };
+		assert.match(save.content[0].text, /Saved taskflow 'audit-auth'/);
+		assert.match(save.content[0].text, /审计/);
+
+		// Search by a paraphrased purpose → should find it.
+		const search = (await tools.taskflow_search({ query: "check api security auth endpoints" })) as { isError?: boolean; content: { text: string }[] };
+		assert.equal(search.isError, false);
+		const text = search.content[0].text;
+		assert.match(text, /structural mode/);
+		assert.ok(text.includes("audit-auth"), `search should surface audit-auth:\n${text}`);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp: taskflow_search with empty query returns an error", async () => {
+	const tools = makeToolHandlers(process.cwd());
+	const res = (await tools.taskflow_search({ query: "" })) as { isError?: boolean; content: { text: string }[] };
+	assert.equal(res.isError, true);
+	assert.match(res.content[0].text, /requires `query`/);
 });
 
 // --- Codex-rendering ergonomics (see docs/codex-mcp.md) -------------------

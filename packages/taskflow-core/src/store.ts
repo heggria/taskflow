@@ -25,6 +25,7 @@ import type { Taskflow } from "./schema.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
+import type { FlowMeta } from "./library/types.ts";
 
 export interface SavedFlow {
 	name: string;
@@ -671,6 +672,8 @@ export function listFlows(cwd: string): SavedFlow[] {
 		}
 		for (const name of entries) {
 			if (!name.endsWith(".json")) continue;
+			// A1: sidecar .meta.json must never be scanned as a candidate flow.
+			if (name.endsWith(".meta.json")) continue;
 			const flow = readFlowFile(path.join(dir, name), scope);
 			if (flow) map.set(flow.name, flow); // project after user → overrides
 		}
@@ -710,6 +713,109 @@ export function saveFlow(
 	return { filePath };
 }
 
+// ---------------------------------------------------------------------------
+// Library sidecar (.meta.json) — RFC docs/rfc-library-reuse.md
+// ---------------------------------------------------------------------------
+
+/** Path to a flow's library sidecar. Uses the SAME safeFlowDirName as the flow
+ *  file itself (N1 fix) so path-safety normalization is consistent. */
+export function sidecarPathFor(cwd: string, flowName: string, scope: "user" | "project" = "project"): string {
+	const dir = scope === "user" ? userFlowsDir() : (findProjectFlowsDir(cwd) ?? path.join(cwd, ".pi", "taskflows"));
+	return path.join(dir, `${safeFlowDirName(flowName)}.meta.json`);
+}
+
+/** Path to a flow's sidecar given its flow-file directory (avoids re-resolving
+ *  scope when we already have the flow's filePath from listFlows). */
+function sidecarPathIn(flowFilePath: string): string {
+	return flowFilePath.replace(/\.json$/, ".meta.json");
+}
+
+/** Read a flow's library sidecar. Returns null if missing/unparseable. */
+export function readMeta(cwd: string, flowName: string): FlowMeta | null {
+	// Try project scope first, then user — mirrors getFlow's resolution.
+	for (const scope of ["project", "user"] as const) {
+		const p = sidecarPathFor(cwd, flowName, scope);
+		try {
+			if (!fs.existsSync(p)) continue;
+			const raw = fs.readFileSync(p, "utf-8");
+			const parsed = safeParse(raw);
+			if (parsed && typeof parsed === "object") return parsed as FlowMeta;
+			return null;
+		} catch {
+			continue;
+		}
+	}
+	return null;
+}
+
+/** Read a sidecar next to a specific flow file (avoids name→scope lookup when
+ *  we already have the SavedFlow from listFlows). */
+export function readMetaNextTo(flowFilePath: string): FlowMeta | null {
+	try {
+		const p = sidecarPathIn(flowFilePath);
+		if (!fs.existsSync(p)) return null;
+		const raw = fs.readFileSync(p, "utf-8");
+		const parsed = safeParse(raw);
+		return parsed && typeof parsed === "object" ? (parsed as FlowMeta) : null;
+	} catch {
+		return null;
+	}
+}
+
+/** Write a flow + its sidecar atomically (same withLock critical section — R2).
+ *  Embedding (Phase 2) is computed by the caller BEFORE this call and passed in
+ *  via meta; this function does only synchronous I/O under the lock (R2R3). */
+export function saveFlowWithMeta(
+	cwd: string,
+	def: Taskflow,
+	meta: FlowMeta,
+	scope: "user" | "project" = "project",
+): { filePath: string; metaPath: string } {
+	const dir = scope === "user" ? userFlowsDir() : (findProjectFlowsDir(cwd, true) ?? path.join(cwd, ".pi", "taskflows"));
+	if (!def.name || def.name.trim().length === 0) throw new Error("Flow name must not be empty");
+	fs.mkdirSync(dir, { recursive: true });
+	const safe = safeFlowDirName(def.name);
+	const filePath = path.join(dir, `${safe}.json`);
+	const metaPath = path.join(dir, `${safe}.meta.json`);
+	const fileLockPath = filePath + ".lock"; // shared lock key for flow+sidecar (R2R5)
+	withLock(fileLockPath, () => {
+		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`);
+		writeFileAtomic(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
+	});
+	return { filePath, metaPath };
+}
+
+/** Bump reuseCount/lastUsedAt for a flow's sidecar. Idempotent under the flow
+ *  lock. If no sidecar exists yet, creates a minimal one carrying just the
+ *  reuse bookkeeping (structural fields are filled next time the flow is
+ *  re-saved with deriveMeta). Returns the new reuseCount, or null if the flow
+ *  itself doesn't exist. */
+export function bumpReuseInSidecar(cwd: string, flowName: string): number | null {
+	const saved = getFlow(cwd, flowName);
+	if (!saved) return null;
+	const metaPath = sidecarPathIn(saved.filePath);
+	const lockPath = saved.filePath + ".lock";
+	return withLock(lockPath, () => {
+		const existing = readMetaNextTo(saved.filePath);
+		const now = Date.now();
+		const updated: FlowMeta = existing
+			? { ...existing, reuseCount: (existing.reuseCount ?? 0) + 1, lastUsedAt: now }
+			: {
+					schemaVersion: 1,
+					phaseSignature: "",
+					phaseCount: 0,
+					agentUsage: [],
+					generality: 0,
+					reuseCount: 1,
+					lastUsedAt: now,
+					createdAt: now,
+					version: 1,
+					embedding: null,
+			  };
+		writeFileAtomic(metaPath, `${JSON.stringify(updated, null, 2)}\n`);
+		return updated.reuseCount;
+	});
+}
 
 // --- Run state ---
 
