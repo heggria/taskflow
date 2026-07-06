@@ -46,7 +46,7 @@ jobs:
         run: pnpm test
 
   e2e:
-    name: e2e (MCP stdio, network-free)
+    name: e2e (codex MCP, network-free)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
