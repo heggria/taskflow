@@ -208,38 +208,6 @@
     box-shadow: 0 20px 40px -12px hsl(var(--fd-foreground) / 0.12);
   }
 
-  .json-key {
-    color: hsl(var(--fd-primary));
-  }
-
-  .json-string {
-    color: hsl(35 90% 42%);
-  }
-
-  .json-number {
-    color: hsl(160 75% 34%);
-  }
-
-  .json-bool {
-    color: hsl(260 70% 58%);
-  }
-
-  .json-punct {
-    color: hsl(var(--fd-muted-foreground));
-  }
-
-  .dark .json-string {
-    color: hsl(40 95% 68%);
-  }
-
-  .dark .json-number {
-    color: hsl(160 70% 55%);
-  }
-
-  .dark .json-bool {
-    color: hsl(260 80% 74%);
-  }
-
   @media (prefers-reduced-motion: no-preference) {
     @keyframes float {
       0%,

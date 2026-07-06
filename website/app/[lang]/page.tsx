@@ -379,6 +379,15 @@ function tokenizeJsonLine(line: string): JsonToken[] {
 	return tokens;
 }
 
+const jsonTokenClass: Record<JsonToken["type"], string | undefined> = {
+	key: "text-sky-600 dark:text-sky-400",
+	string: "text-emerald-600 dark:text-emerald-400",
+	number: "text-amber-600 dark:text-amber-400",
+	bool: "text-amber-600 dark:text-amber-400",
+	punct: "text-fd-muted-foreground",
+	plain: undefined,
+};
+
 function highlightJson(line: string) {
 	return (
 		<span>
@@ -386,7 +395,7 @@ function highlightJson(line: string) {
 				<span
 					// biome-ignore lint/suspicious/noArrayIndexKey: static syntax highlight tokens
 					key={`${token.type}-${token.value}-${i}`}
-					className={token.type === "plain" ? undefined : `json-${token.type}`}
+					className={jsonTokenClass[token.type]}
 				>
 					{token.value}
 				</span>
