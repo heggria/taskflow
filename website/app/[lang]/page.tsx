@@ -694,7 +694,7 @@ export default async function HomePage({
 
 					<div className="animate-fade-in animate-fade-in-delay-3 relative z-10 -mt-6 w-full max-w-3xl md:-mt-12">
 						<figure
-							className="code-window pointer-events-none relative w-full overflow-hidden rounded-2xl glass gradient-border"
+							className="code-window relative w-full overflow-hidden rounded-2xl glass gradient-border"
 							aria-label={t.code.label}
 						>
 							<figcaption className="flex items-center gap-3 border-b bg-fd-muted/50 px-5 py-3.5">
