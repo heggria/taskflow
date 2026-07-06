@@ -23,6 +23,8 @@
     "---Guides---",
     "guides/pi",
     "guides/codex",
+    "guides/claude-code",
+    "guides/opencode",
     "guides/agents-and-model-roles",
     "guides/dynamic-planning",
     "guides/tournament",

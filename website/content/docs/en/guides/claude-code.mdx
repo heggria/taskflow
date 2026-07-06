@@ -1,0 +1,240 @@
+---
+title: Using taskflow on Claude Code
+description: Install taskflow as a Claude Code plugin and orchestrate multi-phase workflows via MCP.
+---
+
+[Claude Code](https://claude.com/product/claude-code) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Claude Code, taskflow ships as a plugin that registers a dependency-free MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
+
+This page walks through the whole arc: install the plugin, confirm the MCP server is live, run a flow through a tool call, and understand the permission and long-running-flow model.
+
+## Install
+
+taskflow is distributed through the shared plugin marketplace. Add the marketplace, then install the plugin:
+
+```bash title="Install the taskflow plugin"
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+```
+
+That single `plugin install` does three things at once:
+
+<Steps>
+  <Step>
+    **Registers the MCP server.** The plugin declares a `taskflow` server launched via `npx -y -p claude-taskflow claude-taskflow-mcp`, so Claude Code can reach the runtime over stdio. The `npx` pin binds the exact code that runs — nothing to install globally.
+  </Step>
+  <Step>
+    **Installs the routing skill.** A bundled skill teaches Claude Code when to reach for the taskflow tools, so you don't have to remember their names.
+  </Step>
+  <Step>
+    **Keeps zero runtime deps.** The MCP server speaks JSON-RPC 2.0 over stdio on Node built-ins — no `@modelcontextprotocol/sdk`, so taskflow keeps its zero-dependency guarantee.
+  </Step>
+</Steps>
+
+Restart your Claude Code session if it was already running, so the new plugin is picked up.
+
+## Verify the install
+
+Before running anything, confirm both the plugin and its MCP server registered cleanly:
+
+```bash title="Verify the plugin and MCP server"
+claude plugin list   # claude-taskflow@taskflow should appear, enabled
+claude mcp list      # taskflow should appear, enabled
+```
+
+If either is missing, the `plugin install` step didn't complete — re-run it and check for errors.
+
+## Run your first flow
+
+On Claude Code, you don't invoke taskflow through a slash command — you invoke it through an MCP tool. The model decides when to call it, guided by the bundled skill. So the most natural way to start is to just describe the work.
+
+### Just ask
+
+Try one of these in a Claude Code session:
+
+```text title="Describe the work in plain language"
+> List my saved taskflows.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+The skill routes the request to the right tool. If a flow is saved in the current project, the model calls `taskflow_run` with the saved name; if you pasted an inline definition, it passes that instead.
+
+### Call the tool directly
+
+If you want to be explicit — useful in scripts or when you know the exact shape — the tool is `taskflow_run`. It accepts either a saved flow `name` or an inline `define`:
+
+```json title="Run a saved flow via taskflow_run"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+```json title="Run an inline flow via taskflow_run"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
+Either form runs the same DAG. The tool returns only the final output — the intermediate transcripts from `discover`, `review-each`, and `summarize` stay inside the runtime and never enter your context.
+
+<Callout type="info">
+  Only the phase marked `final: true` is returned. Everything else is context-isolated by design.
+</Callout>
+
+## Check a flow before spending tokens
+
+Before running a DAG, you can ask Claude Code to verify it statically. This catches cycles, dangling `dependsOn`, unknown phase references, and malformed configs — all at zero token cost:
+
+```json title="Verify a flow via taskflow_verify"
+{
+  "name": "review-changes"
+}
+```
+
+Or render the DAG as a diagram to eyeball its shape:
+
+```json title="Compile a flow to a diagram via taskflow_compile"
+{
+  "name": "review-changes"
+}
+```
+
+`taskflow_compile` returns the DAG grouped into topological layers as a text outline, plus an inline SVG image for clients that render images.
+
+## How subagents run
+
+Each phase's subagent runs as an isolated `claude -p` session — a real Claude Code headless process, not a pi process. The server discovers saved flows and agents from its **launch cwd**, so the project you start it in determines which flows are visible.
+
+### Permission mapping
+
+Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is either whitelisted or denied. The runner maps each phase's tool whitelist to a permission mode:
+
+| Phase tools | Permission mode | What it means |
+|---|---|---|
+| Read-only (no `write`/`edit`/`bash`) | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | Mutating tools are denied outright. Note there's no read-only shell — `Bash` is not granted to read-only phases. |
+| Mutating (or no whitelist) | `--permission-mode bypassPermissions` | The subagent can run any tool. Run flows you trust, in a repo you can `git reset`. |
+
+<Callout type="warn">
+  Mutating phases run with `bypassPermissions` and have no OS sandbox backstop. Prefer a throwaway worktree (`cwd: "worktree"`) for flows that touch the filesystem, and only run flows you trust.
+</Callout>
+
+## Long-running flows
+
+Here's the one thing to know about running taskflow on Claude Code: **`taskflow_run` is synchronous.** The tool call doesn't return until the entire DAG finishes — every phase, every subagent. For a three-phase review that's fine; for a fan-out over fifty files with a tournament at the end, it can take a while.
+
+If a flow is genuinely huge, consider splitting it into a few smaller `taskflow_run` calls so each returns promptly, or run it in the background from a plain shell:
+
+```bash title="Run a flow in the background"
+claude -p "run the nightly-audit taskflow" &
+```
+
+Then inspect the run afterward with `taskflow_peek`:
+
+```json title="Peek at a phase's stored output via taskflow_peek"
+{
+  "runId": "run_2026-07-04_abc123",
+  "phaseId": "summarize"
+}
+```
+
+Omit `phaseId` to list every phase with its status and output size. Output is hard-truncated (default 4000 chars) so a peek never floods your context.
+
+<Callout type="warn">
+  `taskflow_peek` is the one intentional exception to taskflow's context isolation. It pulls intermediate output into your conversation — use it for debugging, not as part of your normal flow.
+</Callout>
+
+## Approvals in MCP mode
+
+MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows you run through the `taskflow_*` tools; use `approval` only in flows a human runs interactively.
+
+## Tool reference
+
+Here's the full MCP surface the plugin exposes:
+
+| Tool | Purpose |
+|---|---|
+| `taskflow_run` | Run a saved flow (by `name`) or an inline definition (by `define`). Returns the final output + a `runId`. |
+| `taskflow_list` | List saved flows discoverable from the cwd, with library metadata when available. |
+| `taskflow_show` | Show a saved flow's definition plus its library sidecar metadata. |
+| `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. |
+| `taskflow_search` | Search the library before authoring. Returns ranked reusable flows. |
+| `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
+| `taskflow_compile` | Render the DAG as a text outline + inline SVG. |
+| `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+
+<Callout type="tip">
+  You rarely need to memorize these. The bundled skill tells Claude Code which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.
+</Callout>
+
+## Alternative: register the MCP server manually
+
+If you'd rather not use the plugin, install the package and register its `claude-taskflow-mcp` bin yourself:
+
+```bash title="Manual MCP registration"
+pnpm add -g claude-taskflow
+claude mcp add taskflow -- claude-taskflow-mcp
+```
+
+Verify it registered:
+
+```bash title="Verify manual registration"
+claude mcp list   # taskflow … enabled
+```
+
+The server behaves identically to the plugin version — it just doesn't come with the routing skill or the one-command update path.
+
+## Remove
+
+If you need to take taskflow off a machine:
+
+```bash title="Remove the taskflow plugin"
+claude plugin uninstall claude-taskflow@taskflow   # if installed as a plugin
+claude mcp remove taskflow                          # if registered manually
+```
+
+This unregisters the MCP server and removes the skill. Any saved flow definitions on disk are left untouched.
+
+## Next
+
+<Cards>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    The five-minute tour, if you haven't seen it yet.
+  </Card>
+  <Card title="Phase Types" href="/en/docs/concepts/phases">
+    The ten building blocks you can compose into a DAG.
+  </Card>
+  <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
+    The same runtime, wired into OpenAI Codex.
+  </Card>
+</Cards>
