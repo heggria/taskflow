@@ -1,0 +1,133 @@
+---
+title: 社区
+description: 贡献模板、提出问题，并一起塑造 taskflow 的未来。
+---
+
+taskflow 在开放中构建，而最好的 flow 往往来自每天运行它们的人。无论你有一个解决了真实问题的工作流、一个关于某个棘手 phase 的问题，还是一个关于新模式的想法——这里都有它的位置。
+
+这一页是简短导览：在哪里交流、如何分享模板、贡献规则是什么，以及如何提出一个能被快速回答的问题。
+
+## 社区在哪里
+
+一切的单一入口是 [GitHub Discussions](https://github.com/heggria/taskflow/discussions)。它同时是帮助台、模板画廊和 RFC 讨论室。
+
+<Cards>
+  <Card title="GitHub Discussions" href="https://github.com/heggria/taskflow/discussions">
+    提问、分享 flow、提出模式，并跟踪版本规划。
+  </Card>
+  <Card title="Issue 跟踪器" href="https://github.com/heggria/taskflow/issues">
+    用可复现的示例提交 bug 和功能请求。
+  </Card>
+  <Card title="examples/ 目录" href="https://github.com/heggria/taskflow/tree/main/examples">
+    可复用 flow 定义的官方存放地。
+  </Card>
+</Cards>
+
+<Callout type="tip">
+  不知道该发在哪里？拿不准时，先开一个 Discussion。维护者会帮你把它转成 issue、PR 或一个保存好的 example——哪种合适就用哪种。
+</Callout>
+
+## 分享模板
+
+一个*模板*就是一个保存好的 taskflow，用来解决某个反复出现的问题——发布就绪检查、PR 审查、迁移规划。分享的门槛很低：一个真实问题、一个能跑的 flow、以及一句如何运行它的说明。
+
+<Steps>
+  <Step>
+    **写 flow。** 从你已经在跑的真实任务出发。给它一个 `name`、一行 `description`，以及能完成工作的最小 `phases` 集合。删掉那些"以防万一"加进去的东西——模板是起点，不是大杂烩。
+  </Step>
+  <Step>
+    **命名。** 文件名用 `kebab-case`（`release-check.json`，而不是 `ReleaseCheck.json` 或 `release_check.json`）。内部的 `name` 字段应与文件名一致。phase ID 也用 kebab-case（`audit-each`、`final-report`）。
+  </Step>
+  <Step>
+    **加上必填字段。** 每个模板必须包含 `name`、`description` 和 `phases`。把任何输入声明为 `args`，并带上 `description` 和 `required` 标记，这样调用者就知道该传什么。如果 flow 会 fan-out，就设置 `concurrency` 和 `budget`。
+  </Step>
+  <Step>
+    **验证它能跑。** 先跑 `/tf verify <name>`（零 token）抓结构错误，再用小输入跑一次 `/tf run <name>` 确认产出符合预期。一个跑不起来的模板是 bug，不是贡献。
+  </Step>
+  <Step>
+    **向 `examples/` 提 PR。** 把 `.json` 文件放进 `examples/`，在目录的 README 里加一行说明它做什么，然后开 PR。或者，开一个 Discussion 把 flow 贴进去——两种方式都行，维护者也可以替你把它移进 `examples/`。
+  </Step>
+</Steps>
+
+<Callout type="info">
+  再小的 PR 都欢迎。一个为某个团队解决真实问题的五阶段 flow，和一个跨项目泛化的二十阶段 flow，同样受欢迎。
+</Callout>
+
+### 一个好模板长什么样
+
+```json title="examples/release-check.json"
+{
+  "name": "release-check",
+  "description": "Audit changed files and return a single release-readiness summary.",
+  "args": {
+    "since": { "description": "Git ref to diff against (e.g. a tag or branch).", "default": "last-tag" }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 1.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files changed since {args.since}. Output ONLY a JSON array of {path} objects.",
+      "output": "json"
+    },
+    {
+      "id": "summarize",
+      "type": "reduce",
+      "from": ["discover"],
+      "agent": "writer",
+      "task": "Combine these changes into one release-readiness summary:\n{steps.discover.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+## 贡献指南
+
+一些约定让整个生态可浏览。它们很轻——大部分是你本来就会做的事。
+
+- **命名用 kebab-case。** 文件名、`name` 字段、phase ID 都用连字符（`risk-review`、`audit-each`）。这与插值语法（`{steps.risk-review.output}`）和宿主约定一致。
+- **必填字段不可妥协。** 每个 flow 都要有 `name`、`description` 和 `phases`。`args` 必须声明 `description`（以及 flow 没它就跑不了的 `required`）。缺这些的模板会过不了 `/tf verify`，不会被合并。
+- **每个 phase 目的清晰。** 一个 phase 做一件事。如果某个 `task` prompt 试图在一次调用里又发现、又审查、又汇总，就拆开它——那正是 `map` 和 `reduce` 的用途。
+- **测试是预期内的。** 在 README 里加一个示例调用（该传的 `args` 以及你拿到的结果形状）。如果你的 flow 触发了不常见的分支——`loop`、`gate`、`flow { def }`——加一句说明哪个输入会触发它。你不需要一整套测试套件；你需要一次可复现的运行。
+- **Fail open，保持安全。** 遵循运行时本身的姿态：`when` 解析错误时 phase 照跑，gate 歧义时放行，tournament 评委失败时回退到 variant 1。模板绝不该在软错误上静默中止整次运行。
+- **成本是一等公民。** 任何会 fan-out 的 flow 都要设 `budget`。一个能无限烧 token 的模板，对下一个运行它的人是地雷。
+
+<Callout type="warn">
+  不要提交密钥。模板绝不硬编码 token、API key 或内部 URL。对任何敏感内容，用 `env:` 指纹条目或 `{args.X}`——shell 相关的活优先用 `script` phase，其中数组形式对注入是安全的。
+</Callout>
+
+## 提问求助
+
+问题永远欢迎，而一个问得好的问题能得到快速回答。发帖前，快速过一遍这个清单：
+
+<Steps>
+  <Step>
+    **先搜。** 浏览[已有的 Discussion](https://github.com/heggria/taskflow/discussions) 和[语法参考](/zh-cn/docs/syntax)里你卡住的 phase 类型或字段。大多数"为什么不work"的答案已经写在那里了。
+  </Step>
+  <Step>
+    **跑一下 `/tf verify`。** 它是零 token 的，能抓到绝大多数编写错误——悬空的 `dependsOn`、不可达的占位符、环。如果 verify 通过但运行仍异常，那才是值得拿来讨论的有趣情况。
+  </Step>
+  <Step>
+    **附上 flow 和 run id。** 贴出能复现问题的最小 flow（不断删 phase，直到删掉某一个后问题消失），你传的精确 `args`，以及如果有的话 run id。磁盘上的 run 状态是最快的诊断路径。
+  </Step>
+  <Step>
+    **说明你期望什么、实际得到什么。** "我期望 `map` 对 4 个 item fan-out，但只跑了 2 个"是可行动的。"它不work"则不是。附上宿主（Pi、Codex、Claude Code、OpenCode），以及相关的话 agent 名。
+  </Step>
+</Steps>
+
+<Callout type="info">
+  发现的是 bug 而不是用法问题？开一个 [issue](https://github.com/heggria/taskflow/issues)，附上同样的复现信息——flow、args、run id、期望 vs 实际。维护者会从那里开始分流。
+</Callout>
+
+## 路线图与 RFC
+
+更大的想法——一个新的 phase 类型、对缓存模型的改动、一个宿主移植——从一个标记为 `rfc` 的 Discussion 开始。门槛和模板一样：描述真实问题，勾勒能解决问题的最小形状，并说明你会放弃什么。经过一轮讨论存活下来的 RFC 会得到一份 `docs/` 下的设计文档和一个跟踪 issue。
+
+阅读[设计文档](https://github.com/heggria/taskflow/tree/main/docs)了解已做决策背后的思考——跨运行记忆化、动态加固上限、共享上下文树。它们是理解 taskflow 不只做*什么*、还理解*为什么*的最佳途径。
+
+<Callout type="tip">
+  影响路线图最快的方式，是发布一个能证明这个需求的模板。一个被五个人 star 的能跑的 flow，比任何规格说明都更有说服力。
+</Callout>

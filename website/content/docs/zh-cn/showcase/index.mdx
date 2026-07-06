@@ -1,0 +1,54 @@
+---
+title: 实战案例
+description: 端到端案例研究——用 taskflow 解决真实问题，逐阶段构建。
+---
+
+实战案例是把各个部件拼到一起的地方。每个案例都从一个你大概率遇到过的具体问题出发，一次加一个阶段地构建一个 taskflow，并解释*为什么*每个阶段长成那样。每个案例结束时，你都会得到一个完整、可保存、可直接运行的 flow。
+
+它们不是宿主走查——同一个 flow 在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode（`taskflow_run`）上跑起来完全一样。它们是*模式*指南：读它们是为了学会这个形状，再把形状套到你自己的问题上。
+
+<Callout type="tip">
+  刚接触？[什么是 taskflow？](/zh-cn/docs/what-is-taskflow) 用一页讲清楚模型，[快速上手](/zh-cn/docs/getting-started) 五分钟跑起一个 flow。想看模型在一个真实问题上被拉满时，再回到这里。
+</Callout>
+
+## 案例研究
+
+三个问题，三种形状。每个都驱动运行时的不同部分——扇出、锦标赛选择、带循环的动态规划。
+
+<Cards>
+  <Card title="审查一次 Pull Request" href="/zh-cn/docs/guides/code-audit-case-study">
+    跨三个包改动了 47 个文件的 PR。发现改动文件、扇出逐文件安全审查、并行跑架构审查、用 gate 拦风险、汇总成一份报告。
+  </Card>
+  <Card title="写发布说明" href="/zh-cn/docs/guides/headline-tournament-case-study">
+    一条高风险的标题。先看朴素的单智能体基线，再换成四变体锦标赛，由裁判挑出胜者。
+  </Card>
+  <Card title="自动化代码迁移" href="/zh-cn/docs/guides/migration-planner-case-study">
+    一个没法预先规划的迁移。发现调用点、在运行时生成计划、gate 校验、作为子流程执行、循环到旧 API 彻底消失。
+  </Card>
+</Cards>
+
+## 你会带走什么
+
+每个案例的结构都一样，方便你把经验映射到自己的工作上：
+
+1. **问题。** 为什么最显然的做法（一次大智能体调用，或三次手动委派）撑不下来。
+2. **逐阶段。** 每个新阶段都有理由——扇出换吞吐、gate 换安全、循环换收敛。你看到 flow 是长出来的，而不是只看到成品。
+3. **完整 flow。** 拼好的 JSON，可直接保存运行。
+
+<Callout type="info">
+  想要*为什么*声明式图胜过命令式脚本的简短版——带具体的前后对比数字？见[为什么用 taskflow？](/zh-cn/docs/showcase/why-taskflow)。
+</Callout>
+
+## 下一步
+
+<Cards>
+  <Card title="为什么用 taskflow？" href="/zh-cn/docs/showcase/why-taskflow">
+    一份简明的前后对比，附 token 成本走查。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/concepts/phases">
+    案例研究用来组合的十种构建块。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax/flow-definition">
+    每个字段，一处可查。
+  </Card>
+</Cards>

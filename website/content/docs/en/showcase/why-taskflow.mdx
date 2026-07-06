@@ -1,0 +1,131 @@
+---
+title: Why taskflow?
+description: A concrete before/after — what a declarative DAG buys you, with token-cost numbers.
+---
+
+The [What is taskflow?](/en/docs/what-is-taskflow) page makes the case in the abstract: a declarative graph is verifiable, observable, replayable, and safe to hand to a model. This page makes it concrete. We take one job — auditing a 47-file pull request — and cost it out two ways: the imperative script you would write by hand, and the same job declared as a taskflow. The numbers are hypothetical but realistic, drawn from the shapes in the [PR audit case study](/en/docs/guides/code-audit-case-study).
+
+<Callout type="info">
+  The numbers below are illustrative, not benchmarked. They reflect the *structural* differences between an imperative script and a declared DAG — full transcripts returning to your context, no resume, no verification. Your mileage varies with model and prompt, but the shape of the gap is stable.
+</Callout>
+
+## The job
+
+A PR lands: **47 files changed across 3 packages.** You want a merged report covering security, architecture, and test coverage. There are two ways to get it.
+
+### The imperative way
+
+You script it in the host. Each `subagent(...)` call returns its full reasoning into your conversation. You loop over the files, branch on the package, and write the summary yourself at the end.
+
+```js title="imperative-pr-audit.js (pseudocode)"
+const files = await subagent("List the 47 changed files");
+const audits = [];
+for (const file of files) {
+  audits.push(await subagent(`Audit ${file} for security risks`));   // 47 full transcripts
+}
+const arch = await subagent("Review architecture per package");
+const report = await subagent(`Merge into one report:\n${audits.join("\n")}\n${arch}`);
+return report;
+```
+
+### The taskflow way
+
+You declare the same shape as a DAG. The runtime fans out, holds the transcripts inside, and returns only the final report.
+
+```json title="pr-audit.json"
+{
+  "name": "pr-audit",
+  "concurrency": 4,
+  "phases": [
+    { "id": "discover", "type": "agent", "agent": "scout", "output": "json",
+      "task": "List changed files. Output ONLY a JSON array of {path, package} objects." },
+    { "id": "security-each", "type": "map", "over": "{steps.discover.json}", "as": "file",
+      "agent": "security-reviewer", "dependsOn": ["discover"], "concurrency": 4,
+      "task": "Review {file.path} for security risks. Return one paragraph." },
+    { "id": "report", "type": "reduce", "from": ["security-each"], "agent": "writer",
+      "dependsOn": ["security-each"], "final": true,
+      "task": "Merge these audits into one prioritized report:\n{steps.security-each.output}" }
+  ]
+}
+```
+
+## Before / after
+
+The structural differences show up as measurable gaps. Here is the same job, two ways:
+
+| Dimension | Imperative script | taskflow | Why it differs |
+|---|---|---|---|
+| Plan visible before tokens spent? | No — bugs surface at runtime | Yes — `/tf verify` is zero-token | The graph is data, so it can be checked |
+| Transcripts in your context | **47** full audit transcripts + 3 more | **1** final report | Only `final: true` returns to the host |
+| Context tokens consumed (host side) | ~470,000 | ~2,500 | Each transcript ≈ 10k tokens; taskflow holds them internally |
+| Resume after a crash | Re-run from scratch; pay for all 47 again | Cached phases auto-skip; pay only for unfinished work | Every completed phase is persisted |
+| Reusable next PR | Copy-paste the script | `/tf run pr-audit since=v1.5.0` | The flow is saved by name |
+| Safe to generate with an LLM | Risky — it is arbitrary code | Safe — graph is verified before it runs | A malformed DAG fails open, never executes |
+| Structural bugs caught early | At runtime, after you paid | Before any model call | Verification runs first |
+
+<Callout type="tip">
+  The headline number is the context row. The imperative script dumps every audit transcript into *your* window — the very window you need to read the final report. taskflow keeps the 47 transcripts inside the runtime; your context only ever sees the one summary.
+</Callout>
+
+## A token-cost walkthrough
+
+Let us put real-ish numbers on the PR audit. Assume a mid-tier model at **$3 / 1M input tokens** and **$15 / 1M output tokens**, and that each per-file audit reads ~8,000 input tokens (the file plus a little context) and writes ~500 output tokens.
+
+### Per-file audit cost
+
+```text title="cost of one audit call"
+input:   8,000 tokens  ×  $3.00 / 1M   =   $0.0240
+output:    500 tokens  ×  $15.00 / 1M  =   $0.0075
+                                  total =   $0.0315  per file
+```
+
+Forty-seven files at $0.0315 each is **$1.48** for the security fan-out. Add the discover call (~$0.05), the architecture review (~$0.10), and the final merge (~$0.08), and the whole flow costs roughly **$1.71** to run end to end.
+
+That cost is the *same* whether you script it or declare it — the model does the same work. The difference is what you get for it.
+
+### What you get for the same $1.71
+
+| | Imperative script | taskflow |
+|---|---|---|
+| Model cost | $1.71 | $1.71 |
+| Your context after the run | ~470k tokens of transcripts gone | ~2.5k tokens — one report |
+| If the run dies at the merge step | Pay another ~$1.66 to redo the 47 audits | Pay ~$0.08 — only the merge re-runs |
+| If you run it again next week | Full $1.71 again | Cached phases skip; often a few cents |
+| Verify before spending | Impossible | `/tf verify` is free |
+
+The cost row is identical. Every other row favors the declared graph — and the gap widens with scale. A 200-file audit is the same shape but ten times the transcripts flooding your context, while the taskflow side still returns one report.
+
+<Callout type="warn">
+  The expensive failure mode of the imperative script is not the happy path — it is the crash at step 48 of 50. With no resume, you pay the full fan-out *again*. With taskflow, the 47 cached audits skip and you pay for the one phase that never finished. On a large fan-out, that single difference can be an order of magnitude.
+</Callout>
+
+## When the gap is small (and when it is not)
+
+The structural advantage scales with the job. A one-shot, single-step delegation gains almost nothing from taskflow — the host's built-in subagent tool is already the right tool, and the overhead of declaring a graph is not earned back.
+
+| Job shape | Imperative is fine | taskflow earns its overhead |
+|---|---|---|
+| One delegation, no follow-up | ✅ | — |
+| Two steps, second depends on first | borderline | ✅ |
+| Fan-out over many items | — | ✅ |
+| Needs a quality gate before output | — | ✅ |
+| Needs resume / replay | — | ✅ |
+| Plan is generated by a model | — | ✅ (verified before it runs) |
+
+<Callout type="info">
+  The rule of thumb: taskflow earns its overhead the moment there is a *second step that depends on the first*. Below that, use the host's subagent tool directly.
+</Callout>
+
+## Next steps
+
+<Cards>
+  <Card title="Auditing a Pull Request" href="/en/docs/guides/code-audit-case-study">
+    See the 47-file audit built phase by phase.
+  </Card>
+  <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
+    The conceptual version of this comparison.
+  </Card>
+  <Card title="Getting Started" href="/en/docs/getting-started">
+    Run your first flow in five minutes.
+  </Card>
+</Cards>
