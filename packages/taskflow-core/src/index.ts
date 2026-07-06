@@ -10,6 +10,7 @@
  */
 
 export * from "./schema.ts";
+export * from "./jsonc.ts";
 export * from "./contract.ts";
 export * from "./scorers.ts";
 export * from "./scorer-runtime.ts";
