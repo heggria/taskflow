@@ -770,7 +770,7 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
-**v0.1.6**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **库 Phase 1**（先搜后写 + 可复用流程资产）、**`defineFile` 参数**（从磁盘路径 verify/compile/run 流程）、以及流程定义文件的 **JSONC 注释支持**（`//` 与 `/* */` 注释 + 尾逗号，由零依赖的 `parseJsonc` 解析）。**v0.1.5** 新增了 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**七个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp` MCP 服务器、共享宿主运行器的 `taskflow-hosts`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（后三者为交付包，通过 `taskflow-hosts` 复用 runner + MCP bin + 插件/配置），共享 `taskflow-mcp` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+**v0.1.6**——当前发布版。完整历史详见 [CHANGELOG](./CHANGELOG.md)。本版新增 **库 Phase 1**（先搜后写 + 可复用流程资产）、**`defineFile` 参数**（从磁盘路径 verify/compile/run 流程）、以及流程定义文件的 **JSONC 注释支持**（`//` 与 `/* */` 注释 + 尾逗号，由零依赖的 `parseJsonc` 解析）。**v0.1.5** 新增了 **Claude Code 与 OpenCode 两个宿主**、**将 MCP 服务器拆为独立的 `taskflow-mcp-core` 包**，并**将三个宿主运行器去重**为共享的 `runSubagentProcess`。基线：**七个包的多宿主 monorepo**——宿主无关的 `taskflow-core` 引擎、宿主无关的 `taskflow-mcp-core` MCP 服务器、共享宿主运行器的 `taskflow-hosts`，加上 `pi-taskflow`（Pi 适配器）、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`（后三者为交付包，通过 `taskflow-hosts` 复用 runner + MCP bin + 插件/配置），共享 `taskflow-mcp-core` 中的宿主无关 MCP 服务器。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 
@@ -789,7 +789,7 @@ provided files. Report violations grouped by file. No fixes.
 | 包 | 角色 |
 |----|------|
 | [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`）——运行时、DSL、缓存、验证 |
-| [`taskflow-mcp`](./packages/taskflow-mcp) | 宿主无关的 MCP 服务器（stdio JSON-RPC + `taskflow_*` 工具 + DAG 渲染）；依赖 core |
+| [`taskflow-mcp-core`](./packages/taskflow-mcp-core) | 宿主无关的 MCP 服务器（stdio JSON-RPC + `taskflow_*` 工具 + DAG 渲染）；依赖 core |
 | [`taskflow-hosts`](./packages/taskflow-hosts) | 共享宿主 runner 集合（codex / claude / opencode 的 `SubagentRunner` + argv 构建器 + 事件流解析器）；依赖 core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi 扩展适配器——`taskflow` 工具 + `/tf` 命令（即 `pi install npm:pi-taskflow` 安装的内容） |
 | [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + MCP bin，及 [Codex 插件](./packages/codex-taskflow/plugin)（[指南](./docs/codex-mcp.md)） |

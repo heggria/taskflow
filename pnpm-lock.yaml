@@ -38,9 +38,9 @@ importers:
       taskflow-hosts:
         specifier: 0.1.6
         version: link:../taskflow-hosts
-      taskflow-mcp:
+      taskflow-mcp-core:
         specifier: 0.1.6
-        version: link:../taskflow-mcp
+        version: link:../taskflow-mcp-core
 
   packages/codex-taskflow:
     dependencies:
@@ -50,9 +50,9 @@ importers:
       taskflow-hosts:
         specifier: 0.1.6
         version: link:../taskflow-hosts
-      taskflow-mcp:
+      taskflow-mcp-core:
         specifier: 0.1.6
-        version: link:../taskflow-mcp
+        version: link:../taskflow-mcp-core
 
   packages/opencode-taskflow:
     dependencies:
@@ -62,9 +62,9 @@ importers:
       taskflow-hosts:
         specifier: 0.1.6
         version: link:../taskflow-hosts
-      taskflow-mcp:
+      taskflow-mcp-core:
         specifier: 0.1.6
-        version: link:../taskflow-mcp
+        version: link:../taskflow-mcp-core
 
   packages/pi-taskflow:
     dependencies:
@@ -103,7 +103,7 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  packages/taskflow-mcp:
+  packages/taskflow-mcp-core:
     dependencies:
       taskflow-core:
         specifier: 0.1.6

@@ -472,7 +472,7 @@ function buildReuseHint(result: SearchResult): string {
 
 ### 5.4 新增 MCP 工具清单（A5/N2 修复）
 
-当前 MCP server（`taskflow-mcp`）的 TOOLS 数组只有 `taskflow_run`/`taskflow_list`/`taskflow_show`/`taskflow_verify`/`taskflow_compile`/`taskflow_peek`。library 功能需要新增以下 MCP 工具：
+当前 MCP server（`taskflow-mcp-core`）的 TOOLS 数组只有 `taskflow_run`/`taskflow_list`/`taskflow_show`/`taskflow_verify`/`taskflow_compile`/`taskflow_peek`。library 功能需要新增以下 MCP 工具：
 
 | 工具名 | 参数 | 说明 |
 |--------|------|------|

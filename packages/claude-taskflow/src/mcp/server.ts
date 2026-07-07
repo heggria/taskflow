@@ -1,5 +1,5 @@
 /**
- * The Claude Code binding of the host-neutral MCP server (taskflow-mcp/server).
+ * The Claude Code binding of the host-neutral MCP server (taskflow-mcp-core/server).
  *
  * The protocol layer, tool schemas, and handlers all live in core; this shim
  * only closes the loop for Claude Code: every subagent a flow spawns is itself
@@ -11,8 +11,8 @@ import {
 	makeMcpHandlers as coreMakeMcpHandlers,
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
-} from "taskflow-mcp/server";
-import type { RpcHandler } from "taskflow-mcp/jsonrpc";
+} from "taskflow-mcp-core/server";
+import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { claudeSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with claude subagent execution bound in. */

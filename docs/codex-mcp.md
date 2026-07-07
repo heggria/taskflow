@@ -11,7 +11,7 @@ both built on the host-neutral `SubagentRunner` seam
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
 The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp/src/mcp/jsonrpc.ts`), so taskflow keeps its
+built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
 **zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
 
 ## Install (recommended): the Codex plugin

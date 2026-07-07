@@ -5,13 +5,13 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ## [0.1.6] — 2026-07-06
 
 ### Changed
-- **Extracted the MCP server into its own `taskflow-mcp` package** (sixth
+- **Extracted the MCP server into its own `taskflow-mcp-core` package** (sixth
   package). The stdio JSON-RPC server + `taskflow_*` tool handlers + DAG
-  SVG/outline renderer moved out of `taskflow-core` into `taskflow-mcp`, so
+  SVG/outline renderer moved out of `taskflow-core` into `taskflow-mcp-core`, so
   core is again purely the portable engine (DSL/runtime/cache/verify) and the
   MCP presentation layer is an independently-publishable unit. The host
-  adapters (codex/claude/opencode) now depend on `taskflow-mcp` and import it
-  via `taskflow-mcp/server` / `taskflow-mcp/jsonrpc`. `pi-taskflow` is
+  adapters (codex/claude/opencode) now depend on `taskflow-mcp-core` and import it
+  via `taskflow-mcp-core/server` / `taskflow-mcp-core/jsonrpc`. `pi-taskflow` is
   unaffected (it never used the MCP server).
 - **De-duplicated the three host runners.** The codex/claude/opencode runners
   each copy-pasted ~82 lines of identical process-handling boilerplate
@@ -22,8 +22,16 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   parameterized by a per-host `SubagentAccumulator` + `foldLine`. Each host
   runner shrank to just its host-specific bits (argv, model-id rule,
   permission mapping, event parser): codex 366→217, claude 417→266, opencode
-  397→247 lines. Behavior is identical (1092/1092 tests pass); adding a new
+  397→247 lines. Behavior is identical (1140/1140 tests pass); adding a new
   host can no longer drift the process/classify contract.
+
+- **Renamed the MCP server package from `taskflow-mcp` to `taskflow-mcp-core`**
+  at release time: `taskflow-mcp` (and `taskflow-mcp-server`) had been squatted
+  on npm by an unrelated package, so the host-neutral MCP server ships as
+  `taskflow-mcp-core`. The directory (`packages/taskflow-mcp-core`), the host
+  adapters dependency pins, and all `taskflow-mcp/server` / `taskflow-mcp/jsonrpc`
+  imports were updated accordingly. The adapters own bin names
+  (`codex-taskflow-mcp` / `claude-taskflow-mcp` / `opencode-taskflow-mcp`) are unchanged.
 
 ### Added
 - **Library Phase 1: search-before-author + reusable-flow assets.** A new
@@ -44,7 +52,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   config scaffold, mirroring the Codex/Claude adapters. A flow's subagents can
   now execute as isolated `opencode run` sessions, and taskflow is exposed to
   OpenCode via the same `taskflow_*` MCP tools. Register with
-  `opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp`
+  `opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp-core`
   (or an `opencode.json` `mcp` entry). See `docs/opencode-mcp.md`.
   - Read-only phases inject a deny-mutations permission policy via
     `OPENCODE_CONFIG_CONTENT` (genuinely enforced); mutating phases run with
@@ -325,7 +333,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - **Codex plugin** (`packages/codex-taskflow/plugin/`) for zero-config,
   plug-and-play install: `codex plugin marketplace add heggria/taskflow` then
   `codex plugin add taskflow@taskflow`. Ships a `.codex-plugin/plugin.json`
-  manifest, a `.mcp.json` that launches the MCP server via `npx -y -p codex-taskflow@<version> codex-taskflow-mcp`
+  manifest, a `.mcp.json` that launches the MCP server via `npx -y -p codex-taskflow@<version> codex-taskflow-mcp-core`
   (no separate global install), and a routing `SKILL.md` so Codex reaches for the
   `taskflow_*` tools on multi-phase / fan-out work automatically. A repo-root
   `.claude-plugin/marketplace.json` makes the plugin discoverable.
@@ -403,9 +411,9 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   typebox). Vendors the three small pi helpers it used (`StringEnum`,
   `parseFrontmatter`, `getAgentDir`) so it is fully standalone.
 - **`codex-taskflow`** — run taskflow on OpenAI Codex: a `codex exec`-backed
-  subagent runner, plus a dependency-free MCP server (`codex-taskflow-mcp`) that
+  subagent runner, plus a dependency-free MCP server (`codex-taskflow-mcp-core`) that
   exposes `taskflow_run/list/show/verify/compile` to Codex users. Register with
-  `codex mcp add taskflow -- codex-taskflow-mcp`.
+  `codex mcp add taskflow -- codex-taskflow-mcp-core`.
 - **Host-neutral `SubagentRunner` seam** — the engine drives any host via an
   injected `runTask`; `piSubagentRunner` and `codexSubagentRunner` are the two
   implementations.
