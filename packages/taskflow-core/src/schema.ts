@@ -1073,6 +1073,14 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.over);
 	scan(phase.when);
 	scan(phase.until);
+	// Script phases: the array form of `run` supports {steps.X}/{args.X}
+	// interpolation (the string form does NOT — it's a raw shell command,
+	// validation rejects placeholders in it), and `input` (stdin) does too.
+	if (Array.isArray(phase.run)) for (const r of phase.run) if (typeof r === "string") scan(r);
+	if (typeof phase.input === "string") scan(phase.input);
+	// Inline sub-flow: a *string* `def` is interpolated then JSON-parsed, so its
+	// {steps.X} refs are real dependencies. An object `def` is used verbatim.
+	if (typeof phase.def === "string") scan(phase.def);
 	for (const e of asArray<string>(phase.eval)) if (typeof e === "string") scan(e);
 	// Scoring gates: the target ref and judge prompt are interpolated at runtime.
 	const score = (phase as { score?: { target?: unknown; judge?: { task?: unknown } } }).score;

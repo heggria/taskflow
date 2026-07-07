@@ -32,7 +32,12 @@ import type {
 // automatically through `Phase` indexing).
 // ---------------------------------------------------------------------------
 
+// NOTE: keep in sync with PhaseSchema (schema.ts). Every Phase field that is
+// NOT represented on FlowIRNode (id/type/when) must appear here, or it is
+// silently dropped on JSON ↔ DSL round-trip (translateTaskflow copies these
+// verbatim into the sidecar). Missing fields here = data loss on round-trip.
 const SIDECAR_PHASE_FIELDS = [
+	"agent",
 	"task",
 	"over",
 	"as",
@@ -41,9 +46,13 @@ const SIDECAR_PHASE_FIELDS = [
 	"use",
 	"def",
 	"with",
+	"run",
+	"input",
+	"timeout",
 	"until",
 	"maxIterations",
 	"convergence",
+	"reflexion",
 	"variants",
 	"judge",
 	"judgeAgent",
@@ -53,19 +62,22 @@ const SIDECAR_PHASE_FIELDS = [
 	"when",
 	"retry",
 	"output",
+	"expect",
 	"model",
 	"thinking",
 	"tools",
 	"cwd",
+	"final",
+	"optional",
+	"idempotent",
+	"concurrency",
 	"context",
 	"contextLimit",
 	"onBlock",
 	"eval",
+	"score",
 	"cache",
 	"shareContext",
-	"optional",
-	"final",
-	"concurrency",
 ] as const;
 
 /** Build the per-phase sidecar record (verbatim copy of non-IR fields). */
@@ -112,9 +124,13 @@ export function translateTaskflow(def: Taskflow): {
 
 	const nodes: FlowIRNode[] = def.phases.map((phase) => {
 		const refs = collectRefs(phase);
-		// declared reads: the {steps.X} refs this phase statically references.
-		const reads = refs.steps.filter((id) => id !== phase.id);
-		declaredDeps[phase.id] = { reads, writes: [phase.id] };
+		// declared reads: the {steps.X} refs this phase statically references,
+		// UNION the phase's explicit dependsOn (a declared-but-unobserved edge —
+		// e.g. a semantic ordering that no interpolation captures — still counts
+		// as a dependency for staleness propagation; observed ∪ declared).
+		const reads = new Set<string>(refs.steps.filter((id) => id !== phase.id));
+		for (const d of phase.dependsOn ?? []) if (d !== phase.id) reads.add(d);
+		declaredDeps[phase.id] = { reads: Array.from(reads), writes: [phase.id] };
 
 		// Advisory: a {steps.X} ref whose target doesn't exist (mirrors the
 		// validation check but non-fatal here — validation is the source of
@@ -139,7 +155,7 @@ export function translateTaskflow(def: Taskflow): {
 		return {
 			id: phase.id,
 			kind: phase.type ?? "agent",
-			inject: reads,
+			inject: Array.from(reads),
 			emits: [phase.id],
 			when: phase.when,
 		} satisfies FlowIRNode;
