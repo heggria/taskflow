@@ -2,6 +2,17 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.1.7] — 2026-07-07
+
+### Fixed
+- **The pi-taskflow "built-in agents upgrade" hint is now truly one-time.** It
+  previously re-printed every session while `settings.json` lacked a `taskflow`
+  key and the project had `.pi/agents/*.md`. A marker file
+  (`~/.pi/agent/.taskflow-upgrade-hint-shown`) is now written atomically (`wx`
+  flag) after the first print, so subsequent sessions skip it. Best-effort: an
+  unwritable agent dir only means the hint may show once more; it never blocks
+  session startup.
+
 ## [0.1.6] — 2026-07-06
 
 ### Changed
