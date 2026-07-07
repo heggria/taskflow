@@ -1,16 +1,28 @@
 /**
- * taskflow 0.2.0 — Solid 路线 DSL 复杂度演示
+ * taskflow 0.2.0 — DSL 复杂度演示(愿景上限)
+ *
+ * ⚠️ POST-0.2.0 特性警告 ──────────────────────────────────────────
+ * 这个 demo 故意展示了 0.2.0 的【完整愿景上限】,其中部分特性在
+ * `docs/rfc-0.2.0-dsl-syntax.md` §7 明确标为 **post-0.2.0**(依赖全局
+ * 响应式运行时 / Shared Context Tree,首版不含):
+ *   - `$derived` / `$state`      全局响应式派生状态
+ *   - `read()` / `write()`       读写全局响应式 store
+ *   - `flow.component(...)`      带 props 的可复用子 flow
+ * 这些行在文件内用 `// [post-0.2.0]` 标注。0.2.0 首版能跑的是其余部分
+ * (agent/map/gate/reduce/loop/tournament/approval/script + 编译期类型)。
+ * 不要把这个文件当作 0.2.0 首版的可运行样例 —— 它是愿景草图。
+ * ────────────────────────────────────────────────────────────────
  *
  * 场景:大型 monorepo 的"智能迁移 + 安全审计 + 自愈"系统。
  * 把 styled-components 全量迁移到 Tailwind,同时跑安全审计,
  * 失败自动修复,最后 tournament 选最优策略汇总。
  *
- * 这个 demo 展示 Solid 路线能写出的工程级复杂度:
- *   - 响应式组合(flow 片段像 Solid 组件一样组合)
- *   - 自动依赖追踪(读 .output 即依赖,不用手写 dependsOn)
- *   - 派生状态($derived,中间指标自动计算)
+ * 这个 demo 展示 DSL 能写出的工程级复杂度:
+ *   - 响应式组合(flow 片段像组件一样组合)
+ *   - 自动依赖追踪(编译期收集 .output 引用,不用手写 dependsOn)
+ *   - 派生状态($derived [post-0.2.0],中间指标自动计算)
  *   - 细粒度更新(overstory:改一个文件只重算相关分支)
- *   - 跨文件复用(components/ 里是可复用的 flow 组件)
+ *   - 跨文件复用(components/ 里是可复用的 flow 组件 [post-0.2.0])
  *   - 多层 map 嵌套 + gate 链 + tournament + loop 自愈 + 动态子流程
  *
  * 对照:这个逻辑用现在的 JSON DSL 写大约要 300+ 行嵌套 + 字符串模板,
@@ -18,9 +30,9 @@
  */
 
 import { flow, agent, map, parallel, gate, reduce, tournament, loop, approval, script } from "taskflow";
-import { $derived, $state, json, read, type Phase } from "taskflow";
-import { migrateOneFile } from "./components/migrate-one.ts";
-import { auditOneFile } from "./components/audit-one.ts";
+import { $derived, $state, json, read, type Phase } from "taskflow"; // [post-0.2.0] $derived/$state/read 需全局响应式运行时
+import { migrateOneFile } from "./components/migrate-one.ts";          // [post-0.2.0] migrateOneFile 是 flow.component
+import { auditOneFile } from "./components/audit-one.ts";             // [post-0.2.0] auditOneFile 是 flow.component
 
 // ============================================================================
 // 主 flow —— 像写一个 Solid App:组合多个"组件"(子 flow)
@@ -39,7 +51,7 @@ export default flow("smart-migration", ({ args, budget }) => {
   // ↑ files 和 securityBaseline 自动并发;且它们之间无依赖边。
 
   // ── 阶段 2:派生指标(像 Solid 的 const doubled = createMemo) ─────────
-  const plan = $derived(() => ({
+  const plan = $derived(() => ({          // [post-0.2.0] 全局响应式派生
     total: files.output.length,
     batches: chunk(files.output, 8),         // 分批,每批 8 个文件
     riskProfile: securityBaseline.output.includes("no-auth") ? "high" : "normal",
@@ -62,7 +74,7 @@ export default flow("smart-migration", ({ args, budget }) => {
 
   // ── 阶段 4:分批迁移 + 每文件自愈(map 嵌套复用组件) ──────────────────
   const migrations = map(plan.output.batches, (batch, batchIdx) =>
-    flow.component(migrateOneFile, {            // ← 复用 components/migrate-one.ts
+    flow.component(migrateOneFile, {            // [post-0.2.0] 可复用子 flow ← 复用 components/migrate-one.ts
       file: batch,
       strategy: strategy.output,
       dryRun: args.dryRun,
@@ -74,7 +86,7 @@ export default flow("smart-migration", ({ args, budget }) => {
 
   // ── 阶段 5:并行安全审计(复用另一个组件) ───────────────────────────
   const audits = map(files.output, (f) =>
-    flow.component(auditOneFile, { file: f, baseline: securityBaseline.output })
+    flow.component(auditOneFile, { file: f, baseline: securityBaseline.output })  // [post-0.2.0]
   );
 
   // ── 阶段 6:交叉验证 gate(不同 agent 复核迁移 + 审计) ────────────────
@@ -132,7 +144,7 @@ export default flow("smart-migration", ({ args, budget }) => {
 // 组件 1:迁移单个文件(内含 migrate→test→fix 自愈循环)
 // 文件:components/migrate-one.ts —— 像 Solid 的一个可复用组件
 // ============================================================================
-export const migrateOneFile = flow.component(
+export const migrateOneFile = flow.component(   // [post-0.2.0] 可复用子 flow
   "migrate-one",
   ({ props }: { props: { file: string; strategy: string; dryRun: boolean } }) => {
 
@@ -165,7 +177,7 @@ export const migrateOneFile = flow.component(
 // 组件 2:审计单个文件(并行跑 3 个角度 + reduce)
 // 文件:components/audit-one.ts
 // ============================================================================
-export const auditOneFile = flow.component(
+export const auditOneFile = flow.component(    // [post-0.2.0] 可复用子 flow
   "audit-one",
   ({ props }: { props: { file: string; baseline: string } }) => {
 

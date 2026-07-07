@@ -1,4 +1,6 @@
 /**
+ * ⚠️ 愿景草图 —— 含 post-0.2.0 特性($derived/$store/read/write/flow.component)。见 ./README.md。
+ *
  * taskflow 0.2.0 应用 —— 自主软件交付平台
  *
  * issue → 规划 → 实现 → 审查 → 安全审计 → 自愈 → 置信度决策 → 交付/转人工
@@ -15,12 +17,12 @@
  * 改一个 issue 的字段,只有相关分支重算(overstory 增量)。
  */
 
-import { flow, agent, gate, approval, parallel, script, $derived, $store, read, write, when, json } from "taskflow";
-import planFlow from "./flows/plan.ts";
-import implementFlow from "./flows/implement.ts";
-import { reviewChanges } from "./components/review-changes.ts";
-import { securityAudit } from "./components/security-audit.ts";
-import { dashboard, remainingBudget } from "./stores/dashboard.ts";
+import { flow, agent, gate, approval, parallel, script, $derived, $store, read, write, when, json } from "taskflow"; // $derived/$store/read/write = [post-0.2.0]
+import planFlow from "./flows/plan.ts";             // [post-0.2.0] planFlow 内部用 $derived
+import implementFlow from "./flows/implement.ts";    // [post-0.2.0] implementFlow 用 flow.component
+import { reviewChanges } from "./components/review-changes.ts";  // [post-0.2.0] flow.component
+import { securityAudit } from "./components/security-audit.ts"; // [post-0.2.0] flow.component
+import { dashboard, remainingBudget } from "./stores/dashboard.ts"; // [post-0.2.0] $store/$derived
 import { config } from "./config/app.ts";
 import { needsSecurityReview, inferComplexity } from "./lib/utils.ts";
 import type { Issue, DeliveryReport, DeliveryStatus } from "./types/domain.ts";

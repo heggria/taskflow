@@ -1,4 +1,6 @@
 /**
+ * ⚠️ 全 post-0.2.0 —— 整个文件基于 $store/$derived(全局响应式)。见 ../README.md。
+ *
  * 响应式 Store —— 全局共享状态(跨 flow / 跨 phase)。
  *
  * 这是 Solid 路线的精华:像 Solid 的 createRoot + createStore,
@@ -9,7 +11,7 @@
  * 0.2.0 把它包装成 Solid 风格的 $store rune。
  */
 
-import { $store, $derived } from "taskflow";
+import { $store, $derived } from "taskflow";  // [post-0.2.0] 整个文件都基于全局响应式
 import type { DeliveryReport, Issue } from "../types/domain.ts";
 
 /** 全局交付看板:实时跟踪所有 issue 的进度。 */

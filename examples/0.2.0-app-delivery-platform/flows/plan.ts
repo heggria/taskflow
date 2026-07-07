@@ -1,4 +1,6 @@
 /**
+ * ⚠️ 愿景草图 —— 含 post-0.2.0 特性($derived/read/historicalConfidence)。见 ../README.md。
+ *
  * Flow:需求理解 + 规划。
  *
  * 读 issue → 拆解 → tournament 选最优方案 → 输出 Plan。

@@ -1,4 +1,6 @@
 /**
+ * ⚠️ 愿景草图 —— 含 post-0.2.0 特性(flow.component/selfHeal)。见 ../README.md。
+ *
  * Flow:实现 + 自愈。
  *
  * 拿 Plan → 按 step 实现 → 每个 step 跑测试自愈 → 输出 diff。

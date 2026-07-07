@@ -1,4 +1,6 @@
 /**
+ * ⚠️ 愿景草图 —— 含 post-0.2.0 特性(read/hotspotFiles)。见 ./README.md。
+ *
  * 组件:多视角代码审查。
  *
  * 像 Solid 的一个可复用组件 —— 接受 props,内部有自己的响应式状态,
