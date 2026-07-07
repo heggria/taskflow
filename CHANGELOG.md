@@ -5,6 +5,32 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ## [0.1.7] — 2026-07-07
 
 ### Fixed
+- **File loaders now report *why* a file failed, with the parse position —
+  instead of a merged "not found or unparseable" message.** Four user-facing
+  loaders (`readDefineFile`, `readFlowFile`/`listFlows`, `tryReadRunFile`, and
+  the library sidecar `readMeta`/`readMetaNextTo`) used to collapse two
+  distinct failures — *file missing* and *file malformed* — into a single
+  `null` / `"… not found or unparseable"` result. The underlying `JSON.parse`
+  `SyntaxError` (which carries the offending byte offset and, on Node ≥17, a
+  line/column) was swallowed by the lenient `safeParse` and never reached the
+  user. A hand-authored `defineFile` with a stray bare newline inside a string
+  literal therefore reported "defineFile not found or unparseable" and sent
+  authors chasing a phantom path/cwd problem. The loaders now return a
+  discriminated `LoadResult<T>` (`{ ok: true, value } | { ok: false, reason:
+  "missing" | "unparseable", path, detail }`); `detail` carries the original
+  parse error (e.g. `Bad control character in string literal in JSON at
+  position 3979 (line 30 column 801)`), surfaced via a shared
+  `describeLoadFailure(r, what)` helper. New strict `parseStrict(text,
+  { allowFence })` (in `interpolate.ts`) preserves the `SyntaxError`; the
+  lenient `safeParse` is unchanged, so all ~25 LLM/subagent output paths keep
+  their fail-open fence/balanced-bracket recovery. `listFlows` now `console.warn`s
+  on a corrupt saved flow instead of silently dropping it (so `getFlow(name)`
+  no longer reports "not found" for a file that clearly exists); new
+  `getFlowDiagnosed` / `loadRunDiagnosed` distinguish corrupt-vs-missing for
+  by-name/by-runId resolution. **Breaking** (pre-1.0): `readDefineFile`,
+  `readMeta`, and `readMetaNextTo` return `LoadResult<T>` instead of `T | null`.
+  The opaquely-fail-open paths (index-rebuild scans, `cache.ts` file hashing,
+  path-traversal rejections) are intentionally unchanged.
 - **The pi-taskflow "built-in agents upgrade" hint is now truly one-time.** It
   previously re-printed every session while `settings.json` lacked a `taskflow`
   key and the project had `.pi/agents/*.md`. A marker file

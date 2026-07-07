@@ -173,7 +173,7 @@ test("mcp: taskflow_verify with a missing defineFile returns a clear error", asy
 		},
 	]);
 	assert.equal(res.error.code, -32602);
-	assert.match(res.error.message, /defineFile not found or unparseable/);
+	assert.match(res.error.message, /defineFile not found:/);
 });
 
 test("mcp: tools/call unknown tool returns invalid-params", async () => {

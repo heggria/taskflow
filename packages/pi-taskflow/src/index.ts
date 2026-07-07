@@ -35,9 +35,11 @@ import { type UsageStats } from "taskflow-core";
 import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
 	getFlow,
+	getFlowDiagnosed,
 	listFlows,
 	listRuns,
 	loadRun,
+	loadRunDiagnosed,
 	newRunId,
 	peekRun,
 	type RunState,
@@ -45,6 +47,7 @@ import {
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
+	describeLoadFailure,
 	readMeta,
 	saveFlowWithMeta,
 	bumpReuseInSidecar,
@@ -685,7 +688,8 @@ export default function (pi: ExtensionAPI) {
 				const text = flows.length
 					? flows
 							.map((f) => {
-								const meta = readMeta(ctx.cwd, f.name);
+								const metaR = readMeta(ctx.cwd, f.name);
+							const meta = metaR.ok ? metaR.value : undefined;
 								const base = `- ${f.name} (${f.scope}): ${f.def.description ?? ""} — ${f.def.phases?.length ?? 0} phase(s)`;
 								if (meta?.purpose) {
 									const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
@@ -737,8 +741,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -794,8 +798,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -840,8 +844,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -889,8 +893,9 @@ export default function (pi: ExtensionAPI) {
 			if (action === "resume") {
 				if (!params.runId)
 					return errorResult(action, "action=resume requires 'runId'");
-				const prev = loadRun(ctx.cwd, params.runId);
-				if (!prev) return errorResult(action, `Run not found: ${params.runId}`);
+				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
+				const prev = prevR.value;
 				const result = await runFlow(prev.def, prev.args, ctx, signal, onUpdate as any, prev);
 				return finalResult(action, result);
 			}
@@ -898,8 +903,9 @@ export default function (pi: ExtensionAPI) {
 			if (action === "provenance") {
 				if (!params.runId)
 					return errorResult(action, "action=provenance requires 'runId'");
-				const run = loadRun(ctx.cwd, params.runId);
-				if (!run) return errorResult(action, `Run not found: ${params.runId}`);
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
 				return {
 					content: [{ type: "text", text: formatProvenance(run) }],
 					details: { action } satisfies TaskflowDetails,
@@ -909,8 +915,9 @@ export default function (pi: ExtensionAPI) {
 			if (action === "why-stale") {
 				if (!params.runId)
 					return errorResult(action, "action=why-stale requires 'runId'");
-				const run = loadRun(ctx.cwd, params.runId);
-				if (!run) return errorResult(action, `Run not found: ${params.runId}`);
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
 				const reads = readMapOf(run.phases);
 				const declared = declaredReadMapOfDef(run.def);
 				const seeds = params.phaseId ? [String(params.phaseId)] : [];
@@ -925,8 +932,9 @@ export default function (pi: ExtensionAPI) {
 					return errorResult(action, "action=recompute requires 'runId'");
 				if (!params.phaseId)
 					return errorResult(action, "action=recompute requires 'phaseId' (the seed phase to re-run)");
-				const prev = loadRun(ctx.cwd, params.runId);
-				if (!prev) return errorResult(action, `Run not found: ${params.runId}`);
+				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
+				const prev = prevR.value;
 				// H1: the LLM-callable tool defaults to a SAFE dry-run (no tokens, no
 				// mutation). A real recompute — which spends money and overwrites the
 				// run — requires an explicit dryRun:false.
@@ -960,8 +968,8 @@ export default function (pi: ExtensionAPI) {
 			let resolvedDefine: unknown = params.define;
 			if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 				const fromFile = readDefineFile(params.defineFile);
-				if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-				resolvedDefine = fromFile;
+				if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+				resolvedDefine = fromFile.value;
 			}
 			if (typeof resolvedDefine === "string") {
 				const parsed = safeParse(resolvedDefine);
@@ -1000,15 +1008,14 @@ export default function (pi: ExtensionAPI) {
 				if (!v.ok) return errorResult(action, `Invalid taskflow:\n- ${v.errors.join("\n- ")}`);
 				def = candidate as Taskflow;
 			} else if (params.name) {
-				const saved = getFlow(ctx.cwd, params.name);
-				if (!saved) {
-					const available = listFlows(ctx.cwd);
-					const hint = available.length
-						? ` Available flows: ${available.map((f) => f.name).join(", ")}.`
-						: " No saved flows found. Use action=save to create one, or pass 'define' for an inline flow.";
-					return errorResult(action, `Saved flow '${params.name}' not found.${hint}`);
+				const savedR = getFlowDiagnosed(ctx.cwd, params.name);
+				if (!savedR.ok) {
+					const hint = savedR.reason === "missing"
+						? (() => { const available = listFlows(ctx.cwd); return available.length ? ` Available flows: ${available.map((f) => f.name).join(", ")}.` : " No saved flows found. Use action=save to create one, or pass 'define' for an inline flow."; })()
+						: "";
+					return errorResult(action, `${describeLoadFailure(savedR, `Saved flow '${params.name}'`)}.${hint}`);
 				}
-				def = saved.def;
+				def = savedR.value.def;
 			}
 			if (!def)
 				return errorResult(
@@ -1029,7 +1036,8 @@ export default function (pi: ExtensionAPI) {
 				// RFC library: write a sidecar .meta.json alongside the flow so search can
 				// retrieve it. Structural fields are derived; purpose/tags/notes come
 				// from the caller. (Phase 1: no embedding yet — embedded later.)
-				const prevMeta = readMeta(ctx.cwd, def.name) ?? undefined;
+				const prevMetaR = readMeta(ctx.cwd, def.name);
+				const prevMeta = prevMetaR.ok ? prevMetaR.value : undefined;
 				const meta = deriveMeta(def, {
 					purpose: typeof params.purpose === "string" ? params.purpose : undefined,
 					tags: Array.isArray(params.tags) ? (params.tags as string[]).filter((t) => typeof t === "string") : undefined,
@@ -1256,12 +1264,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (sub === "show") {
-				const flow = getFlow(ctx.cwd, arg);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${arg}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, arg);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${arg}"`), "error");
 					return;
 				}
-				const meta = readMeta(ctx.cwd, arg);
+				const flow = flowR.value;
+				const metaR = readMeta(ctx.cwd, arg);
+				const meta = metaR.ok ? metaR.value : undefined;
 				if (meta) {
 					const out = { definition: flow.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
 					ctx.ui.notify(JSON.stringify(out, null, 2), "info");
@@ -1280,11 +1290,12 @@ export default function (pi: ExtensionAPI) {
 				const parts = arg.trim().split(/\s+/);
 				const flowName = parts[0];
 				const direction = parts[1]?.toLowerCase() === "lr" ? "LR" : "TD";
-				const flow = getFlow(ctx.cwd, flowName);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${flowName}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				// Schema-validate before compiling so a malformed saved flow yields a
 				// clean error rather than a half-rendered diagram (mirrors the tool action).
 				const vr = validateTaskflow(flow.def, { cwd: ctx.cwd ? String(ctx.cwd) : undefined });
@@ -1304,11 +1315,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const flowName = arg.trim().split(/\s+/)[0];
-				const flow = getFlow(ctx.cwd, flowName);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${flowName}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				// Schema-validate before compiling so a malformed saved flow yields a
 				// clean error rather than a half-rendered report (mirrors action=ir).
 				const vr = validateTaskflow(flow.def, { cwd: ctx.cwd ? String(ctx.cwd) : undefined });
@@ -1327,11 +1339,12 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /tf provenance <runId>", "warning");
 					return;
 				}
-				const run = loadRun(ctx.cwd, arg);
-				if (!run) {
-					ctx.ui.notify(`Run not found: ${arg}`, "error");
+				const runR = loadRunDiagnosed(ctx.cwd, arg);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${arg}"`), "error");
 					return;
 				}
+				const run = runR.value;
 				ctx.ui.notify(formatProvenance(run), "info");
 				return;
 			}
@@ -1342,11 +1355,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const [rid, ...rest] = arg.trim().split(/\s+/);
-				const run = loadRun(ctx.cwd, rid);
-				if (!run) {
-					ctx.ui.notify(`Run not found: ${rid}`, "error");
+				const runR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${rid}"`), "error");
 					return;
 				}
+				const run = runR.value;
 				const reads = readMapOf(run.phases);
 				const declared = declaredReadMapOfDef(run.def);
 				ctx.ui.notify(formatWhyStale(run.runId, run.flowName, reads, rest, declared), "info");
@@ -1362,11 +1376,12 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /tf recompute <runId> <phaseId> [--apply]\n(default is a safe dry-run; --apply spends tokens)", "warning");
 					return;
 				}
-				const prev = loadRun(ctx.cwd, rid);
-				if (!prev) {
-					ctx.ui.notify(`Run not found: ${rid}`, "error");
+				const prevR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!prevR.ok) {
+					ctx.ui.notify(describeLoadFailure(prevR, `Run "${rid}"`), "error");
 					return;
 				}
+				const prev = prevR.value;
 				const settings = readSubagentSettings();
 				const { agents } = discoverAgents(ctx.cwd, prev.def.agentScope ?? "user", settings.modelRoles, settings.taskflow);
 				const deps: RuntimeDeps = {
@@ -1460,11 +1475,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const [name, ...maybeArgs] = arg.split(/\s+/);
-				const flow = getFlow(ctx.cwd, name);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${name}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, name);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${name}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				if (!ctx.isIdle()) {
 					ctx.ui.notify("Agent is busy; try again when idle.", "warning");
 					return;

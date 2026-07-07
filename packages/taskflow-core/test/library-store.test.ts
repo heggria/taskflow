@@ -18,6 +18,13 @@ import {
 	sidecarPathFor,
 } from "../src/store.ts";
 import { deriveMeta } from "../src/library/meta.ts";
+import type { FlowMeta } from "../src/library/types.ts";
+
+/** Test helper: readMeta now returns a LoadResult; unwrap to FlowMeta | null. */
+function metaOf(cwd: string, name: string): FlowMeta | null {
+	const r = readMeta(cwd, name);
+	return r.ok ? r.value : null;
+}
 
 function makeTmpCwd(): string {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-lib-store-"));
@@ -43,7 +50,7 @@ test("saveFlowWithMeta: writes flow + sidecar, readMeta recovers it", () => {
 		assert.ok(fs.existsSync(filePath));
 		assert.ok(fs.existsSync(metaPath));
 		assert.equal(path.basename(metaPath), "audit-endpoints.meta.json");
-		const back = readMeta(cwd, "audit-endpoints");
+		const back = metaOf(cwd, "audit-endpoints");
 		assert.equal(back?.purpose, "审计鉴权");
 		assert.deepEqual(back?.tags, ["audit", "auth"]);
 		assert.equal(back?.phaseSignature, "agent→reduce");
@@ -76,7 +83,7 @@ test("A1 regression guard: a sidecar that looks flow-like (has a name field) is 
 		// The listFlows filter must reject it by suffix BEFORE readFlowFile runs.
 		saveFlowWithMeta(cwd, sampleDef, deriveMeta(sampleDef, {}));
 		const metaPath = sidecarPathFor(cwd, "audit-endpoints");
-		const malicious = JSON.stringify({ ...readMeta(cwd, "audit-endpoints"), name: "ghost-xyz" }, null, 2);
+		const malicious = JSON.stringify({ ...metaOf(cwd, "audit-endpoints"), name: "ghost-xyz" }, null, 2);
 		fs.writeFileSync(metaPath, malicious, "utf-8");
 		const flows = listFlows(cwd);
 		const names = flows.map((f) => f.name);
@@ -90,7 +97,7 @@ test("A1 regression guard: a sidecar that looks flow-like (has a name field) is 
 test("readMeta: returns null for missing flow", () => {
 	const cwd = makeTmpCwd();
 	try {
-		assert.equal(readMeta(cwd, "does-not-exist"), null);
+		assert.equal(metaOf(cwd, "does-not-exist"), null);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
@@ -100,12 +107,12 @@ test("bumpReuseInSidecar: increments reuseCount + lastUsedAt, idempotent under r
 	const cwd = makeTmpCwd();
 	try {
 		saveFlowWithMeta(cwd, sampleDef, deriveMeta(sampleDef, {}));
-		assert.equal(readMeta(cwd, "audit-endpoints")?.reuseCount, 0);
-		assert.equal(readMeta(cwd, "audit-endpoints")?.lastUsedAt, null);
+		assert.equal(metaOf(cwd, "audit-endpoints")?.reuseCount, 0);
+		assert.equal(metaOf(cwd, "audit-endpoints")?.lastUsedAt, null);
 
 		const n1 = bumpReuseInSidecar(cwd, "audit-endpoints");
 		assert.equal(n1, 1);
-		const after1 = readMeta(cwd, "audit-endpoints");
+		const after1 = metaOf(cwd, "audit-endpoints");
 		assert.equal(after1?.reuseCount, 1);
 		assert.ok((after1?.lastUsedAt ?? 0) > 0);
 
@@ -130,10 +137,10 @@ test("bumpReuseInSidecar: creates a minimal sidecar if save used the legacy save
 	try {
 		// legacy save (no sidecar) — backward compat
 		saveFlow(cwd, sampleDef, "project");
-		assert.equal(readMeta(cwd, "audit-endpoints"), null);
+		assert.equal(metaOf(cwd, "audit-endpoints"), null);
 		const n = bumpReuseInSidecar(cwd, "audit-endpoints");
 		assert.equal(n, 1);
-		const m = readMeta(cwd, "audit-endpoints");
+		const m = metaOf(cwd, "audit-endpoints");
 		assert.equal(m?.reuseCount, 1);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });

@@ -28,7 +28,7 @@ import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
 import {
 	discoverAgents,
 	executeTaskflow,
-	getFlow,
+	getFlowDiagnosed,
 	listFlows,
 	newRunId,
 	peekRun,
@@ -36,6 +36,7 @@ import {
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
+	describeLoadFailure,
 	compileTaskflow,
 	verifyTaskflow,
 	desugar,
@@ -280,16 +281,16 @@ const TOOLS: McpTool[] = [
 function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
 	if (params.define === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 		const fromFile = readDefineFile(params.defineFile);
-		if (fromFile === null) throw new RpcError(RPC.INVALID_PARAMS, `defineFile not found or unparseable: ${params.defineFile}`);
-		params = { ...params, define: fromFile };
+		if (!fromFile.ok) throw new RpcError(RPC.INVALID_PARAMS, describeLoadFailure(fromFile, "defineFile"));
+		params = { ...params, define: fromFile.value };
 	}
 	if (params.define !== undefined && params.define !== null) {
 		return isShorthand(params.define) ? desugar(params.define) : (params.define as Taskflow);
 	}
 	if (params.name) {
-		const saved = getFlow(cwd, params.name);
-		if (!saved) throw new RpcError(RPC.INVALID_PARAMS, `No saved flow named "${params.name}" found from ${cwd}.`);
-		return saved.def;
+		const r = getFlowDiagnosed(cwd, params.name);
+		if (!r.ok) throw new RpcError(RPC.INVALID_PARAMS, describeLoadFailure(r, `Saved flow "${params.name}"`));
+		return r.value.def;
 	}
 	throw new RpcError(RPC.INVALID_PARAMS, "Provide either `name` (a saved flow) or `define` (an inline flow).");
 }
@@ -388,7 +389,8 @@ export function makeToolHandlers(
 			const flows = listFlows(cwd);
 			if (flows.length === 0) return textContent("No saved taskflows found from this directory.");
 			const lines = flows.map((f) => {
-				const meta = readMeta(cwd, f.name);
+				const metaR = readMeta(cwd, f.name);
+				const meta = metaR.ok ? metaR.value : undefined;
 				if (meta?.purpose) {
 					const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
 					return `- ${f.name} (${f.scope}) — ${f.def.phases.length} phase(s) · ${purpose} · g=${meta.generality?.toFixed(2) ?? "?"} · used ${meta.reuseCount ?? 0}×`;
@@ -400,9 +402,11 @@ export function makeToolHandlers(
 
 		taskflow_show: async (args) => {
 			const name = String(args.name ?? "");
-			const saved = getFlow(cwd, name);
-			if (!saved) return textContent(`No saved flow named "${name}".`, true);
-			const meta = readMeta(cwd, name);
+			const savedR = getFlowDiagnosed(cwd, name);
+			if (!savedR.ok) return textContent(describeLoadFailure(savedR, `Saved flow "${name}"`), true);
+			const saved = savedR.value;
+			const metaR = readMeta(cwd, name);
+			const meta = metaR.ok ? metaR.value : undefined;
 			if (meta) {
 				const out = { definition: saved.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
 				return textContent(JSON.stringify(out, null, 2));
@@ -428,7 +432,8 @@ export function makeToolHandlers(
 			const v = validateTaskflow(def);
 			if (!v.ok) return textContent(`Flow is invalid:\n- ${v.errors.join("\n- ")}`, true);
 			const scope = args.scope === "user" ? "user" : "project";
-			const prevMeta = readMeta(cwd, name) ?? undefined;
+			const prevMetaR = readMeta(cwd, name);
+		const prevMeta = prevMetaR.ok ? prevMetaR.value : undefined;
 			const meta = deriveMeta(def, {
 				purpose: typeof args.purpose === "string" ? args.purpose : undefined,
 				tags: Array.isArray(args.tags) ? args.tags.filter((t): t is string => typeof t === "string") : undefined,
