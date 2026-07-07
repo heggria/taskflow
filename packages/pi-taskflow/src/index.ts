@@ -18,6 +18,7 @@ import {
 	RECOMMENDED_DEFAULTS,
 	readSettings,
 	writeSettings,
+	getSettingsPath,
 	formatRolesReport,
 	formatDiffReport,
 	formatFlowResult,
@@ -516,23 +517,32 @@ export default function (pi: ExtensionAPI) {
 		// Upgrade hint: if the project already has .pi/agents/ with agent
 		// files but no explicit taskflow settings, the user is upgrading
 		// from the old default (sync=true) and may be surprised that sync
-		// is now disabled by default.
+		// is now disabled by default. Tracked by a marker file so it is shown
+		// at most once per agent dir (never repeats every session).
 		try {
 			const raw = readSettings();
 			if (!("taskflow" in raw)) {
 				const fs = await import("node:fs");
 				const path = await import("node:path");
-				const projectAgentsDir = path.join(ctx.cwd, ".pi", "agents");
-				try {
-					const entries = fs.readdirSync(projectAgentsDir).filter((e: string) => e.endsWith(".md"));
-					if (entries.length > 0) {
-						console.warn(
-							`[taskflow] Note: built-in agents are no longer synced to .pi/agents/ by default. ` +
-							`If you rely on this, run /tf init → 'Configure taskflow preferences' to re-enable. ` +
-							`(This is a one-time upgrade hint.)`,
-						);
-					}
-				} catch { /* .pi/agents/ doesn't exist — no hint needed */ }
+				const markerPath = path.join(path.dirname(getSettingsPath()), ".taskflow-upgrade-hint-shown");
+				if (!fs.existsSync(markerPath)) {
+					const projectAgentsDir = path.join(ctx.cwd, ".pi", "agents");
+					try {
+						const entries = fs.readdirSync(projectAgentsDir).filter((e: string) => e.endsWith(".md"));
+						if (entries.length > 0) {
+							console.warn(
+								`[taskflow] Note: built-in agents are no longer synced to .pi/agents/ by default. ` +
+								`If you rely on this, run /tf init → 'Configure taskflow preferences' to re-enable. ` +
+								`(This is a one-time upgrade hint.)`,
+							);
+							// Persist the marker so the hint is not shown again. Best-effort:
+							// an unwritable agent dir just means it may show once more.
+							try {
+								fs.writeFileSync(markerPath, new Date().toISOString() + "\n", { flag: "wx" });
+							} catch { /* marker already exists or unwritable — best effort */ }
+						}
+					} catch { /* .pi/agents/ doesn't exist — no hint needed */ }
+				}
 			}
 		} catch {
 			// Best-effort: settings.json missing or unreadable is not an error.
