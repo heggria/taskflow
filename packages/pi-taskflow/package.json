@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
   "keywords": [
     "pi-package",
@@ -53,7 +53,7 @@
     "image": "https://raw.githubusercontent.com/heggria/taskflow/main/assets/social-preview.png"
   },
   "dependencies": {
-    "taskflow-core": "0.1.6"
+    "taskflow-core": "0.1.7"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

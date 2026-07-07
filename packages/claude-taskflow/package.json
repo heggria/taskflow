@@ -1,6 +1,6 @@
 {
   "name": "claude-taskflow",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Run taskflow on Claude Code: a Claude subagent runner plus an MCP server (and a plug-and-play Claude Code plugin) that exposes the taskflow_* tools to Claude Code users.",
   "keywords": [
     "claude",
@@ -54,8 +54,8 @@
     "access": "public"
   },
   "dependencies": {
-    "taskflow-core": "0.1.6",
-    "taskflow-hosts": "0.1.6",
-    "taskflow-mcp-core": "0.1.6"
+    "taskflow-core": "0.1.7",
+    "taskflow-hosts": "0.1.7",
+    "taskflow-mcp-core": "0.1.7"
   }
 }
