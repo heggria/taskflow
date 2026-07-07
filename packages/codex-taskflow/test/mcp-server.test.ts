@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { serveStdio } from "taskflow-mcp/jsonrpc";
+import { serveStdio } from "taskflow-mcp-core/jsonrpc";
 import { makeMcpHandlers, makeToolHandlers } from "../src/mcp/server.ts";
 
 /** Send a list of JSON-RPC messages through the server, collect responses. */

@@ -41,7 +41,7 @@ See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` i
 |---------------------|------|
 | `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store (zero host-SDK deps) |
 | `packages/taskflow-core/src/agents/` | 18 built-in agent definitions (`.md` with YAML frontmatter) |
-| `packages/taskflow-mcp/` | Host-neutral MCP server: stdio JSON-RPC + `taskflow_*` tools + DAG SVG/outline renderer (depends on taskflow-core) |
+| `packages/taskflow-mcp-core/` | Host-neutral MCP server: stdio JSON-RPC + `taskflow_*` tools + DAG SVG/outline renderer (depends on taskflow-core) |
 | `packages/pi-taskflow/` | Pi extension adapter (`taskflow` tool + `/tf` commands, TUI) + `skills/` |
 | `packages/codex-taskflow/` | Codex subagent runner + MCP bin + Codex plugin |
 | `packages/claude-taskflow/` | Claude Code subagent runner + MCP bin + Claude Code plugin |

@@ -1,7 +1,7 @@
 # Architecture Decisions (taskflow)
 
 > Status: **living document**. Records the structural decisions behind the
-> multi-host layout (taskflow-core / taskflow-mcp / taskflow-hosts / pi-taskflow /
+> multi-host layout (taskflow-core / taskflow-mcp-core / taskflow-hosts / pi-taskflow /
 > codex-taskflow / claude-taskflow / opencode-taskflow), the trade-offs that
 > were considered, and the direction to take as the host count grows.
 >
@@ -164,12 +164,12 @@ error blob.
 - **`runner-core.ts` lives in `taskflow-core`.** It is host-neutral (no host
   SDK import — only `node:child_process`), so keeping it in core does not
   violate the "core has zero host-SDK deps" rule. Moving it out (e.g. into
-  `taskflow-mcp`) would force every host adapter to depend on a second package
+  `taskflow-mcp-core`) would force every host adapter to depend on a second package
   for no benefit.
 - **Skill generation is single-sourced** (`skills-src/` + `build-skills.mjs` +
   a drift-guard test). New hosts add one `entry.<host>.md` and extend the
   comma host list; the skill body is shared. Do not per-host the skill body.
-- **MCP server is its own package (`taskflow-mcp`)** — a pure presentation
+- **MCP server is its own package (`taskflow-mcp-core`)** — a pure presentation
   layer over core. Pi users never pull MCP code. This boundary is correct.
 - **Lockstep versioning is kept for now** (all seven packages share a version).
   It is crude but it is *less* work than tracking which subset of packages need

@@ -5,18 +5,18 @@ taskflow is a monorepo of seven independently published packages:
 | Package | npm name | What it is |
 |---------|----------|------------|
 | `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify). Zero host SDK deps. |
-| `packages/taskflow-mcp` | **`taskflow-mcp`** | Host-neutral MCP server (stdio JSON-RPC + taskflow_* tools + DAG renderer). Depends on core. |
+| `packages/taskflow-mcp-core` | **`taskflow-mcp-core`** | Host-neutral MCP server (stdio JSON-RPC + taskflow_* tools + DAG renderer). Depends on core. |
 | `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
 | `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
 | `packages/codex-taskflow` | **`codex-taskflow`** | Codex delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 | `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 | `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
 
-Dependency order: `taskflow-mcp`, `taskflow-hosts`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` all depend on `taskflow-core` (`taskflow-mcp` and `taskflow-hosts` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp`), so **core publishes first, then taskflow-mcp, then taskflow-hosts, then the adapters**.
+Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core` and `taskflow-hosts` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, then taskflow-hosts, then the adapters**.
 
 ## One-time setup
 
-All seven names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; the rest (`taskflow-core`, `taskflow-mcp`, `taskflow-hosts`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) are unclaimed (publishing creates them).
+All seven names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; the rest (`taskflow-core`, `taskflow-mcp-core`, `taskflow-hosts`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) are unclaimed (publishing creates them).
 
 ```sh
 # 1. Point at PUBLIC npm (the repo's default registry may be a private mirror)
@@ -69,7 +69,7 @@ this release's CHANGELOG section, verify:
 ```sh
 # core FIRST — the adapters depend on it
 pnpm publish --filter taskflow-core   --registry=https://registry.npmjs.org/ --provenance
-pnpm publish --filter taskflow-mcp    --registry=https://registry.npmjs.org/ --provenance
+pnpm publish --filter taskflow-mcp-core    --registry=https://registry.npmjs.org/ --provenance
 pnpm publish --filter taskflow-hosts  --registry=https://registry.npmjs.org/ --provenance
 pnpm publish --filter pi-taskflow     --registry=https://registry.npmjs.org/ --provenance
 pnpm publish --filter codex-taskflow  --registry=https://registry.npmjs.org/ --provenance
@@ -79,12 +79,12 @@ pnpm publish --filter opencode-taskflow --registry=https://registry.npmjs.org/ -
 
 `publishConfig.access: public` is set on each package, so scoped/unscoped both publish publicly.
 
-> **Note on `taskflow-core` as a dependency.** `taskflow-mcp`, `taskflow-hosts`, and the host adapters
+> **Note on `taskflow-core` as a dependency.** `taskflow-mcp-core`, `taskflow-hosts`, and the host adapters
 > (`pi-taskflow` / `codex-taskflow` / `claude-taskflow` / `opencode-taskflow`)
 > declare `"taskflow-core": "0.1.6"` (an exact version, not `workspace:*`), so the
 > published tarballs resolve the real npm package once it exists. Always publish
-> `taskflow-core` first and bump all seven in lockstep. (`taskflow-mcp` and `taskflow-hosts` are the
-> other internal dependencies: the MCP host adapters pin `"taskflow-mcp"`; the codex/claude/opencode
+> `taskflow-core` first and bump all seven in lockstep. (`taskflow-mcp-core` and `taskflow-hosts` are the
+> other internal dependencies: the MCP host adapters pin `"taskflow-mcp-core"`; the codex/claude/opencode
 > delivery packages pin `"taskflow-hosts"`.)
 
 ## Tag + GitHub Release (automated)
@@ -101,7 +101,7 @@ git tag v0.1.6 && git push origin v0.1.6
 
 ```sh
 pnpm view taskflow-core version --registry=https://registry.npmjs.org/
-pnpm view taskflow-mcp version --registry=https://registry.npmjs.org/
+pnpm view taskflow-mcp-core version --registry=https://registry.npmjs.org/
 pnpm view taskflow-hosts version --registry=https://registry.npmjs.org/
 pnpm view pi-taskflow  version --registry=https://registry.npmjs.org/
 pnpm view codex-taskflow version --registry=https://registry.npmjs.org/

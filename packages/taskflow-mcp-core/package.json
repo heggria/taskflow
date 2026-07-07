@@ -1,5 +1,5 @@
 {
-  "name": "taskflow-mcp",
+  "name": "taskflow-mcp-core",
   "version": "0.1.6",
   "description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode adapters — depends only on taskflow-core.",
   "keywords": [
@@ -19,7 +19,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/heggria/taskflow.git",
-    "directory": "packages/taskflow-mcp"
+    "directory": "packages/taskflow-mcp-core"
   },
   "type": "module",
   "engines": {
@@ -53,7 +53,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp-core",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {

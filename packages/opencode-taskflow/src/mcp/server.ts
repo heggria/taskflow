@@ -1,5 +1,5 @@
 /**
- * The OpenCode binding of the host-neutral MCP server (taskflow-mcp/server).
+ * The OpenCode binding of the host-neutral MCP server (taskflow-mcp-core/server).
  *
  * The protocol layer, tool schemas, and handlers all live in core; this shim
  * only closes the loop for OpenCode: every subagent a flow spawns is itself an
@@ -12,8 +12,8 @@ import {
 	makeMcpHandlers as coreMakeMcpHandlers,
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
-} from "taskflow-mcp/server";
-import type { RpcHandler } from "taskflow-mcp/jsonrpc";
+} from "taskflow-mcp-core/server";
+import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { opencodeSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with opencode subagent execution bound in. */
