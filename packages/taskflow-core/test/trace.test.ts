@@ -184,3 +184,36 @@ test("FileTraceSink: never throws on an unwritable dir (fail-open)", () => {
 	// flush must not throw.
 	assert.doesNotThrow(() => sink.flush("p"));
 });
+
+// ─── decision events: gate verdict + unreplayable marker ─────────────────────
+
+test("trace: a gate phase emits a gate-verdict decision event", async () => {
+	const def: Taskflow = {
+		name: "gateflow",
+		phases: [
+			{ id: "g", type: "gate", agent: "a", task: "is it ok? VERDICT: PASS", final: true },
+		],
+	};
+	const { sink, events } = captureSink();
+	await executeTaskflow(mkState(def), baseDeps(mockRunner(() => "looks fine. VERDICT: PASS"), sink));
+	const verdict = events.find((e) => e.kind === "decision" && e.decision?.type === "gate-verdict");
+	assert.ok(verdict, "a gate-verdict decision event was emitted");
+	assert.equal(verdict!.decision!.type, "gate-verdict");
+	// The discriminated value field carries the parsed verdict.
+	assert.equal((verdict!.decision as { value: string }).value, "pass");
+});
+
+test("trace: a context-sharing phase emits an unreplayable decision marker", async () => {
+	const def: Taskflow = {
+		name: "ctxflow",
+		contextSharing: true,
+		phases: [
+			{ id: "p1", type: "agent", agent: "a", task: "use the blackboard", final: true },
+		],
+	};
+	const { sink, events } = captureSink();
+	await executeTaskflow(mkState(def), baseDeps(mockRunner(() => "ok"), sink));
+	const marker = events.find((e) => e.kind === "decision" && e.decision?.type === "unreplayable");
+	assert.ok(marker, "an unreplayable marker was emitted for the context-sharing phase");
+	assert.equal((marker!.decision as { reason: string }).reason, "context-sharing");
+});

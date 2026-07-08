@@ -36,6 +36,18 @@ All notable changes to taskflow are documented here. This project follows [Keep 
     which scoped this to trace-only in 0.1.7 and deferred replay logic to 0.2.0.)
 
 ### Fixed
+- **Release-prep fixes from a deep cross-adversarial release-readiness review**
+  (scout → risk/security/quality reviewers → critic cross-exam → final-arbiter):
+  - **Bumped the stale `@0.1.6` plugin pins** in `codex-taskflow/plugin/.mcp.json`
+    and `claude-taskflow/plugin/.mcp.json` to `@0.1.7`. Without this,
+    `codex plugin add taskflow@taskflow` / `claude plugin install` would install a
+    server lacking `taskflow_trace`, `taskflow_why_stale`, `taskflow_recompute`,
+    `taskflow_save`, and `taskflow_search` — the 0.1.7 features silently absent.
+    (`opencode-taskflow/plugin/opencode.json` was already at 0.1.7.)
+  - **Taught the `trace` action in the skills** (the actions table + Pi/MCP
+    surface in README) so agents can discover and invoke it — an engine feature
+    the skill doesn't teach effectively doesn't exist.
+  - Added trace **decision-event** tests (gate-verdict, unreplayable marker).
 - **File loaders now report *why* a file failed, with the parse position —
   instead of a merged "not found or unparseable" message.** Four user-facing
   loaders (`readDefineFile`, `readFlowFile`/`listFlows`, `tryReadRunFile`, and

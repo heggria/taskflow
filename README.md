@@ -648,10 +648,12 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf compile <name> [lr\|td]` | **Render the flow as a Mermaid diagram + verification overlay** — 0 tokens, no LLM; paste into a README/issue/PR |
 | `/tf runs` | Browse recent run history (interactive TUI — **live auto-refreshes** while any run is active) |
 | `/tf resume <runId>` | Continue a paused/failed run — cached phases skip automatically |
+| `/tf peek <runId> [phaseId]` | Inspect a phase's intermediate output (the debugging escape hatch) |
+| `/tf trace <runId> [--json]` | Show a run's **deterministic-replay event trace** (each subagent call + runtime decisions) |
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
-Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `why-stale`, `recompute`, `cache-clear`. On Codex, Claude Code, and OpenCode the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
+Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, and OpenCode the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
 
 ## Background (detached) execution
 
