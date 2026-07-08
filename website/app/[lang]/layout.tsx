@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Viewport } from 'next';
 import { I18nProvider } from 'fumadocs-ui/contexts/i18n';
 import { i18n } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
@@ -66,12 +67,9 @@ export async function generateMetadata({
       icon: [{ url: `${base}/favicon.svg`, type: 'image/svg+xml' }],
       apple: [{ url: `${base}/apple-icon`, sizes: '180x180', type: 'image/png' }],
     },
-    // themeColor + appleWebApp pair with app/manifest.ts and app/apple-icon.tsx
+    // themeColor lives in generateViewport() below (Next.js 15+ moved it out
+    // of metadata). appleWebApp pairs with app/manifest.ts + app/apple-icon.tsx
     // so Safari/iOS/Android render a branded tab, splash, and home-screen icon.
-    themeColor: [
-      { media: '(prefers-color-scheme: light)', color: '#fff7ed' },
-      { media: '(prefers-color-scheme: dark)', color: '#1c1917' },
-    ],
     appleWebApp: {
       title: 'taskflow',
       statusBarStyle: 'default',
@@ -94,6 +92,13 @@ export async function generateMetadata({
     },
   };
 }
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#fff7ed' },
+    { media: '(prefers-color-scheme: dark)', color: '#1c1917' },
+  ],
+};
 
 export default async function LangLayout({
   children,
