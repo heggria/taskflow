@@ -410,13 +410,20 @@ of several drafts, or a synthesis of diverse approaches.
 - `mode` — `"best"` (judge picks one winner, default) or `"aggregate"` (judge merges all).
 - `judge` — the judge's rubric/instructions. `judgeAgent` — optional judge agent
   (defaults to the phase `agent`; use a stronger model here).
-- Fail-open: if the judge's pick is unparseable, variant 1 is returned (work is never lost).
+- **Winner format — prefer JSON.** Have the judge return `{"winner": <n>}` (and an
+  optional `"reason"`); the runtime also reads a `WINNER: <n>` line (`#3` and
+  common Markdown emphasis like `WINNER: **3**` are tolerated — issue #54).
+  JSON is more robust than a text marker: there's no formatting the model can
+  get subtly wrong.
+- Fail-open: if the judge's pick is still unparseable, variant 1 is returned
+  (work is never lost — the variants are already computed, so blocking would be
+  worse than picking a safe default).
 
 ```jsonc
 {
   "id": "headline", "type": "tournament", "agent": "executor",
   "variants": 3, "mode": "best",
-  "judge": "Pick the clearest, most accurate headline. End with: WINNER: <n>.",
+  "judge": "Pick the clearest, most accurate headline. Return JSON {\"winner\": <n>, \"reason\": \"...\"}.",
   "task": "Write one headline for the article below.\n\n{steps.draft.output}",
   "dependsOn": ["draft"], "final": true
 }
@@ -492,7 +499,16 @@ Interpolation also runs on a scoring gate's `score.target` and `score.judge.task
 4. Mark the result-bearing phase with `"final": true` (else the last phase wins).
 5. Machine checks before LLM checks: `script` for ground truth, gate `eval`
    before gate `task`, `expect` before a downstream "did it parse?" phase.
-6. `verify` before `run` for anything non-trivial (zero tokens).
+6. **Decision phases should emit structured output, not free text.** Any phase
+   whose output is a *decision* a downstream phase (or the runtime) acts on — a
+   gate verdict, a router's branch, a tournament winner, a judge's score — should
+   use `output: "json"` + an `expect` enum/contract so the decision is
+   machine-validated. Free-text markers (`VERDICT:`, `WINNER:`, `SCORE:`) are
+   tolerated and Markdown-emphasis-tolerant (issue #54), but a JSON contract is
+   strictly more robust: there's no formatting the model can get subtly wrong, and
+   a malformed decision fails the contract (retryable) instead of being silently
+   mis-read.
+7. `verify` before `run` for anything non-trivial (zero tokens).
 
 ## Common mistakes (the runtime rejects these at validation time)
 

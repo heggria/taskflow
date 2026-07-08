@@ -136,9 +136,11 @@ test("parseJudgeOutput: JSON, text markers, fail-closed", () => {
 	assert.equal(parseJudgeOutput('{"score": 0.2}').verdict, "block");
 	assert.equal(parseJudgeOutput("Analysis...\nVERDICT: BLOCK").verdict, "block");
 	assert.equal(parseJudgeOutput("SCORE: 0.75").score, 0.75);
-	// Issue #54: Markdown-emphasized verdict tokens are parsed, not missed.
+	// Issue #54: Markdown-emphasized verdict AND score tokens are parsed, not missed.
 	assert.equal(parseJudgeOutput("### VERDICT: **BLOCK**").verdict, "block");
 	assert.equal(parseJudgeOutput("VERDICT: **PASS**").verdict, "pass");
+	assert.equal(parseJudgeOutput("SCORE: **0.8**").score, 0.8);
+	assert.equal(parseJudgeOutput("Quality is high.\nSCORE: __0.9__").score, 0.9);
 	const open = parseJudgeOutput("I am not sure what to say");
 	assert.equal(open.verdict, "block", "unparseable judge output fails closed");
 	assert.equal(open.score, 0, "unparseable judge output scores 0");

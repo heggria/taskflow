@@ -70,6 +70,18 @@ test("parseTournamentWinner: JSON, text, clamp, fail-open", () => {
 	assert.equal(parseTournamentWinner("I cannot decide", 3).winner, 1); // fail-open
 });
 
+test("parseTournamentWinner: Markdown-emphasized winner tokens (issue #54)", () => {
+	// Models wrap the winner marker in emphasis; a bare-token regex silently
+	// missed it and defaulted to variant 1, losing the judge's actual pick.
+	assert.equal(parseTournamentWinner("Variant 3 is strongest.\n### WINNER: **3**", 3).winner, 3);
+	assert.equal(parseTournamentWinner("WINNER: **2**", 3).winner, 2);
+	assert.equal(parseTournamentWinner("WINNER: __1__", 3).winner, 1);
+	assert.equal(parseTournamentWinner("WINNER: `3`", 3).winner, 3);
+	assert.equal(parseTournamentWinner("WINNER: **#2**", 3).winner, 2); // emphasis around the # form
+	// fail-open still holds when nothing parses
+	assert.equal(parseTournamentWinner("I pick option three", 3).winner, 1);
+});
+
 // ---------------------------------------------------------------------------
 // validation
 // ---------------------------------------------------------------------------

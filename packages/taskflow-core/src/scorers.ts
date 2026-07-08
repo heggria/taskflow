@@ -337,15 +337,34 @@ export function scoreResultJSON(
 }
 
 /**
- * Shared verdict-token matcher. Matches `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT`
- * (last occurrence wins) AND tolerates common Markdown emphasis around the verdict
- * word, because models frequently emit `VERDICT: **BLOCK**`, `VERDICT: __BLOCK__`,
- * `VERDICT: `BLOCK``, or `### VERDICT: **BLOCK**` — a bare-token regex silently
- * misses these and falls to the fail-closed default (issue #54). The emphasis
- * chars (`*`, `_`, `~`, `` ` ``) may appear in runs on either side of the word.
+ * Build an emphasis-tolerant marker regex. Decision phases parse a token the
+ * model emits as a trailing marker (`VERDICT: PASS`, `WINNER: 3`, `SCORE: 0.8`).
+ * Models routinely wrap these tokens in Markdown emphasis (`VERDICT: **BLOCK**`,
+ * `WINNER: __3__`, `SCORE: `0.8``), and a bare-token regex silently misses them —
+ * the genuine signal is lost and the phase falls to its default verdict (issue #54).
+ * This factory injects optional `*`/`_`/`~`/`` ` `` runs on either side of the
+ * captured value so the common Markdown habits are read correctly.
+ *
+ * `label` is escaped; `value` is a RegExp source for the capture group(s).
+ * Returns a fresh `/gi` regex (safe with `String.matchAll`, which never shares
+ * `lastIndex` across calls — concurrency-safe in parallel map phases).
  */
-export const VERDICT_TOKEN_RE =
-	/VERDICT\s*[:=]\s*(?:[*_~`]+\s*)?(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)(?:\s*[*_~`]+)?/gi;
+function markerRe(label: string, value: string): RegExp {
+	// Emphasis chars (* _ ~ `) as a char-class source. Kept as a plain string
+	// (not a template literal) so the backtick doesn't terminate the literal below.
+	const emph = "[*_~`]+";
+	const src = label + "\\s*[:=]\\s*(?:" + emph + "\\s*)?" + value + "(?:\\s*" + emph + ")?";
+	return new RegExp(src, "gi");
+}
+
+/** Matches `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT` (last occurrence wins). */
+export const VERDICT_TOKEN_RE = markerRe("VERDICT", "(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)");
+
+/** Matches `SCORE: 0.x` (last occurrence wins), emphasis-tolerant. */
+export const SCORE_TOKEN_RE = markerRe("SCORE", "([01](?:\\.\\d+)?)");
+
+/** Matches `WINNER: n` (last occurrence wins), emphasis-tolerant; `#n` allowed. */
+export const WINNER_TOKEN_RE = markerRe("WINNER", "#?(\\d+)");
 
 /**
  * Parse an LLM judge's output into a score + verdict. Accepts JSON
@@ -378,7 +397,7 @@ export function parseJudgeOutput(output: string): {
 			return { score: s, verdict: s >= 0.5 ? "pass" : "block", reason, parsed: true };
 		}
 	}
-	const scoreMatches = [...output.matchAll(/SCORE\s*[:=]\s*([01](?:\.\d+)?)/gi)];
+	const scoreMatches = [...output.matchAll(SCORE_TOKEN_RE)];
 	const verdictMatches = [...output.matchAll(VERDICT_TOKEN_RE)];
 	if (scoreMatches.length || verdictMatches.length) {
 		const s = scoreMatches.length ? clamp(Number(scoreMatches[scoreMatches.length - 1][1])) : undefined;

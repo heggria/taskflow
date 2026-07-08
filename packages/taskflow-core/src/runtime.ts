@@ -37,7 +37,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
-import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, VERDICT_TOKEN_RE } from "./scorers.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, VERDICT_TOKEN_RE, WINNER_TOKEN_RE } from "./scorers.ts";
 import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
@@ -2659,7 +2659,7 @@ export function parseTournamentWinner(output: string, count: number): { winner: 
 		const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
 		if (Number.isFinite(n)) return { winner: clamp(n), reason: asReason(o.reason) };
 	}
-	const matches = [...output.matchAll(/WINNER\s{0,20}[:=]\s{0,20}#?\s{0,20}(\d+)/gi)];
+	const matches = [...output.matchAll(WINNER_TOKEN_RE)];
 	if (matches.length) {
 		const n = Number(matches[matches.length - 1][1]);
 		if (Number.isFinite(n)) return { winner: clamp(n) };

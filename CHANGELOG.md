@@ -39,20 +39,24 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   unwritable agent dir only means the hint may show once more; it never blocks
   session startup.
 - **Gate verdict parsing hardened — a genuine BLOCK is no longer silently
-  downgraded to PASS (issue #54).** Models routinely wrap verdict tokens in
-  Markdown emphasis (`VERDICT: **BLOCK**`, `### VERDICT: __BLOCK__`,
-  `VERDICT: `BLOCK``), which the bare-token regex
-  `/VERDICT\s*[:=]\s*(PASS|BLOCK|…)/` missed — the match fell through to the
-  fail-open default and the gate recorded `pass`, letting a blocked review
-  silently continue downstream. Three layered fixes: (1) a shared
-  `VERDICT_TOKEN_RE` now tolerates `*`/`_`/`` ` ``/`~` emphasis runs on either
-  side of the verdict word (in both `parseGateVerdict` and `parseJudgeOutput`);
+  downgraded to PASS (issue #54).** Models routinely wrap decision tokens in
+  Markdown emphasis (`VERDICT: **BLOCK**`, `### WINNER: __3__`, `SCORE: `0.8``),
+  which the bare-token regexes (`/VERDICT\s*[:=]\s*(…)/`, `/WINNER…(\d+)/`,
+  `/SCORE…([01]…)/`) missed — the match fell through to the default verdict,
+  so a genuine BLOCK was silently recorded as `pass` and a judge's actual pick
+  silently reverted to variant 1. Three layered fixes: (1) a shared `markerRe()`
+  factory in `scorers.ts` now emits emphasis-tolerant regexes for **all three**
+  decision markers — `VERDICT_TOKEN_RE`, `SCORE_TOKEN_RE`, `WINNER_TOKEN_RE` —
+  tolerating `*`/`_`/`` ` ``/`~` runs on either side of the captured value (used
+  by `parseGateVerdict`, `parseJudgeOutput`, and `parseTournamentWinner`);
   (2) **gate *model output* that cannot be parsed now fails closed (BLOCK)**
   instead of PASS — a gate that cannot reach a verdict cannot be trusted to
   pass, while *config* slips (unresolved `score.target`, malformed `scorers`)
   remain fail-open with a warning (they are authoring errors that degrade, not a
-  judge that couldn't decide); (3) a free-text gate whose task omits a
-  `VERDICT:` instruction now gets the exact format suffix **auto-appended**.
+  judge that couldn't decide); tournament winner stays fail-open (variant 1 —
+  never lose work, since the variants are already computed); (3) a free-text
+  gate whose task omits a `VERDICT:` instruction now gets the exact format
+  suffix **auto-appended**.
   For maximum robustness, prefer `output: "json"` + `expect` enum
   (`{ verdict: { enum: ["pass","block"] } }`) which machine-validates the verdict.
   Regression tests added for every Markdown variant and the fail-closed default.

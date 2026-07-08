@@ -226,7 +226,7 @@ different *approaches* judged against each other.
 {
   "id": "strategy", "type": "tournament", "mode": "best",
   "judgeAgent": "final-arbiter",
-  "judge": "Judge on: correctness under concurrent access, blast radius, migration cost. Quote evidence. End with WINNER: <n>.",
+  "judge": "Judge on: correctness under concurrent access, blast radius, migration cost. Quote evidence. Return JSON {\"winner\": <n>, \"reason\": \"...\"}.",
   "branches": [
     { "task": "Design the cache-invalidation fix with a conservative approach: minimal diff, no schema change.", "agent": "analyst" },
     { "task": "Design the fix assuming we can change the schema: optimal correctness.", "agent": "analyst" },
@@ -237,7 +237,8 @@ different *approaches* judged against each other.
 ```
 
 Give the judge a **rubric with named criteria**, a stronger model
-(`judgeAgent`), and an exact terminator (`WINNER: <n>`). `mode: "aggregate"`
+(`judgeAgent`), and a structured winner output (`{"winner": <n>}` JSON,
+or an exact `WINNER: <n>` terminator). `mode: "aggregate"`
 instead merges all variants — good for research synthesis, bad for decisions.
 
 ---
