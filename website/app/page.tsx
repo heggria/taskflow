@@ -24,7 +24,7 @@ export default function RootPage() {
         <meta property="og:url" content="https://heggria.github.io/taskflow/en/" />
         <meta
           property="og:image"
-          content="https://heggria.github.io/taskflow/opengraph-image"
+          content="https://heggria.github.io/taskflow/en/opengraph-image"
         />
         <meta name="twitter:card" content="summary_large_image" />
         <meta
@@ -37,7 +37,7 @@ export default function RootPage() {
         />
         <meta
           name="twitter:image"
-          content="https://heggria.github.io/taskflow/opengraph-image"
+          content="https://heggria.github.io/taskflow/en/opengraph-image"
         />
         <meta
           name="google-site-verification"

@@ -71,6 +71,16 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   unparseable model output is affected. *Config* slips (unresolved `score.target`,
   malformed `scorers`) remain fail-open with a warning.
 
+### Security
+- **PostCSS bumped to 8.5.16 (GHSA-qx2m-qp2m-jg93 / CVE-2026-41305, medium).**
+  PostCSS < 8.5.10 did not escape `</style>` when stringifying CSS ASTs, an XSS
+  vector when user-submitted CSS is parsed and re-embedded in HTML `<style>`
+  tags. `next@16.2.10` (a `website/` transitive dep) pinned the vulnerable
+  `postcss@8.4.31`. A root `pnpm.overrides` now forces `postcss@^8.5.10`
+  workspace-wide, hoisting the single `8.4.31` resolution to `8.5.16` (the
+  version `@tailwindcss/postcss` already resolved). The website build (Next.js +
+  Tailwind CSS pipeline) was verified unaffected.
+
 ## [0.1.6] — 2026-07-06
 
 ### Changed
