@@ -168,6 +168,15 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   and saved flows from the library. `safeParse()` for LLM output remains
   strict. Re-exported from the `taskflow-core` barrel as `parseJsonc`.
 
+### Fixed
+- **The pi-taskflow "built-in agents upgrade" hint is now truly one-time.** It
+  previously re-printed every session while `settings.json` lacked a `taskflow`
+  key and the project had `.pi/agents/*.md`. A marker file
+  (`~/.pi/agent/.taskflow-upgrade-hint-shown`) is now written atomically (`wx`
+  flag) after the first print, so subsequent sessions skip it. Best-effort: an
+  unwritable agent dir only means the hint may show once more; it never blocks
+  session startup.
+
 ## [0.1.5] — 2026-07-03
 
 ### Added
