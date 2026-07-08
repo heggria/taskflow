@@ -274,6 +274,13 @@ function runFilePath(runsRoot: string, flowName: string, runId: string): string 
 	return path.join(flowRunDir(runsRoot, flowName), `${runId}.json`);
 }
 
+/** Return the path to a run's deterministic-replay trace (append-only JSONL).
+ *  Sibling to `<runId>.json` in the same per-flow dir. Best-effort: the file
+ *  only exists if a TraceSink was injected for the run. */
+export function traceFilePath(runsRoot: string, flowName: string, runId: string): string {
+	return path.join(flowRunDir(runsRoot, flowName), `${runId}.trace.jsonl`);
+}
+
 /** Return the path to the run index file. */
 function indexPath(runsRoot: string): string {
 	return path.join(runsRoot, "index.json");
@@ -613,6 +620,10 @@ function cleanupTerminalRuns(
 		try { fs.unlinkSync(filePath); } catch { /* already gone */ }
 		// Also remove any orphaned lock file.
 		try { fs.unlinkSync(filePath + ".lock"); } catch { /* ignore */ }
+		// Also remove the deterministic-replay trace (sibling .trace.jsonl +
+		// its append lock) so pruned runs don't accumulate trace files.
+		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl")); } catch { /* ignore */ }
+		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl.lock")); } catch { /* ignore */ }
 		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
 		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
 		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }

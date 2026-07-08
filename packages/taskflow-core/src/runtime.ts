@@ -37,7 +37,12 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
-import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, VERDICT_TOKEN_RE, WINNER_TOKEN_RE } from "./scorers.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, WINNER_TOKEN_RE } from "./scorers.ts";
+import { parseGateVerdict, overBudget as overBudgetCheck, type BudgetCheckInput } from "./deterministic.ts";
+import { type TraceEvent, type TraceSink } from "./trace.ts";
+// Re-export so existing `import { parseGateVerdict } from "./runtime.ts"` callers
+// (and tests) keep working; the implementation now lives in deterministic.ts.
+export { parseGateVerdict };
 import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
@@ -81,6 +86,11 @@ export interface RuntimeDeps {
 	cacheStore?: CacheStore;
 	/** Default cache scope for phases that don't specify one. */
 	cacheScopeDefault?: CacheScope;
+	/** Deterministic-replay trace sink (best-effort, fail-open). When injected,
+	 *  the runtime records each phase's subagent calls + its own decisions to an
+	 *  append-only trace for offline replay. Absent → no-op (runs behave
+	 *  identically to today). See `trace.ts`. */
+	trace?: TraceSink;
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 	/** Internal: pre-resolved Shared Context Tree dir for this run (sub-flows inherit the parent's). */
@@ -349,14 +359,12 @@ function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefined): Ta
 function overBudget(state: RunState): { over: boolean; reason: string } {
 	const budget: Budget | undefined = state.def.budget;
 	if (!budget) return { over: false, reason: "" };
-	const u = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
-	if (budget.maxUSD !== undefined && u.cost > budget.maxUSD) {
-		return { over: true, reason: `cost $${u.cost.toFixed(3)} exceeded cap $${budget.maxUSD}` };
-	}
-	if (budget.maxTokens !== undefined && u.input + u.output > budget.maxTokens) {
-		return { over: true, reason: `tokens ${u.input + u.output} exceeded cap ${budget.maxTokens}` };
-	}
-	return { over: false, reason: "" };
+	const input: BudgetCheckInput = {
+		maxUSD: budget.maxUSD,
+		maxTokens: budget.maxTokens,
+		usages: Object.values(state.phases).map((p) => p.usage ?? emptyUsage()),
+	};
+	return overBudgetCheck(input);
 }
 
 /** Merge several sub-results into a single PhaseState (for map/parallel). */
@@ -417,6 +425,54 @@ function mergePhaseState(
  * A live-update sink that mirrors a subagent's streaming progress into a single
  * phase's state row, then notifies the TUI. Shared by all single-agent phases.
  */
+/** Fail-open trace emit: a throwing/missing sink must NEVER crash a run.
+ *  Mirrors the `safeEmit` discipline used for `persist`/`onProgress`. */
+function traceEmit(deps: RuntimeDeps, event: TraceEvent): void {
+	try {
+		deps.trace?.emit(event);
+	} catch {
+		/* trace is best-effort; never run-breaking */
+	}
+}
+
+/** Fail-open trace flush at phase-end. */
+function traceFlush(deps: RuntimeDeps, phaseId: string): void {
+	try {
+		deps.trace?.flush(phaseId);
+	} catch {
+		/* trace is best-effort; never run-breaking */
+	}
+}
+
+/** Emit a `decision: unreplayable` marker for a phase whose inputs the trace
+ *  cannot fully capture (Shared Context Tree, inner sub-flows, context files,
+ *  unobservable interpolation deps). A future replay marks such phases
+ *  `needs-live-rerun` instead of silently reusing a recorded output.
+ *  Single-phase analog of `hasUnobservedDependencies`. Fail-open. */
+function emitUnreplayableMarker(deps: RuntimeDeps, state: RunState, phase: Phase): void {
+	const reason = unreplayableReason(state, phase);
+	if (!reason) return;
+	traceEmit(deps, {
+		ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "decision",
+		decision: { type: "unreplayable", reason },
+	});
+}
+
+/** Why (if at all) a single phase cannot be deterministically replayed. */
+function unreplayableReason(state: RunState, phase: Phase): "context-sharing" | "inner-flow" | "context-files" | "unobservable-deps" | undefined {
+	if (phase.shareContext === true || state.def.contextSharing === true) return "context-sharing";
+	if (phase.type === "flow") return "inner-flow";
+	if (phase.context && phase.context.length > 0) return "context-files";
+	// Interpolation refs that don't resolve through steps.*/args.*/item.* are
+	// unobservable to the trace (previous.output is observable via dependsOn).
+	const scan = (text: string | undefined): boolean =>
+		!!text && /\{(previous\.output|item\b|item\.)/.test(text);
+	if (scan(phase.task) || scan(phase.when) || scan(phase.until) || (Array.isArray(phase.eval) && phase.eval.some(scan))) {
+		return "unobservable-deps";
+	}
+	return undefined;
+}
+
 function liveSink(state: RunState, phaseId: string, emitProgress: () => void): (l: LiveUpdate) => void {
 	return (l: LiveUpdate) => {
 		const live = state.phases[phaseId];
@@ -694,6 +750,44 @@ interface PhaseExecOpts {
 }
 
 async function executePhase(
+	phase: Phase,
+	state: RunState,
+	deps: RuntimeDeps,
+	prior: PhaseState | undefined,
+	emitProgress: () => void,
+	_retryDepth = 0,
+	opts?: PhaseExecOpts,
+): Promise<PhaseState> {
+	// Trace: phase-start (fail-open). Record whether this phase is replayable
+	// up front so a future replay can short-circuit it without walking events.
+	traceEmit(deps, { ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-start" });
+	if (deps.trace) emitUnreplayableMarker(deps, state, phase);
+	let result: PhaseState;
+	let threw = false;
+	try {
+		result = await executePhaseImpl(phase, state, deps, prior, emitProgress, _retryDepth, opts);
+	} catch (e) {
+		threw = true;
+		// Trace: phase-end on failure (fail-open) before re-throwing.
+		traceEmit(deps, {
+			ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-end",
+			status: "failed", error: e instanceof Error ? e.message : String(e),
+		});
+		traceFlush(deps, phase.id);
+		throw e;
+	}
+	if (threw) return result; // unreachable; satisfies TS
+	// Trace: phase-end with the real status, then flush buffered events.
+	traceEmit(deps, {
+		ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-end",
+		status: result.status, error: result.error,
+	});
+	traceFlush(deps, phase.id);
+	return result;
+}
+
+/** The pre-trace body of executePhase (workspace lifecycle + stamping). */
+async function executePhaseImpl(
 	phase: Phase,
 	state: RunState,
 	deps: RuntimeDeps,
@@ -1012,6 +1106,29 @@ async function executePhaseInner(
 		}
 		if (usages.length > 1) last.usage = aggregateUsage(usages);
 		last.attempts = usages.length;
+		// Trace: record this subagent call (the load-bearing record a future
+		// replay consumes). Fail-open. nodePath carries the item/variant
+		// discriminator (e.g. "review", "review-item-3", "gate-judge").
+		traceEmit(deps, {
+			ts: Date.now(),
+			runId: state.runId,
+			phaseId: phase.id,
+			kind: "subagent-call",
+			input: {
+				agent: agentName,
+				model: phase.model,
+				task,
+				preRead,
+				nodePath: ctxNodeId ?? phase.id,
+				attempt: usages.length > 0 ? usages.length - 1 : undefined,
+			},
+			output: {
+				text: last.output,
+				model: last.model,
+				usage: last.usage,
+				stopReason: last.stopReason,
+			},
+		});
 		return last;
 	};
 
@@ -1436,7 +1553,15 @@ async function executePhaseInner(
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
-		if (type === "gate" && ps.status === "done") ps.gate = parseGateVerdict(r.output);
+		if (type === "gate" && ps.status === "done") {
+			ps.gate = parseGateVerdict(r.output);
+			// Trace: record the gate verdict decision (fail-open). A future replay
+			// re-adjudicates this against a changed threshold.
+			if (ps.gate) traceEmit(deps, {
+				ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "decision",
+				decision: { type: "gate-verdict", value: ps.gate.verdict, reason: ps.gate.reason },
+			});
+		}
 
 		// Shared Context Tree: register this node, mark its terminal status, and
 		// pick up any ctx_spawn intents the subagent queued. The spawned child
@@ -2593,29 +2718,9 @@ function defaultAgent(deps: RuntimeDeps): string {
  * JSON verdict object whose value is non-blocking (e.g. `{"verdict":"No issues
  * found"}`) is an *explicit* pass, not ambiguity, and still resolves to pass.
  */
-export function parseGateVerdict(output: string): { verdict: "pass" | "block"; reason?: string } {
-	const json = safeParse(output);
-	if (json && typeof json === "object") {
-		const o = json as Record<string, unknown>;
-		if (typeof o.continue === "boolean") return { verdict: o.continue ? "pass" : "block", reason: asReason(o.reason) };
-		if (typeof o.pass === "boolean") return { verdict: o.pass ? "pass" : "block", reason: asReason(o.reason) };
-		if (typeof o.verdict === "string") {
-			// Note: do NOT include standalone "no" — natural-language verdicts like
-			// "No issues found" / "no errors" would otherwise be false-positive BLOCK.
-			// An explicit non-blocking verdict word is a semantic PASS, not ambiguity:
-			// fail-closed below only applies when NO verdict could be parsed at all.
-			const block = /block|fail|stop|reject|halt/i.test(o.verdict);
-			return { verdict: block ? "block" : "pass", reason: asReason(o.reason) };
-		}
-	}
-	const matches = [...output.matchAll(VERDICT_TOKEN_RE)];
-	if (matches.length) {
-		const v = matches[matches.length - 1][1].toUpperCase();
-		const pass = v === "PASS" || v === "OK";
-		return { verdict: pass ? "pass" : "block" };
-	}
-	return { verdict: "block", reason: "unparseable gate verdict (fail-closed)" };
-}
+// `parseGateVerdict` is implemented in `deterministic.ts` (a pure seam a
+// future replay can import without dragging in the process-spawning runner).
+// It is imported at the top of this file and re-exported from the barrel.
 
 function asReason(v: unknown): string | undefined {
 	return typeof v === "string" && v.trim() ? v.trim() : undefined;

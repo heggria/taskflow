@@ -37,3 +37,6 @@ export * from "./library/search.ts";
 export * from "./runner-core.ts";
 export * from "./host/runner-types.ts";
 export * from "./flowir/index.ts";
+export * from "./trace.ts";
+export * from "./deterministic.ts";
+export * from "./replay.ts";

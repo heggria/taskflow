@@ -4,6 +4,37 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [0.1.7] — 2026-07-07
 
+### Added
+- **Deterministic-replay trace foundation.** Every run may now record an
+  **append-only event trace** (`runs/<flow>/<runId>.trace.jsonl`) capturing
+  each subagent call's resolved input + full output and the runtime's own
+  decisions (gate verdicts, `unreplayable` markers for context-sharing / inner
+  `flow` / context-file phases). This is the foundation for **deterministic
+  replay** — re-evaluating a recorded run against changed decision knobs (gate
+  thresholds, budget, model route) **without calling the model**, zero tokens
+  offline — which lands in 0.2.0. The schema is already complete enough that 0.2.0
+  replay won't need a breaking migration.
+  - New `trace.ts` (`TraceEvent`, `TraceSink`, buffered `FileTraceSink`,
+    partial-line-tolerant `readTrace`) and `replay.ts` (`ReplayDecision` type
+    contract) modules in `taskflow-core`; re-exported from the barrel.
+  - New optional `RuntimeDeps.trace?: TraceSink` hook — **fail-open** (a missing
+    or throwing sink never crashes a run) and **host-agnostic** (no host SDK in
+    core; runs with no trace sink behave identically to before). Wired into all
+    four `RuntimeDeps` construction sites in the pi adapter and the MCP server.
+  - New `trace` action / `/tf trace <runId> [--json]` command (pi) and
+    `taskflow_trace` MCP tool: read-only inspection of a run's event timeline.
+    Human form truncates subagent outputs (like `peek`); `--json` returns the
+    complete machine-readable record.
+  - Backfilled the MCP server with `taskflow_why_stale` and `taskflow_recompute`
+    (dry-run only) — the MCP host previously lacked 5 analysis actions pi had.
+  - Trace files are cleaned up alongside their runs by `cleanupTerminalRuns`
+    (no unbounded disk accumulation).
+  - Extracted the pure `parseGateVerdict` + a decoupled `overBudget` into
+    `deterministic.ts`, so a future `replay.ts` can import them without dragging
+    in the process-spawning runner. (Design came from a 3-reviewer cross-
+    adversarial plan review: risk-reviewer + critic + reviewer → plan-arbiter,
+    which scoped this to trace-only in 0.1.7 and deferred replay logic to 0.2.0.)
+
 ### Fixed
 - **File loaders now report *why* a file failed, with the parse position —
   instead of a merged "not found or unparseable" message.** Four user-facing

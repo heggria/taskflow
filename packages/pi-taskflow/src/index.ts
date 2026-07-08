@@ -30,7 +30,7 @@ import { renderRunResult, summarizeRun } from "./render.ts";
 import { piSubagentRunner, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
-import { executeTaskflow, recomputeTaskflow, summarizeReuse, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
+import { executeTaskflow, recomputeTaskflow, summarizeReuse, traceFilePath, FileTraceSink, runsDir, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
 import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
@@ -59,6 +59,7 @@ import {
 import { CacheStore } from "taskflow-core";
 import { safeParse } from "taskflow-core";
 import { declaredReadMapOfDef, formatWhyStale, readMapOf } from "taskflow-core";
+import { readTrace, type TraceEvent } from "taskflow-core";
 import type { TaskflowIR } from "taskflow-core";
 import {
 	isValidKey,
@@ -100,8 +101,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "why-stale", "recompute", "cache-clear", "search"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute", "cache-clear", "search"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's deterministic-replay event trace, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -145,8 +146,9 @@ const TaskflowParams = Type.Object({
 		}),
 	),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Invocation arguments for the flow" })),
-	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume)" })),
+	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume), inspect (provenance/trace/why-stale), or recompute" })),
 	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale, or the phase to re-run for action=recompute" })),
+	json: Type.Optional(Type.Boolean({ description: "For action=trace: return the raw event trace as machine-readable JSON instead of a human-readable timeline." })),
 	dryRun: Type.Optional(Type.Boolean({ description: "For action=recompute: compute the stale frontier without re-executing anything (no tokens spent). Defaults to true (safe); set false to actually re-run the seed + stale frontier and persist the updated run" })),
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
@@ -271,6 +273,48 @@ function formatRecompute(r: RecomputeReport): string {
 			lines.push(`  ${glyph[d.outcome] ?? "•"} ${d.phaseId}: ${d.reason}${cause}`);
 		}
 	}
+	return lines.join("\n");
+}
+
+/** Human-readable timeline of a run's deterministic-replay event trace.
+ *  Output text is truncated (default 4000 chars, like `peek`) so a 30-file
+ *  fan-out's full subagent transcripts don't flood the conversation — pass
+ *  `json` for the complete machine-readable record. */
+function formatTrace(events: TraceEvent[], runId: string, flowName: string): string {
+	const lines: string[] = [`Trace — ${flowName} / ${runId}  (${events.length} events)`];
+	lines.push("");
+	const out = (text: string | undefined, limit = 400): string => {
+		if (!text) return "";
+		const t = text.length > limit ? `${text.slice(0, limit)}… (+${text.length - limit} chars)` : text;
+		return t.replace(/\n/g, " ⏎ ");
+	};
+	for (const e of events) {
+		const ts = new Date(e.ts).toISOString().slice(11, 23); // HH:mm:ss.SSS
+		if (e.kind === "phase-start") {
+			lines.push(`${ts}  ▶ ${e.phaseId} start`);
+		} else if (e.kind === "phase-end") {
+			const tag = e.status ? ` [${e.status}]` : "";
+			lines.push(`${ts}  ■ ${e.phaseId} end${tag}${e.error ? ` — ${out(e.error, 120)}` : ""}`);
+		} else if (e.kind === "subagent-call" && e.input && e.output) {
+			const node = e.input.nodePath !== e.phaseId ? ` @${e.input.nodePath}` : "";
+			const att = e.input.attempt ? ` attempt=${e.input.attempt}` : "";
+			lines.push(`${ts}    ↳ ${e.input.agent}${node}${att}: ${out(e.input.task, 160)}`);
+			lines.push(`${ts}      → ${out(e.output.text, 200)}`);
+		} else if (e.kind === "decision" && e.decision) {
+			const d = e.decision;
+			const summary =
+				d.type === "gate-verdict" ? `gate ${d.value.toUpperCase()}${d.reason ? ` — ${out(d.reason, 120)}` : ""}`
+				: d.type === "gate-score" ? `score ${d.combined.toFixed(2)} (≥${d.threshold ?? "—"}) → ${d.verdict.toUpperCase()}`
+				: d.type === "tournament-winner" ? `winner #${d.value}${d.reason ? ` — ${out(d.reason, 120)}` : ""}`
+				: d.type === "budget-hit" ? `budget hit — ${out(d.value, 120)}`
+				: d.type === "cache-hit" ? `cache hit (${d.scope})`
+				: d.type === "when-guard" ? `when-guard ${d.result ? "passed" : "skipped"}: ${out(d.expression, 120)}`
+				: `unreplayable (${d.reason})`;
+			lines.push(`${ts}    ◆ ${e.phaseId} decision: ${summary}`);
+		}
+	}
+	lines.push("");
+	lines.push("(Use action=trace with json:true for the complete machine-readable trace.)");
 	return lines.join("\n");
 }
 
@@ -433,6 +477,10 @@ async function runFlow(
 			globalThinking: settings.globalThinking,
 			signal,
 			persist: persistThrottled,
+			// Deterministic-replay trace (best-effort, fail-open). Records each
+			// subagent call + runtime decisions to an append-only JSONL so a future
+			// `replay` can re-evaluate the run offline. Absent in tests = no-op.
+			trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), state.flowName, state.runId)),
 			// Inject the pi subagent runner. Core is host-neutral and its default
 			// runTask is a no-op stub, so every host MUST inject its own — omitting
 			// this (as the pre-refactor code could, when the default was runAgentTask
@@ -912,6 +960,27 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			if (action === "trace") {
+				if (!params.runId)
+					return errorResult(action, "action=trace requires 'runId'");
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
+				const events = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (events.length === 0)
+					return errorResult(action, `No trace recorded for run "${params.runId}" (the run predates tracing, or no trace sink was injected).`);
+				if (params.json) {
+					return {
+						content: [{ type: "text", text: JSON.stringify(events, null, 2) }],
+						details: { action } satisfies TaskflowDetails,
+					};
+				}
+				return {
+					content: [{ type: "text", text: formatTrace(events, run.runId, run.flowName) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
 			if (action === "why-stale") {
 				if (!params.runId)
 					return errorResult(action, "action=why-stale requires 'runId'");
@@ -948,6 +1017,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					runTask: piSubagentRunner.runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				const { report, state } = await recomputeTaskflow(prev, deps, [String(params.phaseId)], { dryRun });
 				// H2: never persist a partial/aborted recompute over the original run.
@@ -1244,7 +1314,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "why-stale", "recompute"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1349,6 +1419,29 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			if (sub === "trace") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf trace <runId> [--json]", "warning");
+					return;
+				}
+				const tokens = arg.trim().split(/\s+/).filter(Boolean);
+				const rid = tokens[0];
+				const json = tokens.includes("--json");
+				const runR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${rid}"`), "error");
+					return;
+				}
+				const run = runR.value;
+				const events = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (events.length === 0) {
+					ctx.ui.notify(`No trace recorded for run "${rid}" (the run predates tracing, or no trace sink was injected).`, "warning");
+					return;
+				}
+				ctx.ui.notify(json ? JSON.stringify(events, null, 2) : formatTrace(events, run.runId, run.flowName), "info");
+				return;
+			}
+
 			if (sub === "why-stale") {
 				if (!arg) {
 					ctx.ui.notify("Usage: /tf why-stale <runId> [phaseId]", "warning");
@@ -1390,6 +1483,7 @@ export default function (pi: ExtensionAPI) {
 					globalThinking: settings.globalThinking,
 					runTask: piSubagentRunner.runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				if (apply) {
 					const { report, state } = await recomputeTaskflow(prev, deps, [seed], { dryRun: false });

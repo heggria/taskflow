@@ -54,8 +54,21 @@ import {
 	type RunState,
 	type Taskflow,
 	type VerificationIssue,
+	type TraceEvent,
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
+import {
+	runsDir,
+	traceFilePath,
+	FileTraceSink,
+	readTrace,
+	loadRunDiagnosed,
+	readMapOf,
+	declaredReadMapOfDef,
+	formatWhyStale,
+	recomputeTaskflow,
+	type RecomputeReport,
+} from "taskflow-core";
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: "0.1.5" } as const;
@@ -156,6 +169,61 @@ function count(n: number, noun: string): string {
 	return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
+/** Human-readable timeline of a run's deterministic-replay event trace (MCP).
+ *  Output text is truncated so a fan-out's full transcripts don't flood the
+ *  host context — pass json:true for the complete record. Mirrors the pi
+ *  adapter's formatTrace. */
+function formatTraceMcp(events: TraceEvent[], runId: string, flowName: string): string {
+	const lines: string[] = [`Trace — ${flowName} / ${runId}  (${events.length} events)`];
+	lines.push("");
+	const out = (text: string | undefined, limit = 400): string => {
+		if (!text) return "";
+		const t = text.length > limit ? `${text.slice(0, limit)}… (+${text.length - limit} chars)` : text;
+		return t.replace(/\n/g, " ⏎ ");
+	};
+	for (const e of events) {
+		const ts = new Date(e.ts).toISOString().slice(11, 23);
+		if (e.kind === "phase-start") lines.push(`${ts}  ▶ ${e.phaseId} start`);
+		else if (e.kind === "phase-end") lines.push(`${ts}  ■ ${e.phaseId} end${e.status ? ` [${e.status}]` : ""}${e.error ? ` — ${out(e.error, 120)}` : ""}`);
+		else if (e.kind === "subagent-call" && e.input && e.output) {
+			const node = e.input.nodePath !== e.phaseId ? ` @${e.input.nodePath}` : "";
+			lines.push(`${ts}    ↳ ${e.input.agent}${node}: ${out(e.input.task, 160)}`);
+			lines.push(`${ts}      → ${out(e.output.text, 200)}`);
+		} else if (e.kind === "decision" && e.decision) {
+			const d = e.decision;
+			const summary =
+				d.type === "gate-verdict" ? `gate ${d.value.toUpperCase()}${d.reason ? ` — ${out(d.reason, 120)}` : ""}`
+				: d.type === "gate-score" ? `score ${d.combined.toFixed(2)} (≥${d.threshold ?? "—"}) → ${d.verdict.toUpperCase()}`
+				: d.type === "tournament-winner" ? `winner #${d.value}`
+				: d.type === "budget-hit" ? `budget hit — ${out(d.value, 120)}`
+				: d.type === "cache-hit" ? `cache hit (${d.scope})`
+				: d.type === "when-guard" ? `when-guard ${d.result ? "passed" : "skipped"}`
+				: `unreplayable (${d.reason})`;
+			lines.push(`${ts}    ◆ ${e.phaseId} decision: ${summary}`);
+		}
+	}
+	lines.push("");
+	lines.push("(Pass json:true for the complete machine-readable trace, including full subagent outputs.)");
+	return lines.join("\n");
+}
+
+/** Human-readable recompute dry-run report (MCP). Mirrors the pi adapter's
+ *  formatRecompute. */
+function formatRecomputeMcp(r: RecomputeReport): string {
+	const lines: string[] = [`Recompute (DRY RUN — MCP never executes) — seed: ${r.seeds.join(", ")}`];
+	lines.push("");
+	lines.push(`▲ would re-run (${r.rerun.length}): ${r.rerun.join(", ") || "—"}`);
+	lines.push(`✓ reused (outside frontier): ${r.reused.join(", ") || "—"}`);
+	if (r.decisions && r.decisions.length > 0) {
+		lines.push("");
+		lines.push("Why:");
+		for (const d of r.decisions) lines.push(`  • ${d.phaseId}: ${d.reason}`);
+	}
+	lines.push("");
+	lines.push("To actually re-execute (spending tokens), use the Pi adapter: /tf recompute <runId> <phaseId> --apply");
+	return lines.join("\n");
+}
+
 const TOOLS: McpTool[] = [
 	{
 		name: "taskflow_run",
@@ -236,6 +304,51 @@ const TOOLS: McpTool[] = [
 				limit: { type: "number", description: "Truncation cap in chars (default 4000, max 32000)." },
 			},
 			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_trace",
+		title: "Show a run's deterministic-replay event trace",
+		description:
+			"Read the append-only event trace a run recorded (each subagent call's input/output + the runtime's own decisions: gate verdicts, when-guard results, budget hits, cache hits, unreplayable markers). This is the foundation for deterministic replay (re-evaluating a run against changed thresholds/budget offline, zero tokens — landing in a future release). For now it is a read-only observability view of exactly what the run did. Output is human-readable by default; pass json:true for the complete machine-readable record.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run to inspect (from a prior taskflow_run or the runs index)." },
+				json: { type: "boolean", description: "Return the complete machine-readable trace (JSON) instead of a human-readable timeline. Use when you need the full subagent outputs (the human form truncates them)." },
+			},
+			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_why_stale",
+		title: "Explain why a stored run is stale",
+		description:
+			"Given a runId (+ optional phaseId seed): with no seed, prints the observed dependency graph; with a seed, computes the transitive stale frontier — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. Read-only.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run to analyze." },
+				phaseId: { type: "string", description: "Optional assumed-changed seed phase. Omit to print the observed dependency graph." },
+			},
+			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_recompute",
+		title: "Re-run a stored run's stale frontier (dry-run only)",
+		description:
+			"Report what would re-run if a phase changed — the stale frontier from the seed phase. Dry-run only in MCP (zero tokens): reports the re-run / cutoff / reused sets with per-phase reasons. To actually re-execute (spending tokens), use the Pi adapter's /tf recompute --apply. Never calls a model in MCP.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run whose frontier to compute." },
+				phaseId: { type: "string", description: "The assumed-changed seed phase." },
+			},
+			required: ["runId", "phaseId"],
 		},
 	},
 	{
@@ -337,6 +450,8 @@ export function makeToolHandlers(
 				runTask: runner.runTask,
 			};
 			const state = mkRunState(def, (args.args as Record<string, unknown>) ?? {}, cwd);
+			// Deterministic-replay trace (best-effort, fail-open).
+			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
 
 			// Persist run state (throttled + final) so taskflow_peek / resume can read
@@ -383,6 +498,47 @@ export function makeToolHandlers(
 				limit: typeof args.limit === "number" ? args.limit : undefined,
 			});
 			return textContent(res.text, !res.ok);
+		},
+
+		taskflow_trace: async (args) => {
+			const runId = String(args.runId ?? "");
+			if (!runId) return textContent("taskflow_trace requires `runId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const events = readTrace(traceFilePath(runsDir(cwd), run.flowName, run.runId));
+			if (events.length === 0)
+				return textContent(`No trace recorded for run "${runId}" (the run predates tracing, or no trace sink was injected).`, true);
+			if (args.json === true) return textContent(JSON.stringify(events, null, 2));
+			return textContent(formatTraceMcp(events, run.runId, run.flowName));
+		},
+
+		taskflow_why_stale: async (args) => {
+			const runId = String(args.runId ?? "");
+			if (!runId) return textContent("taskflow_why_stale requires `runId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const reads = readMapOf(run.phases);
+			const declared = declaredReadMapOfDef(run.def);
+			const seeds = typeof args.phaseId === "string" ? [args.phaseId] : [];
+			return textContent(formatWhyStale(run.runId, run.flowName, reads, seeds, declared));
+		},
+
+		taskflow_recompute: async (args) => {
+			// MCP exposes recompute as DRY-RUN ONLY (never spends tokens). To actually
+			// re-execute, hosts use the Pi adapter's /tf recompute --apply.
+			const runId = String(args.runId ?? "");
+			const phaseId = String(args.phaseId ?? "");
+			if (!runId || !phaseId) return textContent("taskflow_recompute requires `runId` and `phaseId` (the seed).", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const settings = readSubagentSettings();
+			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask };
+			const { report } = await recomputeTaskflow(run, deps, [phaseId], { dryRun: true });
+			return textContent(formatRecomputeMcp(report));
 		},
 
 		taskflow_list: async () => {
