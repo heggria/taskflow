@@ -1,0 +1,78 @@
+---
+title: taskflow vs 命令式 agent workflow
+description: 声明式 DAG（taskflow）与模型编写执行的动态、代码态 workflow 脚本之间的对比——可验证性、续跑、以及你为此付出的代价。
+---
+
+**`workflow`**——也就是现在不少 agent runtime 提供的动态、代码态那一种——是模型写出一个**命令式 JavaScript 脚本**，让它"流"起来：`await agent(...)`、一个 `if`、一个 `for`、又一个 `await`。**`taskflow`** 正好相反：你把工作**声明**为由 `dependsOn` 边连接的离散任务节点图，运行时负责执行。
+
+两者都是真实、合理的设计。它们处在同一条轴线的两端：**表达能力 vs 可验证性。**
+
+## 核心差异
+
+| | 动态 `workflow`（代码态） | **`taskflow`**（声明式图） |
+|---|---|---|
+| **计划是** | 模型编写并执行的命令式 JS | 运行时执行的声明式 JSON 数据 |
+| **图** | 隐式的——藏在 `if`/`for`/`await` 里 | 显式的——`phases[]` + `dependsOn`，一等对象 |
+| **运行前校验** | ✗ 图灵完备；无法证明它会终止 | **✓ 静态检查：环、死端、预算溢出、悬空引用** |
+| **可视化** | ✗ 图只在代码运行时才存在 | **✓ 实时进度渲染本身就是这张 DAG** |
+| **续跑** | 粗粒度（调用缓存去重） | **✓ 逐阶段、按输入哈希、跨会话** |
+| **能否安全地让 LLM 生成** | 有风险——它是可执行代码 | **✓ 它是数据——没有 `eval`；运行时生成的子流在执行前会被结构化校验** |
+| **表达能力上限** | **更高**——任意控制流 | 受 DSL 约束（`map`/`when`/`loop`/`gate`/`tournament` + `flow {def}`） |
+
+## workflow 能给你、而 taskflow 给不了的
+
+这一点要诚实：代码态 workflow 是**图灵完备**的。JavaScript 能表达的，workflow 都能表达，包括：
+
+- 运行中途对部分结果做任意计算和分支
+- 在编排过程中调用非 LLM 库（数据库、HTTP、文件 I/O）
+- 用普通代码写动态重规划
+
+taskflow 的 DSL 是**受限**的。如果某项工作无法映射到 `map`/`when`/`loop`/`gate`/`tournament`，你没法直接表达。逃生舱是：
+
+- **`script` 阶段**——运行一条 shell 命令（零 token）做确定性计算
+- **`flow {def}` 阶段**——让模型在运行时编写子流，随后在执行前被*结构化校验*（检查环 / 悬空引用 / 重复 id）
+
+但这个上限是真实存在的。我们是故意用表达能力换可验证性的。
+
+## taskflow 能给你、而 workflow 给不了的
+
+因为计划是**数据而不是代码**，运行时能做命令式脚本结构上做不到的事：
+
+### 1. 花一个 token 之前先校验
+
+```bash
+# taskflow：免费检查这张图
+/tf verify my-pipeline
+
+# workflow：……你跑一遍才知道
+```
+
+workflow 是可执行代码。想知道它会不会终止、会不会超预算、有没有坏引用，唯一的办法是**像读程序一样读它**——或者跑一遍并付出代价。taskflow 的 `verify` 在任何 subagent 启动前对图跑静态分析（环检测、死端检测、gate 穷尽、预算可行性、悬空的 `dependsOn` / 插值引用）。
+
+### 2. 实时进度本身就是这张 DAG
+
+workflow 跑起来时，你对它的观察只有模型碰巧写的那些 `console.log`。taskflow 跑起来时，运行时渲染**真实的图**——每个阶段、状态、耗时、成本——因为图是它拥有的一等对象，而不是执行的副产品。
+
+### 3. 逐阶段续跑，跨会话
+
+workflow 的续跑是粗粒度的：靠缓存去重相同调用。taskflow 按**阶段解析后的输入哈希**续跑，跨会话。编辑某个阶段后重跑整个流程，只会重新执行该阶段及其下游；上游全部从缓存复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+
+### 4. 能安全地让 LLM 生成
+
+workflow 是代码。让模型编写一个 workflow，意味着运行模型生成的 JavaScript——接近 `eval`。taskflow 是**数据**。让模型编写一个 taskflow（`flow {def}`），意味着运行时解析 JSON 并在**任何阶段执行前校验其结构**。从"模型吐出一个字符串"到"有东西被执行"之间没有任何代码路径。
+
+## 各自适合什么场景
+
+<Callout type="info">
+  **选动态 workflow**：工作确实是任意控制流、需要 `script`/`flow` 阶段覆盖不了的中途计算、或是一次性的、再也不会重跑的任务。
+</Callout>
+
+<Callout type="info">
+  **选 taskflow**：工作是可重复的流水线（review、审计、迁移、调研、发布），你想按名字运行、运行前先校验、以图的形式观察、并跨会话续跑。
+</Callout>
+
+## 延伸阅读
+
+- [为什么叫 "taskflow" 而不是 "workflow"？](/zh-cn/docs/what-is-taskflow)——命名论点
+- [声明式图 vs 命令式脚本](/zh-cn/docs/showcase/why-taskflow)——更深入的设计理念
+- [可验证性](/zh-cn/docs/concepts/verification)——静态检查到底能抓到什么

@@ -1,0 +1,90 @@
+---
+title: What is a task graph? (for LLM orchestration)
+description: The concept behind taskflow — why modeling LLM work as a graph of discrete, declared task nodes (a DAG) is more verifiable, observable, and resumable than a flowing script.
+---
+
+"Task graph" is the core idea behind taskflow, but the term gets used loosely. This page pins down what a task graph actually is in the context of LLM orchestration, why it's different from a "workflow," and what you gain by making the graph **declarative data** instead of imperative code.
+
+## Task vs work
+
+In engineering, a **task** is a *discrete, declared unit of work* — the node of a task graph, the same kind of `task` a build system, a scheduler, or a compiler wires into a DAG. **Work**, by contrast, is *fluid and unbounded* — the continuous, imperative act of doing.
+
+That distinction is the whole design split:
+
+- A **workflow** (the dynamic, code-mode kind) is the model writing an **imperative script** that *flows*: `await agent(...)`, an `if`, a `for`, another `await`. Expressive — Turing-complete — but the graph only exists *as the code runs*. You can't see it, diff it, or prove it terminates before you pay for it.
+- A **taskflow** moves the plan **out of code and into a declarative graph of task nodes.** Because the graph is *data*, the runtime can do what an imperative script structurally cannot.
+
+## What makes it a graph (not a chain)
+
+Most agent "orchestration" is actually a **chain** — step 1, step 2, step 3, linearly. A task graph generalizes this in three directions:
+
+### 1. Dependencies are edges, not order
+
+```json
+{
+  "phases": [
+    { "id": "discover", "agent": "scout", "task": "..." },
+    { "id": "review-a", "agent": "reviewer", "dependsOn": ["discover"], "task": "..." },
+    { "id": "review-b", "agent": "risk-reviewer", "dependsOn": ["discover"], "task": "..." },
+    { "id": "merge", "agent": "executor", "dependsOn": ["review-a", "review-b"], "task": "..." }
+  ]
+}
+```
+
+`review-a` and `review-b` both depend on `discover` and nothing else — so the runtime runs them **in parallel**. `merge` waits for both. You didn't write "do these concurrently"; you declared the *edges*, and the runtime derived the schedule. This is layered concurrency for free.
+
+### 2. Fan-out is a first-class shape
+
+```json
+{
+  "id": "review",
+  "map": "{steps.discover.json}",
+  "agent": "security-reviewer",
+  "task": "Audit {item} for vulnerabilities.",
+  "concurrency": 4
+}
+```
+
+`map` creates **one task node per item** in an array — dynamically, at runtime, based on what `discover` produced. If `discover` returns 30 files, you get 30 review nodes, bounded to 4 concurrent. The graph's shape isn't known until runtime, but it's still a graph the runtime tracks, renders, and resumes.
+
+### 3. Routing is declarative
+
+```json
+{ "id": "skip-if-empty", "when": "{steps.discover.json.length} > 0", "agent": "...", "task": "..." }
+```
+
+`when` guards skip a phase entirely. `join: "any"` lets a phase proceed as soon as *any* of its dependencies finish (OR-join) instead of all (the default AND-join). Conditional routing without imperative `if` statements.
+
+## What a declarative task graph buys you
+
+Because the graph is **data, not code**, four things become possible that an imperative script can't offer:
+
+### Verifiable before it runs
+
+The runtime can statically analyze the graph: detect cycles, dead-end phases (nothing downstream consumes them), gate-exhaustion (can every path hit a `BLOCK`?), budget feasibility (will the declared phases exceed the spend cap?), and dangling references (`{steps.typo.output}`). All **before a single subagent spawns**. An imperative script is Turing-complete; you can only find these problems by reading it like a program or running it.
+
+### Observable as the graph itself
+
+When a task graph runs, the **live progress view *is* the DAG** — every node, its status (pending / running / done / failed / blocked), its timing, its cost. The graph is a first-class object the runtime owns, so it can render it. A script's progress is whatever `console.log`s the author happened to write.
+
+### Resumable, phase by phase
+
+Each task node's result is persisted, keyed on its **resolved input hash**. Resume picks up exactly where it stopped. Re-run the whole graph after changing one node's prompt, and only that node and its downstream re-execute — everything else is served from cache. An imperative script's resume is coarser (call-cache dedup at best).
+
+### Safe to generate with an LLM
+
+A task graph is JSON. Letting a model author one means parsing JSON and **validating the structure** — there is no code path from "model emitted a string" to "something executes." An imperative script is executable code; letting a model author one is `eval`-adjacent. For plan-then-execute and iterative replanning, declarative graphs are the safe surface.
+
+## When a task graph is overkill
+
+A task graph is the wrong tool when:
+
+- The job is **one or two steps** with no branching — a single subagent call is simpler.
+- You need **arbitrary mid-flight logic** beyond what `map`/`when`/`loop`/`gate`/`script` cover, and a code-mode workflow's expressivity is worth the verifiability trade.
+- It's a **one-off** you'll never re-run — the overhead of declaring a graph doesn't pay back.
+
+## The short version
+
+A **task graph** is a DAG of discrete, declared task nodes connected by dependency edges. Making it **declarative data** (not imperative code) is what unlocks verification, observation, resume, and safe LLM authoring. That's the bet taskflow makes.
+
+Want to see one in action? The [templates gallery](/en/docs/templates) has five complete graphs, and [What is taskflow?](/en/docs/what-is-taskflow) walks through the motivation end to end.

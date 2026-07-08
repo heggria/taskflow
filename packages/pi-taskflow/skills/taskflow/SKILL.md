@@ -210,15 +210,41 @@ For static (non-conditional) concurrency, a `parallel` phase runs fixed
 ### Gate phases (quality control)
 
 A `gate` phase runs an agent to review upstream output and can **block the rest
-of the workflow**. End the gate task's instructions by asking the agent to emit a
-verdict the runtime can read:
+of the workflow**. The runtime needs to read a verdict from the agent's output.
+There are three ways to provide one, in order of robustness:
 
-- a final line `VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT), or
-- JSON like `{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block", "reason": "..."}`
+**1. JSON contract (most robust — preferred).** Set `output: "json"` + an `expect`
+enum so the output is machine-validated. A verdict that isn't exactly `"pass"` or
+`"block"` (wrong case, extra formatting, a synonym) fails the `expect` contract and
+is retried — the verdict can never be silently misread.
+
+```jsonc
+{ "id": "review", "type": "gate", "agent": "reviewer", "dependsOn": ["impl"],
+  "output": "json",
+  "expect": { "type": "object",
+    "properties": { "verdict": { "enum": ["pass", "block"] }, "reason": { "type": "string" } },
+    "required": ["verdict", "reason"] },
+  "task": "Review the diff. Respond ONLY with JSON: {\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}" }
+```
+
+**2. Explicit text marker.** End the task by asking the agent to emit a final line
+`VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT; common
+Markdown emphasis like `VERDICT: **BLOCK**` is tolerated). JSON objects such as
+`{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block"}` also work.
+
+**3. Auto-appended format suffix.** If a free-text gate's task does **not** already
+ask for a `VERDICT:` marker (and has no JSON contract), the runtime automatically
+appends the exact format instruction. You don't need to remember to add it — but
+writing it yourself (option 2) makes the intent explicit in your flow.
 
 On **BLOCK**, downstream phases are skipped and the run ends as `blocked` with the
-reason surfaced. Ambiguous output **fails open** (treated as PASS) so a gate never
-halts the flow by accident.
+reason surfaced. Unparseable gate **model output fails closed** (treated as BLOCK):
+a gate that cannot reach a verdict cannot be trusted to pass (issue #54). Note
+that *config* slips (an unresolved `score.target`, malformed `scorers`) are
+different and still fail **open** with a warning — those are authoring errors that
+degrade to the historical behavior, not a judge that couldn't decide. An explicit
+non-blocking JSON verdict (e.g. `{"verdict":"No issues found"}`) is a semantic PASS,
+not ambiguity.
 
 **Zero-token machine checks (`eval`) — use these before spending tokens.**
 List machine-checkable assertions in `eval`. If **all** pass, the gate
@@ -267,9 +293,10 @@ where the deterministic score is a lower bound already clearing the threshold
 runs** — its verdict is authoritative (it may check what scorers cannot, e.g.
 factuality); (2) fail + `judge` → judge decides; (3) fail + `task` → the gate
 task runs with the scorer report appended; (4) fail + no fallback → **explicit
-BLOCK** (a deterministic failure is not ambiguity). Fail-open: unparseable judge
-→ PASS; unresolved `target` with no fallback → PASS + warning; malformed
-`score` → the plain LLM gate. **Security:** LLM-generated dynamic sub-flows
+BLOCK** (a deterministic failure is not ambiguity). Fail-closed: an unparseable
+judge → BLOCK (issue #54); unresolved `target` with no fallback → PASS +
+warning (config slip, not a judge verdict); malformed `score` → the plain LLM
+gate. **Security:** LLM-generated dynamic sub-flows
 (`flow{def}`) may not use `code-compiles` (compiler execution) or `regex`
 (ReDoS) scorers — same hardening class as the `script` block.
 
@@ -383,13 +410,20 @@ of several drafts, or a synthesis of diverse approaches.
 - `mode` — `"best"` (judge picks one winner, default) or `"aggregate"` (judge merges all).
 - `judge` — the judge's rubric/instructions. `judgeAgent` — optional judge agent
   (defaults to the phase `agent`; use a stronger model here).
-- Fail-open: if the judge's pick is unparseable, variant 1 is returned (work is never lost).
+- **Winner format — prefer JSON.** Have the judge return `{"winner": <n>}` (and an
+  optional `"reason"`); the runtime also reads a `WINNER: <n>` line (`#3` and
+  common Markdown emphasis like `WINNER: **3**` are tolerated — issue #54).
+  JSON is more robust than a text marker: there's no formatting the model can
+  get subtly wrong.
+- Fail-open: if the judge's pick is still unparseable, variant 1 is returned
+  (work is never lost — the variants are already computed, so blocking would be
+  worse than picking a safe default).
 
 ```jsonc
 {
   "id": "headline", "type": "tournament", "agent": "executor",
   "variants": 3, "mode": "best",
-  "judge": "Pick the clearest, most accurate headline. End with: WINNER: <n>.",
+  "judge": "Pick the clearest, most accurate headline. Return JSON {\"winner\": <n>, \"reason\": \"...\"}.",
   "task": "Write one headline for the article below.\n\n{steps.draft.output}",
   "dependsOn": ["draft"], "final": true
 }
@@ -465,7 +499,16 @@ Interpolation also runs on a scoring gate's `score.target` and `score.judge.task
 4. Mark the result-bearing phase with `"final": true` (else the last phase wins).
 5. Machine checks before LLM checks: `script` for ground truth, gate `eval`
    before gate `task`, `expect` before a downstream "did it parse?" phase.
-6. `verify` before `run` for anything non-trivial (zero tokens).
+6. **Decision phases should emit structured output, not free text.** Any phase
+   whose output is a *decision* a downstream phase (or the runtime) acts on — a
+   gate verdict, a router's branch, a tournament winner, a judge's score — should
+   use `output: "json"` + an `expect` enum/contract so the decision is
+   machine-validated. Free-text markers (`VERDICT:`, `WINNER:`, `SCORE:`) are
+   tolerated and Markdown-emphasis-tolerant (issue #54), but a JSON contract is
+   strictly more robust: there's no formatting the model can get subtly wrong, and
+   a malformed decision fails the contract (retryable) instead of being silently
+   mis-read.
+7. `verify` before `run` for anything non-trivial (zero tokens).
 
 ## Common mistakes (the runtime rejects these at validation time)
 
@@ -509,7 +552,7 @@ Phase ids and agent names use **hyphens** (`audit-each`, `risk-reviewer`).
 An unknown agent name fails the phase with the list of available agents.
 Check with `action: "agents"` instead of guessing.
 
-## Actions (all 13)
+## Actions (all 15)
 
 | action | what it does |
 |--------|--------------|
@@ -522,9 +565,11 @@ Check with `action: "agents"` instead of guessing.
 | `compile` | Render a flow as a Mermaid diagram + verification report. Zero tokens. |
 | `ir` | Compile to **FlowIR** — the canonical intermediate representation with a content hash per phase. Use to diff two versions of a flow or confirm a definition change actually changed a phase's fingerprint. Zero tokens. |
 | `provenance` | Show a completed run's **observed read-sets** — which phases actually read which upstream outputs at runtime (may be narrower than `dependsOn`). Requires `runId`. Zero tokens. |
+| `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). The foundation for offline replay (re-evaluating a run against changed thresholds/budget, zero tokens — full replay logic lands in a later release). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
 | `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
 | `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
 | `cache-clear` | Clear the cross-run memoization store. |
+| `search` | Search the reusable-flow **library** by purpose/tags (structural + CJK-aware keyword scoring). Find a flow to reuse before authoring a new one. |
 | `init` | Model-roles configuration. `mode: "show"` is read-only; `apply-defaults` requires `force: true`; `interactive` needs a UI session. |
 
 **The incremental loop** (`ir` → `why-stale` → `recompute`) is taskflow's

@@ -1,0 +1,93 @@
+---
+title: taskflow vs LangGraph
+description: How a coding-agent task graph (taskflow) differs from LangGraph — scope, host coupling, persistence model, verification, and when each fits.
+---
+
+[LangGraph](https://github.com/langchain-ai/langgraph) is a popular, general-purpose framework for building **stateful, multi-actor LLM applications** as graphs. taskflow is a narrower thing: a **declarative task-DAG orchestrator built specifically for coding-agent subagents.** They overlap in the "graph of LLM calls" idea but differ sharply in scope, host coupling, and what they optimize for.
+
+This page is an honest comparison — including where LangGraph is clearly the better tool.
+
+## At a glance
+
+| | **LangGraph** | **taskflow** |
+|---|---|---|
+| **What it is** | A library for stateful LLM app graphs (Python/JS) | A declarative task-DAG runtime for coding-agent subagents |
+| **You write** | Python or JS graph code | JSON data (the DSL) |
+| **Runs inside** | your own application process | your coding agent (Pi, Codex, Claude Code, OpenCode) |
+| **Nodes are** | arbitrary functions (LLM calls, tools, logic) | **subagent invocations** (scoped, model-routed agent calls) |
+| **State** | a typed shared state object, reduced over edges | the Shared Context Tree (blackboard + supervision) |
+| **Persistence** | checkpointers (SQLite/Postgres/in-memory) | file-backed run store + cross-run cache |
+| **Human-in-the-loop** | interrupt + resume on state | `approval` phases (approve/reject/edit) |
+| **Verification** | runtime graph validation | **static pre-flight: cycles, dead-ends, budget, dangling refs — before any token** |
+| **Host coupling** | framework-agnostic (you bring the model + tools) | **agent-host-native** (installs as a Pi extension / Codex/Claude/OpenCode plugin) |
+
+## Where they genuinely overlap
+
+Both model multi-step LLM work as a **graph** rather than a linear chain. Both support:
+
+- Cycles / loops (LangGraph natively; taskflow via the `loop` phase)
+- Branching and conditional edges (LangGraph conditional edges; taskflow `when` + `join: any`)
+- Human-in-the-loop pauses (LangGraph interrupts; taskflow `approval` phases)
+- Checkpointing / resume (LangGraph checkpointers; taskflow file-backed run store + cache)
+- Fan-out (LangGraph `Send` / map-reduce; taskflow `map` phases)
+
+If you've used LangGraph's mental model, taskflow's phases + `dependsOn` will feel familiar.
+
+## Where they differ — and why it matters
+
+### 1. Code you write vs data you declare
+
+LangGraph graphs are **Python or JS code** — you define `StateGraph`, add nodes as functions, wire edges, compile. That gives you full power (a node can do anything a function can) at the cost of authoring a program.
+
+taskflow flows are **JSON data**. You declare `phases[]` with `dependsOn` edges; the runtime maps each phase to a subagent call. You can't put arbitrary logic in a phase — only a task prompt (plus `script` phases for shell, `flow {def}` for runtime-generated sub-graphs). The trade is the same one as [taskflow vs imperative workflows](./taskflow-vs-workflow): bounded expressivity for verifiability and LLM-safe authoring.
+
+### 2. Verification happens before tokens, not at runtime
+
+LangGraph validates the graph **when you compile/run it** — a malformed graph throws. taskflow runs **static pre-flight analysis** that checks things a runtime throw can't cheaply catch: budget feasibility (will this flow exceed the USD/token ceiling given the declared phases?), gate-exhaustion (can every reachable path hit a `BLOCK`?), dead-end phases, and dangling interpolation references. `verify` is a zero-token operation you run before committing to a flow.
+
+### 3. The unit of work is a subagent, not a function call
+
+A LangGraph node is a function you write — you choose the model, build the prompt, parse the result, handle tools. taskflow's unit of work is a **subagent invocation**: you name an agent (`security-reviewer`, `executor-code`) and give it a task; the runtime + host handle model routing, tool scoping, and the transcript. You're orchestrating **agents**, not call sites.
+
+This makes taskflow much more concise for the "fan out N scoped agents over N items" pattern (one `map` phase), but much less flexible when a node needs bespoke non-agent logic.
+
+### 4. Host-native vs bring-your-own-runtime
+
+LangGraph is **framework-agnostic** — you embed it in your own app, bring your own model client and tools. It's a library.
+
+taskflow is **agent-host-native**: it installs *into* an existing coding agent (Pi extension, Codex/Claude Code/OpenCode plugin) and orchestrates *that host's* subagents. You don't write a new application — you declare flows your agent runs. If you're not already inside one of these coding agents, taskflow isn't the tool; LangGraph might be.
+
+### 5. Persistence shape
+
+LangGraph's checkpointers snapshot the **graph state** at each step — great for resuming a long-running agent with typed state.
+
+taskflow persists **per-phase results** keyed on each phase's resolved input hash, in a file-backed run store. Resume is phase-by-phase and **cross-run** (not just cross-session): editing one phase and re-running re-executes only that phase + downstream, serving everything else from cache. See [incremental recompute](/en/docs/reference/incremental-recompute).
+
+## When to pick LangGraph
+
+<Callout type="info">
+  **Pick LangGraph when** you're building a **custom LLM application** (a chatbot, a RAG pipeline, an agent product), you want fine-grained control over state and nodes as functions, you're running it in your own codebase, and you need the broader LangChain tool ecosystem.
+</Callout>
+
+LangGraph is the better choice for **product-grade agent applications** — anything you'd ship *as* a service, where you own the runtime and want typed state machines.
+
+## When to pick taskflow
+
+<Callout type="info">
+  **Pick taskflow when** you're working **inside a coding agent** (Pi / Codex / Claude Code / OpenCode) and want to turn a repeatable multi-step delegation (review, audit, migration, research, release) into a **named, verified, resumable pipeline** whose intermediate transcripts stay out of your context.
+</Callout>
+
+taskflow is the better choice for **developer workflows** — pipelines you run on your codebase, by name, from inside the agent you already use.
+
+## The short version
+
+- **Building an agent *product*?** → LangGraph.
+- **Orchestrating your coding agent's *subagents* into reusable pipelines?** → taskflow.
+
+They're not really competitors; they optimize for different things on the same graph idea.
+
+## Further reading
+
+- [What is taskflow?](/en/docs/what-is-taskflow)
+- [taskflow vs imperative workflows](./taskflow-vs-workflow) — the code-vs-data trade in depth
+- [The DAG concept](/en/docs/concepts/dag)

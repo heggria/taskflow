@@ -1,0 +1,140 @@
+---
+title: Orchestrate Codex subagents with a task graph
+description: How to turn ad-hoc OpenAI Codex subagent delegations into a named, statically verified, resumable pipeline using taskflow — fan-out review, gates, and budget caps included.
+---
+
+OpenAI Codex can spawn subagents to do focused work — but once you're past two or three calls, you hit a familiar wall: the model re-derives the plan every run, intermediate transcripts flood your session, a single failed call means starting over, and there's no way to *check* the plan before you pay for it. This post shows how to wrap Codex subagent work in a **taskflow** — a declarative graph that's verified before it runs, resumable across sessions, and whose intermediate results stay out of your context.
+
+## The wall
+
+You're shipping a release and want a readiness check. The Codex-natural way is to *script* it:
+
+```text title="ad-hoc Codex session"
+You: "Check whether this branch is ready to release."
+Codex: [spawns a subagent to list changed files]
+       [spawns a subagent per file to audit breaking changes]
+       [spawns a subagent to check the changelog]
+       [tries to summarize...]
+```
+
+That works once. The fourth time you do it, the problems compound:
+
+- **No reuse** — you re-describe the whole plan every release.
+- **No verification** — you find out the plan is broken *while paying for it*.
+- **No resume** — one subagent call fails on a rate limit and you start over.
+- **No budget guardrail** — a fan-out over 50 files spends what it spends.
+
+## The taskflow version
+
+Install the Codex plugin:
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+Then declare the same job as a graph:
+
+```json title="release-readiness.json"
+{
+  "name": "release-readiness",
+  "description": "Verify a branch is ready to release: discover changes, fan out breaking-change review, check the changelog, gate on risk.",
+  "args": {
+    "base": { "default": "origin/main", "description": "The ref to diff against." }
+  },
+  "budget": { "maxUSD": 2.00 },
+  "phases": [
+    {
+      "id": "discover",
+      "agent": "scout",
+      "task": "List every file changed between {args.base} and HEAD, as a JSON array of paths."
+    },
+    {
+      "id": "review",
+      "map": "{steps.discover.json}",
+      "agent": "risk-reviewer",
+      "task": "Audit {item} for breaking changes. Return a one-line risk verdict.",
+      "concurrency": 4
+    },
+    {
+      "id": "changelog",
+      "agent": "executor",
+      "task": "Does CHANGELOG.md cover the changes since {args.base}? Answer yes/no with evidence."
+    },
+    {
+      "id": "gate",
+      "type": "gate",
+      "dependsOn": ["review", "changelog"],
+      "agent": "plan-arbiter",
+      "task": "Based on the per-file reviews and the changelog check, emit VERDICT: PASS or VERDICT: BLOCK with reasons."
+    },
+    {
+      "id": "report",
+      "agent": "executor",
+      "dependsOn": ["gate"],
+      "task": "Summarize the release-readiness verdict into a short report."
+    }
+  ]
+}
+```
+
+## Verify it for free, then run it
+
+Before you spend a token, check the graph:
+
+```bash
+# through the taskflow tool in your Codex session
+taskflow_verify release-readiness
+```
+
+`verify` runs static analysis — no model calls. It catches cycles, dead-end phases, a `map` that won't produce an array, a `budget` that the phase count makes infeasible, and dangling `{steps.*}` references. You fix these *before* paying.
+
+Then run it:
+
+```text
+taskflow_run release-readiness --base origin/main
+```
+
+The runtime:
+
+1. Resolves the graph and spawns phase `discover`.
+2. Fans out one `risk-reviewer` per discovered file, **bounded to 4 concurrent**.
+3. Runs `changelog` in parallel with the reviews.
+4. Hits `gate` — if it emits `VERDICT: BLOCK`, the flow halts and `report` never runs.
+5. Returns **only the final report** to your session.
+
+The 50 per-file transcripts never enter your Codex context. Only the merged report does.
+
+## What you get that ad-hoc scripting can't give you
+
+| Concern | Ad-hoc Codex | taskflow |
+|---|---|---|
+| **Reuse** | re-describe every time | run `release-readiness` by name |
+| **Cost control** | none | `budget: { maxUSD: 2.00 }` halts the run |
+| **Failure** | start over | per-phase `retry` + cross-session resume |
+| **Quality gate** | eyeball it | `gate` phase halts on `BLOCK` |
+| **Context** | every transcript returns | only the final report returns |
+
+## Resume across sessions
+
+Run it, walk away, come back tomorrow:
+
+```text
+taskflow_resume <runId>
+```
+
+Phases that already completed are served from cache (keyed on their resolved inputs). If you edited `changelog`'s prompt overnight, only `changelog`, `gate`, and `report` re-run — `discover` and all the reviews are reused. See [incremental recompute](/en/docs/reference/incremental-recompute).
+
+## When to stay ad-hoc
+
+Don't reach for taskflow for a one-off "go look at X." The built-in subagent shorthand is right for that. Reach for it when the job is a **repeatable pipeline** you'll run on every release — exactly the case where re-describing it each time hurts most.
+
+## Takeaways
+
+- A taskflow is **data**, not code — so you can verify it before running.
+- `map` fans out one subagent per item with bounded concurrency.
+- `gate` phases give you a real quality gate that can halt the flow.
+- `budget` caps spend; resume is free and cross-session.
+- Only the final phase reaches your Codex context.
+
+Grab the [templates gallery](/en/docs/templates) for five more ready-to-run flows, or read the [Codex guide](/en/docs/guides/codex) for the full host-specific surface.

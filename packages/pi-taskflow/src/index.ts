@@ -30,14 +30,16 @@ import { renderRunResult, summarizeRun } from "./render.ts";
 import { piSubagentRunner, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
-import { executeTaskflow, recomputeTaskflow, summarizeReuse, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
+import { executeTaskflow, recomputeTaskflow, summarizeReuse, traceFilePath, FileTraceSink, runsDir, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
 import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
 	getFlow,
+	getFlowDiagnosed,
 	listFlows,
 	listRuns,
 	loadRun,
+	loadRunDiagnosed,
 	newRunId,
 	peekRun,
 	type RunState,
@@ -45,6 +47,7 @@ import {
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
+	describeLoadFailure,
 	readMeta,
 	saveFlowWithMeta,
 	bumpReuseInSidecar,
@@ -56,6 +59,7 @@ import {
 import { CacheStore } from "taskflow-core";
 import { safeParse } from "taskflow-core";
 import { declaredReadMapOfDef, formatWhyStale, readMapOf } from "taskflow-core";
+import { readTrace, type TraceEvent } from "taskflow-core";
 import type { TaskflowIR } from "taskflow-core";
 import {
 	isValidKey,
@@ -97,8 +101,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "why-stale", "recompute", "cache-clear", "search"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute", "cache-clear", "search"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's deterministic-replay event trace, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -142,8 +146,9 @@ const TaskflowParams = Type.Object({
 		}),
 	),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Invocation arguments for the flow" })),
-	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume)" })),
+	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume), inspect (provenance/trace/why-stale), or recompute" })),
 	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale, or the phase to re-run for action=recompute" })),
+	json: Type.Optional(Type.Boolean({ description: "For action=trace: return the raw event trace as machine-readable JSON instead of a human-readable timeline." })),
 	dryRun: Type.Optional(Type.Boolean({ description: "For action=recompute: compute the stale frontier without re-executing anything (no tokens spent). Defaults to true (safe); set false to actually re-run the seed + stale frontier and persist the updated run" })),
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
@@ -268,6 +273,48 @@ function formatRecompute(r: RecomputeReport): string {
 			lines.push(`  ${glyph[d.outcome] ?? "•"} ${d.phaseId}: ${d.reason}${cause}`);
 		}
 	}
+	return lines.join("\n");
+}
+
+/** Human-readable timeline of a run's deterministic-replay event trace.
+ *  Output text is truncated (default 4000 chars, like `peek`) so a 30-file
+ *  fan-out's full subagent transcripts don't flood the conversation — pass
+ *  `json` for the complete machine-readable record. */
+function formatTrace(events: TraceEvent[], runId: string, flowName: string): string {
+	const lines: string[] = [`Trace — ${flowName} / ${runId}  (${events.length} events)`];
+	lines.push("");
+	const out = (text: string | undefined, limit = 400): string => {
+		if (!text) return "";
+		const t = text.length > limit ? `${text.slice(0, limit)}… (+${text.length - limit} chars)` : text;
+		return t.replace(/\n/g, " ⏎ ");
+	};
+	for (const e of events) {
+		const ts = new Date(e.ts).toISOString().slice(11, 23); // HH:mm:ss.SSS
+		if (e.kind === "phase-start") {
+			lines.push(`${ts}  ▶ ${e.phaseId} start`);
+		} else if (e.kind === "phase-end") {
+			const tag = e.status ? ` [${e.status}]` : "";
+			lines.push(`${ts}  ■ ${e.phaseId} end${tag}${e.error ? ` — ${out(e.error, 120)}` : ""}`);
+		} else if (e.kind === "subagent-call" && e.input && e.output) {
+			const node = e.input.nodePath !== e.phaseId ? ` @${e.input.nodePath}` : "";
+			const att = e.input.attempt ? ` attempt=${e.input.attempt}` : "";
+			lines.push(`${ts}    ↳ ${e.input.agent}${node}${att}: ${out(e.input.task, 160)}`);
+			lines.push(`${ts}      → ${out(e.output.text, 200)}`);
+		} else if (e.kind === "decision" && e.decision) {
+			const d = e.decision;
+			const summary =
+				d.type === "gate-verdict" ? `gate ${d.value.toUpperCase()}${d.reason ? ` — ${out(d.reason, 120)}` : ""}`
+				: d.type === "gate-score" ? `score ${d.combined.toFixed(2)} (≥${d.threshold ?? "—"}) → ${d.verdict.toUpperCase()}`
+				: d.type === "tournament-winner" ? `winner #${d.value}${d.reason ? ` — ${out(d.reason, 120)}` : ""}`
+				: d.type === "budget-hit" ? `budget hit — ${out(d.value, 120)}`
+				: d.type === "cache-hit" ? `cache hit (${d.scope})`
+				: d.type === "when-guard" ? `when-guard ${d.result ? "passed" : "skipped"}: ${out(d.expression, 120)}`
+				: `unreplayable (${d.reason})`;
+			lines.push(`${ts}    ◆ ${e.phaseId} decision: ${summary}`);
+		}
+	}
+	lines.push("");
+	lines.push("(Use action=trace with json:true for the complete machine-readable trace.)");
 	return lines.join("\n");
 }
 
@@ -430,6 +477,10 @@ async function runFlow(
 			globalThinking: settings.globalThinking,
 			signal,
 			persist: persistThrottled,
+			// Deterministic-replay trace (best-effort, fail-open). Records each
+			// subagent call + runtime decisions to an append-only JSONL so a future
+			// `replay` can re-evaluate the run offline. Absent in tests = no-op.
+			trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), state.flowName, state.runId)),
 			// Inject the pi subagent runner. Core is host-neutral and its default
 			// runTask is a no-op stub, so every host MUST inject its own — omitting
 			// this (as the pre-refactor code could, when the default was runAgentTask
@@ -685,7 +736,8 @@ export default function (pi: ExtensionAPI) {
 				const text = flows.length
 					? flows
 							.map((f) => {
-								const meta = readMeta(ctx.cwd, f.name);
+								const metaR = readMeta(ctx.cwd, f.name);
+							const meta = metaR.ok ? metaR.value : undefined;
 								const base = `- ${f.name} (${f.scope}): ${f.def.description ?? ""} — ${f.def.phases?.length ?? 0} phase(s)`;
 								if (meta?.purpose) {
 									const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
@@ -737,8 +789,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -794,8 +846,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -840,8 +892,8 @@ export default function (pi: ExtensionAPI) {
 				let resolvedDefine: unknown = params.define;
 				if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 					const fromFile = readDefineFile(params.defineFile);
-					if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-					resolvedDefine = fromFile;
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					resolvedDefine = fromFile.value;
 				}
 				if (typeof resolvedDefine === "string") {
 					const parsed = safeParse(resolvedDefine);
@@ -889,8 +941,9 @@ export default function (pi: ExtensionAPI) {
 			if (action === "resume") {
 				if (!params.runId)
 					return errorResult(action, "action=resume requires 'runId'");
-				const prev = loadRun(ctx.cwd, params.runId);
-				if (!prev) return errorResult(action, `Run not found: ${params.runId}`);
+				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
+				const prev = prevR.value;
 				const result = await runFlow(prev.def, prev.args, ctx, signal, onUpdate as any, prev);
 				return finalResult(action, result);
 			}
@@ -898,10 +951,32 @@ export default function (pi: ExtensionAPI) {
 			if (action === "provenance") {
 				if (!params.runId)
 					return errorResult(action, "action=provenance requires 'runId'");
-				const run = loadRun(ctx.cwd, params.runId);
-				if (!run) return errorResult(action, `Run not found: ${params.runId}`);
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
 				return {
 					content: [{ type: "text", text: formatProvenance(run) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
+			if (action === "trace") {
+				if (!params.runId)
+					return errorResult(action, "action=trace requires 'runId'");
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
+				const events = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (events.length === 0)
+					return errorResult(action, `No trace recorded for run "${params.runId}" (the run predates tracing, or no trace sink was injected).`);
+				if (params.json) {
+					return {
+						content: [{ type: "text", text: JSON.stringify(events, null, 2) }],
+						details: { action } satisfies TaskflowDetails,
+					};
+				}
+				return {
+					content: [{ type: "text", text: formatTrace(events, run.runId, run.flowName) }],
 					details: { action } satisfies TaskflowDetails,
 				};
 			}
@@ -909,8 +984,9 @@ export default function (pi: ExtensionAPI) {
 			if (action === "why-stale") {
 				if (!params.runId)
 					return errorResult(action, "action=why-stale requires 'runId'");
-				const run = loadRun(ctx.cwd, params.runId);
-				if (!run) return errorResult(action, `Run not found: ${params.runId}`);
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
 				const reads = readMapOf(run.phases);
 				const declared = declaredReadMapOfDef(run.def);
 				const seeds = params.phaseId ? [String(params.phaseId)] : [];
@@ -925,8 +1001,9 @@ export default function (pi: ExtensionAPI) {
 					return errorResult(action, "action=recompute requires 'runId'");
 				if (!params.phaseId)
 					return errorResult(action, "action=recompute requires 'phaseId' (the seed phase to re-run)");
-				const prev = loadRun(ctx.cwd, params.runId);
-				if (!prev) return errorResult(action, `Run not found: ${params.runId}`);
+				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
+				const prev = prevR.value;
 				// H1: the LLM-callable tool defaults to a SAFE dry-run (no tokens, no
 				// mutation). A real recompute — which spends money and overwrites the
 				// run — requires an explicit dryRun:false.
@@ -940,6 +1017,7 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					runTask: piSubagentRunner.runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				const { report, state } = await recomputeTaskflow(prev, deps, [String(params.phaseId)], { dryRun });
 				// H2: never persist a partial/aborted recompute over the original run.
@@ -960,8 +1038,8 @@ export default function (pi: ExtensionAPI) {
 			let resolvedDefine: unknown = params.define;
 			if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
 				const fromFile = readDefineFile(params.defineFile);
-				if (fromFile === null) return errorResult(action, `defineFile not found or unparseable: ${params.defineFile}`);
-				resolvedDefine = fromFile;
+				if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+				resolvedDefine = fromFile.value;
 			}
 			if (typeof resolvedDefine === "string") {
 				const parsed = safeParse(resolvedDefine);
@@ -1000,15 +1078,14 @@ export default function (pi: ExtensionAPI) {
 				if (!v.ok) return errorResult(action, `Invalid taskflow:\n- ${v.errors.join("\n- ")}`);
 				def = candidate as Taskflow;
 			} else if (params.name) {
-				const saved = getFlow(ctx.cwd, params.name);
-				if (!saved) {
-					const available = listFlows(ctx.cwd);
-					const hint = available.length
-						? ` Available flows: ${available.map((f) => f.name).join(", ")}.`
-						: " No saved flows found. Use action=save to create one, or pass 'define' for an inline flow.";
-					return errorResult(action, `Saved flow '${params.name}' not found.${hint}`);
+				const savedR = getFlowDiagnosed(ctx.cwd, params.name);
+				if (!savedR.ok) {
+					const hint = savedR.reason === "missing"
+						? (() => { const available = listFlows(ctx.cwd); return available.length ? ` Available flows: ${available.map((f) => f.name).join(", ")}.` : " No saved flows found. Use action=save to create one, or pass 'define' for an inline flow."; })()
+						: "";
+					return errorResult(action, `${describeLoadFailure(savedR, `Saved flow '${params.name}'`)}.${hint}`);
 				}
-				def = saved.def;
+				def = savedR.value.def;
 			}
 			if (!def)
 				return errorResult(
@@ -1029,7 +1106,8 @@ export default function (pi: ExtensionAPI) {
 				// RFC library: write a sidecar .meta.json alongside the flow so search can
 				// retrieve it. Structural fields are derived; purpose/tags/notes come
 				// from the caller. (Phase 1: no embedding yet — embedded later.)
-				const prevMeta = readMeta(ctx.cwd, def.name) ?? undefined;
+				const prevMetaR = readMeta(ctx.cwd, def.name);
+				const prevMeta = prevMetaR.ok ? prevMetaR.value : undefined;
 				const meta = deriveMeta(def, {
 					purpose: typeof params.purpose === "string" ? params.purpose : undefined,
 					tags: Array.isArray(params.tags) ? (params.tags as string[]).filter((t) => typeof t === "string") : undefined,
@@ -1236,7 +1314,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "why-stale", "recompute"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1256,12 +1334,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (sub === "show") {
-				const flow = getFlow(ctx.cwd, arg);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${arg}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, arg);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${arg}"`), "error");
 					return;
 				}
-				const meta = readMeta(ctx.cwd, arg);
+				const flow = flowR.value;
+				const metaR = readMeta(ctx.cwd, arg);
+				const meta = metaR.ok ? metaR.value : undefined;
 				if (meta) {
 					const out = { definition: flow.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
 					ctx.ui.notify(JSON.stringify(out, null, 2), "info");
@@ -1280,11 +1360,12 @@ export default function (pi: ExtensionAPI) {
 				const parts = arg.trim().split(/\s+/);
 				const flowName = parts[0];
 				const direction = parts[1]?.toLowerCase() === "lr" ? "LR" : "TD";
-				const flow = getFlow(ctx.cwd, flowName);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${flowName}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				// Schema-validate before compiling so a malformed saved flow yields a
 				// clean error rather than a half-rendered diagram (mirrors the tool action).
 				const vr = validateTaskflow(flow.def, { cwd: ctx.cwd ? String(ctx.cwd) : undefined });
@@ -1304,11 +1385,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const flowName = arg.trim().split(/\s+/)[0];
-				const flow = getFlow(ctx.cwd, flowName);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${flowName}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				// Schema-validate before compiling so a malformed saved flow yields a
 				// clean error rather than a half-rendered report (mirrors action=ir).
 				const vr = validateTaskflow(flow.def, { cwd: ctx.cwd ? String(ctx.cwd) : undefined });
@@ -1327,12 +1409,36 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /tf provenance <runId>", "warning");
 					return;
 				}
-				const run = loadRun(ctx.cwd, arg);
-				if (!run) {
-					ctx.ui.notify(`Run not found: ${arg}`, "error");
+				const runR = loadRunDiagnosed(ctx.cwd, arg);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${arg}"`), "error");
 					return;
 				}
+				const run = runR.value;
 				ctx.ui.notify(formatProvenance(run), "info");
+				return;
+			}
+
+			if (sub === "trace") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf trace <runId> [--json]", "warning");
+					return;
+				}
+				const tokens = arg.trim().split(/\s+/).filter(Boolean);
+				const rid = tokens[0];
+				const json = tokens.includes("--json");
+				const runR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${rid}"`), "error");
+					return;
+				}
+				const run = runR.value;
+				const events = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (events.length === 0) {
+					ctx.ui.notify(`No trace recorded for run "${rid}" (the run predates tracing, or no trace sink was injected).`, "warning");
+					return;
+				}
+				ctx.ui.notify(json ? JSON.stringify(events, null, 2) : formatTrace(events, run.runId, run.flowName), "info");
 				return;
 			}
 
@@ -1342,11 +1448,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const [rid, ...rest] = arg.trim().split(/\s+/);
-				const run = loadRun(ctx.cwd, rid);
-				if (!run) {
-					ctx.ui.notify(`Run not found: ${rid}`, "error");
+				const runR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${rid}"`), "error");
 					return;
 				}
+				const run = runR.value;
 				const reads = readMapOf(run.phases);
 				const declared = declaredReadMapOfDef(run.def);
 				ctx.ui.notify(formatWhyStale(run.runId, run.flowName, reads, rest, declared), "info");
@@ -1362,11 +1469,12 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /tf recompute <runId> <phaseId> [--apply]\n(default is a safe dry-run; --apply spends tokens)", "warning");
 					return;
 				}
-				const prev = loadRun(ctx.cwd, rid);
-				if (!prev) {
-					ctx.ui.notify(`Run not found: ${rid}`, "error");
+				const prevR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!prevR.ok) {
+					ctx.ui.notify(describeLoadFailure(prevR, `Run "${rid}"`), "error");
 					return;
 				}
+				const prev = prevR.value;
 				const settings = readSubagentSettings();
 				const { agents } = discoverAgents(ctx.cwd, prev.def.agentScope ?? "user", settings.modelRoles, settings.taskflow);
 				const deps: RuntimeDeps = {
@@ -1375,6 +1483,7 @@ export default function (pi: ExtensionAPI) {
 					globalThinking: settings.globalThinking,
 					runTask: piSubagentRunner.runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				if (apply) {
 					const { report, state } = await recomputeTaskflow(prev, deps, [seed], { dryRun: false });
@@ -1460,11 +1569,12 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const [name, ...maybeArgs] = arg.split(/\s+/);
-				const flow = getFlow(ctx.cwd, name);
-				if (!flow) {
-					ctx.ui.notify(`Flow not found: ${name}`, "error");
+				const flowR = getFlowDiagnosed(ctx.cwd, name);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${name}"`), "error");
 					return;
 				}
+				const flow = flowR.value;
 				if (!ctx.isIdle()) {
 					ctx.ui.notify("Agent is busy; try again when idle.", "warning");
 					return;

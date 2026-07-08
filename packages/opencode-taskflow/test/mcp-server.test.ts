@@ -47,12 +47,12 @@ test("opencode mcp: initialize returns the protocol version + serverInfo", async
 	assert.equal(res.result.serverInfo.name, "taskflow");
 });
 
-test("opencode mcp: tools/list exposes the same six taskflow tools", async () => {
+test("opencode mcp: tools/list exposes the taskflow tools", async () => {
 	const [res] = await rpcRoundtrip([{ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }]);
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -78,10 +78,10 @@ test("opencode mcp: taskflow_verify dispatches through the opencode binding (no 
 	assert.equal(res.result.isError, false);
 });
 
-test("opencode mcp: makeToolHandlers exposes the eight tools", () => {
+test("opencode mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_verify"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 });

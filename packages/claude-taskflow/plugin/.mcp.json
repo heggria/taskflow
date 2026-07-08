@@ -2,7 +2,7 @@
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "claude-taskflow@0.1.6", "claude-taskflow-mcp"]
+      "args": ["-y", "-p", "claude-taskflow@0.1.7", "claude-taskflow-mcp"]
     }
   }
 }

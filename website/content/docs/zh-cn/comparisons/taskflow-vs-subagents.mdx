@@ -1,0 +1,145 @@
+---
+title: taskflow vs 内置 subagent
+description: agent 原生的 task/tasks/chain 简写什么时候够用，什么时候你会超越它——内置工具给不了的 DAG、gate、续跑与上下文隔离。
+---
+
+每个现代编程 agent 都自带 subagent 简写——Pi 上是 `task`/`tasks`/`chain`；Codex、Claude Code、OpenCode 上是名字不同、思路相同的东西。**taskflow 并不取代它。** taskflow 说的是*同一套*简写，所以你已有的委派立刻变成可追踪、可续跑、可保存的。等你超越了简写，完整的 DSL 会给你一张真正的 DAG。
+
+诚实的问题是：**什么时候内置简写够用，什么时候你需要 taskflow？**
+
+## 什么时候内置简写是对的选择
+
+直接用原生 subagent 工具的场景：
+
+- 就是**一两个任务**、没有分支——"去看看 X，告诉我 Y"。
+- 你**再也不会重跑**它——当前对话里的一次性需求。
+- 你**就想要中间结果留在上下文里**——你要对着它们推理。
+- **没有质量门禁**——你信任输出，或者你会自己过一眼。
+
+这些场景 `task` 完美。为它起一个 taskflow 定义反而是负担。
+
+## 什么时候你超越了简写
+
+当下面**任意一条**成真时，你就撞墙了：
+
+| 需求 | 内置 subagent | **taskflow** |
+|---|---|---|
+| 对几十个 item 做**分支扇出** | 只有扁平的 `tasks` | **`map`——每 item 一个 subagent，并发有界** |
+| **中间逐字稿** | 涌入你的上下文窗口 | **留在 runtime 里——只有最终阶段返回** |
+| **按名字复用** | 每次重新描述 | **存成 `/tf:<名字>`（Pi）或按名字运行（其它 host）** |
+| **可续跑** | ✗——任何失败都从头来 | **✓ 逐阶段、跨会话、缓存阶段自动跳过** |
+| 能叫停整个流程的**质量门禁** | ✗ | **`gate` 阶段——`VERDICT: BLOCK` 全停** |
+| **条件路由** | ✗ | **`when` 守卫 + `join: any` 或汇合** |
+| **重试 / 容错** | ✗ | **逐阶段 `retry` + 瞬态错误自动重试** |
+| 流程中途的**人工审批** | ✗ | **`approval` 阶段（批准 / 拒绝 / 编辑）** |
+| **花费上限** | ✗ | **整次运行的 `budget`（美元 / token 上限）** |
+| **竞争式择优** | ✗ | **`tournament`——N 个变体 + 裁判** |
+| **实时图视图** | 运行时不透明 | **带耗时与成本的实时 DAG 渲染** |
+
+## 上下文隔离的差异，具体看
+
+这是最直观能感受到的差异。同一个 12 步的 review 任务两种做法：
+
+**内置 subagent**——每份逐字稿都回到你这里：
+
+```
+你："审查这 12 个文件的安全问题。"
+Agent：[12 次 subagent 调用 → 12 份完整逐字稿进入你的上下文]
+       ↓
+       你的上下文窗口：+47,000 token 逐字稿
+```
+
+**taskflow**——只有合并后的报告返回：
+
+```json title="security-review.json"
+{
+  "name": "security-review",
+  "phases": [
+    { "id": "discover", "agent": "scout", "task": "列出 origin/main 之后改动的文件" },
+    { "id": "review", "map": "{steps.discover.json.files}", "agent": "security-reviewer",
+      "task": "审计 {item} 的漏洞", "concurrency": 4 },
+    { "id": "report", "agent": "executor", "dependsOn": ["review"],
+      "task": "把逐文件审查合并成一份报告" }
+  ]
+}
+```
+
+```
+你：/tf run security-review
+       ↓（12 份逐字稿留在 runtime 里）
+       你的上下文窗口：+1 份最终报告
+```
+
+对一次性任务，这很舒服。对每个 PR 都要跑的流水线，这就是"上下文还能用"和"上下文被淹没"的差别。
+
+## "存起来就忘掉它"的工作流
+
+另一大转变是**复用**。描述一次流水线，存下来：
+
+```bash
+# Pi——存成一个单词命令
+/tf save code-audit
+
+# 现在 /tf:code-audit 按名字运行整张校验过的图
+```
+
+```bash
+# Codex / Claude Code / OpenCode——按名字运行保存的流程
+taskflow_run code-audit
+```
+
+内置简写没有等价物：你每次都重新描述计划，模型每次从头推导。
+
+## 迁移路径（零重写）
+
+你不必一开始就选。taskflow 的简写**就是**内置简写的升级版：
+
+<Tabs>
+  <Tab value="内置">
+
+```js
+// agent 的原生委派
+chain([
+  { agent: "scout", task: "摸清仓库" },
+  { agent: "executor-code", task: "实现计划" },
+  { agent: "reviewer", task: "审查 diff" }
+])
+```
+
+  </Tab>
+  <Tab value="taskflow 简写">
+
+```js
+// 完全相同的接口——但现在可追踪、可续跑、可保存
+//（Pi：包在 /tf 里；其它 host：taskflow_run）
+```
+
+  </Tab>
+  <Tab value="taskflow 完整 DSL">
+
+```json
+{
+  "name": "implement-and-review",
+  "phases": [
+    { "id": "map", "agent": "scout", "task": "摸清仓库" },
+    { "id": "build", "agent": "executor-code", "dependsOn": ["map"],
+      "task": "实现计划" },
+    { "id": "review", "agent": "reviewer", "dependsOn": ["build"],
+      "task": "审查 diff" },
+    { "id": "gate", "type": "gate", "dependsOn": ["review"],
+      "agent": "plan-arbiter",
+      "task": "VERDICT: PASS 或 BLOCK（基于审查）" }
+  ]
+}
+```
+
+  </Tab>
+</Tabs>
+
+从简写开始。当你需要 gate、预算、续跑、或对 30 个 item 扇出时——升级到 DSL。你已有的委派可以原样搬过来。
+
+## 延伸阅读
+
+- [简写参考](/zh-cn/docs/reference/shorthand)——`task`/`tasks`/`chain` 语法
+- [阶段类型](/zh-cn/docs/syntax/phase-types)——完整 DSL 词汇表
+- [上下文隔离](/zh-cn/docs/concepts/context-isolation)——逐字稿为何不进你的窗口

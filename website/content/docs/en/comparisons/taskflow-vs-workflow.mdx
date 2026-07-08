@@ -1,0 +1,78 @@
+---
+title: taskflow vs imperative agent workflows
+description: A declarative DAG (taskflow) versus a dynamic, code-mode workflow script the model writes and runs — verifiability, resume, and what you trade away.
+---
+
+A **`workflow`** — the dynamic, code-mode kind that several agent runtimes now ship — is the model writing an **imperative JavaScript script** that *flows*: `await agent(...)`, an `if`, a `for`, another `await`. A **`taskflow`** is the opposite: you **declare** the work as a graph of discrete task nodes connected by `dependsOn` edges, and the runtime owns execution.
+
+Both are real, legitimate designs. They sit at opposite ends of one axis: **expressivity vs verifiability.**
+
+## The core difference
+
+| | dynamic `workflow` (code-mode) | **`taskflow`** (declarative graph) |
+|---|---|---|
+| **The plan is** | imperative JS the model writes & runs | declarative JSON data the runtime executes |
+| **The graph** | implicit — hidden in `if`/`for`/`await` | explicit — `phases[]` + `dependsOn`, a first-class object |
+| **Verify before running** | ✗ Turing-complete; can't prove it terminates | **✓ static checks: cycles, dead-ends, budget overflow, dangling refs** |
+| **See it** | ✗ the graph only exists as the code runs | **✓ the live progress render *is* the DAG** |
+| **Resume** | coarse (call-cache dedup) | **✓ phase-by-phase, input-hash keyed, cross-session** |
+| **Safe to LLM-generate** | risky — it's executable code | **✓ it's data — no `eval`; a runtime-generated sub-flow is structurally validated before it runs** |
+| **Expressivity ceiling** | **higher** — arbitrary control flow | bounded by the DSL (`map`/`when`/`loop`/`gate`/`tournament` + `flow {def}`) |
+
+## What a workflow gives you that taskflow doesn't
+
+Be honest about this: a code-mode workflow is **Turing-complete**. Anything you can express in JavaScript, you can express in a workflow. That includes:
+
+- Arbitrary mid-flight computation and branching on partial results
+- Calling non-LLM libraries mid-orchestration (databases, HTTP, file I/O)
+- Dynamic re-planning written as ordinary code
+
+taskflow's DSL is **bounded**. If a job needs logic that doesn't map onto `map`/`when`/`loop`/`gate`/`tournament`, you can't express it directly. The escape hatches are:
+
+- **`script` phases** — run a shell command (zero tokens) for deterministic computation
+- **`flow {def}` phases** — let a model author a sub-flow at runtime, which is then *structurally validated* before it runs (cycles / dangling refs / duplicate ids checked)
+
+But the ceiling is real. We trade raw expressivity on purpose.
+
+## What taskflow gives you that a workflow can't
+
+Because the plan is **data, not code**, the runtime can do things an imperative script structurally cannot:
+
+### 1. Verify before a single token is spent
+
+```bash
+# taskflow: check the graph for free
+/tf verify my-pipeline
+
+# workflow: ...you run it and find out
+```
+
+A workflow is executable code. The only way to know it terminates, stays under budget, and has no broken references is to **read it like a program** — or run it and pay the cost. taskflow's `verify` runs static analysis on the graph (cycle detection, dead-end detection, gate-exhaustion, budget feasibility, dangling `dependsOn` / interpolation refs) before any subagent spawns.
+
+### 2. The live progress *is* the DAG
+
+When a workflow runs, your window into it is whatever `console.log` statements the model happened to write. When a taskflow runs, the runtime renders the **actual graph** — every phase, its status, timing, and cost — because the graph is a first-class object it owns, not a side effect of execution.
+
+### 3. Phase-by-phase resume, cross-session
+
+A workflow's resume is coarse: dedup of identical calls via a cache. taskflow resumes **per phase, keyed on the phase's resolved input hash**, across sessions. Re-running a flow after editing one phase re-executes only that phase and its downstream; everything upstream is served from cache. See [incremental recompute](/en/docs/reference/incremental-recompute).
+
+### 4. Safe to generate with an LLM
+
+A workflow is code. Letting a model author one means running model-generated JavaScript — `eval`-adjacent. A taskflow is **data**. Letting a model author one (`flow {def}`) means the runtime parses JSON and **validates the structure** before a single phase runs. There is no code path from "model emitted a string" to "something executes."
+
+## When to pick which
+
+<Callout type="info">
+  **Pick a dynamic workflow when** the job is genuinely arbitrary control flow, needs mid-flight computation beyond what `script`/`flow` phases cover, or is a one-off you'll never re-run.
+</Callout>
+
+<Callout type="info">
+  **Pick taskflow when** the job is a repeatable pipeline (review, audit, migration, research, release) you want to run by name, verify before paying, watch as a graph, and resume across sessions.
+</Callout>
+
+## Further reading
+
+- [Why "taskflow" and not "workflow"?](/en/docs/what-is-taskflow) — the naming thesis
+- [Declarative graph vs imperative script](/en/docs/showcase/why-taskflow) — deeper design rationale
+- [Verification](/en/docs/concepts/verification) — what the static checks actually catch

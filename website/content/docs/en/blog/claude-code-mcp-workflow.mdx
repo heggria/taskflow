@@ -1,0 +1,112 @@
+---
+title: "Claude Code + MCP: a workflow that gates itself"
+description: Run a taskflow MCP server inside Claude Code to get declarative task graphs with quality gates, budget caps, and context isolation — without leaving your Claude session.
+---
+
+Claude Code is a powerful coding agent on its own. But when a job needs a **repeatable pipeline** — review every changed file, gate on risk, stay under a spend cap — ad-hoc prompting runs into the same limits every agent does: the model re-derives the plan each time, intermediate transcripts fill your context, and there's no way to halt the whole thing if a reviewer finds a critical issue. This post shows how to add a **taskflow MCP server** to Claude Code and run a self-gating review pipeline from inside your session.
+
+## Add the taskflow MCP server to Claude Code
+
+taskflow ships as a Claude Code plugin that registers an MCP server exposing the `taskflow_*` tools:
+
+```bash
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
+```
+
+That's it — the plugin wires up the MCP server (via `npx claude-taskflow-mcp`) and drops in the taskflow skill. Restart Claude Code and you'll have `taskflow_run`, `taskflow_verify`, `taskflow_resume`, and friends available as tools.
+
+## The job: a gated security review
+
+You want a pipeline that runs on every PR: discover changed files, fan out a security review per file, run an architecture review in parallel, and **halt** if anything critical turns up — returning a single merged report.
+
+Declare it as a graph:
+
+```json title="pr-security-review.json"
+{
+  "name": "pr-security-review",
+  "description": "Review a PR for security and architecture issues, gate on risk, return one report.",
+  "budget": { "maxUSD": 1.50 },
+  "phases": [
+    {
+      "id": "discover",
+      "agent": "scout",
+      "task": "List files changed since origin/main as a JSON array of paths."
+    },
+    {
+      "id": "sec-review",
+      "map": "{steps.discover.json}",
+      "agent": "security-reviewer",
+      "task": "Audit {item} for vulnerabilities: injection, auth, secrets, unsafe deserialization. Return a risk level and one-line finding.",
+      "concurrency": 4
+    },
+    {
+      "id": "arch-review",
+      "agent": "reviewer",
+      "dependsOn": ["discover"],
+      "task": "Review the overall diff for architectural problems: coupling, layering, missing abstractions."
+    },
+    {
+      "id": "gate",
+      "type": "gate",
+      "dependsOn": ["sec-review", "arch-review"],
+      "agent": "plan-arbiter",
+      "task": "Given the per-file security findings and the architecture review, emit VERDICT: BLOCK if any critical/high issue exists, else VERDICT: PASS."
+    },
+    {
+      "id": "report",
+      "agent": "executor",
+      "dependsOn": ["gate"],
+      "task": "Merge the security and architecture reviews into one PR report with a verdict and action items."
+    }
+  ]
+}
+```
+
+## Why the `gate` phase matters
+
+The `gate` phase is the thing ad-hoc prompting structurally can't give you. It's a phase whose **sole job** is to decide whether the flow continues:
+
+- If `plan-arbiter` emits `VERDICT: PASS` → the flow proceeds to `report`.
+- If it emits `VERDICT: BLOCK` → the flow **halts immediately**. `report` never runs. You get the blocker finding instead of a polished report that buries it.
+
+That's a quality gate with teeth. The fail-open rule (ambiguous output → PASS) means a confused gate won't accidentally halt good work — but a clear `BLOCK` is final.
+
+## Run it from Claude Code
+
+```text
+# verify the graph for free first
+taskflow_verify pr-security-review
+
+# run it
+taskflow_run pr-security-review
+```
+
+What Claude Code sees: a **single streaming tool call** that returns the final report. What it doesn't see: the dozens of per-file security-reviewer transcripts. Those stay inside the taskflow runtime — your context window gets the merged report, not the raw noise.
+
+## Budget caps as a first-class field
+
+```json
+"budget": { "maxUSD": 1.50 }
+```
+
+If a fan-out over an unexpectedly large diff would blow past $1.50, the runtime halts the run with a budget-exceeded outcome. No surprises on the invoice. Pair this with `concurrency: 4` so the fan-out is bounded even before the budget kicks in.
+
+## Save it and reuse it
+
+Describe the pipeline once:
+
+```text
+taskflow_save pr-security-review pr-security-review.json
+```
+
+Now every PR review is `taskflow_run pr-security-review` — no re-prompting, no re-deriving the plan. And because phases are cached on their input hash, re-running after a tiny prompt tweak only re-executes the changed phase and its downstream.
+
+## Takeaways
+
+- The taskflow **MCP server** brings declarative task graphs *into* Claude Code as tools.
+- `gate` phases give you a real halt-on-block quality gate.
+- `budget` caps spend; `map` fans out with bounded concurrency.
+- Only the final report returns to your session — transcripts stay isolated.
+
+For the full Claude Code surface (permissions, model routing, all available tools), see the [Claude Code guide](/en/docs/guides/claude-code). The [templates gallery](/en/docs/templates) has four more runnable pipelines.

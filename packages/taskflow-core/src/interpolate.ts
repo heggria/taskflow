@@ -214,6 +214,48 @@ export function safeParse(text: string): unknown {
 	return undefined;
 }
 
+/**
+ * Strict JSON parse for files the USER authored or pointed at (as opposed to
+ * `safeParse`, which is deliberately lenient for LLM/subagent output).
+ *
+ * Unlike `safeParse`, this THROWS on malformed input and preserves the original
+ * `SyntaxError` — V8's message carries the offending byte position and, since
+ * Node 17, a `lineNumber`/`columnNumber` pair. File loaders surface that to
+ * the user so they can fix a stray bare newline (or similar) in seconds
+ * instead of chasing a phantom "file not found".
+ *
+ * When `allowFence` is set (used by `defineFile`, which may point at a markdown
+ * draft wrapping the JSON in a ```json block), a fenced block is tried if the
+ * whole-document parse fails — but the *underlying* parse error is still
+ * thrown if no block parses, so the position is never lost.
+ */
+export function parseStrict(text: string, opts?: { allowFence?: boolean }): unknown {
+	const trimmed = text.trim();
+	if (!trimmed) throw new SyntaxError("Cannot parse an empty document.");
+	// Keep the FIRST SyntaxError we see — it points at the real problem in the
+	// most natural location (whole-document first, then each fence body).
+	let firstError: unknown;
+	try {
+		return JSON.parse(trimmed);
+	} catch (e) {
+		firstError = e;
+		if (!opts?.allowFence) throw e;
+	}
+	// Same fence regex as safeParse (see comment there for ReDoS safety).
+	const fenceRe = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
+	let fm: RegExpExecArray | null;
+	while ((fm = fenceRe.exec(trimmed)) !== null) {
+		if (fm[1].trim().toLowerCase() === "json") {
+			try {
+				return JSON.parse(fm[2].trim());
+			} catch (e) {
+				firstError ??= e;
+			}
+		}
+	}
+	throw firstError;
+}
+
 /** Coerce a parsed value into an array for map fan-out. */
 export function coerceArray(value: unknown): unknown[] | null {
 	if (Array.isArray(value)) return value;

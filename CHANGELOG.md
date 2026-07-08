@@ -2,6 +2,128 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.1.7] — 2026-07-07
+
+### Added
+- **Deterministic-replay trace foundation.** Every run may now record an
+  **append-only event trace** (`runs/<flow>/<runId>.trace.jsonl`) capturing
+  each subagent call's resolved input + full output and the runtime's own
+  decisions (gate verdicts, `unreplayable` markers for context-sharing / inner
+  `flow` / context-file phases). This is the foundation for **deterministic
+  replay** — re-evaluating a recorded run against changed decision knobs (gate
+  thresholds, budget, model route) **without calling the model**, zero tokens
+  offline — which lands in 0.2.0. The schema is already complete enough that 0.2.0
+  replay won't need a breaking migration.
+  - New `trace.ts` (`TraceEvent`, `TraceSink`, buffered `FileTraceSink`,
+    partial-line-tolerant `readTrace`) and `replay.ts` (`ReplayDecision` type
+    contract) modules in `taskflow-core`; re-exported from the barrel.
+  - New optional `RuntimeDeps.trace?: TraceSink` hook — **fail-open** (a missing
+    or throwing sink never crashes a run) and **host-agnostic** (no host SDK in
+    core; runs with no trace sink behave identically to before). Wired into all
+    four `RuntimeDeps` construction sites in the pi adapter and the MCP server.
+  - New `trace` action / `/tf trace <runId> [--json]` command (pi) and
+    `taskflow_trace` MCP tool: read-only inspection of a run's event timeline.
+    Human form truncates subagent outputs (like `peek`); `--json` returns the
+    complete machine-readable record.
+  - Backfilled the MCP server with `taskflow_why_stale` and `taskflow_recompute`
+    (dry-run only) — the MCP host previously lacked 5 analysis actions pi had.
+  - Trace files are cleaned up alongside their runs by `cleanupTerminalRuns`
+    (no unbounded disk accumulation).
+  - Extracted the pure `parseGateVerdict` + a decoupled `overBudget` into
+    `deterministic.ts`, so a future `replay.ts` can import them without dragging
+    in the process-spawning runner. (Design came from a 3-reviewer cross-
+    adversarial plan review: risk-reviewer + critic + reviewer → plan-arbiter,
+    which scoped this to trace-only in 0.1.7 and deferred replay logic to 0.2.0.)
+
+### Fixed
+- **Release-prep fixes from a deep cross-adversarial release-readiness review**
+  (scout → risk/security/quality reviewers → critic cross-exam → final-arbiter):
+  - **Bumped the stale `@0.1.6` plugin pins** in `codex-taskflow/plugin/.mcp.json`
+    and `claude-taskflow/plugin/.mcp.json` to `@0.1.7`. Without this,
+    `codex plugin add taskflow@taskflow` / `claude plugin install` would install a
+    server lacking `taskflow_trace`, `taskflow_why_stale`, `taskflow_recompute`,
+    `taskflow_save`, and `taskflow_search` — the 0.1.7 features silently absent.
+    (`opencode-taskflow/plugin/opencode.json` was already at 0.1.7.)
+  - **Taught the `trace` action in the skills** (the actions table + Pi/MCP
+    surface in README) so agents can discover and invoke it — an engine feature
+    the skill doesn't teach effectively doesn't exist.
+  - Added trace **decision-event** tests (gate-verdict, unreplayable marker).
+- **File loaders now report *why* a file failed, with the parse position —
+  instead of a merged "not found or unparseable" message.** Four user-facing
+  loaders (`readDefineFile`, `readFlowFile`/`listFlows`, `tryReadRunFile`, and
+  the library sidecar `readMeta`/`readMetaNextTo`) used to collapse two
+  distinct failures — *file missing* and *file malformed* — into a single
+  `null` / `"… not found or unparseable"` result. The underlying `JSON.parse`
+  `SyntaxError` (which carries the offending byte offset and, on Node ≥17, a
+  line/column) was swallowed by the lenient `safeParse` and never reached the
+  user. A hand-authored `defineFile` with a stray bare newline inside a string
+  literal therefore reported "defineFile not found or unparseable" and sent
+  authors chasing a phantom path/cwd problem. The loaders now return a
+  discriminated `LoadResult<T>` (`{ ok: true, value } | { ok: false, reason:
+  "missing" | "unparseable", path, detail }`); `detail` carries the original
+  parse error (e.g. `Bad control character in string literal in JSON at
+  position 3979 (line 30 column 801)`), surfaced via a shared
+  `describeLoadFailure(r, what)` helper. New strict `parseStrict(text,
+  { allowFence })` (in `interpolate.ts`) preserves the `SyntaxError`; the
+  lenient `safeParse` is unchanged, so all ~25 LLM/subagent output paths keep
+  their fail-open fence/balanced-bracket recovery. `listFlows` now `console.warn`s
+  on a corrupt saved flow instead of silently dropping it (so `getFlow(name)`
+  no longer reports "not found" for a file that clearly exists); new
+  `getFlowDiagnosed` / `loadRunDiagnosed` distinguish corrupt-vs-missing for
+  by-name/by-runId resolution. **Breaking** (pre-1.0): `readDefineFile`,
+  `readMeta`, and `readMetaNextTo` return `LoadResult<T>` instead of `T | null`.
+  The opaquely-fail-open paths (index-rebuild scans, `cache.ts` file hashing,
+  path-traversal rejections) are intentionally unchanged.
+- **The pi-taskflow "built-in agents upgrade" hint is now truly one-time.** It
+  previously re-printed every session while `settings.json` lacked a `taskflow`
+  key and the project had `.pi/agents/*.md`. A marker file
+  (`~/.pi/agent/.taskflow-upgrade-hint-shown`) is now written atomically (`wx`
+  flag) after the first print, so subsequent sessions skip it. Best-effort: an
+  unwritable agent dir only means the hint may show once more; it never blocks
+  session startup.
+- **Gate verdict parsing hardened — a genuine BLOCK is no longer silently
+  downgraded to PASS (issue #54).** Models routinely wrap decision tokens in
+  Markdown emphasis (`VERDICT: **BLOCK**`, `### WINNER: __3__`, `SCORE: `0.8``),
+  which the bare-token regexes (`/VERDICT\s*[:=]\s*(…)/`, `/WINNER…(\d+)/`,
+  `/SCORE…([01]…)/`) missed — the match fell through to the default verdict,
+  so a genuine BLOCK was silently recorded as `pass` and a judge's actual pick
+  silently reverted to variant 1. Three layered fixes: (1) a shared `markerRe()`
+  factory in `scorers.ts` now emits emphasis-tolerant regexes for **all three**
+  decision markers — `VERDICT_TOKEN_RE`, `SCORE_TOKEN_RE`, `WINNER_TOKEN_RE` —
+  tolerating `*`/`_`/`` ` ``/`~` runs on either side of the captured value (used
+  by `parseGateVerdict`, `parseJudgeOutput`, and `parseTournamentWinner`);
+  (2) **gate *model output* that cannot be parsed now fails closed (BLOCK)**
+  instead of PASS — a gate that cannot reach a verdict cannot be trusted to
+  pass, while *config* slips (unresolved `score.target`, malformed `scorers`)
+  remain fail-open with a warning (they are authoring errors that degrade, not a
+  judge that couldn't decide); tournament winner stays fail-open (variant 1 —
+  never lose work, since the variants are already computed); (3) a free-text
+  gate whose task omits a `VERDICT:` instruction now gets the exact format
+  suffix **auto-appended**.
+  For maximum robustness, prefer `output: "json"` + `expect` enum
+  (`{ verdict: { enum: ["pass","block"] } }`) which machine-validates the verdict.
+  Regression tests added for every Markdown variant and the fail-closed default.
+  **Breaking** (pre-1.0): a gate whose model output contains *no* parseable
+  verdict (no `VERDICT:` marker and no JSON verdict object) now **blocks** the
+  flow instead of silently passing. Previously such gates rubber-stamped PASS.
+  Migration: any custom gate `task` that relied on prose-only output should
+  either emit `VERDICT: PASS|BLOCK` (auto-appended if omitted), adopt the
+  `output:"json"` + `expect` enum contract, or be marked `optional: true` with a
+  downstream fallback. Note that an *explicit* non-blocking JSON verdict (e.g.
+  `{"verdict":"No issues found"}`) still resolves to PASS — only truly
+  unparseable model output is affected. *Config* slips (unresolved `score.target`,
+  malformed `scorers`) remain fail-open with a warning.
+
+### Security
+- **PostCSS bumped to 8.5.16 (GHSA-qx2m-qp2m-jg93 / CVE-2026-41305, medium).**
+  PostCSS < 8.5.10 did not escape `</style>` when stringifying CSS ASTs, an XSS
+  vector when user-submitted CSS is parsed and re-embedded in HTML `<style>`
+  tags. `next@16.2.10` (a `website/` transitive dep) pinned the vulnerable
+  `postcss@8.4.31`. A root `pnpm.overrides` now forces `postcss@^8.5.10`
+  workspace-wide, hoisting the single `8.4.31` resolution to `8.5.16` (the
+  version `@tailwindcss/postcss` already resolved). The website build (Next.js +
+  Tailwind CSS pipeline) was verified unaffected.
+
 ## [0.1.6] — 2026-07-06
 
 ### Changed

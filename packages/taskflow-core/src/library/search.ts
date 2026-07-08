@@ -11,6 +11,7 @@
 
 import { getFlow, listFlows, readMeta } from "../store.ts";
 import type { Taskflow } from "../schema.ts";
+import type { FlowMeta } from "./types.ts";
 import {
 	computeGenerality,
 	computePhaseSignature,
@@ -63,7 +64,7 @@ export function resolveCandidate(
 	def: Taskflow,
 	scope: "user" | "project",
 	name: string,
-	sidecar: ReturnType<typeof readMeta>,
+	sidecar: FlowMeta | undefined,
 ): ResolvedCandidate {
 	const freshSig = computePhaseSignature(def);
 	const freshGen = computeGenerality(def);
@@ -245,7 +246,8 @@ export async function searchLibrary(deps: LibraryDeps, input: SearchInput): Prom
 
 	const scored: Array<{ cand: ResolvedCandidate; score: number; semScore?: number; structScore: number; textScore: number }> = [];
 	for (const f of flows) {
-		const sidecar = readMeta(deps.cwd, f.name);
+		const sidecarR = readMeta(deps.cwd, f.name);
+		const sidecar = sidecarR.ok ? sidecarR.value : undefined;
 		const cand = resolveCandidate(f.def, f.scope, f.name, sidecar);
 		const qShape = {
 			phaseSignature: input.phaseSignatureHint ?? "",

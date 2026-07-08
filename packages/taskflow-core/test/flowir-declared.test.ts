@@ -206,3 +206,140 @@ test("DeclaredDeps: gate `eval` refs are captured in the declared plane", async 
 	const ir = await compileTaskflowToIR(f);
 	assert.deepEqual(ir.meta.declaredDeps.quality.reads, ["build"]);
 });
+
+// ---------------------------------------------------------------------------
+// Regression coverage for three bugs found by the 0.2.0-DSL multi-agent review
+// (review-020-design run, 2026-07-07). Each test pins a previously-broken
+// behavior so the bug cannot silently return.
+// ---------------------------------------------------------------------------
+
+test("DeclaredDeps: script `run` (array) + `input` interpolation refs are captured", async () => {
+	// collectRefs previously scanned task/over/when/until/eval/score/branches/with/context
+	// but NOT `run` (array form) or `input`. The runtime interpolates both, so a
+	// missing declared edge here would let `recompute` skip a phase whose stdin
+	// or argv genuinely depended on an upstream output.
+	const f = flow([
+		{ id: "gen", type: "agent", task: "generate code" } as Phase,
+		{
+			id: "lint",
+			type: "script",
+			run: ["eslint", "--stdin"],
+			input: "review this:\n{steps.gen.output}",
+			dependsOn: ["gen"],
+			final: true,
+		} as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	// {steps.gen.output} in `input` must produce a declared read on `gen`.
+	assert.ok(
+		ir.meta.declaredDeps.lint.reads.includes("gen"),
+		"script `input` {steps.gen.output} must register as a declared read on `gen`",
+	);
+});
+
+test("DeclaredDeps: string `def` (inline sub-flow) interpolation refs are captured", async () => {
+	// A string `def` is interpolated then JSON-parsed at runtime; its {steps.X}
+	// refs are real dependencies. (An object `def` is used verbatim — not scanned.)
+	const f = flow([
+		{ id: "planner", type: "agent", task: "emit a sub-flow" } as Phase,
+		{
+			id: "exec",
+			type: "flow",
+			def: "{steps.planner.json}",
+			final: true,
+		} as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	assert.ok(
+		ir.meta.declaredDeps.exec.reads.includes("planner"),
+		"string `def` {steps.planner.json} must register as a declared read on `planner",
+	);
+});
+
+test("DeclaredDeps: explicit `dependsOn` is merged into declared reads (observed ∪ declared)", async () => {
+	// A phase may depend on another SEMANTICALLY (must run after it) without
+	// interpolating its output — e.g. sequential scripts where A writes a file
+	// and B reads it from the filesystem. Previously `reads` came only from
+	// collectRefs (interpolation), so the explicit edge was missing from
+	// RunState.declaredDeps and `recompute` could skip B when A went stale.
+	const f = flow([
+		{ id: "setup", type: "script", run: "mkdir -p /tmp/build" } as Phase,
+		{
+			id: "build",
+			type: "script",
+			run: "tsc",
+			// No interpolation referencing `setup`, but build MUST run after it.
+			dependsOn: ["setup"],
+			final: true,
+		} as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	assert.deepEqual(ir.meta.declaredDeps.build.reads, ["setup"]);
+});
+
+test("Sidecar round-trip: every previously-dropped Phase field is preserved", async () => {
+	// SIDECAR_PHASE_FIELDS previously omitted 8 fields: agent, run, input,
+	// timeout, expect, reflexion, idempotent, score. A JSON → FlowIR → JSON
+	// round-trip silently lost them, leaving script/gate/loop phases unrunnable.
+	// This test pins the full field set so a future omission fails loudly.
+	const everyField = {
+		id: "kitchen-sink",
+		type: "agent",
+		agent: "executor-code",
+		task: "do everything",
+		over: "{steps.x}",
+		as: "row",
+		branches: [{ task: "b" }],
+		from: ["x"],
+		use: "lib",
+		def: "{steps.x}",
+		with: { k: "{steps.x}" },
+		run: ["echo", "{steps.x}"],
+		input: "pipe {steps.x}",
+		timeout: 30000,
+		until: "{steps.x} == done",
+		maxIterations: 3,
+		convergence: true,
+		reflexion: true,
+		variants: 2,
+		judge: "pick",
+		judgeAgent: "final-arbiter",
+		mode: "best",
+		dependsOn: ["x"],
+		join: "any",
+		when: "{steps.x} == ok",
+		retry: { max: 2 },
+		output: "json",
+		expect: { type: "object" },
+		model: "strong",
+		thinking: "high",
+		tools: ["read"],
+		cwd: "worktree",
+		final: true,
+		optional: true,
+		idempotent: false,
+		concurrency: 4,
+		context: ["{steps.x}"],
+		contextLimit: 4000,
+		onBlock: "retry",
+		eval: ["{steps.x} contains ok"],
+		score: { target: "{steps.x}", scorers: [{ type: "contains", value: "ok" }], combine: "all" },
+		cache: { scope: "cross-run", ttl: "7d", fingerprint: ["git:HEAD"] },
+		shareContext: true,
+	} as Phase;
+	const f = flow([{ id: "x", type: "agent", task: "seed" } as Phase, everyField]);
+	const ir = await compileTaskflowToIR(f);
+	const sidecar = (ir.meta.sidecar as { phases: Record<string, Record<string, unknown>> }).phases["kitchen-sink"];
+	// The 8 previously-dropped fields must all survive the projection.
+	for (const previouslyDropped of ["agent", "run", "input", "timeout", "expect", "reflexion", "idempotent", "score"]) {
+		assert.ok(
+			previouslyDropped in sidecar,
+			`sidecar dropped '${previouslyDropped}' — SIDECAR_PHASE_FIELDS regression`,
+		);
+	}
+	// And nothing the author wrote should be silently lost either.
+	for (const key of Object.keys(everyField)) {
+		if (key === "id" || key === "type" || key === "when") continue; // FlowIRNode carries these
+		assert.ok(key in sidecar, `sidecar dropped author field '${key}'`);
+	}
+});

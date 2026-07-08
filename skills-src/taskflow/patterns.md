@@ -226,7 +226,7 @@ different *approaches* judged against each other.
 {
   "id": "strategy", "type": "tournament", "mode": "best",
   "judgeAgent": "final-arbiter",
-  "judge": "Judge on: correctness under concurrent access, blast radius, migration cost. Quote evidence. End with WINNER: <n>.",
+  "judge": "Judge on: correctness under concurrent access, blast radius, migration cost. Quote evidence. Return JSON {\"winner\": <n>, \"reason\": \"...\"}.",
   "branches": [
     { "task": "Design the cache-invalidation fix with a conservative approach: minimal diff, no schema change.", "agent": "analyst" },
     { "task": "Design the fix assuming we can change the schema: optimal correctness.", "agent": "analyst" },
@@ -237,7 +237,8 @@ different *approaches* judged against each other.
 ```
 
 Give the judge a **rubric with named criteria**, a stronger model
-(`judgeAgent`), and an exact terminator (`WINNER: <n>`). `mode: "aggregate"`
+(`judgeAgent`), and a structured winner output (`{"winner": <n>}` JSON,
+or an exact `WINNER: <n>` terminator). `mode: "aggregate"`
 instead merges all variants — good for research synthesis, bad for decisions.
 
 ---
@@ -283,7 +284,7 @@ use `why-stale` → `recompute` instead of a fresh run — see `advanced.md`.
 | Anti-pattern | Why it fails | Fix |
 |--------------|--------------|-----|
 | One mega-phase doing discover+audit+report | No parallelism, no caching granularity, one failure loses everything | Split along the archetype-1 shape |
-| Gate whose task doesn't demand a `VERDICT:` terminator | Ambiguity fails open → gate silently always passes | End every gate task with the exact verdict instruction |
+| Gate whose task doesn't demand a `VERDICT:` terminator | Ambiguous model output fails closed → gate blocks on a model that forgot the verdict | Use `output:"json"` + `expect` enum (preferred), or end the task with the exact `VERDICT: PASS\|BLOCK` instruction (auto-appended if you omit it) |
 | Router phase without `expect` enum | `"Deep"` vs `"deep"` → both `when` branches skip, `join:"any"` reduce gets nothing | `expect: { properties: { route: { enum: [...] } } }` + `retry` |
 | Agent phase that just runs a shell command | Tokens spent, output paraphrased inaccurately | `script` phase |
 | Same agent produces and reviews | Self-review passes everything | Different agent (ideally model) for the gate |

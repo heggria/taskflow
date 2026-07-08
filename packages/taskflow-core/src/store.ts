@@ -20,7 +20,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
-import { safeParse } from "./interpolate.ts";
+import { parseStrict } from "./interpolate.ts";
 import type { Taskflow } from "./schema.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
@@ -32,6 +32,52 @@ export interface SavedFlow {
 	scope: "user" | "project";
 	filePath: string;
 	def: Taskflow;
+}
+
+/**
+ * Outcome of loading a user-authored file from disk. Failure is discriminated
+ * by `reason` so callers can tell the user *why* it failed (and where):
+ *
+ * - `missing`    — the file does not exist / is unreadable.
+ * - `unparseable`— the file exists but failed to parse; `detail` carries the
+ *                  underlying error (e.g. a V8 `SyntaxError` with byte offset
+ *                  + line/column), so flow authors can fix it in seconds.
+ *
+ * This replaces the old `T | null` contract that collapsed both cases into
+ * `null` and produced messages like "not found or unparseable" — which hid the
+ * real cause and the exact position of a malformed token.
+ */
+export type LoadResult<T> =
+	| { ok: true; value: T }
+	| { ok: false; reason: "missing" | "unparseable"; path: string; detail: string };
+
+/** Build a single-line, user-facing message from a failed `LoadResult`. */
+export function describeLoadFailure(
+	r: Extract<LoadResult<unknown>, { ok: false }>,
+	what: string,
+): string {
+	return r.reason === "missing"
+		? `${what} not found: ${r.path}`
+		: `${what} could not be parsed — ${r.detail} (${r.path})`;
+}
+
+/** Read+parse a user-authored file, distinguishing missing from malformed. */
+function loadFile<T>(filePath: string, parse: (raw: string) => T): LoadResult<T> {
+	let raw: string;
+	try {
+		raw = fs.readFileSync(filePath, "utf-8");
+	} catch (e) {
+		return { ok: false, reason: "missing", path: filePath, detail: errMessage(e) };
+	}
+	try {
+		return { ok: true, value: parse(raw) };
+	} catch (e) {
+		return { ok: false, reason: "unparseable", path: filePath, detail: errMessage(e) };
+	}
+}
+
+function errMessage(e: unknown): string {
+	return e instanceof Error ? e.message : String(e);
 }
 
 /** @internal */
@@ -226,6 +272,13 @@ function flowRunDir(runsRoot: string, flowName: string): string {
 /** Return the full path for a run file in the new subdirectory layout. */
 function runFilePath(runsRoot: string, flowName: string, runId: string): string {
 	return path.join(flowRunDir(runsRoot, flowName), `${runId}.json`);
+}
+
+/** Return the path to a run's deterministic-replay trace (append-only JSONL).
+ *  Sibling to `<runId>.json` in the same per-flow dir. Best-effort: the file
+ *  only exists if a TraceSink was injected for the run. */
+export function traceFilePath(runsRoot: string, flowName: string, runId: string): string {
+	return path.join(flowRunDir(runsRoot, flowName), `${runId}.trace.jsonl`);
 }
 
 /** Return the path to the run index file. */
@@ -567,6 +620,10 @@ function cleanupTerminalRuns(
 		try { fs.unlinkSync(filePath); } catch { /* already gone */ }
 		// Also remove any orphaned lock file.
 		try { fs.unlinkSync(filePath + ".lock"); } catch { /* ignore */ }
+		// Also remove the deterministic-replay trace (sibling .trace.jsonl +
+		// its append lock) so pruned runs don't accumulate trace files.
+		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl")); } catch { /* ignore */ }
+		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl.lock")); } catch { /* ignore */ }
 		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
 		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
 		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }
@@ -617,37 +674,25 @@ function findProjectFlowsDirInternal(cwd: string, create = false): string | null
 
 /**
  * Read a flow definition from a file on disk. Supports raw JSON or a Markdown
- * document with a fenced ```json block (reuses safeParse). Used by the
- * `defineFile` parameter so verify/compile/run can share one persisted draft
- * (e.g. in the OS temp dir) without saving it into the project's .pi/taskflows.
+ * document with a fenced ```json block. Used by the `defineFile` parameter so
+ * verify/compile/run can share one persisted draft (e.g. in the OS temp dir)
+ * without saving it into the project's .pi/taskflows.
  *
- * Returns the parsed definition (object/array/shorthand), or null if the file
- * can't be read or parsed. Callers surface an explicit error in that case.
+ * Returns a `LoadResult`: `{ ok: true, value }` on success, or
+ * `{ ok: false, reason: "missing" | "unparseable", ... }` on failure. Callers
+ * surface an explicit error via `describeLoadFailure`.
  */
-export function readDefineFile(filePath: string): unknown {
-	let raw: string;
-	try {
-		raw = fs.readFileSync(filePath, "utf-8");
-	} catch {
-		return null;
-	}
-	const parsed = safeParse(raw);
-	return parsed ?? null;
+export function readDefineFile(filePath: string): LoadResult<unknown> {
+	return loadFile(filePath, (raw) => parseStrict(raw, { allowFence: true }));
 }
 
-function readFlowFile(filePath: string, scope: "user" | "project"): SavedFlow | null {
-	try {
-		const raw = fs.readFileSync(filePath, "utf-8");
-		// Flow definition files are hand-authored and may contain JSONC-style
-		// comments (// line and /* block */) for readability. parseJsonc strips
-		// them before handing off to JSON.parse. LLM/subagent output is NOT
-		// routed through here — see interpolate.ts#safeParse (kept strict).
-		const def = parseJsonc(raw) as Taskflow;
-		if (!def?.name) return null;
-		return { name: def.name, scope, filePath, def };
-	} catch {
-		return null;
+function readFlowFile(filePath: string, scope: "user" | "project"): LoadResult<SavedFlow> {
+	const r = loadFile(filePath, (raw) => parseJsonc(raw) as Taskflow);
+	if (!r.ok) return r;
+	if (!r.value?.name) {
+		return { ok: false, reason: "unparseable", path: filePath, detail: "parsed OK but missing required field: name" };
 	}
+	return { ok: true, value: { name: r.value.name, scope, filePath, def: r.value } };
 }
 
 /** List all saved flows (project overrides user on name collision). */
@@ -674,8 +719,17 @@ export function listFlows(cwd: string): SavedFlow[] {
 			if (!name.endsWith(".json")) continue;
 			// A1: sidecar .meta.json must never be scanned as a candidate flow.
 			if (name.endsWith(".meta.json")) continue;
-			const flow = readFlowFile(path.join(dir, name), scope);
-			if (flow) map.set(flow.name, flow); // project after user → overrides
+			const r = readFlowFile(path.join(dir, name), scope);
+			if (r.ok) {
+				map.set(r.value.name, r.value); // project after user → overrides
+			} else if (r.reason === "unparseable") {
+				// A corrupt saved flow used to be silently dropped here, so `getFlow`
+				// would later report "not found" for a file that clearly exists.
+				// Surface it loudly instead — the detail carries line/column.
+				console.warn(
+					`[taskflow] saved flow is corrupt and was excluded from the list: ${name} — ${r.detail}`,
+				);
+			}
 		}
 	}
 	return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
@@ -683,6 +737,31 @@ export function listFlows(cwd: string): SavedFlow[] {
 
 export function getFlow(cwd: string, name: string): SavedFlow | null {
 	return listFlows(cwd).find((f) => f.name === name) ?? null;
+}
+
+/**
+ * Resolve a saved flow by name with diagnosable failure. Unlike `getFlow`
+ * (which returns `null` for both "no such flow" and "file exists but corrupt",
+ * because corrupt files are excluded from `listFlows`), this re-reads the
+ * candidate file directly so callers can report *why* a name didn't resolve.
+ */
+export function getFlowDiagnosed(cwd: string, name: string): LoadResult<SavedFlow> {
+	const found = getFlow(cwd, name);
+	if (found) return { ok: true, value: found };
+	// Not in the list — check whether a file exists for this name but is corrupt.
+	const candidates: Array<{ dir: string; scope: "user" | "project" }> = [
+		{ dir: userFlowsDir(), scope: "user" },
+	];
+	const projDir = findProjectFlowsDir(cwd);
+	if (projDir) candidates.push({ dir: projDir, scope: "project" });
+	for (const { dir, scope } of candidates) {
+		const filePath = path.join(dir, `${safeFlowDirName(name)}.json`);
+		if (fs.existsSync(filePath)) {
+			const r = readFlowFile(filePath, scope);
+			if (!r.ok) return r; // unparseable (or a missing-in-race) — surface detail
+		}
+	}
+	return { ok: false, reason: "missing", path: name, detail: `no saved flow named '${name}'` };
 }
 
 let _piCreationHinted = false;
@@ -730,36 +809,39 @@ function sidecarPathIn(flowFilePath: string): string {
 	return flowFilePath.replace(/\.json$/, ".meta.json");
 }
 
-/** Read a flow's library sidecar. Returns null if missing/unparseable. */
-export function readMeta(cwd: string, flowName: string): FlowMeta | null {
+/** Read a flow's library sidecar. Returns a `LoadResult`; missing/unparseable
+ *  are discriminated by `reason`. */
+export function readMeta(cwd: string, flowName: string): LoadResult<FlowMeta> {
 	// Try project scope first, then user — mirrors getFlow's resolution.
 	for (const scope of ["project", "user"] as const) {
 		const p = sidecarPathFor(cwd, flowName, scope);
-		try {
-			if (!fs.existsSync(p)) continue;
-			const raw = fs.readFileSync(p, "utf-8");
-			const parsed = safeParse(raw);
-			if (parsed && typeof parsed === "object") return parsed as FlowMeta;
-			return null;
-		} catch {
-			continue;
-		}
+		if (!fs.existsSync(p)) continue;
+		const r = loadFile(p, (raw) => {
+			const parsed = parseStrict(raw);
+			if (!parsed || typeof parsed !== "object") {
+				throw new Error("expected a JSON object at the top level");
+			}
+			return parsed as FlowMeta;
+		});
+		return r;
 	}
-	return null;
+	return { ok: false, reason: "missing", path: flowName, detail: "no sidecar .meta.json found" };
 }
 
 /** Read a sidecar next to a specific flow file (avoids name→scope lookup when
  *  we already have the SavedFlow from listFlows). */
-export function readMetaNextTo(flowFilePath: string): FlowMeta | null {
-	try {
-		const p = sidecarPathIn(flowFilePath);
-		if (!fs.existsSync(p)) return null;
-		const raw = fs.readFileSync(p, "utf-8");
-		const parsed = safeParse(raw);
-		return parsed && typeof parsed === "object" ? (parsed as FlowMeta) : null;
-	} catch {
-		return null;
+export function readMetaNextTo(flowFilePath: string): LoadResult<FlowMeta> {
+	const p = sidecarPathIn(flowFilePath);
+	if (!fs.existsSync(p)) {
+		return { ok: false, reason: "missing", path: p, detail: "no sidecar .meta.json next to flow file" };
 	}
+	return loadFile(p, (raw) => {
+		const parsed = parseStrict(raw);
+		if (!parsed || typeof parsed !== "object") {
+			throw new Error("expected a JSON object at the top level");
+		}
+		return parsed as FlowMeta;
+	});
 }
 
 /** Write a flow + its sidecar atomically (same withLock critical section — R2).
@@ -796,7 +878,8 @@ export function bumpReuseInSidecar(cwd: string, flowName: string): number | null
 	const metaPath = sidecarPathIn(saved.filePath);
 	const lockPath = saved.filePath + ".lock";
 	return withLock(lockPath, () => {
-		const existing = readMetaNextTo(saved.filePath);
+		const existingR = readMetaNextTo(saved.filePath);
+		const existing = existingR.ok ? existingR.value : undefined;
 		const now = Date.now();
 		const updated: FlowMeta = existing
 			? { ...existing, reuseCount: (existing.reuseCount ?? 0) + 1, lastUsedAt: now }
@@ -889,18 +972,36 @@ export function saveRun(state: RunState, cleanup?: { maxKeep?: number; maxAgeDay
  * All existing path-traversal, symlink, and realpath guards are preserved for
  * every path touched.
  */
-export function loadRun(cwd: string, runId: string): RunState | null {
-	if (!validateRunId(runId)) return null;
-
+/**
+ * Diagnosable variant of `loadRun`. Returns a `LoadResult` so callers can tell
+ * the user *why* a runId didn't resolve: a file exists for it but is corrupt
+ * (`reason: "unparseable"`, with the parse error in `detail`) versus genuinely
+ * absent (`reason: "missing"`). Used by user-facing paths (resume / show /
+ * provenance / why-stale / recompute). Internal polling keeps the plain
+ * `loadRun` (RunState | null) for API stability.
+ */
+export function loadRunDiagnosed(cwd: string, runId: string): LoadResult<RunState> {
+	if (!validateRunId(runId)) {
+		return { ok: false, reason: "missing", path: runId, detail: "invalid runId format" };
+	}
 	const root = runsDir(cwd);
+
+	// Remember the first corrupt candidate so we can report "corrupt" rather
+	// than "missing" when no candidate parses cleanly.
+	let corrupt: Extract<LoadResult<RunState>, { ok: false }> | null = null;
+	const probe = (filePath: string): RunState | undefined => {
+		const r = tryReadRunFile(root, filePath);
+		if (r.ok) return r.value;
+		if (r.reason === "unparseable" && !corrupt) corrupt = r;
+		return undefined;
+	};
 
 	// ---- Try index first ----
 	const indexEntries = readIndex(root);
 	const entry = indexEntries.find((e) => e.runId === runId);
 	if (entry) {
-		const filePath = path.join(root, entry.relPath);
-		const state = tryReadRunFile(root, filePath);
-		if (state) return state;
+		const found = probe(path.join(root, entry.relPath));
+		if (found) return { ok: true, value: found };
 		// Index entry exists but file is gone or corrupt — fall through.
 	}
 
@@ -911,29 +1012,36 @@ export function loadRun(cwd: string, runId: string): RunState | null {
 			.filter((d) => d.isDirectory())
 			.map((d) => d.name);
 	} catch { dirs = []; }
-
 	for (const dirName of dirs) {
-		const filePath = path.join(root, dirName, `${runId}.json`);
-		const state = tryReadRunFile(root, filePath);
-		if (state) return state;
+		const found = probe(path.join(root, dirName, `${runId}.json`));
+		if (found) return { ok: true, value: found };
 	}
 
 	// ---- Try legacy flat fallback ----
-	const flatPath = path.join(root, `${runId}.json`);
-	const state = tryReadRunFile(root, flatPath);
-	if (state) return state;
+	const found = probe(path.join(root, `${runId}.json`));
+	if (found) return { ok: true, value: found };
 
-	return null;
+	if (corrupt) return corrupt; // file exists for this runId but won't parse
+	return { ok: false, reason: "missing", path: runId, detail: `no run with id '${runId}'` };
+}
+
+export function loadRun(cwd: string, runId: string): RunState | null {
+	const r = loadRunDiagnosed(cwd, runId);
+	return r.ok ? r.value : null;
 }
 
 /**
  * Safely read a run file, performing all path-traversal / symlink guards.
  * Returns null on any violation or read error.
  */
-function tryReadRunFile(runsRoot: string, filePath: string): RunState | null {
+function tryReadRunFile(runsRoot: string, filePath: string): LoadResult<RunState> {
 	// Lexical traversal guard.
 	const rel = path.relative(runsRoot, filePath);
-	if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+	if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+		// Path-traversal violation — report opaquely as "missing" (do not leak
+		// filesystem layout to the caller).
+		return { ok: false, reason: "missing", path: filePath, detail: "outside runs root" };
+	}
 
 	// Resolve symlinks on both runsRoot and the file so the containment check
 	// uses consistent physical paths (macOS /var → /private/var etc.).
@@ -942,15 +1050,16 @@ function tryReadRunFile(runsRoot: string, filePath: string): RunState | null {
 	try {
 		realDir = fs.realpathSync(runsRoot);
 		realFilePath = fs.realpathSync(filePath);
-	} catch { return null; }
+	} catch {
+		return { ok: false, reason: "missing", path: filePath, detail: "unresolvable path" };
+	}
 
 	const realRel = path.relative(realDir, realFilePath);
-	if (realRel === ".." || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) return null;
+	if (realRel === ".." || realRel.startsWith(`..${path.sep}`) || path.isAbsolute(realRel)) {
+		return { ok: false, reason: "missing", path: filePath, detail: "outside runs root" };
+	}
 
-	try {
-		const raw = fs.readFileSync(realFilePath, "utf-8");
-		return JSON.parse(raw) as RunState;
-	} catch { return null; }
+	return loadFile(realFilePath, (raw) => JSON.parse(raw) as RunState);
 }
 
 /**

@@ -63,7 +63,7 @@ test("resolveCandidate: no sidecar → embedding null, structural fields live-de
 		phases: [{ id: "a", type: "agent", task: "{args.x}" }],
 		args: { x: { default: "1" } },
 	} as Taskflow;
-	const c = resolveCandidate(def, "project", "x", null);
+	const c = resolveCandidate(def, "project", "x", undefined);
 	assert.equal(c.embedding, null);
 	assert.equal(c.embeddingStale, true);
 	assert.equal(c.phaseSignature, "agent");

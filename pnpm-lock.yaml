@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  postcss: ^8.5.10
+
 importers:
 
   .:
@@ -33,37 +36,37 @@ importers:
   packages/claude-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-mcp-core
 
   packages/codex-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-mcp-core
 
   packages/opencode-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-mcp-core
 
   packages/pi-taskflow:
@@ -81,7 +84,7 @@ importers:
         specifier: '*'
         version: 0.80.3
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
       typebox:
         specifier: '*'
@@ -96,7 +99,7 @@ importers:
   packages/taskflow-hosts:
     dependencies:
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
     devDependencies:
       typescript:
@@ -106,7 +109,7 @@ importers:
   packages/taskflow-mcp-core:
     dependencies:
       taskflow-core:
-        specifier: 0.1.6
+        specifier: 0.1.7
         version: link:../taskflow-core
 
   website:
@@ -2260,10 +2263,6 @@ packages:
   picomatch@4.0.5:
     resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
-
-  postcss@8.4.31:
-    resolution: {integrity: sha512-PS08Iboia9mts/2ygV3eLpY5ghnUcfLV/EXTOW1E2qYxJKGGBUtNjN76FYHnMs36RmARn41bC0AZmn+rR0OVpQ==}
-    engines: {node: ^10 || ^12 || >=14}
 
   postcss@8.5.16:
     resolution: {integrity: sha512-vuwillviilfKZsg0VGj5R/YwwcHx4SLsIOI/7K6mQkWx+l5cUHTjj5g0AasTBcyXsbfTgrwsUNmVUb5xVwyPwg==}
@@ -4911,7 +4910,7 @@ snapshots:
       '@swc/helpers': 0.5.15
       baseline-browser-mapping: 2.10.42
       caniuse-lite: 1.0.30001802
-      postcss: 8.4.31
+      postcss: 8.5.16
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
       styled-jsx: 5.1.6(react@19.2.7)
@@ -4982,12 +4981,6 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.5: {}
-
-  postcss@8.4.31:
-    dependencies:
-      nanoid: 3.3.15
-      picocolors: 1.1.1
-      source-map-js: 1.2.1
 
   postcss@8.5.16:
     dependencies:

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Viewport } from 'next';
 import { I18nProvider } from 'fumadocs-ui/contexts/i18n';
 import { i18n } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
@@ -9,20 +10,27 @@ export function generateStaticParams() {
 
 const site = {
   en: {
-    title: 'taskflow',
+    // Full SEO title for the homepage / OG cards. Subpages use `brand` in the
+    // `%s | taskflow` template below, so individual pages stay short.
+    title: 'taskflow — Declarative DAG Orchestration for Coding Agents',
+    brand: 'taskflow',
     description:
       'A declarative, verifiable graph of task nodes for coding-agent subagents. Fan out, gate, loop, resume, and save as a command.',
   },
   'zh-cn': {
-    title: 'taskflow',
+    title: 'taskflow — 面向编程智能体的声明式 DAG 任务编排',
+    brand: 'taskflow',
     description:
       '面向编程智能体子代理的声明式、可验证任务节点图。支持 fan-out、gate、loop、断点续跑，并保存为命令。',
   },
 } as const;
 
-// Replace this with the actual content from Google Search Console HTML tag verification.
-// Example: 'abc123...'
-const GOOGLE_SITE_VERIFICATION = process.env.GOOGLE_SITE_VERIFICATION || '';
+// Google Search Console ownership verification (HTML-tag method). This value is
+// public by design — it is safe to commit. Overridable via env for builds that
+// want to keep it out of the repo.
+const GOOGLE_SITE_VERIFICATION =
+  process.env.GOOGLE_SITE_VERIFICATION ||
+  'iBm6KBJfiBJLOmW6jAtJCJlCbTiP7W9PhrDW6afMltw';
 
 // The site is deployed under a GitHub Pages subpath (/taskflow), so every
 // metadata asset URL (favicon, apple-touch-icon, manifest, icon PNGs) must be
@@ -43,7 +51,7 @@ export async function generateMetadata({
     metadataBase: new URL('https://heggria.github.io/taskflow'),
     title: {
       default: meta.title,
-      template: `%s | ${meta.title}`,
+      template: `%s | ${meta.brand}`,
     },
     description: meta.description,
     alternates: {
@@ -59,12 +67,9 @@ export async function generateMetadata({
       icon: [{ url: `${base}/favicon.svg`, type: 'image/svg+xml' }],
       apple: [{ url: `${base}/apple-icon`, sizes: '180x180', type: 'image/png' }],
     },
-    // themeColor + appleWebApp pair with app/manifest.ts and app/apple-icon.tsx
+    // themeColor lives in generateViewport() below (Next.js 15+ moved it out
+    // of metadata). appleWebApp pairs with app/manifest.ts + app/apple-icon.tsx
     // so Safari/iOS/Android render a branded tab, splash, and home-screen icon.
-    themeColor: [
-      { media: '(prefers-color-scheme: light)', color: '#fff7ed' },
-      { media: '(prefers-color-scheme: dark)', color: '#1c1917' },
-    ],
     appleWebApp: {
       title: 'taskflow',
       statusBarStyle: 'default',
@@ -87,6 +92,13 @@ export async function generateMetadata({
     },
   };
 }
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#fff7ed' },
+    { media: '(prefers-color-scheme: dark)', color: '#1c1917' },
+  ],
+};
 
 export default async function LangLayout({
   children,

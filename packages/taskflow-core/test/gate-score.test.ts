@@ -128,7 +128,7 @@ test("combine: judge weight makes deterministic combination a lower bound", () =
 	assert.equal(final.passed, true);
 });
 
-test("parseJudgeOutput: JSON, text markers, fail-open", () => {
+test("parseJudgeOutput: JSON, text markers, fail-closed", () => {
 	assert.deepEqual(
 		(({ score, verdict }) => ({ score, verdict }))(parseJudgeOutput('{"score": 0.9, "verdict": "pass"}')),
 		{ score: 0.9, verdict: "pass" },
@@ -136,8 +136,14 @@ test("parseJudgeOutput: JSON, text markers, fail-open", () => {
 	assert.equal(parseJudgeOutput('{"score": 0.2}').verdict, "block");
 	assert.equal(parseJudgeOutput("Analysis...\nVERDICT: BLOCK").verdict, "block");
 	assert.equal(parseJudgeOutput("SCORE: 0.75").score, 0.75);
+	// Issue #54: Markdown-emphasized verdict AND score tokens are parsed, not missed.
+	assert.equal(parseJudgeOutput("### VERDICT: **BLOCK**").verdict, "block");
+	assert.equal(parseJudgeOutput("VERDICT: **PASS**").verdict, "pass");
+	assert.equal(parseJudgeOutput("SCORE: **0.8**").score, 0.8);
+	assert.equal(parseJudgeOutput("Quality is high.\nSCORE: __0.9__").score, 0.9);
 	const open = parseJudgeOutput("I am not sure what to say");
-	assert.equal(open.verdict, "pass");
+	assert.equal(open.verdict, "block", "unparseable judge output fails closed");
+	assert.equal(open.score, 0, "unparseable judge output scores 0");
 	assert.equal(open.parsed, false);
 });
 
@@ -355,9 +361,9 @@ test("score gate: deterministic fail + judge → judge decides (verdict authorit
 	assert.equal(json.judge?.score, 0.85);
 });
 
-test("score gate: judge unparseable → fail-open PASS", async () => {
+test("score gate: judge unparseable → fail-closed BLOCK", async () => {
 	const def = {
-		name: "score-judge-open",
+		name: "score-judge-closed",
 		phases: [
 			{ id: "gen", type: "agent", task: "produce" },
 			{
@@ -372,8 +378,8 @@ test("score gate: judge unparseable → fail-open PASS", async () => {
 		runTask: async (_c, _a, _n, task) => (task.includes("Judge it") ? ok("mumble mumble") : ok("output")),
 	};
 	const result = await executeTaskflow(state, deps);
-	assert.equal(result.ok, true);
-	assert.equal(state.phases["check"]?.gate?.verdict, "pass", "ambiguous judge output must fail-open");
+	assert.equal(result.ok, false, "an unparseable judge halts the flow (fail-closed)");
+	assert.equal(state.phases["check"]?.gate?.verdict, "block", "ambiguous judge output must fail-closed");
 });
 
 test("score gate: deterministic fail + task fallback → gate task decides with report", async () => {

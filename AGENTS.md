@@ -191,7 +191,7 @@ pnpm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencod
 
 ### Error Handling
 - **Fail-open for guards**: `when` parse errors → phase still runs (never silently drop).
-- **Fail-open for gates**: ambiguous gate output → `PASS` (never accidentally halt).
+- **Fail-closed for gate verdicts**: unparseable gate *model output* → `BLOCK` (a gate that cannot reach a verdict cannot be trusted to pass — issue #54). This is distinct from config/resolution slips (unresolved `score.target`, malformed `scorers`), which remain **fail-open** with a warning, because those are authoring errors that should degrade, not silently block. An explicit JSON verdict that is non-blocking (e.g. `{"verdict":"No issues found"}`) is a semantic PASS, not ambiguity.
 - **Fail-open for tournament**: unparseable winner → variant 1 (never lose work).
 - **Safe emit**: user callbacks (`persist`, `onProgress`) are wrapped in try/catch — a throwing callback must never replace the runtime's outcome.
 - **Transient retry**: rate limits, 5xx, timeouts are auto-retried up to 3 times with backoff.
@@ -250,7 +250,7 @@ pnpm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencod
 1. **Never leak intermediate results to the host context.** Only `finalOutput` is returned.
 2. **Never let a throwing callback crash the runtime.** `safeEmit`/`safeProgress` swallow errors.
 3. **Never silently drop a phase.** Parse errors in `when` → fail-open (phase runs).
-4. **Never lose work.** Tournament judge failure → fallback to best variant. Gate ambiguity → PASS.
+4. **Never lose work, and never rubber-stamp a gate.** Tournament judge failure → fallback to best variant (fail-open, work preserved). Gate *model output* that cannot be parsed → BLOCK (fail-closed, issue #54); config/resolution slips (unresolved `score.target`, malformed `scorers`) stay fail-open with a warning.
 5. **Never hang forever.** Idle watchdog kills stalled subagents. Loops have hard iteration caps.
 6. **Never break on resume.** Re-running a phase clears stale `endedAt`/`error` before starting.
 7. **File operations must be atomic.** `writeFileAtomic` + file locks for all persistence.

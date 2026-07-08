@@ -1,0 +1,31 @@
+---
+title: Comparisons
+description: How taskflow compares to imperative agent workflows, built-in subagents, LangGraph, and other orchestration tools.
+---
+
+Every orchestration tool makes a trade-off between **expressivity** and **verifiability**. These pages explain where taskflow sits on that axis, honestly — including what you give up.
+
+<Cards>
+  <Card title="taskflow vs imperative workflows" href="./taskflow-vs-workflow">
+    A declarative DAG vs a dynamic, code-mode script the model writes and runs. The core thesis.
+  </Card>
+  <Card title="taskflow vs built-in subagents" href="./taskflow-vs-subagents">
+    When the agent's native `task` / `tasks` / `chain` shorthand is enough, and when you outgrow it.
+  </Card>
+  <Card title="taskflow vs LangGraph" href="./taskflow-vs-langgraph">
+    A coding-agent task graph vs a general-purpose LLM graph framework. Different shape, different goal.
+  </Card>
+</Cards>
+
+## The one-axis mental model
+
+The closest competitors to taskflow differ on a single question: **is the plan code, or is it data?**
+
+- **Imperative / code-mode workflows** put the plan in executable JavaScript. Maximum expressivity; the graph only exists as the code runs.
+- **taskflow** puts the plan in declarative JSON data. Bounded expressivity; the graph is a first-class object the runtime can check, render, resume, and safely let a model author.
+
+Neither is universally better. If your job is "do twelve arbitrary things with branching," a script wins. If your job is "run a review pipeline a hundred times and trust it," a verified graph wins.
+
+<Callout type="info">
+  New to the declarative-graph idea? Start with [What is taskflow?](/en/docs/what-is-taskflow) and the [DAG concept page](/en/docs/concepts/dag).
+</Callout>
