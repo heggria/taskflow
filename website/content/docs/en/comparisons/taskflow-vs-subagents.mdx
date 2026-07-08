@@ -1,0 +1,145 @@
+---
+title: taskflow vs built-in subagents
+description: When your agent's native task/tasks/chain shorthand is enough, and when you outgrow it — DAGs, gates, resume, and context isolation that the built-in tool can't give you.
+---
+
+Every modern coding agent ships a built-in subagent shorthand — on Pi it's `task` / `tasks` / `chain`; on Codex, Claude Code, and OpenCode the same idea exists under different names. **taskflow does not replace it.** taskflow speaks the *same* shorthand, so your existing delegations instantly become tracked, resumable, and saveable. Then, when you outgrow the shorthand, the full DSL gives you a real DAG.
+
+The honest question is: **when is the built-in shorthand enough, and when do you need taskflow?**
+
+## When the built-in shorthand is the right call
+
+Use the native subagent tool directly when:
+
+- It's **one or two tasks** with no branching — "go look at X and tell me Y."
+- You'll **never re-run it** — it's a one-shot for the current conversation.
+- You **want the intermediate results in your context** — you're going to reason about them inline.
+- There's **no quality gate** — you trust the output, or you'll eyeball it yourself.
+
+For these cases, `task` is perfect. Spinning up a taskflow definition would be overhead.
+
+## When you outgrow the shorthand
+
+You've hit the wall when **any** of these become true:
+
+| Need | Built-in subagent | **taskflow** |
+|---|---|---|
+| **Branching fan-out** over dozens of items | flat `tasks` only | **`map` — one subagent per item, bounded concurrency** |
+| **Intermediate transcripts** | flood your context window | **stay in the runtime — only the final phase returns** |
+| **Reusable by name** | re-described every time | **saved as `/tf:<name>` (Pi) or run by name (other hosts)** |
+| **Resumable** | ✗ — start over on any failure | **✓ phase-by-phase, cross-session, cached phases skip** |
+| **Quality gate** that can halt the flow | ✗ | **`gate` phases — `VERDICT: BLOCK` stops everything** |
+| **Conditional routing** | ✗ | **`when` guards + `join: any` OR-joins** |
+| **Retry / fault tolerance** | ✗ | **per-phase `retry` + auto-retry on transient errors** |
+| **Human approval** mid-flow | ✗ | **`approval` phases (approve / reject / edit)** |
+| **Spend ceiling** | ✗ | **run-wide `budget` (USD / token caps)** |
+| **Competitive selection** | ✗ | **`tournament` — N variants + a judge** |
+| **Live graph view** | opaque while running | **live DAG render with timing + cost** |
+
+## The context-isolation difference, concretely
+
+This is the single most felt difference. Here's the same 12-step review job both ways:
+
+**Built-in subagents** — every transcript comes back to you:
+
+```
+You: "Review these 12 files for security issues."
+Agent: [12 subagent calls → 12 full transcripts in your context]
+       ↓
+       your context window: +47,000 tokens of transcripts
+```
+
+**taskflow** — only the merged report returns:
+
+```json title="security-review.json"
+{
+  "name": "security-review",
+  "phases": [
+    { "id": "discover", "agent": "scout", "task": "List files changed since origin/main" },
+    { "id": "review", "map": "{steps.discover.json.files}", "agent": "security-reviewer",
+      "task": "Audit {item} for vulnerabilities", "concurrency": 4 },
+    { "id": "report", "agent": "executor", "dependsOn": ["review"],
+      "task": "Merge the per-file reviews into one report" }
+  ]
+}
+```
+
+```
+You: /tf run security-review
+       ↓  (12 transcripts stay in the runtime)
+       your context window: +1 final report
+```
+
+For a one-off, that's nice. For a pipeline you run on every PR, it's the difference between a usable context and a flooded one.
+
+## The "save it and forget it" workflow
+
+The other big shift is **reuse**. Describe a pipeline once, save it:
+
+```bash
+# Pi — save as a one-word command
+/tf save code-audit
+
+# now /tf:code-audit runs the whole verified graph by name
+```
+
+```bash
+# Codex / Claude Code / OpenCode — run a saved flow by name
+taskflow_run code-audit
+```
+
+The built-in shorthand has no equivalent: you re-describe the plan every single run, and the model re-derives it from scratch.
+
+## The migration path (zero rewrite)
+
+You don't have to choose up front. taskflow's shorthand **is** the built-in shorthand, upgraded:
+
+<Tabs>
+  <Tab value="Built-in">
+
+```js
+// the agent's native delegation
+chain([
+  { agent: "scout", task: "Map the repo" },
+  { agent: "executor-code", task: "Implement the plan" },
+  { agent: "reviewer", task: "Review the diff" }
+])
+```
+
+  </Tab>
+  <Tab value="taskflow shorthand">
+
+```js
+// identical surface — but now tracked, resumable, saveable
+// (Pi: wrapped in /tf; other hosts: taskflow_run)
+```
+
+  </Tab>
+  <Tab value="taskflow full DSL">
+
+```json
+{
+  "name": "implement-and-review",
+  "phases": [
+    { "id": "map", "agent": "scout", "task": "Map the repo" },
+    { "id": "build", "agent": "executor-code", "dependsOn": ["map"],
+      "task": "Implement the plan" },
+    { "id": "review", "agent": "reviewer", "dependsOn": ["build"],
+      "task": "Review the diff" },
+    { "id": "gate", "type": "gate", "dependsOn": ["review"],
+      "agent": "plan-arbiter",
+      "task": "VERDICT: PASS or BLOCK based on review" }
+  ]
+}
+```
+
+  </Tab>
+</Tabs>
+
+Start with the shorthand. When you need a gate, a budget, a resume, or a fan-out over 30 items — graduate to the DSL. Your existing delegations carry over verbatim.
+
+## Further reading
+
+- [Shorthand reference](/en/docs/reference/shorthand) — `task` / `tasks` / `chain` syntax
+- [Phase types](/en/docs/syntax/phase-types) — the full DSL vocabulary
+- [Context isolation](/en/docs/concepts/context-isolation) — why transcripts stay out of your window

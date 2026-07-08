@@ -35,10 +35,20 @@
     "---Showcase---",
     "showcase/why-taskflow",
     "templates",
+    "---Comparisons---",
+    "comparisons/index",
+    "comparisons/taskflow-vs-workflow",
+    "comparisons/taskflow-vs-subagents",
+    "comparisons/taskflow-vs-langgraph",
     "---Reference---",
     "reference/shorthand",
     "reference/commands",
     "reference/incremental-recompute",
-    "community"
+    "community",
+    "---Blog---",
+    "blog/index",
+    "blog/orchestrate-codex-subagents",
+    "blog/claude-code-mcp-workflow",
+    "blog/what-is-a-task-graph"
   ]
 }

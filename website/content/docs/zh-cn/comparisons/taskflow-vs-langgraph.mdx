@@ -1,0 +1,93 @@
+---
+title: taskflow vs LangGraph
+description: 面向编程 agent 的任务图（taskflow）与 LangGraph 的差异——范围、host 耦合、持久化模型、可验证性，以及各自适合什么。
+---
+
+[LangGraph](https://github.com/langchain-ai/langgraph) 是一个流行的、通用的框架，用于把**有状态、多角色 LLM 应用**构建成图。taskflow 是个更窄的东西：一个**专为编程 agent subagent 构建的声明式任务 DAG 编排器**。两者在"LLM 调用组成的图"这个想法上重叠，但在范围、host 耦合和优化目标上差异很大。
+
+本页是一次诚实的对比——包括 LangGraph 明显是更好工具的地方。
+
+## 一览
+
+| | **LangGraph** | **taskflow** |
+|---|---|---|
+| **是什么** | 一个用于有状态 LLM 应用图的库（Python/JS） | 面向编程 agent subagent 的声明式任务 DAG runtime |
+| **你写的是** | Python 或 JS 图代码 | JSON 数据（DSL） |
+| **跑在** | 你自己的应用进程里 | 你的编程 agent 里（Pi、Codex、Claude Code、OpenCode） |
+| **节点是** | 任意函数（LLM 调用、工具、逻辑） | **subagent 调用**（有作用域、按模型路由的 agent 调用） |
+| **状态** | 一个有类型的共享状态对象，沿边 reduce | 共享上下文树（黑板 + 监督） |
+| **持久化** | checkpointer（SQLite/Postgres/内存） | 文件式运行存储 + 跨运行缓存 |
+| **人在环中** | 基于 state 的中断 + 恢复 | `approval` 阶段（批准/拒绝/编辑） |
+| **校验** | 运行时图校验 | **静态预检：环、死端、预算、悬空引用——在任何 token 之前** |
+| **host 耦合** | 框架无关（你自己带模型 + 工具） | **agent-host 原生**（作为 Pi 扩展 / Codex/Claude/OpenCode 插件安装） |
+
+## 真正重叠的地方
+
+两者都把多步 LLM 工作建模成**图**而不是线性链。两者都支持：
+
+- 环 / 循环（LangGraph 原生；taskflow 通过 `loop` 阶段）
+- 分支与条件边（LangGraph 条件边；taskflow `when` + `join: any`）
+- 人在环中暂停（LangGraph 中断；taskflow `approval` 阶段）
+- 检查点 / 续跑（LangGraph checkpointer；taskflow 文件式运行存储 + 缓存）
+- 扇出（LangGraph `Send` / map-reduce；taskflow `map` 阶段）
+
+如果你用过 LangGraph 的心智模型，taskflow 的阶段 + `dependsOn` 会让你觉得很熟。
+
+## 差在哪里——以及为什么重要
+
+### 1. 你写的是代码 vs 声明的是数据
+
+LangGraph 的图是 **Python 或 JS 代码**——你定义 `StateGraph`，把节点加成函数，连边，编译。这给你全部能力（节点能做函数能做的任何事），代价是你要写一个程序。
+
+taskflow 的流程是 **JSON 数据**。你声明 `phases[]` 和 `dependsOn` 边；运行时把每个阶段映射到一次 subagent 调用。你没法在阶段里放任意逻辑——只能放任务提示词（加上 `script` 阶段跑 shell，`flow {def}` 跑运行时生成的子图）。这和 [taskflow vs 命令式 workflow](./taskflow-vs-workflow) 是同一个取舍：用受限的表达能力换可验证性和 LLM 安全编写。
+
+### 2. 校验发生在 token 之前，而不是运行时
+
+LangGraph 在你**编译/运行图时**校验——坏图会抛异常。taskflow 跑**静态预检分析**，检查的是运行时抛异常不容易廉价抓到的东西：预算可行性（给定声明的阶段，这次流程会不会超美元/token 上限？）、gate 穷尽（每条可达路径是否都能撞上 `BLOCK`？）、死端阶段、悬空的插值引用。`verify` 是一个零 token 的操作，你在 commit 到一个流程之前先跑。
+
+### 3. 工作单元是 subagent，不是函数调用
+
+LangGraph 节点是你写的函数——你选模型、写提示词、解析结果、处理工具。taskflow 的工作单元是一次 **subagent 调用**：你点名一个 agent（`security-reviewer`、`executor-code`）并给它任务；运行时 + host 负责模型路由、工具作用域和逐字稿。你编排的是 **agent**，而不是调用点。
+
+这让 taskflow 在"对 N 个 item 扇出 N 个有作用域的 agent"这种模式上简洁得多（一个 `map` 阶段），但在节点需要定制非 agent 逻辑时没那么灵活。
+
+### 4. host 原生 vs 自带 runtime
+
+LangGraph **框架无关**——你把它嵌入自己的应用，自带模型客户端和工具。它是一个库。
+
+taskflow 是 **agent-host 原生**：它*安装进*一个已有的编程 agent（Pi 扩展、Codex/Claude Code/OpenCode 插件），编排*那个 host 的* subagent。你不是在写一个新应用——你在声明你的 agent 要跑的流程。如果你不在这些编程 agent 里，taskflow 不是你要的工具；LangGraph 可能是。
+
+### 5. 持久化的形状
+
+LangGraph 的 checkpointer 在每一步快照**图状态**——很适合用有类型 state 恢复一个长时间运行的 agent。
+
+taskflow 持久化**逐阶段结果**，按每个阶段解析后的输入哈希键入一个文件式运行存储。续跑是逐阶段的，而且**跨运行**（不只是跨会话）：编辑某个阶段后重跑，只有那个阶段 + 下游重新执行，其余全部从缓存复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+
+## 什么时候选 LangGraph
+
+<Callout type="info">
+  **选 LangGraph**：你在构建一个**自定义 LLM 应用**（聊天机器人、RAG 流水线、agent 产品），你想对 state 和"节点即函数"有细粒度控制，你在自己的代码库里跑，你需要更广的 LangChain 工具生态。
+</Callout>
+
+LangGraph 更适合**产品级 agent 应用**——任何你会*作为*服务发布的东西，你拥有 runtime 并想要有类型的 state 机。
+
+## 什么时候选 taskflow
+
+<Callout type="info">
+  **选 taskflow**：你在**编程 agent 内部**（Pi / Codex / Claude Code / OpenCode）工作，想把一个可重复的多步委派（review、审计、迁移、调研、发布）变成一条**有名字、可校验、可续跑、中间逐字稿不进你上下文**的流水线。
+</Callout>
+
+taskflow 更适合**开发者工作流**——你在自己用的 agent 里、按名字、对自己的代码库跑的流水线。
+
+## 一句话版本
+
+- **在构建 agent *产品*？** → LangGraph。
+- **在把编程 agent 的 *subagent* 编排成可复用流水线？** → taskflow。
+
+它们其实不算竞品；它们在同一个"图"的想法上优化不同的东西。
+
+## 延伸阅读
+
+- [什么是 taskflow？](/zh-cn/docs/what-is-taskflow)
+- [taskflow vs 命令式 workflow](./taskflow-vs-workflow)——代码 vs 数据的取舍深入
+- [DAG 概念](/zh-cn/docs/concepts/dag)

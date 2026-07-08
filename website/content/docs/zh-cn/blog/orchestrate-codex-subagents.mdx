@@ -1,0 +1,140 @@
+---
+title: 用任务图编排 Codex subagent
+description: 如何用 taskflow 把临时的 OpenAI Codex subagent 委派变成有名字、静态可校验、可跨会话续跑的流水线——含扇出审查、gate 和预算上限。
+---
+
+OpenAI Codex 能 spawn subagent 做聚焦的工作——但一旦超过两三个调用，你就会撞上一堵熟悉的墙：模型每次都重新推导计划，中间逐字稿淹没你的会话，一次失败的调用意味着从头来过，而且你在付钱之前根本没法*检查*这个计划。本文讲的是怎么用 **taskflow** 把 Codex subagent 工作包起来——一张运行前先校验、跨会话可续跑、中间结果不进你上下文的声明式图。
+
+## 那堵墙
+
+你要发布版本，想做个就绪检查。Codex 自然的玩法是*脚本化*：
+
+```text title="临时的 Codex 会话"
+你："检查这个分支是否可以发布了。"
+Codex：[spawn 一个 subagent 列出改动文件]
+       [每个文件 spawn 一个 subagent 审计破坏性变更]
+       [spawn 一个 subagent 检查 changelog]
+       [试图总结……]
+```
+
+跑一次没问题。到第四次，问题开始累积：
+
+- **无法复用**——每次发布你都重新描述整个计划。
+- **无法校验**——计划坏不坏是*一边付钱一边*发现的。
+- **无法续跑**——一个 subagent 调用撞上限流，你就从头来。
+- **没有预算护栏**——对 50 个文件扇出，花多少就是多少。
+
+## taskflow 版本
+
+装上 Codex 插件：
+
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
+```
+
+然后把同样的工作声明成一张图：
+
+```json title="release-readiness.json"
+{
+  "name": "release-readiness",
+  "description": "验证分支是否可发布：发现改动、扇出破坏性变更审查、检查 changelog、按风险 gate。",
+  "args": {
+    "base": { "default": "origin/main", "description": "要对比的 git ref。" }
+  },
+  "budget": { "maxUSD": 2.00 },
+  "phases": [
+    {
+      "id": "discover",
+      "agent": "scout",
+      "task": "以 JSON 路径数组形式，列出 {args.base} 与 HEAD 之间改动的所有文件。"
+    },
+    {
+      "id": "review",
+      "map": "{steps.discover.json}",
+      "agent": "risk-reviewer",
+      "task": "审计 {item} 的破坏性变更。返回一行风险判定。",
+      "concurrency": 4
+    },
+    {
+      "id": "changelog",
+      "agent": "executor",
+      "task": "CHANGELOG.md 是否覆盖了 {args.base} 之后的改动？给是/否并附证据。"
+    },
+    {
+      "id": "gate",
+      "type": "gate",
+      "dependsOn": ["review", "changelog"],
+      "agent": "plan-arbiter",
+      "task": "基于逐文件审查和 changelog 检查，给出 VERDICT: PASS 或 VERDICT: BLOCK 及理由。"
+    },
+    {
+      "id": "report",
+      "agent": "executor",
+      "dependsOn": ["gate"],
+      "task": "把发布就绪判定汇总成一份简短报告。"
+    }
+  ]
+}
+```
+
+## 免费先校验，再运行
+
+花一个 token 之前，先检查这张图：
+
+```bash
+# 在你的 Codex 会话里通过 taskflow 工具
+taskflow_verify release-readiness
+```
+
+`verify` 跑静态分析——不调模型。它能抓到环、死端阶段、`map` 产不出数组、阶段数让 `budget` 不可行、以及悬空的 `{steps.*}` 引用。这些你都在*付钱之前*修掉。
+
+然后运行：
+
+```text
+taskflow_run release-readiness --base origin/main
+```
+
+运行时会：
+
+1. 解析图并 spawn `discover` 阶段。
+2. 每个发现的文件扇出一个 `risk-reviewer`，**并发上限 4**。
+3. `changelog` 与审查并行跑。
+4. 命中 `gate`——如果它给 `VERDICT: BLOCK`，流程立即停止，`report` 永不运行。
+5. **只把最终报告**返回给你的会话。
+
+那 50 份逐文件逐字稿永远不会进你的 Codex 上下文。只有合并后的报告会。
+
+## 临时脚本给不了你的东西
+
+| 关注点 | 临时 Codex | taskflow |
+|---|---|---|
+| **复用** | 每次重新描述 | 按名字跑 `release-readiness` |
+| **成本控制** | 没有 | `budget: { maxUSD: 2.00 }` 叫停运行 |
+| **失败** | 从头来 | 逐阶段 `retry` + 跨会话续跑 |
+| **质量门禁** | 自己过目 | `gate` 阶段遇 `BLOCK` 叫停 |
+| **上下文** | 每份逐字稿都返回 | 只有最终报告返回 |
+
+## 跨会话续跑
+
+跑起来，走开，明天回来：
+
+```text
+taskflow_resume <runId>
+```
+
+已完成的阶段从缓存复用（按解析后的输入键入）。如果你夜里改了 `changelog` 的提示词，只有 `changelog`、`gate`、`report` 会重跑——`discover` 和所有审查都复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+
+## 什么时候保持临时
+
+一次性的"去看看 X"别上 taskflow。内置 subagent 简写就对了。taskflow 适合**可重复的流水线**——你每次发布都要跑的那种——恰恰是每次重新描述最痛的场景。
+
+## 要点
+
+- taskflow 是**数据**而不是代码——所以你能在运行前校验。
+- `map` 按有界并发对每个 item 扇出一个 subagent。
+- `gate` 阶段给你一个真能叫停的质量门禁。
+- `budget` 封顶花费；续跑免费且跨会话。
+- 只有最终阶段进入你的 Codex 上下文。
+
+去 [模板库](/zh-cn/docs/templates) 拿另外五个开箱即用的流程，或读 [Codex 指南](/zh-cn/docs/guides/codex) 看完整的 host 专属接口。

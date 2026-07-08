@@ -1,0 +1,31 @@
+---
+title: 横向对比
+description: taskflow 与命令式 workflow、内置 subagent、LangGraph 等编排工具的对比。
+---
+
+每个编排工具都在**表达能力（expressivity）**与**可验证性（verifiability）**之间做取舍。本节页面诚实地解释 taskflow 处于这条轴线的哪个位置——包括你放弃了什么。
+
+<Cards>
+  <Card title="taskflow vs 命令式 workflow" href="./taskflow-vs-workflow">
+    声明式 DAG 与模型写出来并执行的动态、代码态脚本。这是 taskflow 的核心论点。
+  </Card>
+  <Card title="taskflow vs 内置 subagent" href="./taskflow-vs-subagents">
+    agent 原生的 `task`/`tasks`/`chain` 简写什么时候够用，什么时候你会超越它。
+  </Card>
+  <Card title="taskflow vs LangGraph" href="./taskflow-vs-langgraph">
+    面向编程 agent 的任务图 vs 通用 LLM 图框架。形状不同，目标也不同。
+  </Card>
+</Cards>
+
+## 单轴心智模型
+
+与 taskflow 最接近的竞品，区别都集中在一个问题上：**计划是代码，还是数据？**
+
+- **命令式 / 代码态 workflow** 把计划放进可执行的 JavaScript 里。表达能力最强；图只在代码运行时才存在。
+- **taskflow** 把计划放进声明式 JSON 数据里。表达能力受限；图是一个一等对象，运行时可以校验、渲染、续跑，并安全地让模型来编写。
+
+没有哪个在所有场景下都更好。如果你的工作是"随便做十二件带分支的事"，脚本赢。如果你的工作是"把一个 review 流程跑一百遍并信任它"，可验证的图赢。
+
+<Callout type="info">
+  刚接触声明式图的概念？建议先看 [什么是 taskflow？](/zh-cn/docs/what-is-taskflow) 和 [DAG 概念页](/zh-cn/docs/concepts/dag)。
+</Callout>

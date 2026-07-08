@@ -35,10 +35,20 @@
     "---案例展示---",
     "showcase/why-taskflow",
     "templates",
+    "---横向对比---",
+    "comparisons/index",
+    "comparisons/taskflow-vs-workflow",
+    "comparisons/taskflow-vs-subagents",
+    "comparisons/taskflow-vs-langgraph",
     "---参考---",
     "reference/shorthand",
     "reference/commands",
     "reference/incremental-recompute",
-    "community"
+    "community",
+    "---博客---",
+    "blog/index",
+    "blog/orchestrate-codex-subagents",
+    "blog/claude-code-mcp-workflow",
+    "blog/what-is-a-task-graph"
   ]
 }
