@@ -37,7 +37,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
-import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, VERDICT_TOKEN_RE } from "./scorers.ts";
 import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
@@ -1323,7 +1323,7 @@ async function executePhaseInner(
 					if (phase.task) {
 						const agentName = resolveAgent(phase.agent, deps, state);
 						const text = interpolate(phase.task, freshCtx).text;
-						const fullTask = `${preRead}${text}\n\n---\n\n${report}`;
+						const fullTask = appendGateFormatSuffix(`${preRead}${text}\n\n---\n\n${report}`, phase);
 						const ckT = cacheKeys(cc, [phase.id, agentName, phase.model ?? "", fullTask, scoreId]);
 						const inputHash = ckT.key;
 						const cachedT = cachedPhase(cc, ckT);
@@ -1409,7 +1409,7 @@ async function executePhaseInner(
 			const interpM = interpolate(phase.task ?? "", ctx);
 			const textM = interpM.text;
 			const refWarningM = warnUnresolvedRefs(phase.id, interpM.missing);
-			const fullTaskM = preRead + textM;
+			const fullTaskM = appendGateFormatSuffix(preRead + textM, phase);
 			const agentNameM = resolveAgent(phase.agent, deps, state);
 			const ckM = cacheKeys(cc, [phase.id, agentNameM, phase.model ?? "", fullTaskM]);
 			const cachedM = cachedPhase(cc, ckM);
@@ -1425,7 +1425,7 @@ async function executePhaseInner(
 		const interp = interpolate(phase.task ?? "", ctx);
 		const text = interp.text;
 		const refWarning = warnUnresolvedRefs(phase.id, interp.missing);
-		const fullTask = preRead + text;
+		const fullTask = appendGateFormatSuffix(preRead + text, phase);
 		const agentName = resolveAgent(phase.agent, deps, state);
 		const ck = cacheKeys(cc, [phase.id, agentName, phase.model ?? "", fullTask]);
 		const inputHash = ck.key;
@@ -1487,7 +1487,7 @@ async function executePhaseInner(
 				}
 				const retryCtx = buildInterpolationContext(state, lastCompletedOutput(state, phase));
 				const retryText = interpolate(phase.task ?? "", retryCtx).text;
-				const retryTask = preRead + retryText;
+				const retryTask = appendGateFormatSuffix(preRead + retryText, phase);
 				const retryIH = cacheKeys(cc, [phase.id, agentName, phase.model ?? "", retryTask]).key;
 				const retryR = await runOne(agentName, retryTask, liveSink(state, phase.id, emitProgress), undefined, contractCheck);
 				gatePs = resultToPhaseState(phase.id, retryR, retryIH, parseJson);
@@ -2578,10 +2578,20 @@ function defaultAgent(deps: RuntimeDeps): string {
 }
 
 /**
- * Parse a gate phase's output into a verdict. Blocks the flow only on an
- * explicit negative signal; ambiguous output passes (fail-open).
- * Accepts JSON ({continue|pass: bool} or {verdict: "..."}) or a text marker
- * `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT` (last occurrence wins).
+ * Parse a gate phase's output into a verdict. Blocks the flow on an explicit
+ * negative signal OR on ambiguous, unparseable model output. Accepts JSON
+ * ({continue|pass: bool} or {verdict: "..."}) or a text marker
+ * `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT` (last occurrence wins). The text
+ * matcher tolerates common Markdown emphasis around the verdict word
+ * (`VERDICT: **BLOCK**`, `### VERDICT: __BLOCK__`, `VERDICT: `BLOCK``) so a
+ * genuine BLOCK is never silently downgraded to PASS (issue #54).
+ *
+ * **Fail-closed:** if the model produced output but no verdict could be parsed,
+ * the gate BLOCKS. A gate that cannot reach a verdict cannot be trusted to pass;
+ * halting is recoverable (prior phases persist, the run is resumable) whereas a
+ * rubber-stamped PASS is silent and potentially ships broken work. Note that a
+ * JSON verdict object whose value is non-blocking (e.g. `{"verdict":"No issues
+ * found"}`) is an *explicit* pass, not ambiguity, and still resolves to pass.
  */
 export function parseGateVerdict(output: string): { verdict: "pass" | "block"; reason?: string } {
 	const json = safeParse(output);
@@ -2592,22 +2602,46 @@ export function parseGateVerdict(output: string): { verdict: "pass" | "block"; r
 		if (typeof o.verdict === "string") {
 			// Note: do NOT include standalone "no" — natural-language verdicts like
 			// "No issues found" / "no errors" would otherwise be false-positive BLOCK.
-			// Fail-open covers any ambiguous text.
+			// An explicit non-blocking verdict word is a semantic PASS, not ambiguity:
+			// fail-closed below only applies when NO verdict could be parsed at all.
 			const block = /block|fail|stop|reject|halt/i.test(o.verdict);
 			return { verdict: block ? "block" : "pass", reason: asReason(o.reason) };
 		}
 	}
-	const matches = [...output.matchAll(/VERDICT\s*[:=]\s*(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)/gi)];
+	const matches = [...output.matchAll(VERDICT_TOKEN_RE)];
 	if (matches.length) {
 		const v = matches[matches.length - 1][1].toUpperCase();
 		const pass = v === "PASS" || v === "OK";
 		return { verdict: pass ? "pass" : "block" };
 	}
-	return { verdict: "pass" };
+	return { verdict: "block", reason: "unparseable gate verdict (fail-closed)" };
 }
 
 function asReason(v: unknown): string | undefined {
 	return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+/**
+ * If a gate phase relies on free-text verdict parsing (no `output:"json"` +
+ * `expect` contract) and its task does not already demand a `VERDICT:` marker,
+ * append a hard output-format suffix. This pushes the model toward the exact
+ * machine-readable terminator the parser expects, so a genuine verdict is not
+ * lost to an authoring slip or a model that "forgets" to emit one (issue #54).
+ * When the phase already enforces a JSON contract, no suffix is needed — the
+ * `expect` schema validates the output deterministically.
+ */
+function appendGateFormatSuffix(task: string, phase: Phase): string {
+	// Only free-text GATE phases need the verdict terminator. Agent/map/reduce/loop
+	// phases pass through untouched — they have no verdict to parse.
+	if (phase.type !== "gate") return task;
+	if (phase.output === "json" && phase.expect) return task;
+	// Already asks for a verdict marker (any case) — don't duplicate.
+	if (/VERDICT\s*[:=]/i.test(task)) return task;
+	return (
+		`${task}\n\n--- Required output format ---\n` +
+		`End your response with exactly one line in this exact form (no Markdown, no bold, no extra words):\n` +
+		`VERDICT: PASS\nor\nVERDICT: BLOCK`
+	);
 }
 
 /**

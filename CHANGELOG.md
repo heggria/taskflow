@@ -38,6 +38,34 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   flag) after the first print, so subsequent sessions skip it. Best-effort: an
   unwritable agent dir only means the hint may show once more; it never blocks
   session startup.
+- **Gate verdict parsing hardened — a genuine BLOCK is no longer silently
+  downgraded to PASS (issue #54).** Models routinely wrap verdict tokens in
+  Markdown emphasis (`VERDICT: **BLOCK**`, `### VERDICT: __BLOCK__`,
+  `VERDICT: `BLOCK``), which the bare-token regex
+  `/VERDICT\s*[:=]\s*(PASS|BLOCK|…)/` missed — the match fell through to the
+  fail-open default and the gate recorded `pass`, letting a blocked review
+  silently continue downstream. Three layered fixes: (1) a shared
+  `VERDICT_TOKEN_RE` now tolerates `*`/`_`/`` ` ``/`~` emphasis runs on either
+  side of the verdict word (in both `parseGateVerdict` and `parseJudgeOutput`);
+  (2) **gate *model output* that cannot be parsed now fails closed (BLOCK)**
+  instead of PASS — a gate that cannot reach a verdict cannot be trusted to
+  pass, while *config* slips (unresolved `score.target`, malformed `scorers`)
+  remain fail-open with a warning (they are authoring errors that degrade, not a
+  judge that couldn't decide); (3) a free-text gate whose task omits a
+  `VERDICT:` instruction now gets the exact format suffix **auto-appended**.
+  For maximum robustness, prefer `output: "json"` + `expect` enum
+  (`{ verdict: { enum: ["pass","block"] } }`) which machine-validates the verdict.
+  Regression tests added for every Markdown variant and the fail-closed default.
+  **Breaking** (pre-1.0): a gate whose model output contains *no* parseable
+  verdict (no `VERDICT:` marker and no JSON verdict object) now **blocks** the
+  flow instead of silently passing. Previously such gates rubber-stamped PASS.
+  Migration: any custom gate `task` that relied on prose-only output should
+  either emit `VERDICT: PASS|BLOCK` (auto-appended if omitted), adopt the
+  `output:"json"` + `expect` enum contract, or be marked `optional: true` with a
+  downstream fallback. Note that an *explicit* non-blocking JSON verdict (e.g.
+  `{"verdict":"No issues found"}`) still resolves to PASS — only truly
+  unparseable model output is affected. *Config* slips (unresolved `score.target`,
+  malformed `scorers`) remain fail-open with a warning.
 
 ## [0.1.6] — 2026-07-06
 

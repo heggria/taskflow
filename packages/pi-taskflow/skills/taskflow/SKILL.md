@@ -210,15 +210,41 @@ For static (non-conditional) concurrency, a `parallel` phase runs fixed
 ### Gate phases (quality control)
 
 A `gate` phase runs an agent to review upstream output and can **block the rest
-of the workflow**. End the gate task's instructions by asking the agent to emit a
-verdict the runtime can read:
+of the workflow**. The runtime needs to read a verdict from the agent's output.
+There are three ways to provide one, in order of robustness:
 
-- a final line `VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT), or
-- JSON like `{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block", "reason": "..."}`
+**1. JSON contract (most robust — preferred).** Set `output: "json"` + an `expect`
+enum so the output is machine-validated. A verdict that isn't exactly `"pass"` or
+`"block"` (wrong case, extra formatting, a synonym) fails the `expect` contract and
+is retried — the verdict can never be silently misread.
+
+```jsonc
+{ "id": "review", "type": "gate", "agent": "reviewer", "dependsOn": ["impl"],
+  "output": "json",
+  "expect": { "type": "object",
+    "properties": { "verdict": { "enum": ["pass", "block"] }, "reason": { "type": "string" } },
+    "required": ["verdict", "reason"] },
+  "task": "Review the diff. Respond ONLY with JSON: {\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}" }
+```
+
+**2. Explicit text marker.** End the task by asking the agent to emit a final line
+`VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT; common
+Markdown emphasis like `VERDICT: **BLOCK**` is tolerated). JSON objects such as
+`{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block"}` also work.
+
+**3. Auto-appended format suffix.** If a free-text gate's task does **not** already
+ask for a `VERDICT:` marker (and has no JSON contract), the runtime automatically
+appends the exact format instruction. You don't need to remember to add it — but
+writing it yourself (option 2) makes the intent explicit in your flow.
 
 On **BLOCK**, downstream phases are skipped and the run ends as `blocked` with the
-reason surfaced. Ambiguous output **fails open** (treated as PASS) so a gate never
-halts the flow by accident.
+reason surfaced. Unparseable gate **model output fails closed** (treated as BLOCK):
+a gate that cannot reach a verdict cannot be trusted to pass (issue #54). Note
+that *config* slips (an unresolved `score.target`, malformed `scorers`) are
+different and still fail **open** with a warning — those are authoring errors that
+degrade to the historical behavior, not a judge that couldn't decide. An explicit
+non-blocking JSON verdict (e.g. `{"verdict":"No issues found"}`) is a semantic PASS,
+not ambiguity.
 
 **Zero-token machine checks (`eval`) — use these before spending tokens.**
 List machine-checkable assertions in `eval`. If **all** pass, the gate
@@ -267,9 +293,10 @@ where the deterministic score is a lower bound already clearing the threshold
 runs** — its verdict is authoritative (it may check what scorers cannot, e.g.
 factuality); (2) fail + `judge` → judge decides; (3) fail + `task` → the gate
 task runs with the scorer report appended; (4) fail + no fallback → **explicit
-BLOCK** (a deterministic failure is not ambiguity). Fail-open: unparseable judge
-→ PASS; unresolved `target` with no fallback → PASS + warning; malformed
-`score` → the plain LLM gate. **Security:** LLM-generated dynamic sub-flows
+BLOCK** (a deterministic failure is not ambiguity). Fail-closed: an unparseable
+judge → BLOCK (issue #54); unresolved `target` with no fallback → PASS +
+warning (config slip, not a judge verdict); malformed `score` → the plain LLM
+gate. **Security:** LLM-generated dynamic sub-flows
 (`flow{def}`) may not use `code-compiles` (compiler execution) or `regex`
 (ReDoS) scorers — same hardening class as the `script` block.
 

@@ -337,11 +337,24 @@ export function scoreResultJSON(
 }
 
 /**
+ * Shared verdict-token matcher. Matches `VERDICT: PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT`
+ * (last occurrence wins) AND tolerates common Markdown emphasis around the verdict
+ * word, because models frequently emit `VERDICT: **BLOCK**`, `VERDICT: __BLOCK__`,
+ * `VERDICT: `BLOCK``, or `### VERDICT: **BLOCK**` — a bare-token regex silently
+ * misses these and falls to the fail-closed default (issue #54). The emphasis
+ * chars (`*`, `_`, `~`, `` ` ``) may appear in runs on either side of the word.
+ */
+export const VERDICT_TOKEN_RE =
+	/VERDICT\s*[:=]\s*(?:[*_~`]+\s*)?(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)(?:\s*[*_~`]+)?/gi;
+
+/**
  * Parse an LLM judge's output into a score + verdict. Accepts JSON
  * ({score: 0..1, verdict?, reason?}), bare {verdict}, or a text
- * `SCORE: 0.x` / `VERDICT: PASS|BLOCK` marker. Fail-open per the project
- * invariant: unparseable output PASSES with score 1 (ambiguity must not
- * block the flow — same stance as parseGateVerdict).
+ * `SCORE: 0.x` / `VERDICT: PASS|BLOCK` marker. **Fail-closed** per the gate
+ * safety stance (issue #54): unparseable *model* output BLOCKS with score 0.
+ * Config/resolution errors (unresolved score.target, malformed scorers) are a
+ * different path and remain fail-open with a warning — they are authoring
+ * slips, not a judge that could not reach a verdict.
  */
 export function parseJudgeOutput(output: string): {
 	score: number;
@@ -366,15 +379,18 @@ export function parseJudgeOutput(output: string): {
 		}
 	}
 	const scoreMatches = [...output.matchAll(/SCORE\s*[:=]\s*([01](?:\.\d+)?)/gi)];
-	const verdictMatches = [...output.matchAll(/VERDICT\s*[:=]\s*(PASS|BLOCK|FAIL|STOP|OK|REJECT|HALT)/gi)];
+	const verdictMatches = [...output.matchAll(VERDICT_TOKEN_RE)];
 	if (scoreMatches.length || verdictMatches.length) {
 		const s = scoreMatches.length ? clamp(Number(scoreMatches[scoreMatches.length - 1][1])) : undefined;
 		const v = verdictMatches.length ? verdictMatches[verdictMatches.length - 1][1].toUpperCase() : undefined;
 		const blocked = v !== undefined ? !(v === "PASS" || v === "OK") : (s ?? 1) < 0.5;
 		return { score: s ?? (blocked ? 0 : 1), verdict: blocked ? "block" : "pass", parsed: true };
 	}
-	// Fail-open: ambiguous judge output must not block the flow.
-	return { score: 1, verdict: "pass", reason: "unparseable judge output (fail-open pass)", parsed: false };
+	// Fail-closed (issue #54): a judge that reached no readable verdict cannot be
+	// trusted to pass. Block with score 0 so a weighted combination drags down and
+	// an all/any gate halts — the run is recoverable (prior phases persist) and the
+	// silent rubber-stamp of a missed BLOCK is eliminated.
+	return { score: 0, verdict: "block", reason: "unparseable judge output (fail-closed)", parsed: false };
 }
 
 function truncate(s: string, n: number): string {

@@ -339,7 +339,7 @@ test("runtime: concurrency cap is respected in map", async () => {
 	assert.ok(peak <= 2, `peak concurrency ${peak} exceeded cap 2`);
 });
 
-test("parseGateVerdict: text markers, JSON, and fail-open default", () => {
+test("parseGateVerdict: text markers, JSON, Markdown emphasis, and fail-closed default", () => {
 	assert.equal(parseGateVerdict("looks good\nVERDICT: PASS").verdict, "pass");
 	assert.equal(parseGateVerdict("issues found\nVERDICT: BLOCK").verdict, "block");
 	assert.equal(parseGateVerdict("VERDICT: OK").verdict, "pass");
@@ -349,13 +349,23 @@ test("parseGateVerdict: text markers, JSON, and fail-open default", () => {
 	assert.equal(parseGateVerdict('{"verdict": "reject"}').verdict, "block");
 	// F-005 regression: standalone "no" / "No issues found" must NOT be classified as BLOCK.
 	// Natural-language verdicts like these are semantically PASS; the remaining
-	// block|fail|stop|reject|halt keywords cover genuine block signals, and
-	// fail-open handles anything ambiguous.
+	// block|fail|stop|reject|halt keywords cover genuine block signals. An explicit
+	// non-blocking JSON verdict is a semantic PASS, NOT ambiguity.
 	assert.equal(parseGateVerdict('{"verdict": "No issues found"}').verdict, "pass");
 	assert.equal(parseGateVerdict('{"verdict": "no errors detected"}').verdict, "pass");
 	assert.equal(parseGateVerdict('{"verdict": "No"}').verdict, "pass");
-	// ambiguous output → fail-open (pass), never accidentally halt
-	assert.equal(parseGateVerdict("just some prose with no verdict").verdict, "pass");
+	// Issue #54 regression: Markdown-emphasized verdict tokens must be parsed, not
+	// silently downgraded to the fail-closed default.
+	assert.equal(parseGateVerdict("Review failed.\n\n### VERDICT: **BLOCK**").verdict, "block");
+	assert.equal(parseGateVerdict("VERDICT: **BLOCK**").verdict, "block");
+	assert.equal(parseGateVerdict("VERDICT: __BLOCK__").verdict, "block");
+	assert.equal(parseGateVerdict("VERDICT: `BLOCK`").verdict, "block");
+	assert.equal(parseGateVerdict("### VERDICT: **PASS**").verdict, "pass");
+	assert.equal(parseGateVerdict("VERDICT: **PASS**").verdict, "pass");
+	assert.equal(parseGateVerdict("required fix: update X\nVERDICT: ~~BLOCK~~").verdict, "block");
+	// ambiguous model output (no verdict at all) → fail-closed (block), never pass.
+	assert.equal(parseGateVerdict("just some prose with no verdict").verdict, "block");
+	assert.match(parseGateVerdict("just some prose with no verdict").reason ?? "", /fail-closed/i);
 });
 
 test("runtime: gate BLOCK halts the flow and skips downstream", async () => {
@@ -393,6 +403,60 @@ test("runtime: gate PASS lets the flow continue", async () => {
 	assert.equal(res.state.status, "completed");
 	assert.equal(res.state.phases.check.gate?.verdict, "pass");
 	assert.equal(res.state.phases.ship.status, "done");
+});
+
+test("issue #54: free-text gate auto-appends VERDICT format suffix; model then emits a parseable verdict", async () => {
+	// A gate whose task does NOT ask for a VERDICT marker must still get a verdict
+	// because the runtime auto-appends the format suffix (Layer 1). The model
+	// complies by emitting the exact terminator, which parses correctly.
+	let seenTask = "";
+	const def: Taskflow = {
+		name: "gate-autoformat",
+		phases: [
+			{ id: "work", type: "agent", agent: "a", task: "do work" },
+			{ id: "check", type: "gate", agent: "a", task: "Is this safe?", dependsOn: ["work"] },
+		],
+	};
+	const deps = baseDeps(
+		mockRunner((t) => {
+			if (t.startsWith("Is this safe")) {
+				seenTask = t;
+				return "Looks fine.\nVERDICT: PASS";
+			}
+			return `ok:${t}`;
+		}),
+	);
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.ok(/VERDICT\s*[:=]/i.test(seenTask), "gate task must be auto-suffixed with a VERDICT format instruction");
+	assert.match(seenTask, /Required output format/);
+	assert.equal(res.state.phases.check.gate?.verdict, "pass");
+});
+
+test("issue #54: a gate with output:json + expect does NOT get the VERDICT suffix (JSON contract governs)", async () => {
+	let seenTask = "";
+	const def: Taskflow = {
+		name: "gate-json-contract",
+		phases: [
+			{ id: "work", type: "agent", agent: "a", task: "do work" },
+			{
+				id: "check", type: "gate", agent: "a", task: "Is this safe?", dependsOn: ["work"],
+				output: "json",
+				expect: { type: "object", properties: { verdict: { enum: ["pass", "block"] } }, required: ["verdict"] },
+			},
+		],
+	};
+	const deps = baseDeps(
+		mockRunner((t) => {
+			if (t.startsWith("Is this safe")) {
+				seenTask = t;
+				return '{"verdict": "pass", "reason": "ok"}';
+			}
+			return `ok:${t}`;
+		}),
+	);
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.ok(!/Required output format/.test(seenTask), "a JSON-contract gate must not receive the free-text VERDICT suffix");
+	assert.equal(res.state.phases.check.gate?.verdict, "pass");
 });
 
 test("runtime: completed phases retain startedAt (run elapsed regression)", async () => {
