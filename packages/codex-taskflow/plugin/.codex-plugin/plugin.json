@@ -1,6 +1,6 @@
 {
   "name": "taskflow",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Declarative, verifiable DAG orchestration for Codex subagents — fan-out, gates, loops, tournaments, approvals, resumable runs, and saveable commands, with intermediate transcripts kept out of your context.",
   "author": {
     "name": "heggria",
