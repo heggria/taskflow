@@ -168,6 +168,8 @@ export async function stepAgent(phase: Phase, ctx: StepContext): Promise<StepRes
 	return stepPhase({ ...phase, type: "agent" }, ctx) as Promise<StepResult>;
 }
 
+const SCRIPT_STDOUT_CAP = 1_000_000; // 1 MiB — match imperative runtime
+
 async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
 	const run = phase.run;
 	if (!run || (Array.isArray(run) && run.length === 0)) {
@@ -176,7 +178,9 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 	}
 	const argv = Array.isArray(run) ? run.map(String) : ["bash", "-lc", String(run)];
 	const [cmd, ...args] = argv;
-	const timeoutMs = typeof phase.timeout === "number" ? phase.timeout : 120_000;
+	// Match runtime: default 60s, clamp to [1000, 300_000]
+	const rawT = typeof phase.timeout === "number" && Number.isFinite(phase.timeout) ? phase.timeout : 60_000;
+	const timeoutMs = Math.min(300_000, Math.max(1000, rawT));
 	const cwd = ctx.deps.cwd;
 
 	const result = await new Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
@@ -184,27 +188,61 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
+		let killedForCap = false;
 		const t = setTimeout(() => {
 			timedOut = true;
+			try {
+				child.kill("SIGTERM");
+			} catch {
+				/* ignore */
+			}
+			setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					/* ignore */
+				}
+			}, 200);
+		}, timeoutMs);
+		const onAbort = () => {
 			try {
 				child.kill("SIGKILL");
 			} catch {
 				/* ignore */
 			}
-		}, timeoutMs);
+		};
+		ctx.deps.signal?.addEventListener("abort", onAbort, { once: true });
+		if (ctx.deps.signal?.aborted) onAbort();
 		child.stdout?.on("data", (d) => {
 			stdout += d.toString();
+			if (stdout.length > SCRIPT_STDOUT_CAP) {
+				killedForCap = true;
+				stdout = stdout.slice(0, SCRIPT_STDOUT_CAP);
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					/* ignore */
+				}
+			}
 		});
 		child.stderr?.on("data", (d) => {
 			stderr += d.toString();
+			if (stderr.length > SCRIPT_STDOUT_CAP) stderr = stderr.slice(0, SCRIPT_STDOUT_CAP);
 		});
 		child.on("error", (e) => {
 			clearTimeout(t);
+			ctx.deps.signal?.removeEventListener("abort", onAbort);
 			resolve({ code: 1, stdout, stderr: e.message, timedOut: false });
 		});
 		child.on("close", (code) => {
 			clearTimeout(t);
-			resolve({ code: code ?? 1, stdout, stderr, timedOut });
+			ctx.deps.signal?.removeEventListener("abort", onAbort);
+			resolve({
+				code: code ?? 1,
+				stdout,
+				stderr: killedForCap ? `${stderr}\n(stdout capped at ${SCRIPT_STDOUT_CAP} bytes)` : stderr,
+				timedOut,
+			});
 		});
 	});
 
@@ -242,20 +280,57 @@ async function runOneAgent(
 	nodePath: string,
 	mapIndex?: number,
 ): Promise<{ result: RunResult; event: Event }> {
-	const r = await ctx.deps.runTask(
-		ctx.deps.cwd,
-		ctx.deps.agents,
-		agentName,
-		task,
-		{
-			model: phase.model,
-			thinking: phase.thinking,
-			tools: phase.tools,
-			cwd: ctx.deps.cwd,
-			signal: ctx.deps.signal,
-		},
-		ctx.deps.globalThinking,
-	);
+	// Per-phase timeout: AbortController chained to run signal (matches runtime).
+	const phaseTimeoutMs =
+		typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
+			? phase.timeout
+			: undefined;
+	let timedOut = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onParentAbort: (() => void) | undefined;
+	let callSignal: AbortSignal | undefined = ctx.deps.signal;
+	if (phaseTimeoutMs) {
+		const ac = new AbortController();
+		callSignal = ac.signal;
+		if (ctx.deps.signal?.aborted) ac.abort();
+		else if (ctx.deps.signal) {
+			onParentAbort = () => ac.abort();
+			ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+		}
+		timer = setTimeout(() => {
+			timedOut = true;
+			ac.abort();
+		}, phaseTimeoutMs);
+	}
+	let r: RunResult;
+	try {
+		r = await ctx.deps.runTask(
+			ctx.deps.cwd,
+			ctx.deps.agents,
+			agentName,
+			task,
+			{
+				model: phase.model,
+				thinking: phase.thinking,
+				tools: phase.tools,
+				cwd: ctx.deps.cwd,
+				signal: callSignal,
+			},
+			ctx.deps.globalThinking,
+		);
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
+	}
+	if (timedOut) {
+		r = {
+			...r!,
+			exitCode: r!.exitCode === 0 ? 1 : r!.exitCode,
+			stopReason: "error",
+			errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
+			phaseTimeout: true,
+		};
+	}
 	const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
 	const event = baseEvent(ctx, phase.id, "subagent-call", {
 		input: {

@@ -142,7 +142,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 
 - **FlowIR (S0):** `compileTaskflowToIR` → genuine `compileTaskflowToFlowIR` + `hashFlowIR` → `ir:<64-hex>`; `usedFallbackHash: false` when IR is content-addressable.
 - **Trace:** every run may record `runs/<flow>/<runId>.trace.jsonl` via `RuntimeDeps.trace` (`FileTraceSink`). Decisions include gate/when/cache/budget/tournament/unreplayable.
-- **Event kernel (S2 complete, default OFF):** set `RuntimeDeps.eventKernel: true` or `PI_TASKFLOW_EVENT_KERNEL=1`. All 10 phase kinds run on `exec/driver` when enabled; imperative path remains the default until S5.
+- **Event kernel (S2 complete, default OFF):** set `RuntimeDeps.eventKernel: true` or `PI_TASKFLOW_EVENT_KERNEL=1`. All 10 kinds run on `exec/driver` when enabled **unless** the flow uses unsupported advanced features (score gates, `onBlock:retry`, reflexion, retry, expect, cross-run cache, shareContext) — those fall back to the imperative path. Budget, join/optional deps, dynamic `flow{def}` hardening, and agent timeouts are enforced on the kernel path.
 - **Offline replay (S3, zero tokens):** `replayRun(events, overrides)` in `replay.ts` — **must not** import `runtime` / `exec/driver` / `exec/step` (guarded by `replay-import-lint.test.ts`). Surfaces: pi `action=replay` + `/tf replay`; MCP `taskflow_replay`. Distinct from **resume** / **recompute** (those re-execute live phases).
 - **MCP roster (12):** `taskflow_run|list|show|verify|compile|peek|trace|replay|why_stale|recompute|save|search`.
 

@@ -17,7 +17,7 @@
 > |------|------|----------|
 > | **S0** | ✅ | `compileTaskflowToFlowIR` + `hashFlowIR` → `ir:<64-hex>`；`usedFallbackHash: false`（well-formed IR） |
 > | **S1** | ✅ | `exec/{events,fold}`；runtime 全量 decision emit；fold 差分 + kill-9 rebuild 测试 |
-> | **S2** | ✅ | `exec/{step,driver}` **全部 10 kind**；默认 OFF（`eventKernel` / `PI_TASKFLOW_EVENT_KERNEL`） |
+> | **S2** | ✅ | `exec/{step,driver}` **全部 10 kind** + P0 硬化（budget/deps/eval/json/dynamic def/recursion）；高级特性 fall-back；默认 OFF |
 > | **S3** | ✅ | `replayRun`；`taskflow_replay` MCP；pi `action=replay` + `/tf replay`；golden + import-lint |
 > | **S4** | ⬜ | `taskflow-dsl` 包（下一主线） |
 > | **S5** | ⬜ | 全 kind 差分绿 → kernel 默认 ON |

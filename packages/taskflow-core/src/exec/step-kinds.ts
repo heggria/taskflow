@@ -10,13 +10,16 @@ import type { Phase, Taskflow } from "../schema.ts";
 import {
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	LOOP_HARD_MAX_ITERATIONS,
+	MAX_DYNAMIC_NESTING,
 	TOURNAMENT_DEFAULT_VARIANTS,
 	TOURNAMENT_HARD_MAX_VARIANTS,
 	validateTaskflow,
 } from "../schema.ts";
 import { parseGateVerdict, parseTournamentWinner } from "../deterministic.ts";
+import { verifyTaskflow } from "../verify.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
-import { evaluateCondition, interpolate, safeParse, type InterpolationContext } from "../interpolate.ts";
+import { evaluateCondition, interpolate, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
+import { clampSubFlowBudget } from "./kernel-policy.ts";
 import { mapWithConcurrencyLimit } from "../runner-core.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
@@ -62,20 +65,56 @@ async function runAgentCall(
 	mapIndex?: number,
 	variantIndex?: number,
 ): Promise<{ result: RunResult; event: Event }> {
-	const r = await ctx.deps.runTask(
-		ctx.deps.cwd,
-		ctx.deps.agents,
-		agentName,
-		task,
-		{
-			model: phase.model,
-			thinking: phase.thinking,
-			tools: phase.tools,
-			cwd: ctx.deps.cwd,
-			signal: ctx.deps.signal,
-		},
-		ctx.deps.globalThinking,
-	);
+	const phaseTimeoutMs =
+		typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
+			? phase.timeout
+			: undefined;
+	let timedOut = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onParentAbort: (() => void) | undefined;
+	let callSignal: AbortSignal | undefined = ctx.deps.signal;
+	if (phaseTimeoutMs) {
+		const ac = new AbortController();
+		callSignal = ac.signal;
+		if (ctx.deps.signal?.aborted) ac.abort();
+		else if (ctx.deps.signal) {
+			onParentAbort = () => ac.abort();
+			ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+		}
+		timer = setTimeout(() => {
+			timedOut = true;
+			ac.abort();
+		}, phaseTimeoutMs);
+	}
+	let r: RunResult;
+	try {
+		r = await ctx.deps.runTask(
+			ctx.deps.cwd,
+			ctx.deps.agents,
+			agentName,
+			task,
+			{
+				model: phase.model,
+				thinking: phase.thinking,
+				tools: phase.tools,
+				cwd: ctx.deps.cwd,
+				signal: callSignal,
+			},
+			ctx.deps.globalThinking,
+		);
+	} finally {
+		if (timer) clearTimeout(timer);
+		if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
+	}
+	if (timedOut) {
+		r = {
+			...r!,
+			exitCode: r!.exitCode === 0 ? 1 : r!.exitCode,
+			stopReason: "error",
+			errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
+			phaseTimeout: true,
+		};
+	}
 	const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
 	const event = baseEvent(ctx, phase.id, "subagent-call", {
 		input: {
@@ -126,11 +165,34 @@ export async function executeReduceBody(phase: Phase, ctx: StepContext): Promise
 
 /** Gate: LLM judge + parseGateVerdict (score/eval advanced paths stay on imperative). */
 export async function executeGateBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
-	// Zero-token eval auto-pass when all eval conditions are truthy.
+	// Zero-token eval auto-pass — MUST match imperative fail-safe (tryEvaluate + contains).
 	if (Array.isArray(phase.eval) && phase.eval.length > 0) {
-		const ctxI = interpCtx(ctx);
-		const allPass = phase.eval.every((e) => evaluateCondition(String(e), ctxI));
-		if (allPass) {
+		const evalCtx = interpCtx(ctx);
+		let allPassed = true;
+		for (const check of phase.eval) {
+			if (typeof check !== "string") {
+				allPassed = false;
+				break;
+			}
+			let expr = check;
+			const containsIdx = expr.indexOf(" contains ");
+			if (containsIdx > 0) {
+				const lhs = expr.slice(0, containsIdx).trim();
+				const rhs = expr.slice(containsIdx + " contains ".length).trim();
+				const lhsVal = interpolate(lhs, evalCtx);
+				if (lhsVal.missing.length > 0 || !lhsVal.text.includes(rhs)) {
+					allPassed = false;
+					break;
+				}
+				continue;
+			}
+			const { value: passed, error: evalErr } = tryEvaluateCondition(expr, evalCtx);
+			if (evalErr || !passed) {
+				allPassed = false;
+				break;
+			}
+		}
+		if (allPassed) {
 			return {
 				midEvents: [
 					baseEvent(ctx, phase.id, "decision", {
@@ -413,24 +475,35 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 	let subDef: Taskflow | undefined;
 	let recursionKey: string;
 
+	const defFailOpen = (diag: string): BodyResult => ({
+		midEvents: [],
+		output: "",
+		status: "done",
+		usage: emptyUsage(),
+		// surface diagnostic without failing the run (matches runtime fail-open)
+		error: undefined,
+	});
+	void defFailOpen; // used below; keep signature for clarity
 	if (hasDef) {
+		const inlineDepth = stack.filter((s) => s.startsWith("def:")).length;
+		if (inlineDepth >= MAX_DYNAMIC_NESTING) {
+			return {
+				midEvents: [],
+				output: "",
+				status: "done",
+				usage: emptyUsage(),
+			};
+		}
 		const rawDef = (phase as { def?: unknown }).def;
 		let parsed: unknown;
 		if (typeof rawDef === "string") {
 			parsed = safeParse(interpolate(rawDef, interpCtx(ctx)).text);
 			if (parsed === undefined) {
-				return {
-					midEvents: [],
-					output: "",
-					status: "done",
-					usage: emptyUsage(),
-					error: undefined,
-				};
+				return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
 			}
 		} else {
 			parsed = rawDef;
 		}
-		// Normalize
 		let wrapped: Taskflow | undefined;
 		if (Array.isArray(parsed)) {
 			wrapped = { name: `${phase.id}-inline`, phases: parsed as Taskflow["phases"] };
@@ -444,11 +517,24 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		if (wrapped.phases.length === 0) {
 			return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
 		}
-		const v = validateTaskflow(wrapped);
+		// Dynamic hardening: LLM-authored defs are untrusted (script RCE, cwd escape, caps).
+		const v = validateTaskflow(wrapped, { dynamic: true, cwd: ctx.deps.cwd });
 		if (!v.ok) {
 			return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
 		}
-		subDef = wrapped;
+		const ver = verifyTaskflow({
+			name: wrapped.name,
+			phases: wrapped.phases as Phase[],
+			budget: wrapped.budget,
+			concurrency: wrapped.concurrency,
+		});
+		if (!ver.ok) {
+			const errs = ver.issues.filter((i) => i.severity === "error");
+			if (errs.length) {
+				return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
+			}
+		}
+		subDef = clampSubFlowBudget(wrapped, ctx.state.def.budget);
 		recursionKey = `def:${subDef.name}`;
 	} else {
 		const useName = phase.use;
@@ -480,11 +566,12 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		recursionKey = useName;
 	}
 
-	if (recursionKey === ctx.state.flowName || stack.includes(recursionKey)) {
+	// Match runtime: push parent flowName so A→B→A cycles are detected.
+	if (recursionKey === ctx.state.flowName || stack.includes(recursionKey) || stack.includes(ctx.state.flowName)) {
 		return {
 			midEvents: [],
 			status: "failed",
-			error: `flow phase '${phase.id}': recursive sub-flow`,
+			error: `flow phase '${phase.id}': recursive sub-flow ${[...stack, ctx.state.flowName, recursionKey].join(" -> ")}`,
 			usage: emptyUsage(),
 		};
 	}
@@ -498,7 +585,6 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		};
 	}
 
-	// Resolve `with` args
 	const provided: Record<string, unknown> = {};
 	const withMap = phase.with;
 	if (withMap && typeof withMap === "object") {
@@ -507,10 +593,13 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		}
 	}
 
+	const nextStack = hasDef
+		? [...stack, ctx.state.flowName, recursionKey]
+		: [...stack, ctx.state.flowName];
 	const nested = await ctx.deps.runNested({
 		def: subDef,
 		args: provided,
-		stack: [...stack, recursionKey],
+		stack: nextStack,
 	});
 
 	return {

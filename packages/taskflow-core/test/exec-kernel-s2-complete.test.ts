@@ -57,7 +57,7 @@ test("EVENT_KERNEL_PHASE_TYPES covers all PHASE_TYPES", () => {
 	assert.deepEqual([...EVENT_KERNEL_PHASE_TYPES].sort(), [...PHASE_TYPES].sort());
 });
 
-test("canUseEventKernel: all 10 kinds accepted", () => {
+test("canUseEventKernel: all 10 basic kinds accepted (no advanced features)", () => {
 	assert.equal(
 		canUseEventKernel({
 			name: "all",
