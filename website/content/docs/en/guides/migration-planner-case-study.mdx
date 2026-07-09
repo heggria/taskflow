@@ -8,7 +8,7 @@ You need to migrate from an old HTTP client to a new one. The old call site is `
 This guide builds a taskflow that does the migration safely. We start with a one-shot discover-and-plan, add a gate that sanity-checks the plan, execute the plan via a generated sub-flow, and finish with a loop that re-plans until no old calls remain. By the end you will have a complete, saveable flow you can point at any mechanical migration.
 
 <Callout type="info">
-  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
 </Callout>
 
 ## The problem

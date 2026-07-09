@@ -8,7 +8,7 @@ A real PR lands and it is big: **47 files changed across 3 packages.** You need 
 This guide builds a taskflow that does the review properly. We start with one phase that discovers the changed files, add a fan-out for per-file security review, layer in a parallel architecture review, gate the whole thing on risk, and finish with a single merged report. By the end you will have a complete, saveable flow you can run on every PR.
 
 <Callout type="info">
-  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
 </Callout>
 
 ## The problem

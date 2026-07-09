@@ -824,7 +824,7 @@ pnpm install
 pnpm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
 pnpm test              # 单元测试——无网络，无进程派生
 pnpm run test:hosts    # 仅 taskflow-hosts 测试（另有 test:pi、test:codex、test:claude、test:opencode）
-pnpm run build         # 为七个包生成 dist/*.js + .d.ts
+pnpm run build         # 为八个包生成 dist/*.js + .d.ts
 pnpm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
 pnpm run test:e2e-codex-mcp  # codex MCP 服务器端到端
 pnpm run test:e2e-claude-mcp # claude MCP 服务器端到端（无需实时 claude）
