@@ -306,7 +306,7 @@ FlowIR + sidecar 已经 lossless(7b48105 补全了 8 个字段)。decompiler 是
 - 新 phase 类型 = 新 rune 函数(`import { saga } from "taskflow/experimental"`)。
 - 新通用字段 = 新 option key。
 - **v2 新增:** `flow.component`(带 props 的可复用子 flow)和 `$store`/`$derived`(全局响应式)**明确标为 post-0.2.0**(依赖 Shared Context Tree / 响应式运行时,见 demo 的使用)。0.2.0 首版不含;demo 里用到的地方加 `// [post-0.2.0]` 注释。
-- **0.2.0 脑暴 phase 收编:** 事件溯源解锁的 `expand` / `race` / `compensate` / `route` / `watch` / loop 多 body / map 逐项增量 / `counterfactual` 等 —— **语言形状与分期**见 [`rfc-0.2.0-dsl-phases-horizon.md`](./rfc-0.2.0-dsl-phases-horizon.md)（A 轨 DSL 糖 · B 轨 S4.x 引擎+语言 · C 轨 experimental）。不扩大「现有 10 kind 基本形态」的 S4 MVP 出货门，但 **设计上不再「未定义」。**
+- **0.2.0 脑暴 phase 收编:** 事件溯源解锁的 `expand` / `race` / `compensate` / `route` / `watch` / loop 多 body / map 逐项增量 / `counterfactual` 等 —— **语言形状与分期**见 [`rfc-0.2.0-dsl-phases-horizon.md`](./rfc-0.2.0-dsl-phases-horizon.md)（A 轨 DSL 糖 · B 轨 S4.x 引擎+语言 · C 轨 experimental）。原 S4 MVP 出货门为 10 kind 基本形态；引擎现为 **12 kind**（+`race`/`expand` 已落地），其余 B/C 项仍分期，但 **设计上不再「未定义」。**
 
 ---
 

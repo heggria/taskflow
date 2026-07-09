@@ -13,7 +13,7 @@
 Claude Code shipped **Dynamic Workflows** — its first feature that shares
 taskflow's core thesis ("move the plan into code; only the final answer reaches
 the conversation"). The overlap is real and large. **But taskflow still leads on
-orchestration depth** (10 phase types + DAG + cross-run caching + multi-host),
+orchestration depth** (12 phase types + DAG + cross-run caching + multi-host),
 while **Claude Code leads on two things taskflow lacks**:
 
 1. **Zero-author orchestration** — Claude *writes* the workflow script for you
@@ -199,7 +199,7 @@ Legend: ✅ has it · ⚠️ partial / weaker · ❌ missing.
 
 ## 3. Where taskflow is clearly ahead (defend these)
 
-1. **Orchestration vocabulary** — 10 phase types vs 2 primitives. gate /
+1. **Orchestration vocabulary** — 12 phase types vs 2 primitives. gate /
    tournament / loop / approval / reduce are first-class, statically verified.
 2. **Cross-run caching + incremental recompute** — unique. CC re-runs everything.
 3. **Cross-session resume** — CC workflows die with the session.

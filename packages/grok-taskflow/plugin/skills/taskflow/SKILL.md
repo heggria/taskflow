@@ -71,7 +71,7 @@ task deserves level 3 — the higher levels are where taskflow pays for itself.
 | 1 | linear DAG with `dependsOn` | fixed steps, each consuming the last |
 | 2 | discover → `map` fan-out → `gate` → `reduce` | many items, needs review before reporting |
 | 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost-capped, fails precisely |
-| 4 | + `loop`, `tournament`, `flow{def}` dynamic planning | the work itself is discovered at runtime; one shot is unreliable |
+| 4 | + `loop`, `tournament`, `flow{def}` / `expand`, `race` | the work itself is discovered at runtime; one shot is unreliable; try parallel approaches and keep the first win |
 | 5 | + `incremental: true`, `cache.fingerprint` | the flow re-runs as the repo changes; only re-pay for what changed |
 
 **A production-grade flow (level 3+) usually has:** machine checks before LLM
@@ -167,12 +167,12 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 }
 ```
 
-### Phase types (10)
+### Phase types (12)
 
 | type | meaning | details |
 |------|---------|---------|
 | `agent` | one subagent runs `task` | this file |
-| `parallel` | run static `branches[]` concurrently | this file |
+| `parallel` | run static `branches[]` concurrently (all complete) | this file |
 | `map` | fan out over `over` (an array) — one subagent per item, `{item}` bound | this file |
 | `gate` | quality/review step that can **halt the flow** | Gate phases below |
 | `reduce` | aggregate `from[]` phases into one output | this file |
@@ -181,6 +181,8 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `loop` | repeat a body until a condition / convergence / `maxIterations` | Loop phases below |
 | `tournament` | run N competing `variants`, a `judge` picks best or aggregates | Tournament phases below |
 | `script` | run a **shell command** (no LLM, zero tokens) — stdout is the output | Script phases below |
+| `race` | run `branches[]` concurrently; **first completed wins** (unlike parallel) | Race phases below |
+| `expand` | run a dynamic fragment (`def`); `nested` (isolated) or `graft` (promote onto parent) | Expand phases below |
 
 ### Control-flow fields (any phase)
 
@@ -189,7 +191,7 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `when` | conditional guard — skip the phase unless the expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& \|\| !`, parentheses, quoted strings/numbers. Parse errors fail **open** (phase runs). |
 | `join` | dependency join: `"all"` (default — wait for every dep) or `"any"` (OR-join — run as soon as one dep completes). |
 | `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
-| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
+| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/race/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow/expand. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
 | `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with per-path diagnostics (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
 | `idempotent` | side-effect classification. Default `true` (safe to cache + auto-retry). Set `false` on phases with **irreversible side effects** (webhook POSTs, deploys, DB writes, file mutations): transient provider errors are **not** auto-retried (an explicit `retry{}` IS still honored — it's your declaration that repeats are acceptable) and the result is **never cached** in any scope (within-run resume, cross-run, `incremental` — the phase re-runs every time). The phase state records `sideEffect: true` (rendered as ⚡). |
 | `optional` | fail-soft — a failed/blocked phase won't abort the run; downstream sees empty output. Pair with a fallback phase guarded by `when`. |
@@ -464,6 +466,55 @@ output is exact.
 { "id": "build", "type": "script", "run": "pnpm run build", "timeout": 120000 },
 { "id": "score", "type": "script", "run": ["python", "score.py"],
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
+```
+
+### Race phases (first completed wins)
+
+A `race` phase runs static `branches[]` concurrently and **returns the first
+branch that finishes successfully**. Losers may be cancelled (`cancelLosers`,
+default true). Use it when several approaches can answer the same question and
+latency matters more than waiting for every branch (unlike `parallel`, which
+waits for all, or `tournament`, which judges quality after all variants finish).
+
+- `branches` — **required**, at least two `{task, agent?}`.
+- `cancelLosers` — optional boolean (default `true`).
+- Output of the winning branch becomes the race phase output; a warning records
+  which branch won.
+
+```jsonc
+{
+  "id": "quick", "type": "race",
+  "branches": [
+    { "task": "Answer with a short heuristic…", "agent": "executor" },
+    { "task": "Answer with a thorough search…", "agent": "researcher" }
+  ],
+  "final": true
+}
+```
+
+### Expand phases (dynamic fragment: nested or graft)
+
+An `expand` phase runs a **fragment Taskflow** from `def` (inline object,
+phases array, or interpolated `{steps.plan.json}`). Two modes:
+
+| `expandMode` | Behavior |
+|--------------|----------|
+| `nested` (default) | Run as an isolated sub-flow (like `flow{def}`); child phase ids stay **off** the parent. |
+| `graft` | After success, **promote** child phase states onto the parent as `<expandId>-<childId>` so later phases can read `{steps.grow-leaf.output}`. |
+
+- `def` — **required** for expand.
+- `maxNodes` — optional cap on fragment phase count (default 50, hard max 100).
+- Dynamic validation + nesting caps match `flow{def}` (see `advanced.md`).
+- Prefer `expand` when the planner fragment is a first-class kind; prefer
+  `flow` + `use` for saved reusable flows; prefer `flow` + `def` when you want
+  the classic nested sub-flow without graft promote.
+
+```jsonc
+{
+  "id": "grow", "type": "expand", "expandMode": "graft",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"], "final": true
+}
 ```
 
 ### Budget (cost / token caps)

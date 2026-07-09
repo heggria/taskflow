@@ -56,14 +56,16 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 ```jsonc
 {
   "id": "audit",            // required, unique — referenced via {steps.audit.output}
-  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script (default: agent)
+  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script | race | expand (default: agent)
   "agent": "analyst",       // agent name to run this phase
   "task": "Audit {item.route}…",
   "dependsOn": ["discover"],// DAG edges
   "over": "{steps.discover.json}",  // [map] array to fan out over
   "as": "item",             // [map] loop var name (default: item)
-  "branches": [ /* … */ ],  // [parallel] static task list
+  "branches": [ /* … */ ],  // [parallel|race] static task list
   "from": ["audit"],        // [reduce] phase ids to aggregate
+  "def": "{steps.plan.json}", // [expand|flow] inline fragment / dynamic sub-flow
+  "expandMode": "nested",   // [expand] nested | graft
   "output": "json",         // text | json (default: text)
   "model": "claude-sonnet-4-5",   // per-phase model override
   "thinking": "high",       // per-phase thinking override
@@ -77,13 +79,17 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | Key | Applies to | Default | Notes |
 |-----|-----------|---------|-------|
 | `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
-| `type` | all | `agent` | One of the 10 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script). |
+| `type` | all | `agent` | One of the **12** phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, **race**, **expand**). |
 | `agent` | all | first available | Agent name; resolved from the scoped pool. |
 | `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types. |
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
-| `branches` | parallel | — | **Required for parallel.** `[{task, agent?}]`. |
+| `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
+| `cancelLosers` | race | `true` | Cancel non-winning branches after the first success. |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
+| `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
+| `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |
+| `maxNodes` | expand | `50` | Cap fragment phase count (1..100). |
 | `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
 | `input` | script | — | Text piped to the command's stdin; supports interpolation. |
 | `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. |
@@ -99,12 +105,12 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `cache` | all | `run-only` | Per-phase cache policy (`scope`/`ttl`/`fingerprint`). See §11. |
 | `final` | all | last phase | Exactly one phase may be `final`; its output is returned. |
 
-> Gate-only control fields (`eval`, `onBlock`), the loop/tournament control
+> Gate-only control fields (`eval`, `onBlock`, score), the loop/tournament control
 > fields (`until`/`maxIterations`/`convergence`, `variants`/`judge`/`judgeAgent`/`mode`),
-> the script fields (`run`/`input`/`timeout`), and the cross-phase contract
-> fields (`expect`, `timeout`, `optional`, `strictInterpolation`) are documented
-> in `SKILL.md` next to their phase types. `shareContext` and the workspace
-> `cwd` keywords (`temp`/`dedicated`/`worktree`) are in `advanced.md`.
+> the script fields (`run`/`input`/`timeout`), race/expand fields above, and the
+> cross-phase contract fields (`expect`, `timeout`, `optional`, `strictInterpolation`)
+> are documented in `SKILL.md` next to their phase types. `shareContext` and the
+> workspace `cwd` keywords (`temp`/`dedicated`/`worktree`) are in `advanced.md`.
 
 ---
 
@@ -436,13 +442,30 @@ node --conditions=development --experimental-strip-types \
 | `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
 | `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
 
-**Authoring notes**
+**Authoring notes (kinds ↔ runes)**
 
-- Import: `import { flow, agent, map, … } from "taskflow-dsl"`.
+Import: `import { flow, agent, map, … } from "taskflow-dsl"`. Runes erase to Taskflow
+JSON kinds (single source: `PHASE_TYPES` in core + `erase/kinds/*` registry).
+
+| JSON `type` | DSL rune(s) | Notes |
+|-------------|-------------|--------|
+| `agent` | `agent(task, opts?)` | templates → `{steps.*}` / `{item.*}` |
+| `parallel` | `parallel([agent…])` | waits for all branches |
+| `map` | `map(source, item => agent…)` | `over` + `as` |
+| `gate` | `gate(up, opts?, task?)` · `gate.automated` · `gate.scored` | sugar → `eval` / `score` |
+| `reduce` | `reduce([…], () => agent…)` | `from` |
+| `approval` | `approval({ request })` | |
+| `flow` | `subflow("name")` · `subflow.def(plan)` | use vs def |
+| `loop` | `loop({ task, until?, … })` | |
+| `tournament` | `tournament({ branches/variants, judge, … })` | |
+| `script` | `script(run, opts?)` | string or argv array |
+| `race` | `race([agent…], { cancelLosers? })` | first completed wins |
+| `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode` |
+
 - `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.
-- `race([agent(...), agent(...)])` — first branch to finish wins (`type: "race"`).
-- `expand.nested(plan.json)` / `expand.graft(plan.json)` — dynamic fragment (`type: "expand"`); graft promotes child phase states onto the parent under `expandId-childId`.
+- `race([...])` does **not** support array destructure — bind as one phase: `const winner = race([...])`.
 - Unbuilt `.tf.ts` must **not** be executed as a Node program (runes throw `TFDSL_ERASE_ONLY`).
+- Modular erase: new kind → `packages/taskflow-dsl/src/build/erase/kinds/<kind>.ts` + registry entry (see `docs/internal/modularization-0.2.0.md`).
 
 Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
 

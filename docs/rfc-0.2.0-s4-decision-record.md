@@ -1,7 +1,7 @@
 # S4 Shape Decision Record (`taskflow-dsl`)
 
-> Status: **NEEDS_HUMAN** (route/surface frozen in council; 3 open locks)  
-> Date: 2026-07-09  
+> Status: **IMPLEMENTED (package live)** — route/surface frozen; coverage extended beyond original MVP ship bar (see §“Landed beyond MVP”)  
+> Date: 2026-07-09 · Last kinds sync: 2026-07-09  
 > Full surface: [`rfc-0.2.0-s4-mvp.md`](./rfc-0.2.0-s4-mvp.md)  
 > Council runs: `s4-shape-council` → `s4-shape-council-v2` → `s4-shape-finalize`
 
@@ -26,10 +26,10 @@
 - **Hosts:** CLI-first; **no** new MCP tools in S4; run via existing `taskflow_run` + emitted `.taskflow.json`
 - **Core:** allow schema/validate/desugar/FlowIR compile+hash/verify; **deny** runtime/exec/runner/store/hosts/mcp
 
-## MVP scope (in)
+## MVP scope (in) — original ship bar
 
 1. `flow` + args/budget/concurrency/description  
-2. All **10 phase kinds** basic runes (closed option types — no scored/automated gate sugar)  
+2. Core **10 phase kinds** basic runes  
 3. Template → `{steps.*}` / `{item.*}` erase  
 4. Auto `dependsOn` from `.output` / `.json` reads + explicit `dependsOn`  
 5. `when` **string** form (+ TS subset in `check` if cheap)  
@@ -38,19 +38,36 @@
 8. Golden **FlowIR hash equality** demos (must include map + templates + `json<T>`, not only hello)  
 9. Import-lint: DSL must not drag core runtime  
 
-## Brainstorm phases — language support (not all in S4 ship bar)
+## Landed beyond original MVP (kinds sync)
+
+Engine `PHASE_TYPES` is now **12** (`race`, `expand` added). DSL erase registry
+(`packages/taskflow-dsl/src/build/erase/kinds/*`) covers:
+
+| Kind / sugar | Status |
+|--------------|--------|
+| Core 10 + `subflow` / `subflow.def` | ✅ |
+| `gate.automated` / `gate.scored` | ✅ (A-track sugar) |
+| `race` + `cancelLosers` | ✅ engine + DSL |
+| `expand` / `expand.nested` / `expand.graft` + `maxNodes` | ✅ engine + DSL |
+| Parallel destructure → N agent phases | ✅ |
+| Modular pipeline (no monolith grow) | ✅ see `docs/internal/modularization-0.2.0.md` |
+
+Still **not** shipped as runes: loop multi-body, `route`, `compensate`/saga,
+`watch`, experimental C-track.
+
+## Brainstorm phases — language support
 
 Source: `docs/internal/brainstorm-2026-07-08-0.2.0-phases.md`  
 Design: **`docs/rfc-0.2.0-dsl-phases-horizon.md`**
 
 | Track | What | When |
 |-------|------|------|
-| **A** | `subflow.def` / `expand.nested`, `gate.scored`/`automated`, `reflexion`, `idempotent` — **DSL sugar on existing engine** | S4 / S4.1 |
-| **B** | New/enhanced: **`expand` graft**, **`race`**, **loop multi-body**, **`route`**, **`compensate`/saga**, approval timeout, map item-incremental, **`watch` on-stale** | S4.x engine + DSL |
+| **A** | `subflow.def` / `expand.nested`, `gate.scored`/`automated`, `reflexion`, `idempotent` — **DSL sugar on existing engine** | ✅ mostly landed (reflexion/idempotent via opts) |
+| **B** | New/enhanced: **`expand` graft**, **`race`**, **loop multi-body**, **`route`**, **`compensate`/saga**, approval timeout, map item-incremental, **`watch` on-stale** | race + expand graft ✅; rest S4.x |
 | **C** | experimental: `counterfactual`, `quorum`, `fork`, … | language stubs + fail-closed until engine |
 | **D** | visual builder, true stream edges, full self-rewriting flow | never / far |
 
-S4 MVP **compiler** only erases A (where engine exists) + core 10 kinds. B/C runes may exist as **types/docs** but build must **error** if engine kind missing (no silent drop).
+Unknown / unimplemented experimental runes must **error** (no silent drop).
 
 ## Explicitly out (S4 ship bar)
 
@@ -82,13 +99,13 @@ export default flow("audit", (ctx) => {
 
 ## Acceptance gates
 
-- [ ] `packages/taskflow-dsl` in workspace; bin + exports as `rfc-0.2.0-s4-mvp.md` §1  
-- [ ] Demo `.tf.ts` and twin `.json` → **same** `ir:<64-hex>`  
-- [ ] Equality fixtures include **map + json\<T\> + templates**  
-- [ ] Rune runtime call throws `TFDSL_ERASE_ONLY`  
-- [ ] Import-lint denylist green  
-- [ ] Skills/docs: JSON first-class for agents; CLI path for DSL  
-- [ ] DSL v2 note: FULL vs S4 MVP ship gate (authority B1)
+- [x] `packages/taskflow-dsl` in workspace; bin + exports as `rfc-0.2.0-s4-mvp.md` §1  
+- [x] Demo `.tf.ts` and twin `.json` → **same** `ir:<64-hex>` (parity tests)  
+- [x] Equality fixtures include **map + json\<T\> + templates**  
+- [x] Rune runtime call throws `TFDSL_ERASE_ONLY`  
+- [x] Import-lint denylist green  
+- [x] Skills/docs: JSON first-class for agents; CLI path for DSL (+ kinds table)  
+- [x] DSL v2 note: FULL vs S4 MVP ship gate (authority B1)
 
 ## Open questions for human (max 3)
 

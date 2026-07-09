@@ -1,6 +1,7 @@
 # RFC: taskflow 0.2.0 S4 MVP — `taskflow-dsl` public surface
 
-> Status: **PROPOSED — awaiting human lock** · Design-only · 2026-07-09  
+> Status: **IMPLEMENTED** (package + CLI live; surface extended — see §8.1) · 2026-07-09  
+
 > Parent: [`rfc-0.2.0-architecture.md`](./rfc-0.2.0-architecture.md) §4.3 / §9 S4  
 > Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 (**FULL language goal**; ship gate is this MVP doc)  
 > Route lock: north-star 决策1 + this document §0  
@@ -338,12 +339,12 @@ export function flow(
   fn: (ctx: FlowCtx) => PhaseRef | void,
 ): TaskflowModuleDefault;
 
-// --- phase runes (MVP kinds) ---
+// --- phase runes (aligned with PHASE_TYPES + sugars; see runes.ts) ---
 export function agent(task: TemplateInput, opts?: PhaseOptions): PhaseRef;
 export function parallel(
   branches: PhaseRef[],
   opts?: PhaseOptions,
-): PhaseRef[] & PhaseRef; // compile-time destructure; type as tuple-friendly
+): PhaseRef[] & PhaseRef; // compile-time destructure → N agent phases
 export function map<TItem>(
   source: PhaseRef | Placeholder,
   fn: (item: ItemSymbol<TItem>) => PhaseRef,
@@ -354,6 +355,7 @@ export function gate(
   opts?: GateOptions,
   task?: (input: PhaseRef) => TemplateInput,
 ): PhaseRef;
+// sugar: gate.automated / gate.scored
 export function reduce(
   from: PhaseRef[],
   fn: (parts: Record<string, PhaseRef>) => PhaseRef,
@@ -365,12 +367,22 @@ export function subflow(
   withArgs?: Record<string, unknown>,
   opts?: PhaseOptions,
 ): PhaseRef;
+// sugar: subflow.def
 export function loop(opts: LoopOptions): PhaseRef;
 export function tournament(opts: TournamentOptions): PhaseRef;
 export function script(
   run: string | string[],
   opts?: ScriptOptions,
 ): PhaseRef;
+export function race(
+  branches: PhaseRef[],
+  opts?: PhaseOptions & { cancelLosers?: boolean },
+): PhaseRef;
+export function expand(
+  def: PhaseRef | string,
+  opts?: PhaseOptions & { expandMode?: "nested" | "graft"; maxNodes?: number },
+): PhaseRef;
+// sugar: expand.nested / expand.graft
 
 // --- expect sugar ---
 export function json<T>(): JsonExpectMarker<T>;
@@ -720,23 +732,37 @@ Public surface exposes runes for the **Y** rows of the S4 coverage matrix (full 
 | `json<T>()` basic object/array | `json` |
 | template → `{steps.*}` / `{item.*}` | erase in `build` |
 | `when` string + TS subset | options + check rules |
-| `gate.automated` / `gate.scored` | **Y (S4.1 A-track)** — erase to `eval` / `score` |
+| `gate.automated` / `gate.scored` | **✅ landed** — erase to `eval` / `score` |
 | top-level strict/share/incremental/scope | **not exported** (S4.1+) |
 
-FULL RFC coverage remains a post-MVP completion track; missing FULL features must not appear as stub exports that silently no-op.
+### §8.1 Kinds extension (post-MVP, same package)
+
+Engine and DSL now also ship Horizon B kinds (skills + decompile cover them):
+
+| Kind / feature | Surface | Notes |
+|----------------|---------|--------|
+| `race` | `race([...], { cancelLosers? })` | first completed branch wins |
+| `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode`; graft promotes `<id>-<child>` |
+| `subflow.def` | `subflow.def(plan)` | → `type:flow` + `def` |
+| Parallel destructure | `const [a,b] = parallel([...])` | N real `agent` phase ids |
+
+Erase modularization: `build/erase/kinds/*` registry — do not re-monolith `pipeline.ts`.
+
+FULL RFC coverage remains a completion track; missing FULL features must not appear as stub exports that silently no-op.
 
 ---
 
 ## §9. Acceptance checklist (public surface)
 
-- [ ] Package name `taskflow-dsl` publishable with exports/bin as §1  
-- [ ] `taskflow-dsl build|check|decompile|new` flags/IO as §2  
-- [ ] Author import `from "taskflow-dsl"` typechecks a hello + audit-style demo  
-- [ ] `build` on demo `.tf.ts` and hand JSON → **identical** `hashFlowIR`  
-- [ ] Diagnostics stable codes + positions on deliberate erase errors  
-- [ ] Import-lint: no denylist modules from core/hosts  
-- [ ] No MCP/schema changes required to pass S4 gate  
-- [ ] README/skills teach CLI-first workflow; JSON escape documented as first-class  
+- [x] Package name `taskflow-dsl` publishable with exports/bin as §1  
+- [x] `taskflow-dsl build|check|decompile|new` flags/IO as §2  
+- [x] Author import `from "taskflow-dsl"` typechecks a hello + audit-style demo  
+- [x] `build` on demo `.tf.ts` and hand JSON → **identical** `hashFlowIR`  
+- [x] Diagnostics stable codes + positions on deliberate erase errors  
+- [x] Import-lint: no denylist modules from core/hosts  
+- [x] No MCP/schema changes required to pass S4 gate  
+- [x] README/skills teach CLI-first workflow; JSON escape documented as first-class  
+
 
 ---
 

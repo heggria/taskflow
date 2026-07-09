@@ -14,7 +14,7 @@
 | **C · experimental 语言预留** | 语法进 `taskflow-dsl/experimental`，引擎未就绪前 build **失败明确**（不静默 no-op） |
 | **D · 不做** | 脑暴已否或仍冲突护城河 |
 
-S4 **MVP ship** 仍是 10 种现有 kind 的基本形态；本文件是 **语言 horizon**，与 MVP 出货门正交——**实现可分期，设计先收齐**。
+S4 **原 MVP ship bar** 是 10 种 kind 的基本形态；引擎现为 **12 kind**（+`race`/`expand`，见 §6 打勾）。本文件仍是 **语言 horizon**——未打勾项实现可分期，设计先收齐。
 
 ---
 
@@ -314,8 +314,8 @@ const sp = fork.save("after-plan");
 
 | 优先级 | 项 | 轨 | 语言工作 | 引擎工作 |
 |--------|----|----|----------|----------|
-| **P0** | 10 kind 基本 + `subflow.def` / `expand.nested` 糖 | A | S4 | 已有 |
-| **P0** | `gate.scored` / `gate.automated` / `reflexion` / `idempotent` 糖 | A | S4.1 | 已有 |
+| **P0** | 10 kind 基本 + `subflow.def` / `expand.nested` 糖 | A | S4 | **✅** |
+| **P0** | `gate.scored` / `gate.automated` / `reflexion` / `idempotent` 糖 | A | S4.1 | **✅** gate sugar + opts；erase kinds 注册 |
 | **P1** | **`expand` graft** | B | rune + IR kind | **✅ runtime + DSL** (promote onto parent) |
 | **P1** | **`loop` multi-body** | B | body 回调 erase | **新** |
 | **P1** | **`race`** | B | rune | **✅ runtime + DSL** |
@@ -364,12 +364,12 @@ const sp = fork.save("after-plan");
 
 | 文档 | 范围 |
 |------|------|
-| `rfc-0.2.0-s4-mvp.md` | **可发布表面**：现有 10 kind 基本 + CLI |
+| `rfc-0.2.0-s4-mvp.md` | **可发布表面**：CLI + runes（现含 12 kind + 糖） |
 | **本文** | **语言 horizon**：脑暴 phase 的 DSL 形状与分期 |
-| 引擎 S4.x / S6 | 按 §6 表落地 type |
+| 引擎 S4.x / S6 | 按 §6 表落地剩余 type |
 
 S4 出货门 **不变**（demo FlowIR == hand JSON）。  
-S4 实现时 **可提前** 接受 JSON 里未知 type 的透传策略由实现定；DSL erase **只生成已支持 type**。
+DSL erase **只生成已支持 type**；未知 experimental → fail-closed。
 
 ---
 

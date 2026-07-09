@@ -10,7 +10,7 @@
 | Framework | Orchestration model | Authoring | Durable / resume | Dynamic fan-out | Human-in-loop | Quality gate | Static verification | Cross-run memoization | Observability | Deps | Uniquely good at |
 |---|---|---|---|:--:|:--:|:--:|:--:|:--:|---|:--:|---|
 | **▼ LOCAL / EMBEDDED DAG DSL** |||||||||||
-| **pi-taskflow** | Declarative JSON-DSL DAG (10 phase types) | JSON data | phase-level input-hash cache + cross-session resume | **YES** (`map`) | YES (approval) | YES (verdict) | NO (planned) | **YES** | basic (live DAG render; no OTel) | **ZERO** | zero-dep declarative subagent DAG; phase-hash caching; when-guards; budget caps; loop·tournament·cross-run cache |
+| **pi-taskflow** | Declarative JSON-DSL DAG (12 phase types) | JSON data | phase-level input-hash cache + cross-session resume | **YES** (`map`) | YES (approval) | YES (verdict) | NO (planned) | **YES** | basic (live DAG render; no OTel) | **ZERO** | zero-dep declarative subagent DAG; phase-hash caching; when-guards; budget caps; loop·tournament·race·expand·cross-run cache |
 | **▼ GRAPH / STATE-MACHINE** |||||||||||
 | LangGraph | StateGraph nodes/edges + Pregel super-steps | Python/JS code | checkpointer every super-step; time travel | YES (`Send`) | YES (`interrupt()` any node) | NO builtin | YES (`.compile()` + typed state) | within-session only | YES (LangSmith) | heavy | checkpoint durability + time travel; largest community |
 | Google ADK | Directed graph + agent-tree hierarchy | Python/JS/Go/Java/Kotlin | durable memory; event-driven dormancy | YES | YES (any-node) | YES (safety framework) | YES (inferred from graph compile) | UNVERIFIED | YES (builtin logs/metrics/traces) | medium | multi-language agent-tree hierarchy; first-class delegation |

@@ -243,6 +243,63 @@ instead merges all variants — good for research synthesis, bad for decisions.
 
 ---
 
+## Archetype 7: Race for latency (first approach wins)
+
+When several strategies can answer the same question and you care about **time
+to first good answer** more than comparing quality, use `race` (not
+`tournament`). Branches start together; the first successful completion becomes
+the phase output.
+
+```jsonc
+{
+  "name": "quick-answer",
+  "budget": { "maxUSD": 0.5 },
+  "phases": [
+    {
+      "id": "answer", "type": "race",
+      "branches": [
+        { "task": "Answer from local heuristics only: {args.q}", "agent": "executor" },
+        { "task": "Answer after a short web/docs look: {args.q}", "agent": "researcher" }
+      ],
+      "final": true
+    }
+  ]
+}
+```
+
+**Prefer tournament when** you need a judge to pick the *best* draft after all
+variants finish. **Prefer parallel when** you need *every* branch's output
+downstream (then `reduce`).
+
+## Archetype 8: Expand graft (planner fragment on the parent DAG)
+
+Planner emits a fragment; `expand` with `expandMode: "graft"` runs it and
+promotes child phase states as `<expandId>-<childId>` so a later phase can read
+them. Use `nested` (or classic `flow{def}`) when you only need the fragment's
+**final** output and do not want child ids on the parent.
+
+```jsonc
+{
+  "name": "plan-graft",
+  "phases": [
+    {
+      "id": "plan", "type": "agent", "agent": "planner", "output": "json",
+      "task": "Emit a mini-flow JSON: {name, phases:[{id,type,agent,task,final?}…]} for the audit.",
+      "expect": { "type": "object", "required": ["phases"] }
+    },
+    {
+      "id": "grow", "type": "expand", "expandMode": "graft",
+      "def": "{steps.plan.json}", "dependsOn": ["plan"]
+    },
+    {
+      "id": "wrap", "type": "agent", "agent": "writer",
+      "task": "Summarize grafted work. Child outputs may appear as steps.grow-* in the run state.",
+      "dependsOn": ["grow"], "final": true
+    }
+  ]
+}
+```
+
 ## Archetype 6: Incremental repo-watch audit (cross-run)
 
 Use for flows you'll re-run as the repo evolves. First run pays full price;
