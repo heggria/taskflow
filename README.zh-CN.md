@@ -535,7 +535,7 @@ Review the audit below. If any endpoint is missing auth, end with
 
 ## 命令
 
-保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_list` / `taskflow_show` / `taskflow_run`（按 `name`）/ `taskflow_verify` / `taskflow_compile` / `taskflow_peek`。
+保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_list` / `taskflow_show` / `taskflow_run`（按 `name`）/ `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_save` / `taskflow_search`。
 
 | 命令 | 功能 |
 |---|---|
@@ -548,7 +548,7 @@ Review the audit below. If any endpoint is missing auth, end with
 | `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
 | `/tf:<name> [args]` | 快捷方式——一键运行流程 |
 
-工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`why-stale`、`recompute`、`cache-clear`。在 Codex、Claude Code、OpenCode、Grok Build 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`。
+工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`trace`、`replay`、`why-stale`、`recompute`、`cache-clear`、`search`。在 Codex、Claude Code、OpenCode、Grok Build 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_save` / `taskflow_search`。
 
 ## 后台（detached）执行
 

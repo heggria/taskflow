@@ -10,6 +10,9 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - `flowir/compile.ts` (`compileTaskflowToFlowIR`) — genuine Taskflow→canonical FlowIR compiler; `compileTaskflowToIR` now content-addresses with `hashFlowIR` (`ir:<64-hex>`) and sets `usedFallbackHash: false`.
   - `exec/fold.ts` — pure `foldEvents(log) →` per-phase snapshot (S1 differential building block).
   - `replay.ts` — implements `replayRun(log, overrides)` (threshold / budget / model / args knobs; zero tokens; no import of runtime/driver).
+  - **S1 decision coverage:** runtime emits `gate-score` / `gate-verdict`, `when-guard`, `cache-hit`, `tournament-winner`, `budget-hit`, plus synthetic phase lifecycle for budget/dep skips. Fold differential tests pin fold ↔ RunState agreement.
+  - **S2 event kernel (strangler, default OFF):** `exec/step.ts` + `exec/driver.ts` run agent+script-only flows when `RuntimeDeps.eventKernel` or `PI_TASKFLOW_EVENT_KERNEL=1`. Imperative path remains default. Kernel path preserves agent `usage`, evaluates `when` (with `when-guard` decision events), and emits skip lifecycle for unmet deps.
+  - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
 
 ## [0.1.7] — 2026-07-07
 

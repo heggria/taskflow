@@ -675,7 +675,7 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
-Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, OpenCode, and Grok Build the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
+Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `replay`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, OpenCode, and Grok Build the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
 
 ## Background (detached) execution
 

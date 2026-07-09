@@ -91,6 +91,11 @@ export interface RuntimeDeps {
 	 *  append-only trace for offline replay. Absent → no-op (runs behave
 	 *  identically to today). See `trace.ts`. */
 	trace?: TraceSink;
+	/**
+	 * S2 strangler: when true, agent+script-only flows run on `exec/driver`
+	 * (event kernel). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
+	 */
+	eventKernel?: boolean;
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 	/** Internal: pre-resolved Shared Context Tree dir for this run (sub-flows inherit the parent's). */
@@ -432,6 +437,49 @@ function traceEmit(deps: RuntimeDeps, event: TraceEvent): void {
 		deps.trace?.emit(event);
 	} catch {
 		/* trace is best-effort; never run-breaking */
+	}
+}
+
+/** Emit a `decision` event (S1: full decision coverage for fold/replay). Fail-open. */
+function traceDecision(
+	deps: RuntimeDeps,
+	state: RunState,
+	phaseId: string,
+	decision: NonNullable<TraceEvent["decision"]>,
+): void {
+	traceEmit(deps, {
+		ts: Date.now(),
+		runId: state.runId,
+		phaseId,
+		kind: "decision",
+		decision,
+	});
+}
+
+/** Emit gate decision as gate-score when scores present, else gate-verdict. */
+function traceGateDecision(
+	deps: RuntimeDeps,
+	state: RunState,
+	phaseId: string,
+	gate: NonNullable<PhaseState["gate"]>,
+	judgeOutput?: string,
+): void {
+	if (gate.scores) {
+		traceDecision(deps, state, phaseId, {
+			type: "gate-score",
+			target: "",
+			results: gate.scores.results,
+			combined: gate.scores.combined,
+			threshold: gate.scores.threshold,
+			verdict: gate.verdict,
+			judgeOutput,
+		});
+	} else {
+		traceDecision(deps, state, phaseId, {
+			type: "gate-verdict",
+			value: gate.verdict,
+			reason: gate.reason,
+		});
 	}
 }
 
@@ -777,6 +825,13 @@ async function executePhase(
 		throw e;
 	}
 	if (threw) return result; // unreachable; satisfies TS
+	// S1: cache-hit decision (within-run or cross-run) for fold/replay.
+	if (result.cacheHit) {
+		traceDecision(deps, state, phase.id, {
+			type: "cache-hit",
+			scope: result.cacheHit === "cross-run" ? "cross-run" : "run-only",
+		});
+	}
 	// Trace: phase-end with the real status, then flush buffered events.
 	traceEmit(deps, {
 		ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-end",
@@ -900,7 +955,13 @@ async function executePhaseInner(
 	// interpolation is captured by the shared onRead hook, not silently dropped
 	// by a separate out-of-band context.
 	if (phase.when !== undefined) {
-		if (!evaluateCondition(phase.when, ctx)) {
+		const whenResult = evaluateCondition(phase.when, ctx);
+		traceDecision(deps, state, phase.id, {
+			type: "when-guard",
+			expression: phase.when,
+			result: whenResult,
+		});
+		if (!whenResult) {
 			return {
 				id: phase.id,
 				status: "skipped",
@@ -1395,6 +1456,7 @@ async function executePhaseInner(
 							endedAt: Date.now(),
 						};
 						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+						traceGateDecision(deps, state, phase.id, ps.gate!, undefined);
 						return ps;
 					}
 
@@ -1430,6 +1492,7 @@ async function executePhaseInner(
 							const verdict: "pass" | "block" = final.passed ? "pass" : "block";
 							ps.gate = { verdict, reason: judged.reason, scores: { results, combined: final.combined, threshold } };
 							ps.json = scoreResultJSON(results, final.combined, verdict, threshold, { score: judged.score, reason: judged.reason });
+							traceGateDecision(deps, state, phase.id, ps.gate, r.output);
 						}
 						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 						return ps;
@@ -1555,12 +1618,8 @@ async function executePhaseInner(
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
 		if (type === "gate" && ps.status === "done") {
 			ps.gate = parseGateVerdict(r.output);
-			// Trace: record the gate verdict decision (fail-open). A future replay
-			// re-adjudicates this against a changed threshold.
-			if (ps.gate) traceEmit(deps, {
-				ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "decision",
-				decision: { type: "gate-verdict", value: ps.gate.verdict, reason: ps.gate.reason },
-			});
+			// Trace: gate decision (fail-open). Replay re-adjudicates thresholds.
+			if (ps.gate) traceGateDecision(deps, state, phase.id, ps.gate);
 		}
 
 		// Shared Context Tree: register this node, mark its terminal status, and
@@ -2375,6 +2434,12 @@ async function executePhaseInner(
 		}
 		// Only one competitor survived → no contest; it wins by default (skip judge).
 		if (ok.length === 1) {
+			const w = ranIdx(ok[0]);
+			traceDecision(deps, state, phase.id, {
+				type: "tournament-winner",
+				value: w,
+				reason: "only surviving variant",
+			});
 			return {
 				id: phase.id,
 				status: "done",
@@ -2383,7 +2448,7 @@ async function executePhaseInner(
 				usage: variantUsage,
 				model: ok[0].model,
 				budgetTruncated: budgetSkipCount > 0 || undefined,
-				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "only surviving variant" },
+				tournament: { variants: competitors.length, winner: w, mode, reason: "only surviving variant" },
 				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
@@ -2451,6 +2516,11 @@ async function executePhaseInner(
 		const chosen = winnerIneligible ? ok[0] : winnerResult;
 		const winnerIdx = ranIdx(chosen);
 		const output = mode === "aggregate" ? judgeRes.output : chosen.output;
+		traceDecision(deps, state, phase.id, {
+			type: "tournament-winner",
+			value: winnerIdx,
+			reason,
+		});
 		return {
 			id: phase.id,
 			status: "done",
@@ -3057,6 +3127,24 @@ export async function recomputeTaskflow(
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
 	try {
+		// S2 strangler (default OFF): agent+script-only flows may use the event kernel.
+		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
+		if (eventKernelEnabled(deps) && canUseEventKernel(def)) {
+			if (!deps.runTask) {
+				throw new Error("event kernel requires RuntimeDeps.runTask");
+			}
+			return await runEventKernel(state, {
+				cwd: deps.cwd,
+				agents: deps.agents,
+				runTask: deps.runTask,
+				signal: deps.signal,
+				globalThinking: deps.globalThinking,
+				trace: deps.trace,
+				persist: deps.persist,
+				onProgress: deps.onProgress,
+				eventKernel: deps.eventKernel,
+			});
+		}
 		return await runTaskflowLayers(state, deps);
 	} catch (e) {
 		// A thrown phase must not leave the run wedged in "running" (which breaks
@@ -3178,7 +3266,17 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				skipReason = join === "any" ? "All dependencies failed or were skipped" : "Upstream dependency not satisfied";
 
 			if (skipReason) {
-				if (skipReason.startsWith("Budget exceeded")) budgetBlocked = true;
+				if (skipReason.startsWith("Budget exceeded")) {
+					budgetBlocked = true;
+					// S1: budget-hit decision so fold/replay can re-tally under new caps.
+					traceDecision(deps, state, phase.id, {
+						type: "budget-hit",
+						value: budgetReason || "budget",
+						reason: skipReason,
+					});
+				}
+				// Synthetic phase-start/end so fold sees a complete phase lifecycle.
+				traceEmit(deps, { ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-start" });
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
@@ -3186,6 +3284,15 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
+				traceEmit(deps, {
+					ts: Date.now(),
+					runId: state.runId,
+					phaseId: phase.id,
+					kind: "phase-end",
+					status: "skipped",
+					error: skipReason,
+				});
+				traceFlush(deps, phase.id);
 				safeEmit(deps, state);
 				return;
 			}
@@ -3230,6 +3337,14 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			// acceptable: budgetBlocked prevents cascading into subsequent layers.
 			const ob = overBudget(state);
 			if (ob.over) {
+				if (!budgetBlocked) {
+					// First time we detect the ceiling after a phase completes.
+					traceDecision(deps, state, phase.id, {
+						type: "budget-hit",
+						value: "budget",
+						reason: ob.reason,
+					});
+				}
 				budgetBlocked = true;
 				budgetReason = ob.reason;
 			}

@@ -81,3 +81,21 @@ test("replayRun: never throws on empty log", () => {
 	assert.deepEqual(report.decisions, []);
 	assert.equal(report.needsLiveRerun, false);
 });
+
+test("replayRun: golden fixture — threshold flip on recorded gate-score", async () => {
+	const { readFileSync } = await import("node:fs");
+	const { join, dirname } = await import("node:path");
+	const { fileURLToPath } = await import("node:url");
+	const { readEvents } = await import("../src/exec/events.ts");
+	const here = dirname(fileURLToPath(import.meta.url));
+	const text = readFileSync(join(here, "fixtures/golden-gate-trace.jsonl"), "utf8");
+	const events = readEvents(text);
+	assert.equal(events.length, 7);
+	const base = replayRun(events);
+	assert.equal(base.needsLiveRerun, false);
+	assert.ok(base.decisions.every((d) => d.outcome === "reused" || d.outcome === "failed"));
+	const flipped = replayRun(events, { thresholds: { review: 0.9 } });
+	const d = flipped.decisions.find((x) => x.phaseId === "review")!;
+	assert.equal(d.outcome, "would-block");
+	assert.ok(flipped.totalUsage.cost > 0);
+});

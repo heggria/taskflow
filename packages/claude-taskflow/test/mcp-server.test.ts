@@ -52,7 +52,7 @@ test("claude mcp: tools/list exposes the same taskflow tools as codex", async ()
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -82,6 +82,6 @@ test("claude mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 });

@@ -18,7 +18,7 @@ import type { AgentConfig } from "taskflow-core";
 import { CacheStore } from "taskflow-core";
 import { cacheKeys, executeTaskflow, type PhaseCacheCtx, type RuntimeDeps } from "taskflow-core";
 import type { RunResult, RunOptions } from "../src/runner.ts";
-import { compileTaskflowToIR } from "../extensions/flowir/index.ts";
+import { compileTaskflowToIR } from "taskflow-core";
 import type { Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";

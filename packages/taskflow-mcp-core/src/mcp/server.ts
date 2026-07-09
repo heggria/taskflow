@@ -21,6 +21,9 @@
  *   - taskflow_verify  : statically verify a flow (no execution)
  *   - taskflow_compile : render a flow as a DAG diagram (SVG image) + status line
  *   - taskflow_peek    : inspect a stored run's intermediate phase output
+ *   - taskflow_trace   : read a run's append-only event trace
+ *   - taskflow_replay  : re-evaluate a recorded trace under alternate knobs (zero tokens)
+ *   - taskflow_why_stale / taskflow_recompute / taskflow_save / taskflow_search
  */
 
 import { RpcError, RPC, serveStdio, type RpcHandler } from "./jsonrpc.ts";
@@ -55,6 +58,10 @@ import {
 	type Taskflow,
 	type VerificationIssue,
 	type TraceEvent,
+	replayRun,
+	upgradeTraceEvent,
+	type ReplayReport,
+	type ReplayOverrides,
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import {
@@ -207,6 +214,47 @@ function formatTraceMcp(events: TraceEvent[], runId: string, flowName: string): 
 	return lines.join("\n");
 }
 
+/** Human-readable offline replay report (MCP). Zero tokens — re-folds the
+ *  recorded trace under alternate decision knobs. */
+function formatReplayMcp(r: ReplayReport, runId: string, flowName: string): string {
+	const lines: string[] = [
+		`Replay — ${flowName} / ${runId}  (${r.decisions.length} phase decision(s), zero tokens)`,
+	];
+	lines.push("");
+	if (r.needsLiveRerun) lines.push("⚠ Some phases need a live re-run (model/args override).");
+	lines.push(`Recorded usage cost ≈ $${r.totalUsage.cost.toFixed(4)}  tokens in=${r.totalUsage.input} out=${r.totalUsage.output}`);
+	lines.push("");
+	for (const d of r.decisions) {
+		const prior = d.priorOutcome ? ` prior=${d.priorOutcome}` : "";
+		const next = d.replayedOutcome ? ` → ${d.replayedOutcome}` : "";
+		lines.push(`  • ${d.phaseId}: [${d.outcome}]${prior}${next} — ${d.reason}`);
+	}
+	lines.push("");
+	lines.push("(Pass json:true for the full ReplayReport machine-readable record.)");
+	return lines.join("\n");
+}
+
+function parseReplayOverrides(args: Record<string, unknown>): ReplayOverrides {
+	const o: ReplayOverrides = {};
+	if (typeof args.budgetMaxUSD === "number") o.budgetMaxUSD = args.budgetMaxUSD;
+	if (typeof args.budgetMaxTokens === "number") o.budgetMaxTokens = args.budgetMaxTokens;
+	if (args.thresholds && typeof args.thresholds === "object" && !Array.isArray(args.thresholds)) {
+		const t: Record<string, number> = {};
+		for (const [k, v] of Object.entries(args.thresholds as Record<string, unknown>)) {
+			if (typeof v === "number") t[k] = v;
+		}
+		if (Object.keys(t).length) o.thresholds = t;
+	}
+	if (args.models && typeof args.models === "object" && !Array.isArray(args.models)) {
+		const m: Record<string, string> = {};
+		for (const [k, v] of Object.entries(args.models as Record<string, unknown>)) {
+			if (typeof v === "string") m[k] = v;
+		}
+		if (Object.keys(m).length) o.models = m;
+	}
+	return o;
+}
+
 /** Human-readable recompute dry-run report (MCP). Mirrors the pi adapter's
  *  formatRecompute. */
 function formatRecomputeMcp(r: RecomputeReport): string {
@@ -310,13 +358,40 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_trace",
 		title: "Show a run's deterministic-replay event trace",
 		description:
-			"Read the append-only event trace a run recorded (each subagent call's input/output + the runtime's own decisions: gate verdicts, when-guard results, budget hits, cache hits, unreplayable markers). This is the foundation for deterministic replay (re-evaluating a run against changed thresholds/budget offline, zero tokens — landing in a future release). For now it is a read-only observability view of exactly what the run did. Output is human-readable by default; pass json:true for the complete machine-readable record.",
+			"Read the append-only event trace a run recorded (each subagent call's input/output + the runtime's own decisions: gate verdicts, when-guard results, budget hits, cache hits, unreplayable markers). Foundation for taskflow_replay. Output is human-readable by default; pass json:true for the complete machine-readable record.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
 			properties: {
 				runId: { type: "string", description: "The run to inspect (from a prior taskflow_run or the runs index)." },
 				json: { type: "boolean", description: "Return the complete machine-readable trace (JSON) instead of a human-readable timeline. Use when you need the full subagent outputs (the human form truncates them)." },
+			},
+			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_replay",
+		title: "Replay a recorded run under alternate decision knobs (zero tokens)",
+		description:
+			"Re-evaluate a stored run's event trace offline against changed gate thresholds, budget caps, or model routes — without calling any model (zero tokens). Reports per-phase outcomes: reused, would-block, verdict-flipped, would-exceed-budget, needs-live-rerun, etc. Use after taskflow_trace when you want counterfactual analysis of a finished run.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run whose trace to replay (from a prior taskflow_run)." },
+				json: { type: "boolean", description: "Return the full ReplayReport as JSON." },
+				budgetMaxUSD: { type: "number", description: "Alternate max USD budget for would-exceed-budget checks." },
+				budgetMaxTokens: { type: "number", description: "Alternate max token budget." },
+				thresholds: {
+					type: "object",
+					additionalProperties: { type: "number" },
+					description: "Map of phaseId → new score threshold (re-judges recorded gate-score events).",
+				},
+				models: {
+					type: "object",
+					additionalProperties: { type: "string" },
+					description: "Map of phaseId → model id (currently marks needs-live-rerun; quality cannot be re-judged offline).",
+				},
 			},
 			required: ["runId"],
 		},
@@ -511,6 +586,21 @@ export function makeToolHandlers(
 				return textContent(`No trace recorded for run "${runId}" (the run predates tracing, or no trace sink was injected).`, true);
 			if (args.json === true) return textContent(JSON.stringify(events, null, 2));
 			return textContent(formatTraceMcp(events, run.runId, run.flowName));
+		},
+
+		taskflow_replay: async (args) => {
+			const runId = String(args.runId ?? "");
+			if (!runId) return textContent("taskflow_replay requires `runId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const raw = readTrace(traceFilePath(runsDir(cwd), run.flowName, run.runId));
+			if (raw.length === 0)
+				return textContent(`No trace recorded for run "${runId}" (the run predates tracing, or no trace sink was injected).`, true);
+			const events = raw.map((e) => upgradeTraceEvent(e as unknown as Record<string, unknown>));
+			const report = replayRun(events, parseReplayOverrides(args));
+			if (args.json === true) return textContent(JSON.stringify(report, null, 2));
+			return textContent(formatReplayMcp(report, run.runId, run.flowName));
 		},
 
 		taskflow_why_stale: async (args) => {

@@ -580,6 +580,10 @@ and output sizes, then peek the suspicious phase (`json: true` for parsed
 output, `item: n` for one fan-out section). Output is hard-truncated
 (default 4000 chars, max 32000) so a peek never floods your context.
 
+Use `taskflow_trace` to inspect the append-only event log for a finished run,
+then `taskflow_replay` to re-judge it under alternate thresholds/budget **offline
+(zero tokens)** — e.g. "would a 0.9 gate threshold have blocked this run?"
+
 For flows re-run as the repo evolves, pass `incremental: true` to
 `taskflow_run` — every phase defaults to **cross-run cache reuse**: identical
 input → $0 instant hit. Per-phase `cache.fingerprint` entries

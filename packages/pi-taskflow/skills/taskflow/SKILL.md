@@ -552,7 +552,7 @@ Phase ids and agent names use **hyphens** (`audit-each`, `risk-reviewer`).
 An unknown agent name fails the phase with the list of available agents.
 Check with `action: "agents"` instead of guessing.
 
-## Actions (all 15)
+## Actions (all 16)
 
 | action | what it does |
 |--------|--------------|
@@ -565,7 +565,8 @@ Check with `action: "agents"` instead of guessing.
 | `compile` | Render a flow as a Mermaid diagram + verification report. Zero tokens. |
 | `ir` | Compile to **FlowIR** — the canonical intermediate representation with a content hash per phase. Use to diff two versions of a flow or confirm a definition change actually changed a phase's fingerprint. Zero tokens. |
 | `provenance` | Show a completed run's **observed read-sets** — which phases actually read which upstream outputs at runtime (may be narrower than `dependsOn`). Requires `runId`. Zero tokens. |
-| `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). The foundation for offline replay (re-evaluating a run against changed thresholds/budget, zero tokens — full replay logic lands in a later release). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
+| `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
+| `replay` | **Offline what-if** on a recorded trace: re-evaluate under alternate gate thresholds, budget caps, or model routes **without calling the model** (zero tokens). Reports per-phase `reused` / `would-block` / `verdict-flipped` / `would-exceed-budget` / `needs-live-rerun`. `runId` required; optional `thresholds`, `budgetMaxUSD`, `budgetMaxTokens`, `models`; `--json` for the full `ReplayReport`. |
 | `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
 | `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
 | `cache-clear` | Clear the cross-run memoization store. |
@@ -613,6 +614,7 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 - `/tf list` · `/tf run <name> [args]` · `/tf show <name>` · `/tf runs` · `/tf resume <runId>`
 - `/tf verify` · `/tf compile <name> [lr|td]` · `/tf ir <name>`
 - `/tf peek <runId> [phaseId] [--json] [--item <n>] [--limit <chars>]`
-- `/tf provenance <runId>` · `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
+- `/tf provenance <runId>` · `/tf trace <runId> [--json]` · `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]`
+- `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
 - `/tf init` — interactive model-roles setup
 - `/tf:<name> [args]` — shortcut for each saved flow
