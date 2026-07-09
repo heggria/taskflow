@@ -1,11 +1,36 @@
 # RFC: taskflow 0.2.0 S4 MVP — `taskflow-dsl` public surface
 
-> Status: **Draft** · Design-only · 2026-07-09  
+> Status: **PROPOSED — awaiting human lock** · Design-only · 2026-07-09  
 > Parent: [`rfc-0.2.0-architecture.md`](./rfc-0.2.0-architecture.md) §4.3 / §9 S4  
-> Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2  
+> Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 (**FULL language goal**; ship gate is this MVP doc)  
 > Route lock: north-star 决策1 + this document §0  
+> Provenance: multi-agent council runs `s4-shape-council` + `s4-shape-council-v2` + `s4-shape-finalize` (inventory → route tournament → surface → adversary → cross-check)
 
 This document freezes the **publishable public surface** of `packages/taskflow-dsl` for the S4 MVP ship gate. It is intentionally narrower than full DSL RFC coverage: what agents and humans import, invoke, and get wrong messages for — not the full transform implementation plan.
+
+### Authority amendment (council B1 — must land with S4)
+
+| Layer | Meaning |
+|-------|---------|
+| **DSL RFC v2 FULL** | Long-horizon language goal: every JSON field eventually has a DSL expression (§A). |
+| **S4 MVP ship gate (this doc)** | Finite Y-rows + demo `hashFlowIR` equality — **not** every `PhaseSchema` field on day 1. |
+
+DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar. Implementers must not expand S4 scope to FULL §A.
+
+### Shape in one screen
+
+| Decision | Value |
+|----------|--------|
+| **What S4 is** | New package `taskflow-dsl`: compile-time TypeScript frontend that **erases** `.tf.ts` → Taskflow JSON → (via core only) FlowIR |
+| **What S4 is not** | A second runtime, kernel flip (S5), in-file JSON hybrid, or agent-default authoring path |
+| **Primary model** | **Svelte-style** compile-time runes (AST erase; no interpret) |
+| **Escape** | **Whole-file JSON** only (zero migration; dual frontend at file boundary) |
+| **Toolchain** | **ts-morph** (+ pinned `typescript`) → Taskflow → `compileTaskflowToFlowIR` |
+| **Package / bin** | `taskflow-dsl` / `taskflow-dsl {build,check,decompile,new}` |
+| **Import** | `from "taskflow-dsl"` (not `"taskflow"` in S4) |
+| **Hosts** | **CLI-first**; no new MCP / no auto-build on `taskflow_run` |
+| **Ship bar** | Golden demos: DSL build FlowIR hash **==** hand JSON FlowIR hash (must include map + `json<T>` + templates, not only hello) |
+| **Default author for agents** | Still **JSON** + existing MCP; DSL for humans / large typed flows |
 
 ---
 
@@ -714,13 +739,32 @@ FULL RFC coverage remains a post-MVP completion track; missing FULL features mus
 
 ---
 
-## §10. Open implementer choices (do not block surface freeze)
+## §10. Open implementer choices
 
-1. Sync vs async `buildFile` (ts-morph is sync-friendly; Promise ok for future loaders).  
-2. Whether decompile accepts FlowIR in MVP or Taskflow-only.  
-3. Phantom return types vs throw-on-call for rune stubs at runtime.  
-4. Exact synthetic phase id algorithm for anonymous runes.  
-5. Whether `--emit both` default should switch to `taskflow` only for quieter git diffs (product polish).
+### 10.1 Needs human lock before coding (max 3)
+
+| # | Question | Council recommendation (default if human silent) |
+|---|----------|--------------------------------------------------|
+| **H1** | Commit a canonical **coverage matrix** (Y/N per field) next to this RFC? | **Yes** — add `docs/rfc-0.2.0-s4-coverage-matrix.md` from council `coverage-map` output; §8 must link a real table, not “implementer notes”. |
+| **H2** | Decompile input: Taskflow-only vs FlowIR too? | **Taskflow-only in MVP**; reject FlowIR with “pass Taskflow JSON”. |
+| **H3** | Rune stub at Node runtime: phantom vs throw? | **Throw `TFDSL_ERASE_ONLY`** on any runtime call (types-only for tsc). |
+
+### 10.2 Non-blocking polish (implementer discretion)
+
+1. Sync vs async `buildFile` (sync-friendly with ts-morph).  
+2. Exact synthetic phase id algorithm for anonymous runes (must be deterministic for hash equality fixtures).  
+3. Default `--emit both` vs `taskflow` only (recommend **taskflow-only** default; FlowIR via `--emit flowir|both` / CI).  
+4. Optional thin facade over ts-morph `Node` so engine can be swapped later without rewriting erase.
+
+### 10.3 Recommended PR stack (after human lock)
+
+1. **Scaffold** `packages/taskflow-dsl` + workspace/filter + import-lint denylist test.  
+2. **Author stubs + types** (closed MVP option types; throw-on-call).  
+3. **`check` + `new`** (tsc/Program + rune rules + hello skeleton).  
+4. **`build` erase vertical slice** — agent → map/templates → parallel → reduce → gate LLM → script; emit Taskflow; call core FlowIR.  
+5. **Golden parity** — hand JSON twin fixtures; `hashFlowIR` equality (include map + `json<T>`).  
+6. **`decompile` Taskflow→`.tf.ts`** on Y-slice + fail-closed unsupported.  
+7. **Docs/skills** — CLI-first workflow; JSON first-class; import string `taskflow-dsl`; amend DSL v2 FULL vs MVP note.
 
 ---
 
@@ -732,7 +776,9 @@ FULL RFC coverage remains a post-MVP completion track; missing FULL features mus
 | `rfc-0.2.0-dsl-syntax.md` | Language semantics (full); MVP subset bound by §8 |
 | `rfc-0.2.0-three-compile-routes.md` | Historical routes; **superseded for product** by §0 lock (Svelte + JSON escape) |
 | **`rfc-0.2.0-s4-mvp.md` (this)** | Ship surface freeze for `packages/taskflow-dsl` |
+| [`rfc-0.2.0-dsl-phases-horizon.md`](./rfc-0.2.0-dsl-phases-horizon.md) | Brainstorm phases → DSL shapes (expand/race/saga/route/watch/…); A/B/C tracks |
+| [`internal/brainstorm-2026-07-08-0.2.0-phases.md`](./internal/brainstorm-2026-07-08-0.2.0-phases.md) | Original phase brainstorm (event-sourced unlocks) |
 
 ---
 
-*One-line summary: S4 MVP publishes `taskflow-dsl` as a CLI-first, ts-morph erase frontend — `*.tf.ts` in, Taskflow (+ FlowIR via core) out — with whole-file JSON as the only escape, stable diagnostics, a hard core import allowlist, and no MCP or runtime interpret path.*
+*One-line summary: S4 MVP publishes `taskflow-dsl` as a CLI-first, ts-morph erase frontend — `*.tf.ts` in, Taskflow (+ FlowIR via core) out — with whole-file JSON as the only escape, stable diagnostics, a hard core import allowlist, and no MCP or runtime interpret path. Extended brainstorm phases are designed in `rfc-0.2.0-dsl-phases-horizon.md` without expanding the S4 ship bar.*

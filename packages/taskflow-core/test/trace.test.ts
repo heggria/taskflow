@@ -185,6 +185,22 @@ test("FileTraceSink: never throws on an unwritable dir (fail-open)", () => {
 	assert.doesNotThrow(() => sink.flush("p"));
 });
 
+test("FileTraceSink: creates missing parent dir on first flush (MCP constructs sink before saveRun)", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "trace-mkdir-"));
+	const nested = path.join(root, "flow-name", "run.trace.jsonl");
+	// Parent flow-name/ does not exist yet — mirrors first-run MCP path.
+	assert.equal(fs.existsSync(path.dirname(nested)), false);
+	const sink = new FileTraceSink(nested);
+	sink.emit({ ts: 1, runId: "r", phaseId: "hello", kind: "phase-start" });
+	sink.emit({ ts: 2, runId: "r", phaseId: "hello", kind: "phase-end", status: "done" });
+	assert.doesNotThrow(() => sink.flush("hello"));
+	const events = readTrace(nested);
+	assert.equal(events.length, 2);
+	assert.equal(events[0]!.kind, "phase-start");
+	assert.equal(events[1]!.kind, "phase-end");
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
 // ─── decision events: gate verdict + unreplayable marker ─────────────────────
 
 test("trace: a gate phase emits a gate-verdict decision event", async () => {

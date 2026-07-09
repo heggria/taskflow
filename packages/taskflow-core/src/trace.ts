@@ -20,8 +20,17 @@
  * migration. See `replay.ts` for the `ReplayDecision` type stub.
  */
 
-import { openSync, readFileSync, renameSync, unlinkSync, writeFileSync, closeSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+	openSync,
+	readFileSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+	closeSync,
+	statSync,
+	mkdirSync,
+} from "node:fs";
+import { dirname } from "node:path";
 import type { UsageStats } from "./usage.ts";
 import type { ScorerResult } from "./scorers.ts";
 
@@ -148,19 +157,12 @@ export class FileTraceSink implements TraceSink {
 	private readonly buffer = new Map<string, TraceEvent[]>();
 	private readonly tracePath: string;
 	private readonly lockPath: string;
-	private readonly dirOk: boolean;
 
 	constructor(tracePath: string) {
 		this.tracePath = tracePath;
 		this.lockPath = `${tracePath}.lock`;
-		// Probe writability of the parent dir once; if unwritable, degrade to
-		// no-op silently (fail-open — trace is best-effort, never run-breaking).
-		try {
-			const dir = join(tracePath, "..");
-			this.dirOk = existsSync(dir);
-		} catch {
-			this.dirOk = false;
-		}
+		// Do NOT probe parent-dir existence here: the flow run directory is often
+		// created later by the first saveRun(). mkdir is deferred to flush().
 	}
 
 	emit(event: TraceEvent): void {
@@ -176,10 +178,12 @@ export class FileTraceSink implements TraceSink {
 	flush(phaseId: string): void {
 		const events = this.buffer.get(phaseId);
 		this.buffer.delete(phaseId);
-		if (!events || events.length === 0 || !this.dirOk) return;
+		if (!events || events.length === 0) return;
 		// Serialize + append under an exclusive lock. Best-effort: any error is
-		// swallowed (trace is never run-breaking).
+		// swallowed (trace is never run-breaking). Create the parent dir on first
+		// flush so a sink constructed before saveRun still records events.
 		try {
+			mkdirSync(dirname(this.tracePath), { recursive: true });
 			withExclusiveLock(this.lockPath, () => {
 				const chunk = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
 				appendAtomic(this.tracePath, chunk);
