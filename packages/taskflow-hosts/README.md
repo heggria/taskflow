@@ -3,10 +3,10 @@
 > Shared host-runner collection for [taskflow](https://github.com/heggria/taskflow).
 
 This package holds the `SubagentRunner` implementations for taskflow's non-pi
-hosts — **codex**, **claude**, and **opencode** — plus their pure argv builders
-(`buildCodexArgs` / `buildClaudeArgs` / `buildOpencodeArgs`) and event-stream
-parsers. It is the **single place** host runners live; a new host adds a
-`<host>-runner.ts` here.
+hosts — **codex**, **claude**, **opencode**, and **grok** — plus their pure argv
+builders (`buildCodexArgs` / `buildClaudeArgs` / `buildOpencodeArgs` /
+`buildGrokArgs`) and event-stream parsers. It is the **single place** host
+runners live; a new host adds a `<host>-runner.ts` here.
 
 ## Why a separate package
 
@@ -17,21 +17,21 @@ Each host has two halves:
    permission/model helpers.
 2. **The delivery** — the per-host MCP server + bin + plugin scaffold, which is
    that host ecosystem's install target (`codex plugin add`, `claude plugin
-   install`, OpenCode config).
+   install`, OpenCode config, `grok plugin install`).
 
 Half #1 is nearly identical in *shape* across hosts and changes for the same
 reasons (a `taskflow-core` contract change, or a host CLI flag change). Half #2
 is genuinely host-specific (different install mechanisms, different plugin
 manifests). So #1 is collected here; #2 stays in `codex-taskflow` /
-`claude-taskflow` / `opencode-taskflow`, which import their runner from this
-package.
+`claude-taskflow` / `opencode-taskflow` / `grok-taskflow`, which import their
+runner from this package.
 
 ## Install
 
 You usually don't install this directly — install the host delivery package:
 
 ```bash
-npm install -g codex-taskflow     # or claude-taskflow / opencode-taskflow
+npm install -g codex-taskflow     # or claude-taskflow / opencode-taskflow / grok-taskflow
 ```
 
 For code-level use:
@@ -45,22 +45,37 @@ npm install taskflow-hosts
 ```ts
 // one host, tree-shaken:
 import { codexSubagentRunner, buildCodexArgs } from "taskflow-hosts/codex";
+import { grokSubagentRunner, buildGrokArgs } from "taskflow-hosts/grok";
 
 // or the barrel:
-import { claudeSubagentRunner, opencodeSubagentRunner } from "taskflow-hosts";
+import {
+	claudeSubagentRunner,
+	opencodeSubagentRunner,
+	grokSubagentRunner,
+} from "taskflow-hosts";
 ```
 
 Each runner export includes: the `SubagentRunner` (`codexSubagentRunner` / …),
 the `runXxxAgentTask` function, the pure `buildXxxArgs` builder, the
 `foldXxxEventLine` parser + `newXxxAccumulator`, and the permission/model
-helpers (`sandboxForTools`, `permissionArgsForTools`, `isReadOnlyPhase`,
-`resolveXxxModel`, `xxxBin`).
+helpers (`sandboxForTools`, `permissionArgsForTools` / `permissionArgsForGrokTools`,
+`isReadOnlyPhase`, `resolveXxxModel`, `xxxBin`).
+
+## Hosts
+
+| Host | CLI spawn | Delivery package |
+|------|-----------|------------------|
+| Codex | `codex exec --json` | `codex-taskflow` |
+| Claude Code | `claude -p --output-format stream-json` | `claude-taskflow` |
+| OpenCode | `opencode run --format json` | `opencode-taskflow` |
+| Grok Build | `grok -p --output-format streaming-json` | `grok-taskflow` |
 
 ## Adding a host
 
 1. Add `<host>-runner.ts` in `src/` (model it on an existing one — a pure
    `buildXxxArgs` + the event parser + a `SubagentRunner` export).
-2. Add an export entry in `src/index.ts`.
+2. Add an export entry in `src/index.ts` (watch for name collisions on shared
+   helper names like `permissionArgsForTools`).
 3. Add `*-runner.test.ts` (event-stream parser) + `*-args.test.ts` (argv
    contract — CI-locked) in `test/`.
 4. The host's *delivery* (MCP server/bin + plugin scaffold) goes in a

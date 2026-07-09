@@ -1,0 +1,127 @@
+---
+title: 在 Grok Build 上使用 taskflow
+description: 将 taskflow 作为 Grok Build 插件安装，通过 MCP 编排多阶段工作流。
+---
+
+[Grok Build](https://docs.x.ai/build/overview) 是 xAI 的终端编码 agent：TUI、无头模式、插件、skills 与 MCP。在 Grok Build 上，taskflow 以插件形式发布，注册零依赖 MCP 服务器与路由 skill，模型在多阶段 / 扇出任务上会自动调用它。
+
+本页覆盖安装、验证、首次运行、权限与长时 flow。完整说明见仓库 [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md)。
+
+## 安装
+
+### 已发布包 / 市场
+
+```bash title="安装 taskflow 插件"
+grok plugin install <source> --trust
+grok plugin enable taskflow
+```
+
+一次安装完成三件事：
+
+<Steps>
+  <Step>
+    **注册 MCP 服务器。** 插件通过 `npx -y -p grok-taskflow grok-taskflow-mcp` 声明 `taskflow` 服务器。
+  </Step>
+  <Step>
+    **安装路由 skill。** 内置 skill 告诉 Grok 何时该用 taskflow 工具。
+  </Step>
+  <Step>
+    **保持零运行时依赖。** MCP 在 Node 内置 stdio 上讲 JSON-RPC 2.0。
+  </Step>
+</Steps>
+
+### 从 monorepo 检出（发布前 dogfood）
+
+包尚未上 npm 时，本地 build 并指向编译后的 bin：
+
+```bash title="本地 dogfood 安装"
+pnpm install
+pnpm --filter taskflow-core build
+pnpm --filter taskflow-mcp-core build
+pnpm --filter taskflow-hosts build
+pnpm --filter grok-taskflow build
+
+grok plugin install ./packages/grok-taskflow/plugin --trust
+grok plugin enable taskflow
+
+grok mcp add taskflow -- \
+  node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
+```
+
+已打开的会话请重启，或运行 `grok inspect` 重新发现插件与 MCP。
+
+## 验证安装
+
+```bash title="验证插件与 MCP"
+grok plugin list
+grok plugin details taskflow
+grok mcp list
+grok mcp doctor taskflow
+grok inspect
+```
+
+TUI 里可用 `/plugins`、`/mcps` 打开同一扩展面板。
+
+## 运行第一个 flow
+
+在 Grok Build 上通过 MCP 工具调用（`search_tool` / `use_tool`，部分 UI 会显示为 `taskflow__taskflow_*`）。
+
+### 直接描述
+
+```text title="用自然语言描述工作"
+> 列出我保存的 taskflow。
+> 先验证再运行这个 flow：{name:"review-changes", phases:[...]}
+> 运行 "review-changes"，dir 设为 src。
+```
+
+### 直接调工具
+
+```json title="taskflow_run 运行已保存 flow"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+只有标了 `final: true` 的阶段会返回；中间 transcript 留在运行时内。
+
+## 零 token 静态检查
+
+先用 `taskflow_verify` 查环、悬空依赖与坏配置；再用 `taskflow_compile` 看 DAG 轮廓。
+
+## 子 agent 如何跑
+
+每个 phase 是隔离的 `grok -p --output-format streaming-json` 进程。
+
+| Phase tools | 行为 |
+|---|---|
+| 只读 | `--tools read_file,grep,list_dir,web_search,web_fetch` + `--always-approve` |
+| 可写 / 无白名单 | `--always-approve`（**无 OS sandbox**，优先 `cwd: "worktree"`） |
+
+## 长时 flow
+
+**`taskflow_run` 同步返回**——整图跑完才结束。插件默认 `tool_timeout_sec: 1800`。大图请拆分，或事后用 `taskflow_peek`。
+
+## MCP 下的 approval
+
+非交互运行时 `approval` 会 **auto-reject**。agent 评审请用 `gate`。
+
+## 手动注册 MCP
+
+```bash title="手动注册"
+pnpm add -g grok-taskflow
+grok mcp add taskflow -- grok-taskflow-mcp
+```
+
+## 卸载
+
+```bash title="卸载"
+grok plugin uninstall taskflow
+grok mcp remove taskflow
+```
+
+## 下一步
+
+- 仓库指南：[`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md)
+- [语法参考](/zh-cn/docs/syntax)
+- [指南索引](/zh-cn/docs/guides)

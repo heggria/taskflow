@@ -7,7 +7,7 @@ description: 在不同宿主和模式下使用 taskflow 的实用指南。
 
 它们分两种：
 
-- **按宿主。** taskflow 跑在 Pi、Codex、Claude Code 和 OpenCode 上。每个宿主有自己的安装路径和调用入口，所以各自有专门的走查。
+- **按宿主。** taskflow 跑在 Pi、Codex、Claude Code、OpenCode 和 Grok Build 上。每个宿主有自己的安装路径和调用入口，所以各自有专门的走查。
 - **按模式。** 基础跑通之后，有些问题想要特定的形状——一个在运行时规划自己子流程的模型，或者一个生成多份竞争草稿再由评委挑出最佳的锦标赛。
 
 <Callout type="tip">
@@ -22,6 +22,15 @@ description: 在不同宿主和模式下使用 taskflow 的实用指南。
   </Card>
   <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
     安装插件、通过 MCP 调用 `taskflow_run`，并处理长时间运行的 flow。
+  </Card>
+  <Card title="在 Claude Code 上使用 taskflow" href="/zh-cn/docs/guides/claude-code">
+    安装 Claude Code 插件，通过 MCP 驱动多阶段工作。
+  </Card>
+  <Card title="在 OpenCode 上使用 taskflow" href="/zh-cn/docs/guides/opencode">
+    在 `opencode.json` 注册 MCP，用隔离的 `opencode run` 跑子 agent。
+  </Card>
+  <Card title="在 Grok Build 上使用 taskflow" href="/zh-cn/docs/guides/grok-build">
+    安装 Grok 插件，通过 MCP 调用 `taskflow_*`，子 agent 为 `grok -p`。
   </Card>
 </Cards>
 

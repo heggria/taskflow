@@ -1,0 +1,189 @@
+---
+title: Using taskflow on Grok Build
+description: Install taskflow as a Grok Build plugin and orchestrate multi-phase workflows via MCP.
+---
+
+[Grok Build](https://docs.x.ai/build/overview) is xAI's terminal coding agent: TUI, headless mode, plugins, skills, and MCP. On Grok Build, taskflow ships as a plugin that registers a dependency-free MCP server plus a routing skill, so the model can call it when work spans multiple phases or fans out over many items.
+
+This page walks through install, verify, first run, permissions, and long-running flows. The full reference lives in [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md) in the repo.
+
+## Install
+
+### From a published package / marketplace
+
+```bash title="Install the taskflow plugin"
+grok plugin install <source> --trust
+grok plugin enable taskflow
+```
+
+That single install does three things at once:
+
+<Steps>
+  <Step>
+    **Registers the MCP server.** The plugin declares a `taskflow` server launched via `npx -y -p grok-taskflow grok-taskflow-mcp`, so Grok can reach the runtime over stdio.
+  </Step>
+  <Step>
+    **Installs the routing skill.** A bundled skill teaches Grok when to reach for the taskflow tools.
+  </Step>
+  <Step>
+    **Keeps zero runtime deps.** The MCP server speaks JSON-RPC 2.0 over stdio on Node built-ins — no `@modelcontextprotocol/sdk`.
+  </Step>
+</Steps>
+
+### From a monorepo checkout (pre-publish)
+
+Until the package is on npm, build locally and point MCP at the compiled bin:
+
+```bash title="Local dogfood install"
+pnpm install
+pnpm --filter taskflow-core build
+pnpm --filter taskflow-mcp-core build
+pnpm --filter taskflow-hosts build
+pnpm --filter grok-taskflow build
+
+grok plugin install ./packages/grok-taskflow/plugin --trust
+grok plugin enable taskflow
+
+grok mcp add taskflow -- \
+  node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
+```
+
+Restart an already-open Grok session (or run `grok inspect`) so plugins and MCP reload.
+
+## Verify the install
+
+```bash title="Verify the plugin and MCP server"
+grok plugin list
+grok plugin details taskflow
+grok mcp list
+grok mcp doctor taskflow
+grok inspect
+```
+
+You should see the plugin (skills + MCP components) and a healthy `taskflow` MCP server. In the TUI, `/plugins` and `/mcps` open the same extensions modal.
+
+## Run your first flow
+
+On Grok Build you invoke taskflow through MCP tools (discovered via `search_tool` / `use_tool`, often namespaced as `taskflow__taskflow_*`). The bundled skill routes multi-phase work automatically.
+
+### Just ask
+
+```text title="Describe the work in plain language"
+> List my saved taskflows.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+### Call the tool directly
+
+```json title="Run a saved flow via taskflow_run"
+{
+  "name": "review-changes",
+  "args": { "dir": "src" }
+}
+```
+
+```json title="Run an inline flow via taskflow_run"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
+Only the phase marked `final: true` is returned. Intermediate transcripts stay inside the runtime.
+
+## Check a flow before spending tokens
+
+```json title="Verify a flow via taskflow_verify"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [{ "id": "a", "type": "agent", "agent": "executor", "task": "noop", "final": true }]
+  }
+}
+```
+
+Or render the DAG with `taskflow_compile` (text outline + optional inline SVG).
+
+## How subagents run
+
+Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session — a real Grok Build headless process. The server discovers saved flows and agents from its **launch cwd**.
+
+### Permission mapping
+
+| Phase tools | Flags | What it means |
+|---|---|---|
+| Read-only (no write/edit/bash) | `--tools read_file,grep,list_dir,web_search,web_fetch` + `--always-approve` | Mutating tools are not available. |
+| Mutating (or no whitelist) | `--always-approve` | Full tools; **no OS sandbox backstop**. Prefer `cwd: "worktree"`. |
+
+<Callout type="warn">
+  Mutating phases use `--always-approve` with no OS sandbox. Only run flows you trust, preferably in a throwaway worktree.
+</Callout>
+
+## Long-running flows
+
+**`taskflow_run` is synchronous** — the tool call returns only when the whole DAG finishes. The plugin ships `tool_timeout_sec: 1800`. Split huge graphs, or inspect later with `taskflow_peek`.
+
+## Approvals in MCP mode
+
+MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-open). Prefer a `gate` for agent review.
+
+## Tool reference
+
+| Tool | Purpose |
+|---|---|
+| `taskflow_run` | Run a saved or inline flow. Returns final output + `runId`. |
+| `taskflow_list` / `taskflow_show` | Discover and inspect saved flows. |
+| `taskflow_save` / `taskflow_search` | Library write + search. |
+| `taskflow_verify` / `taskflow_compile` | Static check and DAG render (zero tokens). |
+| `taskflow_peek` / `taskflow_trace` | Post-hoc debugging. |
+
+## Alternative: register the MCP server manually
+
+```bash title="Manual MCP registration"
+pnpm add -g grok-taskflow
+grok mcp add taskflow -- grok-taskflow-mcp
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow@0.1.7 grok-taskflow-mcp
+```
+
+## Remove
+
+```bash title="Remove taskflow from Grok Build"
+grok plugin uninstall taskflow
+grok mcp remove taskflow
+```
+
+## Next
+
+- Full repo guide: [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md)
+- [Syntax reference](/en/docs/syntax) for every phase type
+- [Guides index](/en/docs/guides) for patterns and case studies

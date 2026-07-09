@@ -7,7 +7,7 @@ The Guides are the *practical* half of these docs. Where [Concepts](/en/docs/con
 
 They come in two flavors:
 
-- **By host.** taskflow runs on Pi, Codex, Claude Code, and OpenCode. Each host has its own install path and invocation surface, so each gets a dedicated walkthrough.
+- **By host.** taskflow runs on Pi, Codex, Claude Code, OpenCode, and Grok Build. Each host has its own install path and invocation surface, so each gets a dedicated walkthrough.
 - **By pattern.** Once the basics work, some problems want a specific shape — a model that plans its own sub-flow at runtime, or a tournament that spawns competing drafts and picks a winner.
 
 <Callout type="tip">
@@ -22,6 +22,15 @@ They come in two flavors:
   </Card>
   <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
     Install the plugin, call `taskflow_run` over MCP, and handle long-running flows.
+  </Card>
+  <Card title="Using taskflow on Claude Code" href="/en/docs/guides/claude-code">
+    Install the Claude Code plugin and drive multi-phase work via MCP.
+  </Card>
+  <Card title="Using taskflow on OpenCode" href="/en/docs/guides/opencode">
+    Register the MCP server in `opencode.json` and run isolated `opencode run` subagents.
+  </Card>
+  <Card title="Using taskflow on Grok Build" href="/en/docs/guides/grok-build">
+    Install the Grok plugin, call `taskflow_*` over MCP, and spawn `grok -p` subagents.
   </Card>
 </Cards>
 

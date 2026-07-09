@@ -10,7 +10,7 @@
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1140-4B4ACF?style=flat-square" alt="1140 tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
-  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, and OpenCode"></a>
+  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 
 <p><strong>A declarative, verifiable <em>graph of tasks</em> for coding-agent subagents.</strong><br/>
 Not a workflow you script — a DAG you declare. Fan out · gate · loop · tournament · resume · save as a command — intermediate results stay out of your context.<br/>
-Runs on the <a href="https://pi.dev">Pi</a> coding agent, on <a href="https://github.com/openai/codex">OpenAI Codex</a>, on <a href="https://claude.com/product/claude-code">Claude Code</a>, and on <a href="https://opencode.ai">OpenCode</a>.</p>
+Runs on the <a href="https://pi.dev">Pi</a> coding agent, on <a href="https://github.com/openai/codex">OpenAI Codex</a>, on <a href="https://claude.com/product/claude-code">Claude Code</a>, on <a href="https://opencode.ai">OpenCode</a>, and on <a href="https://docs.x.ai/build/overview">Grok Build</a>.</p>
 
 </div>
 
@@ -42,13 +42,17 @@ claude plugin install claude-taskflow@taskflow
 
 # OpenCode — add the MCP server to opencode.json (see the OpenCode guide)
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+
+# Grok Build
+grok plugin install <source> --trust   # e.g. ./packages/grok-taskflow/plugin from a checkout
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```
 
 ---
 
 **A `workflow` flows. A `taskflow` is a *graph*.** Other orchestrators let the model *script* the work — imperative code that flows step by step, with the graph hidden inside control flow. `taskflow` does the opposite: you **declare** the work as a graph of discrete, named **task** nodes connected by `dependsOn` edges — and the runtime *verifies that graph before it spends a single token.*
 
-You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex, Claude Code, and OpenCode you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and a hard spend ceiling.
+You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex, Claude Code, OpenCode, and Grok Build you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and a hard spend ceiling.
 
 And the whole time, **only the final phase reaches your conversation.** Every intermediate transcript stays in the runtime, never your context window.
 
@@ -218,6 +222,24 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 ```
 
 The server runs via `npx` (a version-pinned `opencode-taskflow`), and each phase's subagent runs as an isolated `opencode run` session. OpenCode also auto-discovers the bundled routing skill (`**/SKILL.md`). Then just ask OpenCode to run a multi-phase or fan-out job and it calls the tools. See the [OpenCode guide](./docs/opencode-mcp.md).
+
+### On Grok Build
+
+taskflow ships as a Grok Build **plugin** — install it once and the `taskflow_*` MCP tools plus a routing skill light up automatically:
+
+```bash
+# From a monorepo checkout (pre-publish):
+pnpm --filter grok-taskflow build
+grok plugin install ./packages/grok-taskflow/plugin --trust
+grok plugin enable taskflow
+grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
+
+# Once published:
+# grok plugin install <source> --trust
+# # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+```
+
+The plugin's MCP server runs via `npx` when the package is on npm; from a checkout, point MCP at the built bin as above. Each phase's subagent then runs as an isolated `grok -p --output-format streaming-json` session. See the [Grok Build guide](./docs/grok-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 
@@ -638,7 +660,7 @@ Condition grammar (for `when`): `== != < > <= >=`, `&& || !`, parentheses, quote
 
 ## Commands
 
-Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, and OpenCode, use the `taskflow_*` MCP tools instead — `taskflow_list` / `taskflow_show` / `taskflow_run` (by `name`) / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
+Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, OpenCode, and Grok Build, use the `taskflow_*` MCP tools instead — `taskflow_list` / `taskflow_show` / `taskflow_run` (by `name`) / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
 
 | Command | What it does |
 |---|---|
@@ -653,7 +675,7 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
-Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, and OpenCode the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
+Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, OpenCode, and Grok Build the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
 
 ## Background (detached) execution
 
@@ -872,7 +894,7 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 </div>
 
 - **Zero runtime dependencies.** No `dependencies` field — the runtime is built entirely on Node built-ins (`fs` / `path` / `os` / `child_process` / `crypto`). The file lock is `fs.openSync("wx")`, not a third-party library.
-- **1140 tests across 70 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), backward-compatible cache-key migration (4-tier legacy fallback), per-phase structural sub-fingerprint (v3:phasefp — editing one phase invalidates only it and its dependents), per-item map caching (one changed item re-executes, N−1 cache hits), the `incremental` flag (run-wide cross-run default), reuse reporting, the FlowIR compile seam (determinism, declared-plane synthesis), incremental recompute (early-cutoff propagation, partial cascade strictly < full, observed ∪ declared union frontier), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, the shared context tree (blackboard reuse, supervision spawn, subflow validation/nesting), workspace isolation (temp/dedicated/worktree lifecycle, fail-open degrade, dynamic-flow rejection), dynamic sub-flow security hardening, detached execution (PID persistence, stale detection, crash→failed, resume after failure), live run-history refresh, callback isolation, the idle watchdog, model-role init config, parseModelFromLabel with parenthesized-model-name regression, multi-fence `safeParse` recovery, host argv-contract locking (codex/claude/opencode `buildXxxArgs`), the `compile` Mermaid renderer (id-collision disambiguation, markdown-injection hardening, and full verify-overlay category coverage), plus the library Phase 1 metadata/search/store layer (phaseSignature, generality, CJK text scoring, staleness detection, sidecar persistence, A1 ghost-flow guard).
+- **1140 tests across 70 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), backward-compatible cache-key migration (4-tier legacy fallback), per-phase structural sub-fingerprint (v3:phasefp — editing one phase invalidates only it and its dependents), per-item map caching (one changed item re-executes, N−1 cache hits), the `incremental` flag (run-wide cross-run default), reuse reporting, the FlowIR compile seam (determinism, declared-plane synthesis), incremental recompute (early-cutoff propagation, partial cascade strictly < full, observed ∪ declared union frontier), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, the shared context tree (blackboard reuse, supervision spawn, subflow validation/nesting), workspace isolation (temp/dedicated/worktree lifecycle, fail-open degrade, dynamic-flow rejection), dynamic sub-flow security hardening, detached execution (PID persistence, stale detection, crash→failed, resume after failure), live run-history refresh, callback isolation, the idle watchdog, model-role init config, parseModelFromLabel with parenthesized-model-name regression, multi-fence `safeParse` recovery, host argv-contract locking (codex/claude/opencode/grok `buildXxxArgs`), the `compile` Mermaid renderer (id-collision disambiguation, markdown-injection hardening, and full verify-overlay category coverage), plus the library Phase 1 metadata/search/store layer (phaseSignature, generality, CJK text scoring, staleness detection, sidecar persistence, A1 ghost-flow guard).
 - **Hardened by design.** Path-traversal defense (lexical + `realpath` containment check), runId validation, HTML/error sanitization, atomic writes, stale-lock stealing via `rename`, and an idle watchdog that kills wedged subagents (SIGTERM → SIGKILL after 5 minutes of silence). Dynamic sub-flows additionally get breadth caps, `cwd` containment, budget clamping, nesting depth caps, and prototype-pollution defense.
 - **Dogfooded.** Every new feature has to survive the project's own `self-improve` taskflow before it ships.
 
@@ -897,7 +919,7 @@ Our `self-improve` flow is a 10-phase DAG — it audits the codebase, patches de
 
 ## Status & limits
 
-**v0.1.7** (current release) — **file loaders now report *why* a file failed with the parse position** (line/column) instead of a merged "not found or unparseable" message — `defineFile`, saved flows, run records, and library sidecars all distinguish *missing* from *malformed*, so a stray bare newline in a hand-authored flow is diagnosable in seconds; `safeParse` stays lenient for LLM output. Also fixes a pi-taskflow hint that re-printed every session. **Gate safety hardening (issue #54)**: a shared emphasis-tolerant marker factory now covers **all three decision markers** — `VERDICT`, `WINNER`, and `SCORE` — so Markdown-wrapped tokens (`VERDICT: **BLOCK**`, `WINNER: __3__`, `SCORE: `0.8``) are never silently mis-read (a genuine BLOCK no longer becomes PASS; a judge's pick no longer silently reverts to variant 1); **unparseable gate *model output now fails closed* (BLOCK)** instead of rubber-stamping PASS — a gate that cannot reach a verdict cannot be trusted to pass, while *config* slips (unresolved `score.target`, malformed `scorers`) stay fail-open with a warning; and free-text gates whose task omits a `VERDICT:` instruction now get the exact format suffix **auto-appended**. For the most robust decision phases, use `output: "json"` + `expect` to machine-validate the output (now the documented default for gate verdicts, tournament winners, and router branches). **v0.1.6** added **library Phase 1** (search-before-author + reusable-flow sidecar metadata), the **`defineFile`** parameter (verify/compile/run a flow from a path on disk), and **JSONC comment support** in flow definition files (`//` and `/* */` comments + trailing commas, parsed by the new zero-dependency `parseJsonc`). **v0.1.5** added **Claude Code and OpenCode as hosts**, **extracted the MCP server into its own `taskflow-mcp-core` package**, and **de-duplicated the three host runners** into a shared `runSubagentProcess`. See [CHANGELOG](./CHANGELOG.md) for the full history. Baseline: **multi-host monorepo of seven packages** — the host-neutral `taskflow-core` engine, the host-neutral `taskflow-mcp-core` MCP server, the shared host-runner `taskflow-hosts`, plus `pi-taskflow` (Pi adapter), `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` (the three delivery packages re-export their runners from `taskflow-hosts` and each ships an MCP bin + plugin/config), all sharing the host-neutral MCP server in `taskflow-mcp-core`. **Library Phase 1**: save flows with `purpose`+`tags` via `taskflow_save` (MCP) or `action=save` (Pi), search them with structural + CJK-aware keyword scoring via `taskflow_search`/`action=search`, and track `reuseCount` via `reusedFromSearch`. **`defineFile`**: pass a `defineFile` path (or `{defineFile, name}`) to `action=run` (Pi) or `taskflow_run`/`taskflow_verify`/`taskflow_compile` (MCP) instead of an inline `define`, and the engine reads the flow from disk — pair it with JSONC comments to annotate saved flows. **JSONC**: flow-definition `.json` files may now carry `//` and `/* */` comments and trailing commas (parsed by `parseJsonc`, re-exported from the `taskflow-core` barrel); LLM-output parsing via `safeParse` stays strict. **Shared Context Tree**: opt-in (`shareContext` / `contextSharing`) blackboard + supervision tools (`ctx_read`/`ctx_write` horizontal reuse, `ctx_report`/`ctx_spawn` vertical supervision); `ctx_spawn` accepts a flat task **or** a dependency-bearing `subflow` (a runtime-validated nested DAG), depth-capped on a unified nesting counter with budget accounting. **Workspace isolation**: a phase's `cwd` accepts reserved keywords `temp`/`dedicated`/`worktree` — the runtime allocates an isolated dir (or a git worktree on a throwaway branch) and tears it down after the phase, fail-open, rejected in LLM-authored sub-flows. **Detached execution**: runs can execute in the background, detached from the Pi session. Prior: loop-until-done (`loop`), tournament (best-of-N with a judge), cross-run memoization (content-addressed cache with git/file/glob/env fingerprints and TTL), interactive `/tf init`, configurable built-in agents, 18 built-in agents with 6 model roles. Full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, `onBlock: "retry"`, `eval` machine gates, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`). Inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
+**v0.1.7** (current release) — **file loaders now report *why* a file failed with the parse position** (line/column) instead of a merged "not found or unparseable" message — `defineFile`, saved flows, run records, and library sidecars all distinguish *missing* from *malformed*, so a stray bare newline in a hand-authored flow is diagnosable in seconds; `safeParse` stays lenient for LLM output. Also fixes a pi-taskflow hint that re-printed every session. **Gate safety hardening (issue #54)**: a shared emphasis-tolerant marker factory now covers **all three decision markers** — `VERDICT`, `WINNER`, and `SCORE` — so Markdown-wrapped tokens (`VERDICT: **BLOCK**`, `WINNER: __3__`, `SCORE: `0.8``) are never silently mis-read (a genuine BLOCK no longer becomes PASS; a judge's pick no longer silently reverts to variant 1); **unparseable gate *model output now fails closed* (BLOCK)** instead of rubber-stamping PASS — a gate that cannot reach a verdict cannot be trusted to pass, while *config* slips (unresolved `score.target`, malformed `scorers`) stay fail-open with a warning; and free-text gates whose task omits a `VERDICT:` instruction now get the exact format suffix **auto-appended**. For the most robust decision phases, use `output: "json"` + `expect` to machine-validate the output (now the documented default for gate verdicts, tournament winners, and router branches). **v0.1.6** added **library Phase 1** (search-before-author + reusable-flow sidecar metadata), the **`defineFile`** parameter (verify/compile/run a flow from a path on disk), and **JSONC comment support** in flow definition files (`//` and `/* */` comments + trailing commas, parsed by the new zero-dependency `parseJsonc`). **v0.1.5** added **Claude Code and OpenCode as hosts**, **extracted the MCP server into its own `taskflow-mcp-core` package**, and **de-duplicated the three host runners** into a shared `runSubagentProcess`. See [CHANGELOG](./CHANGELOG.md) for the full history. Baseline: **multi-host monorepo of eight packages** — the host-neutral `taskflow-core` engine, the host-neutral `taskflow-mcp-core` MCP server, the shared host-runner `taskflow-hosts`, plus `pi-taskflow` (Pi adapter), `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, and `grok-taskflow` (the four delivery packages re-export their runners from `taskflow-hosts` and each ships an MCP bin + plugin/config), all sharing the host-neutral MCP server in `taskflow-mcp-core`. **Library Phase 1**: save flows with `purpose`+`tags` via `taskflow_save` (MCP) or `action=save` (Pi), search them with structural + CJK-aware keyword scoring via `taskflow_search`/`action=search`, and track `reuseCount` via `reusedFromSearch`. **`defineFile`**: pass a `defineFile` path (or `{defineFile, name}`) to `action=run` (Pi) or `taskflow_run`/`taskflow_verify`/`taskflow_compile` (MCP) instead of an inline `define`, and the engine reads the flow from disk — pair it with JSONC comments to annotate saved flows. **JSONC**: flow-definition `.json` files may now carry `//` and `/* */` comments and trailing commas (parsed by `parseJsonc`, re-exported from the `taskflow-core` barrel); LLM-output parsing via `safeParse` stays strict. **Shared Context Tree**: opt-in (`shareContext` / `contextSharing`) blackboard + supervision tools (`ctx_read`/`ctx_write` horizontal reuse, `ctx_report`/`ctx_spawn` vertical supervision); `ctx_spawn` accepts a flat task **or** a dependency-bearing `subflow` (a runtime-validated nested DAG), depth-capped on a unified nesting counter with budget accounting. **Workspace isolation**: a phase's `cwd` accepts reserved keywords `temp`/`dedicated`/`worktree` — the runtime allocates an isolated dir (or a git worktree on a throwaway branch) and tears it down after the phase, fail-open, rejected in LLM-authored sub-flows. **Detached execution**: runs can execute in the background, detached from the Pi session. Prior: loop-until-done (`loop`), tournament (best-of-N with a judge), cross-run memoization (content-addressed cache with git/file/glob/env fingerprints and TTL), interactive `/tf init`, configurable built-in agents, 18 built-in agents with 6 model roles. Full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, `onBlock: "retry"`, `eval` machine gates, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`). Inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
 
 Known boundaries (tracked, bounded — no surprises mid-flow):
 
@@ -917,20 +939,22 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 |---------|------|
 | [`taskflow-core`](./packages/taskflow-core) | Host-neutral orchestration engine (zero host-SDK deps; only `typebox`) — runtime, DSL, cache, verify |
 | [`taskflow-mcp-core`](./packages/taskflow-mcp-core) | Host-neutral MCP server (stdio JSON-RPC + `taskflow_*` tools + DAG renderer); depends on core |
-| [`taskflow-hosts`](./packages/taskflow-hosts) | Shared host-runner collection — the codex/claude/opencode `SubagentRunner` impls + their argv builders + event-stream parsers; depends on core |
+| [`taskflow-hosts`](./packages/taskflow-hosts) | Shared host-runner collection — the codex/claude/opencode/grok `SubagentRunner` impls + their argv builders + event-stream parsers; depends on core |
 | [`pi-taskflow`](./packages/pi-taskflow) | Pi extension adapter — `taskflow` tool + `/tf` commands (what `pi install npm:pi-taskflow` gives you) |
 | [`codex-taskflow`](./packages/codex-taskflow) | Codex MCP server + bin + [Codex plugin](./packages/codex-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/codex-mcp.md)) |
 | [`claude-taskflow`](./packages/claude-taskflow) | Claude Code MCP server + bin + [Claude Code plugin](./packages/claude-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/claude-mcp.md)) |
 | [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode MCP server + bin + [OpenCode config scaffold](./packages/opencode-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/opencode-mcp.md)) |
+| [`grok-taskflow`](./packages/grok-taskflow) | Grok Build MCP server + bin + [Grok plugin](./packages/grok-taskflow/plugin) (re-exports the runner from `taskflow-hosts`) ([guide](./docs/grok-mcp.md)) |
 
 ```bash
 pnpm install
 pnpm run typecheck     # tsc --noEmit across all packages (no build needed)
 pnpm test              # unit tests — no network, no process spawning
-pnpm run test:hosts    # host-runner tests only  (also: test:pi, test:codex, test:claude, test:opencode)
+pnpm run test:hosts    # host-runner tests only  (also: test:pi, test:codex, test:claude, test:opencode, test:grok)
 pnpm run build         # emit dist/*.js + .d.ts for all seven packages
 pnpm run test:e2e-codex      # codex executor e2e (needs `codex` + model access)
 pnpm run test:e2e-codex-mcp  # codex MCP server e2e
+pnpm run test:e2e-grok-mcp   # grok MCP server e2e (no live model required)
 ```
 
 The pi end-to-end suites spawn live `pi` subagents and are run directly (they use

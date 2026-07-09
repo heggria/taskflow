@@ -2,6 +2,11 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [Unreleased]
+
+### Added
+- **Grok Build host.** New `grok-taskflow` delivery package + `taskflow-hosts` `grokSubagentRunner` (`grok -p --output-format streaming-json`). Plugin scaffold (`.grok-plugin/plugin.json` + `.mcp.json` + skills), repo marketplace index (`.grok-plugin/marketplace.json`), docs (`docs/grok-mcp.md`, website en/zh guides). Install: `grok plugin install … --trust` or local bin for dogfood.
+
 ## [0.1.7] — 2026-07-07
 
 ### Added
