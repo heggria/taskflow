@@ -4,7 +4,7 @@
 
 ## Project Overview
 
-taskflow is a **declarative DAG orchestration runtime** for coding agents — it runs on the [Pi coding agent](https://pi.dev), on [OpenAI Codex](https://github.com/openai/codex), on [Claude Code](https://claude.com/product/claude-code), and on [OpenCode](https://opencode.ai). It lets users define multi-phase workflows (fan-out, gate, loop, tournament, approval, sub-flow composition) as JSON DSL, executes them via isolated subagent processes, and returns only the final result — intermediate transcripts never enter the host context window.
+taskflow is a **declarative DAG orchestration runtime** for coding agents — it runs on the [Pi coding agent](https://pi.dev), on [OpenAI Codex](https://github.com/openai/codex), on [Claude Code](https://claude.com/product/claude-code), on [OpenCode](https://opencode.ai), and on [Grok Build](https://docs.x.ai/build/overview). It lets users define multi-phase workflows (fan-out, gate, loop, tournament, approval, sub-flow composition) as JSON DSL, executes them via isolated subagent processes, and returns only the final result — intermediate transcripts never enter the host context window.
 
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
 **Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
@@ -153,7 +153,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 ## Development Commands
 
 ```bash
-pnpm install           # links the seven workspace packages
+pnpm install           # links the eight workspace packages (+ website)
 pnpm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
 pnpm test              # full unit suite (node --experimental-strip-types --test)
 pnpm run test:hosts    # taskflow-hosts tests only
@@ -162,7 +162,7 @@ pnpm run test:codex    # codex-adapter tests only
 pnpm run test:claude   # claude-adapter tests only
 pnpm run test:opencode # opencode-adapter tests only
 pnpm run test:grok     # grok-adapter tests only
-pnpm run build         # emit dist/*.js + .d.ts for all seven packages
+pnpm run build         # emit dist/*.js + .d.ts for all eight packages
 pnpm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
 pnpm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
 pnpm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)
@@ -277,7 +277,7 @@ All engine files live in `packages/taskflow-core/src/`; the pi entry lives in `p
 | `runtime.ts` | Core orchestration: `executeTaskflow()`, `executePhase()`, all 10 phase types |
 | `schema.ts` | DSL types, validation, desugar, topo sort, cycle detection |
 | `runner-core.ts` | Host-neutral runner helpers: failure classification, NDJSON accumulator, error sanitization, `mapWithConcurrencyLimit`, AND `runSubagentProcess` (the shared spawn/idle/abort/classify block every host runner delegates to) + `unknownAgentResult` |
-| `taskflow-mcp-core/src/mcp/server.ts` | Host-neutral MCP server: the `taskflow_*` tool schemas + handlers, parameterized by a `SubagentRunner` (codex/claude/opencode adapters bind their runner + a thin bin) |
+| `taskflow-mcp-core/src/mcp/server.ts` | Host-neutral MCP server: the `taskflow_*` tool schemas + handlers, parameterized by a `SubagentRunner` (codex/claude/opencode/grok adapters bind their runner + a thin bin) |
 | `pi-taskflow/src/runner.ts` | Pi subagent spawn (`pi --mode json`), idle watchdog; re-exports the core helpers |
 | `taskflow-hosts/src/codex-runner.ts` | Codex subagent spawn (`codex exec --json`); `codexSubagentRunner` + `buildCodexArgs` |
 | `taskflow-hosts/src/claude-runner.ts` | Claude Code subagent spawn (`claude -p --output-format stream-json`); `claudeSubagentRunner` + `buildClaudeArgs` + permission mapping |

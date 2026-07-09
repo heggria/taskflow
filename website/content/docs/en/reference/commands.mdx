@@ -1,6 +1,6 @@
 ---
 title: Commands
-description: Pi slash commands and Codex MCP tools.
+description: Pi slash commands and MCP tools (Codex, Claude, OpenCode, Grok).
 ---
 
 taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
@@ -71,7 +71,7 @@ On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action
 | `cache-clear` | Clear the cross-run memoization cache. |
 | `init` | Configure model roles. |
 
-## Codex / Claude / OpenCode MCP tools
+## Codex / Claude / OpenCode / Grok MCP tools
 
 On MCP hosts, taskflow exposes these tools (the model calls them; you usually don't type them):
 

@@ -25,6 +25,7 @@
     "guides/codex",
     "guides/claude-code",
     "guides/opencode",
+    "guides/grok-build",
     "guides/agents-and-model-roles",
     "guides/dynamic-planning",
     "guides/tournament",

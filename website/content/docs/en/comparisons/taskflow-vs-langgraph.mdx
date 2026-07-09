@@ -13,13 +13,13 @@ This page is an honest comparison — including where LangGraph is clearly the b
 |---|---|---|
 | **What it is** | A library for stateful LLM app graphs (Python/JS) | A declarative task-DAG runtime for coding-agent subagents |
 | **You write** | Python or JS graph code | JSON data (the DSL) |
-| **Runs inside** | your own application process | your coding agent (Pi, Codex, Claude Code, OpenCode) |
+| **Runs inside** | your own application process | your coding agent (Pi, Codex, Claude Code, OpenCode, Grok Build) |
 | **Nodes are** | arbitrary functions (LLM calls, tools, logic) | **subagent invocations** (scoped, model-routed agent calls) |
 | **State** | a typed shared state object, reduced over edges | the Shared Context Tree (blackboard + supervision) |
 | **Persistence** | checkpointers (SQLite/Postgres/in-memory) | file-backed run store + cross-run cache |
 | **Human-in-the-loop** | interrupt + resume on state | `approval` phases (approve/reject/edit) |
 | **Verification** | runtime graph validation | **static pre-flight: cycles, dead-ends, budget, dangling refs — before any token** |
-| **Host coupling** | framework-agnostic (you bring the model + tools) | **agent-host-native** (installs as a Pi extension / Codex/Claude/OpenCode plugin) |
+| **Host coupling** | framework-agnostic (you bring the model + tools) | **agent-host-native** (installs as a Pi extension / Codex/Claude/OpenCode/Grok plugin) |
 
 ## Where they genuinely overlap
 
@@ -55,7 +55,7 @@ This makes taskflow much more concise for the "fan out N scoped agents over N it
 
 LangGraph is **framework-agnostic** — you embed it in your own app, bring your own model client and tools. It's a library.
 
-taskflow is **agent-host-native**: it installs *into* an existing coding agent (Pi extension, Codex/Claude Code/OpenCode plugin) and orchestrates *that host's* subagents. You don't write a new application — you declare flows your agent runs. If you're not already inside one of these coding agents, taskflow isn't the tool; LangGraph might be.
+taskflow is **agent-host-native**: it installs *into* an existing coding agent (Pi extension, Codex/Claude Code/OpenCode/Grok plugin) and orchestrates *that host's* subagents. You don't write a new application — you declare flows your agent runs. If you're not already inside one of these coding agents, taskflow isn't the tool; LangGraph might be.
 
 ### 5. Persistence shape
 
@@ -74,7 +74,7 @@ LangGraph is the better choice for **product-grade agent applications** — anyt
 ## When to pick taskflow
 
 <Callout type="info">
-  **Pick taskflow when** you're working **inside a coding agent** (Pi / Codex / Claude Code / OpenCode) and want to turn a repeatable multi-step delegation (review, audit, migration, research, release) into a **named, verified, resumable pipeline** whose intermediate transcripts stay out of your context.
+  **Pick taskflow when** you're working **inside a coding agent** (Pi / Codex / Claude Code / OpenCode / Grok Build) and want to turn a repeatable multi-step delegation (review, audit, migration, research, release) into a **named, verified, resumable pipeline** whose intermediate transcripts stay out of your context.
 </Callout>
 
 taskflow is the better choice for **developer workflows** — pipelines you run on your codebase, by name, from inside the agent you already use.

@@ -26,7 +26,7 @@ Save this as `hello.json`:
 
 Then run it.
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run hello
@@ -34,7 +34,22 @@ Then run it.
   </Tab>
   <Tab value="Codex">
     ```bash title="Run on Codex"
-    taskflow_run { "name": "hello", "def": { "name": "hello", "phases": [{ "id": "greet", "type": "agent", "task": "Write a one-sentence welcome message for a taskflow user." }] } }
+    # Ask Codex to call taskflow_run with the hello define (or saved name).
+    ```
+  </Tab>
+  <Tab value="Claude">
+    ```bash title="Run on Claude Code"
+    # Ask Claude to call taskflow_run with the hello define (or saved name).
+    ```
+  </Tab>
+  <Tab value="OpenCode">
+    ```bash title="Run on OpenCode"
+    # Ask OpenCode to call taskflow_run with the hello define (or saved name).
+    ```
+  </Tab>
+  <Tab value="Grok">
+    ```bash title="Run on Grok Build"
+    # Ask Grok to call taskflow_verify / taskflow_run via MCP tools.
     ```
   </Tab>
 </Tabs>
@@ -45,7 +60,7 @@ You should see the runtime execute one phase and return the final output. That i
 
 If you have not installed taskflow yet, pick your host:
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
   <Tab value="Pi">
     ```bash title="Install pi-taskflow"
     pi install npm:pi-taskflow
@@ -55,6 +70,24 @@ If you have not installed taskflow yet, pick your host:
     ```bash title="Install Codex plugin"
     codex plugin marketplace add heggria/taskflow
     codex plugin add taskflow@taskflow
+    ```
+  </Tab>
+  <Tab value="Claude">
+    ```bash title="Install Claude Code plugin"
+    claude plugin marketplace add heggria/taskflow
+    claude plugin install claude-taskflow@taskflow
+    ```
+  </Tab>
+  <Tab value="OpenCode">
+    ```bash title="Register OpenCode MCP"
+    opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+    ```
+  </Tab>
+  <Tab value="Grok">
+    ```bash title="Install Grok Build plugin"
+    grok plugin install <source> --trust
+    # From a monorepo checkout: ./packages/grok-taskflow/plugin
+    # Then: grok mcp add taskflow -- node path/to/dist/mcp/bin.js  (pre-publish)
     ```
   </Tab>
 </Tabs>

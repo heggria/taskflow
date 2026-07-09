@@ -951,7 +951,7 @@ pnpm install
 pnpm run typecheck     # tsc --noEmit across all packages (no build needed)
 pnpm test              # unit tests — no network, no process spawning
 pnpm run test:hosts    # host-runner tests only  (also: test:pi, test:codex, test:claude, test:opencode, test:grok)
-pnpm run build         # emit dist/*.js + .d.ts for all seven packages
+pnpm run build         # emit dist/*.js + .d.ts for all eight packages
 pnpm run test:e2e-codex      # codex executor e2e (needs `codex` + model access)
 pnpm run test:e2e-codex-mcp  # codex MCP server e2e
 pnpm run test:e2e-grok-mcp   # grok MCP server e2e (no live model required)

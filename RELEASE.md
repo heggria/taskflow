@@ -1,22 +1,23 @@
 # Release Guide (monorepo)
 
-taskflow is a monorepo of seven independently published packages:
+taskflow is a monorepo of eight independently published packages:
 
 | Package | npm name | What it is |
 |---------|----------|------------|
 | `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify). Zero host SDK deps. |
 | `packages/taskflow-mcp-core` | **`taskflow-mcp-core`** | Host-neutral MCP server (stdio JSON-RPC + taskflow_* tools + DAG renderer). Depends on core. |
-| `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
+| `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode/grok `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
 | `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
 | `packages/codex-taskflow` | **`codex-taskflow`** | Codex delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 | `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 | `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
+| `packages/grok-taskflow` | **`grok-taskflow`** | Grok Build delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 
-Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, and `opencode-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core` and `taskflow-hosts` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, then taskflow-hosts, then the adapters**.
+Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, and `grok-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core` and `taskflow-hosts` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, then taskflow-hosts, then the adapters**.
 
 ## One-time setup
 
-All seven names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; the rest (`taskflow-core`, `taskflow-mcp-core`, `taskflow-hosts`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) are unclaimed (publishing creates them).
+All eight names are non-scoped and available on public npm — **no npm org needed**. `pi-taskflow` is already owned by `heggria`; the rest (`taskflow-core`, `taskflow-mcp-core`, `taskflow-hosts`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`) are unclaimed until first publish (publishing creates them).
 
 ```sh
 # 1. Point at PUBLIC npm (the repo's default registry may be a private mirror)
@@ -34,7 +35,7 @@ pnpm whoami --registry=https://registry.npmjs.org/   # expect: heggria (or the o
 pnpm install            # links the workspaces
 pnpm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
 pnpm test               # 1140/1140 green
-pnpm run build          # emit dist/ for all seven packages (tsc → .js + .d.ts)
+pnpm run build          # emit dist/ for all eight packages (tsc → .js + .d.ts)
 ```
 
 ### Skill coverage check (before every release)
@@ -51,7 +52,7 @@ this release's CHANGELOG section, verify:
       **source** layer: `core.md` (core DSL + actions), `patterns.md` (if it
       changes best practice), `advanced.md` (context sharing / dynamic flows /
       isolation / recompute), `configuration.md` (knobs), or the per-host
-      entry files (`entry.pi.md` / `entry.codex.md`) for host bindings.
+      entry files (`entry.pi.md` / `entry.codex.md` / `entry.claude.md` / `entry.opencode.md` / `entry.grok.md`) for host bindings.
 - [ ] Host-only capabilities are wrapped in `<!-- host:pi -->` /
       `<!-- host:codex -->` blocks — never teach a host a tool it can't reach.
 - [ ] `node scripts/build-skills.mjs` ran and the generated files are committed.
@@ -75,22 +76,23 @@ pnpm publish --filter pi-taskflow     --registry=https://registry.npmjs.org/ --p
 pnpm publish --filter codex-taskflow  --registry=https://registry.npmjs.org/ --provenance
 pnpm publish --filter claude-taskflow --registry=https://registry.npmjs.org/ --provenance
 pnpm publish --filter opencode-taskflow --registry=https://registry.npmjs.org/ --provenance
+pnpm publish --filter grok-taskflow     --registry=https://registry.npmjs.org/ --provenance
 ```
 
 `publishConfig.access: public` is set on each package, so scoped/unscoped both publish publicly.
 
 > **Note on `taskflow-core` as a dependency.** `taskflow-mcp-core`, `taskflow-hosts`, and the host adapters
-> (`pi-taskflow` / `codex-taskflow` / `claude-taskflow` / `opencode-taskflow`)
+> (`pi-taskflow` / `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow`)
 > declare `"taskflow-core": "0.1.7"` (an exact version, not `workspace:*`), so the
 > published tarballs resolve the real npm package once it exists. Always publish
-> `taskflow-core` first and bump all seven in lockstep. (`taskflow-mcp-core` and `taskflow-hosts` are the
-> other internal dependencies: the MCP host adapters pin `"taskflow-mcp-core"`; the codex/claude/opencode
+> `taskflow-core` first and bump all eight in lockstep. (`taskflow-mcp-core` and `taskflow-hosts` are the
+> other internal dependencies: the MCP host adapters pin `"taskflow-mcp-core"`; the codex/claude/opencode/grok
 > delivery packages pin `"taskflow-hosts"`.)
 
 ## Tag + GitHub Release (automated)
 
 Pushing a `v*` tag triggers `.github/workflows/publish.yml`, which verifies all
-seven package versions match the tag, publishes them in order, and cuts a GitHub
+eight package versions match the tag, publishes them in order, and cuts a GitHub
 Release from the matching `CHANGELOG.md` section.
 
 ```sh
@@ -107,6 +109,7 @@ pnpm view pi-taskflow  version --registry=https://registry.npmjs.org/
 pnpm view codex-taskflow version --registry=https://registry.npmjs.org/
 pnpm view claude-taskflow version --registry=https://registry.npmjs.org/
 pnpm view opencode-taskflow version --registry=https://registry.npmjs.org/
+pnpm view grok-taskflow version --registry=https://registry.npmjs.org/
 ```
 
 ## Install (end users)
@@ -125,4 +128,8 @@ claude plugin install claude-taskflow@taskflow
 
 # OpenCode users (MCP server):
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+
+# Grok Build
+grok plugin install <source> --trust
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```

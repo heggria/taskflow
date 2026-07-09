@@ -3,7 +3,7 @@ title: taskflow vs 内置 subagent
 description: agent 原生的 task/tasks/chain 简写什么时候够用，什么时候你会超越它——内置工具给不了的 DAG、gate、续跑与上下文隔离。
 ---
 
-每个现代编程 agent 都自带 subagent 简写——Pi 上是 `task`/`tasks`/`chain`；Codex、Claude Code、OpenCode 上是名字不同、思路相同的东西。**taskflow 并不取代它。** taskflow 说的是*同一套*简写，所以你已有的委派立刻变成可追踪、可续跑、可保存的。等你超越了简写，完整的 DSL 会给你一张真正的 DAG。
+每个现代编程 agent 都自带 subagent 简写——Pi 上是 `task`/`tasks`/`chain`；Codex、Claude Code、OpenCode、Grok Build 上是名字不同、思路相同的东西。**taskflow 并不取代它。** taskflow 说的是*同一套*简写，所以你已有的委派立刻变成可追踪、可续跑、可保存的。等你超越了简写，完整的 DSL 会给你一张真正的 DAG。
 
 诚实的问题是：**什么时候内置简写够用，什么时候你需要 taskflow？**
 
@@ -84,7 +84,7 @@ Agent：[12 次 subagent 调用 → 12 份完整逐字稿进入你的上下文]
 ```
 
 ```bash
-# Codex / Claude Code / OpenCode——按名字运行保存的流程
+# Codex / Claude Code / OpenCode / Grok——按名字运行保存的流程
 taskflow_run code-audit
 ```
 

@@ -3,7 +3,7 @@ title: taskflow vs built-in subagents
 description: When your agent's native task/tasks/chain shorthand is enough, and when you outgrow it — DAGs, gates, resume, and context isolation that the built-in tool can't give you.
 ---
 
-Every modern coding agent ships a built-in subagent shorthand — on Pi it's `task` / `tasks` / `chain`; on Codex, Claude Code, and OpenCode the same idea exists under different names. **taskflow does not replace it.** taskflow speaks the *same* shorthand, so your existing delegations instantly become tracked, resumable, and saveable. Then, when you outgrow the shorthand, the full DSL gives you a real DAG.
+Every modern coding agent ships a built-in subagent shorthand — on Pi it's `task` / `tasks` / `chain`; on Codex, Claude Code, OpenCode, and Grok Build the same idea exists under different names. **taskflow does not replace it.** taskflow speaks the *same* shorthand, so your existing delegations instantly become tracked, resumable, and saveable. Then, when you outgrow the shorthand, the full DSL gives you a real DAG.
 
 The honest question is: **when is the built-in shorthand enough, and when do you need taskflow?**
 
@@ -84,7 +84,7 @@ The other big shift is **reuse**. Describe a pipeline once, save it:
 ```
 
 ```bash
-# Codex / Claude Code / OpenCode — run a saved flow by name
+# Codex / Claude Code / OpenCode / Grok — run a saved flow by name
 taskflow_run code-audit
 ```
 
