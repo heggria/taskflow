@@ -57,7 +57,7 @@ test("eventKernelEnabled: default off; true flag or env enables", () => {
 	}
 });
 
-test("canUseEventKernel: agent+script only; rejects map/gate/etc", () => {
+test("canUseEventKernel: agent|script|map|parallel; rejects gate", () => {
 	assert.equal(
 		canUseEventKernel({
 			name: "ok",
@@ -70,8 +70,15 @@ test("canUseEventKernel: agent+script only; rejects map/gate/etc", () => {
 	);
 	assert.equal(
 		canUseEventKernel({
-			name: "no",
+			name: "map-ok",
 			phases: [{ id: "m", type: "map", agent: "a", task: "t", over: "[]", final: true }],
+		}),
+		true,
+	);
+	assert.equal(
+		canUseEventKernel({
+			name: "no",
+			phases: [{ id: "g", type: "gate", agent: "a", task: "t", final: true }],
 		}),
 		false,
 	);

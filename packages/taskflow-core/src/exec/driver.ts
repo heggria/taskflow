@@ -12,11 +12,19 @@ import type { RunState } from "../store.ts";
 import { topoLayers, type Taskflow } from "../schema.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
-import { stepPhase, type RunTaskFn, type StepContext, type StepDeps } from "./step.ts";
+import {
+	EVENT_KERNEL_PHASE_TYPES,
+	stepPhase,
+	type RunTaskFn,
+	type StepContext,
+	type StepDeps,
+} from "./step.ts";
 import { foldEvents } from "./fold.ts";
 import { EVENT_SCHEMA_VERSION, type Event } from "./events.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
+
+export { EVENT_KERNEL_PHASE_TYPES };
 
 export interface EventKernelDeps {
 	cwd: string;
@@ -38,11 +46,11 @@ export interface EventKernelResult {
 	totalUsage: UsageStats;
 }
 
-/** True when every phase is agent or script (S2 first slice). */
+/** True when every phase is a kind the S2 kernel implements (agent|script|map|parallel). */
 export function canUseEventKernel(def: Taskflow): boolean {
 	return (def.phases ?? []).every((p) => {
 		const t = p.type ?? "agent";
-		return t === "agent" || t === "script";
+		return (EVENT_KERNEL_PHASE_TYPES as readonly string[]).includes(t);
 	});
 }
 
@@ -70,7 +78,7 @@ function safeTraceFlush(deps: EventKernelDeps, phaseId: string): void {
 }
 
 /**
- * Run a Taskflow on the event kernel (agent+script only).
+ * Run a Taskflow on the event kernel (agent|script|map|parallel).
  * Caller must have checked {@link canUseEventKernel}.
  */
 export async function runEventKernel(state: RunState, deps: EventKernelDeps): Promise<EventKernelResult> {

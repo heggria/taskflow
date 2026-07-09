@@ -1,8 +1,9 @@
 /**
  * exec/step — per-node handlers for the event-sourced kernel (RFC §6.3, S2).
  *
- * First slice: **agent** and **script** only. Each handler executes one node
- * and returns events to append (it does not mutate RunState — fold does that).
+ * Supported kinds (progressive strangler): **agent**, **script**, **map**,
+ * **parallel**. Each handler executes one node and returns events to append
+ * (it does not mutate RunState — fold does that).
  *
  * Deliberately does **not** import `runtime.ts` (avoids circular deps with the
  * strangler switch that imports this package).
@@ -15,8 +16,19 @@ import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
-import { emptyUsage, type UsageStats } from "../usage.ts";
-import { evaluateCondition, interpolate, type InterpolationContext } from "../interpolate.ts";
+import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
+import {
+	coerceArray,
+	evaluateCondition,
+	interpolate,
+	safeParse,
+	type InterpolationContext,
+} from "../interpolate.ts";
+import { mapWithConcurrencyLimit } from "../runner-core.ts";
+
+/** Phase types the S2 event kernel can execute. Expand one kind at a time. */
+export const EVENT_KERNEL_PHASE_TYPES = ["agent", "script", "map", "parallel"] as const;
+export type EventKernelPhaseType = (typeof EVENT_KERNEL_PHASE_TYPES)[number];
 
 export type RunTaskFn = (
 	cwd: string,
@@ -51,6 +63,14 @@ export interface StepResult {
 	usage: UsageStats;
 }
 
+type BodyResult = {
+	midEvents: Event[];
+	output?: string;
+	status: StepResult["status"];
+	error?: string;
+	usage: UsageStats;
+};
+
 function baseEvent(
 	ctx: StepContext,
 	phaseId: string,
@@ -84,6 +104,21 @@ export function usageFromEvents(events: readonly Event[]): UsageStats {
 	return u;
 }
 
+function isFailedResult(r: RunResult): boolean {
+	return (r.exitCode ?? 0) !== 0 || !!r.errorMessage || r.stopReason === "error" || r.stopReason === "aborted";
+}
+
+/** Format fan-out results like the imperative runtime's mergePhaseState text. */
+function combineFanoutText(results: RunResult[]): string {
+	return results
+		.map((r, i) => {
+			const label = `### [${i + 1}/${results.length}] ${r.agent}${isFailedResult(r) ? " (failed)" : ""}`;
+			const content = isFailedResult(r) ? r.errorMessage || r.stderr || r.output : r.output;
+			return `${label}\n\n${content}`;
+		})
+		.join("\n\n---\n\n");
+}
+
 /** Run a shell script phase (no LLM). Captures stdout. */
 export async function stepScript(phase: Phase, ctx: StepContext): Promise<StepResult> {
 	return stepPhase({ ...phase, type: "script" }, ctx) as Promise<StepResult>;
@@ -94,10 +129,7 @@ export async function stepAgent(phase: Phase, ctx: StepContext): Promise<StepRes
 	return stepPhase({ ...phase, type: "agent" }, ctx) as Promise<StepResult>;
 }
 
-async function executeScriptBody(
-	phase: Phase,
-	ctx: StepContext,
-): Promise<{ midEvents: Event[]; output?: string; status: StepResult["status"]; error?: string; usage: UsageStats }> {
+async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
 	const run = phase.run;
 	if (!run || (Array.isArray(run) && run.length === 0)) {
 		const err = "script phase missing `run`";
@@ -139,7 +171,7 @@ async function executeScriptBody(
 
 	const status: StepResult["status"] = result.timedOut ? "timedOut" : result.code === 0 ? "done" : "failed";
 	const text = result.stdout.trimEnd();
-	const usage = emptyUsage(); // scripts spend zero LLM tokens
+	const usage = emptyUsage();
 	const midEvents: Event[] = [
 		baseEvent(ctx, phase.id, "subagent-call", {
 			input: {
@@ -163,10 +195,48 @@ async function executeScriptBody(
 	};
 }
 
-async function executeAgentBody(
-	phase: Phase,
+async function runOneAgent(
 	ctx: StepContext,
-): Promise<{ midEvents: Event[]; output?: string; status: StepResult["status"]; error?: string; usage: UsageStats }> {
+	phase: Phase,
+	agentName: string,
+	task: string,
+	nodePath: string,
+	mapIndex?: number,
+): Promise<{ result: RunResult; event: Event }> {
+	const r = await ctx.deps.runTask(
+		ctx.deps.cwd,
+		ctx.deps.agents,
+		agentName,
+		task,
+		{
+			model: phase.model,
+			thinking: phase.thinking,
+			tools: phase.tools,
+			cwd: ctx.deps.cwd,
+			signal: ctx.deps.signal,
+		},
+		ctx.deps.globalThinking,
+	);
+	const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
+	const event = baseEvent(ctx, phase.id, "subagent-call", {
+		input: {
+			agent: agentName,
+			model: phase.model,
+			task,
+			nodePath,
+			mapIndex,
+		},
+		output: {
+			text: r.output ?? "",
+			model: r.model,
+			usage,
+			stopReason: r.stopReason,
+		},
+	});
+	return { result: { ...r, usage }, event };
+}
+
+async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
 	const interpCtx: InterpolationContext = {
 		args: ctx.args,
 		steps: ctx.steps,
@@ -175,44 +245,122 @@ async function executeAgentBody(
 	const agentName = phase.agent ?? "executor";
 
 	try {
-		const r = await ctx.deps.runTask(
-			ctx.deps.cwd,
-			ctx.deps.agents,
-			agentName,
-			task,
-			{
-				model: phase.model,
-				thinking: phase.thinking,
-				tools: phase.tools,
-				cwd: ctx.deps.cwd,
-				signal: ctx.deps.signal,
-			},
-			ctx.deps.globalThinking,
-		);
-		const failed = (r.exitCode ?? 0) !== 0 || !!r.errorMessage;
+		const { result: r, event } = await runOneAgent(ctx, phase, agentName, task, phase.id);
+		const failed = isFailedResult(r);
 		const status: StepResult["status"] = r.phaseTimeout ? "timedOut" : failed ? "failed" : "done";
 		const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
-		const midEvents: Event[] = [
-			baseEvent(ctx, phase.id, "subagent-call", {
-				input: {
-					agent: agentName,
-					model: phase.model,
-					task,
-					nodePath: phase.id,
-				},
-				output: {
-					text: r.output ?? "",
-					model: r.model,
-					usage,
-					stopReason: r.stopReason,
-				},
-			}),
-		];
 		return {
-			midEvents,
+			midEvents: [event],
 			output: r.output,
 			status,
 			error: failed ? r.errorMessage ?? r.stderr : undefined,
+			usage,
+		};
+	} catch (e) {
+		const err = e instanceof Error ? e.message : String(e);
+		return { midEvents: [], status: "failed", error: err, usage: emptyUsage() };
+	}
+}
+
+/** Resolve map-item template; supports default `{item}` and custom `as` aliases via locals. */
+function resolveMapTask(template: string, phase: Phase, ctx: StepContext, item: unknown): string {
+	const loopVar = phase.as ?? "item";
+	return interpolate(template, {
+		args: ctx.args,
+		steps: ctx.steps,
+		locals: { [loopVar]: item },
+	}).text;
+}
+
+async function executeMapBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
+	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps };
+	const overResolved = interpolate(phase.over ?? "", interpCtx).text;
+	const arr = coerceArray(safeParse(overResolved)) ?? coerceArray(overResolved);
+	if (!arr) {
+		const err = `map phase '${phase.id}': 'over' (${phase.over}) did not resolve to an array`;
+		return { midEvents: [], status: "failed", error: err, usage: emptyUsage() };
+	}
+	const concurrency = typeof phase.concurrency === "number" && phase.concurrency > 0 ? phase.concurrency : 8;
+	const agentName = phase.agent ?? "executor";
+	const tasks = arr.map((item) => ({
+		agent: agentName,
+		task: resolveMapTask(phase.task ?? "", phase, ctx, item),
+	}));
+
+	try {
+		const midEvents: Event[] = [];
+		const results = await mapWithConcurrencyLimit(tasks, concurrency, async (it, idx) => {
+			const { result, event } = await runOneAgent(
+				ctx,
+				phase,
+				it.agent,
+				it.task,
+				`${phase.id}#item-${idx}`,
+				idx,
+			);
+			midEvents.push(event);
+			return result;
+		});
+		// Order events by mapIndex for stable fold/trace
+		midEvents.sort((a, b) => (a.input?.mapIndex ?? 0) - (b.input?.mapIndex ?? 0));
+		const anyFailed = results.some(isFailedResult);
+		const anyTimedOut = results.some((r) => r.phaseTimeout);
+		const usage = aggregateUsage(results.map((r) => r.usage ?? emptyUsage()));
+		const errors = results.filter(isFailedResult).map((r) => `${r.agent}: ${r.errorMessage ?? r.stderr}`);
+		return {
+			midEvents,
+			output: combineFanoutText(results),
+			status: anyTimedOut ? "timedOut" : anyFailed ? "failed" : "done",
+			error: errors.length ? errors.join("; ") : undefined,
+			usage,
+		};
+	} catch (e) {
+		const err = e instanceof Error ? e.message : String(e);
+		return { midEvents: [], status: "failed", error: err, usage: emptyUsage() };
+	}
+}
+
+async function executeParallelBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
+	const branches = phase.branches ?? [];
+	if (branches.length === 0) {
+		return {
+			midEvents: [],
+			status: "failed",
+			error: `parallel phase '${phase.id}': empty branches`,
+			usage: emptyUsage(),
+		};
+	}
+	const concurrency = typeof phase.concurrency === "number" && phase.concurrency > 0 ? phase.concurrency : 8;
+	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps };
+	const tasks = branches.map((b) => ({
+		agent: b.agent ?? phase.agent ?? "executor",
+		task: interpolate(b.task, interpCtx).text,
+	}));
+
+	try {
+		const midEvents: Event[] = [];
+		const results = await mapWithConcurrencyLimit(tasks, concurrency, async (it, idx) => {
+			const { result, event } = await runOneAgent(
+				ctx,
+				phase,
+				it.agent,
+				it.task,
+				`${phase.id}#branch-${idx}`,
+				idx,
+			);
+			midEvents.push(event);
+			return result;
+		});
+		midEvents.sort((a, b) => (a.input?.mapIndex ?? 0) - (b.input?.mapIndex ?? 0));
+		const anyFailed = results.some(isFailedResult);
+		const anyTimedOut = results.some((r) => r.phaseTimeout);
+		const usage = aggregateUsage(results.map((r) => r.usage ?? emptyUsage()));
+		const errors = results.filter(isFailedResult).map((r) => `${r.agent}: ${r.errorMessage ?? r.stderr}`);
+		return {
+			midEvents,
+			output: combineFanoutText(results),
+			status: anyTimedOut ? "timedOut" : anyFailed ? "failed" : "done",
+			error: errors.length ? errors.join("; ") : undefined,
 			usage,
 		};
 	} catch (e) {
@@ -226,8 +374,8 @@ async function executeAgentBody(
  * Emits phase-start → optional when-guard decision → work → phase-end.
  */
 export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepResult | null> {
-	const type = phase.type ?? "agent";
-	if (type !== "script" && type !== "agent") return null;
+	const type = (phase.type ?? "agent") as string;
+	if (!(EVENT_KERNEL_PHASE_TYPES as readonly string[]).includes(type)) return null;
 
 	const events: Event[] = [baseEvent(ctx, phase.id, "phase-start")];
 
@@ -251,7 +399,12 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		}
 	}
 
-	const body = type === "script" ? await executeScriptBody(phase, ctx) : await executeAgentBody(phase, ctx);
+	let body: BodyResult;
+	if (type === "script") body = await executeScriptBody(phase, ctx);
+	else if (type === "map") body = await executeMapBody(phase, ctx);
+	else if (type === "parallel") body = await executeParallelBody(phase, ctx);
+	else body = await executeAgentBody(phase, ctx);
+
 	events.push(...body.midEvents);
 	events.push(
 		baseEvent(ctx, phase.id, "phase-end", {
