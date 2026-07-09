@@ -8,6 +8,19 @@ import {
 	upgradeTraceEvent,
 	readEvents,
 } from "../src/exec/events.ts";
+import type { TraceEvent, TraceDecision } from "../src/trace.ts";
+
+// Compile-time drift guards: Event is TraceEvent + v; EventDecision is TraceDecision.
+type _EventExtendsTrace = Event extends TraceEvent & { v: number } ? true : false;
+type _DecisionAlias = EventDecision extends TraceDecision
+	? TraceDecision extends EventDecision
+		? true
+		: false
+	: false;
+const _eventDriftOk: _EventExtendsTrace = true;
+const _decisionDriftOk: _DecisionAlias = true;
+void _eventDriftOk;
+void _decisionDriftOk;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -69,8 +82,8 @@ test("upgradeTraceEvent: fills defaults for missing fields", () => {
 	const upgraded = upgradeTraceEvent({});
 	// v is always stamped
 	assert.equal(upgraded.v, EVENT_SCHEMA_VERSION);
-	// ts falls back to a number (Date.now() approximate)
-	assert.equal(typeof upgraded.ts, "number");
+	// ts falls back to 0 (deterministic — never Date.now())
+	assert.equal(upgraded.ts, 0);
 	// runId/phaseId fall back to ""
 	assert.equal(upgraded.runId, "");
 	assert.equal(upgraded.phaseId, "");
@@ -82,6 +95,14 @@ test("upgradeTraceEvent: fills defaults for missing fields", () => {
 	assert.equal(upgraded.decision, undefined);
 	assert.equal(upgraded.status, undefined);
 	assert.equal(upgraded.error, undefined);
+});
+
+test("upgradeTraceEvent: missing ts is deterministic across calls", () => {
+	const a = upgradeTraceEvent({ runId: "r", phaseId: "p", kind: "phase-start" });
+	const b = upgradeTraceEvent({ runId: "r", phaseId: "p", kind: "phase-start" });
+	assert.equal(a.ts, 0);
+	assert.equal(b.ts, 0);
+	assert.deepEqual(a, b);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

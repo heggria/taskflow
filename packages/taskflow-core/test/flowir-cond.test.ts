@@ -141,6 +141,26 @@ test("normalizeCond: no refs in a literal-only expression", () => {
 	assert.deepEqual(normalizeCond("true && false").refs, []);
 });
 
+test("normalizeCond: placeholders inside string literals are NOT refs", () => {
+	// The right-hand side is a string that looks like a placeholder — not a dependency.
+	const n = normalizeCond('{args.x} == "{steps.y.output}"');
+	assert.deepEqual(n.refs, ["args.x"]);
+	assert.ok(n.canonical.includes('"{steps.y.output}"'));
+});
+
+test("normalizeCond: single-quoted literal placeholders are NOT refs", () => {
+	const n = normalizeCond("{args.label} == '{steps.fake.output}'");
+	assert.deepEqual(n.refs, ["args.label"]);
+});
+
+test("normalizeCond: escaped quotes inside strings are preserved", () => {
+	// Backslash-escaped quote must survive protect/restore byte-for-byte.
+	const raw = String.raw`{args.x} == "say \"hi\""`;
+	const n = normalizeCond(raw);
+	assert.equal(n.canonical, String.raw`{args.x}=="say \"hi\""`);
+	assert.deepEqual(n.refs, ["args.x"]);
+});
+
 // ---------------------------------------------------------------------------
 // Fail-open (never throws; malformed → canonical = source.trim(), refs = [])
 // ---------------------------------------------------------------------------

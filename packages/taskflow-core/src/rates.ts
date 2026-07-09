@@ -168,14 +168,32 @@ export function resolveRate(
 /**
  * Compute estimated USD cost from token usage.
  *
- * Uses the resolved model rate (via `resolveRate`) and applies per-token pricing:
- *   cost = (input * inputRate + output * outputRate +
+ * ## Cache accounting contract
+ *
+ * Hosts disagree on whether `usage.input` already includes cached tokens:
+ * - **Codex**: `input_tokens` includes `cached_input_tokens` (overlap).
+ * - **Claude / OpenCode (typical)**: `input` is non-cached; `cacheRead` is
+ *   disjoint and additional.
+ *
+ * Heuristic (never double-bill, never under-bill the common cases):
+ * - If `0 < cacheRead <= input`, treat cache as a **subset** of input
+ *   (Codex-style): bill `(input - cacheRead)` at the input rate and
+ *   `cacheRead` at the cache-read rate.
+ * - Otherwise treat input and cacheRead as **disjoint**: bill full `input`
+ *   at the input rate plus `cacheRead` at the cache-read rate.
+ *
+ * Cache-write tokens are always billed separately when a write rate exists
+ * (they are never part of `input`).
+ *
+ * Formula (known rate):
+ *   nonCachedInput = (cacheRead > 0 && cacheRead <= input)
+ *                    ? input - cacheRead : input
+ *   cost = (nonCachedInput * inputRate + output * outputRate +
  *           cacheRead * cacheReadRate + cacheWrite * cacheWriteRate) / 1_000_000
  *
  * If the model cannot be resolved, falls back to
  * `FLAT_FALLBACK_PER_TOKEN * (input + output)`. Cache tokens are *not* counted
- * in the fallback (they are part of the input budget, and double-counting with
- * the flat fallback would over-estimate).
+ * in the fallback (avoids double-count when input already includes them).
  *
  * Pure function — no I/O, no side effects. Never throws.
  *
@@ -194,7 +212,14 @@ export function estimateCost(
 		return FLAT_FALLBACK_PER_TOKEN * (usage.input + usage.output);
 	}
 
-	const inputCost = (usage.input / 1_000_000) * rate.inputPer1M;
+	// Overlap heuristic: when cacheRead is a positive subset of input, peel it
+	// out so it is not billed at the full input rate (Codex-style hosts).
+	const nonCachedInput =
+		usage.cacheRead > 0 && usage.cacheRead <= usage.input
+			? usage.input - usage.cacheRead
+			: usage.input;
+
+	const inputCost = (nonCachedInput / 1_000_000) * rate.inputPer1M;
 	const outputCost = (usage.output / 1_000_000) * rate.outputPer1M;
 	let cacheCost = 0;
 	if (rate.cacheReadPer1M !== undefined && usage.cacheRead > 0) {

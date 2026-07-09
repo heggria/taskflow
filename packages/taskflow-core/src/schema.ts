@@ -16,8 +16,9 @@ import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 // Phase types
 // ---------------------------------------------------------------------------
 
-const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script"] as const;
-type PhaseType = (typeof PHASE_TYPES)[number];
+/** Closed set of native phase kinds — single source of truth for DSL + FlowIR. */
+export const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script"] as const;
+export type PhaseType = (typeof PHASE_TYPES)[number];
 
 /** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
 export const LOOP_DEFAULT_MAX_ITERATIONS = 10;

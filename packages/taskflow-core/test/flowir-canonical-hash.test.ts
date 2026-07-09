@@ -30,14 +30,24 @@ function referenceIR(): FlowIR {
 	]);
 }
 
-test("hashFlowIR: returns 64 lowercase hex chars", () => {
+test("hashFlowIR: returns ir:<64 lowercase hex chars>", () => {
 	const h = hashFlowIR(referenceIR());
-	assert.match(h, /^[0-9a-f]{64}$/);
+	assert.match(h, /^ir:[0-9a-f]{64}$/);
 });
 
-test("hashNode: returns 64 lowercase hex chars", () => {
+test("hashNode: returns node:<64 lowercase hex chars>", () => {
 	const h = hashNode(node("a"));
-	assert.match(h, /^[0-9a-f]{64}$/);
+	assert.match(h, /^node:[0-9a-f]{64}$/);
+});
+
+test("hashFlowIR / hashNode: domain prefixes differ (no shared-namespace collision)", () => {
+	const n = node("solo", { task: "t" });
+	const irHash = hashFlowIR(ir([n]));
+	const nodeHash = hashNode(n);
+	assert.ok(irHash.startsWith("ir:"));
+	assert.ok(nodeHash.startsWith("node:"));
+	// Even if the digests somehow matched, prefixes keep the keys distinct.
+	assert.notEqual(irHash, nodeHash);
 });
 
 // ---------------------------------------------------------------------------

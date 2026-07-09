@@ -29,10 +29,9 @@
  * preserved), not a full AST rewrite: for valid expressions whitespace only
  * separates tokens, so removing it (after protecting quoted literals) yields
  * a stable concatenation that is invariant under the cosmetic differences
- * hashing cares about. Reference extraction uses a `{steps|args|env}.…}`
- * scan — the same pattern as `collectRefs` in `schema.ts` — rather than
- * re-parsing, so it also catches `env.*` refs the interpolation resolver
- * does not bind.
+ * hashing cares about. Reference extraction runs on the **literal-protected**
+ * surface so `{steps.*}` text inside string literals is never treated as a
+ * real dependency.
  *
  * Pure module: no IO, no `Date`, no randomness, never throws.
  *
@@ -56,7 +55,8 @@ import { tryEvaluateCondition, type InterpolationContext } from "../interpolate.
  *   produce byte-identical `canonical` strings.
  * - `refs` — the `steps.<id>…` / `args.<name>…` / `env.<VAR>…` references
  *   the expression reads (in first-occurrence order, de-duplicated). Empty
- *   when the expression failed to parse (fail-open).
+ *   when the expression failed to parse (fail-open). Placeholders that only
+ *   appear inside string literals are **not** counted as refs.
  */
 export interface NormalizedCond {
 	source: string;
@@ -76,12 +76,18 @@ export interface NormalizedCond {
  */
 const REF_RE = /\{\s*(steps|args|env)\.([a-zA-Z0-9_.-]+?)\s*\}/g;
 
-function extractRefs(expr: string): string[] {
+/**
+ * Extract refs from expression text that has already had string literals
+ * replaced by placeholders (see {@link protectLiterals}). Scanning the
+ * protected surface prevents false-positive refs for placeholder-looking
+ * text that only appears inside quotes.
+ */
+function extractRefsFromProtected(protectedText: string): string[] {
 	const seen = new Set<string>();
 	const refs: string[] = [];
 	REF_RE.lastIndex = 0;
 	let m: RegExpExecArray | null;
-	while ((m = REF_RE.exec(expr)) !== null) {
+	while ((m = REF_RE.exec(protectedText)) !== null) {
 		const ref = `${m[1]}.${m[2]}`;
 		if (!seen.has(ref)) {
 			seen.add(ref);
@@ -96,11 +102,12 @@ function extractRefs(expr: string): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Protect quoted string literals (single or double quoted, with `\X` →
- * literal-`X` escaping matching the interpolate tokenizer) by replacing each
- * with a whitespace-free `\u0000<index>\u0000` placeholder. This preserves
- * their contents (including internal spaces) through whitespace removal and
- * prevents their inner parens/operators from confusing the paren stripper.
+ * Protect quoted string literals (single or double quoted, with `\` escapes
+ * preserved byte-for-byte) by replacing each with a whitespace-free
+ * `\u0000<index>\u0000` placeholder. This preserves their contents
+ * (including internal spaces and escape sequences) through whitespace
+ * removal and prevents their inner parens/operators/placeholder-looking
+ * text from confusing the paren stripper or ref extractor.
  * Returns the protected string and the list of original literals.
  */
 function protectLiterals(expr: string): { text: string; literals: string[] } {
@@ -112,22 +119,25 @@ function protectLiterals(expr: string): { text: string; literals: string[] } {
 		const c = expr[i];
 		if (c === '"' || c === "'") {
 			let j = i + 1;
-			let val = "";
+			let val = c; // include opening quote
 			while (j < n) {
 				if (expr[j] === "\\" && j + 1 < n) {
-					val += expr[j + 1];
+					// Preserve the escape sequence intact (do not drop `\`).
+					val += expr[j] + expr[j + 1];
 					j += 2;
 				} else if (expr[j] === c) {
+					val += c; // closing quote
+					j++;
 					break;
 				} else {
 					val += expr[j];
 					j++;
 				}
 			}
-			const closed = j < n;
-			literals.push(c + val + (closed ? c : ""));
+			// Unterminated string: keep whatever we scanned (incl. opening quote).
+			literals.push(val);
 			out += `\u0000${literals.length - 1}\u0000`;
-			i = closed ? j + 1 : j;
+			i = j;
 		} else {
 			out += c;
 			i++;
@@ -206,7 +216,8 @@ function canonicalize(expr: string): string {
  *
  * On success, `canonical` is the whitespace/paren-normalized surface form
  * (stable for hashing) and `refs` are the `steps.*` / `args.*` / `env.*`
- * references the expression reads (for replay rebinding).
+ * references the expression reads (for replay rebinding). Placeholders that
+ * only appear inside string literals are excluded from `refs`.
  */
 export function normalizeCond(expr: string): NormalizedCond {
 	const source = typeof expr === "string" ? expr : expr == null ? "" : String(expr);
@@ -224,9 +235,10 @@ export function normalizeCond(expr: string): NormalizedCond {
 		return { source, canonical: trimmed, refs: [] };
 	}
 
+	const { text: protectedText } = protectLiterals(trimmed);
 	return {
 		source,
 		canonical: canonicalize(trimmed),
-		refs: extractRefs(trimmed),
+		refs: extractRefsFromProtected(protectedText),
 	};
 }

@@ -32,17 +32,21 @@
  * @see docs/internal/rfc-flowir-compilation.md
  */
 
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
+import { StringEnum } from "../typebox-helpers.ts";
+import { PHASE_TYPES, type PhaseType } from "../schema.ts";
 
 // ---------------------------------------------------------------------------
 // FlowIRNodeKind — the 10 native phase kinds (closed literal union)
 // ---------------------------------------------------------------------------
 
 /**
- * The closed set of pi-taskflow phase kinds, projected 1:1 from
- * `PHASE_TYPES` (schema.ts). This is the canonical `FlowIRNode.kind`
- * vocabulary. `translate.ts` sets `kind = phase.type ?? "agent"`, so every
- * node it emits is a member of this union.
+ * The closed set of pi-taskflow phase kinds, derived 1:1 from the exported
+ * {@link PHASE_TYPES} in `../schema.ts` (single source of truth). This is the
+ * canonical `FlowIRNode.kind` vocabulary. `translate.ts` sets
+ * `kind = phase.type ?? "agent"`, so every node it emits is a member of this
+ * union. Adding a phase kind requires updating `PHASE_TYPES` only — FlowIR
+ * follows automatically.
  *
  * | kind        | purpose                                                  |
  * |-------------|----------------------------------------------------------|
@@ -57,22 +61,11 @@ import { Type, type Static } from "typebox";
  * | `tournament`| N competing variants + judge picks best / aggregates    |
  * | `script`    | run a shell command (no LLM, zero tokens)               |
  */
-export const FlowIRNodeKind = Type.Union(
-	[
-		Type.Literal("agent"),
-		Type.Literal("parallel"),
-		Type.Literal("map"),
-		Type.Literal("gate"),
-		Type.Literal("reduce"),
-		Type.Literal("approval"),
-		Type.Literal("flow"),
-		Type.Literal("loop"),
-		Type.Literal("tournament"),
-		Type.Literal("script"),
-	],
-	{ description: "The 10 native pi-taskflow phase kinds (1:1 projection of PHASE_TYPES)" },
-);
-export type FlowIRNodeKind = Static<typeof FlowIRNodeKind>;
+export const FlowIRNodeKind = StringEnum(PHASE_TYPES, {
+	description: "The 10 native pi-taskflow phase kinds (1:1 projection of PHASE_TYPES)",
+});
+/** @see PHASE_TYPES — same closed set as the DSL. */
+export type FlowIRNodeKind = PhaseType;
 
 // ---------------------------------------------------------------------------
 // FlowIRNode — canonical node contract
@@ -281,18 +274,7 @@ export const FlowIRSchema = Type.Object(
 // ---------------------------------------------------------------------------
 
 /** The 10 valid phase kinds, for O(1) membership checks without TypeBox. */
-const VALID_KINDS: ReadonlySet<string> = new Set<FlowIRNodeKind>([
-	"agent",
-	"parallel",
-	"map",
-	"gate",
-	"reduce",
-	"approval",
-	"flow",
-	"loop",
-	"tournament",
-	"script",
-]);
+const VALID_KINDS: ReadonlySet<string> = new Set<string>(PHASE_TYPES);
 
 /**
  * Narrow an `unknown` value to a {@link FlowIRNode}. Pure, synchronous,

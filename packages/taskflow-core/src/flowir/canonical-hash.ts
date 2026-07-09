@@ -40,14 +40,23 @@
  * Two logically-equivalent FlowIRs (key reorder, whitespace, equivalent
  * condition spelling) MUST canonicalize to the same string.
  *
+ * ## Domain-separated digests
+ *
+ * Return values are prefixed:
+ * - `hashFlowIR` → `ir:<64-hex>`
+ * - `hashNode`   → `node:<64-hex>`
+ *
+ * so IR-level and node-level digests never collide in a shared cache key
+ * namespace.
+ *
  * ## Purity
  *
  * Zero runtime deps besides `node:crypto`. No IO, no `Date`, no randomness,
  * never throws. The hash is synchronous (unlike `flowDefHash`).
  *
- * **Not yet wired** into runtime/cache — `usedFallbackHash` is untouched and
- * `canonicalizeFlowIR`/`hashFlowIR`/`hashNode` are not referenced by any
- * barrel or the runtime. Wiring happens in batch 2.
+ * Exported from the FlowIR barrel (`./index.ts`) for consumers; **not yet
+ * wired** into runtime/cache — `usedFallbackHash` is untouched. Wiring
+ * happens in batch 2.
  *
  * @see ./schema.ts for the canonical FlowIR type contract.
  * @see ./cond.ts for condition normalization (`normalizeCond`).
@@ -179,23 +188,25 @@ export function canonicalizeNode(node: FlowIRNode): string {
 }
 
 // ---------------------------------------------------------------------------
-// Content-addressed hashing (node:crypto SHA-256, full 64-hex digest)
+// Content-addressed hashing (node:crypto SHA-256, domain-prefixed)
 // ---------------------------------------------------------------------------
 
 /**
- * SHA-256 (hex, 64 lowercase chars) over {@link canonicalizeFlowIR}. The
- * genuine content-addressed hash of a compiled FlowIR. Synchronous (uses
- * `node:crypto`, unlike the async Web-Crypto `flowDefHash`). Never throws.
+ * Domain-separated content hash of a compiled FlowIR.
+ * Returns `ir:<64 lowercase hex SHA-256 chars>` over {@link canonicalizeFlowIR}.
+ * Synchronous. Never throws.
  */
 export function hashFlowIR(ir: FlowIR): string {
-	return createHash("sha256").update(canonicalizeFlowIR(ir), "utf8").digest("hex");
+	const hex = createHash("sha256").update(canonicalizeFlowIR(ir), "utf8").digest("hex");
+	return `ir:${hex}`;
 }
 
 /**
- * SHA-256 (hex, 64 lowercase chars) over {@link canonicalizeNode} — a
- * per-node content hash usable as a phase fingerprint independent of surface
- * formatting. Synchronous. Never throws.
+ * Domain-separated per-node content hash.
+ * Returns `node:<64 lowercase hex SHA-256 chars>` over {@link canonicalizeNode}.
+ * Synchronous. Never throws.
  */
 export function hashNode(node: FlowIRNode): string {
-	return createHash("sha256").update(canonicalizeNode(node), "utf8").digest("hex");
+	const hex = createHash("sha256").update(canonicalizeNode(node), "utf8").digest("hex");
+	return `node:${hex}`;
 }

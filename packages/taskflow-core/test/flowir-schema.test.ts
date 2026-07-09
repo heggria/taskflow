@@ -8,6 +8,7 @@ import {
 	isFlowIRNode,
 	assertFlowIR,
 } from "../src/flowir/schema.ts";
+import { PHASE_TYPES } from "../src/schema.ts";
 import { Value } from "typebox/value";
 import type { FlowIR, FlowIRNode } from "../src/flowir/schema.ts";
 
@@ -31,13 +32,26 @@ function ir(nodes: FlowIRNode[], overrides?: Partial<FlowIR>): FlowIR {
 // FlowIRNodeKind — closed literal union of the 10 phase kinds
 // ---------------------------------------------------------------------------
 
-test("FlowIRNodeKind: the 10 phase kinds are all valid members", () => {
-	const kinds = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script"];
-	for (const k of kinds) {
-		// Each kind is a member of the union schema.
+test("FlowIRNodeKind: tracks PHASE_TYPES (single source of truth, no drift)", () => {
+	assert.equal(PHASE_TYPES.length, 10);
+	for (const k of PHASE_TYPES) {
+		// Each DSL phase kind is a member of the FlowIR kind schema.
 		const decoded = Value.Decode(FlowIRNodeKind, k);
 		assert.equal(decoded, k);
 	}
+	// Same closed set — if someone adds a kind to only one side, this fails.
+	assert.deepEqual([...PHASE_TYPES], [
+		"agent",
+		"parallel",
+		"map",
+		"gate",
+		"reduce",
+		"approval",
+		"flow",
+		"loop",
+		"tournament",
+		"script",
+	]);
 });
 
 test("FlowIRNodeKind: rejects an unknown phase kind", () => {

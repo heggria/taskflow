@@ -107,9 +107,11 @@ test("estimateCost: fallback uses only input+output (no cache double-count)", ()
 // estimateCost — cache contribution
 // ---------------------------------------------------------------------------
 
-test("estimateCost: cacheRead tokens reduce cost (cached input cheaper)", () => {
+test("estimateCost: cacheRead tokens (disjoint, cacheRead > input) billed separately", () => {
+	// Claude-style: input is non-cached only; cacheRead is additional and larger.
 	const usage: UsageStats = { input: 1000, output: 500, cacheRead: 4000, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 };
 	// claude-sonnet-4: $3/1M input, $15/1M output, $0.30/1M cacheRead
+	// cacheRead > input → disjoint: bill full input + cacheRead
 	// input cost = 1000/1e6 * 3.00 = 0.003
 	// cache cost = 4000/1e6 * 0.30 = 0.0012
 	// output cost = 500/1e6 * 15.00 = 0.0075
@@ -119,6 +121,7 @@ test("estimateCost: cacheRead tokens reduce cost (cached input cheaper)", () => 
 });
 
 test("estimateCost: cacheWrite tokens contribute when rate has cacheWritePer1M", () => {
+	// cacheRead (2000) > input (1000) → disjoint path
 	const usage: UsageStats = { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 3000, cost: 0, contextTokens: 0, turns: 1 };
 	// claude-sonnet-4: $3/1M input, $15/1M output, $0.30/1M cacheRead, $3.75/1M cacheWrite
 	// input cost = 1000/1e6 * 3.00 = 0.003
@@ -128,6 +131,21 @@ test("estimateCost: cacheWrite tokens contribute when rate has cacheWritePer1M",
 	// total = 0.02235
 	const cost = estimateCost(usage, "claude-sonnet-4");
 	assert.equal(cost, 0.02235);
+});
+
+test("estimateCost: Codex-style overlap (cacheRead ⊆ input) does not double-bill", () => {
+	// Codex: input_tokens includes cached_input_tokens.
+	// input=5000, cacheRead=4000 → nonCached=1000 billed at input rate.
+	const usage: UsageStats = { input: 5000, output: 500, cacheRead: 4000, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 };
+	// claude-sonnet-4 rates as stand-in: $3/1M input, $15/1M output, $0.30/1M cacheRead
+	// nonCached input = 1000/1e6 * 3.00 = 0.003
+	// cacheRead = 4000/1e6 * 0.30 = 0.0012
+	// output = 500/1e6 * 15.00 = 0.0075
+	// total = 0.0117
+	const cost = estimateCost(usage, "claude-sonnet-4");
+	assert.ok(Math.abs(cost - 0.0117) < 1e-10, `expected ~0.0117, got ${cost}`);
+	// Contrast: naive full-input+cache would be 0.015 + 0.0012 + 0.0075 = 0.0237
+	assert.ok(cost < 0.02, "must not double-bill overlapping input");
 });
 
 test("estimateCost: rate with no cache fields ignores cache tokens", () => {
