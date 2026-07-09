@@ -73,3 +73,52 @@ export type {
 } from "./meta.ts";
 
 export { phaseFingerprint } from "./phasefp.ts";
+
+// ---------------------------------------------------------------------------
+// Canonical FlowIR type contract + content-addressed hash (batch-1 additions)
+// ---------------------------------------------------------------------------
+//
+// `./meta.ts` exposes the *stub* 1:1 projection (`FlowIR`/`FlowIRNode` with
+// `kind: string`) that `translateTaskflow` emits today. `./schema.ts` defines
+// the *canonical* contract — a strict superset (extra optional fields) with a
+// *closed* `kind` union (`FlowIRNodeKind`). Both are surfaced here:
+//
+//   - `FlowIR` / `FlowIRNode`           → the stub projection (meta.ts), used by
+//                                          `compileTaskflowToIR` / `TaskflowIR`.
+//   - `CanonicalFlowIR` / `CanonicalFlowIRNode` → the canonical contract
+//                                          (schema.ts); the shape the batch-2
+//                                          compiler emits and `hashFlowIR`
+//                                          content-addresses.
+//
+// The canonical names are re-exported under `Canonical*` aliases to avoid a
+// duplicate-export clash with meta.ts's stub `FlowIR`/`FlowIRNode`; this keeps
+// the batch purely additive (the existing public surface is unchanged) while
+// making the canonical contract reachable through the main `taskflow-core`
+// barrel. `hashFlowIR`/`hashNode` take the canonical types, so a consumer
+// hashing a stub-projection IR must widen via the canonical type (the genuine
+// compiler in batch 2 will emit canonical IR directly).
+
+// `./schema.ts` — canonical FlowIR type contract + structural guards.
+export { FlowIRNodeKind } from "./schema.ts"; // value (TypeBox schema) + type (literal union)
+export type {
+	FlowIREdge,
+	FlowIRBudget,
+	FlowIRMeta,
+	FlowIR as CanonicalFlowIR,
+	FlowIRNode as CanonicalFlowIRNode,
+} from "./schema.ts";
+export {
+	FlowIRNodeSchema,
+	FlowIREdgeSchema,
+	FlowIRSchema,
+	isFlowIRNode,
+	assertFlowIR,
+} from "./schema.ts";
+
+// `./cond.ts` — condition-IR normalization (canonical `when` form for hashing + replay refs).
+export type { NormalizedCond } from "./cond.ts";
+export { normalizeCond } from "./cond.ts";
+
+// `./canonical-hash.ts` — genuine content-addressed hash over canonical FlowIR
+// (sync `node:crypto` SHA-256; distinct from the vendored async `flowDefHash`).
+export { canonicalizeFlowIR, hashFlowIR, hashNode } from "./canonical-hash.ts";
