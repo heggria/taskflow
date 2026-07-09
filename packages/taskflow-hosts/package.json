@@ -47,7 +47,7 @@
     "taskflow-core": "0.1.7"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "keywords": [
     "taskflow",
