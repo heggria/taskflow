@@ -51,6 +51,8 @@ export type CacheScope = (typeof CACHE_SCOPES)[number];
 const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
 /** Phase types that must NOT be cached across runs (a fresh result is required each run). */
 const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script"] as const;
+/** `cwd` is a literal path / workspace keyword, not an interpolated field. */
+const CWD_PLACEHOLDER_RE = /\{[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\}/;
 
 const ParallelTaskSchema = Type.Object(
 	{
@@ -648,6 +650,11 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (v !== undefined && typeof v !== "string") {
 				errors.push(`Phase '${p.id}': '${key}' must be a string, got ${typeof v}`);
 			}
+		}
+		if (typeof p.cwd === "string" && CWD_PLACEHOLDER_RE.test(p.cwd)) {
+			errors.push(
+				`Phase '${p.id}': 'cwd' does not support interpolation placeholders (${p.cwd}). Use a literal path, or a reserved workspace keyword ('temp', 'dedicated', 'worktree').`,
+			);
 		}
 		// dependsOn / from entries are string phase-id refs that flow into the graph
 		// helpers and nodeId(); a non-string entry would crash the renderer.
