@@ -51,13 +51,20 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 10. Examples: `race-first-win.json`, `expand-nested-fragment.json`.
 11. Skills advanced: `flow{def}` vs `expand`; configuration caveats (kernel/decompile).
 
+### Pass 3 (multi-agent review P0/P1 fixes)
+12. Race **first-success** (not first-settled); usage aggregates all branches.
+13. Graft: rewrite `{steps.*}` after id prefix; zero expand usage after promote (no double-count).
+14. DSL `register()` unions explicit `dependsOn`; unknown runes / non-agent branches error.
+15. Decompile: import race/expand; fail-closed non-string `def`.
+16. Kernel policy: `incremental` + workspace cwd keywords force imperative.
+17. README phase table + taskflow-dsl README preview note.
+
 ## Still open (not claimed as done)
 
 - Formal **0.2.0 npm publish** + version bump (packages still 0.1.7; `taskflow-dsl` may 404 on registry).
-- ~~Implement real `cancelLosers` abort~~ → **done** (best-effort AbortSignal; tests in race-expand).
 - S5 kernel default ON + flagship $ demo seal → plan: `docs/internal/s5-kernel-default-on-plan.md`.
-- Full website polish for every “ten” remnant in long-form copy (bulk pass done; spot-check periodically).
 - Live host e2e as release gate (unit suite is the local hard gate).
+- FlowIR full sidecar for expandMode/maxNodes/cancelLosers (optional S5.x).
 
 ## Re-verify commands
 

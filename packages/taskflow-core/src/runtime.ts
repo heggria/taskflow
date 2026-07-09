@@ -1168,7 +1168,26 @@ async function executePhaseInner(
 			// backoff.
 			const factor = retry ? (retry.factor ?? 1) : DEFAULT_TRANSIENT_FACTOR;
 			const wait = Math.min(60000, Math.round(baseMs * factor ** attempt));
-			if (wait > 0) await delay(wait, deps.signal);
+			if (wait > 0) {
+				// Honor run abort and/or race-branch cancel during backoff.
+				if (deps.signal && extraSignal) {
+					const ac = new AbortController();
+					const ab = () => ac.abort();
+					if (deps.signal.aborted || extraSignal.aborted) ac.abort();
+					else {
+						deps.signal.addEventListener("abort", ab, { once: true });
+						extraSignal.addEventListener("abort", ab, { once: true });
+					}
+					try {
+						await delay(wait, ac.signal);
+					} finally {
+						deps.signal.removeEventListener("abort", ab);
+						extraSignal.removeEventListener("abort", ab);
+					}
+				} else {
+					await delay(wait, extraSignal ?? deps.signal);
+				}
+			}
 		}
 		// Aborted before any attempt ran → return a clean aborted result (no crash).
 		if (!last) {
@@ -2125,16 +2144,24 @@ async function executePhaseInner(
 		const sp = Object.values(subState.phases);
 		// expand graft promote — pure helper (see runtime/phases/expand.ts)
 		const warnings: string[] = [];
+		let graftPromoted = 0;
 		if (type === "expand" && expandMode === "graft" && subResult.ok) {
 			const promo = promoteGraftPhases(state, subState.phases);
 			warnings.push(...promo.warnings);
+			graftPromoted = promo.promoted;
 		}
+		// Graft: children carry usage after promote — zero expand usage to avoid double-count
+		// in run-level aggregateUsage(Object.values(state.phases)).
+		const phaseUsage =
+			type === "expand" && expandMode === "graft" && subResult.ok && graftPromoted > 0
+				? emptyUsage()
+				: subResult.totalUsage;
 		const flowPs: PhaseState = {
 			id: phase.id,
 			status: subResult.ok ? "done" : "failed",
 			output: subResult.finalOutput,
 			json: parseJson ? safeParse(subResult.finalOutput) : undefined,
-			usage: subResult.totalUsage,
+			usage: phaseUsage,
 			// B-F015: include failed in `done` so the renderer's
 			// `done - failed` formula gives the success count (matches the
 			// map/parallel runner's overlapping-counter convention).

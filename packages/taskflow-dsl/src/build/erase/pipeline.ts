@@ -97,6 +97,18 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 
 		if (!PHASE_RUNES.has(cn.split(".")[0]!) && !PHASE_RUNES.has(cn)) {
 			if (cn === "json") return undefined;
+			// Bound or returned call that is not a known rune → hard error (no silent drop).
+			if (bindName !== undefined) {
+				diags.push(
+					diag(
+						file,
+						sf,
+						call,
+						"TFDSL_RUNE_UNKNOWN",
+						`Unknown rune or call '${cn}' cannot erase to a phase (typo?).`,
+					),
+				);
+			}
 			return undefined;
 		}
 

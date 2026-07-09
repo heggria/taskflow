@@ -7,12 +7,18 @@ import type { Diagnostic } from "../../diagnostics.ts";
 import { calleeName, diag, evalLiteral } from "./ast.ts";
 import type { PhaseDraft } from "./types.ts";
 
+/** Extra option keys allowed without TFDSL_RUNE_OPTS_UNKNOWN (sugar / kind-specific). */
+export type MergeOptsExtra = {
+	allowKeys?: ReadonlySet<string>;
+};
+
 export function mergeOpts(
 	sf: ts.SourceFile,
 	file: string,
 	obj: ts.Expression | undefined,
 	diags: Diagnostic[],
 	phases: Map<string, PhaseDraft>,
+	extra?: MergeOptsExtra,
 ): Record<string, unknown> {
 	if (!obj) return {};
 	if (!ts.isObjectLiteralExpression(obj)) {
@@ -28,6 +34,11 @@ export function mergeOpts(
 				? p.name.text
 				: undefined;
 		if (!key) continue;
+		if (extra?.allowKeys?.has(key)) {
+			const v = evalLiteral(p.initializer);
+			if (v !== undefined) out[key] = v;
+			continue;
+		}
 
 		if (key === "dependsOn" && ts.isArrayLiteralExpression(p.initializer)) {
 			const ids: string[] = [];

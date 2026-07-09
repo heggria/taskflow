@@ -21,7 +21,8 @@ export function emitRace(
 	const arr = call.arguments[0];
 	const branches: Array<Record<string, unknown>> = [];
 	if (arr && ts.isArrayLiteralExpression(arr)) {
-		for (const el of arr.elements) {
+		for (let bi = 0; bi < arr.elements.length; bi++) {
+			const el = arr.elements[bi]!;
 			if (ts.isCallExpression(el) && calleeName(el.expression) === "agent") {
 				const erased = eraseStringish(
 					ctx.sf,
@@ -45,6 +46,13 @@ export function emitRace(
 				);
 				Object.assign(b, bopts);
 				branches.push(b);
+			} else {
+				ctx.diags.push({
+					code: "TFDSL_BRANCH_KIND",
+					severity: "error",
+					message: `race() branch ${bi + 1} must be agent(...) — other expressions are not erasable.`,
+					file: ctx.file,
+				});
 			}
 		}
 	}

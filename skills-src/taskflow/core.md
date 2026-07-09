@@ -482,14 +482,17 @@ output is exact.
 ### Race phases (first completed wins)
 
 A `race` phase runs static `branches[]` concurrently and **returns the first
-branch that finishes successfully** (first-finish-wins). Unlike `parallel`
-(waits for all) or `tournament` (judges quality after all variants), use race
-when latency matters more than comparing every approach.
+branch that finishes successfully** (failed settles do **not** win — a slower
+success still wins over a fast hard-fail). Unlike `parallel` (waits for all) or
+`tournament` (judges quality after all variants), use race when latency matters
+more than comparing every approach.
 
 - `branches` — **required**, at least two `{task, agent?}`.
-- `cancelLosers` — optional boolean (default `true`). After the first branch
-  settles, abort other branches via `AbortSignal` (best-effort — host must honor
-  the signal). Set `false` to let losers finish naturally.
+- `cancelLosers` — optional boolean (default `true`). After the first **success**,
+  abort other branches via `AbortSignal` (best-effort — host must honor the
+  signal). Set `false` to let losers finish naturally.
+- Phase `usage` **aggregates all branches** (including aborted partials) so
+  budgets stay honest.
 - Output of the winning branch becomes the race phase output; a warning records
   which branch won.
 

@@ -51,7 +51,41 @@ export function decompileTaskflow(def: Taskflow): string {
 	}
 
 	const lines: string[] = [];
-	lines.push(`import { flow, agent, map, parallel, gate, reduce, approval, subflow, loop, tournament, script } from "taskflow-dsl";`);
+	const imports = new Set([
+		"flow",
+		"agent",
+		"map",
+		"parallel",
+		"gate",
+		"reduce",
+		"approval",
+		"subflow",
+		"loop",
+		"tournament",
+		"script",
+	]);
+	for (const p of def.phases ?? []) {
+		if (p.type === "race") imports.add("race");
+		if (p.type === "expand") imports.add("expand");
+	}
+	// Stable import order for golden/tests
+	const order = [
+		"flow",
+		"agent",
+		"map",
+		"parallel",
+		"gate",
+		"reduce",
+		"approval",
+		"subflow",
+		"loop",
+		"tournament",
+		"script",
+		"race",
+		"expand",
+	];
+	const importList = order.filter((n) => imports.has(n));
+	lines.push(`import { ${importList.join(", ")} } from "taskflow-dsl";`);
 	lines.push(``);
 	const desc = def.description ? `, { description: ${JSON.stringify(def.description)} }` : "";
 	lines.push(`export default flow(${JSON.stringify(def.name)}${desc}, (ctx) => {`);
@@ -125,8 +159,15 @@ function decompilePhase(p: Phase, bind: string, _byId: Map<string, Phase>): stri
 			);
 			return `const ${bind} = race([${branches.join(", ")}]${optStr});`;
 		}
-		case "expand":
-			return `const ${bind} = expand(${JSON.stringify(typeof p.def === "string" ? p.def : "{steps.plan.json}")}, { expandMode: ${JSON.stringify((p as { expandMode?: string }).expandMode ?? "nested")} });`;
+		case "expand": {
+			if (typeof p.def !== "string") {
+				throw new Error(
+					`TFDSL_DECOMPILE_UNSUPPORTED: expand phase ${JSON.stringify(p.id)} has non-string def (inline object cannot be recovered as a rune argument)`,
+				);
+			}
+			const em = (p as { expandMode?: string }).expandMode ?? "nested";
+			return `const ${bind} = expand(${JSON.stringify(p.def)}, { expandMode: ${JSON.stringify(em)} });`;
+		}
 		case "reduce": {
 			const from = (p.from ?? p.dependsOn ?? []).map((id) => phaseBinding(id));
 			return `const ${bind} = reduce([${from.join(", ")}], (parts) => agent(\`${esc(String(p.task ?? "reduce"))}\`)${optStr});`;
@@ -135,7 +176,12 @@ function decompilePhase(p: Phase, bind: string, _byId: Map<string, Phase>): stri
 			return `const ${bind} = approval({ request: \`${esc(String(p.task ?? "Approve?"))}\`${opts.length ? `, ${opts.join(", ")}` : ""} });`;
 		case "flow":
 			if (p.def !== undefined) {
-				return `const ${bind} = subflow.def(${JSON.stringify(typeof p.def === "string" ? p.def : "/* inline */")}${optStr});`;
+				if (typeof p.def !== "string") {
+					throw new Error(
+						`TFDSL_DECOMPILE_UNSUPPORTED: flow phase ${JSON.stringify(p.id)} has non-string def (cannot decompile inline object)`,
+					);
+				}
+				return `const ${bind} = subflow.def(${JSON.stringify(p.def)}${optStr});`;
 			}
 			return `const ${bind} = subflow(${JSON.stringify(p.use ?? "child")}${optStr});`;
 		case "loop":

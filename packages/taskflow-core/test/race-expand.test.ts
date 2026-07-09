@@ -75,7 +75,7 @@ test("validate: race + expand shapes", () => {
 	);
 });
 
-test("race: first completed branch wins", async () => {
+test("race: first successful branch wins", async () => {
 	const def: Taskflow = {
 		name: "race-flow",
 		phases: [
@@ -107,6 +107,59 @@ test("race: first completed branch wins", async () => {
 	assert.equal(st.phases.r?.output?.trim(), "FAST");
 	assert.ok(st.phases.r?.warnings?.some((w) => /branch 2/.test(w)));
 	assert.ok(st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w ?? "")));
+	// Usage aggregates both branches (winner + aborted loser partial)
+	assert.ok((st.phases.r?.usage?.cost ?? 0) >= 0.001);
+});
+
+test("race: first-success ignores fast failure (slow success wins)", async () => {
+	const def: Taskflow = {
+		name: "race-fail-fast",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: false,
+				branches: [
+					{ task: "fail-fast", agent: "a" },
+					{ task: "slow-ok", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task) => {
+			if (task.includes("fail-fast")) {
+				return {
+					agent,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "boom",
+					usage: { ...emptyUsage(), input: 1, output: 0, cost: 0.001, turns: 1 },
+					stopReason: "error",
+					errorMessage: "boom",
+				};
+			}
+			await new Promise((r) => setTimeout(r, 20));
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "RECOVERED",
+				stderr: "",
+				usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.002, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	});
+	assert.equal(st.status, "completed");
+	assert.equal(st.phases.r?.status, "done");
+	assert.equal(st.phases.r?.output?.trim(), "RECOVERED");
+	assert.ok((st.phases.r?.usage?.cost ?? 0) >= 0.002);
 });
 
 test("race: cancelLosers aborts losing branch via AbortSignal", async () => {
@@ -280,4 +333,54 @@ test("expand graft: promotes child phases onto parent", async () => {
 	// grafted id is grow-leaf
 	assert.equal(st.phases["grow-leaf"]?.status, "done");
 	assert.match(st.phases["grow-leaf"]?.output ?? "", /grafted-ok/);
+	// No usage double-count: expand usage zeroed; child holds cost
+	assert.equal(st.phases.grow?.usage?.cost ?? 0, 0);
+	assert.ok((st.phases["grow-leaf"]?.usage?.cost ?? 0) > 0);
+});
+
+test("expand graft: rewrites multi-phase {steps.*} refs after prefix", async () => {
+	const def: Taskflow = {
+		name: "exp-graft-chain",
+		phases: [
+			{
+				id: "grow",
+				type: "expand",
+				expandMode: "graft",
+				def: {
+					name: "frag",
+					phases: [
+						{ id: "a", type: "agent", agent: "a", task: "part-a-out" },
+						{
+							id: "b",
+							type: "agent",
+							agent: "a",
+							task: "chain from {steps.a.output}",
+							dependsOn: ["a"],
+							final: true,
+						},
+					],
+				},
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	const seen: string[] = [];
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: runner((t) => {
+			seen.push(t);
+			if (t.includes("part-a")) return "A-VALUE";
+			if (t.includes("chain from")) return `B-SEES-${t}`;
+			return "x";
+		}),
+	});
+	assert.equal(st.status, "completed", st.phases.grow?.defError ?? st.phases.grow?.error);
+	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError);
+	assert.equal(st.phases["grow-a"]?.status, "done");
+	assert.equal(st.phases["grow-b"]?.status, "done");
+	// Task text must use grow-a after prefix rewrite
+	assert.ok(seen.some((t) => t.includes("grow-a") || t.includes("A-VALUE")));
+	assert.match(st.phases["grow-b"]?.output ?? "", /A-VALUE/);
 });

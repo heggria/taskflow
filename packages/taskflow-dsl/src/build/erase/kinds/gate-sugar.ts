@@ -22,7 +22,19 @@ export function emitGateSugar(
 	const up = call.arguments[0];
 	if (up && ts.isIdentifier(up) && ctx.phases.has(up.text)) draft.dependsOn.add(up.text);
 	const optsArg = call.arguments[1] as ts.Expression | undefined;
-	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	const sugarKeys = new Set([
+		"pass",
+		"scorers",
+		"combine",
+		"threshold",
+		"weights",
+		"target",
+		"judge",
+		"task",
+	]);
+	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases, {
+		allowKeys: sugarKeys,
+	});
 	if (typeof opts.id === "string") draft.id = opts.id;
 	Object.assign(draft.raw, opts);
 

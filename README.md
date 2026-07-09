@@ -426,6 +426,8 @@ See [Tournament phases](#tournament-tournament) for the full reference.
 | `loop` | **iterate a task until done** — re-run a body until a condition, convergence, or a cap | `task`, `until` |
 | `tournament` | **N variants compete**, a judge picks the best (or aggregates) | `task` \| `branches` |
 | `script` | run a **shell command** — no LLM, zero tokens — capturing stdout as the phase output | `run` |
+| `race` | **first successful** branch wins (optional `cancelLosers` abort) | `branches` (≥2) |
+| `expand` | run a dynamic fragment (`nested` or `graft` promote) | `def` (+ `expandMode?`) |
 
 ### Common phase fields
 

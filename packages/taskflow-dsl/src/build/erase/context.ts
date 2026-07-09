@@ -20,7 +20,13 @@ export function nextSyntheticId(ctx: EmitContext, prefix: string): string {
 
 export function register(ctx: EmitContext, draft: PhaseDraft): string {
 	delete draft.raw.id;
+	// Union auto-wired deps with any explicit dependsOn already on raw (opts).
+	const explicit = Array.isArray(draft.raw.dependsOn)
+		? (draft.raw.dependsOn as unknown[]).filter((d): d is string => typeof d === "string")
+		: [];
+	for (const d of explicit) draft.dependsOn.add(d);
 	if (draft.dependsOn.size) draft.raw.dependsOn = [...draft.dependsOn];
+	else delete draft.raw.dependsOn;
 	if (draft.final) draft.raw.final = true;
 	ctx.phases.set(draft.id, draft);
 	if (!ctx.order.includes(draft.id)) ctx.order.push(draft.id);

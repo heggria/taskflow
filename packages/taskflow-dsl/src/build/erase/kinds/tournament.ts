@@ -25,7 +25,8 @@ export function emitTournament(
 			if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
 			if (p.name.text === "branches" && ts.isArrayLiteralExpression(p.initializer)) {
 				const branches: Array<Record<string, unknown>> = [];
-				for (const el of p.initializer.elements) {
+				for (let bi = 0; bi < p.initializer.elements.length; bi++) {
+					const el = p.initializer.elements[bi]!;
 					if (ts.isCallExpression(el) && calleeName(el.expression) === "agent") {
 						const erased = eraseStringish(
 							ctx.sf,
@@ -46,6 +47,13 @@ export function emitTournament(
 						);
 						Object.assign(b, bopts);
 						branches.push(b);
+					} else {
+						ctx.diags.push({
+							code: "TFDSL_BRANCH_KIND",
+							severity: "error",
+							message: `tournament.branches[${bi}] must be agent(...).`,
+							file: ctx.file,
+						});
 					}
 				}
 				draft.raw.branches = branches;

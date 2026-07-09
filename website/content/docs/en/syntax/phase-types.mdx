@@ -419,11 +419,11 @@ To pass dynamic values into a script safely, pipe them through `input` (which su
   `script` phases cannot use `retry` or `output: "json"`. `timeout` defaults to `60000` and caps at `300000` ms.
 </Callout>
 
-## First finish wins: `race`
+## First success wins: `race`
 
-When several approaches can answer the same question and **latency** matters more than waiting for every branch, use `race`. Branches start together; the first successful completion becomes the phase output (unlike `parallel`, which waits for all, or `tournament`, which judges quality after all variants).
+When several approaches can answer the same question and **latency** matters more than waiting for every branch, use `race`. Branches start together; the **first successful** completion becomes the phase output (a fast hard-fail does **not** win). Unlike `parallel` (waits for all) or `tournament` (judges quality after all variants).
 
-```json title="race — first completed wins"
+```json title="race — first success wins"
 {
   "id": "quick",
   "type": "race",
@@ -436,7 +436,7 @@ When several approaches can answer the same question and **latency** matters mor
 ```
 
 <Callout type="info">
-  **`cancelLosers` (default true):** after the first branch settles, other branches receive `AbortSignal` (best-effort — the host runner must honor it). Set `false` to let losers finish.
+  **`cancelLosers` (default true):** after the first **success**, other branches receive `AbortSignal` (best-effort). Phase `usage` aggregates all branches for honest budgets. Set `false` to let losers finish.
 </Callout>
 
 ## Dynamic fragment: `expand`

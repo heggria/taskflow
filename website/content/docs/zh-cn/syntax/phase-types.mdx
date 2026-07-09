@@ -419,11 +419,11 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
   `script` 阶段不能用 `retry` 或 `output: "json"`。`timeout` 默认 `60000`、上限 `300000` ms。
 </Callout>
 
-## 先完成者胜：`race`
+## 先成功者胜：`race`
 
-当多种路径都能回答同一问题、且**延迟**比等齐所有分支更重要时，用 `race`。各分支同时启动，**第一个成功完成**的输出成为阶段结果（`parallel` 会等全部；`tournament` 会等齐后由裁判比质量）。
+当多种路径都能回答同一问题、且**延迟**比等齐所有分支更重要时，用 `race`。各分支同时启动，**第一个成功完成**的输出成为阶段结果（快速硬失败**不会**赢）。`parallel` 会等全部；`tournament` 会等齐后由裁判比质量。
 
-```json title="race — 先完成者胜"
+```json title="race — 先成功者胜"
 {
   "id": "quick",
   "type": "race",
@@ -436,7 +436,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 ```
 
 <Callout type="info">
-  **`cancelLosers`（默认 true）：** 第一个分支 settle 后，其余分支收到 `AbortSignal`（尽力而为——宿主 runner 需遵守）。设 `false` 可让败者跑完。
+  **`cancelLosers`（默认 true）：** 第一个**成功**后，其余分支收到 `AbortSignal`（尽力而为）。阶段 `usage` 汇总所有分支以便预算诚实。设 `false` 可让败者跑完。
 </Callout>
 
 ## 动态片段：`expand`

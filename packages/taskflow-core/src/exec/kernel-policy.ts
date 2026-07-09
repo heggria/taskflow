@@ -11,6 +11,10 @@ import { dependenciesOf } from "../schema.ts";
  * When set, executeTaskflow must NOT enter the event kernel (even if enabled).
  */
 export function kernelUnsupportedReason(def: Taskflow): string | undefined {
+	// Flow-level: incremental default cross-run is not implemented on the kernel path.
+	if ((def as { incremental?: boolean }).incremental === true) {
+		return `flow incremental:true requires the imperative runtime`;
+	}
 	for (const p of def.phases ?? []) {
 		const id = p.id;
 		if (p.type === "gate" && (p as { score?: unknown }).score !== undefined) {
@@ -37,6 +41,11 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		}
 		if (p.shareContext === true || def.contextSharing === true) {
 			return `phase '${id}': Shared Context Tree requires the imperative runtime`;
+		}
+		// Workspace isolation keywords are imperative-only today.
+		const cwd = p.cwd;
+		if (typeof cwd === "string" && (cwd === "temp" || cwd === "dedicated" || cwd === "worktree")) {
+			return `phase '${id}': workspace cwd '${cwd}' requires the imperative runtime`;
 		}
 	}
 	return undefined;
