@@ -238,6 +238,7 @@ pnpm run test:e2e-grok-mcp        # grok MCP stdio e2e (src; no live grok needed
 
 ### File Structure Rules
 - **Source**: `.ts` source lives in `packages/<pkg>/src/`. Host-neutral logic goes in `taskflow-core`; host **runner** code (the `SubagentRunner` impl, argv builder, event-stream parser for codex/claude/opencode/grok) goes in `taskflow-hosts`; host **delivery** code (the MCP server/bin + plugin scaffold) goes in the `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow` packages; the pi adapter (which peer-depends the pi SDK) stays in `pi-taskflow`. `taskflow-core` must never import a host SDK (`@earendil-works/*`).
+- **No monolith growth**: prefer cohesive folders (`runtime/phases/<kind>.ts`, `build/erase/*`) over lengthening `runtime.ts` / fat erase pipelines. See `docs/internal/modularization-0.2.0.md`.
 - **Imports**: adapters import the engine via the bare specifier `taskflow-core` (never a relative path into `../taskflow-core/src`). The MCP server lives in the separate `taskflow-mcp-core` package — host adapters import it via `taskflow-mcp-core/server` / `taskflow-mcp-core/jsonrpc`. `detached-runner.ts` is spawn-only — reference it by `taskflow-core/detached-runner.js`, never via the barrel. `runSubagentProcess` (in `runner-core.ts`, re-exported from the `taskflow-core` barrel) is the shared spawn+classify helper every host runner delegates to.
 - **Tests**: `.test.ts` in the owning package's `test/`. Named `<module>.test.ts` or `<feature>.test.ts`.
 - **Agents**: built-in agent `.md` files in `packages/taskflow-core/src/agents/` (copied to `dist/agents` at build).
@@ -248,9 +249,11 @@ pnpm run test:e2e-grok-mcp        # grok MCP stdio e2e (src; no live grok needed
 ### Adding a New Phase Type
 1. Add the type string to `PHASE_TYPES` in `schema.ts`.
 2. Add per-type validation in `validateTaskflow()`.
-3. Add the execution branch in `executePhase()` in `runtime.ts`.
-4. Add tests in `packages/taskflow-core/test/runtime-branches.test.ts` (or a new file).
-5. Update the skill sources in `skills-src/taskflow/` (never the generated files) and run `node scripts/build-skills.mjs`.
+3. **Implement the kind in `runtime/phases/<kind>.ts`** (pure-ish helpers); wire with a one-liner from `executePhaseInner` in `runtime.ts`. Do **not** paste a large block into the monolith.
+4. If event-kernel support is needed: handler in `exec/step-kinds.ts` (or keep excluded from `EVENT_KERNEL_PHASE_TYPES` until then).
+5. Add tests in `packages/taskflow-core/test/` (prefer a focused `<kind>.test.ts`).
+6. DSL: emitter under `taskflow-dsl/src/build/erase/` (not a growing dump in one file).
+7. Update skill sources in `skills-src/taskflow/` and run `node scripts/build-skills.mjs`.
 
 ### Adding a New Condition Operator
 1. Add the token to `OPS` in `interpolate.ts`.

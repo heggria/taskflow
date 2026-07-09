@@ -1856,9 +1856,9 @@ async function executePhaseInner(
 		return ps;
 	}
 
-	// Horizon B: first completed branch wins. Losers are aborted best-effort when
-	// cancelLosers is true (default) via AbortController per branch.
+	// Horizon B: race — implementation lives in runtime/phases/race.ts
 	if (type === "race") {
+		const { executeRaceBranches } = await import("./runtime/phases/race.ts");
 		const branches = (phase.branches ?? []).map((b) => {
 			const r = interpolate(b.task, ctx);
 			return {
@@ -1866,43 +1866,15 @@ async function executePhaseInner(
 				task: preRead + r.text,
 			};
 		});
-		if (branches.length < 2) {
-			return failPhase(phase.id, `race phase '${phase.id}': needs at least 2 branches`);
-		}
 		const ck = cacheKeys(cc, [phase.id, "race", phase.model ?? "", JSON.stringify(branches)]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
-
-		// Race: fire all branches; first settled result wins. Loser cancellation is
-		// best-effort via parent signal only (per-branch AbortController plumbing
-		// requires runner support for multiple concurrent signals — follow-up).
-		// cancelLosers reserved for future hard-abort of losers.
-		void (phase as { cancelLosers?: boolean }).cancelLosers;
-		const raced = await Promise.race(
-			branches.map(async (b, i) => {
-				const result = await runOne(b.agent, b.task);
-				return { i, result };
-			}),
-		);
-
-		const winner = raced.result;
-		const failed = isFailed(winner);
-		const ps: PhaseState = {
-			id: phase.id,
-			status: failed ? "failed" : "done",
-			output: failed
-				? winner.errorMessage || winner.stderr || winner.output || `race branch ${raced.i + 1} failed`
-				: winner.output,
-			json: parseJson ? safeParse(winner.output) : undefined,
-			usage: winner.usage ?? emptyUsage(),
-			model: winner.model,
-			error: failed ? winner.errorMessage ?? winner.stderr : undefined,
+		const ps = await executeRaceBranches(phase, branches, runOne, isFailed, {
 			inputHash,
-			endedAt: Date.now(),
-			warnings: [`race: branch ${raced.i + 1}/${branches.length} won`],
-		};
-		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+			parseJson,
+			readRefs: readRefs.length ? readRefsToReads(readRefs, state) : undefined,
+		});
 		recordCache(cc, ps);
 		return ps;
 	}
