@@ -139,7 +139,7 @@ Conductor(2026-05 微软开源)和 taskflow 的主张**几乎一一对应**:
 - 风险:护城河窄,微软哪天加个缓存就没了。
 
 ### 路线 B:换战场 —— 不和 Conductor 比"引擎",比"嵌入 coding agent 的体验"
-- Conductor 是独立 CLI;taskflow 是 pi/codex/claude/opencode 里的**原生编排**。
+- Conductor 是独立 CLI;taskflow 是 pi/codex/claude/opencode/grok 里的**原生编排**。
 - 0.1.7 投入"在 host 里用起来最顺"(更好的 TUI、`/tf:` 命令、和 host skill 融合、
   内置 deep-research/audit flow 让用户装完即用)。
 - 定位语:"不是又一个 CLI,是你现在的 coding agent 长出来的编排能力。"

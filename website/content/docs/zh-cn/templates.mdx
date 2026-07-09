@@ -105,7 +105,7 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run pr-security-audit base=origin/main
@@ -116,8 +116,8 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
     /tf:pr-security-audit base=origin/main
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="在 Codex 上运行"
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
     taskflow_run { "name": "pr-security-audit", "args": { "base": "origin/main" } }
     ```
   </Tab>
@@ -175,7 +175,7 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run release-note feature="subagent context isolation"
@@ -185,8 +185,8 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
     /tf save release-note
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="在 Codex 上运行"
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
     taskflow_run { "name": "release-note", "args": { "feature": "subagent context isolation" } }
     ```
   </Tab>
@@ -234,7 +234,7 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run codebase-migration oldApi=legacyAuth\(\) newApi=authorize\(\)
@@ -244,8 +244,8 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
     /tf save codebase-migration
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="在 Codex 上运行"
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
     taskflow_run { "name": "codebase-migration", "args": { "oldApi": "legacyAuth()", "newApi": "authorize()" } }
     ```
   </Tab>
@@ -305,7 +305,7 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run api-docs dir=src
@@ -315,8 +315,8 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
     /tf save api-docs
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="在 Codex 上运行"
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
     taskflow_run { "name": "api-docs", "args": { "dir": "src" } }
     ```
   </Tab>
@@ -384,7 +384,7 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run dep-upgrade-review manager=npm
@@ -394,8 +394,8 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
     /tf save dep-upgrade-review
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="在 Codex 上运行"
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
     taskflow_run { "name": "dep-upgrade-review", "args": { "manager": "npm" } }
     ```
   </Tab>

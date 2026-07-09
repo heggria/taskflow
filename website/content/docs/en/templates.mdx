@@ -105,7 +105,7 @@ Discover the files a pull request touches, fan out a per-file security review wi
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run pr-security-audit base=origin/main
@@ -116,8 +116,9 @@ Discover the files a pull request touches, fan out a per-file security review wi
     /tf:pr-security-audit base=origin/main
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="Run on Codex"
+  <Tab value="MCP hosts">
+    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "pr-security-audit", "args": { "base": "origin/main" } }
     ```
   </Tab>
@@ -175,7 +176,7 @@ Research the feature into a shared set of facts, run a four-variant tournament t
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run release-note feature="subagent context isolation"
@@ -185,8 +186,9 @@ Research the feature into a shared set of facts, run a four-variant tournament t
     /tf save release-note
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="Run on Codex"
+  <Tab value="MCP hosts">
+    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "release-note", "args": { "feature": "subagent context isolation" } }
     ```
   </Tab>
@@ -234,7 +236,7 @@ Discover every call site of a legacy API, plan the migration per file, gate the 
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run codebase-migration oldApi=legacyAuth\(\) newApi=authorize\(\)
@@ -244,8 +246,9 @@ Discover every call site of a legacy API, plan the migration per file, gate the 
     /tf save codebase-migration
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="Run on Codex"
+  <Tab value="MCP hosts">
+    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "codebase-migration", "args": { "oldApi": "legacyAuth()", "newApi": "authorize()" } }
     ```
   </Tab>
@@ -305,7 +308,7 @@ Discover the public API surface of a directory, draft reference documentation fo
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run api-docs dir=src
@@ -315,8 +318,9 @@ Discover the public API surface of a directory, draft reference documentation fo
     /tf save api-docs
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="Run on Codex"
+  <Tab value="MCP hosts">
+    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "api-docs", "args": { "dir": "src" } }
     ```
   </Tab>
@@ -384,7 +388,7 @@ Enumerate the project's outdated dependencies, evaluate each for breaking-change
 }
 ```
 
-<Tabs groupId="host" items={['Pi', 'Codex']}>
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run dep-upgrade-review manager=npm
@@ -394,8 +398,9 @@ Enumerate the project's outdated dependencies, evaluate each for breaking-change
     /tf save dep-upgrade-review
     ```
   </Tab>
-  <Tab value="Codex">
-    ```bash title="Run on Codex"
+  <Tab value="MCP hosts">
+    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "dep-upgrade-review", "args": { "manager": "npm" } }
     ```
   </Tab>
