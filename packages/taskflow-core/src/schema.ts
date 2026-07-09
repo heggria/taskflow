@@ -150,8 +150,8 @@ const PhaseSchema = Type.Object(
 		),
 		/**
 		 * [race] When true (default), abort in-flight loser branches after the first branch
-		 * settles (best-effort `AbortSignal` to the host runner). First-finish-wins still
-		 * applies. Set `false` to let losers run to natural completion.
+		 * **succeeds** (best-effort `AbortSignal`). Race semantics are first-**success**
+		 * (failed settles do not win). Set `false` to let losers run to natural completion.
 		 */
 		cancelLosers: Type.Optional(Type.Boolean({ default: true })),
 

@@ -23,7 +23,7 @@
 |-------|--------|
 | Version | All packages still **0.1.7**; branch is `release/0.2.0` preview — not a published 0.2.0 npm tag until bump |
 | S5 | Kernel default ON **not** done; flagship $6→$0.40 is **acceptance target**, not certified number |
-| `cancelLosers` | Schema + DSL accept; **runtime ignores** (first-finish-wins; warning when default true) |
+| `cancelLosers` | **Implemented**: abort losers after first **success** (best-effort AbortSignal); usage aggregates all branches |
 | Event kernel “complete” | Complete for **kernel-eligible** kinds/features; not race/expand; not score/retry/expect/reflexion/cross-run cache/shareContext |
 | Multi-host DSL | Hosts run **Taskflow JSON**; `.tf.ts` requires prior `taskflow-dsl build` |
 | Decompile | Semantic, not literal round-trip |
@@ -37,7 +37,7 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 ## Alignment actions taken
 
 ### Pass 1 (claim ledger)
-1. Schema + skills: `cancelLosers` reserved/ignored; race warning.
+1. Schema + skills: `cancelLosers` documented (later upgraded to real abort + first-success).
 2. S4 RFCs: ts-morph → TypeScript compiler API.
 3. FlowIR/step/runtime comments: 12 kinds / kernel-10.
 4. README / AGENTS / workspace / architecture counts.

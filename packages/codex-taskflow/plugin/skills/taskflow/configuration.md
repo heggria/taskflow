@@ -85,7 +85,7 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
 | `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
-| `cancelLosers` | race | `true` | Abort in-flight losers after first settle (best-effort AbortSignal). |
+| `cancelLosers` | race | `true` | Abort in-flight losers after first **success** (best-effort AbortSignal). |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
 | `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
 | `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |
@@ -456,7 +456,7 @@ JSON kinds (single source: `PHASE_TYPES` in core + `erase/kinds/*` registry).
 | `loop` | `loop({ task, until?, … })` | |
 | `tournament` | `tournament({ branches/variants, judge, … })` | |
 | `script` | `script(run, opts?)` | string or argv array |
-| `race` | `race([agent…], { cancelLosers? })` | first completed wins |
+| `race` | `race([agent…], { cancelLosers? })` | first **success** wins |
 | `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode` |
 
 - `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.

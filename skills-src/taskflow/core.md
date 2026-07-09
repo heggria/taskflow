@@ -186,7 +186,7 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `loop` | repeat a body until a condition / convergence / `maxIterations` | Loop phases below |
 | `tournament` | run N competing `variants`, a `judge` picks best or aggregates | Tournament phases below |
 | `script` | run a **shell command** (no LLM, zero tokens) — stdout is the output | Script phases below |
-| `race` | run `branches[]` concurrently; **first completed wins** (unlike parallel) | Race phases below |
+| `race` | run `branches[]` concurrently; **first success wins** (unlike parallel) | Race phases below |
 | `expand` | run a dynamic fragment (`def`); `nested` (isolated) or `graft` (promote onto parent) | Expand phases below |
 
 ### Control-flow fields (any phase)
@@ -479,7 +479,7 @@ output is exact.
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```
 
-### Race phases (first completed wins)
+### Race phases (first success wins)
 
 A `race` phase runs static `branches[]` concurrently and **returns the first
 branch that finishes successfully** (failed settles do **not** win — a slower
