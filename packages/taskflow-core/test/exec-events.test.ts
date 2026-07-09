@@ -161,7 +161,7 @@ test("readEvents: round-trip an event with a decision", () => {
 	const decision: EventDecision = {
 		type: "gate-score",
 		target: "score the output for quality",
-		results: [{ name: "coherence", score: 0.9, weight: 1 }],
+		results: [{ name: "coherence", type: "contains", passed: true, score: 0.9 }],
 		combined: 0.9,
 		threshold: 0.7,
 		verdict: "pass",
