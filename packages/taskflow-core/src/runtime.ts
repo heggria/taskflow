@@ -1687,9 +1687,10 @@ async function executePhaseInner(
 		return ps;
 	}
 
-	// script — zero-token shell command. Spawns a child process, pipes
-	// interpolated `input` to stdin, captures stdout as the phase output.
+	// script — zero-token shell (spawn/timeout/size caps in runtime/phases/script.ts)
 	if (type === "script") {
+		const { runScriptCommand, scriptResultToPhaseState, scriptSpawnErrorToPhaseState } =
+			await import("./runtime/phases/script.ts");
 		const cmd = phase.run;
 		if (!cmd) {
 			return {
@@ -1700,18 +1701,15 @@ async function executePhaseInner(
 				usage: emptyUsage(),
 			};
 		}
-		// Interpolate the command.
 		// Array form: interpolate each element (safe — schema rejects placeholders in string form).
 		// String form: skip interpolation — schema already guarantees no {placeholders}.
 		const interpRun = Array.isArray(cmd)
 			? cmd.map((s) => interpolate(s, ctx))
-			: [{ text: cmd, missing: [] }];
-		// Warn unresolved references.
+			: [{ text: cmd, missing: [] as string[] }];
 		for (const r of interpRun) {
 			if (r.missing.length) warnUnresolvedRefs(phase.id, r.missing);
 		}
 		const interpRunText = interpRun.map((r) => r.text);
-		// Interpolate stdin input if provided.
 		const stdinInterp = phase.input !== undefined ? interpolate(phase.input, ctx) : undefined;
 		if (stdinInterp?.missing.length) warnUnresolvedRefs(phase.id, stdinInterp.missing);
 		const stdinInput = stdinInterp?.text;
@@ -1721,122 +1719,36 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		const MAX_STDOUT = 1_048_576; // 1 MB cap
-		const SCRIPT_TIMEOUT_MS = (phase.timeout ?? 60_000); // default 60 s, configurable via phase.timeout
-		const SIGKILL_GRACE_MS = 5_000; // grace period after SIGTERM before SIGKILL
-
+		const SCRIPT_TIMEOUT_MS = phase.timeout ?? 60_000;
+		const reads = readRefs.length ? readRefsToReads(readRefs, state) : undefined;
 		try {
-			const { spawn } = await import("node:child_process");
-			const result = await new Promise<{ stdout: string; stderr: string; code: number | null; stdoutOversize: boolean; timedOut: boolean }>((resolve, reject) => {
-				// Array command → direct spawn (safe); string → shell (rejected at validation if it has placeholders).
-				const child = Array.isArray(cmd)
-					? spawn(interpRunText[0], interpRunText.slice(1), {
-							cwd: effCwd,
-							env: process.env,
-							shell: false,
-							signal: deps.signal,
-					  })
-					: spawn(interpRunText[0], [], {
-							cwd: effCwd,
-							env: process.env,
-							shell: true,
-							signal: deps.signal,
-					  });
-
-				let stdout = "";
-				let stderr = "";
-				let stdoutOversize = false;
-				let timedOut = false;
-				child.stdout?.on("data", (d: Buffer) => {
-					if (stdout.length < MAX_STDOUT) {
-						const need = MAX_STDOUT - stdout.length;
-						stdout += d.toString().slice(0, need);
-						if (stdout.length >= MAX_STDOUT) stdoutOversize = true;
-					}
-				});
-				child.stderr?.on("data", (d: Buffer) => {
-					if (stderr.length < 500) {
-						stderr += d.toString().slice(0, 500 - stderr.length);
-					}
-				});
-
-				// Timeout guard: SIGTERM first, then SIGKILL after grace period.
-				let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
-				const timer = setTimeout(() => {
-					timedOut = true;
-					child.kill("SIGTERM");
-					// SIGKILL fallback if process ignores SIGTERM.
-					sigkillTimer = setTimeout(() => {
-						try { child.kill("SIGKILL"); } catch { /* already dead */ }
-					}, SIGKILL_GRACE_MS);
-				}, SCRIPT_TIMEOUT_MS);
-
-				child.on("error", (err) => {
-					clearTimeout(timer);
-					clearTimeout(sigkillTimer);
-					reject(err);
-				});
-				child.on("close", (code) => {
-					clearTimeout(timer);
-					clearTimeout(sigkillTimer);
-					resolve({ stdout, stderr, code, stdoutOversize, timedOut });
-				});
-
-				if (stdinInput !== undefined) {
-					child.stdin?.on("error", () => {}); // swallow EPIPE when child closes stdin early
-					child.stdin?.write(stdinInput);
-					child.stdin?.end();
-				}
+			const result = await runScriptCommand({
+				interpRunText,
+				arrayForm: Array.isArray(cmd),
+				cwd: effCwd,
+				signal: deps.signal,
+				stdinInput,
+				timeoutMs: SCRIPT_TIMEOUT_MS,
 			});
-
-			if (result.code !== 0 || result.timedOut) {
-				const ps: PhaseState = {
-					id: phase.id,
-					status: "failed",
-					output: result.stdout,
-					error: result.timedOut
-						? `Script timed out after ${SCRIPT_TIMEOUT_MS}ms`
-						: `Script exited with code ${result.code}${result.stderr ? ": " + result.stderr.slice(0, 500) : ""}${result.stdoutOversize ? " [stdout truncated at 1 MB]" : ""}`,
-					timedOut: result.timedOut || undefined,
-					usage: emptyUsage(),
-					inputHash,
-					endedAt: Date.now(),
-				};
-				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-				// Non-zero exit: cache (deterministic failure). Timeout: don't cache (transient, like spawn errors).
-				if (!result.timedOut) recordCache(cc, ps);
-				return ps;
-			}
-
-			const ps: PhaseState = {
-				id: phase.id,
-				status: "done",
-				output: result.stdout.trimEnd() + (result.stdoutOversize ? "\n[stdout truncated at 1 MB]" : ""),
-				usage: emptyUsage(),
+			const ps = scriptResultToPhaseState(phase, result, {
 				inputHash,
-				endedAt: Date.now(),
-			};
-			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-			recordCache(cc, ps);
+				timeoutMs: SCRIPT_TIMEOUT_MS,
+				reads,
+			});
+			// Non-zero exit: cache (deterministic). Timeout/spawn: don't cache (transient).
+			if (ps.status === "done" || (ps.status === "failed" && !ps.timedOut)) {
+				recordCache(cc, ps);
+			}
 			return ps;
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			// Note: intentionally NOT cached — spawn errors (ENOENT, permission denied, etc.)
-			// are treated as transient. The phase will re-execute on resume/retry.
-			const ps: PhaseState = {
-				id: phase.id,
-				status: "failed",
-				error: `Script error: ${msg}`,
-				usage: emptyUsage(),
-				inputHash,
-				endedAt: Date.now(),
-			};
-			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-			return ps;
+			// Spawn errors intentionally NOT cached — re-execute on resume/retry.
+			return scriptSpawnErrorToPhaseState(phase.id, err, { inputHash, reads });
 		}
 	}
 
+	// parallel — all branches; merge via shared mergePhaseState (phases/parallel.ts)
 	if (type === "parallel") {
+		const { executeParallelBranches } = await import("./runtime/phases/parallel.ts");
 		const branches = (phase.branches ?? []).map((b) => {
 			const r = interpolate(b.task, ctx);
 			return {
@@ -1849,9 +1761,11 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		const results = await runFanout(branches);
-		const ps = mergePhaseState(phase.id, results, inputHash, parseJson);
-		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+		const ps = await executeParallelBranches(phase, branches, runFanout, mergePhaseState, {
+			inputHash,
+			parseJson,
+			reads: readRefs.length ? readRefsToReads(readRefs, state) : undefined,
+		});
 		recordCache(cc, ps);
 		return ps;
 	}
@@ -1974,7 +1888,9 @@ async function executePhaseInner(
 		return ps;
 	}
 
+	// approval — HITL pause (decision → PhaseState in runtime/phases/approval.ts)
 	if (type === "approval") {
+		const { approvalDecisionToPhaseState } = await import("./runtime/phases/approval.ts");
 		const readRefs: string[] = [];
 		const ctx = buildInterpolationContext(state, previousOutput, undefined, (ref) => readRefs.push(ref));
 		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
@@ -1983,39 +1899,21 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		// Non-interactive (headless/CI/detached): auto-REJECT, fail-open, but record it.
-		// Approval gates are safety boundaries — bypassing them silently in CI would
-		// let unreviewed work ship. Detached/CI runs must not bypass approval gates.
+		const reads = readRefsToReads(readRefs, state);
+		// Non-interactive (headless/CI/detached): auto-REJECT — safety boundary, never bypass.
 		if (!deps.requestApproval) {
-			return {
-				id: phase.id,
-				status: "done",
-				output: "(auto-rejected: no interactive approver available)",
-				approval: { decision: "reject", auto: true },
-				gate: { verdict: "block", reason: "(auto-rejected: no interactive approver available)" },
-				usage: emptyUsage(),
+			return approvalDecisionToPhaseState(phase.id, { decision: "reject" }, {
 				inputHash,
-				reads: readRefsToReads(readRefs, state),
-				endedAt: Date.now(),
-			};
+				reads,
+				auto: true,
+			});
 		}
-		const decision = await deps.requestApproval({ phaseId: phase.id, message, upstream: previousOutput });
-		const note = decision.note?.trim();
-		const ps: PhaseState = {
-			id: phase.id,
-			status: "done",
-			output: note || `(${decision.decision})`,
-			approval: { decision: decision.decision, note },
-			usage: emptyUsage(),
-			inputHash,
-			reads: readRefsToReads(readRefs, state),
-			endedAt: Date.now(),
-		};
-		// A rejection halts the flow via the same mechanism as a blocking gate.
-		if (decision.decision === "reject") {
-			ps.gate = { verdict: "block", reason: note || "Rejected by user" };
-		}
-		return ps;
+		const decision = await deps.requestApproval({
+			phaseId: phase.id,
+			message,
+			upstream: previousOutput,
+		});
+		return approvalDecisionToPhaseState(phase.id, decision, { inputHash, reads });
 	}
 
 	if (type === "flow" || type === "expand") {
