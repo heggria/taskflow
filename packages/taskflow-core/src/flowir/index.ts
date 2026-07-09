@@ -1,64 +1,53 @@
 /**
  * Public entry point for the FlowIR compile seam.
  *
- * `compileTaskflowToIR` is the read-only, content-addressed IR projection used
- * by:
+ * `compileTaskflowToIR` is the content-addressed IR projection used by:
  *   - `/tf ir <flow>` / `action=ir`     — render the compiled IR + hash (0 tokens)
  *   - the runtime (`runTaskflowLayers`) — fold `ir.hash` into the cache key
- *     (== `flowDefHash` in the stub; the overstory-canonical hash once the
- *     genuine compiler is vendored) and persist `ir.meta.declaredDeps` to
- *     `RunState` (M2 declared plane).
  *
- * The stub hash reuses the already-vendored overstory `flowDefHash` algorithm
- * (./hash.ts) so pi-taskflow and overstory share one byte-identical hashing
- * contract today. `usedFallbackHash` is `true` in the stub (the genuine
- * overstory `hashIR` is not yet wired); it flips to `false` once the compiler
- * is vendored, at which point the cache key's `v2:` prefix advances to `v3:`
- * (see docs/internal/cache-migration.md).
+ * **S0 (0.2.0):** the genuine compiler (`./compile.ts`) emits canonical FlowIR
+ * and content-addresses it with {@link hashFlowIR}. `usedFallbackHash` is
+ * **false** when IR is produced. The DSL-level `flowDefHash` remains available
+ * for the v2 cache tier (`v2:flowdef:`) during the migration window.
  *
- * Pure + async (Web Crypto). Never throws — a hash failure leaves `hash`
- * unset and `usedFallbackHash` true; the runtime degrades to the safe
- * flowName-only cache key (cross-run disabled for that run).
+ * Pure + async-compatible API (sync body; async retained for callers). Never
+ * throws — a hash failure leaves `hash` unset and `usedFallbackHash` true.
  *
- * @see docs/internal/overstory-convergence-roadmap.md §3 (M1)
- * @see docs/internal/rfc-flowir-compilation.md
+ * @see docs/rfc-0.2.0-architecture.md §5, §9 (S0)
  */
 
 import type { Taskflow } from "../schema.ts";
-import { flowDefHash } from "./hash.ts";
-import { translateTaskflow } from "./translate.ts";
+import { compileTaskflowToFlowIR } from "./compile.ts";
+import { hashFlowIR } from "./canonical-hash.ts";
 import type { TaskflowIR } from "./meta.ts";
 
 /**
  * Compile a (desugared) `Taskflow` into its content-addressed IR.
  *
- * The returned `hash` is, in the stub, exactly `flowDefHash(def)` — the
- * overstory-vendored canonical-JSON + SHA-256-truncation contract. The
- * `usedFallbackHash` flag records that this is the *fallback* hash (non-IR-
- * canonical): it is `true` whenever the stub cannot guarantee IR-canonicity
- * (any phase with a `when`, or any hash-compute failure).
+ * The returned `hash` is `ir:<64-hex>` from {@link hashFlowIR} over the
+ * **canonical** FlowIR (key-order / node-order / condition-normalization
+ * invariant). `usedFallbackHash` is false when compilation produced nodes.
  *
- * Never throws. Returns structured diagnostics so `/tf ir` on a broken flow
- * yields a clean error table instead of crashing.
+ * Never throws.
  */
 export async function compileTaskflowToIR(def: Taskflow): Promise<TaskflowIR> {
-	const t = translateTaskflow(def);
+	const c = compileTaskflowToFlowIR(def);
 	let hash: string | undefined;
 	try {
-		hash = await flowDefHash(def);
+		if (c.canonical.nodes.length > 0) {
+			hash = hashFlowIR(c.canonical);
+		}
 	} catch {
 		hash = undefined;
 	}
 	return {
-		ir: t.ir,
-		meta: t.meta,
+		ir: c.ir,
+		meta: c.meta,
 		hash,
-		warnings: t.warnings,
-		errors: t.errors,
-		// Stub: the fallback hash is used whenever (a) any phase has a `when`
-		// (translateTaskflow flags it) OR (b) the hash computation itself failed.
-		// Once the genuine overstory compiler is vendored, condition (a) drops.
-		usedFallbackHash: t.usedFallbackHash || hash === undefined,
+		warnings: c.warnings,
+		errors: c.errors,
+		// Fallback only when we could not content-address the IR.
+		usedFallbackHash: c.usedFallbackHash || hash === undefined,
 	};
 }
 
@@ -73,6 +62,8 @@ export type {
 } from "./meta.ts";
 
 export { phaseFingerprint } from "./phasefp.ts";
+export { compileTaskflowToFlowIR, type CompileTaskflowToFlowIRResult } from "./compile.ts";
+export { translateTaskflow } from "./translate.ts";
 
 // ---------------------------------------------------------------------------
 // Canonical FlowIR type contract + content-addressed hash (batch-1 additions)
@@ -86,20 +77,13 @@ export { phaseFingerprint } from "./phasefp.ts";
 //   - `FlowIR` / `FlowIRNode`           → the stub projection (meta.ts), used by
 //                                          `compileTaskflowToIR` / `TaskflowIR`.
 //   - `CanonicalFlowIR` / `CanonicalFlowIRNode` → the canonical contract
-//                                          (schema.ts); the shape the batch-2
-//                                          compiler emits and `hashFlowIR`
-//                                          content-addresses.
+//                                          (schema.ts); the shape the compiler
+//                                          emits and `hashFlowIR` content-addresses.
 //
 // The canonical names are re-exported under `Canonical*` aliases to avoid a
-// duplicate-export clash with meta.ts's stub `FlowIR`/`FlowIRNode`; this keeps
-// the batch purely additive (the existing public surface is unchanged) while
-// making the canonical contract reachable through the main `taskflow-core`
-// barrel. `hashFlowIR`/`hashNode` take the canonical types, so a consumer
-// hashing a stub-projection IR must widen via the canonical type (the genuine
-// compiler in batch 2 will emit canonical IR directly).
+// duplicate-export clash with meta.ts's stub `FlowIR`/`FlowIRNode`.
 
-// `./schema.ts` — canonical FlowIR type contract + structural guards.
-export { FlowIRNodeKind } from "./schema.ts"; // value (TypeBox schema) + type (literal union)
+export { FlowIRNodeKind } from "./schema.ts";
 export type {
 	FlowIREdge,
 	FlowIRBudget,
@@ -115,10 +99,7 @@ export {
 	assertFlowIR,
 } from "./schema.ts";
 
-// `./cond.ts` — condition-IR normalization (canonical `when` form for hashing + replay refs).
 export type { NormalizedCond } from "./cond.ts";
 export { normalizeCond } from "./cond.ts";
 
-// `./canonical-hash.ts` — genuine content-addressed hash over canonical FlowIR
-// (sync `node:crypto` SHA-256; distinct from the vendored async `flowDefHash`).
 export { canonicalizeFlowIR, hashFlowIR, hashNode } from "./canonical-hash.ts";
