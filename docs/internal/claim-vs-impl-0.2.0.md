@@ -34,13 +34,30 @@
 
 loop multi-body · route · compensate/saga · watch · experimental C-track runes · host auto-build of `.tf.ts` · S5 default kernel ON
 
-## Alignment actions taken this pass
+## Alignment actions taken
 
-1. Schema + skills: `cancelLosers` documented as reserved/ignored; race emits warning.
+### Pass 1 (claim ledger)
+1. Schema + skills: `cancelLosers` reserved/ignored; race warning.
 2. S4 RFCs: ts-morph → TypeScript compiler API.
-3. FlowIR/step/runtime comments: 12 kinds / kernel-10 clarified.
-4. README / AGENTS / workspace / architecture topology counts refreshed.
-5. North-star: DSL ✅; flagship $ as S5 gate; multi-host via JSON.
+3. FlowIR/step/runtime comments: 12 kinds / kernel-10.
+4. README / AGENTS / workspace / architecture counts.
+5. North-star: DSL ✅; flagship $ = S5 gate.
+
+### Pass 2 (website + CHANGELOG + examples)
+6. Website homepage: **12** phases / **5** hosts (en+zh).
+7. Website phase-types + concepts: `race` / `expand` sections (en+zh).
+8. Website reference: **TypeScript DSL** page (en+zh) + nav.
+9. CHANGELOG Unreleased: S4 + race/expand + alignment; kernel wording fixed.
+10. Examples: `race-first-win.json`, `expand-nested-fragment.json`.
+11. Skills advanced: `flow{def}` vs `expand`; configuration caveats (kernel/decompile).
+
+## Still open (not claimed as done)
+
+- Formal **0.2.0 npm publish** + version bump (packages still 0.1.7; `taskflow-dsl` may 404 on registry).
+- Implement real `cancelLosers` abort (or keep reserved forever).
+- S5 kernel default ON + flagship $ demo seal.
+- Full website polish for every “ten” remnant in long-form copy (bulk pass done; spot-check periodically).
+- `pnpm test` full suite as release gate; live host e2e.
 
 ## Re-verify commands
 

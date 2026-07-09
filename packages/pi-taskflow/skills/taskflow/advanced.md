@@ -9,6 +9,21 @@ directories, or surgical re-execution after the world changes
 
 ---
 
+## `flow{def}` vs `expand` (when to use which)
+
+| Need | Prefer |
+|------|--------|
+| Saved reusable flow by name | `flow` + `use` |
+| Planner JSON as isolated nested sub-flow (classic) | `flow` + `def` **or** `expand` + `expandMode: "nested"` |
+| Fragment phases must appear on the **parent** run as `<expandId>-<childId>` | `expand` + `expandMode: "graft"` |
+| First of several static approaches (latency) | `race` (not tournament) |
+
+`expand` is a first-class phase type (Horizon B). Dynamic validation / nesting /
+breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
+(imperative path only until step handlers exist).
+
+---
+
 ## Shared Context Tree (blackboard + supervision) — opt-in
 
 By default subagents are fully isolated: they share nothing and only return a

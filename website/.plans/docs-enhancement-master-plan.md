@@ -61,7 +61,7 @@
 
 更新 `app/[lang]/page.tsx`：
 
-- 新增 **By the numbers** 数据区（4 hosts / 10 phase types / 0 deps / resume）
+- 新增 **By the numbers** 数据区（4 hosts / 12 phase types / 0 deps / resume）
 - 新增 **Testimonials** 社会证明区（3 条角色化引用）
 - 新增 **Comparison** 对比区（命令式 vs taskflow，精简版表格）
 - 新增/改进底部 CTAs：Read docs / Browse templates / Join community

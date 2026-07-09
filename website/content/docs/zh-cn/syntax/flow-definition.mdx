@@ -380,7 +380,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 | `Missing or invalid 'name'` | `name` 缺失、为空、或不是字符串。 |
 | `Taskflow must have at least one phase` | `phases` 缺失或为空。 |
 | `Duplicate phase id: X` | 两个阶段共用一个 `id`。 |
-| `Phase 'X': unknown type 'Y'` | `type` 不在 10 个允许值里。 |
+| `Phase 'X': unknown type 'Y'` | `type` 不在 12 个允许值里。 |
 | `Phase 'X': dependsOn unknown phase 'Y'` | `dependsOn` 或 `from` 条目没有对应阶段。 |
 | `Dependency cycle detected: A -> B -> A` | Kahn 算法发现环。 |
 | `Only one phase may be marked 'final' (found N)` | 多于一个 `final: true` 阶段。 |

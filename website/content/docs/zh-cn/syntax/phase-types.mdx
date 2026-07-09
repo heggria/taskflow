@@ -1,11 +1,11 @@
 ---
 title: 阶段类型
-description: taskflow 的十个构建块，以及何时选用各自。
+description: taskflow 的十二个构建块，以及何时选用各自。
 ---
 
-一个 taskflow 是由**阶段**组成的有向图。每个阶段是一个工作单元 —— 一次隔离的子代理调用、一次 shell 命令、或一个控制决策 —— 运行时通过 `dependsOn` 把它们连起来。本页按你实际会遇到它们的顺序，逐一讲解全部十种阶段类型：从你 80% 场景都会用的那个开始，再随着问题变复杂逐步加上能力。
+一个 taskflow 是由**阶段**组成的有向图。每个阶段是一个工作单元 —— 一次隔离的子代理调用、一次 shell 命令、或一个控制决策 —— 运行时通过 `dependsOn` 把它们连起来。本页按你实际会遇到它们的顺序，逐一讲解全部十二种阶段类型：从你 80% 场景都会用的那个开始，再随着问题变复杂逐步加上能力。
 
-你可能在想：*我得先把十种全学会才能干活吗？* 不用。大多数 flow 只用三四种类型就建起来了。其余几种是给特定场景准备的 —— 人工审批、迭代精修、竞争草稿 —— 在你撞上那些场景之前，完全可以无视它们。
+你可能在想：*我得先把十二种全学会才能干活吗？* 不用。大多数 flow 只用三四种类型就建起来了。其余几种是给特定场景准备的 —— 人工审批、迭代精修、竞争草稿 —— 在你撞上那些场景之前，完全可以无视它们。
 
 ## 何时用什么
 
@@ -419,6 +419,47 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
   `script` 阶段不能用 `retry` 或 `output: "json"`。`timeout` 默认 `60000`、上限 `300000` ms。
 </Callout>
 
+## 先完成者胜：`race`
+
+当多种路径都能回答同一问题、且**延迟**比等齐所有分支更重要时，用 `race`。各分支同时启动，**第一个成功完成**的输出成为阶段结果（`parallel` 会等全部；`tournament` 会等齐后由裁判比质量）。
+
+```json title="race — 先完成者胜"
+{
+  "id": "quick",
+  "type": "race",
+  "branches": [
+    { "task": "用简短启发式作答…", "agent": "executor" },
+    { "task": "查一下文档再作答…", "agent": "researcher" }
+  ],
+  "final": true
+}
+```
+
+<Callout type="info">
+  **`cancelLosers` 为预留字段。** schema 接受它以保持前向兼容，但败者**目前不会被中止**，可能仍跑到自然结束。请用 `budget` / `timeout` 控制开销。
+</Callout>
+
+## 动态片段：`expand`
+
+`expand` 从 `def` 运行一段片段 Taskflow（内联对象、phases 数组，或 `{steps.plan.json}`）。两种模式：
+
+| `expandMode` | 行为 |
+|---|---|
+| `nested`（默认） | 隔离子流（类似 `flow`+`def`）；子阶段 id 不进入父 run |
+| `graft` | 成功后把子阶段状态提升到父 run，id 为 `<expandId>-<childId>` |
+
+```json title="expand — graft 提升"
+{
+  "id": "grow",
+  "type": "expand",
+  "expandMode": "graft",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+可选 `maxNodes` 限制片段规模（默认 50，硬上限 100）。动态校验与 `flow{def}` 安全帽一致。
+
 ## 完整的 PR 审查 flow
 
 把五种最常用的类型 —— `agent`、`map`、`reduce`、`gate`，加一个用于 lint 的 `script` —— 拼到一起，这就是你可以直接复制改造的完整审查 flow：
@@ -503,7 +544,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `id` | `string` | — | **必需。** 唯一标识符，在 `dependsOn` 和 `{steps.<id>.output}` 中被引用。用连字符，不用下划线。 |
-| `type` | `string` | `"agent"` | 十种阶段类型之一。 |
+| `type` | `string` | `"agent"` | 十二种阶段类型之一。 |
 | `agent` | `string` | 第一个发现的 agent | agent 名称。必须用连字符。 |
 | `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches`）。 |
 | `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
@@ -549,8 +590,10 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | `loop` | 必需 | — | — | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — |
 | `tournament` | 必需³ | — | — | 可选³ | — | — | — | — | — | — | — | 可选 | 可选 | — | — |
 | `script` | 忽略 | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — | — | — |
+| `race` | 忽略 | — | — | 必需⁴ | — | — | — | — | — | — | — | — | — | — | — |
+| `expand` | 忽略 | — | — | — | — | 必需（`def`） | 可选 | — | — | — | — | — | — | — | — |
 
-¹ `gate` 在不用 `score` 时需要 `task`。² `flow` 需要 `use` 或 `def` 恰好其一。³ `tournament` 在不用 `branches` 时需要 `task`。
+¹ `gate` 在不用 `score` 时需要 `task`。² `flow` 需要 `use` 或 `def` 恰好其一。³ `tournament` 在不用 `branches` 时需要 `task`。⁴ `race` 至少 2 条 `branches`。`expand` 另有 `expandMode`（`nested`\|`graft`）与 `maxNodes`。
 
 ### 按类型的字段细节
 

@@ -96,12 +96,12 @@ const translations = {
 		stats: {
 			heading: "By the numbers",
 			hosts: {
-				value: "4 hosts",
-				label: "Pi, Codex, Claude Code, OpenCode",
+				value: "5 hosts",
+				label: "Pi, Codex, Claude Code, OpenCode, Grok",
 			},
 			phases: {
-				value: "10 phase types",
-				label: "agent, map, gate, reduce, and more",
+				value: "12 phase types",
+				label: "agent, map, gate, race, expand, and more",
 			},
 			deps: {
 				value: "0 runtime deps",
@@ -226,12 +226,12 @@ const translations = {
 		stats: {
 			heading: "数据一览",
 			hosts: {
-				value: "4 个宿主",
-				label: "Pi、Codex、Claude Code、OpenCode",
+				value: "5 个宿主",
+				label: "Pi、Codex、Claude Code、OpenCode、Grok",
 			},
 			phases: {
-				value: "10 种阶段类型",
-				label: "agent、map、gate、reduce 等",
+				value: "12 种阶段类型",
+				label: "agent、map、gate、race、expand 等",
 			},
 			deps: {
 				value: "0 个运行时依赖",

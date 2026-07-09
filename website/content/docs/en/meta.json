@@ -45,6 +45,7 @@
     "---Reference---",
     "reference/shorthand",
     "reference/commands",
+    "reference/typescript-dsl",
     "reference/incremental-recompute",
     "community",
     "---Blog---",

@@ -380,7 +380,7 @@ Every flow is validated before execution, in two modes:
 | `Missing or invalid 'name'` | `name` missing, empty, or not a string. |
 | `Taskflow must have at least one phase` | `phases` missing or empty. |
 | `Duplicate phase id: X` | Two phases share an `id`. |
-| `Phase 'X': unknown type 'Y'` | `type` not in the 10 allowed values. |
+| `Phase 'X': unknown type 'Y'` | `type` not in the 12 allowed values. |
 | `Phase 'X': dependsOn unknown phase 'Y'` | A `dependsOn` or `from` entry has no matching phase. |
 | `Dependency cycle detected: A -> B -> A` | Kahn's algorithm found a cycle. |
 | `Only one phase may be marked 'final' (found N)` | More than one `final: true` phase. |

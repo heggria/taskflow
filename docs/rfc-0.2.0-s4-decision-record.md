@@ -29,7 +29,7 @@
 ## MVP scope (in) — original ship bar
 
 1. `flow` + args/budget/concurrency/description  
-2. Core **10 phase kinds** basic runes  
+2. Core phase kinds basic runes (ship bar was **10**; engine now **12** with `race`/`expand` — see Landed beyond MVP)  
 3. Template → `{steps.*}` / `{item.*}` erase  
 4. Auto `dependsOn` from `.output` / `.json` reads + explicit `dependsOn`  
 5. `when` **string** form (+ TS subset in `check` if cheap)  

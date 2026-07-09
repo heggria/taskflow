@@ -184,7 +184,7 @@
 4. **core 零运行时依赖不变**：`flowir/*`、`exec/*`、`replay.ts`、`rates.ts` 全是纯模块（仅 typebox）。
 5. **`taskflow-core` 永不 import host SDK**（`@earendil-works/*`）——不变。
 
-### 4.3 新包 taskflow-dsl（7 → 8 包）
+### 4.3 新包 taskflow-dsl（9 packages + website）
 
 | 内容 | 说明 |
 |---|---|

@@ -5,7 +5,7 @@ description: The ten building blocks of a taskflow, and how to choose between th
 
 A **phase** is one unit of work in a taskflow. Each phase runs as an isolated subagent call, shell command, or control decision, and the runtime wires them into a DAG via `dependsOn`.
 
-The best way to understand the ten phase types is to watch a single problem evolve. Imagine you are building a tool that reviews a pull request.
+The best way to understand the twelve phase types is to watch a single problem evolve. Imagine you are building a tool that reviews a pull request.
 
 ## Start simple: one agent
 
@@ -200,9 +200,9 @@ Putting it together:
 }
 ```
 
-## The other five phase types
+## The other phase types
 
-The PR-review story used the five most common types. The remaining five solve specific problems:
+The PR-review story used the five most common types. The remaining types solve specific problems:
 
 ### `approval` — pause for a human
 
@@ -273,6 +273,35 @@ Use for builds, tests, lint, or file transformations. Zero tokens.
 }
 ```
 
+### `race` — first completed branch wins
+
+Use when several approaches can answer the same question and you want the **fastest** successful result (not a quality judge).
+
+```json title="race-example.json"
+{
+  "id": "quick",
+  "type": "race",
+  "branches": [
+    { "task": "Heuristic answer…", "agent": "executor" },
+    { "task": "Thorough answer…", "agent": "researcher" }
+  ]
+}
+```
+
+### `expand` — run a dynamic fragment (nested or graft)
+
+Use when a planner emits a mini-flow JSON and you want the runtime to execute it. `expandMode: "graft"` promotes child phase states onto the parent as `<expandId>-<childId>`.
+
+```json title="expand-example.json"
+{
+  "id": "grow",
+  "type": "expand",
+  "expandMode": "nested",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
 ## Choosing a phase type
 
 | If your problem is... | Use | Why |
@@ -287,6 +316,8 @@ Use for builds, tests, lint, or file transformations. Zero tokens.
 | "Repeat until a condition is met" | `loop` | Iterative refinement. |
 | "Pick the best of several attempts" | `tournament` | Competitive selection for subjective work. |
 | "Run a command, no LLM" | `script` | Builds, tests, file ops. |
+| "Keep the first approach that finishes" | `race` | Latency over exhaustive wait/judge. |
+| "Run a planner-emitted fragment" | `expand` | Nested isolation or graft-promote onto parent. |
 
 ## Phase lifecycle
 

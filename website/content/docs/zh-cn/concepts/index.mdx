@@ -6,7 +6,7 @@ description: taskflow 声明式 DAG 模型背后的思想。
 这一章是 taskflow 背后的*心智模型*。它不列举每个字段——那是[语法参考](/zh-cn/docs/syntax)的事——也不带你走某个宿主的安装——那是[指南](/zh-cn/docs/guides)的事。它解释的是让 taskflow 不同于你手写命令式脚本的六个理念：
 
 - 工作是一张**图**，而不是一串调用；
-- 图由十种**阶段类型**搭建而成；
+- 图由十二种**阶段类型**搭建而成；
 - 数据通过**插值**在阶段之间流动；
 - 整张图在任何 token 花出去之前就被**验证**过；
 - 中间输出与你的上下文**隔离**；
@@ -24,7 +24,7 @@ description: taskflow 声明式 DAG 模型背后的思想。
     **[DAG 模型](/zh-cn/docs/concepts/dag)** —— 为什么工作是一张由 `dependsOn` 边构成的图，以及为什么数组顺序*不是*一条边。
   </Step>
   <Step>
-    **[阶段类型](/zh-cn/docs/concepts/phases)** —— 十个构建块（`agent`、`map`、`gate`、`loop`……）以及何时该用哪一个。
+    **[阶段类型](/zh-cn/docs/concepts/phases)** —— 十二个构建块（`agent`、`map`、`gate`、`loop`……）以及何时该用哪一个。
   </Step>
   <Step>
     **[插值](/zh-cn/docs/concepts/interpolation)** —— `{steps.X.output}` 之类的东西如何零 token、确定性地在阶段之间搬运数据。

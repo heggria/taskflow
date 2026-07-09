@@ -468,10 +468,16 @@ Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
 
 ---
 
-## Caveats (declared but not yet enforced)
+## Caveats (declared but not yet enforced / partial)
 
-These keys validate but the runtime does **not** act on them yet — don't rely on
-them for behavior:
+These keys validate but the runtime does **not** fully act on them yet — don't
+rely on them for behavior:
 
 - `arg.required` — missing required args are not rejected.
 - `flow.version` — informational only.
+- `cancelLosers` (race) — **reserved / ignored** (first-finish-wins only).
+- **Event kernel** (`eventKernel` / `PI_TASKFLOW_EVENT_KERNEL=1`) — opt-in; does
+  **not** run `race`/`expand`; score gates, `retry`, `expect`, reflexion,
+  cross-run cache, and Shared Context Tree force the **imperative** path.
+- **`taskflow-dsl decompile`** — semantic readability, **not** literal round-trip
+  (e.g. expand `def` objects may collapse to a placeholder string).

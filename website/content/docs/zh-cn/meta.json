@@ -45,6 +45,7 @@
     "---参考---",
     "reference/shorthand",
     "reference/commands",
+    "reference/typescript-dsl",
     "reference/incremental-recompute",
     "community",
     "---博客---",

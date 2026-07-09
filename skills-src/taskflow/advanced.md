@@ -9,9 +9,24 @@ directories, or surgical re-execution after the world changes
 <!-- host:codex,claude,opencode,grok -->
 # Taskflow Advanced — dynamic sub-flows & workspace isolation
 
-Load this when a flow needs: runtime-generated work (`flow{def}`) or isolated
-working directories (`cwd: temp/dedicated/worktree`).
+Load this when a flow needs: runtime-generated work (`flow{def}` / `expand`) or
+isolated working directories (`cwd: temp/dedicated/worktree`).
 <!-- /host:codex,claude,opencode,grok -->
+
+---
+
+## `flow{def}` vs `expand` (when to use which)
+
+| Need | Prefer |
+|------|--------|
+| Saved reusable flow by name | `flow` + `use` |
+| Planner JSON as isolated nested sub-flow (classic) | `flow` + `def` **or** `expand` + `expandMode: "nested"` |
+| Fragment phases must appear on the **parent** run as `<expandId>-<childId>` | `expand` + `expandMode: "graft"` |
+| First of several static approaches (latency) | `race` (not tournament) |
+
+`expand` is a first-class phase type (Horizon B). Dynamic validation / nesting /
+breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
+(imperative path only until step handlers exist).
 
 ---
 

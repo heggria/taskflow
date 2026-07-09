@@ -3,7 +3,7 @@ title: Phase Types
 description: The ten building blocks of a taskflow, and when to reach for each one.
 ---
 
-A taskflow is a directed graph of **phases**. Each phase is one unit of work — an isolated subagent call, a shell command, or a control decision — and the runtime wires them together with `dependsOn`. This page walks through all ten phase types the way you will actually meet them: starting with the one you will use 80% of the time, then adding power as the problem demands.
+A taskflow is a directed graph of **phases**. Each phase is one unit of work — an isolated subagent call, a shell command, or a control decision — and the runtime wires them together with `dependsOn`. This page walks through all twelve phase types the way you will actually meet them: starting with the one you will use 80% of the time, then adding power as the problem demands.
 
 You might be wondering: *do I need to learn all ten before I can do anything useful?* No. Most flows are built from three or four types. The rest exist for specific situations — human approval, iterative refinement, competing drafts — and you can ignore them until you meet one of those situations.
 
@@ -419,6 +419,47 @@ To pass dynamic values into a script safely, pipe them through `input` (which su
   `script` phases cannot use `retry` or `output: "json"`. `timeout` defaults to `60000` and caps at `300000` ms.
 </Callout>
 
+## First finish wins: `race`
+
+When several approaches can answer the same question and **latency** matters more than waiting for every branch, use `race`. Branches start together; the first successful completion becomes the phase output (unlike `parallel`, which waits for all, or `tournament`, which judges quality after all variants).
+
+```json title="race — first completed wins"
+{
+  "id": "quick",
+  "type": "race",
+  "branches": [
+    { "task": "Answer with a short heuristic…", "agent": "executor" },
+    { "task": "Answer after a brief docs look…", "agent": "researcher" }
+  ],
+  "final": true
+}
+```
+
+<Callout type="info">
+  **`cancelLosers` is reserved.** The schema accepts it for forward compatibility, but losers are **not** aborted yet — they may run to natural completion. Cap spend with `budget` / `timeout`.
+</Callout>
+
+## Dynamic fragment: `expand`
+
+`expand` runs a fragment Taskflow from `def` (inline object, phases array, or `{steps.plan.json}`). Two modes:
+
+| `expandMode` | Behavior |
+|---|---|
+| `nested` (default) | Isolated sub-flow (like `flow` + `def`); child ids stay off the parent. |
+| `graft` | After success, promote child phase states onto the parent as `<expandId>-<childId>`. |
+
+```json title="expand — graft promote"
+{
+  "id": "grow",
+  "type": "expand",
+  "expandMode": "graft",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+Optional `maxNodes` caps fragment size (default 50, hard max 100). Dynamic validation matches `flow{def}` security caps.
+
 ## The complete PR-review flow
 
 Putting the five most common types together — `agent`, `map`, `reduce`, `gate`, with a `script` step for lint — here is the full review flow you can copy and adapt:
@@ -503,7 +544,7 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `id` | `string` | — | **Required.** Unique identifier, referenced in `dependsOn` and `{steps.<id>.output}`. Use hyphens, not underscores. |
-| `type` | `string` | `"agent"` | One of the ten phase types. |
+| `type` | `string` | `"agent"` | One of the twelve phase types (`agent`…`script`, `race`, `expand`). |
 | `agent` | `string` | first discovered | Agent name. Must use hyphens. |
 | `task` | `string` | — | Task prompt. Supports interpolation. Required for `agent`/`map`/`reduce`/`loop`/`tournament` (unless `branches` is used). |
 | `dependsOn` | `string[]` | `[]` | Phase ids that must complete before this phase starts. Forms the DAG edges. |
@@ -549,8 +590,10 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 | `loop` | required | — | — | — | — | — | — | — | — | required | optional | — | — | — | — |
 | `tournament` | required³ | — | — | optional³ | — | — | — | — | — | — | — | optional | optional | — | — |
 | `script` | ignored | — | — | — | — | — | — | required | optional | — | — | — | — | — | — |
+| `race` | ignored | — | — | required⁴ | — | — | — | — | — | — | — | — | — | — | — |
+| `expand` | ignored | — | — | — | — | required (`def`) | optional | — | — | — | — | — | — | — | — |
 
-¹ `gate` requires `task` unless `score` is used. ² `flow` requires exactly one of `use` or `def`. ³ `tournament` requires `task` unless `branches` is used.
+¹ `gate` requires `task` unless `score` is used. ² `flow` requires exactly one of `use` or `def`. ³ `tournament` requires `task` unless `branches` is used. ⁴ `race` requires ≥2 `branches`. Expand also accepts `expandMode` (`nested`\|`graft`) and `maxNodes`.
 
 ### Per-type field details
 

@@ -1,0 +1,32 @@
+{
+  "name": "expand-nested-fragment",
+  "description": "Horizon B: expand runs an inline fragment as an isolated nested sub-flow.",
+  "phases": [
+    {
+      "id": "seed",
+      "type": "agent",
+      "agent": "executor",
+      "task": "Say hello-from-seed",
+      "output": "text"
+    },
+    {
+      "id": "grow",
+      "type": "expand",
+      "expandMode": "nested",
+      "dependsOn": ["seed"],
+      "def": {
+        "name": "frag",
+        "phases": [
+          {
+            "id": "inner",
+            "type": "agent",
+            "agent": "executor",
+            "task": "Say nested-hi (parent seed was upstream; this is the fragment final).",
+            "final": true
+          }
+        ]
+      },
+      "final": true
+    }
+  ]
+}
