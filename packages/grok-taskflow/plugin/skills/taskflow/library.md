@@ -1,3 +1,5 @@
+<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/library.md (npm run build:skills) -->
+
 # Library: reusable flows & the search-before-author loop
 
 taskflow saves flows you'll reuse into a **library** with metadata, so you can
@@ -7,14 +9,8 @@ save (with a good `purpose` + `tags`), the better future search gets.
 > Full design: `docs/rfc-library-reuse.md`. This file is the agent-facing
 > "when and how" guide.
 
-<!-- host:pi -->
-**Host binding (pi):** use the `taskflow` tool with `action: "search"` /
-`action: "save"`, and `/tf list` / `/tf show <name>`.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
 **Host binding:** use the `taskflow_search`, `taskflow_save`, `taskflow_list`,
 `taskflow_show` tools.
-<!-- /host:codex,claude,opencode,grok -->
 
 ## Before authoring a non-trivial flow: SEARCH first
 
@@ -22,16 +18,9 @@ Any time you're about to write a flow with ≥3 phases, fan-out, or a gate,
 **search the library first**. It costs nothing and often finds a starter you
 can adapt.
 
-<!-- host:pi -->
-```jsonc
-{ "action": "search", "query": "audit API endpoints for missing auth", "limit": 5 }
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_search", "arguments": { "query": "audit API endpoints for missing auth", "limit": 5 } }
 ```
-<!-- /host:codex,claude,opencode,grok -->
 
 Read the results and the `→ reuseHint`:
 
@@ -53,21 +42,12 @@ When you finish a flow you expect to use again, save it **with a `purpose` and
 2–4 `tags`**. These two fields are what search matches on — a flow saved
 without them is nearly invisible to future search.
 
-<!-- host:pi -->
-```jsonc
-{ "action": "save", "define": { "name": "audit-endpoints", "phases": [ ... ] },
-  "purpose": "Audit a directory of API endpoints for missing auth checks",
-  "tags": ["audit", "security", "auth", "fan-out"] }
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_save",
   "arguments": { "name": "audit-endpoints", "definition": { "phases": [ ... ] },
     "purpose": "Audit a directory of API endpoints for missing auth checks",
     "tags": ["audit", "security", "auth", "fan-out"] } }
 ```
-<!-- /host:codex,claude,opencode,grok -->
 
 `save` auto-derives structural metadata (phase signature, a `generality` score
 in 0–1) and writes a sidecar `.meta.json` next to the flow file. You don't
@@ -96,18 +76,10 @@ chosen because of a prior search — set the `reusedFromSearch: true` flag on th
 run. Direct run-by-name does **not** bump it (that's intentional: `reuseCount`
 measures "found-via-search reuse", the high-quality signal for later auto-prune).
 
-<!-- host:pi -->
-```jsonc
-// after search recommended "audit-endpoints", run it with the flag:
-{ "action": "run", "name": "audit-endpoints", "args": { "dir": "src/api" }, "reusedFromSearch": true }
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_run",
   "arguments": { "name": "audit-endpoints", "args": { "dir": "src/api" }, "reusedFromSearch": true } }
 ```
-<!-- /host:codex,claude,opencode,grok -->
 
 ## Judicious reuse — not every task needs the library
 

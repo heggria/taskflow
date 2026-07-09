@@ -362,6 +362,7 @@ Each entry is one of:
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+| `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
 
 ---
 

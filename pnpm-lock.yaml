@@ -57,6 +57,18 @@ importers:
         specifier: 0.1.7
         version: link:../taskflow-mcp-core
 
+  packages/grok-taskflow:
+    dependencies:
+      taskflow-core:
+        specifier: 0.1.7
+        version: link:../taskflow-core
+      taskflow-hosts:
+        specifier: 0.1.7
+        version: link:../taskflow-hosts
+      taskflow-mcp-core:
+        specifier: 0.1.7
+        version: link:../taskflow-mcp-core
+
   packages/opencode-taskflow:
     dependencies:
       taskflow-core:

@@ -6,12 +6,12 @@ runtime-generated work (`flow{def}` / `ctx_spawn`), isolated working
 directories, or surgical re-execution after the world changes
 (`ir` / `provenance` / `why-stale` / `recompute`).
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 # Taskflow Advanced — dynamic sub-flows & workspace isolation
 
 Load this when a flow needs: runtime-generated work (`flow{def}`) or isolated
 working directories (`cwd: temp/dedicated/worktree`).
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 ---
 

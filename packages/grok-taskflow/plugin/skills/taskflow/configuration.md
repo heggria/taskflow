@@ -212,9 +212,12 @@ For any phase, the effective value is resolved in this **precedence order**
 
 Notes:
 - `tools` is a **whitelist**. Omit it to allow all.
-- Each phase runs as an isolated `codex exec --json` session. A model id that
-  still looks like a pi-provider path (contains `/`) or an unresolved
-  `{{placeholder}}` is dropped so codex falls back to its configured default.
+- Each phase runs as an isolated `grok -p --output-format streaming-json`
+  session. Unresolved `{{placeholder}}`s, multi-segment openrouter paths, and
+  pi thinking suffixes (`:xhigh`) are dropped so Grok falls back to its
+  configured default. Read-only phases get `--tools read_file,grep,list_dir,…`;
+  all non-interactive phases use `--always-approve` so permission prompts never
+  hang the headless subagent (no OS sandbox — see the README security note).
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---

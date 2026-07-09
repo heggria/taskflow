@@ -176,9 +176,9 @@ still reach `{args.X}`).
 
 Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 ---
 
@@ -247,6 +247,14 @@ Notes:
   (via `OPENCODE_CONFIG_CONTENT`) so bash/write/edit are genuinely blocked;
   mutating phases run with `--auto` (auto-approve).
 <!-- /host:opencode -->
+<!-- host:grok -->
+- Each phase runs as an isolated `grok -p --output-format streaming-json`
+  session. Unresolved `{{placeholder}}`s, multi-segment openrouter paths, and
+  pi thinking suffixes (`:xhigh`) are dropped so Grok falls back to its
+  configured default. Read-only phases get `--tools read_file,grep,list_dir,…`;
+  all non-interactive phases use `--always-approve` so permission prompts never
+  hang the headless subagent (no OS sandbox — see the README security note).
+<!-- /host:grok -->
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -389,6 +397,7 @@ Each entry is one of:
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+| `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
 
 ---
 

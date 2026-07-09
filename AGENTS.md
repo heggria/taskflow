@@ -8,8 +8,8 @@ taskflow is a **declarative DAG orchestration runtime** for coding agents — it
 
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
 **Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
-**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp-core`) and the three MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp-core`). Everything depends on `typebox`.\
-**Layout:** pnpm-workspace monorepo of seven published packages — `taskflow-core` (host-neutral engine), `taskflow-mcp-core` (the host-neutral MCP server + DAG renderer, depends on core), `taskflow-hosts` (shared host-runner collection: the codex/claude/opencode SubagentRunner impls + argv builders + event-stream parsers, depends on core), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), `codex-taskflow` (Codex MCP server + bin + a `plugin/` scaffold installable via `codex plugin add`; re-exports the runner from `taskflow-hosts`), `claude-taskflow` (Claude Code MCP server + bin + a `plugin/` scaffold installable via `claude plugin install`; re-exports the runner from `taskflow-hosts`), and `opencode-taskflow` (OpenCode MCP server + bin + an `opencode.json` config scaffold; re-exports the runner from `taskflow-hosts`).\
+**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp-core`) and the four MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp-core`). Everything depends on `typebox`.\
+**Layout:** pnpm-workspace monorepo of eight published packages — `taskflow-core` (host-neutral engine), `taskflow-mcp-core` (the host-neutral MCP server + DAG renderer, depends on core), `taskflow-hosts` (shared host-runner collection: the codex/claude/opencode/grok SubagentRunner impls + argv builders + event-stream parsers, depends on core), `pi-taskflow` (Pi extension adapter, installed via `pi install npm:pi-taskflow`), `codex-taskflow` (Codex MCP server + bin + a `plugin/` scaffold installable via `codex plugin add`; re-exports the runner from `taskflow-hosts`), `claude-taskflow` (Claude Code MCP server + bin + a `plugin/` scaffold installable via `claude plugin install`; re-exports the runner from `taskflow-hosts`), and `opencode-taskflow` (OpenCode MCP server + bin + an `opencode.json` config scaffold; re-exports the runner from `taskflow-hosts`), and `grok-taskflow` (Grok Build MCP server + bin + a `plugin/` scaffold installable via `grok plugin install`; re-exports the runner from `taskflow-hosts`).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
 
 ## Architecture
@@ -79,7 +79,7 @@ packages/
    │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← plugin icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← mcp-server unit test + .mts e2e scripts
-└─ opencode-taskflow/      ← OpenCode DELIVERY package (depends on taskflow-hosts + taskflow-mcp-core)
+├─ opencode-taskflow/      ← OpenCode DELIVERY package (depends on taskflow-hosts + taskflow-mcp-core)
    ├─ src/
    │  ├─ index.ts          ← re-exports the opencode runner from taskflow-hosts (back-compat public surface)
    │  └─ mcp/              ← thin bind: server.ts re-exports core's MCP server bound to opencodeSubagentRunner; bin.ts
@@ -88,16 +88,27 @@ packages/
    │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
    │  └─ assets/           ← icons (taskflow.svg, taskflow-small.svg)
    └─ test/              ← opencode-adapter unit tests + .mts e2e scripts
+└─ grok-taskflow/         ← Grok Build DELIVERY package (depends on taskflow-hosts + taskflow-mcp-core)
+   ├─ src/
+   │  ├─ index.ts          ← re-exports the grok runner from taskflow-hosts (back-compat public surface)
+   │  └─ mcp/              ← thin bind: server.ts re-exports core's MCP server bound to grokSubagentRunner; bin.ts
+   ├─ plugin/            ← Grok Build plugin scaffold (`grok plugin install … --trust`)
+   │  ├─ .grok-plugin/plugin.json ← plugin manifest
+   │  ├─ .mcp.json         ← declares the taskflow MCP server via `npx grok-taskflow-mcp`
+   │  ├─ skills/taskflow/  ← GENERATED per-host skill files (do not edit; see skills-src/)
+   │  └─ assets/           ← icons (taskflow.svg, taskflow-small.svg)
+   └─ test/              ← mcp-server unit test + .mts e2e scripts
 
 .claude-plugin/           ← marketplace.json (repo-root; shared by both `codex plugin marketplace add`
                             and `claude plugin marketplace add heggria/taskflow`; lists the
-                            `taskflow` [codex] and `claude-taskflow` [claude] plugins. OpenCode has
-                            no marketplace — it registers the MCP server via opencode.json)
+                            `taskflow` [codex] and `claude-taskflow` [claude] plugins. Grok has
+                            `.grok-plugin/marketplace.json` for `grok plugin marketplace add`.
+                            OpenCode has no marketplace — it registers the MCP server via opencode.json)
 
 skills-src/taskflow/      ← SINGLE SOURCE for all hosts' skills: entry.pi.md + entry.codex.md +
                             entry.claude.md + entry.opencode.md (frontmatter + host binding) +
                             core.md/patterns.md/advanced.md/configuration.md (shared body with
-                            <!-- host:pi/codex/claude/opencode --> blocks; the host field is a
+                            <!-- host:pi/codex/claude/opencode/grok --> blocks; the host field is a
                             comma-list, e.g. <!-- host:codex,claude,opencode -->). Compiled by
                             scripts/build-skills.mjs (pnpm run build:skills); drift-guarded by
                             packages/pi-taskflow/test/skills-build.test.ts.
@@ -150,6 +161,7 @@ pnpm run test:pi       # pi-adapter tests only
 pnpm run test:codex    # codex-adapter tests only
 pnpm run test:claude   # claude-adapter tests only
 pnpm run test:opencode # opencode-adapter tests only
+pnpm run test:grok     # grok-adapter tests only
 pnpm run build         # emit dist/*.js + .d.ts for all seven packages
 pnpm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
 pnpm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
@@ -158,6 +170,7 @@ pnpm run test:e2e-claude          # claude executor e2e (needs live claude + mod
 pnpm run test:e2e-claude-mcp      # claude MCP stdio e2e (src; no live claude needed)
 pnpm run test:e2e-opencode        # opencode executor e2e (needs live opencode; uses a free model by default)
 pnpm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencode needed)
+pnpm run test:e2e-grok-mcp        # grok MCP stdio e2e (src; no live grok needed)
 # pi e2e suites are run directly (they use .mts so the unit glob skips them):
 #   node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
 ```
@@ -210,7 +223,7 @@ pnpm run test:e2e-opencode-mcp    # opencode MCP stdio e2e (src; no live opencod
 - **New test files**: name them `<name>.test.ts` in the owning package's `test/` dir — each `test:*` script globs `packages/<pkg>/test/*.test.ts`, so they're picked up automatically (no manual list to update). E2E scripts use the `.mts` extension specifically so the glob excludes them (they need a live `pi`/`codex`).
 
 ### File Structure Rules
-- **Source**: `.ts` source lives in `packages/<pkg>/src/`. Host-neutral logic goes in `taskflow-core`; host **runner** code (the `SubagentRunner` impl, argv builder, event-stream parser for codex/claude/opencode) goes in `taskflow-hosts`; host **delivery** code (the MCP server/bin + plugin scaffold) goes in the `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` packages; the pi adapter (which peer-depends the pi SDK) stays in `pi-taskflow`. `taskflow-core` must never import a host SDK (`@earendil-works/*`).
+- **Source**: `.ts` source lives in `packages/<pkg>/src/`. Host-neutral logic goes in `taskflow-core`; host **runner** code (the `SubagentRunner` impl, argv builder, event-stream parser for codex/claude/opencode/grok) goes in `taskflow-hosts`; host **delivery** code (the MCP server/bin + plugin scaffold) goes in the `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow` packages; the pi adapter (which peer-depends the pi SDK) stays in `pi-taskflow`. `taskflow-core` must never import a host SDK (`@earendil-works/*`).
 - **Imports**: adapters import the engine via the bare specifier `taskflow-core` (never a relative path into `../taskflow-core/src`). The MCP server lives in the separate `taskflow-mcp-core` package — host adapters import it via `taskflow-mcp-core/server` / `taskflow-mcp-core/jsonrpc`. `detached-runner.ts` is spawn-only — reference it by `taskflow-core/detached-runner.js`, never via the barrel. `runSubagentProcess` (in `runner-core.ts`, re-exported from the `taskflow-core` barrel) is the shared spawn+classify helper every host runner delegates to.
 - **Tests**: `.test.ts` in the owning package's `test/`. Named `<module>.test.ts` or `<feature>.test.ts`.
 - **Agents**: built-in agent `.md` files in `packages/taskflow-core/src/agents/` (copied to `dist/agents` at build).
@@ -269,6 +282,7 @@ All engine files live in `packages/taskflow-core/src/`; the pi entry lives in `p
 | `taskflow-hosts/src/codex-runner.ts` | Codex subagent spawn (`codex exec --json`); `codexSubagentRunner` + `buildCodexArgs` |
 | `taskflow-hosts/src/claude-runner.ts` | Claude Code subagent spawn (`claude -p --output-format stream-json`); `claudeSubagentRunner` + `buildClaudeArgs` + permission mapping |
 | `taskflow-hosts/src/opencode-runner.ts` | OpenCode subagent spawn (`opencode run --format json`); `opencodeSubagentRunner` + `buildOpencodeArgs` + model resolution + permission mapping |
+| `taskflow-hosts/src/grok-runner.ts` | Grok Build subagent spawn (`grok -p --output-format streaming-json`); `grokSubagentRunner` + `buildGrokArgs` + permission mapping |
 | `store.ts` | Persistence, file locks, index, cleanup, atomic writes |
 | `interpolate.ts` | Template resolution, condition parser, safeParse, coerceArray |
 | `cache.ts` | Fingerprint resolution (git/glob/file/env), CacheStore |

@@ -1,3 +1,5 @@
+<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/patterns.md (npm run build:skills) -->
+
 # Taskflow Patterns — proven archetypes & the production checklist
 
 Read this when designing a flow with ≥ 4 phases, a gate, or any fan-out.
@@ -145,12 +147,10 @@ Prefer a `script` phase whenever the check is a command — exact, free, fast.
 Use for: anything expensive or destructive where a human should see the plan
 before the spend. The approval's **Edit** option injects mid-run guidance.
 
-<!-- host:codex,claude,opencode,grok -->
 > **MCP-host caveat (Codex / Claude Code / OpenCode):** approval phases auto-reject in
 > MCP-driven (non-interactive) runs. This archetype only works when a human
 > runs the flow interactively; for tool-driven runs, replace the approval with
 > a strict `gate`.
-<!-- /host:codex,claude,opencode,grok -->
 
 ```jsonc
 {
@@ -272,10 +272,6 @@ subsequent runs re-pay only for what changed.
 The `glob!:` fingerprint makes `discover` a cache miss only when file
 *contents* change; the map's per-item cache means one changed file re-audits
 one item.
-<!-- host:pi -->
-For surgically re-running part of an **existing** run after a change,
-use `why-stale` → `recompute` instead of a fresh run — see `advanced.md`.
-<!-- /host:pi -->
 
 ---
 
