@@ -5,26 +5,41 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { buildFile } from "./build.ts";
 import { checkFile } from "./check.ts";
 import { decompileTaskflow } from "./decompile.ts";
 import { formatDiagnostics, hasErrors } from "./diagnostics.ts";
 import { skeletonHello, skeletonJson } from "./new-skeleton.ts";
+import { resolveContainedOut, resolveInput } from "./paths.ts";
 import { desugar, validateTaskflow, type Taskflow } from "taskflow-core";
+
+const require = createRequire(import.meta.url);
+const PKG_VERSION: string = (() => {
+	try {
+		return (require("../package.json") as { version: string }).version;
+	} catch {
+		return "0.0.0-dev";
+	}
+})();
 
 function usage(): string {
 	return `taskflow-dsl <command> [options] [path]
 
 Commands:
   build <file>       Erase .tf.ts (or validate .json) → Taskflow / FlowIR
-  check <file>       Erase + validate (no write)
+  check <file>       Erase + validate (no write; not full tsc)
   decompile <file>   Taskflow JSON → .tf.ts
   new [name]         Write hello skeleton
 
 Options:
-  -o, --out <path>   Output path
+  --cwd <dir>        Project root for path resolution (default: process.cwd())
+  -o, --out <path>   Output path (must stay under --cwd)
   --emit taskflow|flowir|both   (build, default: taskflow)
   --json             Machine-readable diagnostics
+  --force            Overwrite existing file (new)
+  --json-escape      new: emit JSON skeleton instead of .tf.ts
+  -V, --version
   -h, --help
 `;
 }
@@ -36,9 +51,11 @@ function parseArgs(argv: string[]) {
 	for (let i = 0; i < args.length; i++) {
 		const a = args[i]!;
 		if (a === "-h" || a === "--help") flags.help = true;
+		else if (a === "-V" || a === "--version") flags.version = true;
 		else if (a === "--json") flags.json = true;
 		else if (a === "-o" || a === "--out") flags.out = args[++i] ?? "";
 		else if (a === "--emit") flags.emit = args[++i] ?? "taskflow";
+		else if (a === "--cwd") flags.cwd = args[++i] ?? "";
 		else if (a === "--force") flags.force = true;
 		else if (a === "--json-escape") flags.jsonEscape = true;
 		else if (a.startsWith("-")) flags[a] = true;
@@ -49,10 +66,15 @@ function parseArgs(argv: string[]) {
 
 function main(): void {
 	const { flags, positional } = parseArgs(process.argv);
+	if (flags.version) {
+		process.stdout.write(`${PKG_VERSION}\n`);
+		process.exit(0);
+	}
 	if (flags.help || positional.length === 0) {
 		process.stdout.write(usage());
 		process.exit(flags.help ? 0 : 2);
 	}
+	const cwd = typeof flags.cwd === "string" && flags.cwd ? path.resolve(flags.cwd) : process.cwd();
 	const cmd = positional[0]!;
 
 	try {
@@ -62,8 +84,9 @@ function main(): void {
 				process.stderr.write("build requires a file path\n");
 				process.exit(2);
 			}
-			const emit = (String(flags.emit ?? "taskflow") as "taskflow" | "flowir" | "both");
-			const r = buildFile(file, { emit, irHash: true, validate: true });
+			const input = resolveInput(cwd, file);
+			const emit = String(flags.emit ?? "taskflow") as "taskflow" | "flowir" | "both";
+			const r = buildFile(input, { emit, irHash: true, validate: true });
 			if (flags.json) {
 				process.stdout.write(
 					JSON.stringify(
@@ -80,33 +103,30 @@ function main(): void {
 			} else {
 				if (r.diagnostics.length) process.stderr.write(formatDiagnostics(r.diagnostics) + "\n");
 				if (r.ok && r.taskflow) {
-					const stem = path.resolve(file).replace(/\.tf\.ts$/i, "").replace(/\.jsonc?$/i, "");
-					const outTf =
-						typeof flags.out === "string" && flags.out && emit === "taskflow"
-							? flags.out
-							: `${stem}.taskflow.json`;
+					const stem = input.replace(/\.tf\.ts$/i, "").replace(/\.jsonc?$/i, "");
 					if (emit === "taskflow" || emit === "both") {
-						const p = emit === "both" || !flags.out ? `${stem}.taskflow.json` : String(flags.out);
-						fs.writeFileSync(p, JSON.stringify(r.taskflow, null, 2) + "\n");
-						process.stdout.write(`wrote ${p}\n`);
+						let outPath = `${stem}.taskflow.json`;
+						if (typeof flags.out === "string" && flags.out && emit === "taskflow") {
+							const c = resolveContainedOut(cwd, flags.out);
+							if (!c.ok) {
+								process.stderr.write(c.message + "\n");
+								process.exit(2);
+							}
+							outPath = c.path;
+						}
+						fs.writeFileSync(outPath, JSON.stringify(r.taskflow, null, 2) + "\n");
+						process.stdout.write(`wrote ${outPath}\n`);
 					}
 					if ((emit === "flowir" || emit === "both") && r.flowir) {
 						const p = `${stem}.flowir.json`;
-						fs.writeFileSync(
-							p,
-							JSON.stringify({ hash: r.irHash, ir: r.flowir }, null, 2) + "\n",
-						);
+						fs.writeFileSync(p, JSON.stringify({ hash: r.irHash, ir: r.flowir }, null, 2) + "\n");
 						process.stdout.write(`wrote ${p} (${r.irHash})\n`);
-					}
-					if (emit === "taskflow" && flags.out) {
-						fs.writeFileSync(String(flags.out), JSON.stringify(r.taskflow, null, 2) + "\n");
 					}
 					process.stdout.write(
 						`ok name=${r.taskflow.name} phases=${r.taskflow.phases?.length ?? 0}` +
 							(r.irHash ? ` ${r.irHash}` : "") +
 							"\n",
 					);
-					void outTf;
 				}
 			}
 			process.exit(r.ok ? 0 : hasErrors(r.diagnostics) ? 1 : 0);
@@ -118,7 +138,7 @@ function main(): void {
 				process.stderr.write("check requires a file path\n");
 				process.exit(2);
 			}
-			const r = checkFile(file);
+			const r = checkFile(resolveInput(cwd, file));
 			if (flags.json) {
 				process.stdout.write(JSON.stringify({ ok: r.ok, diagnostics: r.diagnostics }, null, 2) + "\n");
 			} else {
@@ -134,7 +154,8 @@ function main(): void {
 				process.stderr.write("decompile requires a Taskflow JSON path\n");
 				process.exit(2);
 			}
-			const raw = JSON.parse(fs.readFileSync(path.resolve(file), "utf8"));
+			const input = resolveInput(cwd, file);
+			const raw = JSON.parse(fs.readFileSync(input, "utf8"));
 			const asRec = raw as Record<string, unknown>;
 			let def: Taskflow;
 			if (Array.isArray(asRec.phases)) {
@@ -157,13 +178,35 @@ function main(): void {
 					process.exit(1);
 				}
 			}
-			const src = decompileTaskflow(def);
-			const out =
+			let src: string;
+			try {
+				src = decompileTaskflow(def);
+			} catch (e) {
+				process.stderr.write((e instanceof Error ? e.message : String(e)) + "\n");
+				process.exit(1);
+			}
+			let out =
 				typeof flags.out === "string" && flags.out
 					? flags.out
-					: path.resolve(file).replace(/\.jsonc?$/i, "") + ".tf.ts";
-			if (out === "-") process.stdout.write(src);
-			else {
+					: input.replace(/\.jsonc?$/i, "") + ".tf.ts";
+			if (out === "-") {
+				process.stdout.write(src);
+			} else {
+				if (!path.isAbsolute(out)) {
+					const c = resolveContainedOut(cwd, out);
+					if (!c.ok) {
+						process.stderr.write(c.message + "\n");
+						process.exit(2);
+					}
+					out = c.path;
+				} else {
+					const c = resolveContainedOut(cwd, path.relative(cwd, out));
+					if (!c.ok) {
+						process.stderr.write(c.message + "\n");
+						process.exit(2);
+					}
+					out = c.path;
+				}
 				fs.writeFileSync(out, src);
 				process.stdout.write(`wrote ${out}\n`);
 			}
@@ -173,16 +216,23 @@ function main(): void {
 		if (cmd === "new") {
 			const name = positional[1] ?? "hello";
 			const content = flags.jsonEscape ? skeletonJson(name) : skeletonHello(name);
-			const out =
+			let outRel =
 				typeof flags.out === "string" && flags.out
 					? flags.out
 					: flags.jsonEscape
 						? `./${name}.json`
 						: `./${name}.tf.ts`;
+			const c = resolveContainedOut(cwd, outRel);
+			if (!c.ok) {
+				process.stderr.write(c.message + "\n");
+				process.exit(2);
+			}
+			const out = c.path;
 			if (fs.existsSync(out) && !flags.force) {
 				process.stderr.write(`refusing to overwrite ${out} (use --force)\n`);
 				process.exit(2);
 			}
+			fs.mkdirSync(path.dirname(out), { recursive: true });
 			fs.writeFileSync(out, content);
 			process.stdout.write(`wrote ${out}\n`);
 			process.exit(0);

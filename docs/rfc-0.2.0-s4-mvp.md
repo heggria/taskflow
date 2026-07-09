@@ -392,7 +392,7 @@ export type { PhaseRef, FlowCtx, FlowOptions, PhaseOptions, ItemSymbol, … };
 
 | API | Reason |
 |-----|--------|
-| `gate.automated` / `gate.scored` | Coverage matrix N → S4.1 |
+| top-level `ctx.scope` / `strict` / `share` / `incremental` | S4.1+ |
 | `subflow.def(() => …)` | Dynamic inline def; engine exists, DSL compile cost high → S4.1 |
 | `$store` / `$derived` / `flow.component` | post-0.2.0 (arch §12) |
 | Runtime `execute*` anything | Wrong package |
@@ -720,7 +720,8 @@ Public surface exposes runes for the **Y** rows of the S4 coverage matrix (full 
 | `json<T>()` basic object/array | `json` |
 | template → `{steps.*}` / `{item.*}` | erase in `build` |
 | `when` string + TS subset | options + check rules |
-| gate.automated / scored, top-level strict/share/incremental/scope | **not exported** |
+| `gate.automated` / `gate.scored` | **Y (S4.1 A-track)** — erase to `eval` / `score` |
+| top-level strict/share/incremental/scope | **not exported** (S4.1+) |
 
 FULL RFC coverage remains a post-MVP completion track; missing FULL features must not appear as stub exports that silently no-op.
 

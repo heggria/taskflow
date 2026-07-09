@@ -116,6 +116,32 @@ export function gate(
 	return eraseOnly("gate");
 }
 
+/** Zero-token pre-checks (`eval`); LLM `task` still required by engine if score absent. */
+export function gateAutomated(
+	_upstream: PhaseRef,
+	_opts: PhaseOptions & { pass: string[]; task?: TemplateInput },
+): PhaseRef {
+	return eraseOnly("gate.automated");
+}
+
+/** Deterministic scorers (`score`); may omit LLM task when score alone decides. */
+export function gateScored(
+	_upstream: PhaseRef,
+	_opts: PhaseOptions & {
+		scorers: Array<Record<string, unknown>>;
+		combine?: "all" | "any" | "weighted";
+		threshold?: number;
+		weights?: number[];
+		target?: string;
+		judge?: { agent?: string; task?: string };
+	},
+): PhaseRef {
+	return eraseOnly("gate.scored");
+}
+
+gate.automated = gateAutomated;
+gate.scored = gateScored;
+
 export function reduce(
 	_from: PhaseRef[],
 	_fn: (parts: Record<string, PhaseRef>) => PhaseRef,

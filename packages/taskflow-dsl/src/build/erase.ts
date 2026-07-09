@@ -445,11 +445,86 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 			return undefined;
 		}
 
+		// gate.automated / gate.scored → type:gate with eval / score
+		if (cn === "gate.automated" || cn === "gate.scored") {
+			const idBase = bindName ?? (order.length === 0 ? "main" : `phase-${order.length}`);
+			const draft: PhaseDraft = {
+				id: idBase,
+				type: "gate",
+				raw: { type: "gate" },
+				dependsOn: new Set(),
+			};
+			const up = call.arguments[0];
+			if (up && ts.isIdentifier(up) && phases.has(up.text)) draft.dependsOn.add(up.text);
+			const optsArg = call.arguments[1] as ts.Expression | undefined;
+			const opts = mergeOpts(sf, file, optsArg, diags, phases);
+			if (typeof opts.id === "string") draft.id = opts.id;
+			Object.assign(draft.raw, opts);
+			if (cn === "gate.automated" && optsArg && ts.isObjectLiteralExpression(optsArg)) {
+				for (const p of optsArg.properties) {
+					if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
+					if (p.name.text === "pass") {
+						const v = evalLiteral(p.initializer);
+						if (Array.isArray(v)) draft.raw.eval = v;
+					}
+					if (p.name.text === "task") {
+						const er = eraseStringish(sf, file, p.initializer, undefined, phases, diags);
+						if (er) {
+							draft.raw.task = er.text;
+							for (const d of er.deps) draft.dependsOn.add(d);
+						}
+					}
+				}
+				// Engine requires task or score; default a minimal task if only eval given
+				if (!draft.raw.task && !draft.raw.score) {
+					draft.raw.task = "Gate (automated pre-checks failed or incomplete).";
+				}
+			}
+			if (cn === "gate.scored" && optsArg && ts.isObjectLiteralExpression(optsArg)) {
+				const score: Record<string, unknown> = {};
+				for (const p of optsArg.properties) {
+					if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
+					const k = p.name.text;
+					if (k === "scorers" || k === "combine" || k === "threshold" || k === "weights" || k === "target" || k === "judge") {
+						const v = evalLiteral(p.initializer);
+						if (v !== undefined) score[k] = v;
+					}
+					if (k === "task") {
+						const er = eraseStringish(sf, file, p.initializer, undefined, phases, diags);
+						if (er) {
+							draft.raw.task = er.text;
+							for (const d of er.deps) draft.dependsOn.add(d);
+						}
+					}
+				}
+				if (!score.combine) score.combine = "all";
+				draft.raw.score = score;
+				// strip score fields from top-level raw if mergeOpts put them
+				delete draft.raw.scorers;
+				delete draft.raw.combine;
+				delete draft.raw.threshold;
+				delete draft.raw.weights;
+				delete draft.raw.target;
+				delete draft.raw.judge;
+			}
+			delete draft.raw.id;
+			delete draft.raw.pass;
+			if (draft.dependsOn.size) draft.raw.dependsOn = [...draft.dependsOn];
+			if (opts.final === true) {
+				draft.final = true;
+				draft.raw.final = true;
+			}
+			phases.set(draft.id, draft);
+			if (!order.includes(draft.id)) order.push(draft.id);
+			return draft.id;
+		}
+
+		const phaseType = type === "gate" ? "gate" : type;
 		const idBase = bindName ?? (order.length === 0 ? "main" : `phase-${order.length}`);
 		const draft: PhaseDraft = {
 			id: idBase,
-			type,
-			raw: { type },
+			type: phaseType,
+			raw: { type: phaseType },
 			dependsOn: new Set(),
 		};
 
@@ -650,6 +725,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 		} else if (type === "loop") {
 			const optsArg = call.arguments[0] as ts.Expression | undefined;
 			const opts = mergeOpts(sf, file, optsArg, diags, phases);
+			if (typeof opts.id === "string") draft.id = opts.id;
 			Object.assign(draft.raw, opts);
 			// task: (prev) => `...` inside object — scan object for task method
 			if (optsArg && ts.isObjectLiteralExpression(optsArg)) {
@@ -658,7 +734,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 					if (p.name.text === "task") {
 						if (ts.isArrowFunction(p.initializer) || ts.isFunctionExpression(p.initializer)) {
 							const prev = p.initializer.parameters[0];
-							const prevName = prev && ts.isIdentifier(prev.name) ? prev.name.text : "prev";
+							const prevNm = prev && ts.isIdentifier(prev.name) ? prev.name.text : "prev";
 							let expr: ts.Expression | undefined = ts.isBlock(p.initializer.body)
 								? undefined
 								: (p.initializer.body as ts.Expression);
@@ -668,7 +744,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 								}
 							}
 							if (expr) {
-								const er = eraseLoopTask(sf, file, expr, prevName, draft.id, diags);
+								const er = eraseLoopTask(sf, file, expr, prevNm, draft.id, diags);
 								if (er) draft.raw.task = er;
 							}
 						} else {
@@ -678,7 +754,6 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 					}
 				}
 			}
-			if (typeof opts.id === "string") draft.id = opts.id;
 			if (opts.final === true) draft.final = true;
 		} else if (type === "tournament") {
 			const optsArg = call.arguments[0] as ts.Expression | undefined;

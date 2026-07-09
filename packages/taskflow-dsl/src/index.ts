@@ -8,6 +8,8 @@ export {
 	parallel,
 	map,
 	gate,
+	gateAutomated,
+	gateScored,
 	reduce,
 	approval,
 	subflow,
