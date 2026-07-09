@@ -73,6 +73,23 @@ test("validate: race + expand shapes", () => {
 		}).ok,
 		true,
 	);
+	assert.equal(
+		validateTaskflow({
+			name: "bad-race",
+			phases: [
+				{
+					id: "r",
+					type: "race",
+					branches: [
+						{ task: "a", agent: "a" },
+						{ task: "b", agent: "a" },
+					],
+					cancelLosers: "false",
+				} as never,
+			],
+		}).ok,
+		false,
+	);
 });
 
 test("race: first successful branch wins", async () => {
@@ -107,7 +124,7 @@ test("race: first successful branch wins", async () => {
 	assert.equal(st.phases.r?.output?.trim(), "FAST");
 	assert.ok(st.phases.r?.warnings?.some((w) => /branch 2/.test(w)));
 	assert.ok(st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w ?? "")));
-	// Usage aggregates both branches (winner + aborted loser partial)
+	// Usage aggregates both branches
 	assert.ok((st.phases.r?.usage?.cost ?? 0) >= 0.001);
 });
 
@@ -206,7 +223,6 @@ test("race: cancelLosers aborts losing branch via AbortSignal", async () => {
 					errorMessage: "aborted",
 				};
 			}
-			// small delay so slow is definitely in-flight
 			await new Promise((r) => setTimeout(r, 15));
 			return {
 				agent,
@@ -275,6 +291,58 @@ test("race: cancelLosers false leaves loser running to completion", async () => 
 	assert.ok(!st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w)));
 });
 
+test("race: cancelLosers returns after a bounded grace when loser ignores abort", async () => {
+	const def: Taskflow = {
+		name: "race-noncooperative-loser",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: true,
+				branches: [
+					{ task: "fast-path", agent: "a" },
+					{ task: "slow-ignores-abort", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	const started = Date.now();
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task) => {
+			if (task.includes("slow")) {
+				await new Promise((r) => setTimeout(r, 250));
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: "SLOW",
+					stderr: "",
+					usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+					stopReason: "end",
+				};
+			}
+			await new Promise((r) => setTimeout(r, 10));
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "FAST",
+				stderr: "",
+				usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	});
+	assert.equal(st.status, "completed");
+	assert.equal(st.phases.r?.output?.trim(), "FAST");
+	assert.ok(Date.now() - started < 180, `race waited for non-cooperative loser`);
+	assert.ok(st.phases.r?.warnings?.some((w) => /did not acknowledge abort/.test(w)));
+});
+
 test("expand nested: runs fragment as sub-flow", async () => {
 	const def: Taskflow = {
 		name: "exp-nested",
@@ -301,7 +369,6 @@ test("expand nested: runs fragment as sub-flow", async () => {
 	assert.equal(st.phases.e?.status, "done");
 	assert.equal(st.phases.e?.defError, undefined, st.phases.e?.defError);
 	assert.match(st.phases.e?.output ?? "", /nested-hi/);
-	// nested: child id not on parent
 	assert.equal(st.phases.inner, undefined);
 });
 
@@ -330,7 +397,6 @@ test("expand graft: promotes child phases onto parent", async () => {
 	assert.equal(st.status, "completed");
 	assert.equal(st.phases.grow?.status, "done");
 	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError);
-	// grafted id is grow-leaf
 	assert.equal(st.phases["grow-leaf"]?.status, "done");
 	assert.match(st.phases["grow-leaf"]?.output ?? "", /grafted-ok/);
 	// No usage double-count: expand usage zeroed; child holds cost
@@ -338,7 +404,7 @@ test("expand graft: promotes child phases onto parent", async () => {
 	assert.ok((st.phases["grow-leaf"]?.usage?.cost ?? 0) > 0);
 });
 
-test("expand graft: rewrites multi-phase {steps.*} refs after prefix", async () => {
+test("expand graft: multi-phase rewrites {steps.*} and avoids usage double-count", async () => {
 	const def: Taskflow = {
 		name: "exp-graft-chain",
 		phases: [
@@ -380,7 +446,93 @@ test("expand graft: rewrites multi-phase {steps.*} refs after prefix", async () 
 	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError);
 	assert.equal(st.phases["grow-a"]?.status, "done");
 	assert.equal(st.phases["grow-b"]?.status, "done");
-	// Task text must use grow-a after prefix rewrite
-	assert.ok(seen.some((t) => t.includes("grow-a") || t.includes("A-VALUE")));
 	assert.match(st.phases["grow-b"]?.output ?? "", /A-VALUE/);
+	// expand usage zeroed after promote; children hold cost
+	assert.equal(st.phases.grow?.usage?.cost ?? 0, 0);
+	assert.ok((st.phases["grow-a"]?.usage?.cost ?? 0) > 0);
+});
+
+test("race: all branches fail → phase failed + usage", async () => {
+	const def: Taskflow = {
+		name: "race-all-fail",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: false,
+				branches: [
+					{ task: "fail-a", agent: "a" },
+					{ task: "fail-b", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task) => ({
+			agent,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: `err-${task}`,
+			usage: { ...emptyUsage(), input: 1, output: 0, cost: 0.001, turns: 1 },
+			stopReason: "error",
+			errorMessage: `err-${task}`,
+		}),
+	});
+	assert.equal(st.status, "failed");
+	assert.equal(st.phases.r?.status, "failed");
+	assert.match(st.phases.r?.error ?? "", /all 2 branches failed/);
+	assert.ok(st.phases.r?.warnings?.some((w) => /all branches failed/.test(w)));
+	assert.ok((st.phases.r?.usage?.cost ?? 0) >= 0.002);
+});
+
+test("race: parent abort bounds wait when branch ignores signal", async () => {
+	const def: Taskflow = {
+		name: "race-parent-abort",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: true,
+				branches: [
+					{ task: "hang-a", agent: "a" },
+					{ task: "hang-b", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	const ac = new AbortController();
+	const started = Date.now();
+	const run = executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		signal: ac.signal,
+		runTask: async (_c, _a, agent, task) => {
+			// Ignore AbortSignal — would hang forever without race grace.
+			await new Promise((r) => setTimeout(r, 5000));
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "too-late",
+				stderr: "",
+				usage: emptyUsage(),
+				stopReason: "end",
+			};
+		},
+	});
+	// Abort shortly after start so both branches are in-flight.
+	await new Promise((r) => setTimeout(r, 15));
+	ac.abort();
+	await run;
+	const elapsed = Date.now() - started;
+	assert.ok(elapsed < 2000, `expected bounded wait, took ${elapsed}ms`);
+	// Parent abort → all branches aborted; non-cooperative → grace → all-fail path
+	assert.ok(st.phases.r?.status === "failed" || st.phases.r?.status === "done");
 });

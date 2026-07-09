@@ -2,7 +2,7 @@
  * Shared emit context for kind handlers (one eraseSource() call).
  */
 
-import type ts from "typescript";
+import ts from "typescript";
 import type { Diagnostic } from "../../diagnostics.ts";
 import type { PhaseDraft } from "./types.ts";
 
@@ -56,8 +56,6 @@ export function bindDefArg(
 	}
 }
 
-// Local type guards to avoid pulling full ts into every call site signature
-import ts from "typescript";
 function tsIsPropertyAccess(n: ts.Node): n is ts.PropertyAccessExpression {
 	return ts.isPropertyAccessExpression(n);
 }

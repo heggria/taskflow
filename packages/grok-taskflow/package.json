@@ -1,6 +1,6 @@
 {
   "name": "grok-taskflow",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Run taskflow on Grok Build: a Grok subagent runner plus an MCP server (and a plug-and-play Grok plugin) that exposes the taskflow_* tools to Grok Build users.",
   "keywords": [
     "grok",
@@ -55,8 +55,8 @@
     "access": "public"
   },
   "dependencies": {
-    "taskflow-core": "0.1.7",
-    "taskflow-hosts": "0.1.7",
-    "taskflow-mcp-core": "0.1.7"
+    "taskflow-core": "workspace:*",
+    "taskflow-hosts": "workspace:*",
+    "taskflow-mcp-core": "workspace:*"
   }
 }

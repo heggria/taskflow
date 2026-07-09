@@ -28,6 +28,9 @@
 
 import { RpcError, RPC, serveStdio, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	discoverAgents,
 	executeTaskflow,
@@ -78,7 +81,22 @@ import {
 } from "taskflow-core";
 
 const PROTOCOL_VERSION = "2025-06-18";
-const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: "0.1.5" } as const;
+const SERVER_VERSION = readServerVersion();
+const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: SERVER_VERSION } as const;
+
+function readServerVersion(): string {
+	try {
+		const packageJsonPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+		const pkg: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+		if (typeof pkg === "object" && pkg !== null && "version" in pkg) {
+			const version = (pkg as { version?: unknown }).version;
+			if (typeof version === "string" && version) return version;
+		}
+	} catch {
+		// Keep the handshake available even in unusual embedded/bundled layouts.
+	}
+	return "0.2.0";
+}
 
 /** An MCP tool definition as returned by tools/list. */
 interface McpTool {

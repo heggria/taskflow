@@ -816,12 +816,15 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (!p.branches || p.branches.length === 0)
 				errors.push(`Phase '${p.id}' (parallel) requires non-empty 'branches'`);
 		}
-		if (type === "race") {
-			if (!p.branches || p.branches.length === 0)
-				errors.push(`Phase '${p.id}' (race) requires non-empty 'branches'`);
-			else if (p.branches.length < 2)
-				errors.push(`Phase '${p.id}' (race): needs at least 2 branches`);
-		}
+			if (type === "race") {
+				if (!p.branches || p.branches.length === 0)
+					errors.push(`Phase '${p.id}' (race) requires non-empty 'branches'`);
+				else if (p.branches.length < 2)
+					errors.push(`Phase '${p.id}' (race): needs at least 2 branches`);
+				if ((p as { cancelLosers?: unknown }).cancelLosers !== undefined && typeof (p as { cancelLosers?: unknown }).cancelLosers !== "boolean") {
+					errors.push(`Phase '${p.id}' (race): cancelLosers must be a boolean`);
+				}
+			}
 		if (type === "expand") {
 			if ((p as { def?: unknown }).def === undefined)
 				errors.push(`Phase '${p.id}' (expand) requires 'def' (fragment Taskflow or {steps.X.json})`);

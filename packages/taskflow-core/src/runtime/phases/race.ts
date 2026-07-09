@@ -8,6 +8,8 @@ import type { PhaseState } from "../../store.ts";
 import { emptyUsage, aggregateUsage } from "../../usage.ts";
 import { safeParse } from "../../interpolate.ts";
 
+const LOSER_CANCEL_GRACE_MS = 50;
+
 export interface RaceBranch {
 	agent: string;
 	task: string;
@@ -24,7 +26,8 @@ export interface RaceIsFailed {
 /**
  * First **successful** branch wins. Failed settles do not terminate the race.
  * If all fail → race fails. cancelLosers aborts others after a success (best-effort).
- * Final usage aggregates all branch results (including aborted partials).
+ * Final usage aggregates settled branch results. A non-cooperative loser that
+ * ignores abort is bounded by a short grace period and reported in warnings.
  */
 export async function executeRaceBranches(
 	phase: Phase,
@@ -52,6 +55,14 @@ export async function executeRaceBranches(
 	const cancelLosers = (phase as { cancelLosers?: boolean }).cancelLosers !== false;
 	const controllers = branches.map(() => new AbortController());
 
+	type Settled = { i: number; result: RunResult };
+	const settled: Settled[] = [];
+	let winner: Settled | undefined;
+	let wake!: () => void;
+	const gate = new Promise<void>((r) => {
+		wake = r;
+	});
+
 	const onParentAbort = () => {
 		for (const c of controllers) {
 			try {
@@ -60,19 +71,14 @@ export async function executeRaceBranches(
 				/* ignore */
 			}
 		}
+		// Unblock the wait loop so non-cooperative runners hit the grace timeout
+		// instead of hanging forever (AGENTS: never hang forever).
+		wake();
 	};
 	if (opts.parentSignal) {
 		if (opts.parentSignal.aborted) onParentAbort();
 		else opts.parentSignal.addEventListener("abort", onParentAbort, { once: true });
 	}
-
-	type Settled = { i: number; result: RunResult };
-	const settled: Settled[] = [];
-	let winner: Settled | undefined;
-	let wake!: () => void;
-	const gate = new Promise<void>((r) => {
-		wake = r;
-	});
 
 	try {
 		const branchPromises = branches.map(async (b, i) => {
@@ -114,15 +120,36 @@ export async function executeRaceBranches(
 			return entry;
 		});
 
-		await Promise.race([gate, Promise.allSettled(branchPromises).then(() => undefined)]);
-		await Promise.allSettled(branchPromises);
+		const allSettled = Promise.allSettled(branchPromises).then(() => undefined);
+		await Promise.race([gate, allSettled]);
+		// Bound remaining wait when branches were aborted (cancelLosers after
+		// success, or parent AbortSignal). Prevents hang if a runner ignores abort.
+		if (settled.length < branches.length) {
+			const parentAborted = opts.parentSignal?.aborted === true;
+			if ((winner && cancelLosers) || parentAborted) {
+				await Promise.race([
+					allSettled,
+					new Promise<void>((r) => setTimeout(r, LOSER_CANCEL_GRACE_MS)),
+				]);
+			} else {
+				await allSettled;
+			}
+		}
 
 		const totalUsage = aggregateUsage(settled.map((s) => s.result.usage ?? emptyUsage()));
+		const outstanding = branches.length - settled.length;
+		const parentAborted = opts.parentSignal?.aborted === true;
 
 		if (!winner) {
 			const errs = settled
 				.map((s) => s.result.errorMessage || s.result.stderr || `branch ${s.i + 1} failed`)
 				.filter(Boolean);
+			const warnings = ["race: all branches failed"];
+			if (parentAborted && outstanding > 0) {
+				warnings.push(
+					`race: ${outstanding} branch(es) did not settle within ${LOSER_CANCEL_GRACE_MS}ms after parent abort`,
+				);
+			}
 			return {
 				id: phase.id,
 				status: "failed",
@@ -130,7 +157,7 @@ export async function executeRaceBranches(
 				usage: totalUsage,
 				inputHash: opts.inputHash,
 				endedAt: Date.now(),
-				warnings: ["race: all branches failed"],
+				warnings,
 				...(opts.readRefs ? { reads: opts.readRefs } : {}),
 			};
 		}
@@ -141,6 +168,11 @@ export async function executeRaceBranches(
 			warnings.push(
 				`race: cancelLosers aborted ${branches.length - 1} loser branch(es) (best-effort AbortSignal)`,
 			);
+			if (outstanding > 0) {
+				warnings.push(
+					`race: ${outstanding} loser branch(es) did not acknowledge abort within ${LOSER_CANCEL_GRACE_MS}ms; returning winner output`,
+				);
+			}
 		}
 		return {
 			id: phase.id,

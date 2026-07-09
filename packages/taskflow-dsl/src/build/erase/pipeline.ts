@@ -97,18 +97,18 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 
 		if (!PHASE_RUNES.has(cn.split(".")[0]!) && !PHASE_RUNES.has(cn)) {
 			if (cn === "json") return undefined;
-			// Bound or returned call that is not a known rune → hard error (no silent drop).
-			if (bindName !== undefined) {
-				diags.push(
-					diag(
-						file,
-						sf,
-						call,
-						"TFDSL_RUNE_UNKNOWN",
-						`Unknown rune or call '${cn}' cannot erase to a phase (typo?).`,
-					),
-				);
-			}
+			// Any unknown call in the flow body → hard error (no silent drop).
+			// Covers bound (`const x = mystery()`), returned (`return mystery()`),
+			// and bare expression statements (`mystery()`).
+			diags.push(
+				diag(
+					file,
+					sf,
+					call,
+					"TFDSL_RUNE_UNKNOWN",
+					`Unknown rune or call '${cn}' cannot erase to a phase (typo?).`,
+				),
+			);
 			return undefined;
 		}
 
@@ -277,12 +277,12 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 		phases.get(last)!.raw.final = true;
 	}
 
-	const phaseList = order.map((id) => {
-		const ph = phases.get(id)!;
-		const raw = { ...ph.raw, id: ph.id };
-		if (ph.dependsOn.size && !raw.dependsOn) raw.dependsOn = [...ph.dependsOn];
-		// clean undefined-ish
-		return raw;
+		const phaseList = order.map((id) => {
+			const ph = phases.get(id)!;
+			const raw: Record<string, unknown> = { ...ph.raw, id: ph.id };
+			if (ph.dependsOn.size && !raw.dependsOn) raw.dependsOn = [...ph.dependsOn];
+			// clean undefined-ish
+			return raw;
 	});
 
 	const taskflow: Record<string, unknown> = {

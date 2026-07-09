@@ -119,7 +119,7 @@ grok mcp add taskflow -- grok-taskflow-mcp
 Or with npx (no global install):
 
 ```sh
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.1.7 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
 Verify:

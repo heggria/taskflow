@@ -43,7 +43,8 @@ const DECOMPILABLE = new Set([
 
 export function decompileTaskflow(def: Taskflow): string {
 	for (const p of def.phases ?? []) {
-		if (!DECOMPILABLE.has(p.type)) {
+		const type = p.type ?? "agent";
+		if (!DECOMPILABLE.has(type)) {
 			throw new Error(
 				`TFDSL_DECOMPILE_UNSUPPORTED: phase type ${JSON.stringify(p.type)} (id=${p.id}) cannot be decompiled in MVP`,
 			);
@@ -125,9 +126,12 @@ function decompilePhase(p: Phase, bind: string, _byId: Map<string, Phase>): stri
 	if (p.when) opts.push(`when: ${JSON.stringify(p.when)}`);
 	if (p.dependsOn?.length) opts.push(`dependsOn: ${JSON.stringify(p.dependsOn)}`);
 	if (p.output) opts.push(`output: ${JSON.stringify(p.output)}`);
+	if ((p as { cancelLosers?: boolean }).cancelLosers === false) opts.push(`cancelLosers: false`);
+	const maxNodes = (p as { maxNodes?: number }).maxNodes;
+	if (typeof maxNodes === "number") opts.push(`maxNodes: ${maxNodes}`);
 	const optStr = opts.length ? `, { ${opts.join(", ")} }` : "";
 
-	switch (p.type) {
+	switch (p.type ?? "agent") {
 		case "agent":
 			return `const ${bind} = agent(\`${esc(String(p.task ?? ""))}\`${optStr});`;
 		case "script": {
@@ -166,7 +170,10 @@ function decompilePhase(p: Phase, bind: string, _byId: Map<string, Phase>): stri
 				);
 			}
 			const em = (p as { expandMode?: string }).expandMode ?? "nested";
-			return `const ${bind} = expand(${JSON.stringify(p.def)}, { expandMode: ${JSON.stringify(em)} });`;
+			// Always emit expandMode + shared opts (dependsOn/final/when/maxNodes) so
+			// decompile → rebuild keeps DAG edges that string-def alone would lose.
+			const expandOpts = [`expandMode: ${JSON.stringify(em)}`, ...opts];
+			return `const ${bind} = expand(${JSON.stringify(p.def)}, { ${expandOpts.join(", ")} });`;
 		}
 		case "reduce": {
 			const from = (p.from ?? p.dependsOn ?? []).map((id) => phaseBinding(id));

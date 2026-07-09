@@ -286,3 +286,44 @@ test("dynamic flow def with script fails open (done empty) not ACE", async () =>
 	assert.equal(res.state.phases.f.status, "done");
 	assert.equal(res.state.phases.f.output ?? "", "");
 });
+
+test("nested flow re-admission: race child rejected under event kernel", async () => {
+	// Parent is kernel-eligible (plain flow wrapper); child has race → must not
+	// silently enter kernel step with wrong semantics.
+	const def: Taskflow = {
+		name: "parent-kernel",
+		phases: [
+			{
+				id: "f",
+				type: "flow",
+				def: {
+					name: "child-race",
+					phases: [
+						{
+							id: "r",
+							type: "race",
+							branches: [
+								{ task: "a", agent: "a" },
+								{ task: "b", agent: "a" },
+							],
+							final: true,
+						},
+					],
+				},
+				final: true,
+			},
+		],
+	};
+	assert.equal(canUseEventKernel(def), true, "parent without race is kernel-eligible");
+	const res = await executeTaskflow(mk(def), {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: paidRunner(0.01),
+		persist: () => {},
+		eventKernel: true,
+	});
+	// Nested admission fails closed — phase fails with clear reason.
+	assert.equal(res.ok, false);
+	assert.equal(res.state.phases.f?.status, "failed");
+	assert.match(res.state.phases.f?.error ?? res.state.phases.f?.output ?? "", /event kernel|race|Nested flow/i);
+});

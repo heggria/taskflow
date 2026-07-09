@@ -88,6 +88,9 @@ export type FlowIRNodeKind = PhaseType;
  *                separate for the edge model).
  * - `join`     — join mode (`"all"` default, or `"any"` for OR-join).
  * - `timeout`  — per-call ms cap (agent-running phases).
+ * - `payload`  — stable, hash-addressed DSL payload fields not otherwise
+ *                represented above (for example branch bodies, script command,
+ *                map source, flow/expand definitions, output contracts).
  *
  * All added fields are **optional** so the stub's minimal output remains valid.
  */
@@ -117,6 +120,8 @@ export interface FlowIRNode {
 	join?: "all" | "any";
 	/** Per-subagent-call ms cap (agent-running phases). */
 	timeout?: number;
+	/** Runtime-affecting DSL payload not otherwise modeled by the core node fields. */
+	payload?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +234,11 @@ export const FlowIRNodeSchema = Type.Object(
 		deps: Type.Optional(Type.Array(Type.String(), { description: "Explicit dependsOn edges" })),
 		join: Type.Optional(Type.Union([Type.Literal("all"), Type.Literal("any")], { description: "Join mode" })),
 		timeout: Type.Optional(Type.Number({ description: "Per-call ms cap" })),
+		payload: Type.Optional(
+			Type.Record(Type.String(), Type.Unknown(), {
+				description: "Runtime-affecting DSL payload not otherwise modeled by the core node fields",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -296,6 +306,9 @@ export function isFlowIRNode(value: unknown): value is FlowIRNode {
 	if (n.deps !== undefined && !isStringArray(n.deps)) return false;
 	if (n.join !== undefined && n.join !== "all" && n.join !== "any") return false;
 	if (n.timeout !== undefined && typeof n.timeout !== "number") return false;
+	if (n.payload !== undefined && (typeof n.payload !== "object" || n.payload === null || Array.isArray(n.payload))) {
+		return false;
+	}
 	return true;
 }
 

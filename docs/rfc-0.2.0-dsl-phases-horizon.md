@@ -1,8 +1,8 @@
 # RFC: DSL 扩展 Phase 设计（脑暴收编 + 语言表面）
 
-> Status: **Design** · 2026-07-09  
-> Source brainstorm: [`internal/brainstorm-2026-07-08-0.2.0-phases.md`](./internal/brainstorm-2026-07-08-0.2.0-phases.md)  
-> DSL 基线: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 + [`rfc-0.2.0-s4-mvp.md`](./rfc-0.2.0-s4-mvp.md)  
+> Status: **Design** · 2026-07-09
+> Source brainstorm: [`internal/brainstorm-2026-07-08-0.2.0-phases.md`](./internal/brainstorm-2026-07-08-0.2.0-phases.md)
+> DSL 基线: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 + [`rfc-0.2.0-s4-mvp.md`](./rfc-0.2.0-s4-mvp.md)
 > Engine foundation: event log + FlowIR (S0–S3) — *why these phases are cheap now*
 
 **目标：** 把「0.2.0 脑暴的更强 phase」收成 **DSL 可写的语言形状**，并分轨：
@@ -83,7 +83,7 @@ gate.automated(build, { pass: ["{steps.build.output} contains 'OK'"] });
 
 ### B1 · `expand` — 动态图**嫁接**（旗舰 · 新 type）
 
-> 与 A 轨 `flow.def` 区别：A = **嵌套**子 flow（子命名空间）；B1 = **splice 进父 DAG**（父拓扑可见新节点）。  
+> 与 A 轨 `flow.def` 区别：A = **嵌套**子 flow（子命名空间）；B1 = **splice 进父 DAG**（父拓扑可见新节点）。
 > 事件溯源治好旧 P0（注入丢失 / 三态就绪 / 并发改数组）——见 brainstorm §0。
 
 **JSON 草图：**
@@ -162,7 +162,7 @@ const first = race([
 });
 ```
 
-**JSON：** `type:"race", branches:[…], cancelLosers?:boolean`  
+**JSON：** `type:"race", branches:[…], cancelLosers?:boolean`
 **vs parallel：** parallel 全等；**vs tournament：** tournament 等全部完成再裁判。
 
 ---
@@ -329,8 +329,8 @@ const sp = fork.save("after-plan");
 
 **「顺便支持脑暴 phase」在语言层的默认承诺：**
 
-1. **文档 + 类型 + experimental 入口**写齐 B1–B5 + C 的 `counterfactual`/`quorum`/`fork` 草形。  
-2. **S4 MVP 编译器**：A 轨能 erase 的 erase；B/C 未实现 kind → **明确诊断**（可先认 type 字符串进 JSON passthrough 给未来引擎，或拒绝——推荐 **S4 拒绝未知 type，S4.x 放行已实现**）。  
+1. **文档 + 类型 + experimental 入口**写齐 B1–B5 + C 的 `counterfactual`/`quorum`/`fork` 草形。
+2. **S4 MVP 编译器**：A 轨能 erase 的 erase；B/C 未实现 kind → **明确诊断**（可先认 type 字符串进 JSON passthrough 给未来引擎，或拒绝——推荐 **S4 拒绝未知 type，S4.x 放行已实现**）。
 3. **不把 Moonshot 全塞进 MVP 出货门**。
 
 ---
@@ -339,11 +339,11 @@ const sp = fork.save("after-plan");
 
 新增 `PHASE_TYPES` 时：
 
-1. `schema.ts` 注册 + `validateTaskflow`  
-2. `flowir` `FlowIRNodeKind` 闭集扩展  
-3. `exec/step` kind 或 imperative 分支  
-4. DSL rune + skills  
-5. 本文件状态表打勾  
+1. `schema.ts` 注册 + `validateTaskflow`
+2. `flowir` `FlowIRNodeKind` 闭集扩展
+3. `exec/step` kind 或 imperative 分支
+4. DSL rune + skills
+5. 本文件状态表打勾
 
 **建议新增 type 名（稳定字符串）：**
 
@@ -368,7 +368,7 @@ const sp = fork.save("after-plan");
 | **本文** | **语言 horizon**：脑暴 phase 的 DSL 形状与分期 |
 | 引擎 S4.x / S6 | 按 §6 表落地剩余 type |
 
-S4 出货门 **不变**（demo FlowIR == hand JSON）。  
+S4 出货门 **不变**（demo FlowIR == hand JSON）。
 DSL erase **只生成已支持 type**；未知 experimental → fail-closed。
 
 ---

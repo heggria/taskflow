@@ -1,8 +1,9 @@
 name: Publish & Release
 
-# Publishes taskflow-core + taskflow-mcp-core + taskflow-hosts + pi-taskflow + codex-taskflow +
-# claude-taskflow + opencode-taskflow to npmjs.com and creates a GitHub Release, when a v* tag is
-# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All seven workspace
+# Publishes all nine packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
+# taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
+# grok-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
+# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All nine workspace
 # versions must equal the tag.
 
 on:
@@ -46,7 +47,7 @@ jobs:
             echo "::error::Tag $TAG does not match root version $EXPECT"
             exit 1
           fi
-          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts pi-taskflow codex-taskflow claude-taskflow opencode-taskflow; do
+          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
@@ -66,6 +67,11 @@ jobs:
             echo "::error::Tag $TAG does not match claude plugin.json version $CLAUDE_PLUGIN_V"
             exit 1
           fi
+          GROK_PLUGIN_V="v$(node -p "require('./packages/grok-taskflow/plugin/.grok-plugin/plugin.json').version")"
+          if [ "$GROK_PLUGIN_V" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match grok plugin.json version $GROK_PLUGIN_V"
+            exit 1
+          fi
           CODEX_PINNED="v$(node -p "require('./packages/codex-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('codex-taskflow@')).split('@')[1]")"
           if [ "$CODEX_PINNED" != "$TAG" ]; then
             echo "::error::codex .mcp.json pins codex-taskflow@${CODEX_PINNED#v} but tag is $TAG"
@@ -74,6 +80,11 @@ jobs:
           CLAUDE_PINNED="v$(node -p "require('./packages/claude-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('claude-taskflow@')).split('@')[1]")"
           if [ "$CLAUDE_PINNED" != "$TAG" ]; then
             echo "::error::claude .mcp.json pins claude-taskflow@${CLAUDE_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
+          GROK_PINNED="v$(node -p "require('./packages/grok-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('grok-taskflow@')).split('@')[1]")"
+          if [ "$GROK_PINNED" != "$TAG" ]; then
+            echo "::error::grok .mcp.json pins grok-taskflow@${GROK_PINNED#v} but tag is $TAG"
             exit 1
           fi
           # OpenCode has no plugin manifest; its scaffold opencode.json pins the
@@ -105,10 +116,12 @@ jobs:
           publish_one taskflow-core
           publish_one taskflow-mcp-core
           publish_one taskflow-hosts
+          publish_one taskflow-dsl
           publish_one pi-taskflow
           publish_one codex-taskflow
           publish_one claude-taskflow
           publish_one opencode-taskflow
+          publish_one grok-taskflow
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -129,7 +142,7 @@ jobs:
               }
             } catch {}
             const text = body.join('\n').trim();
-            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow.'));
+            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow.'));
           " "$VERSION"
           gh release create "$GITHUB_REF_NAME" \
             --notes-file /tmp/release-notes.md \

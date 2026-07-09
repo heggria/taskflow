@@ -60,6 +60,45 @@ test("compileTaskflowToIR: single-field mutation changes the hash", async () => 
 	assert.notEqual((await compileTaskflowToIR(renamed)).hash, h0.hash);
 });
 
+test("compileTaskflowToIR: hash changes for non-agent runtime payload fields", async () => {
+	const cases: Array<[string, Taskflow, Taskflow]> = [
+		[
+			"parallel branch task",
+			flow([{ id: "p", type: "parallel", branches: [{ agent: "a", task: "alpha" }], final: true } as Phase]),
+			flow([{ id: "p", type: "parallel", branches: [{ agent: "a", task: "beta" }], final: true } as Phase]),
+		],
+		[
+			"script run",
+			flow([{ id: "s", type: "script", run: ["echo", "alpha"], final: true } as Phase]),
+			flow([{ id: "s", type: "script", run: ["echo", "beta"], final: true } as Phase]),
+		],
+		[
+			"map source",
+			flow([{ id: "m", type: "map", over: "{steps.a.json}", task: "{item}", final: true } as Phase]),
+			flow([{ id: "m", type: "map", over: "{steps.b.json}", task: "{item}", final: true } as Phase]),
+		],
+		[
+			"flow definition",
+			flow([{ id: "f", type: "flow", def: { name: "child", phases: [{ id: "a", task: "alpha" }] }, final: true } as Phase]),
+			flow([{ id: "f", type: "flow", def: { name: "child", phases: [{ id: "a", task: "beta" }] }, final: true } as Phase]),
+		],
+		[
+			"race cancelLosers",
+			flow([{ id: "r", type: "race", branches: [{ task: "a" }, { task: "b" }], cancelLosers: true, final: true } as Phase]),
+			flow([{ id: "r", type: "race", branches: [{ task: "a" }, { task: "b" }], cancelLosers: false, final: true } as Phase]),
+		],
+		[
+			"expand maxNodes",
+			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 5, final: true } as Phase]),
+			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 6, final: true } as Phase]),
+		],
+	];
+
+	for (const [label, a, b] of cases) {
+		assert.notEqual((await compileTaskflowToIR(a)).hash, (await compileTaskflowToIR(b)).hash, label);
+	}
+});
+
 test("compileTaskflowToIR: structured diagnostics, never throws", async () => {
 	const f = flow([
 		{ id: "a", type: "agent", task: "read {steps.ghost.output}", final: true } as Phase,
@@ -128,6 +167,21 @@ test("compileTaskflowToIR: inject synthesized from {steps.X} refs", async () => 
 	assert.deepEqual(byId.get("audit")!.inject, ["scout"]);
 	assert.deepEqual(byId.get("report")!.inject, ["audit"]);
 	assert.deepEqual(byId.get("scout")!.inject, []);
+});
+
+test("compileTaskflowToIR: reduce.from contributes declared reads and edges", async () => {
+	const f = flow([
+		agent("a"),
+		agent("b"),
+		{ id: "r", type: "reduce", from: ["a", "b"], task: "summarize", final: true } as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	const r = ir.ir!.nodes.find((n) => n.id === "r")!;
+	assert.deepEqual(r.inject, ["a", "b"]);
+	assert.deepEqual(ir.meta.declaredDeps.r, { reads: ["a", "b"], writes: ["r"] });
+	const c = compileTaskflowToFlowIR(f);
+	assert.ok(c.canonical.edges?.some((e) => e.from === "a" && e.to === "r"));
+	assert.ok(c.canonical.edges?.some((e) => e.from === "b" && e.to === "r"));
 });
 
 test("compileTaskflowToIR: declaredDeps mirror inject/emits", async () => {

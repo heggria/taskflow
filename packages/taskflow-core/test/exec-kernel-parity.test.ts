@@ -164,3 +164,17 @@ test("parity: script phase stdout agrees", async () => {
 	assert.equal(kernel.state.phases.s.status, "done");
 	assert.equal(imp.state.phases.s.status, "done");
 });
+
+test("parity: skipped final phase falls back to last completed output", async () => {
+	const def: Taskflow = {
+		name: "parity-skipped-final",
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "one" },
+			{ id: "b", type: "agent", agent: "a", task: "two", when: "false", final: true },
+		],
+	};
+	const { kernel, imp } = await runBoth(def);
+	assert.equal(kernel.ok, imp.ok);
+	assert.equal(kernel.finalOutput, imp.finalOutput);
+	assert.equal(kernel.finalOutput, "OUT:one");
+});

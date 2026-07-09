@@ -12,3 +12,10 @@ packages:
   - "packages/grok-taskflow"
   - "packages/taskflow-dsl"
   - "website"
+overrides:
+  postcss: ^8.5.10
+allowBuilds:
+  "@google/genai": true
+  esbuild: true
+  protobufjs: true
+  sharp: true

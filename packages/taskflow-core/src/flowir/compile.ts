@@ -73,7 +73,12 @@ const SIDECAR_PHASE_FIELDS = [
 	"score",
 	"cache",
 	"shareContext",
+	"cancelLosers",
+	"expandMode",
+	"maxNodes",
 ] as const;
+
+const NODE_FIELD_KEYS = new Set<string>(["task", "dependsOn", "join", "when", "timeout"]);
 
 const VALID_KINDS = new Set<string>(PHASE_TYPES);
 
@@ -84,6 +89,12 @@ function sidecarForPhase(phase: Phase): Record<string, unknown> {
 		if (k in rec && rec[k] !== undefined) out[k] = rec[k];
 	}
 	return out;
+}
+
+function payloadForPhase(phase: Phase): Record<string, unknown> | undefined {
+	const sidecar = sidecarForPhase(phase);
+	for (const key of NODE_FIELD_KEYS) delete sidecar[key];
+	return Object.keys(sidecar).length > 0 ? sidecar : undefined;
 }
 
 function asKind(type: string | undefined): FlowIRNodeKind {
@@ -146,12 +157,15 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 			errors.push({ code: "missing-phase-id", message: "Phase missing id" });
 			continue;
 		}
-		const refs = collectRefs(phase);
-		const reads = new Set<string>(refs.steps.filter((id) => id !== phase.id));
-		for (const d of phase.dependsOn ?? []) {
-			if (d !== phase.id) reads.add(d);
-		}
-		const inject = Array.from(reads);
+			const refs = collectRefs(phase);
+			const reads = new Set<string>(refs.steps.filter((id) => id !== phase.id));
+			for (const d of phase.dependsOn ?? []) {
+				if (d !== phase.id) reads.add(d);
+			}
+			for (const d of phase.from ?? []) {
+				if (d !== phase.id) reads.add(d);
+			}
+			const inject = Array.from(reads);
 		declaredDeps[phase.id] = { reads: inject, writes: [phase.id] };
 
 		for (const r of refs.steps) {
@@ -185,9 +199,11 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 			node.condRef = n.canonical || undefined;
 		}
 		if (typeof phase.task === "string") node.task = phase.task;
-		if (phase.dependsOn && phase.dependsOn.length > 0) node.deps = [...phase.dependsOn];
-		if (phase.join === "all" || phase.join === "any") node.join = phase.join;
-		if (typeof phase.timeout === "number") node.timeout = phase.timeout;
+			if (phase.dependsOn && phase.dependsOn.length > 0) node.deps = [...phase.dependsOn];
+			if (phase.join === "all" || phase.join === "any") node.join = phase.join;
+			if (typeof phase.timeout === "number") node.timeout = phase.timeout;
+			const payload = payloadForPhase(phase);
+			if (payload) node.payload = payload;
 
 		for (const from of inject) {
 			edges.push({ from, to: phase.id });

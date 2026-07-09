@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
 import { test } from "node:test";
 import { buildSource } from "../src/build.ts";
-import { checkSource } from "../src/check.ts";
+import { checkFile, checkSource } from "../src/check.ts";
 import { decompileTaskflow } from "../src/decompile.ts";
 import { flow, agent, TfDslEraseOnlyError } from "../src/index.ts";
 import { compileTaskflowToFlowIR, hashFlowIR, validateTaskflow } from "taskflow-core";
@@ -89,6 +91,29 @@ export default flow("hello", () => agent("hi"));`;
 	assert.equal(r.ok, true, format(r));
 });
 
+test("check: typed json output, item fields, and phase handles typecheck", () => {
+	const dir = fs.mkdtempSync(path.join(process.cwd(), "packages/taskflow-dsl/test/.tmp-typecheck-"));
+	try {
+		const file = path.join(dir, "typed.tf.ts");
+		fs.writeFileSync(
+			file,
+			`
+import { flow, agent, map, reduce, json, expand } from "taskflow-dsl";
+export default flow("typed", () => {
+  const discover = agent("list", { output: json<{ path: string }[]>() });
+  const each = map(discover, (item) => agent(\`Audit \${item.path}\`));
+  const nested = expand.nested(discover.json);
+  return reduce([each, nested], (parts) => agent(\`Summary \${parts.each.output} \${parts.nested.output}\`));
+});
+`,
+		);
+		const r = checkFile(file, { typecheck: true, cwd: process.cwd() });
+		assert.equal(r.ok, true, format(r));
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("parity: DSL build hash matches hand JSON twin (map + json + templates)", () => {
 	const src = `
 import { flow, agent, map, json } from "taskflow-dsl";
@@ -154,6 +179,128 @@ test("decompile: round-trip shape", () => {
 	const src = decompileTaskflow(def);
 	assert.match(src, /export default flow/);
 	assert.match(src, /agent\(/);
+});
+
+test("register: explicit dependsOn unions with auto-wired template deps", () => {
+	const src = `
+import { flow, agent } from "taskflow-dsl";
+export default flow("u", () => {
+  const a = agent("A");
+  const extra = agent("extra work", { dependsOn: ["a"] });
+  // auto-dep via \${a.output}; explicit dependsOn also lists extra
+  return agent(\`see \${a.output}\`, { dependsOn: ["extra"], final: true });
+});
+`;
+	const r = buildSource(src, "union-deps.tf.ts");
+	assert.equal(r.ok, true, format(r));
+	const last = r.taskflow?.phases?.find((p) => p.final);
+	const deps = new Set(last?.dependsOn ?? []);
+	assert.ok(deps.has("a"), `expected auto dep a, got ${[...deps]}`);
+	assert.ok(deps.has("extra"), `expected explicit dep extra, got ${[...deps]}`);
+});
+
+test("unknown rune hard-errors (bound and bare)", () => {
+	const bound = buildSource(
+		`
+import { flow, agent } from "taskflow-dsl";
+export default flow("x", () => {
+  const z = mystery("nope");
+  return agent("ok");
+});
+`,
+		"unknown-bound.tf.ts",
+	);
+	assert.equal(bound.ok, false);
+	assert.ok((bound.diagnostics ?? []).some((d) => d.code === "TFDSL_RUNE_UNKNOWN"));
+
+	const bare = buildSource(
+		`
+import { flow, agent } from "taskflow-dsl";
+export default flow("x", () => {
+  mystery();
+  return agent("ok");
+});
+`,
+		"unknown-bare.tf.ts",
+	);
+	assert.equal(bare.ok, false);
+	assert.ok((bare.diagnostics ?? []).some((d) => d.code === "TFDSL_RUNE_UNKNOWN"));
+});
+
+test("non-agent branch in race/parallel hard-errors TFDSL_BRANCH_KIND", () => {
+	const race = buildSource(
+		`
+import { flow, agent, race, script } from "taskflow-dsl";
+export default flow("r", () => race([agent("a"), script(["echo", "x"])]));
+`,
+		"race-branch.tf.ts",
+	);
+	assert.equal(race.ok, false);
+	assert.ok((race.diagnostics ?? []).some((d) => d.code === "TFDSL_BRANCH_KIND"), format(race));
+
+	const par = buildSource(
+		`
+import { flow, agent, parallel, script } from "taskflow-dsl";
+export default flow("p", () => parallel([agent("a"), script(["echo", "x"])]));
+`,
+		"par-branch.tf.ts",
+	);
+	assert.equal(par.ok, false);
+	assert.ok((par.diagnostics ?? []).some((d) => d.code === "TFDSL_BRANCH_KIND"), format(par));
+});
+
+test("decompile: race/expand imports + object def fail-closed + dependsOn preserved", () => {
+	const withRace = decompileTaskflow({
+		name: "r",
+		phases: [
+			{
+				id: "q",
+				type: "race",
+				branches: [
+					{ task: "fast", agent: "a" },
+					{ task: "slow", agent: "a" },
+				],
+				cancelLosers: false,
+				final: true,
+			},
+		],
+	});
+	assert.match(withRace, /import \{[^}]*\brace\b/);
+	assert.match(withRace, /cancelLosers: false/);
+
+	const withExpand = decompileTaskflow({
+		name: "e",
+		phases: [
+			{ id: "plan", type: "agent", task: "plan" },
+			{
+				id: "grow",
+				type: "expand",
+				def: "{steps.plan.json}",
+				expandMode: "graft",
+				dependsOn: ["plan"],
+				final: true,
+			},
+		],
+	});
+	assert.match(withExpand, /import \{[^}]*\bexpand\b/);
+	assert.match(withExpand, /dependsOn: \["plan"\]/);
+	assert.match(withExpand, /expandMode: "graft"/);
+
+	assert.throws(
+		() =>
+			decompileTaskflow({
+				name: "bad",
+				phases: [
+					{
+						id: "g",
+						type: "expand",
+						def: { name: "inner", phases: [{ id: "c", type: "agent", task: "x" }] },
+						final: true,
+					},
+				],
+			}),
+		/TFDSL_DECOMPILE_UNSUPPORTED/,
+	);
 });
 
 function format(r: { diagnostics?: { code: string; message: string }[] }): string {

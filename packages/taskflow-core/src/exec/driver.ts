@@ -147,6 +147,20 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		args: Record<string, unknown>;
 		stack: string[];
 	}): Promise<NestedFlowResult> => {
+		// Re-admit nested defs — parent admission must not smuggle race/expand
+		// or score/retry/… into the kernel path (silent semantic drift).
+		if (!canUseEventKernel(opts.def)) {
+			const reason =
+				kernelUnsupportedReason(opts.def) ??
+				"nested flow contains phase kinds or features the event kernel cannot execute";
+			return {
+				finalOutput: `Nested flow rejected by event kernel: ${reason}`,
+				ok: false,
+				usage: emptyUsage(),
+				events: [],
+				blocked: false,
+			};
+		}
 		const childState: RunState = {
 			// No `/` — validateRunId rejects path separators if ever persisted.
 			runId: `${state.runId}-n-${opts.def.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40)}`,
@@ -318,12 +332,17 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		console.warn(`[taskflow] event-kernel fold status drift phase=${id} state=${ps.status} fold=${f.status}`);
 	}
 
-	const anyFailed = Object.entries(state.phases).some(
-		([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
-	);
-	const finals = def.phases.filter((p) => p.final);
-	const finalPhase = finals[finals.length - 1] ?? def.phases[def.phases.length - 1];
-	let finalOutput = finalPhase ? (state.phases[finalPhase.id]?.output ?? "") : "";
+		const anyFailed = Object.entries(state.phases).some(
+			([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
+		);
+		const finals = def.phases.filter((p) => p.final);
+		const finalPhase = finals[finals.length - 1] ?? def.phases[def.phases.length - 1];
+		let finalState = finalPhase ? state.phases[finalPhase.id] : undefined;
+		if (!finalState || finalState.status !== "done") {
+			const doneInOrder = def.phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
+			if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
+		}
+		let finalOutput = finalState?.output ?? "";
 	if (gateBlocked) {
 		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${finalOutput ? `\n\n${finalOutput}` : ""}`;
 	} else if (budgetBlocked) {

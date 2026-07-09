@@ -1,6 +1,6 @@
 {
   "name": "race-first-win",
-  "description": "Horizon B: first completed branch wins (latency over exhaustive wait).",
+  "description": "Horizon B: first successful branch wins (latency over exhaustive wait; fast hard-fail does not win).",
   "budget": { "maxUSD": 0.5 },
   "phases": [
     {

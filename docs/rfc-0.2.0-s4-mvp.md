@@ -1,10 +1,10 @@
 # RFC: taskflow 0.2.0 S4 MVP — `taskflow-dsl` public surface
 
-> Status: **IMPLEMENTED** (package + CLI live; surface extended — see §8.1) · 2026-07-09  
+> Status: **IMPLEMENTED** (package + CLI live; surface extended — see §8.1) · 2026-07-09
 
-> Parent: [`rfc-0.2.0-architecture.md`](./rfc-0.2.0-architecture.md) §4.3 / §9 S4  
-> Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 (**FULL language goal**; ship gate is this MVP doc)  
-> Route lock: north-star 决策1 + this document §0  
+> Parent: [`rfc-0.2.0-architecture.md`](./rfc-0.2.0-architecture.md) §4.3 / §9 S4
+> Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 (**FULL language goal**; ship gate is this MVP doc)
+> Route lock: north-star 决策1 + this document §0
 > Provenance: multi-agent council runs `s4-shape-council` + `s4-shape-council-v2` + `s4-shape-finalize` (inventory → route tournament → surface → adversary → cross-check)
 
 This document freezes the **publishable public surface** of `packages/taskflow-dsl` for the S4 MVP ship gate. It is intentionally narrower than full DSL RFC coverage: what agents and humans import, invoke, and get wrong messages for — not the full transform implementation plan.
@@ -53,11 +53,11 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 
 ### S4 MVP is NOT
 
-- Solid runtime runes / Proxy / `currentObserver` graph building  
-- Runnable unbuilt `.tf.ts` or “degraded interpret” next to JSON  
-- In-file JSON phase literals (Vapor hybrid)  
-- Breakpoint-on-`agent()` as a product promise  
-- S5 kernel flip or any change to existing JSON Taskflow execution  
+- Solid runtime runes / Proxy / `currentObserver` graph building
+- Runnable unbuilt `.tf.ts` or “degraded interpret” next to JSON
+- In-file JSON phase literals (Vapor hybrid)
+- Breakpoint-on-`agent()` as a product promise
+- S5 kernel flip or any change to existing JSON Taskflow execution
 
 **WINNER_RATIONALE:** Svelte-style compile-time erase with whole-file JSON escape is the only path that satisfies architecture S4 (`.tf.ts→build→Taskflow→FlowIR`, JSON zero-change) without reopening rejected Proxy physics or hybrid grammar cost.
 
@@ -68,8 +68,8 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 .flow.json ──validate / desugar──▶  Taskflow JSON  ──same core entry only──▶  FlowIR
 ```
 
-- **S4 stop line:** DSL package produces **Taskflow** (and may *call* core to emit FlowIR for CLI convenience).  
-- **Single FlowIR entry:** only `taskflow-core`’s `compileTaskflowToFlowIR` / `hashFlowIR` (arch §4.2).  
+- **S4 stop line:** DSL package produces **Taskflow** (and may *call* core to emit FlowIR for CLI convenience).
+- **Single FlowIR entry:** only `taskflow-core`’s `compileTaskflowToFlowIR` / `hashFlowIR` (arch §4.2).
 - **Acceptance gate:** DSL demo FlowIR == hand-written JSON FlowIR (byte-stable `ir:<64-hex>`).
 
 ---
@@ -176,7 +176,7 @@ Optional monorepo convenience (not published): root script `"dsl": "node --condi
 
 ## §2. CLI surface
 
-Entry: `taskflow-dsl <command> [options] [path…]`  
+Entry: `taskflow-dsl <command> [options] [path…]`
 Global flags (all commands):
 
 | Flag | Meaning |
@@ -227,7 +227,7 @@ taskflow-dsl build <input> [options]
 | flowir | `<stem>.flowir.json` |
 | both | both files |
 
-**Stdout human mode (no `--json`):** short summary — name, phase count, `ir:<hash>` if computed, output paths.  
+**Stdout human mode (no `--json`):** short summary — name, phase count, `ir:<hash>` if computed, output paths.
 **Stdout `--json`:** `BuildResult` (§3.2).
 
 **MVP non-goals for `build`:** watch mode, multi-file project graph beyond one entry `export default`, bundling imports of other `.tf.ts` (S4.1: `import` of subflow modules).
@@ -450,8 +450,8 @@ export function buildSource(
 
 **Contract:**
 
-1. On `ok: true`, `taskflow` is present and has passed `validateTaskflow` (post-desugar shape).  
-2. When `emitFlowIR: true` and ok, `flowir` + `hash` come **only** from `compileTaskflowToFlowIR` + `hashFlowIR`.  
+1. On `ok: true`, `taskflow` is present and has passed `validateTaskflow` (post-desugar shape).
+2. When `emitFlowIR: true` and ok, `flowir` + `hash` come **only** from `compileTaskflowToFlowIR` + `hashFlowIR`.
 3. DSL package never reimplements IR lowering.
 
 ### 3.3 Check API (`taskflow-dsl/check`)
@@ -505,8 +505,8 @@ export function skeletonJson(name?: string): string;
 
 ### 3.6 What the library must **not** expose in MVP
 
-- `interpretTfTs()` / `runUnbuilt()`  
-- Proxy helpers, `currentObserver`, reactive graph APIs  
+- `interpretTfTs()` / `runUnbuilt()`
+- Proxy helpers, `currentObserver`, reactive graph APIs
 - Direct `executeTaskflow` wrappers (hosts already own run)
 
 ---
@@ -541,16 +541,16 @@ Saved-flow library (`.pi/taskflows/*.json` etc.) remains **JSON** as today; S4 d
 
 ### 4.3 Naming
 
-- Flow `name` (string arg to `flow`) = taskflow `name` field (library identity).  
-- Phase ids = **const binding names** where possible (`const discover = agent(…)` → id `discover`); anonymous runes get synthetic ids (`agent_0`, …) with stable ordering rules documented in implementer notes.  
+- Flow `name` (string arg to `flow`) = taskflow `name` field (library identity).
+- Phase ids = **const binding names** where possible (`const discover = agent(…)` → id `discover`); anonymous runes get synthetic ids (`agent_0`, …) with stable ordering rules documented in implementer notes.
 - IDs remain kebab-or-camel as bound; core already accepts phase ids used in `{steps.ID…}` — **prefer valid JS identifiers** that match existing JSON id style in demos (kebab via explicit `opts.id` if needed).
 
 MVP option: `agent("…", { id: "audit-each" })` maps to JSON `id` when binding name differs — **Y** if `id` already exists on PhaseSchema; else use binding name only.
 
 ### 4.4 JSON escape file convention
 
-- Any `*.json` / `*.jsonc` Taskflow document accepted by today’s `validateTaskflow`.  
-- No `.tf.json` hybrid.  
+- Any `*.json` / `*.jsonc` Taskflow document accepted by today’s `validateTaskflow`.
+- No `.tf.json` hybrid.
 - `build`/`check` treat JSON as the escape frontend; output FlowIR must match DSL-built FlowIR for the equality demos.
 
 ---
@@ -705,8 +705,8 @@ JSON authors skip steps 1–4 and keep using define / defineFile as today.
 
 ### 7.3 S4.1 host follow-ups (explicitly deferred)
 
-- `taskflow_build` / `taskflow_check` in `taskflow-mcp-core` (stdio tools wrapping library API).  
-- pi `/tf build|check|new` and skills-src host blocks.  
+- `taskflow_build` / `taskflow_check` in `taskflow-mcp-core` (stdio tools wrapping library API).
+- pi `/tf build|check|new` and skills-src host blocks.
 - Optional: run path accepts `.tf.ts` **only** after explicit build cache hit (still no interpret).
 
 ### 7.4 Compatibility with S0–S3 / S5
@@ -753,14 +753,14 @@ FULL RFC coverage remains a completion track; missing FULL features must not app
 
 ## §9. Acceptance checklist (public surface)
 
-- [x] Package name `taskflow-dsl` publishable with exports/bin as §1  
-- [x] `taskflow-dsl build|check|decompile|new` flags/IO as §2  
-- [x] Author import `from "taskflow-dsl"` typechecks a hello + audit-style demo  
-- [x] `build` on demo `.tf.ts` and hand JSON → **identical** `hashFlowIR`  
-- [x] Diagnostics stable codes + positions on deliberate erase errors  
-- [x] Import-lint: no denylist modules from core/hosts  
-- [x] No MCP/schema changes required to pass S4 gate  
-- [x] README/skills teach CLI-first workflow; JSON escape documented as first-class  
+- [x] Package name `taskflow-dsl` publishable with exports/bin as §1
+- [x] `taskflow-dsl build|check|decompile|new` flags/IO as §2
+- [x] Author import `from "taskflow-dsl"` typechecks a hello + audit-style demo
+- [x] `build` on demo `.tf.ts` and hand JSON → **identical** `hashFlowIR`
+- [x] Diagnostics stable codes + positions on deliberate erase errors
+- [x] Import-lint: no denylist modules from core/hosts
+- [x] No MCP/schema changes required to pass S4 gate
+- [x] README/skills teach CLI-first workflow; JSON escape documented as first-class
 
 
 ---
@@ -777,19 +777,19 @@ FULL RFC coverage remains a completion track; missing FULL features must not app
 
 ### 10.2 Non-blocking polish (implementer discretion)
 
-1. Sync vs async `buildFile` (sync-friendly with the TypeScript API).  
-2. Exact synthetic phase id algorithm for anonymous runes (must be deterministic for hash equality fixtures).  
-3. Default `--emit both` vs `taskflow` only (recommend **taskflow-only** default; FlowIR via `--emit flowir|both` / CI).  
+1. Sync vs async `buildFile` (sync-friendly with the TypeScript API).
+2. Exact synthetic phase id algorithm for anonymous runes (must be deterministic for hash equality fixtures).
+3. Default `--emit both` vs `taskflow` only (recommend **taskflow-only** default; FlowIR via `--emit flowir|both` / CI).
 4. Optional thin facade over TS `Node` so the parser host can be swapped later without rewriting erase.
 
 ### 10.3 Recommended PR stack (after human lock)
 
-1. **Scaffold** `packages/taskflow-dsl` + workspace/filter + import-lint denylist test.  
-2. **Author stubs + types** (closed MVP option types; throw-on-call).  
-3. **`check` + `new`** (tsc/Program + rune rules + hello skeleton).  
-4. **`build` erase vertical slice** — agent → map/templates → parallel → reduce → gate LLM → script; emit Taskflow; call core FlowIR.  
-5. **Golden parity** — hand JSON twin fixtures; `hashFlowIR` equality (include map + `json<T>`).  
-6. **`decompile` Taskflow→`.tf.ts`** on Y-slice + fail-closed unsupported.  
+1. **Scaffold** `packages/taskflow-dsl` + workspace/filter + import-lint denylist test.
+2. **Author stubs + types** (closed MVP option types; throw-on-call).
+3. **`check` + `new`** (tsc/Program + rune rules + hello skeleton).
+4. **`build` erase vertical slice** — agent → map/templates → parallel → reduce → gate LLM → script; emit Taskflow; call core FlowIR.
+5. **Golden parity** — hand JSON twin fixtures; `hashFlowIR` equality (include map + `json<T>`).
+6. **`decompile` Taskflow→`.tf.ts`** on Y-slice + fail-closed unsupported.
 7. **Docs/skills** — CLI-first workflow; JSON first-class; import string `taskflow-dsl`; amend DSL v2 FULL vs MVP note.
 
 ---

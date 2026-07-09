@@ -1,6 +1,6 @@
 # Claim vs implementation — verification log (`release/0.2.0`)
 
-> Last full pass: 2026-07-09 · Branch HEAD after alignment commit  
+> Last full pass: 2026-07-09 · Adversarial closure pass (PR-ready)
 > Purpose: single ledger so marketing/RFCs/skills do not outrun the code.
 
 ## Verified true (hard claims OK)
@@ -21,10 +21,10 @@
 
 | Topic | Truth |
 |-------|--------|
-| Version | All packages still **0.1.7**; branch is `release/0.2.0` preview — not a published 0.2.0 npm tag until bump |
+| Version | Package manifests and plugin pins are bumped to **0.2.0**; npm is not published until the `v0.2.0` release job succeeds |
 | S5 | Kernel default ON **not** done; flagship $6→$0.40 is **acceptance target**, not certified number |
-| `cancelLosers` | **Implemented**: abort losers after first **success** (best-effort AbortSignal); usage aggregates all branches |
-| Event kernel “complete” | Complete for **kernel-eligible** kinds/features; not race/expand; not score/retry/expect/reflexion/cross-run cache/shareContext |
+| `cancelLosers` | **Implemented**: first-**success** wins; abort losers after success; parent abort wakes + grace-bounds wait; cooperative losers in usage |
+| Event kernel “complete” | Complete for **kernel-eligible** kinds/features; not race/expand; not score/retry/expect/reflexion/cross-run cache/shareContext; **nested** `flow` re-runs `canUseEventKernel` (fail-closed) |
 | Multi-host DSL | Hosts run **Taskflow JSON**; `.tf.ts` requires prior `taskflow-dsl build` |
 | Decompile | Semantic, not literal round-trip |
 | Test count | ~**1400+** unit tests in ~**95** `*.test.ts` files (regenerate badge on release) |
@@ -52,19 +52,33 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 11. Skills advanced: `flow{def}` vs `expand`; configuration caveats (kernel/decompile).
 
 ### Pass 3 (multi-agent review P0/P1 fixes)
-12. Race **first-success** (not first-settled); usage aggregates all branches.
+12. Race **first-success** (not first-settled); cooperative loser usage aggregates.
 13. Graft: rewrite `{steps.*}` after id prefix; zero expand usage after promote (no double-count).
 14. DSL `register()` unions explicit `dependsOn`; unknown runes / non-agent branches error.
 15. Decompile: import race/expand; fail-closed non-string `def`.
 16. Kernel policy: `incremental` + workspace cwd keywords force imperative.
 17. README phase table + taskflow-dsl README preview note.
 
+### Pass 4 (multi-agent P0/P1 code fixes)
+18. Race **first-success** (not first-settled); non-cooperative loser wait is bounded.
+19. Graft: rewrite `{steps.*}` after id prefix; zero expand usage after promote.
+20. DSL `register()` unions dependsOn; unknown runes / non-agent branches error.
+21. Decompile: import race/expand; fail-closed non-string `def`.
+22. Kernel policy: incremental + workspace cwd keywords force imperative.
+
+### Pass 5 (adversarial re-review closure)
+23. Race parent-abort wakes gate + grace; all-fail unit test; cancelLosers grace retained.
+24. Nested event-kernel re-admission (`canUseEventKernel` on child) fail-closed.
+25. DSL bare unknown callees error; P0 regression tests (dependsOn union, branch kind, decompile).
+26. Decompile expand keeps `dependsOn`/`final`/`maxNodes`; race emits `cancelLosers: false`.
+27. Docs honesty: EN/zh README monorepo-vs-npm banner; zh phase/package parity; website race first-success; example description; publish.yml nine packages; CONTRIBUTING/DECISIONS counts.
+28. CI includes `test:e2e-grok-mcp` (already wired).
+
 ## Still open (not claimed as done)
 
-- Formal **0.2.0 npm publish** + version bump (packages still 0.1.7; `taskflow-dsl` may 404 on registry).
+- Formal **0.2.0 npm publish** after merge + `v0.2.0` tag; pins already match.
 - S5 kernel default ON + flagship $ demo seal → plan: `docs/internal/s5-kernel-default-on-plan.md`.
-- Live host e2e as release gate (unit suite is the local hard gate).
-- FlowIR full sidecar for expandMode/maxNodes/cancelLosers (optional S5.x).
+- Live host **executor** e2e as release gate (MCP e2e is CI; live model stays manual).
 
 ## Re-verify commands
 

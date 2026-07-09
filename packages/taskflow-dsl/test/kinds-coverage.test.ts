@@ -131,17 +131,12 @@ export default flow("gs", () => {
 	const auto = r.taskflow!.phases!.find((p) => p.id === "auto");
 	assert.ok(Array.isArray(auto?.eval));
 	assert.equal(auto?.task, "fallback llm gate");
-	const scored = r.taskflow!.phases!.find((p) => p.id === "phase-2" || p.type === "gate" && p.score);
 	const withScore = r.taskflow!.phases!.find((p) => (p as { score?: unknown }).score !== undefined);
 	assert.ok(withScore, JSON.stringify(r.taskflow?.phases));
 	assert.equal((withScore as { score: { combine: string } }).score.combine, "all");
 });
 
 test("negative: unknown option warns", () => {
-	const src = `
-import { flow, agent } from "taskflow-dsl";
-export default flow("u", () => agent("t", { notARealField: 1 } as never));
-`;
 	// without as never, TS would error at typecheck; source still has property
 	const raw = `
 import { flow, agent } from "taskflow-dsl";

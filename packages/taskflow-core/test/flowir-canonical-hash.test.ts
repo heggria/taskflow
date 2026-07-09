@@ -238,6 +238,12 @@ test("SENSITIVITY: changing timeout changes the hash", () => {
 	assert.notEqual(hashNode(a), hashNode(b));
 });
 
+test("SENSITIVITY: changing payload changes the hash", () => {
+	const a = node("x", { kind: "parallel", payload: { branches: [{ agent: "a", task: "alpha" }] } });
+	const b = node("x", { kind: "parallel", payload: { branches: [{ agent: "a", task: "beta" }] } });
+	assert.notEqual(hashNode(a), hashNode(b));
+});
+
 test("SENSITIVITY: changing the condition's compared value changes the hash", () => {
 	const a = node("g", { kind: "gate", when: "{steps.a.output} == 'ok'" });
 	const b = node("g", { kind: "gate", when: "{steps.a.output} == 'block'" });

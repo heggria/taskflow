@@ -93,6 +93,10 @@ jobs:
       - name: OpenCode MCP e2e (stdio handshake + tool calls)
         run: pnpm run test:e2e-opencode-mcp
 
+      # Grok MCP e2e is also stdio-only and does not require a live Grok model.
+      - name: Grok MCP e2e (stdio handshake + tool calls)
+        run: pnpm run test:e2e-grok-mcp
+
   build:
     name: build (dist emit)
     runs-on: ubuntu-latest

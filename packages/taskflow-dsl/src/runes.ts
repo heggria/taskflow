@@ -18,7 +18,12 @@ function eraseOnly(rune: string): never {
 }
 
 /** Opaque phase handle — only meaningful to the compiler. */
-export type PhaseRef = { readonly __brand: "PhaseRef"; readonly id?: string };
+export type PhaseRef<TJson = unknown> = {
+	readonly __brand: "PhaseRef";
+	readonly id?: string;
+	readonly output: string;
+	readonly json: TJson;
+};
 
 export type TemplateInput = string;
 
@@ -33,14 +38,14 @@ export interface FlowOptions {
 	version?: number;
 }
 
-export interface PhaseOptions {
+export interface PhaseOptions<TJson = unknown> {
 	id?: string;
 	agent?: string;
 	model?: string;
 	thinking?: string | boolean;
 	tools?: string[];
 	cwd?: string;
-	output?: "text" | "json";
+	output?: "text" | "json" | JsonExpectMarker<TJson>;
 	expect?: unknown;
 	when?: string;
 	join?: "all" | "any";
@@ -74,59 +79,59 @@ export function json<T = unknown>(): JsonExpectMarker<T> {
 
 export function flow(
 	name: string,
-	fn: (ctx: FlowCtx) => PhaseRef | void,
+	fn: (ctx: FlowCtx) => PhaseRef<unknown> | void,
 ): TaskflowModuleDefault;
 export function flow(
 	name: string,
 	opts: FlowOptions,
-	fn: (ctx: FlowCtx) => PhaseRef | void,
+	fn: (ctx: FlowCtx) => PhaseRef<unknown> | void,
 ): TaskflowModuleDefault;
 export function flow(
 	_name: string,
-	_optsOrFn: FlowOptions | ((ctx: FlowCtx) => PhaseRef | void),
-	_fn?: (ctx: FlowCtx) => PhaseRef | void,
+	_optsOrFn: FlowOptions | ((ctx: FlowCtx) => PhaseRef<unknown> | void),
+	_fn?: (ctx: FlowCtx) => PhaseRef<unknown> | void,
 ): TaskflowModuleDefault {
 	return eraseOnly("flow");
 }
 
-export function agent(_task: TemplateInput, _opts?: PhaseOptions): PhaseRef {
+export function agent<TJson = unknown>(_task: TemplateInput, _opts?: PhaseOptions<TJson>): PhaseRef<TJson> {
 	return eraseOnly("agent");
 }
 
 export function parallel(
-	_branches: PhaseRef[],
+	_branches: PhaseRef<unknown>[],
 	_opts?: PhaseOptions,
-): PhaseRef[] & PhaseRef {
+): PhaseRef<unknown>[] & PhaseRef<unknown> {
 	return eraseOnly("parallel");
 }
 
-export function map(
-	_source: PhaseRef | string,
-	_fn: (item: unknown) => PhaseRef,
-	_opts?: PhaseOptions,
-): PhaseRef {
+export function map<TItem = unknown, TJson = unknown>(
+	_source: PhaseRef<TItem[]> | string,
+	_fn: (item: TItem) => PhaseRef<unknown>,
+	_opts?: PhaseOptions<TJson>,
+): PhaseRef<TJson> {
 	return eraseOnly("map");
 }
 
 export function gate(
-	_upstream: PhaseRef,
+	_upstream: PhaseRef<unknown>,
 	_opts?: PhaseOptions,
-	_task?: (input: PhaseRef) => TemplateInput,
-): PhaseRef {
+	_task?: (input: PhaseRef<unknown>) => TemplateInput,
+): PhaseRef<unknown> {
 	return eraseOnly("gate");
 }
 
 /** Zero-token pre-checks (`eval`); LLM `task` still required by engine if score absent. */
 export function gateAutomated(
-	_upstream: PhaseRef,
+	_upstream: PhaseRef<unknown>,
 	_opts: PhaseOptions & { pass: string[]; task?: TemplateInput },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("gate.automated");
 }
 
 /** Deterministic scorers (`score`); may omit LLM task when score alone decides. */
 export function gateScored(
-	_upstream: PhaseRef,
+	_upstream: PhaseRef<unknown>,
 	_opts: PhaseOptions & {
 		scorers: Array<Record<string, unknown>>;
 		combine?: "all" | "any" | "weighted";
@@ -135,7 +140,7 @@ export function gateScored(
 		target?: string;
 		judge?: { agent?: string; task?: string };
 	},
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("gate.scored");
 }
 
@@ -143,14 +148,14 @@ gate.automated = gateAutomated;
 gate.scored = gateScored;
 
 export function reduce(
-	_from: PhaseRef[],
-	_fn: (parts: Record<string, PhaseRef>) => PhaseRef,
+	_from: PhaseRef<unknown>[],
+	_fn: (parts: Record<string, PhaseRef<unknown>>) => PhaseRef<unknown>,
 	_opts?: PhaseOptions,
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("reduce");
 }
 
-export function approval(_opts: { request: TemplateInput } & PhaseOptions): PhaseRef {
+export function approval(_opts: { request: TemplateInput } & PhaseOptions): PhaseRef<unknown> {
 	return eraseOnly("approval");
 }
 
@@ -164,9 +169,9 @@ export function subflow(
 
 /** Nested dynamic sub-flow (compiles to type:flow def). */
 export function subflowDef(
-	_def: PhaseRef | string,
+	_def: PhaseRef<unknown> | string | unknown,
 	_opts?: PhaseOptions,
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("subflow.def");
 }
 subflow.def = subflowDef;
@@ -177,57 +182,57 @@ export function loop(_opts: PhaseOptions & {
 	maxIterations?: number;
 	convergence?: boolean;
 	reflexion?: boolean;
-}): PhaseRef {
+}): PhaseRef<unknown> {
 	return eraseOnly("loop");
 }
 
 export function tournament(_opts: PhaseOptions & {
 	variants?: number;
-	branches?: PhaseRef[];
+	branches?: PhaseRef<unknown>[];
 	mode?: "best" | "aggregate";
 	judge?: string;
 	judgeAgent?: string;
 	task?: TemplateInput;
-}): PhaseRef {
+}): PhaseRef<unknown> {
 	return eraseOnly("tournament");
 }
 
 export function script(
 	_run: string | string[],
 	_opts?: PhaseOptions & { input?: string },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("script");
 }
 
 /** Nested expand (isolated sub-flow). */
-export function expandNested(
-	_def: PhaseRef | string,
+export function expandNested<TDef = unknown>(
+	_def: PhaseRef<TDef> | string | TDef,
 	_opts?: PhaseOptions & { maxNodes?: number },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("expand.nested");
 }
 
 /** Graft-promote expand: run fragment then promote phase states onto parent. */
-export function expandGraft(
-	_def: PhaseRef | string,
+export function expandGraft<TDef = unknown>(
+	_def: PhaseRef<TDef> | string | TDef,
 	_opts?: PhaseOptions & { maxNodes?: number },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("expand.graft");
 }
 
-export function expand(
-	_def: PhaseRef | string,
+export function expand<TDef = unknown>(
+	_def: PhaseRef<TDef> | string | TDef,
 	_opts?: PhaseOptions & { expandMode?: "nested" | "graft"; maxNodes?: number },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("expand");
 }
 expand.nested = expandNested;
 expand.graft = expandGraft;
 
-/** Race: first completed branch wins. */
+/** Race: first successful branch wins. */
 export function race(
-	_branches: PhaseRef[],
+	_branches: PhaseRef<unknown>[],
 	_opts?: PhaseOptions & { cancelLosers?: boolean },
-): PhaseRef {
+): PhaseRef<unknown> {
 	return eraseOnly("race");
 }

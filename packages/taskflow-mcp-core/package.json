@@ -1,7 +1,7 @@
 {
   "name": "taskflow-mcp-core",
-  "version": "0.1.7",
-  "description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode/grok adapters \u2014 depends only on taskflow-core.",
+  "version": "0.2.0",
+  "description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode/grok adapters — depends only on taskflow-core.",
   "keywords": [
     "taskflow",
     "mcp",
@@ -60,6 +60,6 @@
     "access": "public"
   },
   "dependencies": {
-    "taskflow-core": "0.1.7"
+    "taskflow-core": "workspace:*"
   }
 }

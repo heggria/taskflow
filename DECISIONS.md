@@ -51,7 +51,7 @@ host ecosystem's delivery artifact (`codex plugin add taskflow@taskflow`,
 `npm i -g codex-taskflow`, an MCP server a user points their client at). But
 there is *no* reason their release cadence is independent — adapters almost
 never change except when `taskflow-core`'s contract changes or a host CLI
-changes its flags. Today all **eight** packages are **lockstep versioned** at the
+changes its flags. Today all **nine** packages are **lockstep versioned** at the
 same number, which makes a per-package semver meaningless: a codex flag fix
 forces a new version of the untouched core engine.
 
@@ -174,11 +174,11 @@ error blob.
   comma host list; the skill body is shared. Do not per-host the skill body.
 - **MCP server is its own package (`taskflow-mcp-core`)** — a pure presentation
   layer over core. Pi users never pull MCP code. This boundary is correct.
-- **Lockstep versioning is kept for now** (all eight packages share a version).
+- **Lockstep versioning is kept for now** (all nine packages share a version).
   It is crude but it is *less* work than tracking which subset of packages need
-  a given bump, and at 8 packages the cost is still low. `taskflow-hosts` now
-  exists; the next revisit is when core genuinely needs to move on its own
-  cadence independent of host CLI flag churn.
+  a given bump, and at 9 packages the cost is still low. `taskflow-hosts` and
+  `taskflow-dsl` exist; the next revisit is when core genuinely needs to move
+  on its own cadence independent of host CLI flag churn.
 
 ---
 

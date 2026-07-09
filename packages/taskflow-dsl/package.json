@@ -1,8 +1,14 @@
 {
   "name": "taskflow-dsl",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Compile-time TypeScript DSL frontend for taskflow: erase .tf.ts runes to Taskflow JSON, then FlowIR via taskflow-core.",
-  "keywords": ["taskflow", "dsl", "typescript", "dag", "orchestration"],
+  "keywords": [
+    "taskflow",
+    "dsl",
+    "typescript",
+    "dag",
+    "orchestration"
+  ],
   "license": "MIT",
   "author": "heggria <bshengtao@gmail.com>",
   "homepage": "https://github.com/heggria/taskflow#readme",
@@ -47,7 +53,9 @@
       "default": "./dist/diagnostics.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-dsl 2>/dev/null || true",
     "prepublishOnly": "npm run build"

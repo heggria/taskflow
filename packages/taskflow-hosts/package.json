@@ -1,6 +1,6 @@
 {
   "name": "taskflow-hosts",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Shared host-runner collection for taskflow — the codex, claude, opencode, and grok SubagentRunner implementations + their argv builders and event-stream parsers. The per-host MCP servers, plugin scaffolds, and bins live in codex-taskflow / claude-taskflow / opencode-taskflow / grok-taskflow; this package holds just the runners so a new host can be added in one place.",
   "homepage": "https://github.com/heggria/taskflow#readme",
   "type": "module",
@@ -49,7 +49,7 @@
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "taskflow-core": "0.1.7"
+    "taskflow-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^6.0.3"

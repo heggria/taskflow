@@ -1,8 +1,8 @@
 # S4 Shape Decision Record (`taskflow-dsl`)
 
-> Status: **IMPLEMENTED (package live)** — route/surface frozen; coverage extended beyond original MVP ship bar (see §“Landed beyond MVP”)  
-> Date: 2026-07-09 · Last kinds sync: 2026-07-09  
-> Full surface: [`rfc-0.2.0-s4-mvp.md`](./rfc-0.2.0-s4-mvp.md)  
+> Status: **IMPLEMENTED (package live)** — route/surface frozen; coverage extended beyond original MVP ship bar (see §“Landed beyond MVP”)
+> Date: 2026-07-09 · Last kinds sync: 2026-07-09
+> Full surface: [`rfc-0.2.0-s4-mvp.md`](./rfc-0.2.0-s4-mvp.md)
 > Council runs: `s4-shape-council` → `s4-shape-council-v2` → `s4-shape-finalize`
 
 ## One-sentence definition
@@ -28,15 +28,15 @@
 
 ## MVP scope (in) — original ship bar
 
-1. `flow` + args/budget/concurrency/description  
-2. Core phase kinds basic runes (ship bar was **10**; engine now **12** with `race`/`expand` — see Landed beyond MVP)  
-3. Template → `{steps.*}` / `{item.*}` erase  
-4. Auto `dependsOn` from `.output` / `.json` reads + explicit `dependsOn`  
-5. `when` **string** form (+ TS subset in `check` if cheap)  
-6. Basic `json<T>()` → `output:"json"` + `expect` (fail-closed on complex types)  
-7. `check` / `build` / `new` / decompile (Taskflow→`.tf.ts` on Y-slice)  
-8. Golden **FlowIR hash equality** demos (must include map + templates + `json<T>`, not only hello)  
-9. Import-lint: DSL must not drag core runtime  
+1. `flow` + args/budget/concurrency/description
+2. Core phase kinds basic runes (ship bar was **10**; engine now **12** with `race`/`expand` — see Landed beyond MVP)
+3. Template → `{steps.*}` / `{item.*}` erase
+4. Auto `dependsOn` from `.output` / `.json` reads + explicit `dependsOn`
+5. `when` **string** form (+ TS subset in `check` if cheap)
+6. Basic `json<T>()` → `output:"json"` + `expect` (fail-closed on complex types)
+7. `check` / `build` / `new` / decompile (Taskflow→`.tf.ts` on Y-slice)
+8. Golden **FlowIR hash equality** demos (must include map + templates + `json<T>`, not only hello)
+9. Import-lint: DSL must not drag core runtime
 
 ## Landed beyond original MVP (kinds sync)
 
@@ -57,7 +57,7 @@ Still **not** shipped as runes: loop multi-body, `route`, `compensate`/saga,
 
 ## Brainstorm phases — language support
 
-Source: `docs/internal/brainstorm-2026-07-08-0.2.0-phases.md`  
+Source: `docs/internal/brainstorm-2026-07-08-0.2.0-phases.md`
 Design: **`docs/rfc-0.2.0-dsl-phases-horizon.md`**
 
 | Track | What | When |
@@ -71,13 +71,13 @@ Unknown / unimplemented experimental runes must **error** (no silent drop).
 
 ## Explicitly out (S4 ship bar)
 
-1. Solid runtime / Proxy / degraded interpret  
-2. In-file JSON phase hybrid  
-3. Multi-body loop / `flow.component` / `$store` as **MVP ship** (designed in horizon doc; implement later)  
-4. S5 kernel default ON  
-5. New MCP `taskflow_build` / host auto-build of `.tf.ts`  
-6. Literal decompile round-trip marketing  
-7. 100% PhaseSchema coverage as S4 ship bar (FULL = language goal only)  
+1. Solid runtime / Proxy / degraded interpret
+2. In-file JSON phase hybrid
+3. Multi-body loop / `flow.component` / `$store` as **MVP ship** (designed in horizon doc; implement later)
+4. S5 kernel default ON
+5. New MCP `taskflow_build` / host auto-build of `.tf.ts`
+6. Literal decompile round-trip marketing
+7. 100% PhaseSchema coverage as S4 ship bar (FULL = language goal only)
 8. Shipping B-track **engines** inside S4 MVP gate (language design only)
 
 ## Minimal `.tf.ts` example
@@ -99,18 +99,18 @@ export default flow("audit", (ctx) => {
 
 ## Acceptance gates
 
-- [x] `packages/taskflow-dsl` in workspace; bin + exports as `rfc-0.2.0-s4-mvp.md` §1  
-- [x] Demo `.tf.ts` and twin `.json` → **same** `ir:<64-hex>` (parity tests)  
-- [x] Equality fixtures include **map + json\<T\> + templates**  
-- [x] Rune runtime call throws `TFDSL_ERASE_ONLY`  
-- [x] Import-lint denylist green  
-- [x] Skills/docs: JSON first-class for agents; CLI path for DSL (+ kinds table)  
+- [x] `packages/taskflow-dsl` in workspace; bin + exports as `rfc-0.2.0-s4-mvp.md` §1
+- [x] Demo `.tf.ts` and twin `.json` → **same** `ir:<64-hex>` (parity tests)
+- [x] Equality fixtures include **map + json\<T\> + templates**
+- [x] Rune runtime call throws `TFDSL_ERASE_ONLY`
+- [x] Import-lint denylist green
+- [x] Skills/docs: JSON first-class for agents; CLI path for DSL (+ kinds table)
 - [x] DSL v2 note: FULL vs S4 MVP ship gate (authority B1)
 
 ## Open questions for human (max 3)
 
-1. **H1** Commit coverage matrix as a real doc? (recommend **yes**)  
-2. **H2** Decompile Taskflow-only in MVP? (recommend **yes**)  
+1. **H1** Commit coverage matrix as a real doc? (recommend **yes**)
+2. **H2** Decompile Taskflow-only in MVP? (recommend **yes**)
 3. **H3** Throw-on-call for runes? (recommend **yes**)
 
 ## North-star alignment
@@ -130,5 +130,5 @@ export default flow("audit", (ctx) => {
 | `s4-shape-council-v2-mrd6wdcj-e34ca3` | routes + tournament (svelte/json-only/typescript-AST) + api-surface + adversary |
 | `s4-shape-finalize-mrd765gf-f14e1b` | cross-check (PASS on route; BLOCK only until B1/matrix/H2/H3 written) |
 
-Flow defs: `/tmp/taskflow-s4/s4-shape.json`, `s4-shape-v2.json`, `s4-shape-final.json`  
+Flow defs: `/tmp/taskflow-s4/s4-shape.json`, `s4-shape-v2.json`, `s4-shape-final.json`
 Saved project flow: `.pi/taskflows/s4-shape-council.json`

@@ -12,6 +12,7 @@
  * - `flowDefHash(def)`  — "did the *flow definition* change?" (DSL-level)
  * - `hashFlowIR(ir)`    — "is this *compiled IR* the same IR?" (IR-level)
  *
+ * Wired into `compileTaskflowToIR` via `hashFlowIR` (`ir:<64-hex>`).
  * The IR-level hash is the content-addressed key the event-sourced kernel
  * (batch 2, `flowir/compile.ts`) will use to deduplicate compiled graphs and
  * to key per-phase fingerprints (`hashNode`) independent of surface formatting.
@@ -134,6 +135,7 @@ function canonicalNodeObject(node: FlowIRNode): Record<string, unknown> {
 	if (node.deps !== undefined) obj.deps = node.deps;
 	if (node.join !== undefined) obj.join = node.join;
 	if (node.timeout !== undefined) obj.timeout = node.timeout;
+	if (node.payload !== undefined) obj.payload = node.payload;
 	return obj;
 }
 

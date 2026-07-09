@@ -273,9 +273,9 @@ Use for builds, tests, lint, or file transformations. Zero tokens.
 }
 ```
 
-### `race` — first completed branch wins
+### `race` — first successful branch wins
 
-Use when several approaches can answer the same question and you want the **fastest** successful result (not a quality judge).
+Use when several approaches can answer the same question and you want the **fastest successful** result (not a quality judge). A fast hard-fail does **not** win.
 
 ```json title="race-example.json"
 {
@@ -316,7 +316,7 @@ Use when a planner emits a mini-flow JSON and you want the runtime to execute it
 | "Repeat until a condition is met" | `loop` | Iterative refinement. |
 | "Pick the best of several attempts" | `tournament` | Competitive selection for subjective work. |
 | "Run a command, no LLM" | `script` | Builds, tests, file ops. |
-| "Keep the first approach that finishes" | `race` | Latency over exhaustive wait/judge. |
+| "Keep the first approach that succeeds" | `race` | Latency over exhaustive wait/judge; hard-fail does not win. |
 | "Run a planner-emitted fragment" | `expand` | Nested isolation or graft-promote onto parent. |
 
 ## Phase lifecycle

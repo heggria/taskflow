@@ -460,7 +460,7 @@ JSON kinds (single source: `PHASE_TYPES` in core + `erase/kinds/*` registry).
 | `loop` | `loop({ task, until?, … })` | |
 | `tournament` | `tournament({ branches/variants, judge, … })` | |
 | `script` | `script(run, opts?)` | string or argv array |
-| `race` | `race([agent…], { cancelLosers? })` | first **success** wins |
+| `race` | `race([agent…], { cancelLosers? })` | first **success** wins; cooperative loser usage is counted |
 | `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode` |
 
 - `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.
