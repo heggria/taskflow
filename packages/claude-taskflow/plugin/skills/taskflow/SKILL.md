@@ -37,7 +37,7 @@ mistakes that break flows. Load the companion files **only when needed**:
 |------|--------------------|
 | `patterns.md` | **Designing a non-trivial flow.** Proven flow archetypes (audit fan-out, self-healing rework, plan→approve→execute, dynamic replanning, tournament synthesis, incremental audit), anti-patterns, and the production-flow quality checklist. |
 | `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, and workspace isolation (`cwd: temp/dedicated/worktree`). |
-| `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. |
+| `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. **TypeScript DSL CLI** (`taskflow-dsl` / S4). |
 | `library.md` | **Before authoring a non-trivial flow — SEARCH the reusable-flow library.** Save reusable flows with `purpose`+`tags` so future search finds them; reuse + generalize instead of rewriting from scratch. The compounding flywheel. |
 
 > Rule of thumb: writing a flow with ≥ 4 phases, a gate, or any fan-out?

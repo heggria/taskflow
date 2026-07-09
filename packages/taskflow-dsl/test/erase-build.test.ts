@@ -71,14 +71,15 @@ export default flow("p", () => {
 	assert.ok(types.includes("script"));
 });
 
-test("build: race is unsupported error", () => {
+test("build: race erases to type race", () => {
 	const src = `
 import { flow, agent, race } from "taskflow-dsl";
-export default flow("r", () => race([agent("a"), agent("b")]));
+export default flow("r", () => race([agent("fast path"), agent("slow path")], { cancelLosers: true }));
 `;
 	const r = buildSource(src, "r.tf.ts");
-	assert.equal(r.ok, false);
-	assert.ok(r.diagnostics.some((d) => d.code === "TFDSL_PHASE_UNSUPPORTED"));
+	assert.equal(r.ok, true, format(r));
+	assert.equal(r.taskflow?.phases?.[0]?.type, "race");
+	assert.equal(r.taskflow?.phases?.[0]?.branches?.length, 2);
 });
 
 test("check: ok for hello", () => {

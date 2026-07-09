@@ -199,19 +199,32 @@ export function script(
 	return eraseOnly("script");
 }
 
-/** Alias for nested expand (A-track); graft is S4.x. */
+/** Nested expand (isolated sub-flow). */
 export function expandNested(
 	_def: PhaseRef | string,
-	_opts?: PhaseOptions,
+	_opts?: PhaseOptions & { maxNodes?: number },
 ): PhaseRef {
 	return eraseOnly("expand.nested");
 }
 
-export const expand = {
-	nested: expandNested,
-};
+/** Graft-promote expand: run fragment then promote phase states onto parent. */
+export function expandGraft(
+	_def: PhaseRef | string,
+	_opts?: PhaseOptions & { maxNodes?: number },
+): PhaseRef {
+	return eraseOnly("expand.graft");
+}
 
-/** Race — B-track; present as erase-only so authors can typecheck against horizon. */
+export function expand(
+	_def: PhaseRef | string,
+	_opts?: PhaseOptions & { expandMode?: "nested" | "graft"; maxNodes?: number },
+): PhaseRef {
+	return eraseOnly("expand");
+}
+expand.nested = expandNested;
+expand.graft = expandGraft;
+
+/** Race: first completed branch wins. */
 export function race(
 	_branches: PhaseRef[],
 	_opts?: PhaseOptions & { cancelLosers?: boolean },

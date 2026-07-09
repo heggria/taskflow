@@ -24,6 +24,7 @@ const PHASE_RUNES = new Set([
 	"tournament",
 	"script",
 	"race",
+	"expand",
 ]);
 
 interface PhaseDraft {
@@ -272,7 +273,19 @@ function mergeOpts(
 			if (typeof v === "string") out.id = v;
 			continue;
 		}
-		if (key === "input" || key === "request" || key === "until" || key === "judge" || key === "judgeAgent" || key === "mode" || key === "use" || key === "onBlock") {
+		if (
+			key === "input" ||
+			key === "request" ||
+			key === "until" ||
+			key === "judge" ||
+			key === "judgeAgent" ||
+			key === "mode" ||
+			key === "use" ||
+			key === "onBlock" ||
+			key === "cancelLosers" ||
+			key === "expandMode" ||
+			key === "maxNodes"
+		) {
 			const v = evalLiteral(p.initializer);
 			if (v !== undefined) out[key] = v;
 			continue;
@@ -376,13 +389,16 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 		const cn = calleeName(call.expression);
 		if (!cn) return undefined;
 
-		// expand.nested / subflow.def → flow phase
+		// expand.nested → type:expand expandMode:nested; subflow.def → type:flow def
 		if (cn === "expand.nested" || cn === "subflow.def") {
-			const id = bindName ?? `flow-${order.length}`;
+			const id = bindName ?? (cn.startsWith("expand") ? `expand-${order.length}` : `flow-${order.length}`);
 			const draft: PhaseDraft = {
 				id,
-				type: "flow",
-				raw: { type: "flow" },
+				type: cn === "expand.nested" ? "expand" : "flow",
+				raw:
+					cn === "expand.nested"
+						? { type: "expand", expandMode: "nested" }
+						: { type: "flow" },
 				dependsOn: new Set(),
 			};
 			const defArg = call.arguments[0];
@@ -430,19 +446,91 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 		}
 
 		const type = cn === "race" ? "race" : cn;
-		if (type === "race") {
-			diags.push(
-				diag(
-					file,
-					sf,
-					call,
-					"TFDSL_PHASE_UNSUPPORTED",
-					`Phase type "race" is designed (horizon B) but not implemented in the engine yet.`,
-					"error",
-					"Remove race() or wait for S4.x engine support.",
-				),
-			);
-			return undefined;
+		// race([agent(...), ...], opts?)
+		if (cn === "race") {
+			const idBase = bindName ?? (order.length === 0 ? "main" : `phase-${order.length}`);
+			const draft: PhaseDraft = {
+				id: idBase,
+				type: "race",
+				raw: { type: "race" },
+				dependsOn: new Set(),
+			};
+			const arr = call.arguments[0];
+			const branches: Array<Record<string, unknown>> = [];
+			if (arr && ts.isArrayLiteralExpression(arr)) {
+				for (const el of arr.elements) {
+					if (ts.isCallExpression(el) && calleeName(el.expression) === "agent") {
+						const erased = eraseStringish(sf, file, el.arguments[0]!, itemParam, phases, diags);
+						const b: Record<string, unknown> = {};
+						if (erased) {
+							b.task = erased.text;
+							for (const d of erased.deps) draft.dependsOn.add(d);
+						}
+						const bopts = mergeOpts(sf, file, el.arguments[1] as ts.Expression | undefined, diags, phases);
+						Object.assign(b, bopts);
+						branches.push(b);
+					}
+				}
+			}
+			draft.raw.branches = branches;
+			const opts = mergeOpts(sf, file, call.arguments[1] as ts.Expression | undefined, diags, phases);
+			if (typeof opts.id === "string") draft.id = opts.id;
+			if (typeof opts.cancelLosers === "boolean") draft.raw.cancelLosers = opts.cancelLosers;
+			Object.assign(draft.raw, opts);
+			delete draft.raw.id;
+			if (draft.dependsOn.size) draft.raw.dependsOn = [...draft.dependsOn];
+			if (opts.final === true) {
+				draft.final = true;
+				draft.raw.final = true;
+			}
+			phases.set(draft.id, draft);
+			if (!order.includes(draft.id)) order.push(draft.id);
+			return draft.id;
+		}
+
+		// expand(...) / expand.graft(...) — expand.nested handled above
+		if (cn === "expand" || cn === "expand.graft") {
+			const idBase = bindName ?? (order.length === 0 ? "main" : `phase-${order.length}`);
+			const draft: PhaseDraft = {
+				id: idBase,
+				type: "expand",
+				raw: {
+					type: "expand",
+					expandMode: cn === "expand.graft" ? "graft" : "nested",
+				},
+				dependsOn: new Set(),
+			};
+			const defArg = call.arguments[0];
+			if (defArg && ts.isPropertyAccessExpression(defArg) && ts.isIdentifier(defArg.expression)) {
+				const pid = defArg.expression.text;
+				if (phases.has(pid) && (defArg.name.text === "json" || defArg.name.text === "output")) {
+					draft.dependsOn.add(pid);
+					draft.raw.def =
+						defArg.name.text === "json" ? `{steps.${pid}.json}` : `{steps.${pid}.output}`;
+				}
+			} else if (defArg && ts.isStringLiteral(defArg)) {
+				draft.raw.def = defArg.text;
+			} else if (defArg && ts.isIdentifier(defArg) && phases.has(defArg.text)) {
+				draft.dependsOn.add(defArg.text);
+				draft.raw.def = `{steps.${defArg.text}.json}`;
+			}
+			const opts = mergeOpts(sf, file, call.arguments[1] as ts.Expression | undefined, diags, phases);
+			if (typeof opts.id === "string") draft.id = opts.id;
+			if (typeof opts.expandMode === "string") draft.raw.expandMode = opts.expandMode;
+			if (typeof opts.maxNodes === "number") draft.raw.maxNodes = opts.maxNodes;
+			// expand(...) default nested; expand.graft → graft
+			if (cn === "expand.graft") draft.raw.expandMode = "graft";
+			if (cn === "expand" && !draft.raw.expandMode) draft.raw.expandMode = "nested";
+			Object.assign(draft.raw, opts);
+			delete draft.raw.id;
+			if (draft.dependsOn.size) draft.raw.dependsOn = [...draft.dependsOn];
+			if (opts.final === true) {
+				draft.final = true;
+				draft.raw.final = true;
+			}
+			phases.set(draft.id, draft);
+			if (!order.includes(draft.id)) order.push(draft.id);
+			return draft.id;
 		}
 
 		// gate.automated / gate.scored → type:gate with eval / score
@@ -834,13 +922,64 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 		if (ts.isVariableStatement(st)) {
 			for (const decl of st.declarationList.declarations) {
 				if (!decl.initializer) continue;
-				// const [a,b] = parallel(...)
+				// const [a,b] = parallel([agent(...), agent(...)])
+				// Desugar to independent agent phases with true ids (a, b) so
+				// {steps.a.output} works. Concurrent because no dependsOn between them.
 				if (ts.isArrayBindingPattern(decl.name) && ts.isCallExpression(decl.initializer)) {
 					const cn = calleeName(decl.initializer.expression);
 					if (cn === "parallel") {
-						handleCall("parallel-0", decl.initializer);
+						const bindNames = decl.name.elements
+							.map((e) =>
+								ts.isBindingElement(e) && ts.isIdentifier(e.name) ? e.name.text : undefined,
+							)
+							.filter((x): x is string => !!x);
+						const arr = decl.initializer.arguments[0];
+						if (!arr || !ts.isArrayLiteralExpression(arr) || arr.elements.length !== bindNames.length) {
+							diags.push(
+								diag(
+									file,
+									sf,
+									decl.initializer,
+									"TFDSL_PARALLEL_DESTRUCTURE",
+									`parallel destructure requires matching binding count and array of agent() calls (got ${bindNames.length} binds).`,
+								),
+							);
+							continue;
+						}
+						let ok = true;
+						for (let i = 0; i < bindNames.length; i++) {
+							const el = arr.elements[i]!;
+							if (!ts.isCallExpression(el) || calleeName(el.expression) !== "agent") {
+								diags.push(
+									diag(
+										file,
+										sf,
+										el,
+										"TFDSL_PARALLEL_DESTRUCTURE",
+										`parallel destructure branch ${i + 1} must be agent(...).`,
+									),
+								);
+								ok = false;
+								break;
+							}
+							handleCall(bindNames[i], el);
+						}
+						if (!ok) continue;
+						continue;
 					}
-					continue;
+					if (cn === "race") {
+						// race stays one phase — destructure not supported
+						diags.push(
+							diag(
+								file,
+								sf,
+								decl.initializer,
+								"TFDSL_RACE_DESTRUCTURE",
+								`race() does not support array destructure — bind as a single phase: const winner = race([...]).`,
+							),
+						);
+						continue;
+					}
 				}
 				if (!ts.isIdentifier(decl.name)) continue;
 				const name = decl.name.text;

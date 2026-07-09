@@ -65,24 +65,50 @@ export default flow("tour", () =>
 	assert.equal(r.taskflow!.phases![0]!.variants, 2);
 });
 
-test("build: subflow use + expand.nested", () => {
+test("build: subflow use + expand.nested + expand.graft", () => {
 	const src = `
 import { flow, agent, subflow, expand, json } from "taskflow-dsl";
 export default flow("sf", () => {
   const plan = agent("emit plan", { output: json() });
   const nested = expand.nested(plan.json);
-  const saved = subflow("child-flow", { q: "1" }, { dependsOn: ["nested"] });
+  const grafted = expand.graft(plan.json, { dependsOn: ["nested"] });
+  const saved = subflow("child-flow", { q: "1" }, { dependsOn: ["grafted"] });
   return saved;
 });
 `;
 	const r = buildSource(src, "sf.tf.ts");
 	assert.equal(r.ok, true, fmt(r));
-	const types = r.taskflow!.phases!.map((p) => p.type);
-	assert.deepEqual(types, ["agent", "flow", "flow"]);
 	const nested = r.taskflow!.phases!.find((p) => p.id === "nested");
+	assert.equal(nested?.type, "expand");
+	assert.equal((nested as { expandMode?: string }).expandMode, "nested");
 	assert.match(String(nested?.def), /steps\.plan\.json/);
+	const grafted = r.taskflow!.phases!.find((p) => p.id === "grafted");
+	assert.equal(grafted?.type, "expand");
+	assert.equal((grafted as { expandMode?: string }).expandMode, "graft");
 	const saved = r.taskflow!.phases!.find((p) => p.id === "saved");
 	assert.equal(saved?.use, "child-flow");
+});
+
+test("build: parallel destructure → real agent phase ids", () => {
+	const src = `
+import { flow, agent, parallel, reduce } from "taskflow-dsl";
+export default flow("pd", () => {
+  const [auth, perf] = parallel([
+    agent("check auth", { agent: "scout" }),
+    agent("check perf", { agent: "scout" }),
+  ]);
+  return reduce([auth, perf], (p) => agent(\`merge \${p.auth.output} \${p.perf.output}\`));
+});
+`;
+	const r = buildSource(src, "pd.tf.ts");
+	assert.equal(r.ok, true, fmt(r));
+	const ids = r.taskflow!.phases!.map((p) => p.id);
+	assert.ok(ids.includes("auth"));
+	assert.ok(ids.includes("perf"));
+	assert.equal(r.taskflow!.phases!.find((p) => p.id === "auth")?.type, "agent");
+	assert.equal(r.taskflow!.phases!.find((p) => p.id === "perf")?.type, "agent");
+	// no single parallel phase when destructured
+	assert.ok(!r.taskflow!.phases!.some((p) => p.type === "parallel"));
 });
 
 test("build: gate.automated + gate.scored", () => {
@@ -131,7 +157,7 @@ test("negative: decompile rejects unknown phase type", () => {
 		() =>
 			decompileTaskflow({
 				name: "x",
-				phases: [{ id: "r", type: "race" as never, final: true }],
+				phases: [{ id: "r", type: "saga" as never, final: true }],
 			}),
 		/TFDSL_DECOMPILE_UNSUPPORTED/,
 	);

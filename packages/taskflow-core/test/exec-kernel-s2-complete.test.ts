@@ -53,16 +53,18 @@ async function withKernel(def: Taskflow, runTask: RuntimeDeps["runTask"], extra:
 	});
 }
 
-test("EVENT_KERNEL_PHASE_TYPES covers all PHASE_TYPES", () => {
-	assert.deepEqual([...EVENT_KERNEL_PHASE_TYPES].sort(), [...PHASE_TYPES].sort());
+test("EVENT_KERNEL_PHASE_TYPES covers imperative-handled kinds (excludes race/expand until kernel handlers)", () => {
+	const expected = PHASE_TYPES.filter((t) => t !== "race" && t !== "expand").sort();
+	assert.deepEqual([...EVENT_KERNEL_PHASE_TYPES].sort(), expected);
 });
 
-test("canUseEventKernel: all 10 basic kinds accepted (no advanced features)", () => {
+test("canUseEventKernel: classic kinds accepted; race/expand force imperative path", () => {
+	const classic = PHASE_TYPES.filter((t) => t !== "race" && t !== "expand");
 	assert.equal(
 		canUseEventKernel({
 			name: "all",
-			phases: PHASE_TYPES.map((type, i) => {
-				const base: Record<string, unknown> = { id: `p${i}`, type, final: i === PHASE_TYPES.length - 1 };
+			phases: classic.map((type, i) => {
+				const base: Record<string, unknown> = { id: `p${i}`, type, final: i === classic.length - 1 };
 				if (type === "script") base.run = ["node", "-e", "1"];
 				if (type === "map") {
 					base.over = '["x"]';
@@ -82,6 +84,23 @@ test("canUseEventKernel: all 10 basic kinds accepted (no advanced features)", ()
 			}) as Taskflow["phases"],
 		}),
 		true,
+	);
+	assert.equal(
+		canUseEventKernel({
+			name: "with-race",
+			phases: [
+				{
+					id: "r",
+					type: "race",
+					branches: [
+						{ task: "a", agent: "a" },
+						{ task: "b", agent: "a" },
+					],
+					final: true,
+				},
+			],
+		}),
+		false,
 	);
 });
 

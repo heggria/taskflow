@@ -316,9 +316,9 @@ const sp = fork.save("after-plan");
 |--------|----|----|----------|----------|
 | **P0** | 10 kind 基本 + `subflow.def` / `expand.nested` 糖 | A | S4 | 已有 |
 | **P0** | `gate.scored` / `gate.automated` / `reflexion` / `idempotent` 糖 | A | S4.1 | 已有 |
-| **P1** | **`expand` graft** | B | rune + IR kind | **新** |
+| **P1** | **`expand` graft** | B | rune + IR kind | **✅ runtime + DSL** (promote onto parent) |
 | **P1** | **`loop` multi-body** | B | body 回调 erase | **新** |
-| **P1** | **`race`** | B | rune | **新** |
+| **P1** | **`race`** | B | rune | **✅ runtime + DSL** |
 | **P2** | `route` 穷尽路由 | B | rune + check | desugar 或新 type |
 | **P2** | `compensate` / saga | B | opts 或 rune | **新** |
 | **P2** | approval timeout | B | opts | **小** |

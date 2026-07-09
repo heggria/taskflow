@@ -1,18 +1,22 @@
 /**
- * Lightweight check — AST erase + validateTaskflow, no artifact write.
- *
- * S4 honesty: this is **not** a full tsc Program typecheck (RFC §2.2 optional
- * path). It catches erase/DAG errors only. Use `tsc` / IDE for TS type errors.
+ * Check — AST erase + validateTaskflow by default.
+ * Optional `--typecheck` / `typecheck: true` adds a TypeScript Program pass.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import { buildFile, buildSource, type BuildResult } from "./build.ts";
 import type { Diagnostic } from "./diagnostics.ts";
+import { hasErrors } from "./diagnostics.ts";
+import { typecheckFile } from "./typecheck.ts";
 
 export interface CheckOptions {
 	/** Skip Taskflow validate (rune/static only). Default false. */
 	noValidate?: boolean;
+	/** Run full tsc Program diagnostics on the file (default false). */
+	typecheck?: boolean;
+	/** cwd for tsconfig discovery when typecheck is on. */
+	cwd?: string;
 }
 
 export interface CheckResult {
@@ -47,5 +51,9 @@ export function checkFile(filePath: string, opts: CheckOptions = {}): CheckResul
 		};
 	}
 	const r = buildFile(abs, { validate: !opts.noValidate, irHash: false, emit: "taskflow" });
-	return { ok: r.ok, diagnostics: r.diagnostics, file: r.file };
+	const diagnostics = [...r.diagnostics];
+	if (opts.typecheck) {
+		diagnostics.push(...typecheckFile(abs, opts.cwd ?? path.dirname(abs)));
+	}
+	return { ok: !hasErrors(diagnostics), diagnostics, file: r.file };
 }

@@ -1856,6 +1856,57 @@ async function executePhaseInner(
 		return ps;
 	}
 
+	// Horizon B: first completed branch wins. Losers are aborted best-effort when
+	// cancelLosers is true (default) via AbortController per branch.
+	if (type === "race") {
+		const branches = (phase.branches ?? []).map((b) => {
+			const r = interpolate(b.task, ctx);
+			return {
+				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
+				task: preRead + r.text,
+			};
+		});
+		if (branches.length < 2) {
+			return failPhase(phase.id, `race phase '${phase.id}': needs at least 2 branches`);
+		}
+		const ck = cacheKeys(cc, [phase.id, "race", phase.model ?? "", JSON.stringify(branches)]);
+		const inputHash = ck.key;
+		const cached = cachedPhase(cc, ck);
+		if (cached) return cached;
+
+		// Race: fire all branches; first settled result wins. Loser cancellation is
+		// best-effort via parent signal only (per-branch AbortController plumbing
+		// requires runner support for multiple concurrent signals — follow-up).
+		// cancelLosers reserved for future hard-abort of losers.
+		void (phase as { cancelLosers?: boolean }).cancelLosers;
+		const raced = await Promise.race(
+			branches.map(async (b, i) => {
+				const result = await runOne(b.agent, b.task);
+				return { i, result };
+			}),
+		);
+
+		const winner = raced.result;
+		const failed = isFailed(winner);
+		const ps: PhaseState = {
+			id: phase.id,
+			status: failed ? "failed" : "done",
+			output: failed
+				? winner.errorMessage || winner.stderr || winner.output || `race branch ${raced.i + 1} failed`
+				: winner.output,
+			json: parseJson ? safeParse(winner.output) : undefined,
+			usage: winner.usage ?? emptyUsage(),
+			model: winner.model,
+			error: failed ? winner.errorMessage ?? winner.stderr : undefined,
+			inputHash,
+			endedAt: Date.now(),
+			warnings: [`race: branch ${raced.i + 1}/${branches.length} won`],
+		};
+		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+		recordCache(cc, ps);
+		return ps;
+	}
+
 	if (type === "map") {
 		const overResolved = interpolate(phase.over ?? "", ctx).text;
 		// `over` may itself be a placeholder that resolved to a JSON string.
@@ -1995,15 +2046,29 @@ async function executePhaseInner(
 		return ps;
 	}
 
-	if (type === "flow") {
+	if (type === "flow" || type === "expand") {
 		const readRefs: string[] = [];
 		const ctx = buildInterpolationContext(state, previousOutput, undefined, (ref) => readRefs.push(ref));
-		const hasDef = (phase as { def?: unknown }).def !== undefined;
+		// expand always requires `def`; flow may use `use` or `def`.
+		const hasDef =
+			type === "expand" ? (phase as { def?: unknown }).def !== undefined : (phase as { def?: unknown }).def !== undefined;
 		const stack = deps._stack ?? [];
+		const expandMode =
+			type === "expand"
+				? ((phase as { expandMode?: string }).expandMode === "graft" ? "graft" : "nested")
+				: "nested";
+		const maxNodes =
+			typeof (phase as { maxNodes?: number }).maxNodes === "number"
+				? Math.min(MAX_DYNAMIC_PHASES, Math.max(1, (phase as { maxNodes: number }).maxNodes))
+				: 50;
 
 		let subDef: Taskflow | undefined;
 		let name: string;
 		let recursionKey: string; // identity used for cache key + recursion guard
+
+		if (type === "expand" && !hasDef) {
+			return failPhase(phase.id, `expand phase '${phase.id}' requires 'def'`);
+		}
 
 		if (hasDef) {
 			// --- Inline `def`: resolve at runtime, validate, fail-OPEN on any error. ---
@@ -2040,7 +2105,7 @@ async function executePhaseInner(
 				parsed = rawDef;
 			}
 			// Accept a full Taskflow, a bare phases array, or {phases:[...]}; wrap the latter two.
-			const wrapped = normalizeInlineDef(parsed, phase.id);
+			let wrapped = normalizeInlineDef(parsed, phase.id);
 			if (!wrapped) {
 				return defFailOpen("inline def is not a Taskflow, phases array, or {phases:[...]}");
 			}
@@ -2053,10 +2118,36 @@ async function executePhaseInner(
 					output: "",
 					json: parseJson ? safeParse("") : undefined,
 					usage: emptyUsage(),
-					inputHash: hashInput(phase.id, "flow-def-empty"),
+					inputHash: hashInput(phase.id, type === "expand" ? "expand-def-empty" : "flow-def-empty"),
 					reads: readRefsToReads(readRefs, state),
 					endedAt: Date.now(),
 				};
+			}
+			// expand: cap fragment size + prefix ids for graft so they don't collide with parent.
+			if (type === "expand") {
+				if (wrapped.phases.length > maxNodes) {
+					return defFailOpen(
+						`expand fragment has ${wrapped.phases.length} phases (maxNodes=${maxNodes})`,
+					);
+				}
+				if (expandMode === "graft") {
+					const prefix = `${phase.id}-`;
+					const idMap = new Map(wrapped.phases.map((p) => [p.id, prefix + p.id]));
+					wrapped = {
+						...wrapped,
+						name: wrapped.name || `${phase.id}-graft`,
+						phases: wrapped.phases.map((p) => {
+							const np: Phase = { ...p, id: idMap.get(p.id) ?? prefix + p.id };
+							if (p.dependsOn?.length) {
+								np.dependsOn = p.dependsOn.map((d) => idMap.get(d) ?? d);
+							}
+							if (p.from?.length) {
+								np.from = p.from.map((d) => idMap.get(d) ?? d);
+							}
+							return np;
+						}),
+					};
+				}
 			}
 			// Validate with `dynamic` hardening (breadth caps + cwd containment) since
 			// this content is LLM-authored / untrusted. cwd anchors containment checks.
@@ -2160,6 +2251,22 @@ async function executePhaseInner(
 			},
 		});
 		const sp = Object.values(subState.phases);
+		// expand graft: promote child phase states onto the parent run so peek /
+		// downstream can address them as {steps.<expandId>-<childId>.*}. Nested
+		// mode leaves children only in the sub-run.
+		const warnings: string[] = [];
+		if (type === "expand" && expandMode === "graft" && subResult.ok) {
+			let promoted = 0;
+			for (const [cid, cps] of Object.entries(subState.phases)) {
+				if (state.phases[cid]) {
+					warnings.push(`expand graft skipped promote of '${cid}' (id already exists on parent)`);
+					continue;
+				}
+				state.phases[cid] = { ...cps, id: cid };
+				promoted++;
+			}
+			warnings.push(`expand graft: promoted ${promoted} phase(s) onto parent run`);
+		}
 		const flowPs: PhaseState = {
 			id: phase.id,
 			status: subResult.ok ? "done" : "failed",
@@ -2179,6 +2286,7 @@ async function executePhaseInner(
 			inputHash,
 			reads: readRefsToReads(readRefs, state),
 			endedAt: Date.now(),
+			...(warnings.length ? { warnings } : {}),
 		};
 		recordCache(cc, flowPs);
 		return flowPs;

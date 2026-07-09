@@ -37,6 +37,8 @@ const DECOMPILABLE = new Set([
 	"flow",
 	"loop",
 	"tournament",
+	"race",
+	"expand",
 ]);
 
 export function decompileTaskflow(def: Taskflow): string {
@@ -111,8 +113,20 @@ function decompilePhase(p: Phase, bind: string, _byId: Map<string, Phase>): stri
 			);
 			return `const ${bind} = parallel([${branches.join(", ")}]${optStr});`;
 		}
-		case "gate":
-			return `const ${bind} = gate(/* upstream */ ${JSON.stringify(p.dependsOn?.[0] ?? "upstream")}, { agent: ${JSON.stringify(p.agent ?? "reviewer")} }, (i) => \`${esc(String(p.task ?? "{steps.upstream.output}"))}\`);`;
+		case "gate": {
+			const upId = p.dependsOn?.[0];
+			const upBind = upId ? phaseBinding(upId) : "upstream";
+			const taskText = String(p.task ?? (upId ? `{steps.${upId}.output}` : "review"));
+			return `const ${bind} = gate(${upBind}, { agent: ${JSON.stringify(p.agent ?? "reviewer")} }, (i) => \`${esc(taskText)}\`);`;
+		}
+		case "race": {
+			const branches = (p.branches ?? []).map(
+				(b) => `agent(\`${esc(String(b.task ?? ""))}\`${b.agent ? `, { agent: ${JSON.stringify(b.agent)} }` : ""})`,
+			);
+			return `const ${bind} = race([${branches.join(", ")}]${optStr});`;
+		}
+		case "expand":
+			return `const ${bind} = expand(${JSON.stringify(typeof p.def === "string" ? p.def : "{steps.plan.json}")}, { expandMode: ${JSON.stringify((p as { expandMode?: string }).expandMode ?? "nested")} });`;
 		case "reduce": {
 			const from = (p.from ?? p.dependsOn ?? []).map((id) => phaseBinding(id));
 			return `const ${bind} = reduce([${from.join(", ")}], (parts) => agent(\`${esc(String(p.task ?? "reduce"))}\`)${optStr});`;

@@ -28,7 +28,7 @@ function usage(): string {
 
 Commands:
   build <file>       Erase .tf.ts (or validate .json) → Taskflow / FlowIR
-  check <file>       Erase + validate (no write; not full tsc)
+  check <file>       Erase + validate (no write)
   decompile <file>   Taskflow JSON → .tf.ts
   new [name]         Write hello skeleton
 
@@ -36,6 +36,7 @@ Options:
   --cwd <dir>        Project root for path resolution (default: process.cwd())
   -o, --out <path>   Output path (must stay under --cwd)
   --emit taskflow|flowir|both   (build, default: taskflow)
+  --typecheck        (check) also run tsc Program diagnostics
   --json             Machine-readable diagnostics
   --force            Overwrite existing file (new)
   --json-escape      new: emit JSON skeleton instead of .tf.ts
@@ -57,6 +58,7 @@ function parseArgs(argv: string[]) {
 		else if (a === "--emit") flags.emit = args[++i] ?? "taskflow";
 		else if (a === "--cwd") flags.cwd = args[++i] ?? "";
 		else if (a === "--force") flags.force = true;
+		else if (a === "--typecheck") flags.typecheck = true;
 		else if (a === "--json-escape") flags.jsonEscape = true;
 		else if (a.startsWith("-")) flags[a] = true;
 		else positional.push(a);
@@ -138,7 +140,10 @@ function main(): void {
 				process.stderr.write("check requires a file path\n");
 				process.exit(2);
 			}
-			const r = checkFile(resolveInput(cwd, file));
+			const r = checkFile(resolveInput(cwd, file), {
+				typecheck: flags.typecheck === true,
+				cwd,
+			});
 			if (flags.json) {
 				process.stdout.write(JSON.stringify({ ok: r.ok, diagnostics: r.diagnostics }, null, 2) + "\n");
 			} else {

@@ -33,7 +33,11 @@ import {
 } from "./step-kinds.ts";
 
 /** All DSL phase types — S2 kernel is complete. */
-export const EVENT_KERNEL_PHASE_TYPES = PHASE_TYPES;
+/** Kernel kinds: original 10. Horizon B `race`/`expand` run on the imperative
+ *  path until dedicated step handlers land (canUseEventKernel excludes them). */
+export const EVENT_KERNEL_PHASE_TYPES = PHASE_TYPES.filter(
+	(t) => t !== "race" && t !== "expand",
+) as readonly (typeof PHASE_TYPES)[number][];
 export type EventKernelPhaseType = (typeof EVENT_KERNEL_PHASE_TYPES)[number];
 
 export type RunTaskFn = (

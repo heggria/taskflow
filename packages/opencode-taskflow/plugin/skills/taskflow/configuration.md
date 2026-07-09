@@ -409,6 +409,46 @@ Each entry is one of:
 
 ---
 
+## 9. TypeScript DSL CLI (`taskflow-dsl` / S4)
+
+Author flows as **`.tf.ts`** (compile-time runes), then run the emitted JSON
+through existing `taskflow_*` tools. JSON remains first-class (escape hatch).
+
+```bash
+# From a monorepo checkout (dev):
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts new audit
+# edit audit.tf.ts
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts check audit.tf.ts
+# optional full tsc Program pass:
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts check audit.tf.ts --typecheck
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts build audit.tf.ts --emit both
+# → audit.taskflow.json (+ audit.flowir.json)
+# Then: taskflow_verify / taskflow_run with defineFile=audit.taskflow.json
+```
+
+| Command | Purpose |
+|---------|---------|
+| `new [name]` | ≤5-line hello skeleton (`.tf.ts` or `--json-escape` JSON) |
+| `check <file>` | Erase + `validateTaskflow` (add `--typecheck` for tsc) |
+| `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
+| `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
+
+**Authoring notes**
+
+- Import: `import { flow, agent, map, … } from "taskflow-dsl"`.
+- `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.
+- `race([agent(...), agent(...)])` — first branch to finish wins (`type: "race"`).
+- `expand.nested(plan.json)` / `expand.graft(plan.json)` — dynamic fragment (`type: "expand"`); graft promotes child phase states onto the parent under `expandId-childId`.
+- Unbuilt `.tf.ts` must **not** be executed as a Node program (runes throw `TFDSL_ERASE_ONLY`).
+
+Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
+
+---
+
 ## Caveats (declared but not yet enforced)
 
 These keys validate but the runtime does **not** act on them yet — don't rely on

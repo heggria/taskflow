@@ -124,7 +124,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 
 ## Key Concepts
 
-### Phase Types (10 total)
+### Phase Types (12 total)
 | Type | Purpose |
 |------|---------|
 | `agent` | Single subagent call |
@@ -137,6 +137,8 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 | `loop` | Repeat body until condition, convergence, or max iterations |
 | `tournament` | N competing variants + judge picks best or aggregates |
 | `script` | Run a shell command (no LLM, zero tokens) — captures stdout; fields `run`/`input`/`timeout` |
+| `race` | First completed branch wins (Horizon B) |
+| `expand` | Dynamic fragment: nested sub-flow or graft-promote (`def` + `expandMode`) |
 
 ### Event kernel, trace, and offline replay (0.2.0 Phase 2)
 
