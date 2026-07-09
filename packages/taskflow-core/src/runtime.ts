@@ -35,7 +35,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 	stopReason: "error",
 });
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -2025,14 +2025,10 @@ async function executePhaseInner(
 		const hasDef =
 			type === "expand" ? (phase as { def?: unknown }).def !== undefined : (phase as { def?: unknown }).def !== undefined;
 		const stack = deps._stack ?? [];
-		const expandMode =
-			type === "expand"
-				? ((phase as { expandMode?: string }).expandMode === "graft" ? "graft" : "nested")
-				: "nested";
-		const maxNodes =
-			typeof (phase as { maxNodes?: number }).maxNodes === "number"
-				? Math.min(MAX_DYNAMIC_PHASES, Math.max(1, (phase as { maxNodes: number }).maxNodes))
-				: 50;
+		const { resolveExpandMode, resolveMaxNodes, prefixGraftFragment, promoteGraftPhases } =
+			await import("./runtime/phases/expand.ts");
+		const expandMode = type === "expand" ? resolveExpandMode(phase) : "nested";
+		const maxNodes = type === "expand" ? resolveMaxNodes(phase, MAX_DYNAMIC_PHASES) : 50;
 
 		let subDef: Taskflow | undefined;
 		let name: string;
@@ -2095,7 +2091,7 @@ async function executePhaseInner(
 					endedAt: Date.now(),
 				};
 			}
-			// expand: cap fragment size + prefix ids for graft so they don't collide with parent.
+			// expand: cap fragment size + prefix ids for graft (helpers in phases/expand.ts).
 			if (type === "expand") {
 				if (wrapped.phases.length > maxNodes) {
 					return defFailOpen(
@@ -2103,22 +2099,7 @@ async function executePhaseInner(
 					);
 				}
 				if (expandMode === "graft") {
-					const prefix = `${phase.id}-`;
-					const idMap = new Map(wrapped.phases.map((p) => [p.id, prefix + p.id]));
-					wrapped = {
-						...wrapped,
-						name: wrapped.name || `${phase.id}-graft`,
-						phases: wrapped.phases.map((p) => {
-							const np: Phase = { ...p, id: idMap.get(p.id) ?? prefix + p.id };
-							if (p.dependsOn?.length) {
-								np.dependsOn = p.dependsOn.map((d) => idMap.get(d) ?? d);
-							}
-							if (p.from?.length) {
-								np.from = p.from.map((d) => idMap.get(d) ?? d);
-							}
-							return np;
-						}),
-					};
+					wrapped = prefixGraftFragment(wrapped, phase.id);
 				}
 			}
 			// Validate with `dynamic` hardening (breadth caps + cwd containment) since
@@ -2223,21 +2204,11 @@ async function executePhaseInner(
 			},
 		});
 		const sp = Object.values(subState.phases);
-		// expand graft: promote child phase states onto the parent run so peek /
-		// downstream can address them as {steps.<expandId>-<childId>.*}. Nested
-		// mode leaves children only in the sub-run.
+		// expand graft promote — pure helper (see runtime/phases/expand.ts)
 		const warnings: string[] = [];
 		if (type === "expand" && expandMode === "graft" && subResult.ok) {
-			let promoted = 0;
-			for (const [cid, cps] of Object.entries(subState.phases)) {
-				if (state.phases[cid]) {
-					warnings.push(`expand graft skipped promote of '${cid}' (id already exists on parent)`);
-					continue;
-				}
-				state.phases[cid] = { ...cps, id: cid };
-				promoted++;
-			}
-			warnings.push(`expand graft: promoted ${promoted} phase(s) onto parent run`);
+			const promo = promoteGraftPhases(state, subState.phases);
+			warnings.push(...promo.warnings);
 		}
 		const flowPs: PhaseState = {
 			id: phase.id,

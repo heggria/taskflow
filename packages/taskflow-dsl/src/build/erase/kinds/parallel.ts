@@ -1,0 +1,58 @@
+import ts from "typescript";
+import { calleeName } from "../ast.ts";
+import { mergeOpts } from "../opts.ts";
+import { eraseStringish } from "../templates.ts";
+import type { PhaseDraft } from "../types.ts";
+import { type EmitContext, nextSyntheticId, register } from "../context.ts";
+
+export function emitParallel(
+	ctx: EmitContext,
+	bindName: string | undefined,
+	call: ts.CallExpression,
+	itemParam?: string,
+): string {
+	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
+	const draft: PhaseDraft = {
+		id: idBase,
+		type: "parallel",
+		raw: { type: "parallel" },
+		dependsOn: new Set(),
+	};
+	const arr = call.arguments[0];
+	const optsArg = call.arguments[1] as ts.Expression | undefined;
+	const branches: Array<Record<string, unknown>> = [];
+	if (arr && ts.isArrayLiteralExpression(arr)) {
+		for (const el of arr.elements) {
+			if (ts.isCallExpression(el) && calleeName(el.expression) === "agent") {
+				const erased = eraseStringish(
+					ctx.sf,
+					ctx.file,
+					el.arguments[0]!,
+					itemParam,
+					ctx.phases,
+					ctx.diags,
+				);
+				const b: Record<string, unknown> = {};
+				if (erased) {
+					b.task = erased.text;
+					for (const d of erased.deps) draft.dependsOn.add(d);
+				}
+				const bopts = mergeOpts(
+					ctx.sf,
+					ctx.file,
+					el.arguments[1] as ts.Expression | undefined,
+					ctx.diags,
+					ctx.phases,
+				);
+				Object.assign(b, bopts);
+				branches.push(b);
+			}
+		}
+	}
+	draft.raw.branches = branches;
+	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	if (typeof opts.id === "string") draft.id = opts.id;
+	Object.assign(draft.raw, opts);
+	if (opts.final === true) draft.final = true;
+	return register(ctx, draft);
+}
