@@ -167,7 +167,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 ## Development Commands
 
 ```bash
-pnpm install           # links the eight workspace packages (+ website)
+pnpm install           # links the nine workspace packages (+ website)
 pnpm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
 pnpm test              # full unit suite (node --experimental-strip-types --test)
 pnpm run test:hosts    # taskflow-hosts tests only
@@ -176,7 +176,7 @@ pnpm run test:codex    # codex-adapter tests only
 pnpm run test:claude   # claude-adapter tests only
 pnpm run test:opencode # opencode-adapter tests only
 pnpm run test:grok     # grok-adapter tests only
-pnpm run build         # emit dist/*.js + .d.ts for all eight packages
+pnpm run build         # emit dist/*.js + .d.ts for all nine packages
 pnpm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
 pnpm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
 pnpm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)

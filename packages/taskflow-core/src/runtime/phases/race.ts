@@ -49,8 +49,8 @@ export async function executeRaceBranches(
 		};
 	}
 
-	// cancelLosers reserved for multi-signal abort plumbing
-	void (phase as { cancelLosers?: boolean }).cancelLosers;
+	// cancelLosers is schema-accepted but not enforced yet (no per-branch AbortSignal fan-out).
+	const cancelLosers = (phase as { cancelLosers?: boolean }).cancelLosers !== false;
 
 	const raced = await Promise.race(
 		branches.map(async (b, i) => {
@@ -61,6 +61,12 @@ export async function executeRaceBranches(
 
 	const winner = raced.result;
 	const failed = isFailed(winner);
+	const warnings = [`race: branch ${raced.i + 1}/${branches.length} won`];
+	if (cancelLosers) {
+		warnings.push(
+			"race: cancelLosers is reserved — in-flight losers are not aborted yet (first-finish-wins only)",
+		);
+	}
 	return {
 		id: phase.id,
 		status: failed ? "failed" : "done",
@@ -73,7 +79,7 @@ export async function executeRaceBranches(
 		error: failed ? winner.errorMessage ?? winner.stderr : undefined,
 		inputHash: opts.inputHash,
 		endedAt: Date.now(),
-		warnings: [`race: branch ${raced.i + 1}/${branches.length} won`],
+		warnings,
 		...(opts.readRefs ? { reads: opts.readRefs } : {}),
 	};
 }

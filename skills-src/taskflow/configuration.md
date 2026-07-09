@@ -83,7 +83,7 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
 | `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
-| `cancelLosers` | race | `true` | Cancel non-winning branches after the first success. |
+| `cancelLosers` | race | `true` | **Reserved / ignored.** Intended to abort losers; not enforced yet. First-finish-wins only. |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
 | `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
 | `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |

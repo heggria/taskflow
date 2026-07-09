@@ -18,7 +18,7 @@
  * it must not break `translate.ts`, `meta.ts`, `hash.ts`, or any barrel.
  *
  * **Compatibility note:** the canonical `FlowIRNode.kind` is the closed
- * `FlowIRNodeKind` literal union (the 10 native phase kinds), whereas
+ * `FlowIRNodeKind` literal union (the closed set of native phase kinds = `PHASE_TYPES`), whereas
  * `meta.ts`'s `FlowIRNode.kind` is `string` (a 1:1 projection). Every value
  * `translate.ts` produces for `kind` (`phase.type ?? "agent"`) is a member of
  * `FlowIRNodeKind`, so the canonical type is a strict refinement that
@@ -37,7 +37,7 @@ import { StringEnum } from "../typebox-helpers.ts";
 import { PHASE_TYPES, type PhaseType } from "../schema.ts";
 
 // ---------------------------------------------------------------------------
-// FlowIRNodeKind — the 10 native phase kinds (closed literal union)
+// FlowIRNodeKind — closed literal union = PHASE_TYPES (currently 12 kinds)
 // ---------------------------------------------------------------------------
 
 /**
@@ -62,7 +62,7 @@ import { PHASE_TYPES, type PhaseType } from "../schema.ts";
  * | `script`    | run a shell command (no LLM, zero tokens)               |
  */
 export const FlowIRNodeKind = StringEnum(PHASE_TYPES, {
-	description: "The 10 native pi-taskflow phase kinds (1:1 projection of PHASE_TYPES)",
+	description: "Native phase kinds — 1:1 projection of PHASE_TYPES (agent…script, race, expand, …)",
 });
 /** @see PHASE_TYPES — same closed set as the DSL. */
 export type FlowIRNodeKind = PhaseType;

@@ -1,4 +1,4 @@
-# pnpm workspace — the six published packages.
+# pnpm workspace — nine packages under packages/ + website.
 # (Replaces the npm `workspaces` field in the root package.json; pnpm ignores
 # that field and requires this file instead.)
 packages:

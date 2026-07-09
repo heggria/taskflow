@@ -26,7 +26,7 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 | **What S4 is not** | A second runtime, kernel flip (S5), in-file JSON hybrid, or agent-default authoring path |
 | **Primary model** | **Svelte-style** compile-time runes (AST erase; no interpret) |
 | **Escape** | **Whole-file JSON** only (zero migration; dual frontend at file boundary) |
-| **Toolchain** | **ts-morph** (+ pinned `typescript`) → Taskflow → `compileTaskflowToFlowIR` |
+| **Toolchain** | **TypeScript compiler API** (`typescript` package) → Taskflow → `compileTaskflowToFlowIR` |
 | **Package / bin** | `taskflow-dsl` / `taskflow-dsl {build,check,decompile,new}` |
 | **Import** | `from "taskflow-dsl"` (not `"taskflow"` in S4) |
 | **Hosts** | **CLI-first**; no new MCP / no auto-build on `taskflow_run` |
@@ -41,7 +41,7 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 |------|--------|
 | **Primary** | **Svelte-style compile-time erase** (runes are AST directives; runtime does not execute them) |
 | **Escape** | **JSON-only** whole-file (existing Taskflow JSON remains first-class; zero migration) |
-| **Build toolchain** | **ts-morph** (TypeScript Program + AST read → Taskflow JSON → core `compileTaskflowToFlowIR`) |
+| **Build toolchain** | **TypeScript compiler API** (AST erase via `typescript` → Taskflow JSON → core `compileTaskflowToFlowIR`) |
 
 ### Why (≤5)
 
@@ -64,7 +64,7 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 ### Pipeline S4 owns
 
 ```
-.tf.ts  ──build(AST / ts-morph)──▶  Taskflow JSON  ──compileTaskflowToFlowIR──▶  FlowIR (+ ir:<64-hex>)
+.tf.ts  ──build(AST / typescript)──▶  Taskflow JSON  ──compileTaskflowToFlowIR──▶  FlowIR (+ ir:<64-hex>)
 .flow.json ──validate / desugar──▶  Taskflow JSON  ──same core entry only──▶  FlowIR
 ```
 
@@ -94,8 +94,7 @@ DSL v2 hard constraint “100% 功能覆盖” is **not** the S4 acceptance bar.
 | Dep | Kind | Why |
 |-----|------|-----|
 | `taskflow-core` | **dependency** (workspace pin, same version as siblings) | Taskflow types, `validateTaskflow` / `desugar`, `compileTaskflowToFlowIR`, `hashFlowIR`, `verifyTaskflow` |
-| `ts-morph` | **dependency** | Project/SourceFile AST for build + check |
-| `typescript` | **dependency** (or peer + dep) | Program host under ts-morph; pin compatible with monorepo devDependency |
+| `typescript` | **dependency** | AST erase (`createSourceFile` / Program for `--typecheck`); pin with monorepo |
 | `typebox` | **peerDependency** `*` | Align with core; only if public types re-export expect shapes that mention TypeBox |
 
 **Forbidden in this package:** host SDKs (`@earendil-works/*`), `taskflow-hosts`, `taskflow-mcp-core`, any process-spawning runner.
@@ -207,7 +206,7 @@ taskflow-dsl build <input> [options]
 | Input | Behavior |
 |-------|----------|
 | `*.tf.ts` | AST erase → Taskflow → (optional) FlowIR via core |
-| `*.json` / `*.jsonc` | **JSON escape path:** parse → `validateTaskflow` / `desugar` → same emit options (no ts-morph) |
+| `*.json` / `*.jsonc` | **JSON escape path:** parse → `validateTaskflow` / `desugar` → same emit options (no TypeScript AST) |
 | other extension | Error `TFDSL_INPUT_KIND` |
 
 | Flag | Default | IO |
@@ -439,7 +438,7 @@ export interface BuildResult {
 
 /** Build from a filesystem path (.tf.ts | .json). */
 export function buildFile(path: string, opts?: BuildOptions): Promise<BuildResult>;
-// Sync variant allowed if ts-morph usage is sync-only:
+// Sync variant allowed if AST usage is sync-only:
 export function buildFileSync(path: string, opts?: BuildOptions): BuildResult;
 
 /** Build from source text (tests / MCP-later). `fileName` required for positions. */
@@ -688,7 +687,7 @@ Prefer **barrel** `taskflow-core` or narrow subpaths already exported (`taskflow
 | **CLI `taskflow-dsl`** | **Y — primary** | Agents/humans compile before run; matches “no unbuilt run”; easy CI |
 | **Library `buildFile` / `checkFile`** | **Y** | Tests + scripted toolchains |
 | **New MCP tools** (`taskflow_build` / `taskflow_check`) | **N** | Avoid bloating every host adapter + mcp-core in the same release as first compiler; agents shell out or use defineFile of emitted JSON |
-| **Host auto-build of `.tf.ts` on `taskflow_run`** | **N** | Silent compile on run reintroduces “feels executable” and couples hosts to ts-morph |
+| **Host auto-build of `.tf.ts` on `taskflow_run`** | **N** | Silent compile on run reintroduces “feels executable” and couples hosts to the TypeScript compiler |
 | **pi `/tf` DSL commands** | **N** MVP | Optional S4.1 thin wrappers calling the same library |
 
 ### 7.2 Recommended agent workflow (0.2.0)
@@ -778,10 +777,10 @@ FULL RFC coverage remains a completion track; missing FULL features must not app
 
 ### 10.2 Non-blocking polish (implementer discretion)
 
-1. Sync vs async `buildFile` (sync-friendly with ts-morph).  
+1. Sync vs async `buildFile` (sync-friendly with the TypeScript API).  
 2. Exact synthetic phase id algorithm for anonymous runes (must be deterministic for hash equality fixtures).  
 3. Default `--emit both` vs `taskflow` only (recommend **taskflow-only** default; FlowIR via `--emit flowir|both` / CI).  
-4. Optional thin facade over ts-morph `Node` so engine can be swapped later without rewriting erase.
+4. Optional thin facade over TS `Node` so the parser host can be swapped later without rewriting erase.
 
 ### 10.3 Recommended PR stack (after human lock)
 
@@ -808,4 +807,4 @@ FULL RFC coverage remains a completion track; missing FULL features must not app
 
 ---
 
-*One-line summary: S4 MVP publishes `taskflow-dsl` as a CLI-first, ts-morph erase frontend — `*.tf.ts` in, Taskflow (+ FlowIR via core) out — with whole-file JSON as the only escape, stable diagnostics, a hard core import allowlist, and no MCP or runtime interpret path. Extended brainstorm phases are designed in `rfc-0.2.0-dsl-phases-horizon.md` without expanding the S4 ship bar.*
+*One-line summary: S4 MVP publishes `taskflow-dsl` as a CLI-first, TypeScript-AST erase frontend — `*.tf.ts` in, Taskflow (+ FlowIR via core) out — with whole-file JSON as the only escape, stable diagnostics, a hard core import allowlist, and no MCP or runtime interpret path. Extended brainstorm phases are designed in `rfc-0.2.0-dsl-phases-horizon.md` without expanding the S4 ship bar.*

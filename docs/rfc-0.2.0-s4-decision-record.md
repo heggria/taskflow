@@ -15,7 +15,7 @@
 |--|--|
 | **Primary** | **Svelte-style** compile-time runes (AST erase; cannot run unbuilt `.tf.ts`) |
 | **Escape** | **JSON-only** whole-file (dual frontend at **file** boundary) |
-| **Toolchain** | **ts-morph** (+ pinned TypeScript) → Taskflow → `compileTaskflowToFlowIR` |
+| **Toolchain** | **TypeScript compiler API** (`typescript` package) → Taskflow → `compileTaskflowToFlowIR` |
 | **Rejected** | Solid Proxy runtime runes · in-file Vapor hybrid · interpret / auto-build-on-run · S5 prerequisite |
 
 ## Package & CLI
@@ -47,7 +47,7 @@ Engine `PHASE_TYPES` is now **12** (`race`, `expand` added). DSL erase registry
 |--------------|--------|
 | Core 10 + `subflow` / `subflow.def` | ✅ |
 | `gate.automated` / `gate.scored` | ✅ (A-track sugar) |
-| `race` + `cancelLosers` | ✅ engine + DSL |
+| `race` | ✅ engine + DSL (`cancelLosers` **reserved / ignored**) |
 | `expand` / `expand.nested` / `expand.graft` + `maxNodes` | ✅ engine + DSL |
 | Parallel destructure → N agent phases | ✅ |
 | Modular pipeline (no monolith grow) | ✅ see `docs/internal/modularization-0.2.0.md` |
@@ -127,7 +127,7 @@ export default flow("audit", (ctx) => {
 | Run | Role |
 |-----|------|
 | `s4-shape-council-mrd6rcyl-f77e65` | inventory-code, inventory-rfc, coverage-map |
-| `s4-shape-council-v2-mrd6wdcj-e34ca3` | routes + tournament (svelte/json-only/ts-morph) + api-surface + adversary |
+| `s4-shape-council-v2-mrd6wdcj-e34ca3` | routes + tournament (svelte/json-only/typescript-AST) + api-surface + adversary |
 | `s4-shape-finalize-mrd765gf-f14e1b` | cross-check (PASS on route; BLOCK only until B1/matrix/H2/H3 written) |
 
 Flow defs: `/tmp/taskflow-s4/s4-shape.json`, `s4-shape-v2.json`, `s4-shape-final.json`  

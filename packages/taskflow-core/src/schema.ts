@@ -148,7 +148,12 @@ const PhaseSchema = Type.Object(
 				description: "[parallel|race|tournament] Static task branches",
 			}),
 		),
-		/** [race] When true (default), abort in-flight losers after the first branch finishes (best-effort). */
+		/**
+		 * [race] Reserved. Intended: abort in-flight losers after the first branch finishes.
+		 * **Currently ignored** — first-finish-wins still applies; other branches may run to
+		 * natural completion (no multi-signal abort plumbing yet). Accepted so JSON/DSL stay
+		 * forward-compatible; do not rely on cancellation for cost control (use `budget` / `timeout`).
+		 */
 		cancelLosers: Type.Optional(Type.Boolean({ default: true })),
 
 		// reduce

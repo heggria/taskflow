@@ -471,15 +471,16 @@ output is exact.
 ### Race phases (first completed wins)
 
 A `race` phase runs static `branches[]` concurrently and **returns the first
-branch that finishes successfully**. Losers may be cancelled (`cancelLosers`,
-default true). Use it when several approaches can answer the same question and
-latency matters more than waiting for every branch (unlike `parallel`, which
-waits for all, or `tournament`, which judges quality after all variants finish).
+branch that finishes successfully** (first-finish-wins). Unlike `parallel`
+(waits for all) or `tournament` (judges quality after all variants), use race
+when latency matters more than comparing every approach.
 
 - `branches` — **required**, at least two `{task, agent?}`.
-- `cancelLosers` — optional boolean (default `true`).
+- `cancelLosers` — **reserved / currently ignored.** Schema accepts it for
+  forward compatibility; losers are **not** aborted yet and may run to natural
+  completion. Cap cost with `budget` / per-call `timeout`, not this flag.
 - Output of the winning branch becomes the race phase output; a warning records
-  which branch won.
+  which branch won (and notes that cancelLosers is reserved).
 
 ```jsonc
 {

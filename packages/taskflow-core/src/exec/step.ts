@@ -1,8 +1,8 @@
 /**
  * exec/step — per-node handlers for the event-sourced kernel (RFC §6.3, S2).
  *
- * **All 10 phase types** (agent|script|map|parallel|reduce|gate|approval|loop|
- * tournament|flow). Complex kinds live in `./step-kinds.ts`. Does **not**
+ * Kernel covers `EVENT_KERNEL_PHASE_TYPES` (PHASE_TYPES minus `race`/`expand` —
+ * currently 10 kinds). Complex paths live in `./step-kinds.ts`. Does **not**
  * import `runtime.ts` (avoids circular deps with the strangler).
  */
 

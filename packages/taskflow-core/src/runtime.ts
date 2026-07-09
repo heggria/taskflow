@@ -93,8 +93,9 @@ export interface RuntimeDeps {
 	 *  identically to today). See `trace.ts`. */
 	trace?: TraceSink;
 	/**
-	 * S2 strangler: when true, flows run on `exec/driver` (event kernel; all
-	 * 10 phase kinds). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
+	 * S2 strangler: when true, eligible flows run on `exec/driver` (event kernel).
+	 * Covers core kinds except `race`/`expand`; advanced features force imperative
+	 * fallback. Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
 	 */
 	eventKernel?: boolean;
 	/** Internal: sub-flow call stack, for recursion detection. */
