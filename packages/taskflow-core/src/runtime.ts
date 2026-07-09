@@ -1054,39 +1054,56 @@ async function executePhaseInner(
 		type !== "script" && typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
 			? phase.timeout
 			: undefined;
-	const runOne = async (agentName: string, task: string, onLive?: (l: LiveUpdate) => void, ctxNodeId?: string, check?: (r: RunResult) => string[]): Promise<RunResult> => {
+	const runOne = async (
+		agentName: string,
+		task: string,
+		onLive?: (l: LiveUpdate) => void,
+		ctxNodeId?: string,
+		check?: (r: RunResult) => string[],
+		/** Extra abort (e.g. race branch cancelLosers) — chained with run + phase timeout. */
+		extraSignal?: AbortSignal,
+	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
 		const maxAttempts = Math.max(explicitMax, 1 + DEFAULT_TRANSIENT_RETRIES);
 		const usages: UsageStats[] = [];
 		let last: RunResult | undefined;
 		for (let attempt = 0; attempt < maxAttempts; attempt++) {
-			if (deps.signal?.aborted) break;
-			// Phase timeout — an AbortController chained to the run's signal that also
-			// fires after `phase.timeout` ms. Deterministic: a timed-out call is never
-			// retried (retrying a call that just burned its full cap would double-spend).
+			if (deps.signal?.aborted || extraSignal?.aborted) break;
+			// AbortController chains: run signal + optional extra (race cancel) + phase timeout.
+			// Deterministic: a timed-out call is never retried (would double-spend).
 			let timedOut = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
-			let onParentAbort: (() => void) | undefined;
+			const removers: Array<() => void> = [];
 			let callSignal: AbortSignal | undefined;
-			if (phaseTimeoutMs) {
+			if (phaseTimeoutMs || extraSignal) {
 				const ac = new AbortController();
 				callSignal = ac.signal;
-				if (deps.signal?.aborted) ac.abort();
-				else if (deps.signal) {
-					onParentAbort = () => ac.abort();
-					deps.signal.addEventListener("abort", onParentAbort, { once: true });
+				if (deps.signal?.aborted || extraSignal?.aborted) ac.abort();
+				else {
+					if (deps.signal) {
+						const fn = () => ac.abort();
+						deps.signal.addEventListener("abort", fn, { once: true });
+						removers.push(() => deps.signal?.removeEventListener("abort", fn));
+					}
+					if (extraSignal) {
+						const fn = () => ac.abort();
+						extraSignal.addEventListener("abort", fn, { once: true });
+						removers.push(() => extraSignal.removeEventListener("abort", fn));
+					}
 				}
-				timer = setTimeout(() => {
-					timedOut = true;
-					ac.abort();
-				}, phaseTimeoutMs);
+				if (phaseTimeoutMs) {
+					timer = setTimeout(() => {
+						timedOut = true;
+						ac.abort();
+					}, phaseTimeoutMs);
+				}
 			}
 			try {
 				last = await baseRun(agentName, task, onLive, ctxNodeId, callSignal);
 			} finally {
 				if (timer) clearTimeout(timer);
-				if (onParentAbort) deps.signal?.removeEventListener("abort", onParentAbort);
+				for (const r of removers) r();
 			}
 			if (timedOut) {
 				// Reclassify the abort as a phase timeout: a distinct, deterministic
@@ -1122,8 +1139,8 @@ async function executePhaseInner(
 			const liveRetry = state.phases[phase.id];
 			if (liveRetry) liveRetry.usage = aggregateUsage(usages);
 			if (!isFailed(last)) break;
-			// Stop retrying on abort or once the run is over budget.
-			if (deps.signal?.aborted || overBudget(state).over) break;
+			// Stop retrying on abort (run-level or race cancel) or once over budget.
+			if (deps.signal?.aborted || extraSignal?.aborted || overBudget(state).over) break;
 			// Decide whether THIS failure warrants another attempt. Explicit retry
 			// policy covers all failures up to its cap; the transient fallback covers
 			// only retryable provider errors. A non-transient failure with no explicit
@@ -1785,10 +1802,13 @@ async function executePhaseInner(
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
-		const ps = await executeRaceBranches(phase, branches, runOne, isFailed, {
+		const raceRunOne = (agent: string, task: string, branchSignal?: AbortSignal) =>
+			runOne(agent, task, undefined, undefined, undefined, branchSignal);
+		const ps = await executeRaceBranches(phase, branches, raceRunOne, isFailed, {
 			inputHash,
 			parseJson,
 			readRefs: readRefs.length ? readRefsToReads(readRefs, state) : undefined,
+			parentSignal: deps.signal,
 		});
 		recordCache(cc, ps);
 		return ps;

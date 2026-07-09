@@ -149,10 +149,9 @@ const PhaseSchema = Type.Object(
 			}),
 		),
 		/**
-		 * [race] Reserved. Intended: abort in-flight losers after the first branch finishes.
-		 * **Currently ignored** — first-finish-wins still applies; other branches may run to
-		 * natural completion (no multi-signal abort plumbing yet). Accepted so JSON/DSL stay
-		 * forward-compatible; do not rely on cancellation for cost control (use `budget` / `timeout`).
+		 * [race] When true (default), abort in-flight loser branches after the first branch
+		 * settles (best-effort `AbortSignal` to the host runner). First-finish-wins still
+		 * applies. Set `false` to let losers run to natural completion.
 		 */
 		cancelLosers: Type.Optional(Type.Boolean({ default: true })),
 

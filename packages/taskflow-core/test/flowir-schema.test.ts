@@ -29,11 +29,11 @@ function ir(nodes: FlowIRNode[], overrides?: Partial<FlowIR>): FlowIR {
 }
 
 // ---------------------------------------------------------------------------
-// FlowIRNodeKind — closed literal union of the 10 phase kinds
+// FlowIRNodeKind — closed literal union (= PHASE_TYPES, currently 12 kinds)
 // ---------------------------------------------------------------------------
 
 test("FlowIRNodeKind: tracks PHASE_TYPES (single source of truth, no drift)", () => {
-	assert.equal(PHASE_TYPES.length, 10);
+	assert.equal(PHASE_TYPES.length, 12);
 	for (const k of PHASE_TYPES) {
 		// Each DSL phase kind is a member of the FlowIR kind schema.
 		const decoded = Value.Decode(FlowIRNodeKind, k);
@@ -51,6 +51,8 @@ test("FlowIRNodeKind: tracks PHASE_TYPES (single source of truth, no drift)", ()
 		"loop",
 		"tournament",
 		"script",
+		"race",
+		"expand",
 	]);
 });
 

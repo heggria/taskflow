@@ -476,11 +476,11 @@ branch that finishes successfully** (first-finish-wins). Unlike `parallel`
 when latency matters more than comparing every approach.
 
 - `branches` — **required**, at least two `{task, agent?}`.
-- `cancelLosers` — **reserved / currently ignored.** Schema accepts it for
-  forward compatibility; losers are **not** aborted yet and may run to natural
-  completion. Cap cost with `budget` / per-call `timeout`, not this flag.
+- `cancelLosers` — optional boolean (default `true`). After the first branch
+  settles, abort other branches via `AbortSignal` (best-effort — host must honor
+  the signal). Set `false` to let losers finish naturally.
 - Output of the winning branch becomes the race phase output; a warning records
-  which branch won (and notes that cancelLosers is reserved).
+  which branch won.
 
 ```jsonc
 {

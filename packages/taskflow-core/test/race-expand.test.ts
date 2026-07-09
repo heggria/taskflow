@@ -106,6 +106,120 @@ test("race: first completed branch wins", async () => {
 	assert.equal(st.phases.r?.status, "done");
 	assert.equal(st.phases.r?.output?.trim(), "FAST");
 	assert.ok(st.phases.r?.warnings?.some((w) => /branch 2/.test(w)));
+	assert.ok(st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w ?? "")));
+});
+
+test("race: cancelLosers aborts losing branch via AbortSignal", async () => {
+	const def: Taskflow = {
+		name: "race-cancel",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: true,
+				branches: [
+					{ task: "slow-path", agent: "a" },
+					{ task: "fast-path", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	let slowSawAbort = false;
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task, opts) => {
+			if (task.includes("slow")) {
+				await new Promise<void>((resolve) => {
+					const t = setTimeout(() => resolve(), 5000);
+					const onAbort = () => {
+						slowSawAbort = true;
+						clearTimeout(t);
+						resolve();
+					};
+					if (opts?.signal?.aborted) onAbort();
+					else opts?.signal?.addEventListener("abort", onAbort, { once: true });
+				});
+				return {
+					agent,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "aborted",
+					usage: { ...emptyUsage(), input: 1, output: 0, cost: 0, turns: 0 },
+					stopReason: "error",
+					errorMessage: "aborted",
+				};
+			}
+			// small delay so slow is definitely in-flight
+			await new Promise((r) => setTimeout(r, 15));
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "FAST-WIN",
+				stderr: "",
+				usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	});
+	assert.equal(st.status, "completed");
+	assert.equal(st.phases.r?.output?.trim(), "FAST-WIN");
+	assert.equal(slowSawAbort, true);
+});
+
+test("race: cancelLosers false leaves loser running to completion", async () => {
+	const def: Taskflow = {
+		name: "race-no-cancel",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				cancelLosers: false,
+				branches: [
+					{ task: "slow-path", agent: "a" },
+					{ task: "fast-path", agent: "a" },
+				],
+				final: true,
+			},
+		],
+	};
+	const st = mkState(def);
+	let slowFinished = false;
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task) => {
+			if (task.includes("slow")) {
+				await new Promise((r) => setTimeout(r, 40));
+				slowFinished = true;
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: "SLOW",
+					stderr: "",
+					usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+					stopReason: "end",
+				};
+			}
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "FAST",
+				stderr: "",
+				usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	});
+	assert.equal(st.phases.r?.output?.trim(), "FAST");
+	assert.equal(slowFinished, true);
+	assert.ok(!st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w)));
 });
 
 test("expand nested: runs fragment as sub-flow", async () => {

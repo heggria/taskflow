@@ -54,10 +54,10 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 ## Still open (not claimed as done)
 
 - Formal **0.2.0 npm publish** + version bump (packages still 0.1.7; `taskflow-dsl` may 404 on registry).
-- Implement real `cancelLosers` abort (or keep reserved forever).
-- S5 kernel default ON + flagship $ demo seal.
+- ~~Implement real `cancelLosers` abort~~ → **done** (best-effort AbortSignal; tests in race-expand).
+- S5 kernel default ON + flagship $ demo seal → plan: `docs/internal/s5-kernel-default-on-plan.md`.
 - Full website polish for every “ten” remnant in long-form copy (bulk pass done; spot-check periodically).
-- `pnpm test` full suite as release gate; live host e2e.
+- Live host e2e as release gate (unit suite is the local hard gate).
 
 ## Re-verify commands
 

@@ -436,7 +436,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 ```
 
 <Callout type="info">
-  **`cancelLosers` 为预留字段。** schema 接受它以保持前向兼容，但败者**目前不会被中止**，可能仍跑到自然结束。请用 `budget` / `timeout` 控制开销。
+  **`cancelLosers`（默认 true）：** 第一个分支 settle 后，其余分支收到 `AbortSignal`（尽力而为——宿主 runner 需遵守）。设 `false` 可让败者跑完。
 </Callout>
 
 ## 动态片段：`expand`

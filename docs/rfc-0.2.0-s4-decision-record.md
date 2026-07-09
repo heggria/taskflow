@@ -47,7 +47,7 @@ Engine `PHASE_TYPES` is now **12** (`race`, `expand` added). DSL erase registry
 |--------------|--------|
 | Core 10 + `subflow` / `subflow.def` | ✅ |
 | `gate.automated` / `gate.scored` | ✅ (A-track sugar) |
-| `race` | ✅ engine + DSL (`cancelLosers` **reserved / ignored**) |
+| `race` + `cancelLosers` | ✅ engine + DSL (best-effort AbortSignal abort of losers) |
 | `expand` / `expand.nested` / `expand.graft` + `maxNodes` | ✅ engine + DSL |
 | Parallel destructure → N agent phases | ✅ |
 | Modular pipeline (no monolith grow) | ✅ see `docs/internal/modularization-0.2.0.md` |

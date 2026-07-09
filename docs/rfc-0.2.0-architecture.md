@@ -21,7 +21,7 @@
 > | **S2** | ✅ | `exec/{step,driver}` **全部 10 kind** + P0 硬化；高级特性 fall-back；默认 OFF。**`race`/`expand` 仍走 imperative**（未进 `EVENT_KERNEL_PHASE_TYPES`） |
 > | **S3** | ✅ | `replayRun`；`taskflow_replay` MCP；pi `action=replay` + `/tf replay`；golden + import-lint |
 > | **S4** | ✅ | 包 `taskflow-dsl` live：`build`/`check`/`decompile`/`new`；erase `kinds/*` 注册表；parity 测绿。引擎 **12 PHASE_TYPES**（+`race`/`expand`）；gate sugar；skills 对齐 |
-> | **S5** | ⬜ **下一主线** | 全 kind 差分绿 → kernel 默认 ON；退休旧 `executePhase` 主路径。预热：`runtime/phases/*` strangler |
+> | **S5** | ⬜ **下一主线** | 全 kind 差分绿 → kernel 默认 ON；退休旧 `executePhase` 主路径。计划：[`internal/s5-kernel-default-on-plan.md`](./internal/s5-kernel-default-on-plan.md)；预热：`runtime/phases/*` strangler |
 >
 > North-star 口号：**compiled · resumable · incremental · replayable-for-what-if**。
 

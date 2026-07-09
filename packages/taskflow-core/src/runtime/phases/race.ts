@@ -16,8 +16,9 @@ export interface RaceBranch {
 	task: string;
 }
 
+/** Optional per-branch AbortSignal — used to cancel losers after a winner settles. */
 export interface RaceRunOne {
-	(agent: string, task: string): Promise<RunResult>;
+	(agent: string, task: string, signal?: AbortSignal): Promise<RunResult>;
 }
 
 export interface RaceIsFailed {
@@ -26,6 +27,10 @@ export interface RaceIsFailed {
 
 /**
  * Execute race branches. Pure w.r.t. scheduling — does not touch RunState.
+ *
+ * When `cancelLosers` is true (default), abort controllers for non-winning
+ * branches fire after the first branch settles (best-effort: depends on the
+ * host runner honoring AbortSignal).
  */
 export async function executeRaceBranches(
 	phase: Phase,
@@ -36,6 +41,8 @@ export async function executeRaceBranches(
 		inputHash: string;
 		parseJson: boolean;
 		readRefs?: PhaseState["reads"];
+		/** Parent run abort — chained onto each branch controller. */
+		parentSignal?: AbortSignal;
 	},
 ): Promise<PhaseState> {
 	if (branches.length < 2) {
@@ -49,22 +56,56 @@ export async function executeRaceBranches(
 		};
 	}
 
-	// cancelLosers is schema-accepted but not enforced yet (no per-branch AbortSignal fan-out).
 	const cancelLosers = (phase as { cancelLosers?: boolean }).cancelLosers !== false;
+	const controllers = branches.map(() => new AbortController());
 
-	const raced = await Promise.race(
-		branches.map(async (b, i) => {
-			const result = await runOne(b.agent, b.task);
-			return { i, result };
-		}),
-	);
+	// Chain parent abort → all branches.
+	const onParentAbort = () => {
+		for (const c of controllers) {
+			try {
+				c.abort();
+			} catch {
+				/* ignore */
+			}
+		}
+	};
+	if (opts.parentSignal) {
+		if (opts.parentSignal.aborted) onParentAbort();
+		else opts.parentSignal.addEventListener("abort", onParentAbort, { once: true });
+	}
+
+	const branchPromises = branches.map(async (b, i) => {
+		const result = await runOne(b.agent, b.task, controllers[i]!.signal);
+		return { i, result };
+	});
+
+	const raced = await Promise.race(branchPromises);
+
+	if (cancelLosers) {
+		for (let j = 0; j < controllers.length; j++) {
+			if (j !== raced.i) {
+				try {
+					controllers[j]!.abort();
+				} catch {
+					/* ignore */
+				}
+			}
+		}
+	}
+
+	// Let aborted branches settle (avoid unhandled rejections / orphan work).
+	await Promise.allSettled(branchPromises);
+
+	if (opts.parentSignal) {
+		opts.parentSignal.removeEventListener("abort", onParentAbort);
+	}
 
 	const winner = raced.result;
 	const failed = isFailed(winner);
 	const warnings = [`race: branch ${raced.i + 1}/${branches.length} won`];
 	if (cancelLosers) {
 		warnings.push(
-			"race: cancelLosers is reserved — in-flight losers are not aborted yet (first-finish-wins only)",
+			`race: cancelLosers aborted ${branches.length - 1} loser branch(es) (best-effort AbortSignal)`,
 		);
 	}
 	return {
