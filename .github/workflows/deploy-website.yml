@@ -37,7 +37,7 @@ jobs:
       # in the root package.json, so CI uses the same pnpm as local dev. The
       # website is a pnpm workspace member (pnpm-workspace.yaml), so one
       # `pnpm install` at the root installs every package including the website.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - name: Setup Node
         uses: actions/setup-node@v6
