@@ -36,37 +36,37 @@ importers:
   packages/claude-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-mcp-core
 
   packages/codex-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-mcp-core
 
   packages/opencode-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-mcp-core
 
   packages/pi-taskflow:
@@ -84,7 +84,7 @@ importers:
         specifier: '*'
         version: 0.80.3
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
       typebox:
         specifier: '*'
@@ -99,7 +99,7 @@ importers:
   packages/taskflow-hosts:
     dependencies:
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
     devDependencies:
       typescript:
@@ -109,7 +109,7 @@ importers:
   packages/taskflow-mcp-core:
     dependencies:
       taskflow-core:
-        specifier: 0.1.7
+        specifier: 0.1.8
         version: link:../taskflow-core
 
   website:
