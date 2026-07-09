@@ -71,6 +71,31 @@ test("validateTaskflow: new phase types and fields", () => {
 	);
 });
 
+test("validateTaskflow: cwd must be a literal path or workspace keyword (no interpolation)", () => {
+	const withArgs = validateTaskflow({
+		name: "x",
+		phases: [{ id: "p", type: "agent", task: "t", cwd: "{args.repo_dir}" }],
+	});
+	assert.equal(withArgs.ok, false);
+	assert.match(withArgs.errors.join("\n"), /cwd.*does not support interpolation placeholders/i);
+
+	const withSteps = validateTaskflow({
+		name: "x",
+		phases: [{ id: "p", type: "agent", task: "t", cwd: "{steps.plan.output}" }],
+	});
+	assert.equal(withSteps.ok, false);
+	assert.match(withSteps.errors.join("\n"), /cwd.*does not support interpolation placeholders/i);
+
+	assert.equal(
+		validateTaskflow({ name: "x", phases: [{ id: "p", type: "agent", task: "t", cwd: "./repo" }] }).ok,
+		true,
+	);
+	assert.equal(
+		validateTaskflow({ name: "x", phases: [{ id: "p", type: "agent", task: "t", cwd: "worktree" }] }).ok,
+		true,
+	);
+});
+
 test("validateTaskflow: duplicate ids and unknown deps", () => {
 	const dup = { name: "x", phases: [{ id: "p", type: "agent", task: "t" }, { id: "p", type: "agent", task: "t" }] };
 	assert.equal(validateTaskflow(dup).ok, false);
