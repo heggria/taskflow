@@ -535,7 +535,7 @@ Review the audit below. If any endpoint is missing auth, end with
 
 ## 命令
 
-保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_list` / `taskflow_show` / `taskflow_run`（按 `name`）/ `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_save` / `taskflow_search`。
+保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute`（仅 dry-run）/ `save` / `search`。
 
 | 命令 | 功能 |
 |---|---|
@@ -543,8 +543,15 @@ Review the audit below. If any endpoint is missing auth, end with
 | `/tf run <name> [args]` | 运行已保存的流程（例如 `/tf run summarize-files dir=src`） |
 | `/tf show <name>` | 打印流程的定义 |
 | `/tf compile <name> [lr\|td]` | **将流程渲染为 Mermaid 图 + 验证报告** —— 0 token、无 LLM；可粘贴到 README/issue/PR |
+| `/tf ir <name>` | 编译为 **FlowIR** + 内容哈希（`ir:<64-hex>`）—— 0 token |
 | `/tf runs` | 浏览近期运行历史（交互式 TUI——有运行活跃时**实时自动刷新**） |
 | `/tf resume <runId>` | 继续一个暂停/失败的运行——已缓存的阶段自动跳过 |
+| `/tf peek <runId> [phaseId]` | 查看某阶段的中间输出（调试逃生舱） |
+| `/tf provenance <runId>` | 显示已完成运行的观测读集 |
+| `/tf trace <runId> [--json]` | 显示运行的**确定性重放事件轨迹**（各 subagent 调用 + 运行时决策） |
+| `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | **离线 what-if**：按新阈值/预算重判已录制轨迹（零 token） |
+| `/tf why-stale <runId> [phaseId]` | 解释陈旧前沿（观测 ∪ 声明依赖） |
+| `/tf recompute <runId> <phaseId> [--apply]` | 默认 dry-run；`--apply` 时对陈旧前沿做最小重算 |
 | `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
 | `/tf:<name> [args]` | 快捷方式——一键运行流程 |
 

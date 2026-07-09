@@ -214,7 +214,7 @@ function formatFlowIR(ir: TaskflowIR): string {
 	lines.push(`# FlowIR — "${ir.meta.sourceFlowName}"`);
 	lines.push("");
 	if (ir.hash) {
-		lines.push(`**content hash:** \`${ir.hash}\`${ir.usedFallbackHash ? "  (fallback — stub projection)" : "  (overstory-canonical)"}`);
+		lines.push(`**content hash:** \`${ir.hash}\`${ir.usedFallbackHash ? "  (fallback — not IR-canonical)" : "  (ir-canonical)"}`);
 		lines.push("");
 	} else {
 		lines.push("**content hash:** _(unavailable — computation failed)_");

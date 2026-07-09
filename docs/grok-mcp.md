@@ -144,8 +144,10 @@ subagent a flow spawns is itself a `grok -p` process — no pi process needed.
 | `taskflow_verify` | Statically verify a flow — no execution, zero tokens. |
 | `taskflow_compile` | Render a flow's DAG as a text outline (+ inline SVG when the client renders images). |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run. Hard-truncated, read-only. |
-| `taskflow_trace` | Read-only timeline of a run's append-only event log. |
-| `taskflow_why_stale` / `taskflow_recompute` | Staleness analysis (recompute is dry-run only over MCP). |
+| `taskflow_trace` | Read-only timeline of a run's append-only event log (subagent I/O + runtime decisions). |
+| `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
+| `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
 
 Grok namespaces MCP tools as `taskflow__taskflow_*` in some UIs; discover with
 `search_tool` then call via `use_tool`.

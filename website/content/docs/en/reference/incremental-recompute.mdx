@@ -23,32 +23,34 @@ The compilation is routed through `compileTaskflowToIR(def)`, which returns a `T
 interface TaskflowIR {
   ir?: FlowIR;                    // The compiled IR (nodes with inject/emits)
   meta: TaskflowIRMeta;           // Compile-time metadata (declared deps, sidecar)
-  hash?: string;                  // Content fingerprint (32-hex SHA-256)
+  hash?: string;                  // Content-addressed IR: `ir:<64-hex>` (SHA-256)
   warnings: CompileWarning[];     // Non-fatal advisories
-  errors: CompileError[];         // Hard compile errors (none in the stub)
-  usedFallbackHash: boolean;      // True when the hash is flowDefHash (not IR-canonical)
+  errors: CompileError[];         // Hard compile errors
+  usedFallbackHash: boolean;      // false when hash is IR-canonical; true only on hash failure / empty IR
 }
 ```
 
-The compilation is **pure + async** (uses Web Crypto for hashing) and **never throws** — a hash failure leaves `hash` unset and the cache degrades to the legacy flowName-only key (cross-run disabled for that run).
+The compilation is **pure + async-compatible** (sync body; async retained for callers) and **never throws** — a hash failure leaves `hash` unset and `usedFallbackHash: true`, so the cache degrades safely (cross-run may fall back to older key tiers).
 
 ### Content addressing
 
-The `hash` is currently produced by `flowDefHash(def)`, which serializes the desugared definition to **canonical JSON** (recursively key-sorted, no whitespace, `undefined` dropped) and hashes it with SHA-256 (first 16 bytes, lowercase hex). This is the vendored overstory hashing contract — byte-identical to overstory's `hashIR` algorithm.
+As of 0.2.0 **S0**, `compileTaskflowToIR` runs the genuine compiler (`compileTaskflowToFlowIR`) and content-addresses the **canonical FlowIR** with `hashFlowIR` → `ir:` + 64 lowercase hex SHA-256 chars. `usedFallbackHash` is **false** for well-formed flows with nodes.
+
+A separate DSL-level `flowDefHash` (definition fingerprint) remains available for the v2 cache tier (`v2:flowdef:`) during migration — that is **not** what `TaskflowIR.hash` reports after S0.
 
 ```typescript
-// Canonical JSON: keys sorted by UTF-16 code units, arrays preserve order
-function canonicalJson(value: unknown): string;
+// Taskflow → canonical FlowIR (1:1 phase→node, edges, cond normalization)
+function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRResult;
 
-// SHA-256 of canonical serialization, first 16 bytes hex
-async function hashCanonical(canonical: string): Promise<string>;
+// SHA-256 over canonicalizeFlowIR → `ir:<64-hex>`
+function hashFlowIR(ir: FlowIR): string;
 
-// Content fingerprint of the desugared Taskflow definition
-async function flowDefHash(def: Taskflow): Promise<string>;
+// Public seam: IR + meta + hash + usedFallbackHash
+async function compileTaskflowToIR(def: Taskflow): Promise<TaskflowIR>;
 ```
 
-<Callout type="warn">
-  `usedFallbackHash` is **always true** in the current stub: the hash is the definition fingerprint, not the IR-canonical hash. It flips to `false` only once the genuine overstory compiler is vendored. Callers must never mistake a stub hash for a canonical one.
+<Callout type="info">
+  `usedFallbackHash` is **false** when the genuine compiler produced content-addressable IR. It is **true** only if hashing failed or the IR has no nodes — never treat a missing/`usedFallbackHash: true` hash as a stable IR key.
 </Callout>
 
 ### Per-phase sub-fingerprints
@@ -314,7 +316,7 @@ Output:
 
 ```text title="/tf ir output"
 FlowIR — flow "review-changes"
-  hash: a1b2c3d4e5f6789012345678 (usedFallbackHash: true)
+  hash: ir:a1b2c3d4e5f6789012345678abcdef0123456789abcdef0123456789abcd  (ir-canonical)
   nodes: 4
     ■ scout       kind: agent    inject: []              emits: [scout]
     ■ analyst     kind: agent    inject: [scout]         emits: [analyst]

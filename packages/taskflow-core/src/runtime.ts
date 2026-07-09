@@ -92,8 +92,8 @@ export interface RuntimeDeps {
 	 *  identically to today). See `trace.ts`. */
 	trace?: TraceSink;
 	/**
-	 * S2 strangler: when true, agent+script-only flows run on `exec/driver`
-	 * (event kernel). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
+	 * S2 strangler: when true, agent|script|map|parallel-only flows run on
+	 * `exec/driver` (event kernel). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
 	 */
 	eventKernel?: boolean;
 	/** Internal: sub-flow call stack, for recursion detection. */
@@ -3127,7 +3127,7 @@ export async function recomputeTaskflow(
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
 	try {
-		// S2 strangler (default OFF): agent+script-only flows may use the event kernel.
+		// S2 strangler (default OFF): agent|script|map|parallel flows may use the event kernel.
 		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
 		if (eventKernelEnabled(deps) && canUseEventKernel(def)) {
 			if (!deps.runTask) {

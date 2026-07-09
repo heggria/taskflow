@@ -165,7 +165,10 @@ MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fa
 | `taskflow_list` / `taskflow_show` | Discover and inspect saved flows. |
 | `taskflow_save` / `taskflow_search` | Library write + search. |
 | `taskflow_verify` / `taskflow_compile` | Static check and DAG render (zero tokens). |
-| `taskflow_peek` / `taskflow_trace` | Post-hoc debugging. |
+| `taskflow_peek` | Inspect intermediate phase output from a stored run. |
+| `taskflow_trace` | Append-only event log timeline (subagent I/O + decisions). |
+| `taskflow_replay` | Offline what-if re-judge of thresholds/budget (zero tokens). |
+| `taskflow_why_stale` / `taskflow_recompute` | Staleness analysis (recompute is dry-run only over MCP). |
 
 ## Alternative: register the MCP server manually
 

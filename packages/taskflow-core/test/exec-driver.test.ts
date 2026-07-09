@@ -1,5 +1,5 @@
 /**
- * S2 event-kernel driver tests (agent+script slice, default OFF).
+ * S2 event-kernel driver tests (agent|script|map|parallel slice, default OFF).
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";

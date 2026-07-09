@@ -106,6 +106,10 @@ subagent a flow spawns is itself a `claude -p` process — no pi process needed.
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
 | `taskflow_compile` | Render a flow's DAG as a text outline + a compact status line (with an inline SVG image for clients that render images). |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Hard-truncated, read-only. |
+| `taskflow_trace` | Read-only timeline of a run's append-only event log (subagent I/O + runtime decisions). |
+| `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
+| `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
 
 ## How output is rendered
 

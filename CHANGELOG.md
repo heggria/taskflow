@@ -5,6 +5,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ## [Unreleased]
 
 ### Added
+- **Docs hygiene (pre-S4):** website FlowIR docs use genuine `ir:<64-hex>` / `usedFallbackHash: false`; host MCP guides + Grok website list all 12 tools including `taskflow_replay`; README en/zh Commands tables include `/tf replay` and related inspection commands; `AGENTS.md` documents exec/trace/replay + event-kernel flag.
 - **Grok Build host.** New `grok-taskflow` delivery package + `taskflow-hosts` `grokSubagentRunner` (`grok -p --output-format streaming-json`). Plugin scaffold (`.grok-plugin/plugin.json` + `.mcp.json` + skills), repo marketplace index (`.grok-plugin/marketplace.json`), docs (`docs/grok-mcp.md`, website en/zh guides). Install: `grok plugin install … --trust` or local bin for dogfood.
 - **0.2.0 Phase 2 / S0–S3 foundations (event-sourced kernel path):**
   - `flowir/compile.ts` (`compileTaskflowToFlowIR`) — genuine Taskflow→canonical FlowIR compiler; `compileTaskflowToIR` now content-addresses with `hashFlowIR` (`ir:<64-hex>`) and sets `usedFallbackHash: false`.

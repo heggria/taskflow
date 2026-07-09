@@ -660,7 +660,7 @@ Condition grammar (for `when`): `== != < > <= >=`, `&& || !`, parentheses, quote
 
 ## Commands
 
-Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, OpenCode, and Grok Build, use the `taskflow_*` MCP tools instead — `taskflow_list` / `taskflow_show` / `taskflow_run` (by `name`) / `taskflow_verify` / `taskflow_compile` / `taskflow_peek`.
+Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, OpenCode, and Grok Build, use the `taskflow_*` MCP tools instead — full set: `taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute` (dry-run) / `save` / `search`.
 
 | Command | What it does |
 |---|---|
@@ -668,10 +668,15 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf run <name> [args]` | Run a saved flow (e.g. `/tf run summarize-files dir=src`) |
 | `/tf show <name>` | Print a flow's definition |
 | `/tf compile <name> [lr\|td]` | **Render the flow as a Mermaid diagram + verification overlay** — 0 tokens, no LLM; paste into a README/issue/PR |
+| `/tf ir <name>` | Compile to **FlowIR** + content hash (`ir:<64-hex>`) — 0 tokens |
 | `/tf runs` | Browse recent run history (interactive TUI — **live auto-refreshes** while any run is active) |
 | `/tf resume <runId>` | Continue a paused/failed run — cached phases skip automatically |
 | `/tf peek <runId> [phaseId]` | Inspect a phase's intermediate output (the debugging escape hatch) |
+| `/tf provenance <runId>` | Show observed read-sets for a completed run |
 | `/tf trace <runId> [--json]` | Show a run's **deterministic-replay event trace** (each subagent call + runtime decisions) |
+| `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | **Offline what-if** re-judge of thresholds/budget from a recorded trace (zero tokens) |
+| `/tf why-stale <runId> [phaseId]` | Explain the stale frontier (observed ∪ declared deps) |
+| `/tf recompute <runId> <phaseId> [--apply]` | Dry-run (default) or apply minimal recompute of the stale frontier |
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 

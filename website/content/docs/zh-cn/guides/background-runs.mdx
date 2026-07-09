@@ -306,7 +306,7 @@ I'm acting as a risk-reviewer for documentation changes. Since this is a documen
 
 **Critical facts extracted from source:**
 
-1. **FlowIR Compilation (M1)** - `compileTaskflowToIR(def)` in `flowir/index.ts:48` returns `TaskflowIR` with `hash`, `meta.declaredDeps`, `usedFallbackHash` (always true in stub).
+1. **FlowIR Compilation (M1 / 0.2.0 S0)** - `compileTaskflowToIR(def)` returns `TaskflowIR` with content-addressed `hash` (`ir:<64-hex>`), `meta.declaredDeps`, and `usedFallbackHash: false` for well-formed flows (genuine compiler).
 
 2. **Hash Algorithm** - `flowDefHash` in `flowir/hash.ts:64` = `hashCanonical(canonicalJson(def))` = SHA-256 truncated to 16 bytes hex. Vendored from overstory for byte-identical contract.
 
@@ -366,8 +366,8 @@ interface TaskflowIR {
   meta: TaskflowIRMeta;           // Compile-time metadata
   hash?: string;                  // Content fingerprint (32 hex chars)
   warnings: CompileWarning[];     // Non-fatal advisories
-  errors: CompileError[];         // Hard errors (none in stub)
-  usedFallbackHash: boolean;      // true in stub (hash is flowDefHash, not IR-canonical)
+  errors: CompileError[];         // Hard errors
+  usedFallbackHash: boolean;      // false when hash is IR-canonical (`ir:<64-hex>`)
 }
 ```
 
@@ -435,7 +435,7 @@ Editing phase B invalidates only B + its transitive dependents; independent sibl
 
 ### Stub status
 
-`usedFallbackHash` is **always true** in the stub: the hash is `flowDefHash` (the definition fingerprint), not the overstory-IR-canonical hash. It flips to `false` once the genuine overstory compiler is vendored.
+As of 0.2.0 S0, `usedFallbackHash` is **false** when the genuine compiler content-addresses FlowIR (`hash` is `ir:<64-hex>` via `hashFlowIR`). It is true only on hash failure or empty IR. A separate `flowDefHash` may still appear in older cache-key tiers.
 
 ## Observed read-sets (M3)
 

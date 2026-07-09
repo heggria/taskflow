@@ -33,6 +33,10 @@ packages/
 │  │  ├─ detached-runner.ts← spawn-only entry for background runs (NOT in the barrel)
 │  │  ├─ usage.ts          ← token/cost accounting (UsageStats type + aggregation)
 │  │  ├─ stale.ts / workspace.ts / flowir/  ← staleness, worktrees, FlowIR compile seam
+│  │  │                                       (S0: compileTaskflowToFlowIR + hashFlowIR → ir:<64-hex>)
+│  │  ├─ exec/             ← event log schema + fold + S2 kernel (step/driver; default OFF)
+│  │  ├─ replay.ts         ← offline what-if replayRun (zero tokens; no runtime/driver import)
+│  │  ├─ trace.ts          ← TraceEvent / FileTraceSink / readTrace
 │  │  ├─ host/runner-types.ts ← the host-neutral SubagentRunner contract + vendored CoreMessage
 │  │  ├─ runner-core.ts  ← ALSO hosts the shared `runSubagentProcess` (spawn/idle/abort/classify) +
 │  │  │                     `SubagentAccumulator` + `unknownAgentResult` reused by every host runner
@@ -133,6 +137,14 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 | `loop` | Repeat body until condition, convergence, or max iterations |
 | `tournament` | N competing variants + judge picks best or aggregates |
 | `script` | Run a shell command (no LLM, zero tokens) — captures stdout; fields `run`/`input`/`timeout` |
+
+### Event kernel, trace, and offline replay (0.2.0 Phase 2)
+
+- **FlowIR (S0):** `compileTaskflowToIR` → genuine `compileTaskflowToFlowIR` + `hashFlowIR` → `ir:<64-hex>`; `usedFallbackHash: false` when IR is content-addressable.
+- **Trace:** every run may record `runs/<flow>/<runId>.trace.jsonl` via `RuntimeDeps.trace` (`FileTraceSink`). Decisions include gate/when/cache/budget/tournament/unreplayable.
+- **Event kernel (S2, default OFF):** set `RuntimeDeps.eventKernel: true` or `PI_TASKFLOW_EVENT_KERNEL=1`. Only pure `agent|script|map|parallel` DAGs take this path; other kinds stay on the imperative `executeTaskflow` path.
+- **Offline replay (S3, zero tokens):** `replayRun(events, overrides)` in `replay.ts` — **must not** import `runtime` / `exec/driver` / `exec/step` (guarded by `replay-import-lint.test.ts`). Surfaces: pi `action=replay` + `/tf replay`; MCP `taskflow_replay`. Distinct from **resume** / **recompute** (those re-execute live phases).
+- **MCP roster (12):** `taskflow_run|list|show|verify|compile|peek|trace|replay|why_stale|recompute|save|search`.
 
 ### Control Flow Fields
 - `when` — conditional guard (expression must be truthy)
