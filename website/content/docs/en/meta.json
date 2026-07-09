@@ -13,6 +13,7 @@
     "concepts/shared-context-tree",
     "concepts/workspace-isolation",
     "concepts/resume",
+    "concepts/deterministic-replay",
     "---Syntax Reference---",
     "syntax/flow-definition",
     "syntax/phase-types",

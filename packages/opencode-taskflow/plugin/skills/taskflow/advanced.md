@@ -84,3 +84,61 @@ mutation without touching the main tree:
 each `cwd: "worktree"`, each attempting a different refactor strategy and
 reporting its test results; a downstream gate/judge picks which diff to apply
 for real. The main tree is never touched by the losers.
+
+---
+
+## Trace & offline replay (`trace` / `replay`) — vs resume / recompute
+
+Three **different** reuse tools; do not conflate them:
+
+| Tool | Spends tokens? | Mutates the run? | Answers |
+|------|----------------|------------------|---------|
+| **`resume`** | Only unfinished / cache-miss phases | Continues the same run | "Pick up where we stopped" |
+| **`why-stale` → `recompute`** | Dry-run free; `--apply` / `dryRun:false` spends | Optional write of recompute result | "World/input changed — which phases re-run?" |
+| **`trace` → `replay`** | **Never** | Never | "If the gate threshold / budget had been different, would we have blocked?" |
+
+### Trace (read the evidence)
+
+Every instrumented run may write an append-only **event log**
+(`runs/<flow>/<runId>.trace.jsonl`): phase lifecycle, each subagent
+input/output, and runtime **decisions** (gate verdict/score, when-guard,
+cache-hit, budget-hit, tournament-winner, unreplayable).
+
+```
+taskflow_trace { runId: "<id>" }
+taskflow_trace { runId: "<id>", json: true }
+```
+
+If there is no log (pre-trace run, or no sink injected), the tool reports that
+clearly — it never invents events.
+
+### Offline replay (what-if, zero tokens)
+
+`replay` **re-folds** the recorded log under alternate **decision knobs** without
+calling any model:
+
+- `thresholds` — map of `phaseId → new score threshold` (gate-score events)
+- `budgetMaxUSD` / `budgetMaxTokens` — would later phases have been skipped?
+- `models` / `args` — currently report `needs-live-rerun` (quality cannot be
+  re-judged offline without re-execution)
+
+Outcomes per phase: `reused`, `would-block`, `verdict-flipped`,
+`would-exceed-budget`, `threshold-changed`, `needs-live-rerun`, `failed`.
+
+```
+taskflow_replay { runId: "<id>", thresholds: { review: 0.9 } }
+taskflow_replay { runId: "<id>", budgetMaxUSD: 0.05, json: true }
+```
+
+**Import-graph guarantee:** `replayRun` never imports the process-spawning
+runtime or event kernel — offline replay cannot accidentally spend tokens.
+
+### When to use which
+
+| Situation | Use |
+|-----------|-----|
+| Rate-limit mid-run; inputs unchanged | `resume` |
+| Repo file changed; re-pay only affected phases | `why-stale` → `recompute` |
+| "Would a stricter gate have blocked last night's run?" | `trace` → `replay` with new `thresholds` |
+| "Would a $0.10 cap have stopped the fan-out?" | `replay` with `budgetMaxUSD` |
+| Need fresh model judgment under a new model id | `replay` will say `needs-live-rerun` → live `recompute`/`run` |

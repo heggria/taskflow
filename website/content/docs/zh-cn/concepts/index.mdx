@@ -10,7 +10,8 @@ description: taskflow 声明式 DAG 模型背后的思想。
 - 数据通过**插值**在阶段之间流动；
 - 整张图在任何 token 花出去之前就被**验证**过；
 - 中间输出与你的上下文**隔离**；
-- 一次运行可以跨会话**续跑**。
+- 一次运行可以跨会话**续跑**；
+- 已完成的运行还可以**离线确定性重放**（阈值/预算 what-if，零 token）。
 
 把这些读一遍，剩下的文档就自然顺下来了。
 
@@ -37,6 +38,9 @@ description: taskflow 声明式 DAG 模型背后的思想。
   <Step>
     **[续跑](/zh-cn/docs/concepts/resume)** —— 一次失败的运行如何从它停下处继续，以及跨运行记忆化如何复用上周的工作。
   </Step>
+  <Step>
+    **[确定性重放](/zh-cn/docs/concepts/deterministic-replay)** —— 基于事件轨迹的离线 what-if（门控阈值、预算），不调用模型。
+  </Step>
 </Steps>
 
 <Callout type="info">
@@ -62,6 +66,9 @@ description: taskflow 声明式 DAG 模型背后的思想。
     为什么只有最终结果会到达你这里。
   </Card>
   <Card title="续跑" href="/zh-cn/docs/concepts/resume">
-    跨会话重放如何工作。
+    跨会话续跑与缓存复用。
+  </Card>
+  <Card title="确定性重放" href="/zh-cn/docs/concepts/deterministic-replay">
+    事件日志上的离线阈值/预算 what-if。
   </Card>
 </Cards>

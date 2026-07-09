@@ -10,7 +10,8 @@ This chapter is the *mental model* behind taskflow. It does not list every field
 - data moves between phases through **interpolation**;
 - the whole graph is **verified** before a token is spent;
 - intermediate output is **isolated** from your context;
-- and a run can be **resumed** across sessions.
+- a run can be **resumed** across sessions;
+- and a finished run can be **replayed offline** for threshold/budget what-ifs (zero tokens).
 
 Read these once and the rest of the docs click into place.
 
@@ -37,6 +38,9 @@ The concepts build on each other. Read them top to bottom the first time:
   <Step>
     **[Resume](/en/docs/concepts/resume)** — how a failed run picks up where it stopped, and how cross-run memoization reuses last week's work.
   </Step>
+  <Step>
+    **[Deterministic Replay](/en/docs/concepts/deterministic-replay)** — offline what-if on a recorded event trace (gate thresholds, budget) without calling the model.
+  </Step>
 </Steps>
 
 <Callout type="info">
@@ -62,6 +66,9 @@ The concepts build on each other. Read them top to bottom the first time:
     Why only the final result reaches you.
   </Card>
   <Card title="Resume" href="/en/docs/concepts/resume">
-    How cross-session replay works.
+    Cross-session continuation and cache reuse.
+  </Card>
+  <Card title="Deterministic Replay" href="/en/docs/concepts/deterministic-replay">
+    Offline threshold/budget what-if from the event log.
   </Card>
 </Cards>
