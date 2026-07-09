@@ -11,7 +11,7 @@
  */
 
 import { safeParse } from "./interpolate.ts";
-import { VERDICT_TOKEN_RE } from "./scorers.ts";
+import { VERDICT_TOKEN_RE, WINNER_TOKEN_RE } from "./scorers.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 
 /** A gate verdict parsed from a (possibly JSON, possibly free-text) output. */
@@ -67,4 +67,25 @@ export function overBudget(input: BudgetCheckInput): { over: boolean; reason: st
 		return { over: true, reason: `tokens ${u.input + u.output} exceeded cap ${input.maxTokens}` };
 	}
 	return { over: false, reason: "" };
+}
+
+/**
+ * Parse a tournament judge's pick. Fail-open: unreadable → variant 1.
+ * Shared by imperative runtime and the event kernel (must stay pure).
+ */
+export function parseTournamentWinner(output: string, count: number): { winner: number; reason?: string } {
+	const clamp = (n: number) => Math.min(Math.max(1, Math.floor(n)), Math.max(1, count));
+	const json = safeParse(output);
+	if (json && typeof json === "object") {
+		const o = json as Record<string, unknown>;
+		const raw = o.winner ?? o.best ?? o.choice;
+		const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+		if (Number.isFinite(n)) return { winner: clamp(n), reason: asReason(o.reason) };
+	}
+	const matches = [...output.matchAll(WINNER_TOKEN_RE)];
+	if (matches.length) {
+		const n = Number(matches[matches.length - 1][1]);
+		if (Number.isFinite(n)) return { winner: clamp(n) };
+	}
+	return { winner: 1, reason: "no parseable winner; defaulted to variant 1" };
 }

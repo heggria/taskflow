@@ -1,5 +1,5 @@
 /**
- * S2 event-kernel driver tests (agent|script|map|parallel slice, default OFF).
+ * S2 event-kernel driver tests (all phase kinds, default OFF).
  */
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -57,7 +57,7 @@ test("eventKernelEnabled: default off; true flag or env enables", () => {
 	}
 });
 
-test("canUseEventKernel: agent|script|map|parallel; rejects gate", () => {
+test("canUseEventKernel: all kinds including gate", () => {
 	assert.equal(
 		canUseEventKernel({
 			name: "ok",
@@ -77,13 +77,12 @@ test("canUseEventKernel: agent|script|map|parallel; rejects gate", () => {
 	);
 	assert.equal(
 		canUseEventKernel({
-			name: "no",
+			name: "gate-ok",
 			phases: [{ id: "g", type: "gate", agent: "a", task: "t", final: true }],
 		}),
-		false,
+		true,
 	);
 });
-
 test("event kernel: script phase captures stdout (zero tokens)", async () => {
 	const def: Taskflow = {
 		name: "ek-script",

@@ -62,7 +62,7 @@ async function runBoth(def: Taskflow) {
 	return { kernel, imp };
 }
 
-test("canUseEventKernel: map+parallel accepted; gate rejected", () => {
+test("canUseEventKernel: map+parallel+gate all accepted (S2 complete)", () => {
 	assert.equal(
 		canUseEventKernel({
 			name: "ok",
@@ -75,10 +75,10 @@ test("canUseEventKernel: map+parallel accepted; gate rejected", () => {
 	);
 	assert.equal(
 		canUseEventKernel({
-			name: "no",
+			name: "gate-ok",
 			phases: [{ id: "g", type: "gate", agent: "a", task: "judge", final: true }],
 		}),
-		false,
+		true,
 	);
 });
 

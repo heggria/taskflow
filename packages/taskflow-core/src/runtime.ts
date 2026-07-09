@@ -37,8 +37,9 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
-import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, WINNER_TOKEN_RE } from "./scorers.ts";
-import { parseGateVerdict, overBudget as overBudgetCheck, type BudgetCheckInput } from "./deterministic.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
+import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
+export { parseTournamentWinner } from "./deterministic.ts";
 import { type TraceEvent, type TraceSink } from "./trace.ts";
 // Re-export so existing `import { parseGateVerdict } from "./runtime.ts"` callers
 // (and tests) keep working; the implementation now lives in deterministic.ts.
@@ -92,8 +93,8 @@ export interface RuntimeDeps {
 	 *  identically to today). See `trace.ts`. */
 	trace?: TraceSink;
 	/**
-	 * S2 strangler: when true, agent|script|map|parallel-only flows run on
-	 * `exec/driver` (event kernel). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
+	 * S2 strangler: when true, flows run on `exec/driver` (event kernel; all
+	 * 10 phase kinds). Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
 	 */
 	eventKernel?: boolean;
 	/** Internal: sub-flow call stack, for recursion detection. */
@@ -2788,13 +2789,8 @@ function defaultAgent(deps: RuntimeDeps): string {
  * JSON verdict object whose value is non-blocking (e.g. `{"verdict":"No issues
  * found"}`) is an *explicit* pass, not ambiguity, and still resolves to pass.
  */
-// `parseGateVerdict` is implemented in `deterministic.ts` (a pure seam a
-// future replay can import without dragging in the process-spawning runner).
-// It is imported at the top of this file and re-exported from the barrel.
-
-function asReason(v: unknown): string | undefined {
-	return typeof v === "string" && v.trim() ? v.trim() : undefined;
-}
+// `parseGateVerdict` / `parseTournamentWinner` live in `deterministic.ts`
+// (pure seam for replay + event kernel). Re-exported via the barrel.
 
 /**
  * If a gate phase relies on free-text verdict parsing (no `output:"json"` +
@@ -2819,28 +2815,7 @@ function appendGateFormatSuffix(task: string, phase: Phase): string {
 	);
 }
 
-/**
- * Parse a judge's pick of the winning variant. Accepts JSON ({"winner":n} or
- * {"best":n}) or a `WINNER: n` line (last match wins). Clamps to [1, count].
- * Fail-open: an unreadable verdict defaults to variant 1 so the work is never
- * lost. Returns the 1-based index plus an optional reason.
- */
-export function parseTournamentWinner(output: string, count: number): { winner: number; reason?: string } {
-	const clamp = (n: number) => Math.min(Math.max(1, Math.floor(n)), Math.max(1, count));
-	const json = safeParse(output);
-	if (json && typeof json === "object") {
-		const o = json as Record<string, unknown>;
-		const raw = o.winner ?? o.best ?? o.choice;
-		const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-		if (Number.isFinite(n)) return { winner: clamp(n), reason: asReason(o.reason) };
-	}
-	const matches = [...output.matchAll(WINNER_TOKEN_RE)];
-	if (matches.length) {
-		const n = Number(matches[matches.length - 1][1]);
-		if (Number.isFinite(n)) return { winner: clamp(n) };
-	}
-	return { winner: 1, reason: "no parseable winner; defaulted to variant 1" };
-}
+/* parseTournamentWinner lives in deterministic.ts (shared with event kernel). */
 
 /**
  * Best-effort invocation of the user-provided `persist` + `onProgress` callbacks.
@@ -3127,7 +3102,7 @@ export async function recomputeTaskflow(
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
 	try {
-		// S2 strangler (default OFF): agent|script|map|parallel flows may use the event kernel.
+		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
 		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
 		if (eventKernelEnabled(deps) && canUseEventKernel(def)) {
 			if (!deps.runTask) {
@@ -3143,6 +3118,9 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				persist: deps.persist,
 				onProgress: deps.onProgress,
 				eventKernel: deps.eventKernel,
+				requestApproval: deps.requestApproval,
+				loadFlow: deps.loadFlow,
+				_stack: deps._stack,
 			});
 		}
 		return await runTaskflowLayers(state, deps);

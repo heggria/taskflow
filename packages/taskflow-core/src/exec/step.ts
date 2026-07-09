@@ -1,16 +1,14 @@
 /**
  * exec/step — per-node handlers for the event-sourced kernel (RFC §6.3, S2).
  *
- * Supported kinds (progressive strangler): **agent**, **script**, **map**,
- * **parallel**. Each handler executes one node and returns events to append
- * (it does not mutate RunState — fold does that).
- *
- * Deliberately does **not** import `runtime.ts` (avoids circular deps with the
- * strangler switch that imports this package).
+ * **All 10 phase types** (agent|script|map|parallel|reduce|gate|approval|loop|
+ * tournament|flow). Complex kinds live in `./step-kinds.ts`. Does **not**
+ * import `runtime.ts` (avoids circular deps with the strangler).
  */
 
 import { spawn } from "node:child_process";
-import type { Phase } from "../schema.ts";
+import type { Phase, Taskflow } from "../schema.ts";
+import { PHASE_TYPES } from "../schema.ts";
 import type { RunState } from "../store.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
@@ -25,9 +23,17 @@ import {
 	type InterpolationContext,
 } from "../interpolate.ts";
 import { mapWithConcurrencyLimit } from "../runner-core.ts";
+import {
+	executeApprovalBody,
+	executeFlowBody,
+	executeGateBody,
+	executeLoopBody,
+	executeReduceBody,
+	executeTournamentBody,
+} from "./step-kinds.ts";
 
-/** Phase types the S2 event kernel can execute. Expand one kind at a time. */
-export const EVENT_KERNEL_PHASE_TYPES = ["agent", "script", "map", "parallel"] as const;
+/** All DSL phase types — S2 kernel is complete. */
+export const EVENT_KERNEL_PHASE_TYPES = PHASE_TYPES;
 export type EventKernelPhaseType = (typeof EVENT_KERNEL_PHASE_TYPES)[number];
 
 export type RunTaskFn = (
@@ -39,12 +45,41 @@ export type RunTaskFn = (
 	globalThinking?: string,
 ) => Promise<RunResult>;
 
+/** Mirrors runtime ApprovalRequest — kept local to avoid step↔runtime cycles. */
+export interface KernelApprovalRequest {
+	phaseId: string;
+	message: string;
+	upstream?: string;
+}
+export interface KernelApprovalDecision {
+	decision: "approve" | "reject" | "edit";
+	note?: string;
+}
+
+export interface NestedFlowResult {
+	finalOutput: string;
+	ok: boolean;
+	usage: UsageStats;
+	events: Event[];
+	blocked?: boolean;
+}
+
 export interface StepDeps {
 	cwd: string;
 	agents: AgentConfig[];
 	runTask: RunTaskFn;
 	signal?: AbortSignal;
 	globalThinking?: string;
+	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
+	loadFlow?: (name: string) => Taskflow | undefined;
+	/** Sub-flow call stack (recursion guard). */
+	stack?: string[];
+	/** Nested flow runner (driver injects runEventKernel). */
+	runNested?: (opts: {
+		def: Taskflow;
+		args: Record<string, unknown>;
+		stack: string[];
+	}) => Promise<NestedFlowResult>;
 }
 
 export interface StepContext {
@@ -61,6 +96,8 @@ export interface StepResult {
 	error?: string;
 	/** Token/cost usage for this phase (empty for script / skipped). */
 	usage: UsageStats;
+	gate?: { verdict: "pass" | "block"; reason?: string };
+	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
 }
 
 type BodyResult = {
@@ -69,6 +106,8 @@ type BodyResult = {
 	status: StepResult["status"];
 	error?: string;
 	usage: UsageStats;
+	gate?: StepResult["gate"];
+	approval?: StepResult["approval"];
 };
 
 function baseEvent(
@@ -399,16 +438,29 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		}
 	}
 
-	let body: BodyResult;
+	let body: BodyResult & {
+		gate?: StepResult["gate"];
+		approval?: StepResult["approval"];
+	};
 	if (type === "script") body = await executeScriptBody(phase, ctx);
 	else if (type === "map") body = await executeMapBody(phase, ctx);
 	else if (type === "parallel") body = await executeParallelBody(phase, ctx);
+	else if (type === "reduce") body = await executeReduceBody(phase, ctx);
+	else if (type === "gate") body = await executeGateBody(phase, ctx);
+	else if (type === "approval") body = await executeApprovalBody(phase, ctx);
+	else if (type === "loop") body = await executeLoopBody(phase, ctx);
+	else if (type === "tournament") body = await executeTournamentBody(phase, ctx);
+	else if (type === "flow") body = await executeFlowBody(phase, ctx);
 	else body = await executeAgentBody(phase, ctx);
 
 	events.push(...body.midEvents);
+	const endStatus =
+		body.gate?.verdict === "block" && body.status === "done"
+			? "done" // phase completes; run-level blocked handled by driver
+			: body.status;
 	events.push(
 		baseEvent(ctx, phase.id, "phase-end", {
-			status: body.status,
+			status: endStatus === "timedOut" ? "timedOut" : endStatus,
 			error: body.error,
 		}),
 	);
@@ -418,5 +470,7 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		status: body.status,
 		error: body.error,
 		usage: body.usage,
+		gate: body.gate,
+		approval: body.approval,
 	};
 }
