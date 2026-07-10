@@ -142,20 +142,22 @@ Each phase's subagent runs as an isolated `grok -p --output-format streaming-jso
 
 | Phase tools | Flags | What it means |
 |---|---|---|
-| Read-only (no write/edit/bash) | `--tools read_file,grep,list_dir,web_search,web_fetch` + `--always-approve` | Mutating tools are not available. |
-| Mutating (or no whitelist) | `--always-approve` | Full tools; **no OS sandbox backstop**. Prefer `cwd: "worktree"`. |
+| Read-only (no write/edit/bash) | kernel-enforced `--sandbox read-only` + known-good `--tools read_file,grep,list_dir` + mutator denylist + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | Fail-closed even for a workspace under `/tmp` (which the built-in sandbox permits for session files). Web tools are disabled because Grok 0.2.93 treats them as unmappable allowlist entries. |
+| Mutating (or no whitelist) | kernel-enforced `--sandbox workspace` + `--always-approve` | Full tools, but writes are confined to the phase cwd plus Grok's documented temp/session paths. Prefer `cwd: "worktree"`. |
 
 <Callout type="warn">
-  Mutating phases use `--always-approve` with no OS sandbox. Only run flows you trust, preferably in a throwaway worktree.
+  The workspace sandbox still allows reads everywhere, network access, and writes to temp directories and `~/.grok/`. Use a throwaway worktree when filesystem changes should be disposable.
 </Callout>
+
+Effective `thinking` maps to Grok's `--reasoning-effort` flag (`off` maps to `none`). Grok 0.2.93 emits no token/cost usage in `streaming-json`, so the Grok MCP adapter refuses flows declaring `budget` rather than silently ignoring the ceiling.
 
 ## Long-running flows
 
-**`taskflow_run` is synchronous** — the tool call returns only when the whole DAG finishes. The plugin ships `tool_timeout_sec: 1800`. Split huge graphs, or inspect later with `taskflow_peek`.
+**`taskflow_run` is synchronous** — the tool call returns only when the whole DAG finishes. The plugin ships `tool_timeout_sec: 1800`; MCP does not expose Pi's detached mode. Split huge graphs. If the client cancels a request, the server aborts the active DAG and subagent instead of leaving hidden background work.
 
 ## Approvals in MCP mode
 
-MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-open). Prefer a `gate` for agent review.
+MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` for agent review.
 
 ## Tool reference
 

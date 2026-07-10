@@ -26,7 +26,7 @@
  *   - taskflow_why_stale / taskflow_recompute / taskflow_save / taskflow_search
  */
 
-import { RpcError, RPC, serveStdio, type RpcHandler } from "./jsonrpc.ts";
+import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -524,12 +524,19 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): 
 export function makeToolHandlers(
 	cwd: string,
 	runner: SubagentRunner<AgentConfig>,
-): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
 	return {
-		taskflow_run: async (args) => {
+		taskflow_run: async (args, context) => {
 			const def = resolveFlow(cwd, args);
 			const v = validateTaskflow(def);
 			if (!v.ok) return textContent(`Flow is invalid:\n- ${v.errors.join("\n- ")}`, true);
+			const usageAccounting = runner.usageAccounting;
+			if (def.budget && usageAccounting === "unavailable") {
+				return textContent(
+					"This host does not report token or cost usage, so taskflow refuses to run a budgeted flow: the declared ceiling could not be enforced. Remove `budget` only if unmetered execution is intentional, or use a host with usage accounting.",
+					true,
+				);
+			}
 
 			// Resolve model roles (e.g. {{fast}} -> a real model id) so the built-in
 			// agents' placeholder models map to something the host can launch. This is
@@ -541,6 +548,8 @@ export function makeToolHandlers(
 				cwd,
 				agents,
 				runTask: runner.runTask,
+				signal: context?.signal,
+				usageAccounting: usageAccounting === "unavailable" ? "unavailable" : "available",
 			};
 			const state = mkRunState(def, (args.args as Record<string, unknown>) ?? {}, cwd);
 			// Deterministic-replay trace (best-effort, fail-open).
@@ -633,7 +642,7 @@ export function makeToolHandlers(
 			return textContent(formatWhyStale(run.runId, run.flowName, reads, seeds, declared));
 		},
 
-		taskflow_recompute: async (args) => {
+		taskflow_recompute: async (args, context) => {
 			// MCP exposes recompute as DRY-RUN ONLY (never spends tokens). To actually
 			// re-execute, hosts use the Pi adapter's /tf recompute --apply.
 			const runId = String(args.runId ?? "");
@@ -644,7 +653,7 @@ export function makeToolHandlers(
 			const run = runR.value;
 			const settings = readSubagentSettings();
 			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
-			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask };
+			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask, signal: context?.signal };
 			const { report } = await recomputeTaskflow(run, deps, [phaseId], { dryRun: true });
 			return textContent(formatRecomputeMcp(report));
 		},
@@ -839,12 +848,12 @@ export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>
 		},
 		ping: () => ({}),
 		"tools/list": () => ({ tools: TOOLS }),
-		"tools/call": async (params) => {
+		"tools/call": async (params, context) => {
 			const p = (params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
 			const tool = tools[p.name ?? ""];
 			if (!tool) throw new RpcError(RPC.INVALID_PARAMS, `Unknown tool: ${p.name}`);
 			void initialized; // tolerant: we don't hard-gate on initialize ordering
-			return await tool(p.arguments ?? {});
+			return await tool(p.arguments ?? {}, context);
 		},
 	};
 }

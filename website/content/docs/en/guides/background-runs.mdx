@@ -47,18 +47,13 @@ Taskflow 'audit' started in background (pid: 42871). Run id: 2026-07-06T14-32-01
 
 That `runId` is your handle. The `pid` is the OS process id of the detached child — useful if you need to inspect or signal it directly.
 
-### On Codex, Claude Code, OpenCode
+### On MCP hosts
 
-The MCP server exposes the same `detach` parameter on the `taskflow_run` tool. The mechanics are identical: the server spawns a child process and returns the `runId` in the tool result.
-
-```json title="MCP tool call"
-{
-  "action": "run",
-  "name": "audit",
-  "args": { "dir": "src" },
-  "detach": true
-}
-```
+Codex, Claude Code, OpenCode, and Grok Build do **not** expose `detach` on
+`taskflow_run`; detached execution is currently Pi-only. MCP runs are
+synchronous. When an MCP client cancels a request, taskflow propagates that
+cancellation to the DAG and active subagent instead of continuing as an
+untracked background run.
 
 ## What happens under the hood
 

@@ -41,20 +41,38 @@ export function calleeName(expr: ts.Expression): string | undefined {
 export function evalLiteral(node: ts.Expression): unknown {
 	if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
 	if (ts.isNumericLiteral(node)) return Number(node.text);
+	if (
+		ts.isPrefixUnaryExpression(node) &&
+		(node.operator === ts.SyntaxKind.PlusToken || node.operator === ts.SyntaxKind.MinusToken) &&
+		ts.isNumericLiteral(node.operand)
+	) {
+		const value = Number(node.operand.text);
+		return node.operator === ts.SyntaxKind.MinusToken ? -value : value;
+	}
 	if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
 	if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
 	if (node.kind === ts.SyntaxKind.NullKeyword) return null;
 	if (ts.isArrayLiteralExpression(node)) {
-		return node.elements.map((e) => (ts.isSpreadElement(e) ? undefined : evalLiteral(e as ts.Expression)));
+		const values: unknown[] = [];
+		for (const element of node.elements) {
+			if (ts.isSpreadElement(element)) return undefined;
+			const value = evalLiteral(element as ts.Expression);
+			if (value === undefined) return undefined;
+			values.push(value);
+		}
+		return values;
 	}
 	if (ts.isObjectLiteralExpression(node)) {
 		const o: Record<string, unknown> = {};
 		for (const p of node.properties) {
-			if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
-				o[p.name.text] = evalLiteral(p.initializer);
-			} else if (ts.isPropertyAssignment(p) && ts.isStringLiteral(p.name)) {
-				o[p.name.text] = evalLiteral(p.initializer);
-			}
+			if (!ts.isPropertyAssignment(p)) return undefined;
+			const key = ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)
+				? p.name.text
+				: undefined;
+			if (!key) return undefined;
+			const value = evalLiteral(p.initializer);
+			if (value === undefined) return undefined;
+			o[key] = value;
 		}
 		return o;
 	}

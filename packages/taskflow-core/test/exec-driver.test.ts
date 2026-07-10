@@ -63,7 +63,7 @@ test("canUseEventKernel: all kinds including gate", () => {
 			name: "ok",
 			phases: [
 				{ id: "a", type: "agent", agent: "a", task: "t" },
-				{ id: "s", type: "script", run: ["node", "-e", "1"], final: true },
+				{ id: "s", type: "script", run: ["node", "-e", "1"], dependsOn: ["a"], final: true },
 			],
 		}),
 		true,

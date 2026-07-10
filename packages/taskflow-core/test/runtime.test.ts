@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunResult, RunOptions } from "../src/runner-core.ts";
 import { emptyUsage } from "../src/usage.ts";
-import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
+import { agentDefinitionsIdentity, executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
 import type { Taskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { parseGateVerdict } from "../src/runtime.ts";
@@ -14,6 +14,7 @@ import { parseGateVerdict } from "../src/runtime.ts";
 const AGENTS: AgentConfig[] = [
 	{ name: "a", description: "test agent", systemPrompt: "", source: "user", filePath: "" },
 ];
+const AGENTS_ID = agentDefinitionsIdentity(AGENTS);
 
 function mkState(def: Taskflow, args: Record<string, unknown> = {}): RunState {
 	return {
@@ -265,8 +266,8 @@ test("runtime: resume skips cached completed phases", async () => {
 		id: "one",
 		status: "done",
 		output: "out:start",
-		// Must match runtime cacheKey(): flow name + v3:phasefp sub-fingerprint + base parts + thinking + tools + ctx.
-		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpOne}`, "one", "a", "", "start", "think:", "tools:[]", "ctx:"),
+		// Must match runtime cacheKey(): structural + execution + flow-semantic identity.
+		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpOne}`, "one", "a", "", "start", "think:", "tools:[]", "ctx:", "agent-scope:user", "context-sharing:0", `agents:${AGENTS_ID}`),
 		usage: emptyUsage(),
 	};
 
@@ -291,13 +292,13 @@ test("runtime: resume caches a completed reduce phase (unified inputHash)", asyn
 	const subfpX = (await phaseFingerprint(def, "x")) ?? "";
 	const subfpSum = (await phaseFingerprint(def, "sum")) ?? "";
 	const state = mkState(def);
-	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpX}`, "x", "a", "", "tx", "think:", "tools:[]", "ctx:"), usage: emptyUsage() };
+	state.phases.x = { id: "x", status: "done", output: "o:tx", inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpX}`, "x", "a", "", "tx", "think:", "tools:[]", "ctx:", "agent-scope:user", "context-sharing:0", `agents:${AGENTS_ID}`), usage: emptyUsage() };
 	// reduce cache key has the same shape as agent/gate (flow + v3:phasefp + base parts + thinking + tools).
 	state.phases.sum = {
 		id: "sum",
 		status: "done",
 		output: "o:combine o:tx",
-		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpSum}`, "sum", "a", "", "combine o:tx", "think:", "tools:[]", "ctx:"),
+		inputHash: hashInput(`flow:${def.name}`, `v3:phasefp:${subfpSum}`, "sum", "a", "", "combine o:tx", "think:", "tools:[]", "ctx:", "agent-scope:user", "context-sharing:0", `agents:${AGENTS_ID}`),
 		usage: emptyUsage(),
 	};
 	const res = await executeTaskflow(state, baseDeps(runner));

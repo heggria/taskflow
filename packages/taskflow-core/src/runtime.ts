@@ -72,6 +72,10 @@ export interface RuntimeDeps {
 	cwd: string;
 	agents: AgentConfig[];
 	globalThinking?: string;
+	/** Whether the host reports authoritative token/cost usage. A host that
+	 *  cannot observe usage must reject every actually-executed budgeted flow,
+	 *  including nested/dynamic flows, rather than silently bypassing the cap. */
+	usageAccounting?: "available" | "unavailable";
 	signal?: AbortSignal;
 	/** Persist run state after each phase (for resume). */
 	persist?: (state: RunState) => void;
@@ -348,12 +352,22 @@ function normalizeInlineDef(parsed: unknown, phaseId: string): Taskflow | undefi
  * than the parent's, never looser. A generated def cannot raise the spend cap by
  * declaring its own large budget. Each dimension becomes min(child, parent).
  */
-function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefined): Taskflow {
+function clampSubFlowBudget(
+	sub: Taskflow,
+	parentBudget: Budget | undefined,
+	spent: UsageStats = emptyUsage(),
+): Taskflow {
 	if (!parentBudget) return sub;
 	const child = sub.budget;
+	const remainingUSD =
+		parentBudget.maxUSD === undefined ? Infinity : Math.max(0, parentBudget.maxUSD - spent.cost);
+	const remainingTokens =
+		parentBudget.maxTokens === undefined
+			? Infinity
+			: Math.max(0, parentBudget.maxTokens - (spent.input + spent.output));
 	const clamped: Budget = {
-		maxUSD: Math.min(child?.maxUSD ?? Infinity, parentBudget.maxUSD ?? Infinity),
-		maxTokens: Math.min(child?.maxTokens ?? Infinity, parentBudget.maxTokens ?? Infinity),
+		maxUSD: Math.min(child?.maxUSD ?? Infinity, remainingUSD),
+		maxTokens: Math.min(child?.maxTokens ?? Infinity, remainingTokens),
 	};
 	// Drop Infinity dimensions (no cap on that axis).
 	const budget: Budget = {};
@@ -496,7 +510,7 @@ function traceFlush(deps: RuntimeDeps, phaseId: string): void {
 
 /** Emit a `decision: unreplayable` marker for a phase whose inputs the trace
  *  cannot fully capture (Shared Context Tree, inner sub-flows, context files,
- *  unobservable interpolation deps). A future replay marks such phases
+ *  unobservable interpolation deps). Offline replay marks such phases
  *  `needs-live-rerun` instead of silently reusing a recorded output.
  *  Single-phase analog of `hasUnobservedDependencies`. Fail-open. */
 function emitUnreplayableMarker(deps: RuntimeDeps, state: RunState, phase: Phase): void {
@@ -511,7 +525,7 @@ function emitUnreplayableMarker(deps: RuntimeDeps, state: RunState, phase: Phase
 /** Why (if at all) a single phase cannot be deterministically replayed. */
 function unreplayableReason(state: RunState, phase: Phase): "context-sharing" | "inner-flow" | "context-files" | "unobservable-deps" | undefined {
 	if (phase.shareContext === true || state.def.contextSharing === true) return "context-sharing";
-	if (phase.type === "flow") return "inner-flow";
+	if (phase.type === "flow" || phase.type === "expand") return "inner-flow";
 	if (phase.context && phase.context.length > 0) return "context-files";
 	// Interpolation refs that don't resolve through steps.*/args.*/item.* are
 	// unobservable to the trace (previous.output is observable via dependsOn).
@@ -633,6 +647,26 @@ interface SpawnedResult {
 }
 
 /**
+ * Spend produced by the current ctx_spawn supervision tree but not yet folded
+ * into `state.phases`.  A single ledger is shared by siblings and descendants,
+ * otherwise every recursive call observes the same stale parent state and can
+ * independently spend the full remaining allowance.
+ */
+interface SpawnBudgetLedger {
+	usage: UsageStats;
+}
+
+function spawnedOverBudget(state: RunState, local: UsageStats): boolean {
+	const budget = state.def.budget;
+	if (!budget) return false;
+	return overBudgetCheck({
+		maxUSD: budget.maxUSD,
+		maxTokens: budget.maxTokens,
+		usages: [...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), local],
+	}).over;
+}
+
+/**
  * Run an inline sub-flow queued via `ctx_spawn({subflow})`. Reuses the SAME
  * validation + execution machinery as a `flow{def}` phase (normalizeInlineDef →
  * validateTaskflow(dynamic) → verifyTaskflow → nested executeTaskflow), so a
@@ -663,6 +697,7 @@ async function runInlineSubflow(
 	phase: Phase,
 	deps: RuntimeDeps,
 	state: RunState,
+	localSpawnUsage: UsageStats,
 ): Promise<{ output: string; usage: UsageStats }> {
 	const stack = deps._stack ?? [];
 	const inlineDepth = stack.filter((s) => s.startsWith("def:")).length;
@@ -685,7 +720,16 @@ async function runInlineSubflow(
 		const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 		return { output: `(spawned subflow failed verification: ${errs.join("; ")})`, usage: emptyUsage() };
 	}
-	const subDef = clampSubFlowBudget(wrapped, state.def.budget);
+	// The generated sub-flow gets only what remains after both already-folded
+	// parent spend and siblings/ancestors in this still-running spawn batch.  USD
+	// and tokens are clamped independently by clampSubFlowBudget.  Like the main
+	// runtime, this is an atomic-call ceiling: one call may cross the cap, then no
+	// subsequent call is admitted.
+	const parentAndBatchSpent = aggregateUsage([
+		...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()),
+		localSpawnUsage,
+	]);
+	const subDef = clampSubFlowBudget(wrapped, state.def.budget, parentAndBatchSpent);
 	const subState: RunState = {
 		runId: newRunId(subDef.name),
 		flowName: subDef.name,
@@ -730,6 +774,7 @@ async function runSpawnedChildren(
 	deps: RuntimeDeps,
 	state: RunState,
 	run: RunTaskFn,
+	ledger: SpawnBudgetLedger = { usage: emptyUsage() },
 ): Promise<SpawnedResult> {
 	const capped = assignments.slice(0, MAX_DYNAMIC_MAP_ITEMS);
 	const lines: string[] = [];
@@ -739,7 +784,7 @@ async function runSpawnedChildren(
 	const spawnCwd = resolveEffCwd(deps, phase);
 	let idx = 0;
 	for (const a of capped) {
-		if (deps.signal?.aborted || overBudget(state).over) break;
+		if (deps.signal?.aborted || spawnedOverBudget(state, ledger.usage)) break;
 		idx++;
 		const childNodeId = `${parentNodeId}--c${idx}`.replace(/[^A-Za-z0-9._-]+/g, "_");
 		const isSubflow = a.subflow !== undefined && a.subflow !== null;
@@ -748,9 +793,18 @@ async function runSpawnedChildren(
 		let out = "";
 		try {
 			if (isSubflow) {
-				const sub = await runInlineSubflow(a.subflow, a.defaultAgent ?? phase.agent, childNodeId, phase, deps, state);
+				const sub = await runInlineSubflow(
+					a.subflow,
+					a.defaultAgent ?? phase.agent,
+					childNodeId,
+					phase,
+					deps,
+					state,
+					ledger.usage,
+				);
 				out = sub.output;
 				usages.push(sub.usage);
+				ledger.usage = aggregateUsage([ledger.usage, sub.usage]);
 				setNodeStatus(ctxDir, childNodeId, "done");
 			} else {
 				const r = await run(
@@ -762,12 +816,15 @@ async function runSpawnedChildren(
 					deps.globalThinking,
 				);
 				out = r.output ?? "";
-				if (r.usage) usages.push(r.usage);
+				if (r.usage) {
+					usages.push(r.usage);
+					ledger.usage = aggregateUsage([ledger.usage, r.usage]);
+				}
 				setNodeStatus(ctxDir, childNodeId, isFailed(r) ? "failed" : "done");
 				// A child may itself have queued spawns — recurse (depth-capped by the tool).
 				const grand = drainPendingSpawns(ctxDir, childNodeId);
-				if (grand.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run);
+				if (grand.length > 0 && !deps.signal?.aborted && !spawnedOverBudget(state, ledger.usage)) {
+					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger);
 					if (rec.reports) out += rec.reports;
 					usages.push(rec.usage);
 				}
@@ -809,8 +866,15 @@ async function executePhase(
 	opts?: PhaseExecOpts,
 ): Promise<PhaseState> {
 	// Trace: phase-start (fail-open). Record whether this phase is replayable
-	// up front so a future replay can short-circuit it without walking events.
-	traceEmit(deps, { ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-start" });
+	// up front so replay can short-circuit it without guessing from output.
+	traceEmit(deps, {
+		ts: Date.now(),
+		runId: state.runId,
+		phaseId: phase.id,
+		kind: "phase-start",
+		dependencies: dependenciesOf(phase),
+		optional: phase.optional === true,
+	});
 	if (deps.trace) emitUnreplayableMarker(deps, state, phase);
 	let result: PhaseState;
 	let threw = false;
@@ -857,6 +921,7 @@ async function executePhaseImpl(
 	// every type branch inside executePhaseInner is covered. A skipped phase ran
 	// nothing — no side effect to record.
 	const stamp = (ps: PhaseState): PhaseState => {
+		if (phase.optional === true) ps.optional = true;
 		if (phase.idempotent === false && ps.status !== "skipped") {
 			ps.sideEffect = true;
 			// Resume double-fire warning (issue #20): a non-idempotent phase is never
@@ -985,7 +1050,7 @@ async function executePhaseInner(
 	// each run (schema already rejects explicit cross-run, but the default-scope
 	// path must also be blocked). If flowDefHash failed, cross-run is unsafe
 	// because the key degrades to flowName-only and reopens cross-flow collisions.
-	const CROSS_RUN_BLOCKED_TYPES = new Set(["gate", "approval", "loop", "tournament", "script"]);
+	const CROSS_RUN_BLOCKED_TYPES = new Set(["gate", "approval", "loop", "tournament", "script", "race", "expand"]);
 	if (cacheScope === "cross-run" && CROSS_RUN_BLOCKED_TYPES.has(type)) {
 		cacheScope = "run-only";
 	}
@@ -1015,6 +1080,9 @@ async function executePhaseInner(
 		thinking: phase.thinking,
 		tools: phase.tools,
 		preRead,
+		agentScope: state.def.agentScope,
+		contextSharing: state.def.contextSharing === true,
+		agentDefinitions: agentDefinitionsIdentity(deps.agents),
 	};
 
 	const baseRun = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void, ctxNodeId?: string, signal?: AbortSignal) =>
@@ -1967,6 +2035,19 @@ async function executePhaseInner(
 			await import("./runtime/phases/expand.ts");
 		const expandMode = type === "expand" ? resolveExpandMode(phase) : "nested";
 		const maxNodes = type === "expand" ? resolveMaxNodes(phase, MAX_DYNAMIC_PHASES) : 50;
+		if (type === "expand" && expandMode === "graft") {
+			// Rerun replacement semantics: prior promoted children belong to the old
+			// fragment and must disappear before ANY new resolution path. This is
+			// intentionally before parse/validation/empty/sub-flow failure returns so
+			// stale children and their usage cannot survive a failed or empty v2 plan.
+			const declaredIds = new Set(state.def.phases.map((p) => p.id));
+			for (const oldId of Object.keys(prior?.promotedPhases ?? {})) {
+				// Definition evolution may promote an old dynamic id into a real
+				// authored parent phase. That declared phase owns its state now and must
+				// never be deleted by stale graft metadata.
+				if (!declaredIds.has(oldId)) delete state.phases[oldId];
+			}
+		}
 
 		let subDef: Taskflow | undefined;
 		let name: string;
@@ -2079,20 +2160,32 @@ async function executePhaseInner(
 			provided[k] = typeof v === "string" ? interpolate(v, ctx).text : v;
 		}
 		const subArgs = resolveArgs(subDef, provided);
-		// For inline defs the cache identity must include the resolved def content so
-		// that a different generated plan yields a different key (and an identical plan
-		// hits cache). For saved flows the name is the identity (historical behavior).
-		const flowIdentity = hasDef ? `def:${JSON.stringify(subDef)}` : `flow:${name}`;
+		// Every sub-flow cache identity includes the resolved definition. A saved
+		// flow's name alone is insufficient: its contents can change without the
+		// parent definition moving.
+		const flowIdentity = `${hasDef ? "def" : "flow"}:${name}:${JSON.stringify(subDef)}`;
 		const ck = cacheKeys(cc, [phase.id, flowIdentity, preRead, JSON.stringify(subArgs)]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);
-		if (cached) return cached;
+		if (cached) {
+			if (type === "expand" && expandMode === "graft" && cached.promotedPhases) {
+				const promo = promoteGraftPhases(state, cached.promotedPhases);
+				if (promo.promotedIds.length > 0) {
+					cached.promotedPhases = Object.fromEntries(
+						promo.promotedIds.map((id) => [id, { ...cached.promotedPhases![id] }]),
+					);
+				} else {
+					delete cached.promotedPhases;
+				}
+			}
+			return cached;
+		}
 
 		const live = state.phases[phase.id];
-		// Sub-flows enforce their own budget; if they declare none, inherit the
-		// parent cap as a soft per-flow ceiling (best-effort — spend does not cross
-		// flow boundaries, so the parent's already-spent total is not subtracted).
-		const subDefEffective = subDef.budget || !state.def.budget ? subDef : { ...subDef, budget: state.def.budget };
+			// A nested flow receives only the parent's remaining allowance, then its
+			// own cap (if any) may tighten each dimension independently.
+			const parentSpent = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
+			const subDefEffective = clampSubFlowBudget(subDef, state.def.budget, parentSpent);
 		const subState: RunState = {
 			runId: newRunId(subDef.name),
 			flowName: subDef.name,
@@ -2111,6 +2204,9 @@ async function executePhaseInner(
 			baseRunTask(cwd, agents, agentName, preRead + subTask, opts, globalThinking);
 		const subResult = await executeTaskflow(subState, {
 			...deps,
+			// A trace file is scoped to one runId. The parent flow phase carries an
+			// unreplayable marker; nested events must not be mixed into that file.
+			trace: undefined,
 			// Override deps.cwd with the flow phase's own cwd so that sub-flow
 			// phases without an explicit cwd derive their subagents from the
 			// flow's cwd (not the caller's cwd).
@@ -2144,17 +2240,24 @@ async function executePhaseInner(
 		const sp = Object.values(subState.phases);
 		// expand graft promote — pure helper (see runtime/phases/expand.ts)
 		const warnings: string[] = [];
-		let graftPromoted = 0;
+		let graftPromotedIds: string[] = [];
 		if (type === "expand" && expandMode === "graft" && subResult.ok) {
 			const promo = promoteGraftPhases(state, subState.phases);
 			warnings.push(...promo.warnings);
-			graftPromoted = promo.promoted;
+			graftPromotedIds = promo.promotedIds;
 		}
-		// Graft: children carry usage after promote — zero expand usage to avoid double-count
-		// in run-level aggregateUsage(Object.values(state.phases)).
+		// Graft accounting is ownership-based. Successfully promoted children carry
+		// their own usage in parent state; children skipped on id collision remain
+		// owned by the expand phase and their residual usage must stay here. This
+		// yields: all promoted => 0, all collision => all child usage, mixed => only
+		// collision residual (no loss and no double count).
 		const phaseUsage =
-			type === "expand" && expandMode === "graft" && subResult.ok && graftPromoted > 0
-				? emptyUsage()
+			type === "expand" && expandMode === "graft" && subResult.ok
+				? aggregateUsage(
+						Object.entries(subState.phases)
+							.filter(([id]) => !graftPromotedIds.includes(id))
+							.map(([, ps]) => ps.usage ?? emptyUsage()),
+					)
 				: subResult.totalUsage;
 		const flowPs: PhaseState = {
 			id: phase.id,
@@ -2176,6 +2279,9 @@ async function executePhaseInner(
 			reads: readRefsToReads(readRefs, state),
 			endedAt: Date.now(),
 			...(warnings.length ? { warnings } : {}),
+			...(type === "expand" && expandMode === "graft" && subResult.ok && graftPromotedIds.length > 0
+				? { promotedPhases: Object.fromEntries(graftPromotedIds.map((id) => [id, { ...subState.phases[id] }])) }
+				: {}),
 		};
 		recordCache(cc, flowPs);
 		return flowPs;
@@ -2596,6 +2702,13 @@ export interface PhaseCacheCtx {
 	 *  whether a given branch happens to fold preRead into its task string
 	 *  (previously this was only incidentally true via `fullTask`). */
 	preRead?: string;
+	/** Flow-level semantics retained even by per-item cache contexts, which
+	 * deliberately omit phaseFp/flowDefHash for partial reuse. */
+	agentScope?: Taskflow["agentScope"];
+	contextSharing?: boolean;
+	/** Resolved agent content/config. Same name+scope can still change prompt,
+	 * model, tools, or thinking and must invalidate cached output. */
+	agentDefinitions?: string;
 	/** Content fingerprint of the desugared flow definition — folded into the
 	 *  key so two structurally-different flows that share a name can never
 	 *  collide, and a changed flow never serves a stale cross-run hit. */
@@ -2613,12 +2726,31 @@ export interface PhaseCacheCtx {
 	forceRerun?: boolean;
 }
 
+/** Stable cache identity for the fully resolved agent pool. File paths are
+ * excluded: content/config, not installation location, determines output. */
+export function agentDefinitionsIdentity(agents: readonly AgentConfig[]): string {
+	return JSON.stringify(
+		agents
+			.map((a) => ({
+				name: a.name,
+				description: a.description,
+				systemPrompt: a.systemPrompt,
+				model: a.model ?? "",
+				thinking: a.thinking ?? "",
+				tools: [...(a.tools ?? [])].sort(),
+				source: a.source,
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source)),
+	);
+}
+
 /** Fold the phase fingerprint into the base hash parts to form the final cache key. */
 /** A computed cache identity: the new (versioned) key plus the read-only
  *  fallback keys used to honor entries written by older releases. The `key`
  *  is what we WRITE under and what `PhaseState.inputHash` carries; the
- *  `v2Key`/`bareKey`/`legacyKey` are consulted READ-ONLY on a miss so an
- *  upgrade never produces a miss-storm. See docs/internal/cache-migration.md. */
+ *  `v2Key`/`bareKey` are consulted READ-ONLY on a miss. `legacyKey` is exposed
+ *  only for tooling/tests and is never read because it lacks structural
+ *  identity. See docs/internal/cache-migration.md. */
 export interface CacheKeys {
 	/** Current key: folds `v3:phasefp:<subfp>` (the per-phase structural
 	 *  sub-fingerprint; degrades to the whole-flow hash when per-phase
@@ -2636,7 +2768,7 @@ export interface CacheKeys {
 
 /** Fold the phase fingerprint into the base hash parts to form the cache keys.
  *
- *  Four keys are produced for backward compatibility (see
+	 *  Four keys are derived for tooling/backward compatibility (see
  *  docs/internal/cache-migration.md):
  *    - `key`      : `v3:phasefp:<subfp>` — the current write key (per-phase
  *      structural sub-fingerprint; falls back to the whole-flow hash when
@@ -2644,9 +2776,9 @@ export interface CacheKeys {
  *    - `v2Key`    : `v2:flowdef:<flowDefHash>` — pre-M6 whole-flow key.
  *    - `bareKey`  : bare `flowdef:<flowDefHash>` (unversioned) — pre-H1 entries.
  *    - `legacyKey`: the flowdef line omitted — pre-flowDefHash entries.
- *  `cachedPhase` consults all four READ-ONLY on a miss; `recordCache` writes
- *  only `key`. This means an upgrade never produces a miss-storm: existing
- *  entries (whichever shape) still hit, and new writes converge on `key`. */
+	 *  `cachedPhase` consults the first three safe tiers READ-ONLY on a miss;
+	 *  `legacyKey` is never read because it has no structural identity.
+	 *  `recordCache` writes only `key`. */
 export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
 	// Fold the full cache identity into the hash: flow name (prevents collisions
 	// across different flows that share a phase.id + task + model), the per-phase
@@ -2657,6 +2789,9 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
 		`think:${cc.thinking ?? ""}`,
 		`tools:${JSON.stringify(cc.tools ?? [])}`,
 		`ctx:${cc.preRead ?? ""}`,
+		`agent-scope:${cc.agentScope ?? "user"}`,
+		`context-sharing:${cc.contextSharing === true ? "1" : "0"}`,
+		`agents:${cc.agentDefinitions ?? ""}`,
 	];
 	const fold = (parts: string[]): string =>
 		cc.fingerprint ? hashInput(...parts, cc.fingerprint) : hashInput(...parts);
@@ -2677,13 +2812,13 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
  *   - "off":      never reuse (even within-run).
  *   - "run-only": within-run resume only (historical behavior).
  *   - "cross-run": within-run first, then the persistent cross-run store.
- * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
- *
- * The cross-run read is FOUR-TIER and READ-ONLY for fallback keys: it tries
+	 * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
+	 *
+ * The cross-run read is three-tier and READ-ONLY for fallback keys: it tries
  * `keys.key` (current `v3:phasefp:` shape) first, then `keys.v2Key` (pre-M6
- * `v2:flowdef:`), then `keys.bareKey` (pre-H1 bare `flowdef:`), then
- * `keys.legacyKey` (pre-flowDefHash, no flowdef line).
- * A hit on ANY tier is restored as a cache hit; we do NOT write-through (no
+ * `v2:flowdef:`), then `keys.bareKey` (pre-H1 bare `flowdef:`). The older
+ * no-flowdef key is deliberately unsafe and ignored.
+ * A hit on any safe tier is restored as a cache hit; we do NOT write-through (no
  * re-store under the new key) so the cache size stays stable and the legacy
  * entry ages out naturally. See docs/internal/cache-migration.md.
  */
@@ -2699,9 +2834,13 @@ function cachedPhase(cc: PhaseCacheCtx, keys: CacheKeys): PhaseState | null {
 		return { ...cc.prior, status: "done", cacheHit: "run-only" };
 	}
 
-	// 2. cross-run memoization (opt-in) — four-tier read-only fallback.
+	// 2. cross-run memoization (opt-in) — three safe read-only tiers.
 	if (cc.scope === "cross-run") {
-		for (const k of [keys.key, keys.v2Key, keys.bareKey, keys.legacyKey]) {
+		// The pre-flow-definition legacy key is intentionally NOT read: it omits
+		// all structural identity and can return stale output after any semantic
+		// flow change. v2/bare remain safe because they include today's definition
+		// hash; old entries whose historical hash omitted new fields simply miss.
+		for (const k of [keys.key, keys.v2Key, keys.bareKey]) {
 			const e = cc.store.get(k, cc.ttlMs);
 			if (!e) continue;
 			// If we stored the full PhaseState, restore it (preserving gate,
@@ -3098,10 +3237,28 @@ export async function recomputeTaskflow(
 
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	const runnerUsageAccounting = (deps.runTask as (RunTaskFn & { usageAccounting?: "available" | "unavailable" }) | undefined)
+		?.usageAccounting;
+	if (!deps.usageAccounting && runnerUsageAccounting) {
+		// Preserve a runner-advertised capability across the wrapper functions used
+		// by nested flow/context execution; those wrappers would otherwise erase a
+		// property attached to the original runTask function.
+		deps = { ...deps, usageAccounting: runnerUsageAccounting };
+	}
 	try {
+		if (deps.usageAccounting === "unavailable" && def.budget) {
+			throw new Error(
+				`Usage accounting is unavailable for this host; refusing budgeted flow '${def.name}' because its token/USD ceiling cannot be enforced`,
+			);
+		}
 		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
 		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
-		if (eventKernelEnabled(deps) && canUseEventKernel(def)) {
+		// Existing phase state requires the imperative cache/inputHash machinery to
+		// validate definition and idempotency before reuse. The event kernel does
+		// not yet persist compatible input hashes, so it must never blindly trust a
+		// prior `done` row.
+		const hasPriorState = Object.keys(state.phases).length > 0;
+		if (eventKernelEnabled(deps) && !hasPriorState && canUseEventKernel(def, deps.loadFlow)) {
 			if (!deps.runTask) {
 				throw new Error("event kernel requires RuntimeDeps.runTask");
 			}
@@ -3111,6 +3268,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				runTask: deps.runTask,
 				signal: deps.signal,
 				globalThinking: deps.globalThinking,
+				usageAccounting: deps.usageAccounting,
 				trace: deps.trace,
 				persist: deps.persist,
 				onProgress: deps.onProgress,
@@ -3141,6 +3299,31 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 
 async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	// Ownership migration must happen before ANY phase in the new definition is
+	// scheduled. Definition evolution may remove/rename ordinary phases as well
+	// as graft children; neither their terminal failure nor their usage may leak
+	// into the new run. Dynamic promoted state is intentionally cleared here too
+	// and is restored only by its owning expand phase (from its current result or
+	// cache). An id newly promoted to a real authored phase is preserved because
+	// it is present in `declaredPhaseIds` and the scheduler will validate/rerun it.
+	// Cleaning inside the expand phase would be too late: an unrelated authored
+	// phase may already have been scheduled and stale usage already counted.
+	const declaredPhaseIds = new Set(def.phases.map((p) => p.id));
+	// A pre-seeded state may intentionally supply an external dependency (for
+	// example an embedding host injects `src` and the definition starts at a map
+	// that depends on it). Those ids are part of the new definition's dependency
+	// contract even though they have no executable Phase row, so preserve them.
+	const externalDependencyIds = new Set(
+		def.phases.flatMap((phase) => dependenciesOf(phase)).filter((id) => !declaredPhaseIds.has(id)),
+	);
+	for (const oldId of Object.keys(state.phases)) {
+		if (!declaredPhaseIds.has(oldId) && !externalDependencyIds.has(oldId)) delete state.phases[oldId];
+	}
+	for (const previous of Object.values(state.phases)) {
+		for (const oldId of Object.keys(previous.promotedPhases ?? {})) {
+			if (!declaredPhaseIds.has(oldId)) delete state.phases[oldId];
+		}
+	}
 	const layers = topoLayers(def.phases);
 	// Content-fingerprint the desugared definition ONCE per run and fold it into
 	// every phase's cache key (overstory hash algorithm; see ./flowir/hash.ts).
@@ -3154,17 +3337,21 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	// plane) is persisted for audit/provenance. The declared plane is also
 	// derived fresh from `def` in recompute (so old runs get union semantics
 	// too); the persisted copy is for display.
-	if (state.flowDefHash === undefined) {
-		try {
-			const ir = await compileTaskflowToIR(def);
-			state.flowDefHash = ir.hash ?? "failed";
-			state.declaredDeps = ir.meta.declaredDeps;
-			if (ir.errors.length) {
-				console.warn(
-					`[taskflow] IR compile errors for '${def.name}': ${ir.errors.map((e) => e.message).join("; ")}`,
-				);
-			}
-		} catch (e) {
+	try {
+		const ir = await compileTaskflowToIR(def);
+		const nextHash = ir.hash ?? "failed";
+		if (state.flowDefHash !== nextHash) {
+			state.flowDefHash = nextHash;
+			state.phaseFingerprints = undefined;
+		}
+		state.declaredDeps = ir.meta.declaredDeps;
+		if (ir.errors.length) {
+			console.warn(
+				`[taskflow] IR compile errors for '${def.name}': ${ir.errors.map((e) => e.message).join("; ")}`,
+			);
+		}
+	} catch (e) {
+		if (state.flowDefHash === undefined) {
 			// Fail-safe: warn loudly rather than silently degrading to the legacy
 			// flowName-only key, which would reopen the cross-flow collision hole.
 			console.warn(
@@ -3249,9 +3436,19 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 						value: budgetReason || "budget",
 						reason: skipReason,
 					});
+					// executePhase already flushed its phase-end batch. Flush this
+					// post-completion decision too so FileTraceSink cannot strand it.
+					traceFlush(deps, phase.id);
 				}
 				// Synthetic phase-start/end so fold sees a complete phase lifecycle.
-				traceEmit(deps, { ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-start" });
+				traceEmit(deps, {
+					ts: Date.now(),
+					runId: state.runId,
+					phaseId: phase.id,
+					kind: "phase-start",
+					dependencies: dependenciesOf(phase),
+					optional: phase.optional === true,
+				});
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
@@ -3319,6 +3516,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 						value: "budget",
 						reason: ob.reason,
 					});
+					traceFlush(deps, phase.id);
 				}
 				budgetBlocked = true;
 				budgetReason = ob.reason;
@@ -3337,7 +3535,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	}
 	// A failed non-optional phase fails the run; optional failures are tolerated.
 	const anyFailed = Object.entries(state.phases).some(
-		([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
+		([id, p]) => p.status === "failed" && !byId.get(id)?.optional && !p.optional,
 	);
 
 	state.status = aborted

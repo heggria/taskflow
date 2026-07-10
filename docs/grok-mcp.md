@@ -84,22 +84,46 @@ tool_timeout_sec = 1800
 
 ## Permissions (the codex-sandbox analogue)
 
-Grok headless mode has no OS-level sandbox for tool calls. The runner maps each
-phase's tool whitelist as follows:
+The runner always selects a Grok kernel sandbox profile and maps each phase's
+tool whitelist as follows:
 
 - **Read-only phase** (no `write`/`edit`/`bash` / `run_terminal_cmd` /
-  `search_replace` in the phase/agent `tools`) →
-  `--tools read_file,grep,list_dir,web_search,web_fetch` so mutating tools are
-  not available, plus `--always-approve` so remaining tools never block on a
-  confirm prompt.
-- **Mutating phase** (or no whitelist) → `--always-approve` only. This is the
-  workspace-write equivalent **without an OS sandbox backstop** — the subagent
-  can run any built-in tool. Run flows you trust, in a repo you can
-  `git reset`, ideally in a throwaway worktree (`cwd: "worktree"`).
+  `search_replace` in the phase/agent `tools`) → a known-good
+  kernel-enforced `--sandbox read-only`, a
+  `--tools read_file,grep,list_dir` allowlist, an independent
+  `--disallowed-tools` mutator denylist, `--deny Bash/Edit/Write/MCPTool`, and
+  `--no-subagents`. `--always-approve` then applies only to the surviving
+  read-only tools. Grok 0.2.93 treats `web_search` / `web_fetch` as unmappable
+  allowlist entries and can restore the full toolset, so those two tools are
+  deliberately unavailable in a read-only phase until the CLI fixes that
+  fail-open behavior.
+- **Mutating phase** (or no whitelist) → kernel-enforced `--sandbox workspace`
+  plus `--always-approve`. All tools remain available, but filesystem writes
+  are confined to the phase cwd plus Grok's documented temp/session paths
+  (`/tmp`, `/var/tmp`, platform temp directories, and `~/.grok/`). Reads and
+  network remain available. Prefer `cwd: "worktree"` for disposable changes.
+
+Both sandbox profiles cover the whole Grok process and spawned tools on
+macOS/Linux. The independent built-in/MCP denies are also required for
+read-only phases because that profile deliberately permits session writes under
+temporary directories; together they keep a read-only phase non-mutating even
+when its workspace itself is under `/tmp`. A live executor E2E additionally
+proves that the workspace profile permits an in-cwd write and rejects a marker
+outside the cwd and documented exceptions.
 
 Agent system prompts are passed with `--rules`. Model ids that look like
 unresolved `{{placeholders}}`, multi-segment openrouter paths, or pi thinking
 suffixes (`:xhigh`) are dropped so Grok uses its configured default.
+Effective Taskflow thinking is passed as `--reasoning-effort` (`off` maps to
+`none`).
+
+### Budget limitation
+
+Grok 0.2.93 does not include token or cost usage in its `streaming-json`
+events. Consequently the Grok-bound MCP server **refuses any flow that declares
+`budget`**; accepting it would advertise a ceiling the runtime cannot enforce.
+Unbudgeted flows still run normally. Use another host when a hard token/USD
+ceiling is required.
 
 ## Long-running flows and the tool-call timeout
 
@@ -107,7 +131,9 @@ suffixes (`:xhigh`) are dropped so Grok uses its configured default.
 phase outputs stay in the runtime, so from Grok's side it's a single tool call
 that can run for many minutes. The plugin's `.mcp.json` ships
 `tool_timeout_sec: 1800` (30 minutes). For huge flows, split into a few smaller
-`taskflow_run` calls, or run detached and inspect with `taskflow_peek`.
+`taskflow_run` calls. MCP does not expose Pi's detached-run mode. If the client
+sends `notifications/cancelled` (including after a tool timeout), the server
+aborts the active DAG and subagent instead of leaving hidden background work.
 
 ## Alternative: register the MCP server manually
 
@@ -171,7 +197,7 @@ grok -p "Call taskflow_verify on this define (do not run it):
 ```
 
 > **Note on approvals.** MCP-driven runs are non-interactive, so an `approval`
-> phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows
+> phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows
 > you run through the `taskflow_*` tools; use `approval` only in flows a human
 > runs interactively.
 

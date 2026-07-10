@@ -57,7 +57,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-dsl 2>/dev/null || true",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-dsl",
+    "test:e2e": "node --experimental-strip-types test/e2e-dist-cli.mts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

@@ -12,11 +12,13 @@ import {
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp-core/server";
-import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
+import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { grokSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with grok subagent execution bound in. */
-export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
+export function makeToolHandlers(
+	cwd: string,
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
 	return coreMakeToolHandlers(cwd, grokSubagentRunner);
 }
 

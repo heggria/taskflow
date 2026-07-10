@@ -21,6 +21,50 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - **North-star slogan:** `compiled · resumable · incremental · replayable-for-what-if` (drops Qwik "not replayable" collision with deterministic replay).
   - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
 
+### Fixed
+- **MCP cancellation is now real and end-to-end.** The dependency-free stdio
+  transport dispatches requests concurrently, handles
+  `notifications/cancelled`, and propagates a per-request `AbortSignal` through
+  `taskflow_run` into the runtime and active host subprocess. A cancelled tool
+  call returns JSON-RPC `-32800` instead of leaving hidden background work.
+  Input disconnect aborts active requests and notifications; duplicate request
+  ids abort the original controller instead of overwriting it. Completed host
+  subprocesses remove their abort listeners, avoiding long-DAG listener leaks.
+  Transport shutdown is grace-bounded and suppresses late writes; explicit
+  cancellation also races non-cooperative handlers and observes any late
+  rejection, so neither a hung promise nor an unhandled rejection can wedge the
+  MCP process. Asynchronous stdio `error` events (including output `EPIPE`) use
+  the same bounded teardown, abort active work, suppress late responses, and
+  remove their transport listeners after settling.
+- **Grok thinking overrides now work.** Phase → agent → global thinking is
+  mapped to `grok --reasoning-effort` (`off` → `none`).
+- **Grok budgets no longer fail open.** Grok 0.2.93 streaming JSON contains no
+  token/cost usage, so the Grok MCP adapter explicitly rejects flows declaring
+  `budget` rather than silently reporting zero and ignoring the ceiling. The
+  runtime capability check applies at every execution boundary, including
+  inline object/string flows, saved flows, and nested/graft `expand` fragments.
+
+### Security
+- **Grok read-only phases are kernel-enforced and defence-in-depth.** They now
+  use `--sandbox read-only`, a known-good file-read allowlist, independent
+  mutator/MCP deny rules, and disabled subagents. `web_search` / `web_fetch` are
+  omitted from the Grok 0.2.93 allowlist because that CLI version can label
+  them unmappable and restore the full toolset. A live executor E2E verifies a
+  write attempt is blocked even when the workspace is under `/tmp`.
+- **Grok mutating/default phases are workspace-sandboxed.** They keep
+  `--always-approve` for non-interactive execution but now also pass
+  `--sandbox workspace`, confining writes to the phase cwd plus Grok's
+  documented temp/session paths. A live executor E2E proves an in-workspace
+  write succeeds while an outside marker is rejected.
+- **Release reruns no longer blindly trust an existing npm version.** Before
+  skipping, the publish workflow verifies a trusted npm owner, SLSA provenance
+  from this repository/workflow/tag/commit, and exact locally-packed tarball
+  integrity. A preclaimed `name@version` now fails the release. Every
+  third-party action across CI, Pages, and publish/release workflows is pinned
+  to the official major tag's full commit SHA; npm publish has only
+  `contents: read` and `id-token: write`, while GitHub Release creation is
+  isolated in a dependent job with only `contents: write`.
+
 ## [0.1.8] — 2026-07-09
 
 ### Fixed

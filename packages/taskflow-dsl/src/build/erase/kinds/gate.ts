@@ -1,7 +1,8 @@
 import ts from "typescript";
+import { diag } from "../ast.ts";
 import { mergeOpts } from "../opts.ts";
 import { eraseGateTask } from "../templates.ts";
-import type { PhaseDraft } from "../types.ts";
+import { phaseByBinding, type PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
 
 /** Plain gate(upstream, opts?, taskLambda?) — not gate.automated / gate.scored. */
@@ -13,12 +14,17 @@ export function emitGate(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "gate",
 		raw: { type: "gate" },
 		dependsOn: new Set(),
 	};
 	const up = call.arguments[0];
-	if (up && ts.isIdentifier(up) && ctx.phases.has(up.text)) draft.dependsOn.add(up.text);
+	if (up && ts.isIdentifier(up) && phaseByBinding(ctx.phases, up.text)) {
+		draft.dependsOn.add(phaseByBinding(ctx.phases, up.text)!.id);
+	} else if (up) {
+		ctx.diags.push(diag(ctx.file, ctx.sf, up, "TFDSL_DEP_DYNAMIC", `gate upstream must be a previously declared phase handle.`));
+	}
 	const optsArg = call.arguments[1] as ts.Expression | undefined;
 	const taskArg = call.arguments[2] as ts.Expression | undefined;
 	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
@@ -43,7 +49,7 @@ export function emitGate(
 				ctx.file,
 				expr,
 				param,
-				up && ts.isIdentifier(up) ? up.text : undefined,
+				up && ts.isIdentifier(up) ? phaseByBinding(ctx.phases, up.text)?.id : undefined,
 				ctx.phases,
 				ctx.diags,
 			);

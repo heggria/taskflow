@@ -36,26 +36,41 @@ export interface ArgSpec {
 export interface FlowOptions {
 	description?: string;
 	version?: number;
+	agentScope?: "user" | "project" | "both";
+	strictInterpolation?: boolean;
+	contextSharing?: boolean;
+	incremental?: boolean;
 }
 
 export interface PhaseOptions<TJson = unknown> {
 	id?: string;
 	agent?: string;
 	model?: string;
-	thinking?: string | boolean;
+	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 	output?: "text" | "json" | JsonExpectMarker<TJson>;
 	expect?: unknown;
 	when?: string;
 	join?: "all" | "any";
-	dependsOn?: string[];
+	dependsOn?: Array<string | PhaseRef<unknown>>;
 	retry?: { max?: number; backoffMs?: number; factor?: number };
 	timeout?: number;
 	optional?: boolean;
 	idempotent?: boolean;
 	final?: boolean;
 	concurrency?: number;
+	context?: string[];
+	contextLimit?: number;
+	onBlock?: "halt" | "retry";
+	eval?: string[];
+	score?: unknown;
+	cache?: {
+		scope?: "run-only" | "cross-run" | "off";
+		ttl?: string;
+		fingerprint?: string[];
+	};
+	shareContext?: boolean;
 	/** Brand from json<T>(). */
 	jsonExpect?: unknown;
 }
@@ -67,6 +82,16 @@ export interface FlowCtx {
 }
 
 export type TaskflowModuleDefault = { readonly __brand: "TaskflowModuleDefault" };
+
+export interface InlineTaskflowPhase {
+	id: string;
+	type?: string;
+	[key: string]: unknown;
+}
+
+export type InlineTaskflowDefinition =
+	| { name?: string; phases: InlineTaskflowPhase[] }
+	| InlineTaskflowPhase[];
 
 export interface JsonExpectMarker<T> {
 	readonly __brand: "JsonExpectMarker";
@@ -169,7 +194,7 @@ export function subflow(
 
 /** Nested dynamic sub-flow (compiles to type:flow def). */
 export function subflowDef(
-	_def: PhaseRef<unknown> | string | unknown,
+	_def: PhaseRef<unknown> | string | InlineTaskflowDefinition,
 	_opts?: PhaseOptions,
 ): PhaseRef<unknown> {
 	return eraseOnly("subflow.def");

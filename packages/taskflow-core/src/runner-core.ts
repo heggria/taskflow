@@ -12,7 +12,7 @@
  * hosts.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
@@ -41,6 +41,25 @@ export function isTransientError(r: RunResult): boolean {
 	if (r.phaseTimeout) return false;
 	const hay = `${r.errorMessage ?? ""} ${r.stderr ?? ""} ${r.output ?? ""}`;
 	return TRANSIENT_ERROR_RE.test(hay);
+}
+
+/** Wait for a retry backoff, but release immediately when the run is aborted.
+ * Resolves (rather than rejects) on abort so callers can leave their retry loop
+ * through the normal `signal.aborted` branch and preserve paused semantics. */
+export function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+	if (ms <= 0 || signal?.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal?.addEventListener("abort", finish, { once: true });
+	});
 }
 
 /** Placeholder written to a failed phase's `output` so downstream interpolation
@@ -258,9 +277,56 @@ export function num(v: unknown): number {
  *  Module-global (not per-host): a single exit handler must reach every host's
  *  children, so all host runners register here. */
 const activeChildren = new Set<number>();
+
+/** Signal the whole process tree rooted at a spawned subagent. POSIX children
+ * are process-group leaders (`detached:true` at spawn), so a negative pid
+ * reaches every descendant in the group. Windows has no equivalent signal;
+ * taskkill /T /F is the platform-supported tree termination primitive. */
+function killProcessTree(pid: number, signal: NodeJS.Signals, direct?: ChildProcess): void {
+	if (process.platform === "win32") {
+		try {
+			const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+				shell: false,
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			killer.once("error", () => {
+				try { direct?.kill(); } catch { /* already dead */ }
+			});
+			killer.unref();
+		} catch {
+			try { direct?.kill(); } catch { /* already dead */ }
+		}
+		return;
+	}
+	try {
+		process.kill(-pid, signal);
+	} catch {
+		// A process can exit between the liveness check and group signal. Falling
+		// back to the direct handle also covers platforms that reject group kills.
+		try { direct?.kill(signal); } catch { /* already dead */ }
+	}
+}
+
+/** Synchronous variant for the host's `exit` event, where asynchronous taskkill
+ * cannot be awaited and would never get a chance to run. */
+function killProcessTreeSync(pid: number): void {
+	if (process.platform === "win32") {
+		try {
+			spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+				shell: false,
+				stdio: "ignore",
+				windowsHide: true,
+			});
+		} catch { /* already dead / taskkill unavailable */ }
+		return;
+	}
+	try { process.kill(-pid, "SIGKILL"); } catch { /* already dead */ }
+}
+
 const killAllChildren = () => {
 	for (const pid of activeChildren) {
-		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+		killProcessTreeSync(pid);
 	}
 };
 process.on("exit", killAllChildren);
@@ -360,20 +426,44 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	}
 
 	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn(bin, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env });
+		const proc = spawn(bin, args, {
+			cwd,
+			shell: false,
+			stdio: ["ignore", "pipe", "pipe"],
+			env,
+			// On POSIX this makes the subagent a process-group leader while retaining
+			// piped stdout/stderr. Cancellation can then signal `-pid` and cannot
+			// strand grandchildren that outlive the direct CLI process.
+			detached: process.platform !== "win32",
+			windowsHide: true,
+		});
 		if (proc.pid) activeChildren.add(proc.pid);
 
 		let buffer = "";
 		let idleTimer: NodeJS.Timeout | undefined;
 		let forceTimer: NodeJS.Timeout | undefined;
+		let settled = false;
+		let removeAbortListener = () => {};
 		const clearTimers = () => {
-			if (idleTimer) clearTimeout(idleTimer);
-			if (forceTimer) clearTimeout(forceTimer);
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = undefined;
+			}
+			if (forceTimer) {
+				clearTimeout(forceTimer);
+				forceTimer = undefined;
+			}
+		};
+		const signalTree = (signal: NodeJS.Signals) => {
+			if (proc.pid) killProcessTree(proc.pid, signal, proc);
+			else {
+				try { proc.kill(signal); } catch { /* spawn failed / already dead */ }
+			}
 		};
 		const hardKill = () => {
 			idleTimedOut = true;
-			proc.kill("SIGTERM");
-			forceTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+			signalTree("SIGTERM");
+			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
 			forceTimer.unref();
 		};
 		const armIdle = () => {
@@ -417,19 +507,27 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			}
 		});
 
-		proc.on("close", (code, signal) => {
+		const finish = (code: number, signal?: NodeJS.Signals | null) => {
+			if (settled) return;
+			settled = true;
+			// The direct process may close before a signal-resistant descendant.
+			// Close/error cleanup must not cancel escalation while its process group
+			// is still alive, so make one final tree-wide hard-kill first.
+			if ((wasAborted || idleTimedOut) && proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
 			if (proc.pid) activeChildren.delete(proc.pid);
 			clearTimers();
+			removeAbortListener();
 			if (buffer.trim()) processLine(buffer);
-			if (code === null && signal) killedBySignal = signal;
-			resolve(code ?? 0);
+			if (signal) killedBySignal = signal;
+			resolve(code);
+		};
+		proc.on("close", (code, signal) => {
+			finish(code ?? 0, code === null ? signal : undefined);
 		});
 		proc.on("error", (err) => {
-			clearTimers();
-			if (proc.pid) activeChildren.delete(proc.pid); // defensive: close usually fires after error, but don't rely on it
 			if (!result.stderr) result.stderr = err.message;
 			if (!result.errorMessage) result.errorMessage = err.message;
-			resolve(1);
+			finish(1);
 		});
 
 		if (opts.signal) {
@@ -440,12 +538,18 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				// set and the post-exit classify chain (which checks idle BEFORE
 				// abort) would misreport a user abort as an idle stall.
 				clearTimers();
-				proc.kill("SIGTERM");
-				const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
-				forceKill.unref();
+				signalTree("SIGTERM");
+				forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
+				forceTimer.unref();
 			};
 			if (opts.signal.aborted) kill();
-			else opts.signal.addEventListener("abort", kill, { once: true });
+			else {
+				opts.signal.addEventListener("abort", kill, { once: true });
+				removeAbortListener = () => {
+					opts.signal?.removeEventListener("abort", kill);
+					removeAbortListener = () => {};
+				};
+			}
 		}
 	});
 

@@ -62,13 +62,13 @@ async function runBoth(def: Taskflow) {
 	return { kernel, imp };
 }
 
-test("canUseEventKernel: map+parallel+gate all accepted (S2 complete)", () => {
+test("canUseEventKernel: linear map+parallel+gate flows are accepted", () => {
 	assert.equal(
 		canUseEventKernel({
 			name: "ok",
 			phases: [
 				{ id: "m", type: "map", agent: "a", over: '["x"]', task: "{item}" },
-				{ id: "p", type: "parallel", branches: [{ task: "t1" }, { task: "t2" }], final: true },
+				{ id: "p", type: "parallel", branches: [{ task: "t1" }, { task: "t2" }], dependsOn: ["m"], final: true },
 			],
 		}),
 		true,

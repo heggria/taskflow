@@ -367,7 +367,7 @@ test("expand nested: runs fragment as sub-flow", async () => {
 	});
 	assert.equal(st.status, "completed");
 	assert.equal(st.phases.e?.status, "done");
-	assert.equal(st.phases.e?.defError, undefined, st.phases.e?.defError);
+	assert.equal(st.phases.e?.defError, undefined, st.phases.e?.defError ?? "unexpected expand defError");
 	assert.match(st.phases.e?.output ?? "", /nested-hi/);
 	assert.equal(st.phases.inner, undefined);
 });
@@ -396,7 +396,7 @@ test("expand graft: promotes child phases onto parent", async () => {
 	});
 	assert.equal(st.status, "completed");
 	assert.equal(st.phases.grow?.status, "done");
-	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError);
+	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError ?? "unexpected expand defError");
 	assert.equal(st.phases["grow-leaf"]?.status, "done");
 	assert.match(st.phases["grow-leaf"]?.output ?? "", /grafted-ok/);
 	// No usage double-count: expand usage zeroed; child holds cost
@@ -442,8 +442,8 @@ test("expand graft: multi-phase rewrites {steps.*} and avoids usage double-count
 			return "x";
 		}),
 	});
-	assert.equal(st.status, "completed", st.phases.grow?.defError ?? st.phases.grow?.error);
-	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError);
+	assert.equal(st.status, "completed", st.phases.grow?.defError ?? st.phases.grow?.error ?? "expand did not complete");
+	assert.equal(st.phases.grow?.defError, undefined, st.phases.grow?.defError ?? "unexpected expand defError");
 	assert.equal(st.phases["grow-a"]?.status, "done");
 	assert.equal(st.phases["grow-b"]?.status, "done");
 	assert.match(st.phases["grow-b"]?.output ?? "", /A-VALUE/);

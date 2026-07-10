@@ -16,6 +16,7 @@ export function emitExpandNestedOrSubflowDef(
 		(cn.startsWith("expand") ? `expand-${ctx.order.length}` : `flow-${ctx.order.length}`);
 	const draft: PhaseDraft = {
 		id,
+		binding: id,
 		type: cn === "expand.nested" ? "expand" : "flow",
 		raw:
 			cn === "expand.nested"
@@ -43,12 +44,21 @@ export function emitSubflowUse(
 	call: ts.CallExpression,
 ): string {
 	const id = bindName ?? `flow-${ctx.order.length}`;
-	const draft: PhaseDraft = { id, type: "flow", raw: { type: "flow" }, dependsOn: new Set() };
+	const draft: PhaseDraft = { id, binding: id, type: "flow", raw: { type: "flow" }, dependsOn: new Set() };
 	const useArg = call.arguments[0];
 	if (useArg && ts.isStringLiteral(useArg)) draft.raw.use = useArg.text;
 	else ctx.diags.push(diag(ctx.file, ctx.sf, call, "TFDSL_RUNE_ARG", `subflow(use) requires a string name.`));
-	if (call.arguments[1] && ts.isObjectLiteralExpression(call.arguments[1])) {
-		draft.raw.with = evalLiteral(call.arguments[1]);
+	if (call.arguments[1]) {
+		if (!ts.isObjectLiteralExpression(call.arguments[1])) {
+			ctx.diags.push(diag(ctx.file, ctx.sf, call.arguments[1]!, "TFDSL_SUBFLOW_WITH_DYNAMIC", `subflow with-args must be a static object literal.`));
+		} else {
+			const withArgs = evalLiteral(call.arguments[1]);
+			if (withArgs && typeof withArgs === "object" && !Array.isArray(withArgs)) {
+				draft.raw.with = withArgs;
+			} else {
+				ctx.diags.push(diag(ctx.file, ctx.sf, call.arguments[1], "TFDSL_SUBFLOW_WITH_DYNAMIC", `subflow with-args must contain only static JSON values.`));
+			}
+		}
 	}
 	const opts = mergeOpts(
 		ctx.sf,
@@ -72,6 +82,7 @@ export function emitExpand(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "expand",
 		raw: {
 			type: "expand",

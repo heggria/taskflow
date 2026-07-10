@@ -19,8 +19,8 @@ import { parseGateVerdict, parseTournamentWinner } from "../deterministic.ts";
 import { verifyTaskflow } from "../verify.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
 import { evaluateCondition, interpolate, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
-import { clampSubFlowBudget } from "./kernel-policy.ts";
-import { mapWithConcurrencyLimit } from "../runner-core.ts";
+import { clampSubFlowBudget, kernelAttemptsOverBudget } from "./kernel-policy.ts";
+import { abortableDelay, isTransientError, mapWithConcurrencyLimit } from "../runner-core.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
 import type { StepContext, StepResult } from "./step.ts";
@@ -69,53 +69,70 @@ async function runAgentCall(
 		typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
 			? phase.timeout
 			: undefined;
-	let timedOut = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let onParentAbort: (() => void) | undefined;
-	let callSignal: AbortSignal | undefined = ctx.deps.signal;
-	if (phaseTimeoutMs) {
-		const ac = new AbortController();
-		callSignal = ac.signal;
-		if (ctx.deps.signal?.aborted) ac.abort();
-		else if (ctx.deps.signal) {
-			onParentAbort = () => ac.abort();
-			ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+	const usages: UsageStats[] = [];
+	let r: RunResult | undefined;
+	for (let attempt = 0; attempt < 4; attempt++) {
+		if (ctx.deps.signal?.aborted) break;
+		let timedOut = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let onParentAbort: (() => void) | undefined;
+		let callSignal: AbortSignal | undefined = ctx.deps.signal;
+		if (phaseTimeoutMs) {
+			const ac = new AbortController();
+			callSignal = ac.signal;
+			if (ctx.deps.signal?.aborted) ac.abort();
+			else if (ctx.deps.signal) {
+				onParentAbort = () => ac.abort();
+				ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+			}
+			timer = setTimeout(() => {
+				timedOut = true;
+				ac.abort();
+			}, phaseTimeoutMs);
 		}
-		timer = setTimeout(() => {
-			timedOut = true;
-			ac.abort();
-		}, phaseTimeoutMs);
+		try {
+			r = await ctx.deps.runTask(
+				ctx.deps.cwd,
+				ctx.deps.agents,
+				agentName,
+				task,
+				{ model: phase.model, thinking: phase.thinking, tools: phase.tools, cwd: ctx.deps.cwd, signal: callSignal },
+				ctx.deps.globalThinking,
+			);
+		} finally {
+			if (timer) clearTimeout(timer);
+			if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
+		}
+		if (timedOut) {
+			r = {
+				...r,
+				exitCode: r.exitCode === 0 ? 1 : r.exitCode,
+				stopReason: "error",
+				errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
+				phaseTimeout: true,
+			};
+		}
+		usages.push(r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage());
+		if (!isFailedResult(r)) break;
+		if (kernelAttemptsOverBudget(ctx.state, phase.id, usages)) break;
+		if (r.phaseTimeout || phase.idempotent === false || !isTransientError(r) || attempt >= 3) break;
+		const wait = Math.min(60_000, (phase.retry?.backoffMs ?? 2_000) * 2 ** attempt);
+		await abortableDelay(wait, ctx.deps.signal);
 	}
-	let r: RunResult;
-	try {
-		r = await ctx.deps.runTask(
-			ctx.deps.cwd,
-			ctx.deps.agents,
-			agentName,
-			task,
-			{
-				model: phase.model,
-				thinking: phase.thinking,
-				tools: phase.tools,
-				cwd: ctx.deps.cwd,
-				signal: callSignal,
-			},
-			ctx.deps.globalThinking,
-		);
-	} finally {
-		if (timer) clearTimeout(timer);
-		if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
-	}
-	if (timedOut) {
+	if (!r) {
 		r = {
-			...r!,
-			exitCode: r!.exitCode === 0 ? 1 : r!.exitCode,
-			stopReason: "error",
-			errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
-			phaseTimeout: true,
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "Aborted before execution",
+			usage: emptyUsage(),
+			stopReason: "aborted",
+			errorMessage: "Aborted before execution",
 		};
 	}
-	const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
+	const usage = aggregateUsage(usages);
+	r = { ...r, usage, attempts: usages.length };
 	const event = baseEvent(ctx, phase.id, "subagent-call", {
 		input: {
 			agent: agentName,
@@ -132,7 +149,7 @@ async function runAgentCall(
 			stopReason: r.stopReason,
 		},
 	});
-	return { result: { ...r, usage }, event };
+	return { result: r, event };
 }
 
 function interpCtx(ctx: StepContext, extra?: Partial<InterpolationContext>): InterpolationContext {

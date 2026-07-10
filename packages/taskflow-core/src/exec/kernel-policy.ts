@@ -4,7 +4,10 @@
  */
 
 import type { Budget, Phase, Taskflow } from "../schema.ts";
-import { dependenciesOf } from "../schema.ts";
+import { dependenciesOf, topoLayers } from "../schema.ts";
+import { emptyUsage, type UsageStats } from "../usage.ts";
+import type { RunState } from "../store.ts";
+import { overBudget } from "../deterministic.ts";
 
 /**
  * If the definition needs imperative-only features, return a short reason.
@@ -42,11 +45,43 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if (p.shareContext === true || def.contextSharing === true) {
 			return `phase '${id}': Shared Context Tree requires the imperative runtime`;
 		}
-		// Workspace isolation keywords are imperative-only today.
+		if (p.context && p.context.length > 0) {
+			return `phase '${id}': context pre-read requires the imperative runtime`;
+		}
+		// Every phase-local cwd (literal or isolated keyword) is imperative-only.
+		// The kernel currently has only one flow-level cwd; accepting a literal
+		// override would silently run in the wrong workspace.
 		const cwd = p.cwd;
-		if (typeof cwd === "string" && (cwd === "temp" || cwd === "dedicated" || cwd === "worktree")) {
+		if (typeof cwd === "string") {
 			return `phase '${id}': workspace cwd '${cwd}' requires the imperative runtime`;
 		}
+		if ((p.type ?? "agent") === "script" && p.input !== undefined) {
+			return `phase '${id}': script stdin input requires the imperative runtime`;
+		}
+		if ((p.type ?? "agent") === "script" && Array.isArray(p.run) && p.run.some((arg) => /\{[^}]+\}/.test(arg))) {
+			return `phase '${id}': interpolated script argv requires the imperative runtime`;
+		}
+	}
+	// The imperative scheduler runs independent phases concurrently. Until the
+	// event driver has an atomic layer commit, admit only linear layers; this
+	// prevents a completed gate/budget decision from incorrectly skipping an
+	// independent sibling that should already have been in flight.
+	const layers = topoLayers(def.phases ?? []);
+	if (layers.some((layer) => layer.length > 1)) {
+		return "concurrent DAG layers require the imperative runtime";
+	}
+	// A fan-out budget guard must stop spawning items as spend accumulates. The
+	// kernel aggregates only after the whole node today, so budgeted fan-out is
+	// deliberately routed to the imperative implementation.
+	if (def.budget && (def.phases ?? []).some((p) => p.type === "map" || p.type === "parallel")) {
+		return "budgeted fan-out requires the imperative runtime";
+	}
+	// Loop/tournament perform multiple logical calls inside one uncommitted phase.
+	// Until their handlers expose phase-local cumulative usage to every call,
+	// route budgeted variants to the imperative scheduler. Single-call advanced
+	// kinds (gate/reduce) use kernelAttemptsOverBudget between retries.
+	if (def.budget && (def.phases ?? []).some((p) => p.type === "loop" || p.type === "tournament")) {
+		return "budgeted multi-call advanced phases require the imperative runtime";
 	}
 	return undefined;
 }
@@ -74,13 +109,22 @@ export function depsSatisfied(
 	};
 }
 
-/** Clamp child sub-flow budget so it cannot raise the parent cap. */
-export function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefined): Taskflow {
+/** Clamp child budget to the parent's remaining run-wide allowance. */
+export function clampSubFlowBudget(
+	sub: Taskflow,
+	parentBudget: Budget | undefined,
+	spent: UsageStats = emptyUsage(),
+): Taskflow {
 	if (!parentBudget) return sub;
 	const child = sub.budget;
+	const remainingUSD =
+		parentBudget.maxUSD === undefined ? Infinity : Math.max(0, parentBudget.maxUSD - spent.cost);
+	const spentTokens = spent.input + spent.output;
+	const remainingTokens =
+		parentBudget.maxTokens === undefined ? Infinity : Math.max(0, parentBudget.maxTokens - spentTokens);
 	const clamped: Budget = {
-		maxUSD: Math.min(child?.maxUSD ?? Infinity, parentBudget.maxUSD ?? Infinity),
-		maxTokens: Math.min(child?.maxTokens ?? Infinity, parentBudget.maxTokens ?? Infinity),
+		maxUSD: Math.min(child?.maxUSD ?? Infinity, remainingUSD),
+		maxTokens: Math.min(child?.maxTokens ?? Infinity, remainingTokens),
 	};
 	const budget: Budget = {};
 	if (Number.isFinite(clamped.maxUSD)) budget.maxUSD = clamped.maxUSD;
@@ -89,4 +133,27 @@ export function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefin
 		...sub,
 		budget: budget.maxUSD === undefined && budget.maxTokens === undefined ? undefined : budget,
 	};
+}
+
+/** Check a kernel phase's in-flight retry attempts against the run-wide cap.
+ * The driver has not folded the current phase into state yet, so callers must
+ * supply the cumulative usage of attempts made so far. Prior completed phase
+ * usage comes from state; the current running placeholder is excluded. */
+export function kernelAttemptsOverBudget(
+	state: RunState,
+	phaseId: string,
+	attemptUsage: readonly UsageStats[],
+): boolean {
+	const budget = state.def.budget;
+	if (!budget) return false;
+	return overBudget({
+		maxUSD: budget.maxUSD,
+		maxTokens: budget.maxTokens,
+		usages: [
+			...Object.entries(state.phases)
+				.filter(([id]) => id !== phaseId)
+				.map(([, phase]) => phase.usage ?? emptyUsage()),
+			...attemptUsage,
+		],
+	}).over;
 }

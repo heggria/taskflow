@@ -11,6 +11,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
 	runSubagentProcess,
 	unknownAgentResult,
@@ -80,6 +83,76 @@ test("runSubagentProcess: AbortSignal — an aborted run classifies as aborted (
 	assert.equal(r.stopReason, "aborted", "abort must classify as 'aborted', not idle/error");
 	assert.equal(r.idleTimeout, undefined, "idle must NOT fire on an aborted run");
 	assert.match(r.errorMessage ?? "", /abort/i);
+});
+
+test("runSubagentProcess: abort terminates the child process tree", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-process-tree-"));
+	const marker = path.join(dir, "grandchild-survived.txt");
+	try {
+		const grandchild = [
+			`const fs=require("node:fs");`,
+			`process.on("SIGTERM",()=>{});`,
+			`if(process.send)process.send("ready");`,
+			`setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},"survived"),600);`,
+			`setInterval(()=>{},1000);`,
+		].join("");
+		const parent = [
+			`const {spawn}=require("node:child_process");`,
+			`const child=spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:["ignore","ignore","ignore","ipc"]});`,
+			`child.once("message",()=>process.stdout.write(JSON.stringify({spawned:true})+"\\n"));`,
+			`setInterval(()=>{},1000);`,
+		].join("");
+		const ac = new AbortController();
+		const pending = runSubagentProcess({
+			agent: "test", task: "tree", model: undefined,
+			bin: "node", args: ["-e", parent], cwd: process.cwd(),
+			idleTimeoutMs: 60_000, signal: ac.signal,
+			acc: makeAcc(), foldLine,
+			onLive: () => ac.abort(),
+		});
+		const result = await pending;
+		assert.equal(result.stopReason, "aborted");
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		assert.equal(fs.existsSync(marker), false, "grandchild must not survive cancellation to write its marker");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("runSubagentProcess: normal completion does not kill a descendant", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-process-tree-normal-"));
+	const marker = path.join(dir, "normal-grandchild.txt");
+	try {
+		const grandchild = `const fs=require("node:fs");setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},"ok"),150);`;
+		const parent = `const {spawn}=require("node:child_process");spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:"ignore"});process.stdout.write(JSON.stringify({done:true})+"\\n");`;
+		const result = await run(parent);
+		assert.equal(result.stopReason, "end");
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		assert.equal(fs.readFileSync(marker, "utf8"), "ok", "normal parent exit must not terminate descendant work");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("runSubagentProcess: removes the abort listener after a child exits", async () => {
+	const ac = new AbortController();
+	const signal = ac.signal;
+	const originalAdd = signal.addEventListener.bind(signal);
+	const originalRemove = signal.removeEventListener.bind(signal);
+	let added = 0;
+	let removed = 0;
+	(signal as unknown as { addEventListener: typeof signal.addEventListener }).addEventListener = ((...args: Parameters<typeof signal.addEventListener>) => {
+		added++;
+		return originalAdd(...args);
+	}) as typeof signal.addEventListener;
+	(signal as unknown as { removeEventListener: typeof signal.removeEventListener }).removeEventListener = ((...args: Parameters<typeof signal.removeEventListener>) => {
+		removed++;
+		return originalRemove(...args);
+	}) as typeof signal.removeEventListener;
+	const result = await run(`process.stdout.write(JSON.stringify({done:true})+"\\n");`, { signal });
+	assert.equal(result.exitCode, 0);
+	assert.equal(added, 1);
+	assert.equal(removed, 1, "completed child must not retain a listener on a long-lived run signal");
 });
 
 test("runSubagentProcess: a throwing foldLine is swallowed (fail-open), run still completes", async () => {

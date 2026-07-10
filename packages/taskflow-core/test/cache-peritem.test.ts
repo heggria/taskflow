@@ -23,7 +23,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import { CacheStore } from "../src/cache.ts";
-import { cacheKeys, executeTaskflow, summarizeReuse, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
+import { agentDefinitionsIdentity, cacheKeys, executeTaskflow, summarizeReuse, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import type { Taskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
@@ -377,6 +377,7 @@ test("per-item: a budget-skipped item is never recorded as a per-item cache entr
 		flowName: def.name,
 		runId: r1.state.runId,
 		flowDefHash: undefined,
+		agentDefinitions: agentDefinitionsIdentity(AGENTS),
 		phaseFp: undefined,
 		thinking: undefined,
 		tools: undefined,

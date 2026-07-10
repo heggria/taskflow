@@ -95,16 +95,20 @@ TUI 里可用 `/plugins`、`/mcps` 打开同一扩展面板。
 
 | Phase tools | 行为 |
 |---|---|
-| 只读 | `--tools read_file,grep,list_dir,web_search,web_fetch` + `--always-approve` |
-| 可写 / 无白名单 | `--always-approve`（**无 OS sandbox**，优先 `cwd: "worktree"`） |
+| 只读 | 内核强制的 `--sandbox read-only` + 经 Grok 0.2.93 实测的 `--tools read_file,grep,list_dir` + 可变更工具拒绝列表 + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` |
+| 可写 / 无白名单 | 内核强制的 `--sandbox workspace` + `--always-approve`；可使用全量工具，但写入仅限 phase cwd 与 Grok 约定的临时目录 / `~/.grok/`。优先 `cwd: "worktree"` |
+
+Grok 0.2.93 会把 `web_search` / `web_fetch` 报为无法映射的 allowlist 项，并可能回退到全量工具；因此只读 phase 中暂时禁用这两个 web 工具，并用独立 deny 规则做二次保护。`thinking` 会映射到 `--reasoning-effort`（`off` → `none`）。
+
+Grok 0.2.93 的 `streaming-json` 不返回 token / cost usage，所以 Grok MCP 适配器会**拒绝声明了 `budget` 的 flow**，而不是静默忽略上限。
 
 ## 长时 flow
 
-**`taskflow_run` 同步返回**——整图跑完才结束。插件默认 `tool_timeout_sec: 1800`。大图请拆分，或事后用 `taskflow_peek`。
+**`taskflow_run` 同步返回**——整图跑完才结束。插件默认 `tool_timeout_sec: 1800`；MCP 不暴露 Pi 的 detach 模式。客户端取消请求时，服务器会中止正在运行的 DAG 和子 agent，不会留下隐藏的后台工作。
 
 ## MCP 下的 approval
 
-非交互运行时 `approval` 会 **auto-reject**。agent 评审请用 `gate`。
+非交互运行时 `approval` 会 **auto-reject**（对审批决策 fail-closed）。agent 评审请用 `gate`。
 
 ## 手动注册 MCP
 

@@ -5,7 +5,7 @@ description: 启动长时间运行的流程并立即返回提示符。通过 run
 
 普通的 `taskflow` 调用会阻塞你的会话，直到所有阶段完成。一个三阶段的代码审计如果耗时八分钟，你的提示符就冻结八分钟。
 
-后台运行解决了这个问题。设置 `detach: true`，MCP 工具在一秒内返回一个 `runId`。一个子进程接管工作，在每个阶段完成后持久化进度，并在结束时写入最终状态——或者在崩溃时写入失败状态。你可以随时从磁盘轮询运行状态来获取进度更新，也可以在中途失败后恢复它。
+后台运行解决了这个问题。在 **Pi 的 `taskflow` 工具**上设置 `detach: true`，工具在一秒内返回一个 `runId`。一个子进程接管工作，在每个阶段完成后持久化进度，并在结束时写入最终状态——或者在崩溃时写入失败状态。你可以随时从磁盘轮询运行状态来获取进度更新，也可以在中途失败后恢复它。Codex、Claude Code、OpenCode 和 Grok Build 的 MCP `taskflow_run` 目前不支持 detach；MCP 取消会中止 DAG，不会转为后台运行。
 
 本指南详细说明具体的 spawn 机制、如何检查后台运行的状态、审批（approval）阶段会发生什么，以及无头运行的限制。
 
@@ -43,7 +43,7 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
     **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true` 和 `stdio: ["ignore", "ignore", "pipe"]`。stdout 被忽略；stderr 被管道回父进程以捕获崩溃诊断信息。子进程立即 `unref()`——它不会保持父进程的事件循环存活。
   </Step>
   <Step>
-    **父进程返回 runId。** 子进程的 PID 写入 `RunState.pid`，MCP 工具响应同时包含 PID 和 runId。父会话可以继续其他工作。
+    **父进程返回 runId。** 子进程的 PID 写入 `RunState.pid`，Pi `taskflow` 工具响应同时包含 PID 和 runId。父会话可以继续其他工作。
   </Step>
   <Step>
     **子进程启动并运行流程。** 分离运行器读取上下文文件，从磁盘重新发现 agent 配置，动态导入宿主适配器的运行模块，然后调用 `executeTaskflow`。每个阶段完成后通过同一个 `saveRun` 路径持久化进度。

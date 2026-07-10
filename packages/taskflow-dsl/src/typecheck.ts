@@ -33,7 +33,12 @@ export function typecheckFile(filePath: string, cwd = process.cwd()): Diagnostic
 		...program.getSemanticDiagnostics(),
 	].filter((d) => {
 		const f = d.file?.fileName;
-		return !f || path.resolve(f) === abs;
+		if (f && path.resolve(f) !== abs) return false;
+		// A phase binding may be referenced declaratively by its emitted string id
+		// (`dependsOn: ["phase-id"]`) rather than by a TS identifier. Treating that
+		// valid DSL form as TS6133 would make decompiled and hand-authored DAGs fail
+		// check even though the binding is consumed by the eraser and execution engine.
+		return d.code !== 6133;
 	});
 	return diags.map((d) => {
 		const file = d.file;

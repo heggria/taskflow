@@ -11,6 +11,7 @@ export function emitApproval(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "approval",
 		raw: { type: "approval" },
 		dependsOn: new Set(),

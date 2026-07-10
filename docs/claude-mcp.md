@@ -138,7 +138,7 @@ Inside a Claude Code session, just ask — Claude will call the tools:
 ```
 
 > **Note on approvals.** MCP-driven runs are non-interactive, so an `approval`
-> phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows
+> phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows
 > you run through the `taskflow_*` tools; use `approval` only in flows a human
 > runs interactively.
 

@@ -1,8 +1,8 @@
 import ts from "typescript";
-import { calleeName } from "../ast.ts";
+import { calleeName, diag } from "../ast.ts";
 import { mergeOpts } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
-import type { PhaseDraft } from "../types.ts";
+import { phaseByBinding, type PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
 
 export function emitMap(
@@ -13,6 +13,7 @@ export function emitMap(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "map",
 		raw: { type: "map" },
 		dependsOn: new Set(),
@@ -20,18 +21,24 @@ export function emitMap(
 	const overArg = call.arguments[0];
 	const fnArg = call.arguments[1];
 	const optsArg = call.arguments[2] as ts.Expression | undefined;
-	if (overArg && ts.isIdentifier(overArg) && ctx.phases.has(overArg.text)) {
-		draft.dependsOn.add(overArg.text);
-		draft.raw.over = `{steps.${overArg.text}.json}`;
+	if (overArg && ts.isIdentifier(overArg) && phaseByBinding(ctx.phases, overArg.text)) {
+		const pid = phaseByBinding(ctx.phases, overArg.text)!.id;
+		draft.dependsOn.add(pid);
+		draft.raw.over = `{steps.${pid}.json}`;
 	} else if (overArg && ts.isPropertyAccessExpression(overArg) && ts.isIdentifier(overArg.expression)) {
-		const pid = overArg.expression.text;
-		if (ctx.phases.has(pid)) {
+		const binding = overArg.expression.text;
+		const pid = phaseByBinding(ctx.phases, binding)?.id;
+		if (pid && (overArg.name.text === "json" || overArg.name.text === "output")) {
 			draft.dependsOn.add(pid);
 			draft.raw.over =
 				overArg.name.text === "json" ? `{steps.${pid}.json}` : `{steps.${pid}.output}`;
+		} else {
+			ctx.diags.push(diag(ctx.file, ctx.sf, overArg, "TFDSL_DEP_DYNAMIC", `map source must be a phase handle, phase.json/output, or static interpolation string.`));
 		}
 	} else if (overArg && (ts.isStringLiteral(overArg) || ts.isNoSubstitutionTemplateLiteral(overArg))) {
 		draft.raw.over = overArg.text;
+	} else if (overArg) {
+		ctx.diags.push(diag(ctx.file, ctx.sf, overArg, "TFDSL_DEP_DYNAMIC", `map source must be a phase handle, phase.json/output, or static interpolation string.`));
 	}
 	let itemName = "item";
 	if (fnArg && (ts.isArrowFunction(fnArg) || ts.isFunctionExpression(fnArg))) {
@@ -49,6 +56,10 @@ export function emitMap(
 		if (inner && ts.isCallExpression(inner)) {
 			const innerCn = calleeName(inner.expression);
 			if (innerCn === "agent") {
+				if (inner.arguments.length < 1 || inner.arguments.length > 2) {
+					ctx.diags.push(diag(ctx.file, ctx.sf, inner, "TFDSL_RUNE_ARITY", `map inner agent expects 1-2 arguments, got ${inner.arguments.length}.`));
+					return register(ctx, draft);
+				}
 				const erased = eraseStringish(
 					ctx.sf,
 					ctx.file,
@@ -68,8 +79,24 @@ export function emitMap(
 					ctx.diags,
 					ctx.phases,
 				);
-				if (iopts.agent) draft.raw.agent = iopts.agent;
-				if (iopts.output) draft.raw.output = iopts.output;
+				const perItemKeys = new Set([
+					"agent", "model", "thinking", "tools", "cwd", "output", "expect", "retry", "timeout",
+					"optional", "idempotent", "context", "contextLimit", "cache", "shareContext",
+				]);
+				for (const [key, value] of Object.entries(iopts)) {
+					if (perItemKeys.has(key)) draft.raw[key] = value;
+					else {
+						ctx.diags.push(
+							diag(
+								ctx.file,
+								ctx.sf,
+								inner.arguments[1] ?? inner,
+								"TFDSL_MAP_INNER_OPTS",
+								`Option '${key}' cannot be applied inside map's agent(); put phase-level routing options on map(..., ..., opts).`,
+							),
+						);
+					}
+				}
 			}
 		}
 	}

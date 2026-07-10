@@ -11,6 +11,7 @@ import {
 	grokBin,
 	permissionArgsForGrokTools,
 	resolveGrokModel,
+	resolveGrokThinking,
 	type GrokArgsCtx,
 } from "../src/grok-runner.ts";
 
@@ -31,28 +32,49 @@ test("grok bin: defaults to `grok`, honours PI_TASKFLOW_GROK_BIN override", () =
 
 // --- permission mapping -----------------------------------------------------
 
-test("grok perms: no whitelist → --always-approve", () => {
-	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--always-approve"]);
-	assert.deepEqual(permissionArgsForGrokTools([]), ["--always-approve"]);
+test("grok perms: no whitelist → workspace sandbox + --always-approve", () => {
+	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--sandbox", "workspace", "--always-approve"]);
+	assert.deepEqual(permissionArgsForGrokTools([]), ["--sandbox", "workspace", "--always-approve"]);
 });
 
-test("grok perms: mutating whitelist → --always-approve", () => {
-	assert.deepEqual(permissionArgsForGrokTools(["read", "write"]), ["--always-approve"]);
-	assert.deepEqual(permissionArgsForGrokTools(["bash"]), ["--always-approve"]);
-	assert.deepEqual(permissionArgsForGrokTools(["run_terminal_cmd"]), ["--always-approve"]);
-	assert.deepEqual(permissionArgsForGrokTools(["search_replace"]), ["--always-approve"]);
+test("grok perms: mutating whitelist → workspace sandbox + --always-approve", () => {
+	for (const tools of [["read", "write"], ["bash"], ["run_terminal_cmd"], ["search_replace"]]) {
+		assert.deepEqual(permissionArgsForGrokTools(tools), ["--sandbox", "workspace", "--always-approve"]);
+	}
 });
 
 test("grok perms: read-only whitelist → --tools <read set> + --always-approve", () => {
 	const args = permissionArgsForGrokTools(["read", "grep", "glob"]);
-	assert.equal(args[0], "--tools");
-	const allowed = String(args[1]).split(",");
+	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+	assert.ok(args.includes("--tools"));
+	const allowed = String(args[args.indexOf("--tools") + 1]).split(",");
 	assert.ok(allowed.includes("read_file"));
 	assert.ok(allowed.includes("grep"));
 	assert.ok(allowed.includes("list_dir"));
 	assert.ok(!allowed.includes("run_terminal_cmd"));
 	assert.ok(!allowed.includes("search_replace"));
-	assert.equal(args[2], "--always-approve");
+	assert.ok(args.includes("--disallowed-tools"));
+	const denied = String(args[args.indexOf("--disallowed-tools") + 1]).split(",");
+	assert.ok(denied.includes("run_terminal_cmd"));
+	assert.ok(denied.includes("search_replace"));
+	assert.ok(args.includes("--no-subagents"));
+	assert.ok(args.includes("--always-approve"));
+	assert.ok(args.includes("MCPTool"));
+});
+
+test("grok perms: web ids never enter the 0.2.93 allowlist regression path", () => {
+	const args = permissionArgsForGrokTools(["read", "web_search", "web_fetch"]);
+	const allowed = String(args[args.indexOf("--tools") + 1]).split(",");
+	assert.deepEqual(allowed, ["read_file"]);
+	assert.ok(!args.join(" ").includes("web_search"));
+	assert.ok(!args.join(" ").includes("web_fetch"));
+});
+
+test("grok perms: unknown read-only aliases fail closed to a non-empty safe allowlist", () => {
+	const args = permissionArgsForGrokTools(["future_read_tool"]);
+	assert.equal(args[args.indexOf("--tools") + 1], "read_file");
+	assert.ok(args.includes("--disallowed-tools"));
+	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
 });
 
 // --- model resolution -------------------------------------------------------
@@ -67,6 +89,13 @@ test("grok model: placeholders / multi-slash / thinking-suffix dropped", () => {
 	assert.equal(resolveGrokModel("openrouter/vendor/model"), undefined);
 	assert.equal(resolveGrokModel("grok-build:xhigh"), undefined);
 	assert.equal(resolveGrokModel(undefined), undefined);
+});
+
+test("grok thinking: maps taskflow levels to --reasoning-effort", () => {
+	assert.equal(resolveGrokThinking("off"), "none");
+	assert.equal(resolveGrokThinking("high"), "high");
+	assert.equal(resolveGrokThinking("xhigh"), "xhigh");
+	assert.equal(resolveGrokThinking("unknown"), undefined);
 });
 
 // --- argv contract ----------------------------------------------------------
@@ -84,11 +113,13 @@ test("grok argv: starts with -p <task> --output-format streaming-json", () => {
 	assert.equal(args[3], "streaming-json");
 });
 
-test("grok argv: always-approve on default / mutating phases", () => {
+test("grok argv: workspace sandbox + always-approve on default / mutating phases", () => {
 	const a = buildGrokArgs(base);
 	assert.ok(a.includes("--always-approve"));
+	assert.equal(a[a.indexOf("--sandbox") + 1], "workspace");
 	const b = buildGrokArgs({ ...base, tools: ["write", "bash"] });
 	assert.ok(b.includes("--always-approve"));
+	assert.equal(b[b.indexOf("--sandbox") + 1], "workspace");
 	assert.equal(b.indexOf("--tools"), -1);
 });
 
@@ -98,6 +129,7 @@ test("grok argv: read-only phases pass --tools + --always-approve", () => {
 	assert.ok(ti >= 0);
 	assert.ok(String(args[ti + 1]).includes("read_file"));
 	assert.ok(args.includes("--always-approve"));
+	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
 });
 
 test("grok argv: model via -m when resolvable", () => {
@@ -118,4 +150,9 @@ test("grok argv: system prompt via --rules", () => {
 	assert.equal(args[args.indexOf("--rules") + 1], "You are careful.");
 	const empty = buildGrokArgs({ ...base, systemPrompt: "   " });
 	assert.equal(empty.indexOf("--rules"), -1);
+});
+
+test("grok argv: thinking via --reasoning-effort", () => {
+	const args = buildGrokArgs({ ...base, thinking: "off" });
+	assert.equal(args[args.indexOf("--reasoning-effort") + 1], "none");
 });

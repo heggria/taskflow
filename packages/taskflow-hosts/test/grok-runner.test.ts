@@ -60,7 +60,12 @@ test("grok model resolve: flat ok, openrouter path dropped", () => {
 });
 
 test("grok permissions: read-only vs mutating", () => {
-	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--always-approve"]);
-	assert.equal(permissionArgsForGrokTools(["read"])[0], "--tools");
-	assert.deepEqual(permissionArgsForGrokTools(["write"]), ["--always-approve"]);
+	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--sandbox", "workspace", "--always-approve"]);
+	assert.ok(permissionArgsForGrokTools(["read"]).includes("--tools"));
+	assert.equal(
+		permissionArgsForGrokTools(["read"])[permissionArgsForGrokTools(["read"]).indexOf("--sandbox") + 1],
+		"read-only",
+	);
+	assert.ok(permissionArgsForGrokTools(["read"]).includes("--disallowed-tools"));
+	assert.deepEqual(permissionArgsForGrokTools(["write"]), ["--sandbox", "workspace", "--always-approve"]);
 });

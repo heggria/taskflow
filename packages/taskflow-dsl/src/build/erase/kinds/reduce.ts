@@ -1,8 +1,8 @@
 import ts from "typescript";
-import { calleeName } from "../ast.ts";
+import { calleeName, diag } from "../ast.ts";
 import { mergeOpts } from "../opts.ts";
 import { eraseReduceTask } from "../templates.ts";
-import type { PhaseDraft } from "../types.ts";
+import { phaseByBinding, type PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
 
 export function emitReduce(
@@ -13,6 +13,7 @@ export function emitReduce(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "reduce",
 		raw: { type: "reduce" },
 		dependsOn: new Set(),
@@ -23,11 +24,16 @@ export function emitReduce(
 	const fromIds: string[] = [];
 	if (fromArg && ts.isArrayLiteralExpression(fromArg)) {
 		for (const el of fromArg.elements) {
-			if (ts.isIdentifier(el) && ctx.phases.has(el.text)) {
-				fromIds.push(el.text);
-				draft.dependsOn.add(el.text);
+			if (ts.isIdentifier(el) && phaseByBinding(ctx.phases, el.text)) {
+				const pid = phaseByBinding(ctx.phases, el.text)!.id;
+				fromIds.push(pid);
+				draft.dependsOn.add(pid);
+			} else {
+				ctx.diags.push(diag(ctx.file, ctx.sf, el, "TFDSL_DEP_DYNAMIC", `reduce source must be a previously declared phase handle.`));
 			}
 		}
+	} else if (fromArg) {
+		ctx.diags.push(diag(ctx.file, ctx.sf, fromArg, "TFDSL_DEP_DYNAMIC", `reduce sources must be a static array of phase handles.`));
 	}
 	draft.raw.from = fromIds;
 	if (fnArg && (ts.isArrowFunction(fnArg) || ts.isFunctionExpression(fnArg))) {
@@ -38,6 +44,10 @@ export function emitReduce(
 			}
 		} else expr = fnArg.body;
 		if (expr && ts.isCallExpression(expr) && calleeName(expr.expression) === "agent") {
+			if (expr.arguments.length < 1 || expr.arguments.length > 2) {
+				ctx.diags.push(diag(ctx.file, ctx.sf, expr, "TFDSL_RUNE_ARITY", `reduce inner agent expects 1-2 arguments, got ${expr.arguments.length}.`));
+				return register(ctx, draft);
+			}
 			if (expr.arguments[0]) {
 				const t2 = eraseReduceTask(ctx.sf, ctx.file, expr.arguments[0]!, fnArg, ctx.phases, ctx.diags);
 				if (t2) {
@@ -52,7 +62,24 @@ export function emitReduce(
 				ctx.diags,
 				ctx.phases,
 			);
-			if (iopts.agent) draft.raw.agent = iopts.agent;
+			const reduceAgentKeys = new Set([
+				"agent", "model", "thinking", "tools", "cwd", "output", "expect", "retry", "timeout",
+				"optional", "idempotent", "context", "contextLimit", "cache", "shareContext",
+			]);
+			for (const [key, value] of Object.entries(iopts)) {
+				if (reduceAgentKeys.has(key)) draft.raw[key] = value;
+				else {
+					ctx.diags.push(
+						diag(
+							ctx.file,
+							ctx.sf,
+							expr.arguments[1] ?? expr,
+							"TFDSL_REDUCE_INNER_OPTS",
+							`Option '${key}' cannot be applied inside reduce's agent(); put phase-level routing options on reduce(..., ..., opts).`,
+						),
+					);
+				}
+			}
 		}
 	}
 	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);

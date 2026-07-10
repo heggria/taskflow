@@ -224,6 +224,14 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 		meta: {
 			source: "taskflow-core",
 			irVersion: 1,
+			// These flow-level switches change agent discovery / runtime inputs and
+			// therefore MUST participate in the content-addressed cache identity.
+			// Keeping them in canonical meta preserves the 1:1 node projection while
+			// preventing two semantically different flows from sharing an IR hash.
+			annotations: {
+				agentScope: def.agentScope ?? "user",
+				contextSharing: def.contextSharing ?? false,
+			},
 		},
 	};
 

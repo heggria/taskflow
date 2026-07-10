@@ -5,7 +5,7 @@
 import ts from "typescript";
 import type { Diagnostic } from "../../diagnostics.ts";
 import { diag } from "./ast.ts";
-import type { PhaseDraft } from "./types.ts";
+import { phaseByBinding, type PhaseDraft } from "./types.ts";
 
 export function eraseStringish(
 	sf: ts.SourceFile,
@@ -18,7 +18,8 @@ export function eraseStringish(
 	const deps: string[] = [];
 
 	const pushDep = (id: string) => {
-		if (phases.has(id) && !deps.includes(id)) deps.push(id);
+		const phaseId = phaseByBinding(phases, id)?.id;
+		if (phaseId && !deps.includes(phaseId)) deps.push(phaseId);
 	};
 
 	const propToPlaceholder = (expr: ts.Expression): string | undefined => {
@@ -38,12 +39,13 @@ export function eraseStringish(
 				chain.unshift(cur.name.text);
 				cur = cur.expression;
 			}
-			if (ts.isIdentifier(cur) && phases.has(cur.text)) {
-				pushDep(cur.text);
-				if (chain[0] === "output" && chain.length === 1) return `{steps.${cur.text}.output}`;
+			if (ts.isIdentifier(cur) && phaseByBinding(phases, cur.text)) {
+				const phaseId = phaseByBinding(phases, cur.text)!.id;
+				pushDep(phaseId);
+				if (chain[0] === "output" && chain.length === 1) return `{steps.${phaseId}.output}`;
 				if (chain[0] === "json") {
-					if (chain.length === 1) return `{steps.${cur.text}.json}`;
-					return `{steps.${cur.text}.json.${chain.slice(1).join(".")}}`;
+					if (chain.length === 1) return `{steps.${phaseId}.json}`;
+					return `{steps.${phaseId}.json.${chain.slice(1).join(".")}}`;
 				}
 			}
 		}
@@ -67,9 +69,10 @@ export function eraseStringish(
 			const ph = propToPlaceholder(span.expression);
 			if (ph) {
 				text += ph;
-			} else if (ts.isIdentifier(span.expression) && phases.has(span.expression.text)) {
-				pushDep(span.expression.text);
-				text += `{steps.${span.expression.text}.output}`;
+			} else if (ts.isIdentifier(span.expression) && phaseByBinding(phases, span.expression.text)) {
+				const phaseId = phaseByBinding(phases, span.expression.text)!.id;
+				pushDep(phaseId);
+				text += `{steps.${phaseId}.output}`;
 			} else {
 				diags.push(
 					diag(
@@ -197,8 +200,12 @@ export function eraseReduceTask(
 			ts.isIdentifier(e.expression.expression) &&
 			e.expression.expression.text === partsName
 		) {
-			const phaseId = e.expression.name.text;
-			if (phases.has(phaseId)) deps.push(phaseId);
+			const phaseId = phaseByBinding(phases, e.expression.name.text)?.id;
+			if (!phaseId) {
+				diags.push(diag(file, sf, e, "TFDSL_BINDING_UNKNOWN", `Unknown phase binding '${e.expression.name.text}'.`));
+				return undefined;
+			}
+			deps.push(phaseId);
 			if (e.name.text === "output") text += `{steps.${phaseId}.output}`;
 			else if (e.name.text === "json") text += `{steps.${phaseId}.json}`;
 			else text += `{steps.${phaseId}.output}`;

@@ -125,7 +125,10 @@ export function foldEvents(events: readonly Event[]): FoldedRun {
 					p.status = "skipped";
 				}
 				if (ev.decision.type === "budget-hit") {
-					p.status = "skipped";
+					// A budget decision can be emitted either on the phase whose
+					// completion crossed the cap (already terminal: keep it done) or
+					// on a later phase that was prevented from running.
+					if (p.status === "pending" || p.status === "running") p.status = "skipped";
 					p.error = ev.decision.reason ?? ev.decision.value;
 				}
 			}

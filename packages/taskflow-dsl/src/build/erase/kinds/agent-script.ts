@@ -13,6 +13,7 @@ export function emitAgent(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "agent",
 		raw: { type: "agent" },
 		dependsOn: new Set(),
@@ -44,6 +45,7 @@ export function emitScript(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "script",
 		raw: { type: "script" },
 		dependsOn: new Set(),

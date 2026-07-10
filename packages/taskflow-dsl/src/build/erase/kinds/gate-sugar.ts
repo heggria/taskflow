@@ -1,8 +1,8 @@
 import ts from "typescript";
-import { evalLiteral } from "../ast.ts";
+import { diag, evalLiteral } from "../ast.ts";
 import { mergeOpts } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
-import type { PhaseDraft } from "../types.ts";
+import { phaseByBinding, type PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
 
 /** gate.automated / gate.scored */
@@ -15,12 +15,17 @@ export function emitGateSugar(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "gate",
 		raw: { type: "gate" },
 		dependsOn: new Set(),
 	};
 	const up = call.arguments[0];
-	if (up && ts.isIdentifier(up) && ctx.phases.has(up.text)) draft.dependsOn.add(up.text);
+	if (up && ts.isIdentifier(up) && phaseByBinding(ctx.phases, up.text)) {
+		draft.dependsOn.add(phaseByBinding(ctx.phases, up.text)!.id);
+	} else if (up) {
+		ctx.diags.push(diag(ctx.file, ctx.sf, up, "TFDSL_DEP_DYNAMIC", `${cn} upstream must be a previously declared phase handle.`));
+	}
 	const optsArg = call.arguments[1] as ts.Expression | undefined;
 	const sugarKeys = new Set([
 		"pass",

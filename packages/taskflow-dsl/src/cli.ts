@@ -12,7 +12,7 @@ import { decompileTaskflow } from "./decompile.ts";
 import { formatDiagnostics, hasErrors } from "./diagnostics.ts";
 import { skeletonHello, skeletonJson } from "./new-skeleton.ts";
 import { resolveContainedOut, resolveInput } from "./paths.ts";
-import { desugar, validateTaskflow, type Taskflow } from "taskflow-core";
+import { desugar, parseJsonc, validateTaskflow, type Taskflow } from "taskflow-core";
 
 const require = createRequire(import.meta.url);
 const PKG_VERSION: string = (() => {
@@ -36,7 +36,7 @@ Options:
   --cwd <dir>        Project root for path resolution (default: process.cwd())
   -o, --out <path>   Output path (must stay under --cwd)
   --emit taskflow|flowir|both   (build, default: taskflow)
-  --typecheck        (check) also run tsc Program diagnostics
+  --no-typecheck     (check) skip tsc Program diagnostics
   --json             Machine-readable diagnostics
   --force            Overwrite existing file (new)
   --json-escape      new: emit JSON skeleton instead of .tf.ts
@@ -55,10 +55,11 @@ function parseArgs(argv: string[]) {
 		else if (a === "-V" || a === "--version") flags.version = true;
 		else if (a === "--json") flags.json = true;
 		else if (a === "-o" || a === "--out") flags.out = args[++i] ?? "";
-		else if (a === "--emit") flags.emit = args[++i] ?? "taskflow";
+		else if (a === "--emit") flags.emit = args[++i] ?? "";
 		else if (a === "--cwd") flags.cwd = args[++i] ?? "";
 		else if (a === "--force") flags.force = true;
 		else if (a === "--typecheck") flags.typecheck = true;
+		else if (a === "--no-typecheck") flags.noTypecheck = true;
 		else if (a === "--json-escape") flags.jsonEscape = true;
 		else if (a.startsWith("-")) flags[a] = true;
 		else positional.push(a);
@@ -68,6 +69,8 @@ function parseArgs(argv: string[]) {
 
 function main(): void {
 	const { flags, positional } = parseArgs(process.argv);
+	const unknownFlags = Object.keys(flags).filter((key) => key.startsWith("-"));
+	if (unknownFlags.length) failUsage(`unknown option: ${unknownFlags[0]}`);
 	if (flags.version) {
 		process.stdout.write(`${PKG_VERSION}\n`);
 		process.exit(0);
@@ -78,6 +81,21 @@ function main(): void {
 	}
 	const cwd = typeof flags.cwd === "string" && flags.cwd ? path.resolve(flags.cwd) : process.cwd();
 	const cmd = positional[0]!;
+	const allowedByCommand: Record<string, Set<string>> = {
+		build: new Set(["cwd", "out", "emit", "json"]),
+		check: new Set(["cwd", "typecheck", "noTypecheck", "json"]),
+		decompile: new Set(["cwd", "out"]),
+		new: new Set(["cwd", "out", "force", "jsonEscape"]),
+	};
+	const allowed = allowedByCommand[cmd];
+	if (allowed) {
+		for (const key of Object.keys(flags)) {
+			if (key === "help" || key === "version") continue;
+			if (!allowed.has(key)) failUsage(`option --${key} is not valid for ${cmd}`);
+		}
+		const maxPositional = cmd === "new" ? 2 : 2;
+		if (positional.length > maxPositional) failUsage(`${cmd} received unexpected positional arguments`);
+	}
 
 	try {
 		if (cmd === "build") {
@@ -87,7 +105,15 @@ function main(): void {
 				process.exit(2);
 			}
 			const input = resolveInput(cwd, file);
-			const emit = String(flags.emit ?? "taskflow") as "taskflow" | "flowir" | "both";
+			const emitValue = String(flags.emit ?? "taskflow");
+			if (emitValue !== "taskflow" && emitValue !== "flowir" && emitValue !== "both") {
+				failUsage(`--emit must be taskflow, flowir, or both`);
+			}
+			const emit = emitValue;
+			if (emit === "both" && typeof flags.out === "string" && flags.out) {
+				failUsage(`--out is ambiguous with --emit both`);
+			}
+			if (flags.json && typeof flags.out === "string" && flags.out) failUsage(`--out cannot be used with --json`);
 			const r = buildFile(input, { emit, irHash: true, validate: true });
 			if (flags.json) {
 				process.stdout.write(
@@ -97,6 +123,7 @@ function main(): void {
 							diagnostics: r.diagnostics,
 							irHash: r.irHash,
 							taskflow: r.taskflow,
+							flowir: r.flowir,
 						},
 						null,
 						2,
@@ -120,7 +147,12 @@ function main(): void {
 						process.stdout.write(`wrote ${outPath}\n`);
 					}
 					if ((emit === "flowir" || emit === "both") && r.flowir) {
-						const p = `${stem}.flowir.json`;
+						let p = `${stem}.flowir.json`;
+						if (typeof flags.out === "string" && flags.out && emit === "flowir") {
+							const c = resolveContainedOut(cwd, flags.out);
+							if (!c.ok) failUsage(c.message);
+							p = c.path;
+						}
 						fs.writeFileSync(p, JSON.stringify({ hash: r.irHash, ir: r.flowir }, null, 2) + "\n");
 						process.stdout.write(`wrote ${p} (${r.irHash})\n`);
 					}
@@ -140,8 +172,9 @@ function main(): void {
 				process.stderr.write("check requires a file path\n");
 				process.exit(2);
 			}
+			if (flags.typecheck && flags.noTypecheck) failUsage(`--typecheck and --no-typecheck are mutually exclusive`);
 			const r = checkFile(resolveInput(cwd, file), {
-				typecheck: flags.typecheck === true,
+				typecheck: flags.noTypecheck !== true,
 				cwd,
 			});
 			if (flags.json) {
@@ -160,7 +193,8 @@ function main(): void {
 				process.exit(2);
 			}
 			const input = resolveInput(cwd, file);
-			const raw = JSON.parse(fs.readFileSync(input, "utf8"));
+			const inputText = fs.readFileSync(input, "utf8");
+			const raw = input.toLowerCase().endsWith(".jsonc") ? parseJsonc(inputText) : JSON.parse(inputText);
 			const asRec = raw as Record<string, unknown>;
 			let def: Taskflow;
 			if (Array.isArray(asRec.phases)) {
@@ -246,9 +280,14 @@ function main(): void {
 		process.stderr.write(`unknown command: ${cmd}\n${usage()}`);
 		process.exit(2);
 	} catch (e) {
-		process.stderr.write((e instanceof Error ? e.stack ?? e.message : String(e)) + "\n");
+		process.stderr.write((e instanceof Error ? e.message : String(e)) + "\n");
 		process.exit(2);
 	}
+}
+
+function failUsage(message: string): never {
+	process.stderr.write(`${message}\n`);
+	process.exit(2);
 }
 
 main();

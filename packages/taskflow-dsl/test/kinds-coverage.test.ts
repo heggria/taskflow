@@ -136,14 +136,14 @@ export default flow("gs", () => {
 	assert.equal((withScore as { score: { combine: string } }).score.combine, "all");
 });
 
-test("negative: unknown option warns", () => {
+test("negative: unknown option fails closed", () => {
 	// without as never, TS would error at typecheck; source still has property
 	const raw = `
 import { flow, agent } from "taskflow-dsl";
 export default flow("u", () => agent("t", { notARealField: 1 }));
 `;
 	const r = buildSource(raw, "u.tf.ts");
-	// may still validate if unknown stripped
+	assert.equal(r.ok, false);
 	assert.ok(r.diagnostics.some((d) => d.code === "TFDSL_RUNE_OPTS_UNKNOWN"));
 });
 

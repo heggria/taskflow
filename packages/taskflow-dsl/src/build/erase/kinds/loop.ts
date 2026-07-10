@@ -12,12 +12,13 @@ export function emitLoop(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "loop",
 		raw: { type: "loop" },
 		dependsOn: new Set(),
 	};
 	const optsArg = call.arguments[0] as ts.Expression | undefined;
-	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases, { allowKeys: new Set(["task"]) });
 	if (typeof opts.id === "string") draft.id = opts.id;
 	Object.assign(draft.raw, opts);
 	// task: (prev) => `...` inside object — scan object for task method

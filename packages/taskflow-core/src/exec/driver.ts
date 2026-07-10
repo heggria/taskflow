@@ -26,7 +26,7 @@ import { foldEvents } from "./fold.ts";
 import { EVENT_SCHEMA_VERSION, type Event } from "./events.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
-import { depsSatisfied, kernelUnsupportedReason } from "./kernel-policy.ts";
+import { clampSubFlowBudget, depsSatisfied, kernelUnsupportedReason } from "./kernel-policy.ts";
 
 export { EVENT_KERNEL_PHASE_TYPES, kernelUnsupportedReason };
 
@@ -36,6 +36,7 @@ export interface EventKernelDeps {
 	runTask: RunTaskFn;
 	signal?: AbortSignal;
 	globalThinking?: string;
+	usageAccounting?: "available" | "unavailable";
 	trace?: TraceSink;
 	persist?: (state: RunState) => void;
 	onProgress?: (state: RunState) => void;
@@ -53,13 +54,45 @@ export interface EventKernelResult {
 }
 
 /** True when types are known AND no advanced features force imperative fall-back. */
-export function canUseEventKernel(def: Taskflow): boolean {
+export function canUseEventKernel(
+	def: Taskflow,
+	loadFlow?: (name: string) => Taskflow | undefined,
+	seen: Set<string> = new Set(),
+): boolean {
+	if (seen.has(def.name)) return false;
+	const nextSeen = new Set(seen).add(def.name);
 	const typesOk = (def.phases ?? []).every((p) => {
 		const t = p.type ?? "agent";
 		return (EVENT_KERNEL_PHASE_TYPES as readonly string[]).includes(t);
 	});
 	if (!typesOk) return false;
-	return kernelUnsupportedReason(def) === undefined;
+	if (kernelUnsupportedReason(def) !== undefined) return false;
+	for (const phase of def.phases ?? []) {
+		if ((phase.type ?? "agent") !== "flow") continue;
+		let child: Taskflow | undefined;
+		const raw = (phase as { def?: unknown }).def;
+		if (raw !== undefined) {
+			if (typeof raw === "string") {
+				// Interpolated/runtime-generated definitions cannot be admitted statically.
+				if (/\{[^}]+\}/.test(raw)) return false;
+				try {
+					const parsed = JSON.parse(raw) as unknown;
+					if (Array.isArray(parsed)) child = { name: `${phase.id}-inline`, phases: parsed as Taskflow["phases"] };
+					else if (parsed && typeof parsed === "object" && Array.isArray((parsed as Taskflow).phases)) child = parsed as Taskflow;
+				} catch {
+					return false;
+				}
+			} else if (Array.isArray(raw)) {
+				child = { name: `${phase.id}-inline`, phases: raw as Taskflow["phases"] };
+			} else if (raw && typeof raw === "object" && Array.isArray((raw as Taskflow).phases)) {
+				child = raw as Taskflow;
+			}
+		} else if (phase.use && loadFlow) {
+			child = loadFlow(phase.use);
+		}
+		if (!child || !canUseEventKernel(child, loadFlow, nextSeen)) return false;
+	}
+	return true;
 }
 
 export function eventKernelEnabled(deps: { eventKernel?: boolean }): boolean {
@@ -147,11 +180,22 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		args: Record<string, unknown>;
 		stack: string[];
 	}): Promise<NestedFlowResult> => {
+		if (deps.usageAccounting === "unavailable" && (opts.def.budget || def.budget)) {
+			return {
+				finalOutput: `Usage accounting is unavailable; refusing budgeted nested flow '${opts.def.name}'`,
+				ok: false,
+				usage: emptyUsage(),
+				events: [],
+				blocked: false,
+			};
+		}
+		const parentSpent = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
+		const effectiveDef = clampSubFlowBudget(opts.def, def.budget, parentSpent);
 		// Re-admit nested defs — parent admission must not smuggle race/expand
 		// or score/retry/… into the kernel path (silent semantic drift).
-		if (!canUseEventKernel(opts.def)) {
+		if (!canUseEventKernel(effectiveDef, deps.loadFlow)) {
 			const reason =
-				kernelUnsupportedReason(opts.def) ??
+				kernelUnsupportedReason(effectiveDef) ??
 				"nested flow contains phase kinds or features the event kernel cannot execute";
 			return {
 				finalOutput: `Nested flow rejected by event kernel: ${reason}`,
@@ -163,9 +207,9 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		}
 		const childState: RunState = {
 			// No `/` — validateRunId rejects path separators if ever persisted.
-			runId: `${state.runId}-n-${opts.def.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40)}`,
-			flowName: opts.def.name,
-			def: opts.def,
+			runId: `${state.runId}-n-${effectiveDef.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40)}`,
+			flowName: effectiveDef.name,
+			def: effectiveDef,
 			args: opts.args,
 			status: "running",
 			phases: {},
@@ -175,6 +219,10 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		};
 		const child = await runEventKernel(childState, {
 			...deps,
+			// A trace file belongs to exactly one runId. Nested flow events are
+			// intentionally isolated; the parent flow phase is marked unreplayable
+			// by the imperative path rather than polluting the parent's event log.
+			trace: undefined,
 			_stack: opts.stack,
 		});
 		const childErr = Object.values(child.state.phases)
@@ -205,7 +253,6 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		if (deps.signal?.aborted) break;
 		for (const phase of layer) {
 			if (deps.signal?.aborted) break;
-
 			let skipReason: string | undefined;
 			if (gateBlocked) skipReason = `Gate blocked${gateReason ? `: ${gateReason}` : ""}`;
 			else if (budgetBlocked) skipReason = `Budget exceeded${budgetReason ? `: ${budgetReason}` : ""}`;
@@ -278,6 +325,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				startedAt,
 				endedAt: Date.now(),
 				usage: result.usage ?? emptyUsage(),
+				attempts: result.attempts,
 				gate: result.gate,
 				approval: result.approval,
 				...(result.status === "timedOut" ? { timedOut: true as const } : {}),
@@ -307,6 +355,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				};
 				allEvents.push(be);
 				safeTraceEmit(deps, be);
+				// stepPhase already flushed this phase's lifecycle batch.
+				safeTraceFlush(deps, phase.id);
 			}
 			try {
 				deps.persist?.(state);

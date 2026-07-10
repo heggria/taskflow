@@ -16,15 +16,18 @@
  * Mapping to the host-neutral contract:
  *   - output       = concatenated `text` event data (final answer)
  *   - lastActivity = latest text/thought chunk or end/error summary
- *   - usage        = zeros today (streaming-json does not emit token/cost fields;
- *                    fill via rates.ts post-hoc when wiring batch 2 budgets)
+ *   - usage        = zeros today because Grok 0.2.93 streaming-json does not
+ *                    emit token/cost fields. The runner advertises that fact
+ *                    so budgeted MCP runs are rejected instead of silently
+ *                    running without a ceiling.
  *   - failure      = an `error` event, or a non-zero process exit
  *
  * Permission mapping (codex `sandboxForTools` analogue):
- *   - read-only whitelist → `--tools read_file,grep,list_dir,web_search,web_fetch`
- *     (mutating tools removed from the available set)
- *   - mutating / no whitelist → `--always-approve` so non-interactive -p never
- *     hangs on a permission prompt
+ *   - read-only whitelist → kernel `--sandbox read-only`, a known-good
+ *     `--tools` allowlist, and independent mutator deny rules
+ *   - mutating / no whitelist → kernel `--sandbox workspace` plus
+ *     `--always-approve`, so writes are confined to the cwd/temp/session paths
+ *     without hanging non-interactive -p on a permission prompt
  *
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
  * is delegated to shared `runSubagentProcess` in taskflow-core.
@@ -48,12 +51,27 @@ import {
 import { emptyUsage } from "taskflow-core";
 
 /**
- * Grok built-in tool ids a read-only phase may use (from headless docs:
- * `read_file`, `grep`, `list_dir`, `web_search`, `web_fetch`). Shell and edit
- * tools are excluded so a listed-tools phase without write/edit/bash cannot
- * mutate the workspace.
+ * Grok built-in tool ids a read-only phase may use. Web ids are deliberately
+ * omitted because Grok 0.2.93's allowlist parser fails open on them.
  */
-const READ_ONLY_TOOLS = ["read_file", "grep", "list_dir", "web_search", "web_fetch"];
+const READ_ONLY_TOOL_MAP: Readonly<Record<string, string>> = {
+	read: "read_file",
+	read_file: "read_file",
+	grep: "grep",
+	glob: "list_dir",
+	ls: "list_dir",
+	list: "list_dir",
+	list_dir: "list_dir",
+};
+
+/**
+ * Defence in depth for Grok 0.2.93. That version warns that web_search /
+ * web_fetch are "unmappable" in `--tools` and then restores its full toolset.
+ * We therefore never put those ids in the allowlist, and also remove every
+ * known mutator after allowlist processing. `--deny` is a second, independent
+ * enforcement layer in case a future CLI regresses allowlist handling again.
+ */
+const MUTATING_GROK_TOOLS = ["run_terminal_cmd", "search_replace", "write", "write_file", "Agent"];
 
 /** Accumulated state folded from a Grok streaming-json event stream. */
 export interface GrokAccumulator {
@@ -141,19 +159,58 @@ export function grokBin(): string {
 /**
  * Map a phase's tool whitelist to Grok headless permission flags.
  *
- * - no whitelist / mutating tools → `--always-approve` (non-interactive cannot
- *   answer permission prompts; equivalent to codex workspace-write / claude
- *   bypassPermissions — WITHOUT an OS sandbox backstop)
- * - read-only whitelist → `--tools <read-only set>` so write/shell tools are
- *   not available at all (still pairs with `--always-approve` so remaining
- *   tools never block on confirm)
+ * - no whitelist / mutating tools → kernel `--sandbox workspace` plus
+ *   `--always-approve` (non-interactive cannot answer permission prompts;
+ *   writes stay confined to the cwd and Grok's documented temp/session paths)
+ * - read-only whitelist → kernel `--sandbox read-only` plus a narrow
+ *   allowlist and independent deny rules (still pairs with `--always-approve`
+ *   so the remaining safe tools never block on confirm)
  */
 export function permissionArgsForGrokTools(tools: string[] | undefined): string[] {
-	if (!tools || tools.length === 0) return ["--always-approve"];
-	const mutating = new Set(["write", "edit", "bash", "apply_patch", "run_terminal_cmd", "search_replace"]);
+	if (!tools || tools.length === 0) return ["--sandbox", "workspace", "--always-approve"];
+	const mutating = new Set([
+		"write",
+		"write_file",
+		"edit",
+		"bash",
+		"apply_patch",
+		"run_terminal_cmd",
+		"run_terminal_command",
+		"search_replace",
+	]);
 	const canMutate = tools.some((t) => mutating.has(t));
-	if (canMutate) return ["--always-approve"];
-	return ["--tools", READ_ONLY_TOOLS.join(","), "--always-approve"];
+	if (canMutate) return ["--sandbox", "workspace", "--always-approve"];
+	const allowed = [...new Set(tools.map((t) => READ_ONLY_TOOL_MAP[t]).filter((t): t is string => Boolean(t)))];
+	// Keep the allowlist non-empty: an empty --tools value is treated as if the
+	// flag were absent by some Grok builds, which would fail open to all tools.
+	if (allowed.length === 0) allowed.push("read_file");
+	return [
+		"--sandbox",
+		"read-only",
+		"--tools",
+		allowed.join(","),
+		"--disallowed-tools",
+		MUTATING_GROK_TOOLS.join(","),
+		"--deny",
+		"Bash",
+		"--deny",
+		"Edit",
+		"--deny",
+		"Write",
+		"--deny",
+		"MCPTool",
+		"--no-subagents",
+		"--always-approve",
+	];
+}
+
+/** Map Taskflow/Pi thinking levels to Grok's --reasoning-effort contract. */
+export function resolveGrokThinking(thinking: string | undefined): string | undefined {
+	if (!thinking) return undefined;
+	const normalized = thinking.trim().toLowerCase();
+	if (normalized === "off") return "none";
+	if (["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(normalized)) return normalized;
+	return undefined;
 }
 
 /**
@@ -182,6 +239,7 @@ export interface GrokArgsCtx {
 	task: string;
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
+	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 }
@@ -192,14 +250,17 @@ export interface GrokArgsCtx {
  * unit-testable in CI without a live Grok session.
  *
  *   grok -p <task> --output-format streaming-json
- *        [--always-approve | --tools … --always-approve]
- *        [--model m] [--cwd dir] [--rules systemPrompt]
+ *        [--sandbox workspace --always-approve |
+ *         --sandbox read-only --tools … --always-approve]
+ *        [--model m] [--reasoning-effort level] [--cwd dir] [--rules systemPrompt]
  */
 export function buildGrokArgs(ctx: GrokArgsCtx): string[] {
 	const grokModel = resolveGrokModel(ctx.model);
+	const grokThinking = resolveGrokThinking(ctx.thinking);
 	const args: string[] = ["-p", ctx.task, "--output-format", "streaming-json"];
 	args.push(...permissionArgsForGrokTools(ctx.tools));
 	if (grokModel) args.push("-m", grokModel);
+	if (grokThinking) args.push("--reasoning-effort", grokThinking);
 	if (ctx.cwd) args.push("--cwd", ctx.cwd);
 	if (ctx.systemPrompt.trim()) args.push("--rules", ctx.systemPrompt.trim());
 	return args;
@@ -223,13 +284,14 @@ export async function runGrokAgentTask(
 
 	const model = opts.model ?? agent.model;
 	const tools = opts.tools ?? agent.tools;
-	void globalThinking; // grok -p has no thinking-level flag; reserved.
+	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 
 	const cwd = opts.cwd ?? defaultCwd;
 	const args = buildGrokArgs({
 		systemPrompt: agent.systemPrompt,
 		task,
 		model,
+		thinking,
 		tools,
 		cwd,
 	});
@@ -249,10 +311,15 @@ export async function runGrokAgentTask(
 	});
 }
 
+// Preserve the capability when consumers inject the bare function into
+// RuntimeDeps instead of passing the SubagentRunner object through an adapter.
+(runGrokAgentTask as typeof runGrokAgentTask & { usageAccounting: "unavailable" }).usageAccounting = "unavailable";
+
 /**
  * The Grok host's `SubagentRunner`. Drops into `RuntimeDeps.runTask` exactly
  * like the other host runners, so the engine runs unchanged on Grok Build.
  */
 export const grokSubagentRunner: SubagentRunner<AgentConfig> = {
 	runTask: runGrokAgentTask,
+	usageAccounting: "unavailable",
 };

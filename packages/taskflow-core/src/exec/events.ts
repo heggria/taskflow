@@ -89,6 +89,10 @@ export function upgradeTraceEvent(old: Record<string, unknown>): Event {
 		)
 			? (old.kind as EventKind)
 			: "phase-start",
+		dependencies: Array.isArray(old.dependencies)
+			? old.dependencies.filter((x): x is string => typeof x === "string")
+			: undefined,
+		optional: old.optional === true,
 		input: old.input as Event["input"],
 		output: old.output as Event["output"],
 		decision: old.decision as EventDecision | undefined,

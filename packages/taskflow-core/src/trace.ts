@@ -57,6 +57,10 @@ export interface TraceEvent {
 	runId: string;
 	phaseId: string;
 	kind: "phase-start" | "phase-end" | "subagent-call" | "decision";
+	/** Static graph metadata emitted on phase-start. It lets offline replay
+	 *  propagate counterfactual gate/budget outcomes without importing runtime. */
+	dependencies?: string[];
+	optional?: boolean;
 	// — subagent-call (the load-bearing record a replay consumes) —
 	input?: {
 		agent: string;

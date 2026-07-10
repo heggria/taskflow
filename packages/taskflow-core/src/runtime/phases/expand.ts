@@ -103,23 +103,31 @@ export function prefixGraftFragment(fragment: Taskflow, expandPhaseId: string): 
 export function promoteGraftPhases(
 	parent: RunState,
 	childPhases: Record<string, PhaseState>,
-): { promoted: number; warnings: string[] } {
+): { promoted: number; promotedIds: string[]; warnings: string[] } {
 	const warnings: string[] = [];
 	let promoted = 0;
+	const promotedIds: string[] = [];
+	// Collision ownership is defined by the authored definition, not by which
+	// authored phases happen to have reached the scheduler and acquired state
+	// rows. A graft may execute before a later authored phase with the same id;
+	// promoting into that gap would steal ownership and zero the expand's residual
+	// usage even though the authored phase subsequently overwrites the row.
+	const authoredIds = new Set(parent.def.phases.map((phase) => phase.id));
 	for (const [cid, cps] of Object.entries(childPhases)) {
-		if (parent.phases[cid]) {
-			warnings.push(`expand graft skipped promote of '${cid}' (id already exists on parent)`);
+		if (authoredIds.has(cid) || parent.phases[cid]) {
+			warnings.push(`expand graft skipped promote of '${cid}' (id is authored or already exists on parent)`);
 			continue;
 		}
 		// Keep child usage for audit; expand phase usage must be zeroed by caller
 		// so run-level aggregateUsage does not double-count.
 		parent.phases[cid] = { ...cps, id: cid };
 		promoted++;
+		promotedIds.push(cid);
 	}
 	if (promoted > 0) {
 		warnings.push(`expand graft: promoted ${promoted} phase(s) onto parent run`);
 	}
-	return { promoted, warnings };
+	return { promoted, promotedIds, warnings };
 }
 
 /** Empty usage helper for expand phase after graft (avoid double-count in rollup). */

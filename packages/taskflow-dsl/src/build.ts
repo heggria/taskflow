@@ -9,6 +9,7 @@ import {
 	hashFlowIR,
 	validateTaskflow,
 	desugar,
+	parseJsonc,
 	type Taskflow,
 } from "taskflow-core";
 // desugar: only for JSON shorthand escape path
@@ -125,15 +126,24 @@ export function buildFile(filePath: string, opts: BuildOptions = {}): BuildResul
 			file: abs,
 		};
 	}
-	const text = fs.readFileSync(abs, "utf8");
-	return buildSource(text, abs, opts);
+	try {
+		const text = fs.readFileSync(abs, "utf8");
+		return buildSource(text, abs, opts);
+	} catch (e) {
+		return ioFailure(abs, "TFDSL_IO_READ", e);
+	}
 }
 
 function buildJsonFile(abs: string, opts: BuildOptions): BuildResult {
-	const text = fs.readFileSync(abs, "utf8");
+	let text: string;
+	try {
+		text = fs.readFileSync(abs, "utf8");
+	} catch (e) {
+		return ioFailure(abs, "TFDSL_IO_READ", e);
+	}
 	let parsed: unknown;
 	try {
-		parsed = JSON.parse(text);
+		parsed = abs.toLowerCase().endsWith(".jsonc") ? parseJsonc(text) : JSON.parse(text);
 	} catch (e) {
 		return {
 			ok: false,
@@ -151,7 +161,9 @@ function buildJsonFile(abs: string, opts: BuildOptions): BuildResult {
 	const diagnostics: Diagnostic[] = [];
 	// JSON escape: allow full Taskflow or shorthand (task/tasks/chain).
 	let taskflow: Taskflow;
-	const asRec = parsed as Record<string, unknown>;
+	const asRec = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+		? parsed as Record<string, unknown>
+		: {};
 	if (Array.isArray(asRec.phases)) {
 		const v = validateTaskflow(parsed);
 		if (!v.ok) {
@@ -184,11 +196,34 @@ function buildJsonFile(abs: string, opts: BuildOptions): BuildResult {
 	let flowir: unknown;
 	let irHash: string | undefined;
 	if (opts.emit === "flowir" || opts.emit === "both" || opts.irHash !== false) {
-		const compiled = compileTaskflowToFlowIR(taskflow);
-		flowir = compiled.canonical;
-		irHash = hashFlowIR(compiled.canonical);
+		try {
+			const compiled = compileTaskflowToFlowIR(taskflow);
+			flowir = compiled.canonical;
+			irHash = hashFlowIR(compiled.canonical);
+		} catch (e) {
+			diagnostics.push({
+				code: "TFDSL_CORE_IR",
+				severity: "error",
+				message: e instanceof Error ? e.message : String(e),
+				file: abs,
+			});
+			return { ok: false, diagnostics, file: abs };
+		}
 	}
 	return { ok: true, diagnostics, taskflow, flowir, irHash, file: abs };
+}
+
+function ioFailure(file: string, code: string, error: unknown): BuildResult {
+	return {
+		ok: false,
+		diagnostics: [{
+			code,
+			severity: "error",
+			message: error instanceof Error ? error.message : String(error),
+			file,
+		}],
+		file,
+	};
 }
 
 export { eraseSource } from "./build/erase.ts";

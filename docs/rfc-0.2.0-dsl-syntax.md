@@ -162,9 +162,11 @@ const audits = map(discover, (item) => agent(`Audit ${item.route}`, { agent: "an
 
 ### 4.3 `parallel`
 ```ts
-const [a, b] = parallel([ agent("auth"), agent("perf") ], { concurrency: 2 });
+const [a, b] = parallel([ agent("auth"), agent("perf") ]);
 ```
-**v2 澄清(review FEASIBILITY #8):** 解构 `[a,b]` 是**编译期**的 —— 编译器把 `parallel([...])` 转成一个 parallel phase + 给每个 branch 一个合成 id;`a`/`b` 是这些 branch 的符号引用(可被下游 `a.output` 引用,编译器转成对应 branch 的占位符)。不是运行时多返回值。
+**v2 澄清(review FEASIBILITY #8):** 解构 `[a,b]` 是**编译期**的 —— 0.2.0 编译器把每个 branch 降低为一个独立 agent phase；`a`/`b` 是真实 phase handle（可被下游 `a.output` 引用）。不是运行时多返回值。
+
+0.2.0 的 erase 实现将解构形式降低为多个独立 agent phase，因此解构形式不接受第二个 options 参数（无法诚实保留 group-level `concurrency` / `dependsOn`）；需要这些选项时应绑定为单个 `const group = parallel([...], opts)`。
 
 ### 4.4 `gate`(三形态)
 ```ts

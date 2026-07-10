@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import type { Phase, Taskflow } from "../schema.ts";
-import { PHASE_TYPES } from "../schema.ts";
+import { dependenciesOf, PHASE_TYPES } from "../schema.ts";
 import type { RunState } from "../store.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
@@ -22,7 +22,7 @@ import {
 	safeParse,
 	type InterpolationContext,
 } from "../interpolate.ts";
-import { mapWithConcurrencyLimit } from "../runner-core.ts";
+import { abortableDelay, isTransientError, mapWithConcurrencyLimit } from "../runner-core.ts";
 import {
 	executeApprovalBody,
 	executeFlowBody,
@@ -31,6 +31,7 @@ import {
 	executeReduceBody,
 	executeTournamentBody,
 } from "./step-kinds.ts";
+import { kernelAttemptsOverBudget } from "./kernel-policy.ts";
 
 /** All DSL phase types — S2 kernel is complete. */
 /** Kernel kinds: original 10. Horizon B `race`/`expand` run on the imperative
@@ -100,6 +101,8 @@ export interface StepResult {
 	error?: string;
 	/** Token/cost usage for this phase (empty for script / skipped). */
 	usage: UsageStats;
+	/** Total runner attempts, including automatic transient retries. */
+	attempts?: number;
 	gate?: { verdict: "pass" | "block"; reason?: string };
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
 }
@@ -110,6 +113,7 @@ type BodyResult = {
 	status: StepResult["status"];
 	error?: string;
 	usage: UsageStats;
+	attempts?: number;
 	gate?: StepResult["gate"];
 	approval?: StepResult["approval"];
 };
@@ -289,53 +293,79 @@ async function runOneAgent(
 		typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
 			? phase.timeout
 			: undefined;
-	let timedOut = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let onParentAbort: (() => void) | undefined;
-	let callSignal: AbortSignal | undefined = ctx.deps.signal;
-	if (phaseTimeoutMs) {
-		const ac = new AbortController();
-		callSignal = ac.signal;
-		if (ctx.deps.signal?.aborted) ac.abort();
-		else if (ctx.deps.signal) {
-			onParentAbort = () => ac.abort();
-			ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+	const attempts: UsageStats[] = [];
+	let r: RunResult | undefined;
+	for (let attempt = 0; attempt < 4; attempt++) {
+		if (ctx.deps.signal?.aborted) break;
+		let timedOut = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let onParentAbort: (() => void) | undefined;
+		let callSignal: AbortSignal | undefined = ctx.deps.signal;
+		if (phaseTimeoutMs) {
+			const ac = new AbortController();
+			callSignal = ac.signal;
+			if (ctx.deps.signal?.aborted) ac.abort();
+			else if (ctx.deps.signal) {
+				onParentAbort = () => ac.abort();
+				ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
+			}
+			timer = setTimeout(() => {
+				timedOut = true;
+				ac.abort();
+			}, phaseTimeoutMs);
 		}
-		timer = setTimeout(() => {
-			timedOut = true;
-			ac.abort();
-		}, phaseTimeoutMs);
+		try {
+			r = await ctx.deps.runTask(
+				ctx.deps.cwd,
+				ctx.deps.agents,
+				agentName,
+				task,
+				{
+					model: phase.model,
+					thinking: phase.thinking,
+					tools: phase.tools,
+					cwd: ctx.deps.cwd,
+					signal: callSignal,
+				},
+				ctx.deps.globalThinking,
+			);
+		} finally {
+			if (timer) clearTimeout(timer);
+			if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
+		}
+		if (timedOut) {
+			r = {
+				...r,
+				exitCode: r.exitCode === 0 ? 1 : r.exitCode,
+				stopReason: "error",
+				errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
+				phaseTimeout: true,
+			};
+		}
+		attempts.push(r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage());
+		if (!isFailedResult(r)) break;
+		// The current phase has not been committed to state yet. Include prior
+		// completed run usage plus every attempt made here before admitting a
+		// transient retry, matching the imperative runner's live usage guard.
+		if (kernelAttemptsOverBudget(ctx.state, phase.id, attempts)) break;
+		if (r.phaseTimeout || phase.idempotent === false || !isTransientError(r) || attempt >= 3) break;
+		const wait = Math.min(60_000, (phase.retry?.backoffMs ?? 2_000) * 2 ** attempt);
+		await abortableDelay(wait, ctx.deps.signal);
 	}
-	let r: RunResult;
-	try {
-		r = await ctx.deps.runTask(
-			ctx.deps.cwd,
-			ctx.deps.agents,
-			agentName,
-			task,
-			{
-				model: phase.model,
-				thinking: phase.thinking,
-				tools: phase.tools,
-				cwd: ctx.deps.cwd,
-				signal: callSignal,
-			},
-			ctx.deps.globalThinking,
-		);
-	} finally {
-		if (timer) clearTimeout(timer);
-		if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
-	}
-	if (timedOut) {
+	if (!r) {
 		r = {
-			...r!,
-			exitCode: r!.exitCode === 0 ? 1 : r!.exitCode,
-			stopReason: "error",
-			errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
-			phaseTimeout: true,
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: "Aborted before execution",
+			usage: emptyUsage(),
+			stopReason: "aborted",
+			errorMessage: "Aborted before execution",
 		};
 	}
-	const usage = r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage();
+	const usage = aggregateUsage(attempts);
+	r = { ...r, usage, attempts: attempts.length };
 	const event = baseEvent(ctx, phase.id, "subagent-call", {
 		input: {
 			agent: agentName,
@@ -351,7 +381,7 @@ async function runOneAgent(
 			stopReason: r.stopReason,
 		},
 	});
-	return { result: { ...r, usage }, event };
+	return { result: r, event };
 }
 
 async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
@@ -373,6 +403,7 @@ async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyRes
 			status,
 			error: failed ? r.errorMessage ?? r.stderr : undefined,
 			usage,
+			attempts: r.attempts,
 		};
 	} catch (e) {
 		const err = e instanceof Error ? e.message : String(e);
@@ -495,7 +526,19 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 	const type = (phase.type ?? "agent") as string;
 	if (!(EVENT_KERNEL_PHASE_TYPES as readonly string[]).includes(type)) return null;
 
-	const events: Event[] = [baseEvent(ctx, phase.id, "phase-start")];
+	const events: Event[] = [
+		baseEvent(ctx, phase.id, "phase-start", {
+			dependencies: dependenciesOf(phase),
+			optional: phase.optional === true,
+		}),
+	];
+	if (type === "flow") {
+		events.push(
+			baseEvent(ctx, phase.id, "decision", {
+				decision: { type: "unreplayable", reason: "inner-flow" },
+			}),
+		);
+	}
 
 	// when-guard (fail-open evaluateCondition matches imperative runtime)
 	if (phase.when !== undefined) {
@@ -549,6 +592,7 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		status: body.status,
 		error: body.error,
 		usage: body.usage,
+		attempts: body.attempts,
 		gate: body.gate,
 		approval: body.approval,
 	};

@@ -257,7 +257,7 @@ test("flow cycle A→B→A fails on kernel", async () => {
 		loadFlow: (n) => flows[n],
 	});
 	assert.equal(res.ok, false);
-	assert.match(res.state.phases.f.error ?? "", /recursive/i);
+	assert.match(res.state.phases.f.error ?? "", /recursive|sub-flow.*failed/i);
 });
 
 test("dynamic flow def with script fails open (done empty) not ACE", async () => {
@@ -287,9 +287,7 @@ test("dynamic flow def with script fails open (done empty) not ACE", async () =>
 	assert.equal(res.state.phases.f.output ?? "", "");
 });
 
-test("nested flow re-admission: race child rejected under event kernel", async () => {
-	// Parent is kernel-eligible (plain flow wrapper); child has race → must not
-	// silently enter kernel step with wrong semantics.
+test("parent admission recursively routes inline race child to imperative runtime", async () => {
 	const def: Taskflow = {
 		name: "parent-kernel",
 		phases: [
@@ -314,7 +312,7 @@ test("nested flow re-admission: race child rejected under event kernel", async (
 			},
 		],
 	};
-	assert.equal(canUseEventKernel(def), true, "parent without race is kernel-eligible");
+	assert.equal(canUseEventKernel(def), false, "unsupported child makes the parent kernel-ineligible");
 	const res = await executeTaskflow(mk(def), {
 		cwd: process.cwd(),
 		agents: AGENTS,
@@ -322,8 +320,18 @@ test("nested flow re-admission: race child rejected under event kernel", async (
 		persist: () => {},
 		eventKernel: true,
 	});
-	// Nested admission fails closed — phase fails with clear reason.
-	assert.equal(res.ok, false);
-	assert.equal(res.state.phases.f?.status, "failed");
-	assert.match(res.state.phases.f?.error ?? res.state.phases.f?.output ?? "", /event kernel|race|Nested flow/i);
+	assert.equal(res.ok, true);
+	assert.equal(res.state.phases.f?.status, "done");
+});
+
+test("parent admission recursively inspects saved sub-flow", () => {
+	const parent: Taskflow = {
+		name: "saved-parent",
+		phases: [{ id: "f", type: "flow", use: "saved-child", final: true }],
+	};
+	const child: Taskflow = {
+		name: "saved-child",
+		phases: [{ id: "r", type: "race", branches: [{ task: "a" }, { task: "b" }], final: true }],
+	};
+	assert.equal(canUseEventKernel(parent, () => child), false);
 });

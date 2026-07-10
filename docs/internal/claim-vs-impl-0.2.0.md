@@ -1,6 +1,7 @@
 # Claim vs implementation — verification log (`release/0.2.0`)
 
-> Last full pass: 2026-07-09 · Adversarial closure pass (PR-ready)
+> Last updated: 2026-07-10 · Local closure gates pass on the merged tree;
+> do not publish until the release PR/CI passes and the tag job owns all names.
 > Purpose: single ledger so marketing/RFCs/skills do not outrun the code.
 
 ## Verified true (hard claims OK)
@@ -16,6 +17,9 @@
 | MCP 12 tools | `taskflow-mcp-core` server tool list |
 | Five host delivery packages | pi/codex/claude/opencode/grok |
 | Toolchain = TypeScript AST (not ts-morph) | `taskflow-dsl` depends on `typescript` only |
+| MCP request cancellation | concurrent stdio dispatch; `notifications/cancelled` → `AbortSignal` → runtime/host child |
+| Grok sandbox policy | read-only phases: kernel `read-only` + known-good allowlist + independent mutator denies; mutating/default phases: kernel `workspace`; live Grok 0.2.93 E2E proves read-only denial plus in-cwd allow/outside-cwd deny |
+| Existing npm version verification | trusted owner + SLSA/GitHub provenance + tag/commit + exact tarball integrity before skip |
 
 ## Honest / qualified
 
@@ -27,8 +31,9 @@
 | Event kernel “complete” | Complete for **kernel-eligible** kinds/features; not race/expand; not score/retry/expect/reflexion/cross-run cache/shareContext; **nested** `flow` re-runs `canUseEventKernel` (fail-closed) |
 | Multi-host DSL | Hosts run **Taskflow JSON**; `.tf.ts` requires prior `taskflow-dsl build` |
 | Decompile | Semantic, not literal round-trip |
-| Test count | ~**1400+** unit tests in ~**95** `*.test.ts` files (regenerate badge on release) |
+| Test count | **1500+** unit tests in **100** `*.test.ts` files (regenerate the exact count on release) |
 | Package count | **9** under `packages/` + `website` |
+| Grok budgets | Grok 0.2.93 reports no usage; Grok MCP explicitly rejects any flow declaring `budget` |
 
 ## Explicitly not shipped
 
@@ -74,16 +79,36 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 27. Docs honesty: EN/zh README monorepo-vs-npm banner; zh phase/package parity; website race first-success; example description; publish.yml nine packages; CONTRIBUTING/DECISIONS counts.
 28. CI includes `test:e2e-grok-mcp` (already wired).
 
+### Pass 6 (release-closure hardening)
+29. Grok 0.2.93 read-only execution no longer includes unmappable web ids; mutator deny rules remain even if allowlist handling regresses.
+30. Grok thinking maps to `--reasoning-effort`; its unavailable usage accounting rejects budgeted MCP runs fail-closed.
+31. MCP stdio dispatch is concurrent and propagates `notifications/cancelled` through a per-request `AbortSignal`.
+32. Existing npm versions are never blindly skipped: owner, provenance repository/workflow/ref/commit, and local tarball integrity must match.
+33. Added a live Grok executor E2E (`pnpm run test:e2e-grok`) in addition to the network-free Grok MCP E2E.
+34. Corrected detached-run documentation: detach is Pi-only; MCP cancellation aborts rather than creating hidden background work.
+
+### Pass 7 (cross-adversarial terminal closure)
+35. Runtime/kernel/replay/cache/trace/graft/resume semantics were challenged with executable counterexamples; nested and supervision-tree budgets now use remaining caps, replay fails safe on incomplete/legacy graph evidence, and graft ownership/usage survives definition evolution and collisions.
+36. DSL compiler/decompiler/CLI is fail-closed for unsupported dynamic syntax, round-trips all 12 phase kinds, defaults `check` to TypeScript diagnostics, and passes clean tarball/install E2E.
+37. MCP cancellation tears down the full host process tree; stdio disconnect/error paths are bounded and suppress late work/responses.
+38. Grok read-only and workspace-mutating policies have live 0.2.93 enforcement probes; unavailable usage accounting rejects every nested budget path before spawn.
+39. All GitHub Actions are pinned to verified full SHAs; npm publish and GitHub Release use separate least-privilege jobs; published-version reruns verify provenance and exact tarball integrity.
+40. Root typecheck, full unit suite, all package builds, website static export, DSL install E2E, four host MCP E2Es, built-dist comprehensive MCP E2E, and live Codex/OpenCode/Grok executors pass locally.
+
 ## Still open (not claimed as done)
 
 - Formal **0.2.0 npm publish** after merge + `v0.2.0` tag; pins already match.
 - S5 kernel default ON + flagship $ demo seal → plan: `docs/internal/s5-kernel-default-on-plan.md`.
-- Live host **executor** e2e as release gate (MCP e2e is CI; live model stays manual).
+- Live Claude executor E2E is still an external release-environment gate: the current local Claude route returns HTTP 403 from `api.ohmyrouter.com`. Codex, OpenCode, and Grok live executors pass; all four MCP adapters pass without live model access.
 
 ## Re-verify commands
 
 ```bash
 pnpm run test:dsl
+pnpm run test:hosts
+node --conditions=development --experimental-strip-types --test \
+  'packages/taskflow-mcp-core/test/*.test.ts'
+pnpm run test:e2e-grok
 node --conditions=development --experimental-strip-types --test \
   packages/taskflow-core/test/race-expand.test.ts \
   packages/taskflow-core/test/script.test.ts

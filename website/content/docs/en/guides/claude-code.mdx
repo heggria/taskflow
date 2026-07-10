@@ -176,7 +176,7 @@ Omit `phaseId` to list every phase with its status and output size. Output is ha
 
 ## Approvals in MCP mode
 
-MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows you run through the `taskflow_*` tools; use `approval` only in flows a human runs interactively.
+MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows you run through the `taskflow_*` tools; use `approval` only in flows a human runs interactively.
 
 ## Tool reference
 

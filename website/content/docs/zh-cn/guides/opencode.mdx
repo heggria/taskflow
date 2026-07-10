@@ -194,7 +194,7 @@ opencode run "run the nightly-audit taskflow" &
 
 ## MCP 模式下的审批
 
-MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**（fail-open）。在你通过 `taskflow_*` 工具运行的 flow 中，优先使用 `gate`（agent 审查）；`approval` 只用在人工交互运行的 flow 中。
+MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**（对审批决策 fail-closed）。在你通过 `taskflow_*` 工具运行的 flow 中，优先使用 `gate`（agent 审查）；`approval` 只用在人工交互运行的 flow 中。
 
 ## 工具参考
 

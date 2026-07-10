@@ -24,6 +24,7 @@ const repoRoot = join(here, "..");
 const PUBLISHABLE = new Set([
 	"taskflow-core",
 	"taskflow-mcp-core",
+	"taskflow-dsl",
 	"pi-taskflow",
 	"codex-taskflow",
 	"claude-taskflow",

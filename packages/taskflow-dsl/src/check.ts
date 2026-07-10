@@ -13,7 +13,7 @@ import { typecheckFile } from "./typecheck.ts";
 export interface CheckOptions {
 	/** Skip Taskflow validate (rune/static only). Default false. */
 	noValidate?: boolean;
-	/** Run full tsc Program diagnostics on the file (default false). */
+	/** Run full tsc Program diagnostics on .tf.ts files (default true). */
 	typecheck?: boolean;
 	/** cwd for tsconfig discovery when typecheck is on. */
 	cwd?: string;
@@ -52,7 +52,8 @@ export function checkFile(filePath: string, opts: CheckOptions = {}): CheckResul
 	}
 	const r = buildFile(abs, { validate: !opts.noValidate, irHash: false, emit: "taskflow" });
 	const diagnostics = [...r.diagnostics];
-	if (opts.typecheck) {
+	const isTypeScriptDsl = abs.endsWith(".tf.ts") || path.extname(abs).toLowerCase() === ".ts";
+	if (isTypeScriptDsl && opts.typecheck !== false) {
 		diagnostics.push(...typecheckFile(abs, opts.cwd ?? path.dirname(abs)));
 	}
 	return { ok: !hasErrors(diagnostics), diagnostics, file: r.file };

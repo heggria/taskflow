@@ -13,10 +13,22 @@ export interface EraseResult {
 
 export interface PhaseDraft {
 	id: string;
+	/** Source-level variable binding. May differ from the emitted phase id. */
+	binding?: string;
 	type: string;
 	raw: Record<string, unknown>;
 	dependsOn: Set<string>;
 	final?: boolean;
+}
+
+const BINDING_PREFIX = "\u0000binding:";
+
+export function setPhaseBinding(phases: Map<string, PhaseDraft>, binding: string, draft: PhaseDraft): void {
+	phases.set(`${BINDING_PREFIX}${binding}`, draft);
+}
+
+export function phaseByBinding(phases: Map<string, PhaseDraft>, binding: string): PhaseDraft | undefined {
+	return phases.get(`${BINDING_PREFIX}${binding}`) ?? phases.get(binding);
 }
 
 /** Mutable session state for one eraseSource() call. */

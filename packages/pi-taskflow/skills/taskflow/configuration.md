@@ -430,9 +430,9 @@ node --conditions=development --experimental-strip-types \
 # edit audit.tf.ts
 node --conditions=development --experimental-strip-types \
   packages/taskflow-dsl/src/cli.ts check audit.tf.ts
-# optional full tsc Program pass:
+# Fast rune/static-only pass (skip the default full tsc Program check):
 node --conditions=development --experimental-strip-types \
-  packages/taskflow-dsl/src/cli.ts check audit.tf.ts --typecheck
+  packages/taskflow-dsl/src/cli.ts check audit.tf.ts --no-typecheck
 node --conditions=development --experimental-strip-types \
   packages/taskflow-dsl/src/cli.ts build audit.tf.ts --emit both
 # → audit.taskflow.json (+ audit.flowir.json)
@@ -442,7 +442,7 @@ node --conditions=development --experimental-strip-types \
 | Command | Purpose |
 |---------|---------|
 | `new [name]` | ≤5-line hello skeleton (`.tf.ts` or `--json-escape` JSON) |
-| `check <file>` | Erase + `validateTaskflow` (add `--typecheck` for tsc) |
+| `check <file>` | Erase + `validateTaskflow` + tsc (use `--no-typecheck` for a faster static-only pass) |
 | `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
 | `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
 

@@ -65,6 +65,7 @@ test("canUseEventKernel: classic kinds accepted; race/expand force imperative pa
 			name: "all",
 			phases: classic.map((type, i) => {
 				const base: Record<string, unknown> = { id: `p${i}`, type, final: i === classic.length - 1 };
+				if (i > 0) base.dependsOn = [`p${i - 1}`];
 				if (type === "script") base.run = ["node", "-e", "1"];
 				if (type === "map") {
 					base.over = '["x"]';
@@ -82,7 +83,7 @@ test("canUseEventKernel: classic kinds accepted; race/expand force imperative pa
 				if (type === "flow") base.use = "child";
 				return base;
 			}) as Taskflow["phases"],
-		}),
+		}, () => ({ name: "child", phases: [{ id: "p", task: "x", final: true }] })),
 		true,
 	);
 	assert.equal(

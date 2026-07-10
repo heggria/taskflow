@@ -14,6 +14,7 @@ export function emitParallel(
 	const idBase = bindName ?? nextSyntheticId(ctx, "phase");
 	const draft: PhaseDraft = {
 		id: idBase,
+		binding: idBase,
 		type: "parallel",
 		raw: { type: "parallel" },
 		dependsOn: new Set(),
@@ -25,6 +26,15 @@ export function emitParallel(
 		for (let bi = 0; bi < arr.elements.length; bi++) {
 			const el = arr.elements[bi]!;
 			if (ts.isCallExpression(el) && calleeName(el.expression) === "agent") {
+				if (el.arguments.length < 1 || el.arguments.length > 2) {
+					ctx.diags.push({
+						code: "TFDSL_RUNE_ARITY",
+						severity: "error",
+						message: `parallel() branch agent expects 1-2 arguments, got ${el.arguments.length}.`,
+						file: ctx.file,
+					});
+					continue;
+				}
 				const erased = eraseStringish(
 					ctx.sf,
 					ctx.file,
