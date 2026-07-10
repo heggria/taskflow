@@ -1,74 +1,74 @@
 ---
 title: Core Concepts
-description: The ideas behind taskflow's declarative DAG model.
+description: The mental model behind taskflow's declarative DAG runtime.
 ---
 
-This chapter is the *mental model* behind taskflow. It does not list every field — that is the [Syntax Reference](/en/docs/syntax) — and it does not walk through a host install — that is the [Guides](/en/docs/guides). Instead it explains the six ideas that make a taskflow different from an imperative script you write by hand:
+This chapter explains the stable execution model beneath every taskflow. It does not enumerate every field — use the [Syntax Reference](/en/docs/syntax) for that — and it does not cover the 0.2 compiler surfaces — use [New in 0.2](/en/docs/compiler-runtime).
 
-- work is a **graph**, not a sequence of calls;
-- the graph is built from ten **phase types**;
-- data moves between phases through **interpolation**;
-- the whole graph is **verified** before a token is spent;
-- intermediate output is **isolated** from your context;
-- a run can be **resumed** across sessions;
-- and a finished run can be **replayed offline** for threshold/budget what-ifs (zero tokens).
+A taskflow rests on six ideas:
 
-Read these once and the rest of the docs click into place.
+- work is a **graph**, not an implied sequence;
+- twelve **phase types** build the graph;
+- data moves through explicit **interpolation**;
+- the graph is **verified** before token spend;
+- intermediate output and filesystem work can be **isolated**;
+- persisted state lets a run **resume** across sessions.
 
 ## Suggested reading order
 
-The concepts build on each other. Read them top to bottom the first time:
-
 <Steps>
   <Step>
-    **[The DAG Model](/en/docs/concepts/dag)** — why work is a graph of `dependsOn` edges, and why array order is *not* an edge.
+    **[The DAG Model](/en/docs/concepts/dag)** — `dependsOn` creates edges; array order does not.
   </Step>
   <Step>
-    **[Phase Types](/en/docs/concepts/phases)** — the twelve building blocks (`agent`, `map`, `gate`, `loop`, …) and when to reach for each.
+    **[Phase Types](/en/docs/concepts/phases)** — the twelve building blocks and when to use them.
   </Step>
   <Step>
-    **[Interpolation](/en/docs/concepts/interpolation)** — how `{steps.X.output}` and friends move data between phases, deterministically and zero-token.
+    **[Interpolation](/en/docs/concepts/interpolation)** — how values move between phases without an extra model call.
   </Step>
   <Step>
-    **[Verification](/en/docs/concepts/verification)** — the static analysis pass that catches cycles, dead ends, and dangling refs before any agent runs.
+    **[Verification](/en/docs/concepts/verification)** — cycles, dead ends, references, and budget checks before execution.
   </Step>
   <Step>
-    **[Context Isolation](/en/docs/concepts/context-isolation)** — why only the `final` phase reaches your conversation, and how to peek when you need to.
+    **[Context Isolation](/en/docs/concepts/context-isolation)** and **[Workspace Isolation](/en/docs/concepts/workspace-isolation)** — keep transcripts and file changes inside controlled boundaries.
   </Step>
   <Step>
-    **[Resume](/en/docs/concepts/resume)** — how a failed run picks up where it stopped, and how cross-run memoization reuses last week's work.
+    **[Shared Context Tree](/en/docs/concepts/shared-context-tree)** — coordinate isolated agents without dumping every transcript into the host.
   </Step>
   <Step>
-    **[Deterministic Replay](/en/docs/concepts/deterministic-replay)** — offline what-if on a recorded event trace (gate thresholds, budget) without calling the model.
+    **[Resume](/en/docs/concepts/resume)** — continue incomplete work and reuse persisted phase results.
   </Step>
 </Steps>
 
 <Callout type="info">
-  Already comfortable with DAGs and build systems like Make or Bazel? You can skim the first two pages and start at [Verification](/en/docs/concepts/verification) — that is where taskflow's safety story really begins.
+  Replay and incremental recompute build on this model, but are documented as 0.2 runtime capabilities in [New in 0.2](/en/docs/compiler-runtime).
 </Callout>
 
 ## The concepts
 
 <Cards>
   <Card title="The DAG Model" href="/en/docs/concepts/dag">
-    Why a graph of task nodes, and how `dependsOn` builds it.
+    How task nodes and explicit dependencies form the graph.
   </Card>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The 10 building blocks of every taskflow.
+    The twelve execution and control building blocks.
   </Card>
   <Card title="Interpolation" href="/en/docs/concepts/interpolation">
-    How data flows between phases.
+    Deterministic data flow between phases.
   </Card>
   <Card title="Verification" href="/en/docs/concepts/verification">
-    Catching errors before tokens are spent.
+    Catch structural errors before tokens are spent.
   </Card>
   <Card title="Context Isolation" href="/en/docs/concepts/context-isolation">
-    Why only the final result reaches you.
+    Why only the selected final result reaches the host conversation.
+  </Card>
+  <Card title="Workspace Isolation" href="/en/docs/concepts/workspace-isolation">
+    Run file-changing work in inherited, temp, dedicated, or worktree scopes.
+  </Card>
+  <Card title="Shared Context Tree" href="/en/docs/concepts/shared-context-tree">
+    Coordinate agents through explicit shared context.
   </Card>
   <Card title="Resume" href="/en/docs/concepts/resume">
-    Cross-session continuation and cache reuse.
-  </Card>
-  <Card title="Deterministic Replay" href="/en/docs/concepts/deterministic-replay">
-    Offline threshold/budget what-if from the event log.
+    Continue persisted runs across sessions.
   </Card>
 </Cards>

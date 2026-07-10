@@ -123,7 +123,7 @@ Run it, walk away, come back tomorrow:
 taskflow_resume <runId>
 ```
 
-Phases that already completed are served from cache (keyed on their resolved inputs). If you edited `changelog`'s prompt overnight, only `changelog`, `gate`, and `report` re-run — `discover` and all the reviews are reused. See [incremental recompute](/en/docs/reference/incremental-recompute).
+Phases that already completed are served from cache (keyed on their resolved inputs). If you edited `changelog`'s prompt overnight, only `changelog`, `gate`, and `report` re-run — `discover` and all the reviews are reused. See [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
 
 ## When to stay ad-hoc
 
@@ -137,7 +137,7 @@ Don't reach for taskflow for a one-off "go look at X." The built-in subagent sho
 - `budget` caps spend; resume is free and cross-session.
 - Only the final phase reaches your Codex context.
 
-Grab the [templates gallery](/en/docs/templates) for five more ready-to-run flows, or read the [Codex guide](/en/docs/guides/codex) for the full host-specific surface.
+Grab the [templates gallery](/en/docs/guides/templates) for five more ready-to-run flows, or read the [Codex guide](/en/docs/guides/codex) for the full host-specific surface.
 
 
 ## Also available on other hosts

@@ -1,9 +1,21 @@
-import type * as PageTree from "fumadocs-core/page-tree";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { MessageSquare } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { source } from "@/lib/source";
+
+const sidebarCopy = {
+	en: {
+		badge: "New in 0.2",
+		title: "The compiler runtime",
+		body: "Start with FlowIR, replay, and minimal recompute.",
+	},
+	"zh-cn": {
+		badge: "0.2 新能力",
+		title: "编译器运行时",
+		body: "从 FlowIR、replay 与最小重算开始。",
+	},
+} as const;
 
 function TaskflowLogo() {
 	return (
@@ -46,19 +58,6 @@ function GitHubIcon() {
 	);
 }
 
-/**
- * Keep top-level doc sections expanded and disable their collapse trigger.
- * Nested folders remain collapsible so the sidebar stays scannable.
- */
-function freezeTopLevelSections(root: PageTree.Root): PageTree.Root {
-	return {
-		...root,
-		children: root.children.map((node) =>
-			node.type === "folder" ? { ...node, collapsible: false } : node,
-		),
-	};
-}
-
 export default async function DocsLayoutPage({
 	children,
 	params,
@@ -67,11 +66,11 @@ export default async function DocsLayoutPage({
 	params: Promise<{ lang: string }>;
 }) {
 	const { lang } = await params;
-	const tree = freezeTopLevelSections(source.pageTree[lang]);
+	const copy = lang === "zh-cn" ? sidebarCopy["zh-cn"] : sidebarCopy.en;
 
 	return (
 		<DocsLayout
-			tree={tree}
+			tree={source.pageTree[lang]}
 			nav={{
 				title: (
 					<div className="inline-flex items-center gap-2 text-[0.9375rem] font-semibold">
@@ -101,21 +100,19 @@ export default async function DocsLayoutPage({
 				},
 			]}
 			sidebar={{
-				defaultOpenLevel: 1,
+				defaultOpenLevel: 0,
 				banner: (
 					<Link
-						href={`/${lang}/docs/templates`}
+						href={`/${lang}/docs/compiler-runtime`}
 						className="block rounded-lg border bg-fd-card p-3 text-sm transition-colors hover:bg-fd-accent"
 					>
 						<span className="inline-flex items-center rounded-full bg-fd-primary/10 px-2 py-0.5 text-xs font-medium text-fd-primary">
-							New
+							{copy.badge}
 						</span>
 						<span className="mt-1 block font-medium text-fd-card-foreground">
-							Templates
+							{copy.title}
 						</span>
-						<span className="text-fd-muted-foreground">
-							Browse ready-to-run taskflow examples.
-						</span>
+						<span className="text-fd-muted-foreground">{copy.body}</span>
 					</Link>
 				),
 			}}

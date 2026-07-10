@@ -61,7 +61,7 @@ taskflow is **agent-host-native**: it installs *into* an existing coding agent (
 
 LangGraph's checkpointers snapshot the **graph state** at each step — great for resuming a long-running agent with typed state.
 
-taskflow persists **per-phase results** keyed on each phase's resolved input hash, in a file-backed run store. Resume is phase-by-phase and **cross-run** (not just cross-session): editing one phase and re-running re-executes only that phase + downstream, serving everything else from cache. See [incremental recompute](/en/docs/reference/incremental-recompute).
+taskflow persists **per-phase results** keyed on each phase's resolved input hash, in a file-backed run store. Resume is phase-by-phase and **cross-run** (not just cross-session): editing one phase and re-running re-executes only that phase + downstream, serving everything else from cache. See [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
 
 ## When to pick LangGraph
 

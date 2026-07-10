@@ -3,7 +3,7 @@ title: Commands
 description: Pi slash commands and MCP tools (Codex, Claude, OpenCode, Grok).
 ---
 
-taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
+taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode, Grok), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
 
 This page is a grouped reference for both. Every command has a one-line purpose and, where useful, a concrete example. If you just want to skim, jump to the [example session](#an-example-session) at the end.
 
@@ -50,10 +50,11 @@ The `/tf` command is the user-facing surface on Pi. Its subcommands fall into fo
 | Command | Description |
 |---|---|
 | `/tf save` | Save the most recent inline flow definition under a name (makes `/tf:<name>` available immediately). |
+| `/tf search` | Search the reusable-flow library by purpose/tags. |
 | `/tf init` | Configure model roles — map the built-in agent roles to your models. |
 
 <Callout type="tip">
-  `peek`, `provenance`, `why-stale`, and `recompute` explain *what would re-run*. `trace` + `replay` explain *what was decided* and counterfactual knobs — see [Deterministic Replay](/en/docs/concepts/deterministic-replay).
+  `peek`, `provenance`, `why-stale`, and `recompute` explain *what would re-run*. `trace` + `replay` explain *what was decided* and counterfactual knobs — see [Deterministic Replay](/en/docs/compiler-runtime/deterministic-replay).
 </Callout>
 
 ## The `taskflow` tool (Pi)

@@ -70,7 +70,7 @@ The `gate` phase is the thing ad-hoc prompting structurally can't give you. It's
 - If `plan-arbiter` emits `VERDICT: PASS` → the flow proceeds to `report`.
 - If it emits `VERDICT: BLOCK` → the flow **halts immediately**. `report` never runs. You get the blocker finding instead of a polished report that buries it.
 
-That's a quality gate with teeth. The fail-open rule (ambiguous output → PASS) means a confused gate won't accidentally halt good work — but a clear `BLOCK` is final.
+That's a quality gate with teeth. The fail-closed rule (unparseable output → `BLOCK`) means a confused gate cannot accidentally ship bad work — but a clear `BLOCK` is final. An explicit, non-blocking JSON verdict (e.g. `{"verdict": "no issues found"}`) is still treated as `PASS`.
 
 ## Run it from Claude Code
 
@@ -109,7 +109,7 @@ Now every PR review is `taskflow_run pr-security-review` — no re-prompting, no
 - `budget` caps spend; `map` fans out with bounded concurrency.
 - Only the final report returns to your session — transcripts stay isolated.
 
-For the full Claude Code surface (permissions, model routing, all available tools), see the [Claude Code guide](/en/docs/guides/claude-code). The [templates gallery](/en/docs/templates) has four more runnable pipelines.
+For the full Claude Code surface (permissions, model routing, all available tools), see the [Claude Code guide](/en/docs/guides/claude-code). The [templates gallery](/en/docs/guides/templates) has four more runnable pipelines.
 
 
 ## Also available on other hosts

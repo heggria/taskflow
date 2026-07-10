@@ -70,7 +70,7 @@ claude plugin install claude-taskflow@taskflow
 - 如果 `plan-arbiter` 给 `VERDICT: PASS` → 流程继续到 `report`。
 - 如果给 `VERDICT: BLOCK` → 流程**立即停止**。`report` 永不运行。你拿到的是阻塞发现，而不是一份把问题埋掉的漂亮报告。
 
-这是一个有牙齿的质量门禁。fail-open 规则（输出模糊时 → PASS）意味着一个犯迷糊的 gate 不会误停好工作——但一个明确的 `BLOCK` 是终局的。
+这是一个有牙齿的质量门禁。fail-closed 规则（完全无法解析的输出 → `BLOCK`）意味着一个犯迷糊的 gate 不会误放坏工作——但一个明确的 `BLOCK` 是终局的。而明确的非阻塞 JSON 裁决（例如 `{"verdict": "no issues found"}`）仍会被当作 `PASS`。
 
 ## 从 Claude Code 运行
 
@@ -109,7 +109,7 @@ taskflow_save pr-security-review pr-security-review.json
 - `budget` 封顶花费；`map` 按有界并发扇出。
 - 只有最终报告返回你的会话——逐字稿保持隔离。
 
-完整的 Claude Code 接口（权限、模型路由、所有可用工具）见 [Claude Code 指南](/zh-cn/docs/guides/claude-code)。[模板库](/zh-cn/docs/templates) 还有四个可运行流水线。
+完整的 Claude Code 接口（权限、模型路由、所有可用工具）见 [Claude Code 指南](/zh-cn/docs/guides/claude-code)。[模板库](/zh-cn/docs/guides/templates) 还有四个可运行流水线。
 
 
 ## 也适用于其他宿主

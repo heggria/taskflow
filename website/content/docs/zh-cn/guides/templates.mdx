@@ -1,0 +1,435 @@
+---
+title: 模板库
+description: 五个可直接运行、可保存并改写的 taskflow 模板。
+---
+
+模板库是面向常见智能体工作流的完整、可运行 taskflow 定义。每一个都是真实的 JSON 图——你可以原样保存并运行，再针对自己的仓库调整。它们不是玩具示例：这里的每个阶段、依赖和字段都是你在生产环境中会真正写下的内容。
+
+<Callout type="info">
+  这些模板在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode / Grok Build（`taskflow_run`）上运行方式完全一致。宿主特定安装见 [Pi](/zh-cn/docs/guides/pi)、[Codex](/zh-cn/docs/guides/codex)、[Claude Code](/zh-cn/docs/guides/claude-code)、[OpenCode](/zh-cn/docs/guides/opencode) 或 [Grok Build](/zh-cn/docs/guides/grok-build) 指南。
+</Callout>
+
+## 模板列表
+
+<Cards>
+  <Card title="PR 安全审计" href="#1-pr-安全审计">
+    发现变更文件、并行做逐文件安全审查、按风险设闸、输出一份汇总报告。
+  </Card>
+  <Card title="发布说明生成" href="#2-发布说明生成">
+    调研功能特性、跑标题锦标赛、组装出一份完整的发布说明。
+  </Card>
+  <Card title="代码库迁移" href="#3-代码库迁移">
+    发现遗留调用点、规划迁移，并循环到没有旧调用为止。
+  </Card>
+  <Card title="API 文档生成" href="#4-api-文档生成">
+    发现公开 API 面、逐文件起草参考文档、合并为一份文档。
+  </Card>
+  <Card title="依赖升级评审" href="#5-依赖升级评审">
+    枚举过时依赖、评估破坏性变更风险，并对关键项设闸。
+  </Card>
+</Cards>
+
+把任意模板保存为项目里的 `.json` 文件，然后在运行前免费验证它：
+
+```bash title="运行前先验证"
+/tf verify <name>
+```
+
+---
+
+## 1. PR 安全审计
+
+发现一个 PR 触及的文件，以受限并发扇出逐文件安全审查，同时并行做架构审查，按风险对整体设闸，最后输出一份合并报告。只有报告会回到你的上下文——逐文件记录留在运行时内部。
+
+```json title="pr-security-audit.json"
+{
+  "name": "pr-security-audit",
+  "description": "Audit a pull request: discover changed files, fan out per-file security review, run a parallel architecture review, gate on risk, and emit one merged report.",
+  "args": {
+    "base": { "default": "origin/main", "description": "The git ref to diff against." }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 3.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files changed between {args.base} and HEAD. Output ONLY a JSON array of {\"path\": \"<relative-path>\"} objects. No prose.",
+      "output": "json",
+      "expect": { "type": "array", "items": { "type": "object" } },
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "security-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Review {file.path} for security risks: missing auth checks, unsanitized input, hardcoded secrets, unsafe deserialization. Return one paragraph of findings, or 'No issues found.' if clean. Begin with the file path.",
+      "dependsOn": ["discover"],
+      "concurrency": 4,
+      "context": ["{file.path}"],
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "arch-review",
+      "type": "parallel",
+      "branches": [
+        {
+          "task": "Review the changed files for layering violations, leaked internals, and missing abstractions. Return a short prioritized list.",
+          "agent": "reviewer"
+        }
+      ],
+      "concurrency": 2
+    },
+    {
+      "id": "risk-gate",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["security-each", "arch-review"],
+      "join": "all",
+      "task": "You are the final risk gate. If any finding is high-risk (missing auth, secret leak, broken layering, data-loss path), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-review.output}",
+      "onBlock": "halt"
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["security-each", "arch-review", "risk-gate"],
+      "agent": "writer",
+      "task": "Write the final PR review report: 1) Risk verdict, 2) Security findings (prioritized), 3) Architecture findings (prioritized), 4) Recommended actions before merge. Be concise.\n\nSecurity:\n{steps.security-each.output}\n\nArchitecture:\n{steps.arch-review.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+      "dependsOn": ["risk-gate"],
+      "final": true
+    }
+  ]
+}
+```
+
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run pr-security-audit base=origin/main
+    ```
+
+    ```bash title="保存为快捷方式"
+    /tf save pr-security-audit
+    /tf:pr-security-audit base=origin/main
+    ```
+  </Tab>
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
+    taskflow_run { "name": "pr-security-audit", "args": { "base": "origin/main" } }
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="tip">
+  这个 flow 是如何一步步搭起来的——发现、扇出、设闸、报告——在[代码审计案例](/zh-cn/docs/guides/code-audit-case-study)里有完整走查。
+</Callout>
+
+---
+
+## 2. 发布说明生成
+
+把功能特性调研成一组共享事实，跑一个四变体锦标赛选出最强标题，再用调研结果和获胜标题组装出一份完整发布说明。落败标题和评委推理都会被丢弃；只有成品说明会回到你的上下文。
+
+```json title="release-note.json"
+{
+  "name": "release-note",
+  "description": "Research a feature, run a 4-variant headline tournament, and assemble a full release note.",
+  "args": {
+    "feature": { "description": "The feature to write a release note for.", "required": true }
+  },
+  "concurrency": 6,
+  "budget": { "maxUSD": 1.5 },
+  "phases": [
+    {
+      "id": "research",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Read the diff and release notes for {args.feature}. Summarize in 5 bullets: what it does, who it helps, and the single most surprising benefit. Return bullets only.",
+      "output": "json",
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "headline",
+      "type": "tournament",
+      "agent": "writer",
+      "dependsOn": ["research"],
+      "task": "Write a punchy release-note headline based on the research below. It must be accurate and under 80 characters. Return ONLY the headline.\n\n{steps.research.output}",
+      "variants": 4,
+      "judge": "Pick the headline that is the most punchy while staying accurate and under 80 characters. Prefer specific over generic.",
+      "judgeAgent": "final-arbiter",
+      "mode": "best"
+    },
+    {
+      "id": "note",
+      "type": "reduce",
+      "from": ["research", "headline"],
+      "agent": "writer",
+      "task": "Assemble a complete release note. Use the winning headline as the title, then write a 2-3 paragraph body from the research. End with a one-line 'How to try it' call to action.\n\nHeadline:\n{steps.headline.output}\n\nResearch:\n{steps.research.output}",
+      "dependsOn": ["headline"],
+      "final": true
+    }
+  ]
+}
+```
+
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run release-note feature="subagent context isolation"
+    ```
+
+    ```bash title="保存为快捷方式"
+    /tf save release-note
+    ```
+  </Tab>
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
+    taskflow_run { "name": "release-note", "args": { "feature": "subagent context isolation" } }
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="tip">
+  标题锦标赛——变体、评委准则、`best` 与 `aggregate` 模式——在[锦标赛案例](/zh-cn/docs/guides/headline-tournament-case-study)里有端到端讲解。
+</Callout>
+
+---
+
+## 3. 代码库迁移
+
+发现某个遗留 API 的全部调用点、按文件规划迁移、对计划设闸，然后循环：根据剩余项重新规划，直到没有旧调用为止。运行时会在执行任何模型生成的子流程前先验证它，所以坏计划永远不会让整个 run 崩掉。
+
+```json title="codebase-migration.json"
+{
+  "name": "codebase-migration",
+  "description": "Iteratively re-plan a legacyAuth() -> authorize() migration until no calls remain, then execute the final plan.",
+  "args": {
+    "oldApi": { "default": "legacyAuth()", "description": "The old API call to migrate away from." },
+    "newApi": { "default": "authorize()", "description": "The new API to migrate to." }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 4.0 },
+  "phases": [
+    {
+      "id": "refine",
+      "type": "loop",
+      "agent": "planner",
+      "task": "Inspect the codebase for remaining calls to {args.oldApi}. If any remain, output {\"plan\": <taskflow-definition that fixes the remaining files>, \"done\": false}. If none remain, output {\"done\": true}. The plan, when present, must be a JSON taskflow with a 'name' and a 'phases' array.",
+      "until": "{steps.refine.json.done} == true",
+      "maxIterations": 6,
+      "output": "json"
+    },
+    {
+      "id": "execute-final",
+      "type": "flow",
+      "def": "{steps.refine.json.plan}",
+      "when": "{steps.refine.json.done} == false",
+      "dependsOn": ["refine"],
+      "final": true
+    }
+  ]
+}
+```
+
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run codebase-migration oldApi=legacyAuth\(\) newApi=authorize\(\)
+    ```
+
+    ```bash title="保存为快捷方式"
+    /tf save codebase-migration
+    ```
+  </Tab>
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
+    taskflow_run { "name": "codebase-migration", "args": { "oldApi": "legacyAuth()", "newApi": "authorize()" } }
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="tip">
+  完整的 规划 → 设闸 → 执行 → 循环 周期（含动态硬化上限）在[迁移规划案例](/zh-cn/docs/guides/migration-planner-case-study)里逐步走查。
+</Callout>
+
+---
+
+## 4. API 文档生成
+
+发现某个目录的公开 API 面，并行起草每个文件的参考文档，再把草稿 reduce 成一份连贯的 API 参考文档。逐文件草稿留在运行时内部；只有编译好的参考文档会回到你的上下文。
+
+```json title="api-docs.json"
+{
+  "name": "api-docs",
+  "description": "Discover public API surface, draft per-file reference docs, and merge into one document.",
+  "args": {
+    "dir": { "default": "src", "description": "The source directory to document." }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 2.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List the source files under {args.dir} that export a public API (exported functions, classes, types). Output ONLY a JSON array of {\"path\": \"<relative-path>\", \"module\": \"<module-name>\"} objects. No prose.",
+      "output": "json",
+      "expect": { "type": "array", "items": { "type": "object" } },
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "draft-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "writer",
+      "task": "Write reference documentation for the public API in {file.path} (module: {file.module}). For each export: a one-line summary, parameter descriptions, return type, and one usage example. Use Markdown. Begin with a '## {file.module}' heading.",
+      "dependsOn": ["discover"],
+      "concurrency": 4,
+      "context": ["{file.path}"],
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "compile",
+      "type": "reduce",
+      "from": ["draft-each"],
+      "agent": "writer",
+      "task": "Compile the per-module drafts into a single API reference document. Add a top-level title and a table of contents listing each module. Deduplicate cross-referenced types. Preserve the per-module sections in dependency order.\n\n{steps.draft-each.output}",
+      "dependsOn": ["draft-each"],
+      "final": true
+    }
+  ]
+}
+```
+
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run api-docs dir=src
+    ```
+
+    ```bash title="保存为快捷方式"
+    /tf save api-docs
+    ```
+  </Tab>
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
+    taskflow_run { "name": "api-docs", "args": { "dir": "src" } }
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="info">
+  `discover` 阶段是代码库状态的纯函数。给它打上 `cross-run` 并配 `glob!:` 指纹，这样在无关变更后重跑会复用缓存的发现结果——只有真正改动的文件会被重新文档化。
+</Callout>
+
+---
+
+## 5. 依赖升级评审
+
+枚举项目里过时的依赖，并行评估每个的破坏性变更风险，对任何关键发现设闸，最后输出一份按优先级排序的升级计划。当某个依赖盲升级过于危险时，闸门可以在计划写出来之前就中止整个 run。
+
+```json title="dep-upgrade-review.json"
+{
+  "name": "dep-upgrade-review",
+  "description": "Enumerate outdated dependencies, evaluate breaking-change risk, gate on criticals, and emit a prioritized upgrade plan.",
+  "args": {
+    "manager": { "default": "npm", "description": "The package manager to query (npm, pnpm, yarn)." }
+  },
+  "concurrency": 4,
+  "budget": { "maxUSD": 2.0 },
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "Run `{args.manager} outdated --json` (or the equivalent) and list every outdated dependency. Output ONLY a JSON array of {\"name\": \"<package>\", \"current\": \"<version>\", \"wanted\": \"<version>\", \"latest\": \"<version>\"} objects. No prose.",
+      "output": "json",
+      "expect": { "type": "array", "items": { "type": "object" } },
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "evaluate-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "dep",
+      "agent": "risk-reviewer",
+      "task": "Evaluate the risk of upgrading {dep.name} from {dep.current} to {dep.latest}. Check the changelog for breaking changes, deprecations, and peer-dependency shifts. Return: package name, risk level (LOW|MEDIUM|HIGH|CRITICAL), a one-sentence reason, and a recommended action (safe-to-upgrade|test-first|pin-major|hold). Begin with the package name.",
+      "dependsOn": ["discover"],
+      "concurrency": 4,
+      "retry": { "max": 2, "backoffMs": 1000, "factor": 2 }
+    },
+    {
+      "id": "risk-gate",
+      "type": "gate",
+      "agent": "reviewer",
+      "dependsOn": ["evaluate-each"],
+      "join": "all",
+      "task": "You are the upgrade risk gate. If any dependency is rated CRITICAL (a known breaking change with no migration path, or a security-sensitive package), end with: VERDICT: BLOCK. Otherwise end with: VERDICT: PASS.\n\n{steps.evaluate-each.output}",
+      "onBlock": "halt"
+    },
+    {
+      "id": "plan",
+      "type": "reduce",
+      "from": ["evaluate-each", "risk-gate"],
+      "agent": "writer",
+      "task": "Write a prioritized dependency upgrade plan. Group by risk level (CRITICAL first, then HIGH, MEDIUM, LOW). For each dependency: the recommended action and a one-line reason. End with a suggested upgrade order that respects peer-dependency constraints.\n\n{steps.evaluate-each.output}\n\nGate verdict:\n{steps.risk-gate.output}",
+      "dependsOn": ["risk-gate"],
+      "final": true
+    }
+  ]
+}
+```
+
+<Tabs groupId="host" items={['Pi', 'MCP hosts']}>
+  <Tab value="Pi">
+    ```bash title="在 Pi 上运行"
+    /tf run dep-upgrade-review manager=npm
+    ```
+
+    ```bash title="保存为快捷方式"
+    /tf save dep-upgrade-review
+    ```
+  </Tab>
+  <Tab value="MCP hosts">
+    ```bash title="在 Codex / Claude / OpenCode / Grok 上运行"
+    taskflow_run { "name": "dep-upgrade-review", "args": { "manager": "npm" } }
+    ```
+  </Tab>
+</Tabs>
+
+<Callout type="warn">
+  `risk-gate` 用的是 `onBlock: "halt"`。如果发现 CRITICAL 依赖，run 会在 `plan` 阶段运行之前就停止——你拿到的是闸门裁决，而不是一份会为危险升级开绿灯的计划。如果你无论如何都想要计划，去掉闸门（或把 `onBlock` 改成 `"continue"`）。
+</Callout>
+
+---
+
+## 改写模板
+
+上面每个模板都是起点，不是定规。值得调整的旋钮在所有模板里都一样：
+
+- **`concurrency`**——在宽裕的速率限制下调高以更快完成；调低以避免 429。剩下的由 `retry` 策略吸收。
+- **`budget`**——run 级成本上限。`BLOCK` 裁决或预算超支会在下游阶段花更多 token 之前中止 run。
+- **`cache`**——给纯且昂贵的阶段（`discover`、逐文件审查）打上 `cross-run`，配 `git:HEAD` 或 `glob!:` 指纹，这样输入没变的重跑会复用既有工作。
+- **`retry`**——两次尝试加指数退避覆盖大多数瞬时 provider 错误。对命中大模型的阶段可调高 `max`。
+
+<Callout type="tip">
+  编辑模板后永远先跑 `/tf verify <name>`。验证是零 token 的，能在你花任何钱之前抓住绝大多数作者错误——环、死胡同、悬空引用。
+</Callout>
+
+## 接下来
+
+<Cards>
+  <Card title="快速开始" href="/zh-cn/docs/getting-started">
+    安装 taskflow 并运行你的第一个 flow。
+  </Card>
+  <Card title="阶段类型" href="/zh-cn/docs/syntax/phase-types">
+    这些模板里用到的每种阶段的完整字段参考。
+  </Card>
+  <Card title="指南" href="/zh-cn/docs/guides">
+    逐步搭建其中若干模板的端到端走查。
+  </Card>
+</Cards>

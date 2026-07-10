@@ -6,7 +6,7 @@ import {
 	PageLastUpdate,
 } from "fumadocs-ui/layouts/docs/page";
 import { MessageSquare, Pencil } from "lucide-react";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { getMDXComponents } from "@/components/mdx";
 import type { Locale } from "@/lib/i18n";
 import { source } from "@/lib/source";
@@ -100,6 +100,22 @@ export default async function Page({
 	const { lang, slug } = await params;
 	const page = source.getPage(slug, lang);
 	if (!page) notFound();
+	if (page.data.redirect) {
+		const redirectUrl = `${SITE_URL}${page.data.redirect}`;
+		return (
+			<>
+				<meta httpEquiv="refresh" content={`0; url=${page.data.redirect}`} />
+				<main className="container mx-auto flex min-h-[50vh] flex-col items-center justify-center p-8 text-center">
+					<p className="text-lg">
+						{lang === "zh-cn" ? "页面已移动：" : "This page has moved to "}
+						<a href={redirectUrl} className="text-fd-primary underline">
+							{redirectUrl}
+						</a>
+					</p>
+				</main>
+			</>
+		);
+	}
 
 	const MDX = page.data.body;
 
@@ -174,10 +190,14 @@ export default async function Page({
 		<>
 			<script
 				type="application/ld+json"
+				async
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is serialized from trusted static documentation metadata.
 				dangerouslySetInnerHTML={{ __html: JSON.stringify(techArticleJsonLd) }}
 			/>
 			<script
 				type="application/ld+json"
+				async
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD is serialized from trusted static documentation metadata.
 				dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbJsonLd) }}
 			/>
 			<DocsPage
@@ -213,6 +233,14 @@ export async function generateMetadata({
 	const { lang, slug } = await params;
 	const page = source.getPage(slug, lang);
 	if (!page) return {};
+	if (page.data.redirect) {
+		const redirectUrl = `${SITE_URL}${page.data.redirect}`;
+		return {
+			title: page.data.title,
+			alternates: { canonical: redirectUrl },
+			robots: { index: false, follow: true },
+		};
+	}
 
 	const canonicalUrl = `${SITE_URL}${page.url}/`;
 	// page.url already includes the locale prefix, e.g. /en/docs/getting-started
@@ -234,13 +262,13 @@ export async function generateMetadata({
 			title: page.data.title,
 			description: page.data.description,
 			url: canonicalUrl,
-			images: "/opengraph-image",
+			images: `/${lang}/opengraph-image`,
 		},
 		twitter: {
 			card: "summary_large_image",
 			title: page.data.title,
 			description: page.data.description,
-			images: "/opengraph-image",
+			images: `/${lang}/opengraph-image`,
 		},
 	};
 }

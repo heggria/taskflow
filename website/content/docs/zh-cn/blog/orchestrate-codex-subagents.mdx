@@ -123,7 +123,7 @@ taskflow_run release-readiness --base origin/main
 taskflow_resume <runId>
 ```
 
-已完成的阶段从缓存复用（按解析后的输入键入）。如果你夜里改了 `changelog` 的提示词，只有 `changelog`、`gate`、`report` 会重跑——`discover` 和所有审查都复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+已完成的阶段从缓存复用（按解析后的输入键入）。如果你夜里改了 `changelog` 的提示词，只有 `changelog`、`gate`、`report` 会重跑——`discover` 和所有审查都复用。详见[增量重算](/zh-cn/docs/compiler-runtime/incremental-recompute)。
 
 ## 什么时候保持临时
 
@@ -137,7 +137,7 @@ taskflow_resume <runId>
 - `budget` 封顶花费；续跑免费且跨会话。
 - 只有最终阶段进入你的 Codex 上下文。
 
-去 [模板库](/zh-cn/docs/templates) 拿另外五个开箱即用的流程，或读 [Codex 指南](/zh-cn/docs/guides/codex) 看完整的 host 专属接口。
+去 [模板库](/zh-cn/docs/guides/templates) 拿另外五个开箱即用的流程，或读 [Codex 指南](/zh-cn/docs/guides/codex) 看完整的 host 专属接口。
 
 
 ## 也适用于其他宿主

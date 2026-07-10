@@ -4,7 +4,7 @@ description: How taskflow runs survive across sessions.
 ---
 
 <Callout type="info">
-  **Resume ≠ deterministic replay.** Resume continues a live run and may spend tokens on unfinished work. [Deterministic replay](/en/docs/concepts/deterministic-replay) re-judges a *finished* run's event log under new gate thresholds or budgets **without** calling the model. For world-input staleness, use [incremental recompute](/en/docs/reference/incremental-recompute).
+  **Resume ≠ deterministic replay.** Resume continues a live run and may spend tokens on unfinished work. [Deterministic replay](/en/docs/compiler-runtime/deterministic-replay) re-judges a *finished* run's event log under new gate thresholds or budgets **without** calling the model. For world-input staleness, use [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
 </Callout>
 
 Your twenty-minute audit failed at the last step because of a rate limit. Nineteen minutes of subagent work succeeded; one phase tripped over a transient error and the run stopped. Without resume, you would start over from scratch — re-reading every file, re-running every review, paying for all of it twice.
@@ -120,7 +120,7 @@ A few phase types can never be cross-run cached, because they must produce a fre
 - `loop` and `tournament` — their outcome depends on iteration dynamics.
 - `script` — shell commands often have side effects.
 
-A phase marked `idempotent: false` is also excluded — it has irreversible side effects (a deploy, a webhook, a database write) and must never be **served from cache** (that is cache reuse, not [deterministic replay](/en/docs/concepts/deterministic-replay)). Setting `cache.scope` to `cross-run` on any of these is a validation error, caught by `/tf verify`.
+A phase marked `idempotent: false` is also excluded — it has irreversible side effects (a deploy, a webhook, a database write) and must never be **served from cache** (that is cache reuse, not [deterministic replay](/en/docs/compiler-runtime/deterministic-replay)). Setting `cache.scope` to `cross-run` on any of these is a validation error, caught by `/tf verify`.
 
 ### Going flow-wide
 

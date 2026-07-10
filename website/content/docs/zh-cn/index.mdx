@@ -1,77 +1,120 @@
 ---
-title: 简介
-description: 面向编程智能体子代理的声明式、可验证任务节点图。
+title: taskflow 文档
+description: 从 taskflow 0.2 开始，运行第一张可验证任务图，或直接进入编译器 / 运行时参考。
 ---
 
-欢迎来到 **taskflow** 文档。taskflow 是面向编程智能体子代理的声明式、可验证的*任务图*——你把多步骤的智能体工作描述成一个 DAG，运行时会在花费一个 token 之前先验证它，并且只有最终结果会进入你的上下文窗口。
+taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义一张图，在花 token 前验证它，让每个阶段隔离执行，并且只把最终结果返回宿主对话。
 
-整个想法用四行 JSON 就能说清：
+在 **0.2** 中，这张图还成为了一份编译合同：可以用 TypeScript 编写、检查 FlowIR、replay 已记录的运行决策，并且只重算因输入变化而 stale 的阶段。
 
-```json title="一个完整的 taskflow"
-{
-  "task": "Summarize the architecture of src/",
-  "agent": "explorer"
-}
-```
+## 选择你的路径
 
-这就是一个完整的 taskflow。运行时把它变成一张图，跑一个子代理，然后返回结果。再加上更多阶段，用 `dependsOn` 把它们连起来，同样的结构就能扩展到对上百个文件做 fan-out——重试、gate、loop、跨会话续跑都替你处理好。
+<Cards>
+  <Card title="五分钟运行第一个 flow" href="/zh-cn/docs/getting-started">
+    选择宿主、安装 taskflow，并运行第一张经过验证的任务图。
+  </Card>
+  <Card title="理解 taskflow 0.2" href="/zh-cn/docs/compiler-runtime">
+    TypeScript DSL、FlowIR、确定性 replay、后台运行与最小重算。
+  </Card>
+  <Card title="为什么需要任务图？" href="/zh-cn/docs/what-is-taskflow">
+    理解声明式、可检查、可续跑 agent 编排背后的取舍。
+  </Card>
+</Cards>
 
-## 它是为谁准备的？
+<Callout type="tip">
+  如果你正在评估 0.2，请先看 **[taskflow 0.2 新能力](/zh-cn/docs/compiler-runtime)**，不要从头通读整份 Reference。
+</Callout>
 
-taskflow 是为那些把多步骤工作委托给编程智能体、并且遇到以下情况的人准备的：
+## 在你的宿主上安装
 
-- **上下文窗口压力。** 每个子代理的中间记录都涌入你的对话，一次五步审计还没看到结果就把上下文吃光了。
-- **计划只存在于运行时。** 你用自然语言描述一个工作流，模型每次运行都重新推导一遍，既没有东西可以 diff、复用，也没有东西可以交给评审者。
-- **没有恢复能力。** 一次运行死在最后一步，你只能从头再来——每个子代理调用都得重新付费。
-- **可复用的流水线。** 你想给一个工作流命名一次，然后按名称调用它，无论在 Pi、Codex、Claude Code、OpenCode 还是 Grok Build 上。
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build']}>
+  <Tab value="Pi">
+    ```bash title="安装 Pi 扩展"
+    pi install npm:pi-taskflow
+    ```
 
-如果其中任何一条听起来耳熟，taskflow 就是为你做的。
+    继续阅读 [Pi 指南](/zh-cn/docs/guides/pi)。
+  </Tab>
+  <Tab value="Codex">
+    ```bash title="安装 Codex 插件"
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
 
-## 如何阅读这些文档
+    继续阅读 [Codex 指南](/zh-cn/docs/guides/codex)。
+  </Tab>
+  <Tab value="Claude Code">
+    ```bash title="安装 Claude Code 插件"
+    claude plugin marketplace add heggria/taskflow
+    claude plugin install claude-taskflow@taskflow
+    ```
 
-这些文档按学习路径组织。第一次请按顺序阅读；熟悉之后就可以跳着看了。
+    继续阅读 [Claude Code 指南](/zh-cn/docs/guides/claude-code)。
+  </Tab>
+  <Tab value="OpenCode">
+    ```bash title="注册 OpenCode MCP server"
+    opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+    ```
+
+    继续阅读 [OpenCode 指南](/zh-cn/docs/guides/opencode)。
+  </Tab>
+  <Tab value="Grok Build">
+    按 [Grok Build 指南](/zh-cn/docs/guides/grok-build)中的当前 package / 本地构建说明安装。
+  </Tab>
+</Tabs>
+
+## 理解核心模型
+
+<Cards>
+  <Card title="核心概念" href="/zh-cn/docs/concepts">
+    DAG、阶段类型、插值、验证、隔离与续跑。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax">
+    精确的 flow 字段、阶段约束、控制流、缓存、预算与 scorers。
+  </Card>
+  <Card title="指南与 Recipes" href="/zh-cn/docs/guides">
+    宿主走查、模板、动态规划、锦标赛与案例研究。
+  </Card>
+  <Card title="命令与简写" href="/zh-cn/docs/reference">
+    Pi 命令、MCP 工具与 task/tasks/chain 快捷形式。
+  </Card>
+</Cards>
+
+## Compiler / Runtime 路径
 
 <Steps>
   <Step>
-    **[什么是 taskflow？](/zh-cn/docs/what-is-taskflow)** —— *为什么*。命令式子代理脚本的问题，以及那一个让声明式图值得做的权衡。
+    **花 token 前先验证。** 从 `/tf verify` 或 `taskflow_verify` 开始，结构错误零 token。
   </Step>
   <Step>
-    **[开始使用](/zh-cn/docs/getting-started)** —— *怎么做*。五分钟内跑起你的第一个 taskflow，然后见一个真实的 fan-out 例子。
+    **编译执行合同。** 使用 `/tf ir` 检查 FlowIR 与内容哈希。
   </Step>
   <Step>
-    **[核心概念](/zh-cn/docs/concepts)** —— *模型*。DAG、阶段类型、插值、验证、上下文隔离和续跑。
+    **有意地区分 resume 与 replay。** Resume 继续未完成工作；replay 只在零 token 下重判已完成轨迹。
   </Step>
   <Step>
-    **[语法参考](/zh-cn/docs/syntax)** —— *细节*。每种阶段类型的每个字段、控制流、缓存和预算。
-  </Step>
-  <Step>
-    **[指南](/zh-cn/docs/guides)** —— *实践*。各宿主（Pi、Codex、Claude Code、OpenCode、Grok Build）的走查和模式指南（动态规划、锦标赛）。
+    **只重算 stale frontier。** 应用最小重算之前，先运行 `why-stale`。
   </Step>
 </Steps>
 
-<Callout type="tip">
-  时间紧？浏览一下[开始使用](/zh-cn/docs/getting-started)，然后写第一个真实 flow 时把[语法参考](/zh-cn/docs/syntax)放在手边。尽早、经常运行 `/tf verify`——它不消耗 token。
-</Callout>
+## 更多资源
 
-## 章节
+这些资源仍然可以访问，但不再占据主文档学习路径：
 
 <Cards>
-  <Card title="什么是 taskflow？" href="/zh-cn/docs/what-is-taskflow">
-    为什么声明式图胜过命令式脚本。
+  <Card title="模板库" href="/zh-cn/docs/guides/templates">
+    与实用指南放在一起的可运行 flow 模板。
   </Card>
-  <Card title="开始使用" href="/zh-cn/docs/getting-started">
-    五分钟内跑起你的第一个 taskflow。
+  <Card title="横向对比" href="/zh-cn/docs/comparisons">
+    对比命令式 workflow、内置 subagent 与 LangGraph。
   </Card>
-  <Card title="核心概念" href="/zh-cn/docs/concepts">
-    DAG 模型、阶段、插值、验证、隔离、续跑。
+  <Card title="博客" href="/zh-cn/docs/blog">
+    长篇设计文章与宿主工作流实践。
   </Card>
-  <Card title="语法参考" href="/zh-cn/docs/syntax">
-    每个字段、每种阶段类型，详尽列出。
+  <Card title="社区" href="/zh-cn/docs/community">
+    贡献案例、报告问题并加入讨论。
   </Card>
-  <Card title="指南" href="/zh-cn/docs/guides">
-    各宿主走查和模式指南。
-  </Card>
-  <Card title="参考" href="/zh-cn/docs/reference">
-    命令和简写一览。
+  <Card title="案例展示" href="/zh-cn/docs/showcase">
+    查看团队使用 taskflow 的示例。
   </Card>
 </Cards>
