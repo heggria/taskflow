@@ -26,7 +26,12 @@ import { foldEvents } from "./fold.ts";
 import { EVENT_SCHEMA_VERSION, type Event } from "./events.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
-import { clampSubFlowBudget, depsSatisfied, kernelUnsupportedReason } from "./kernel-policy.ts";
+import {
+	clampSubFlowBudget,
+	containsInterpolationPlaceholder,
+	depsSatisfied,
+	kernelUnsupportedReason,
+} from "./kernel-policy.ts";
 
 export { EVENT_KERNEL_PHASE_TYPES, kernelUnsupportedReason };
 
@@ -74,7 +79,7 @@ export function canUseEventKernel(
 		if (raw !== undefined) {
 			if (typeof raw === "string") {
 				// Interpolated/runtime-generated definitions cannot be admitted statically.
-				if (/\{[^}]+\}/.test(raw)) return false;
+				if (containsInterpolationPlaceholder(raw)) return false;
 				try {
 					const parsed = JSON.parse(raw) as unknown;
 					if (Array.isArray(parsed)) child = { name: `${phase.id}-inline`, phases: parsed as Taskflow["phases"] };

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import { CacheStore } from "../src/cache.ts";
 import { canUseEventKernel, kernelUnsupportedReason } from "../src/exec/driver.ts";
-import { clampSubFlowBudget } from "../src/exec/kernel-policy.ts";
+import { clampSubFlowBudget, containsInterpolationPlaceholder } from "../src/exec/kernel-policy.ts";
 import { compileTaskflowToIR } from "../src/flowir/index.ts";
 import { queueSpawn } from "../src/context-store.ts";
 import type { RunOptions, RunResult } from "../src/host/runner-types.ts";
@@ -84,6 +84,25 @@ test("kernel admission safely falls back for every currently unsupported semanti
 		assert.equal(canUseEventKernel(def), false, def.name);
 		assert.match(kernelUnsupportedReason(def) ?? "", reason, def.name);
 	}
+});
+
+test("kernel placeholder detection is linear and distinguishes static JSON", () => {
+	assert.equal(containsInterpolationPlaceholder("{args.topic}"), true);
+	assert.equal(containsInterpolationPlaceholder("prefix {steps.make.json.value} suffix"), true);
+	assert.equal(containsInterpolationPlaceholder('{"name":"child","phases":[]}'), false);
+	assert.equal(containsInterpolationPlaceholder("{".repeat(200_000)), false);
+	assert.equal(
+		canUseEventKernel({
+			name: "static-string-child",
+			phases: [{
+				id: "child",
+				type: "flow",
+				def: JSON.stringify({ name: "nested", phases: [{ id: "run", type: "agent", task: "ok", final: true }] }),
+				final: true,
+			}],
+		}),
+		true,
+	);
 });
 
 test("kernel opt-in falls back to imperative for script stdin and interpolated argv", async () => {

@@ -9,6 +9,42 @@ import { emptyUsage, type UsageStats } from "../usage.ts";
 import type { RunState } from "../store.ts";
 import { overBudget } from "../deterministic.ts";
 
+/** Linear-time placeholder detection for untrusted DSL strings.
+ *
+ * A placeholder body is a non-empty Taskflow-style path made only of the
+ * identifier/path characters accepted by interpolation. Resetting on a nested
+ * opening brace keeps the scan O(n), even for adversarial strings containing
+ * thousands of `{` characters. JSON object braces are ignored because their
+ * bodies contain quotes, colons, commas, or whitespace. */
+export function containsInterpolationPlaceholder(value: string): boolean {
+	let open = false;
+	let valid = false;
+	let length = 0;
+	for (let i = 0; i < value.length; i++) {
+		const code = value.charCodeAt(i);
+		if (code === 123) { // {
+			open = true;
+			valid = true;
+			length = 0;
+			continue;
+		}
+		if (!open) continue;
+		if (code === 125) { // }
+			if (valid && length > 0) return true;
+			open = false;
+			continue;
+		}
+		length++;
+		const allowed =
+			(code >= 48 && code <= 57) || // 0-9
+			(code >= 65 && code <= 90) || // A-Z
+			(code >= 97 && code <= 122) || // a-z
+			code === 45 || code === 46 || code === 95; // - . _
+		if (!allowed) valid = false;
+	}
+	return false;
+}
+
 /**
  * If the definition needs imperative-only features, return a short reason.
  * When set, executeTaskflow must NOT enter the event kernel (even if enabled).
@@ -58,7 +94,7 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if ((p.type ?? "agent") === "script" && p.input !== undefined) {
 			return `phase '${id}': script stdin input requires the imperative runtime`;
 		}
-		if ((p.type ?? "agent") === "script" && Array.isArray(p.run) && p.run.some((arg) => /\{[^}]+\}/.test(arg))) {
+		if ((p.type ?? "agent") === "script" && Array.isArray(p.run) && p.run.some(containsInterpolationPlaceholder)) {
 			return `phase '${id}': interpolated script argv requires the imperative runtime`;
 		}
 	}
