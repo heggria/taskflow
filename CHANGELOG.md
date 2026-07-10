@@ -21,6 +21,30 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - **North-star slogan:** `compiled · resumable · incremental · replayable-for-what-if` (drops Qwik "not replayable" collision with deterministic replay).
   - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
 
+## [0.1.8] — 2026-07-09
+
+### Fixed
+- **`cwd` no longer accepts interpolation placeholders.** A phase's `cwd` field
+  is a literal path / reserved workspace keyword (`temp` / `dedicated` /
+  `worktree`), not an interpolated one — but the validator silently accepted
+  values like `cwd: "{args.workspace}"`, which would then resolve to a literal
+  directory named `{args.workspace}` at run time (or, worse, be exploitable as
+  a path-injection vector). `validateTaskflow()` now rejects any `cwd` value
+  matching a `{placeholder}` pattern with a clear error pointing at the
+  reserved keywords. (#65)
+
+### Changed
+- **Dependency sweep** (no runtime-API changes — these are CI / dev / website
+  dependencies; the published packages' runtime surface is unchanged):
+  - `pnpm/action-setup` 4 → 6 (#57).
+  - Batched the remaining Dependabot PRs that were stuck behind CI /
+    workflow-scope gates (#66): GitHub Actions `actions/checkout` v4 → v7,
+    `actions/upload-pages-artifact` v3 → v5, `actions/deploy-pages` v4 → v5;
+    dev deps `typescript` ^6 → ^7, `@types/node` ^22 → ^26, `typebox` ^1.3.3 →
+    ^1.3.6, `@biomejs/biome` 2.5.2 → 2.5.3; website deps `fumadocs-core/ui`
+    16.10.7 → 16.11.1, `fumadocs-mdx` 15.0.13 → 15.1.0. Local typecheck + the
+    full 1160-test unit suite remain green.
+
 ## [0.1.7] — 2026-07-07
 
 ### Added
