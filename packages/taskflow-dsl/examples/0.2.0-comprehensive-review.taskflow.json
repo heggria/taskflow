@@ -64,7 +64,6 @@
         "ls"
       ],
       "timeout": 900000,
-      "as": "surface",
       "concurrency": 4,
       "cache": {
         "scope": "off"

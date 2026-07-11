@@ -1,5 +1,5 @@
 {
-  "hash": "ir:7c8b505ac49cdbb73a34648f9a24e938ff5cd53a7265fe1a621fa01c469ebda9",
+  "hash": "ir:4ba778e9a594ce2fd691165882a6191b830c52aec3fd6f85d8860e68b264ab2b",
   "ir": {
     "name": "comprehensive-release-review",
     "version": 2,
@@ -87,7 +87,6 @@
         "payload": {
           "agent": "risk-reviewer",
           "over": "{steps.review-plan.json}",
-          "as": "surface",
           "tools": [
             "read",
             "grep",

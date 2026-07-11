@@ -73,7 +73,6 @@ export default flow(
 				),
 			{
 				id: "module-audits",
-				as: "surface",
 				concurrency: 4,
 				cache: { scope: "off" },
 			},
