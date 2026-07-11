@@ -15,6 +15,7 @@ import {
 	codexBin,
 	sandboxForTools,
 	resolveCodexModel,
+	resolveCodexThinking,
 	type CodexArgsCtx,
 } from "../src/codex-runner.ts";
 
@@ -73,6 +74,20 @@ test("codex model: undefined → undefined", () => {
 	assert.equal(resolveCodexModel(undefined), undefined);
 });
 
+// --- thinking resolution ----------------------------------------------------
+
+test("codex thinking: maps Taskflow levels to model_reasoning_effort", () => {
+	assert.equal(resolveCodexThinking("off"), "none");
+	assert.equal(resolveCodexThinking("none"), "none");
+	assert.equal(resolveCodexThinking("minimal"), "none");
+	assert.equal(resolveCodexThinking("low"), "low");
+	assert.equal(resolveCodexThinking("xhigh"), "xhigh");
+	assert.equal(resolveCodexThinking("max"), "xhigh");
+	assert.equal(resolveCodexThinking("ultra"), "xhigh");
+	assert.equal(resolveCodexThinking("unknown"), undefined);
+	assert.equal(resolveCodexThinking(undefined), undefined);
+});
+
 // --- full argv contract -----------------------------------------------------
 
 const baseCtx: CodexArgsCtx = { systemPrompt: "", task: "count files", model: undefined, tools: undefined, cwd: undefined };
@@ -113,6 +128,17 @@ test("codex argv: cwd passed via `-C <dir>` when present", () => {
 	assert.ok(idx >= 0);
 	assert.equal(withCwd[idx + 1], "/repo");
 	assert.equal(buildCodexArgs({ ...baseCtx }).indexOf("-C"), -1, "no cwd → no -C flag");
+});
+
+test("codex argv: thinking is passed via model_reasoning_effort config", () => {
+	const low = buildCodexArgs({ ...baseCtx, thinking: "low" });
+	const lowIdx = low.indexOf("-c");
+	assert.ok(lowIdx >= 0);
+	assert.equal(low[lowIdx + 1], "model_reasoning_effort=low");
+
+	const off = buildCodexArgs({ ...baseCtx, thinking: "off" });
+	assert.equal(off[off.indexOf("-c") + 1], "model_reasoning_effort=none");
+	assert.equal(buildCodexArgs({ ...baseCtx, thinking: "unknown" }).indexOf("-c"), -1);
 });
 
 test("codex argv: prompt is the LAST positional arg; system prompt is prepended", () => {

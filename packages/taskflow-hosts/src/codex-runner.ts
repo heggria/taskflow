@@ -162,12 +162,24 @@ export function resolveCodexModel(model: string | undefined): string | undefined
 	return model;
 }
 
+/** Map Taskflow/Pi thinking levels to Codex's model_reasoning_effort config. */
+export function resolveCodexThinking(thinking: string | undefined): string | undefined {
+	if (!thinking) return undefined;
+	const normalized = thinking.trim().toLowerCase();
+	if (normalized === "off" || normalized === "none" || normalized === "minimal") return "none";
+	if (normalized === "max" || normalized === "ultra") return "xhigh";
+	if (["low", "medium", "high", "xhigh"].includes(normalized)) return normalized;
+	return undefined;
+}
+
 /** Context for {@link buildCodexArgs} — the pure inputs to argv construction. */
 export interface CodexArgsCtx {
 	systemPrompt: string;
 	task: string;
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
+	/** Already-resolved thinking level (opts.thinking ?? agent.thinking ?? global). */
+	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 }
@@ -177,16 +189,19 @@ export interface CodexArgsCtx {
  * (no process.env, no spawn). Extracted from `runCodexAgentTask` so the host's
  * CLI flag contract is unit-testable in CI without a live codex session.
  *
- *   codex exec --json --skip-git-repo-check -s <sandbox> [-m model] [-C cwd] <prompt>
+ *   codex exec --json --skip-git-repo-check -s <sandbox>
+ *        [-m model] [-c model_reasoning_effort=level] [-C cwd] <prompt>
  */
 export function buildCodexArgs(ctx: CodexArgsCtx): string[] {
 	const sandbox = sandboxForTools(ctx.tools);
 	const codexModel = resolveCodexModel(ctx.model);
+	const codexThinking = resolveCodexThinking(ctx.thinking);
 	const fullPrompt = ctx.systemPrompt.trim()
 		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
 		: `Task: ${ctx.task}`;
 	const args: string[] = ["exec", "--json", "--skip-git-repo-check", "-s", sandbox];
 	if (codexModel) args.push("-m", codexModel);
+	if (codexThinking) args.push("-c", `model_reasoning_effort=${codexThinking}`);
 	if (ctx.cwd) args.push("-C", ctx.cwd);
 	args.push(fullPrompt);
 	return args;
@@ -209,13 +224,14 @@ export async function runCodexAgentTask(
 
 	const model = opts.model ?? agent.model;
 	const tools = opts.tools ?? agent.tools;
-	void globalThinking; // codex has no thinking-level flag on exec; reserved.
+	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 
 	const cwd = opts.cwd ?? defaultCwd;
 	const args = buildCodexArgs({
 		systemPrompt: agent.systemPrompt,
 		task,
 		model,
+		thinking,
 		tools,
 		cwd,
 	});

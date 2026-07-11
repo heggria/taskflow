@@ -170,6 +170,18 @@ test("script run: 'input' is piped to stdin with interpolation", async () => {
 	assert.equal(res.finalOutput, "in[payload-7]");
 });
 
+test("script run: omitted input still closes stdin so EOF-waiting commands finish", async () => {
+	const waitForEof = "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('eof'))";
+	const def: Taskflow = {
+		name: "s",
+		phases: [{ id: "a", type: "script", run: ["node", "-e", waitForEof], timeout: 1000, final: true }],
+	};
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	assert.equal(res.ok, true);
+	assert.equal(res.state.phases.a.status, "done");
+	assert.equal(res.finalOutput, "eof");
+});
+
 test("script run: array element interpolation resolves upstream refs", async () => {
 	const def: Taskflow = {
 		name: "s",

@@ -99,10 +99,13 @@ export async function runScriptCommand(opts: {
 			resolve({ stdout, stderr, code, stdoutOversize, timedOut });
 		});
 
-		if (stdinInput !== undefined) {
-			child.stdin?.on("error", () => {}); // swallow EPIPE when child closes stdin early
-			child.stdin?.write(stdinInput);
-			child.stdin?.end();
+		if (child.stdin) {
+			child.stdin.on("error", () => {}); // swallow EPIPE when child closes stdin early
+			if (stdinInput !== undefined) child.stdin.write(stdinInput);
+			// A spawned process always receives a pipe for stdin. Close it even when
+			// the phase omitted `input`, otherwise commands that wait for EOF (for
+			// example `cat`) hang until the script timeout fires.
+			child.stdin.end();
 		}
 	});
 }
