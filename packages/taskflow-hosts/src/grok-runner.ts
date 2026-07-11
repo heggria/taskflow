@@ -23,11 +23,11 @@
  *   - failure      = an `error` event, or a non-zero process exit
  *
  * Permission mapping (codex `sandboxForTools` analogue):
- *   - read-only whitelist → kernel `--sandbox read-only`, a known-good
- *     `--tools` allowlist, and independent mutator deny rules
- *   - mutating / no whitelist → kernel `--sandbox workspace` plus
- *     `--always-approve`, so writes are confined to the cwd/temp/session paths
- *     without hanging non-interactive -p on a permission prompt
+ *   - read-only whitelist → an operator-configured custom profile extending
+ *     `read-only`, a known-good `--tools` allowlist, and mutator deny rules
+ *   - mutating / no whitelist → an operator-configured custom sandbox plus
+ *     `--always-approve`. Grok's built-in profiles can warn and continue
+ *     unsandboxed on unsupported hosts; explicit custom profiles fail closed.
  *
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
  * is delegated to shared `runSubagentProcess` in taskflow-core.
@@ -73,6 +73,13 @@ const READ_ONLY_TOOL_MAP: Readonly<Record<string, string>> = {
  * enforcement layer in case a future CLI regresses allowlist handling again.
  */
 const MUTATING_GROK_TOOLS = ["run_terminal_cmd", "search_replace", "write", "write_file", "Agent"];
+
+/** Custom sandbox profile required for mutating Grok phases. Built-in profiles
+ * may warn and continue without enforcement when the host cannot apply them;
+ * Grok documents explicitly requested custom profiles as fail-closed. */
+export const GROK_MUTATING_SANDBOX_PROFILE_ENV = "PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE";
+export const GROK_READONLY_SANDBOX_PROFILE_ENV = "PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE";
+const BUILTIN_GROK_SANDBOX_PROFILES = new Set(["off", "workspace", "devbox", "read-only", "strict"]);
 
 /** Accumulated state folded from a Grok streaming-json event stream. */
 export interface GrokAccumulator {
@@ -143,8 +150,18 @@ export function foldGrokEventLine(acc: GrokAccumulator, line: string): LiveUpdat
 			activity = `error: ${msg}`;
 			break;
 		}
+		case "max_turns_reached": {
+			const msg =
+				(typeof event.message === "string" && event.message.trim()) ||
+				(typeof event.data === "string" && event.data.trim()) ||
+				"grok reached its maximum turn limit before completing the task";
+			acc.fatalError = msg;
+			acc.stopReason = "max_turns_reached";
+			activity = `error: ${msg}`;
+			break;
+		}
 		default:
-			// max_turns_reached / auto_compact_* / unknown — ignore for fold.
+			// auto_compact_* / unknown — ignore for forward compatibility.
 			return null;
 	}
 
@@ -160,15 +177,50 @@ export function grokBin(): string {
 /**
  * Map a phase's tool whitelist to Grok headless permission flags.
  *
- * - no whitelist / mutating tools → kernel `--sandbox workspace` plus
- *   `--always-approve` (non-interactive cannot answer permission prompts;
- *   writes stay confined to the cwd and Grok's documented temp/session paths)
- * - read-only whitelist → kernel `--sandbox read-only` plus a narrow
+ * - no whitelist / mutating tools → an operator-configured fail-closed custom
+ *   sandbox plus `--always-approve`
+ * - read-only whitelist → a fail-closed custom read-only sandbox plus a narrow
  *   allowlist and independent deny rules (still pairs with `--always-approve`
  *   so the remaining safe tools never block on confirm)
  */
-export function permissionArgsForGrokTools(tools: string[] | undefined): string[] {
-	if (!tools || tools.length === 0) return ["--sandbox", "workspace", "--always-approve"];
+export function resolveGrokMutatingSandboxProfile(
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	const profile = env[GROK_MUTATING_SANDBOX_PROFILE_ENV]?.trim();
+	return profile || undefined;
+}
+
+export function resolveGrokReadOnlySandboxProfile(
+	env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+	const profile = env[GROK_READONLY_SANDBOX_PROFILE_ENV]?.trim();
+	return profile || undefined;
+}
+
+function requireCustomSandbox(profile: string | undefined, envName: string, phaseKind: string): string {
+	if (!profile) {
+		throw new Error(
+			`${phaseKind} Grok phases require a fail-closed custom sandbox profile. ` +
+				`Define one in ~/.grok/sandbox.toml and set ${envName}=<profile>.`,
+		);
+	}
+	if (BUILTIN_GROK_SANDBOX_PROFILES.has(profile)) {
+		throw new Error(
+			`Grok sandbox '${profile}' is built in and may continue unsandboxed when enforcement is unavailable. ` +
+				`${envName} must name a custom profile from ~/.grok/sandbox.toml.`,
+		);
+	}
+	return profile;
+}
+
+export function permissionArgsForGrokTools(
+	tools: string[] | undefined,
+	mutatingSandboxProfile?: string,
+	readOnlySandboxProfile?: string,
+): string[] {
+	if (!tools || tools.length === 0) {
+		return ["--sandbox", requireCustomSandbox(mutatingSandboxProfile, GROK_MUTATING_SANDBOX_PROFILE_ENV, "Mutating/default"), "--always-approve"];
+	}
 	const mutating = new Set([
 		"write",
 		"write_file",
@@ -180,14 +232,16 @@ export function permissionArgsForGrokTools(tools: string[] | undefined): string[
 		"search_replace",
 	]);
 	const canMutate = tools.some((t) => mutating.has(t));
-	if (canMutate) return ["--sandbox", "workspace", "--always-approve"];
+	if (canMutate) {
+		return ["--sandbox", requireCustomSandbox(mutatingSandboxProfile, GROK_MUTATING_SANDBOX_PROFILE_ENV, "Mutating"), "--always-approve"];
+	}
 	const allowed = [...new Set(tools.map((t) => READ_ONLY_TOOL_MAP[t]).filter((t): t is string => Boolean(t)))];
 	// Keep the allowlist non-empty: an empty --tools value is treated as if the
 	// flag were absent by some Grok builds, which would fail open to all tools.
 	if (allowed.length === 0) allowed.push("read_file");
 	return [
 		"--sandbox",
-		"read-only",
+		requireCustomSandbox(readOnlySandboxProfile, GROK_READONLY_SANDBOX_PROFILE_ENV, "Read-only"),
 		"--tools",
 		allowed.join(","),
 		"--disallowed-tools",
@@ -246,6 +300,10 @@ export interface GrokArgsCtx {
 	thinking?: string;
 	tools?: string[];
 	cwd?: string;
+	/** Explicit custom sandbox profile used for mutating/default-capable phases. */
+	mutatingSandboxProfile?: string;
+	/** Explicit custom sandbox profile used for read-only phases. */
+	readOnlySandboxProfile?: string;
 }
 
 /**
@@ -254,15 +312,15 @@ export interface GrokArgsCtx {
  * unit-testable in CI without a live Grok session.
  *
  *   grok -p <task> --output-format streaming-json
- *        [--sandbox workspace --always-approve |
- *         --sandbox read-only --tools … --always-approve]
+ *        [--sandbox <custom-mutating> --always-approve |
+ *         --sandbox <custom-read-only> --tools … --always-approve]
  *        [--model m] [--reasoning-effort level] [--cwd dir] [--rules systemPrompt]
  */
 export function buildGrokArgs(ctx: GrokArgsCtx): string[] {
 	const grokModel = resolveGrokModel(ctx.model);
 	const grokThinking = resolveGrokThinking(ctx.thinking);
 	const args: string[] = ["-p", ctx.task, "--output-format", "streaming-json"];
-	args.push(...permissionArgsForGrokTools(ctx.tools));
+	args.push(...permissionArgsForGrokTools(ctx.tools, ctx.mutatingSandboxProfile, ctx.readOnlySandboxProfile));
 	if (grokModel) args.push("-m", grokModel);
 	if (grokThinking) args.push("--reasoning-effort", grokThinking);
 	if (ctx.cwd) args.push("--cwd", ctx.cwd);
@@ -300,6 +358,8 @@ export async function runGrokAgentTask(
 			thinking,
 			tools,
 			cwd,
+			mutatingSandboxProfile: resolveGrokMutatingSandboxProfile(),
+			readOnlySandboxProfile: resolveGrokReadOnlySandboxProfile(),
 		});
 	} catch (error) {
 		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));

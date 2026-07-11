@@ -8,8 +8,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	buildGrokArgs,
+	GROK_MUTATING_SANDBOX_PROFILE_ENV,
+	GROK_READONLY_SANDBOX_PROFILE_ENV,
 	grokBin,
 	permissionArgsForGrokTools,
+	resolveGrokMutatingSandboxProfile,
+	resolveGrokReadOnlySandboxProfile,
 	resolveGrokModel,
 	resolveGrokThinking,
 	type GrokArgsCtx,
@@ -32,20 +36,37 @@ test("grok bin: defaults to `grok`, honours PI_TASKFLOW_GROK_BIN override", () =
 
 // --- permission mapping -----------------------------------------------------
 
-test("grok perms: no whitelist → workspace sandbox + --always-approve", () => {
-	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--sandbox", "workspace", "--always-approve"]);
-	assert.deepEqual(permissionArgsForGrokTools([]), ["--sandbox", "workspace", "--always-approve"]);
+test("grok perms: no whitelist requires a fail-closed custom sandbox", () => {
+	assert.throws(() => permissionArgsForGrokTools(undefined), new RegExp(GROK_MUTATING_SANDBOX_PROFILE_ENV));
+	assert.throws(() => permissionArgsForGrokTools([], "workspace"), /built in and may continue unsandboxed/);
+	assert.deepEqual(permissionArgsForGrokTools(undefined, "taskflow-workspace"), ["--sandbox", "taskflow-workspace", "--always-approve"]);
 });
 
-test("grok perms: mutating whitelist → workspace sandbox + --always-approve", () => {
+test("grok perms: mutating whitelist requires a fail-closed custom sandbox", () => {
 	for (const tools of [["read", "write"], ["bash"], ["run_terminal_cmd"], ["search_replace"]]) {
-		assert.deepEqual(permissionArgsForGrokTools(tools), ["--sandbox", "workspace", "--always-approve"]);
+		assert.throws(() => permissionArgsForGrokTools(tools), new RegExp(GROK_MUTATING_SANDBOX_PROFILE_ENV));
+		assert.deepEqual(permissionArgsForGrokTools(tools, "taskflow-workspace"), ["--sandbox", "taskflow-workspace", "--always-approve"]);
 	}
 });
 
+test("grok mutating sandbox profile: reads only a non-empty operator value", () => {
+	assert.equal(resolveGrokMutatingSandboxProfile({}), undefined);
+	assert.equal(resolveGrokMutatingSandboxProfile({ [GROK_MUTATING_SANDBOX_PROFILE_ENV]: "  " }), undefined);
+	assert.equal(resolveGrokMutatingSandboxProfile({ [GROK_MUTATING_SANDBOX_PROFILE_ENV]: " taskflow-workspace " }), "taskflow-workspace");
+});
+
+test("grok read-only sandbox profile: is independent and must be custom", () => {
+	assert.equal(resolveGrokReadOnlySandboxProfile({}), undefined);
+	assert.equal(resolveGrokReadOnlySandboxProfile({ [GROK_READONLY_SANDBOX_PROFILE_ENV]: " taskflow-readonly " }), "taskflow-readonly");
+	assert.throws(
+		() => permissionArgsForGrokTools(["read"], undefined, "read-only"),
+		/built in and may continue unsandboxed/,
+	);
+});
+
 test("grok perms: read-only whitelist → --tools <read set> + --always-approve", () => {
-	const args = permissionArgsForGrokTools(["read", "grep", "glob"]);
-	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+	const args = permissionArgsForGrokTools(["read", "grep", "glob"], undefined, "taskflow-readonly");
+	assert.equal(args[args.indexOf("--sandbox") + 1], "taskflow-readonly");
 	assert.ok(args.includes("--tools"));
 	const allowed = String(args[args.indexOf("--tools") + 1]).split(",");
 	assert.ok(allowed.includes("read_file"));
@@ -63,7 +84,7 @@ test("grok perms: read-only whitelist → --tools <read set> + --always-approve"
 });
 
 test("grok perms: web ids never enter the 0.2.93 allowlist regression path", () => {
-	const args = permissionArgsForGrokTools(["read", "web_search", "web_fetch"]);
+	const args = permissionArgsForGrokTools(["read", "web_search", "web_fetch"], undefined, "taskflow-readonly");
 	const allowed = String(args[args.indexOf("--tools") + 1]).split(",");
 	assert.deepEqual(allowed, ["read_file"]);
 	assert.ok(!args.join(" ").includes("web_search"));
@@ -71,10 +92,10 @@ test("grok perms: web ids never enter the 0.2.93 allowlist regression path", () 
 });
 
 test("grok perms: unknown read-only aliases fail closed to a non-empty safe allowlist", () => {
-	const args = permissionArgsForGrokTools(["future_read_tool"]);
+	const args = permissionArgsForGrokTools(["future_read_tool"], undefined, "taskflow-readonly");
 	assert.equal(args[args.indexOf("--tools") + 1], "read_file");
 	assert.ok(args.includes("--disallowed-tools"));
-	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+	assert.equal(args[args.indexOf("--sandbox") + 1], "taskflow-readonly");
 });
 
 // --- model resolution -------------------------------------------------------
@@ -104,6 +125,8 @@ test("grok thinking: maps taskflow levels to --reasoning-effort", () => {
 const base: GrokArgsCtx = {
 	systemPrompt: "",
 	task: "do the thing",
+	mutatingSandboxProfile: "taskflow-workspace",
+	readOnlySandboxProfile: "taskflow-readonly",
 };
 
 test("grok argv: starts with -p <task> --output-format streaming-json", () => {
@@ -114,13 +137,13 @@ test("grok argv: starts with -p <task> --output-format streaming-json", () => {
 	assert.equal(args[3], "streaming-json");
 });
 
-test("grok argv: workspace sandbox + always-approve on default / mutating phases", () => {
+test("grok argv: custom sandbox + always-approve on default / mutating phases", () => {
 	const a = buildGrokArgs(base);
 	assert.ok(a.includes("--always-approve"));
-	assert.equal(a[a.indexOf("--sandbox") + 1], "workspace");
+	assert.equal(a[a.indexOf("--sandbox") + 1], "taskflow-workspace");
 	const b = buildGrokArgs({ ...base, tools: ["write", "bash"] });
 	assert.ok(b.includes("--always-approve"));
-	assert.equal(b[b.indexOf("--sandbox") + 1], "workspace");
+	assert.equal(b[b.indexOf("--sandbox") + 1], "taskflow-workspace");
 	assert.equal(b.indexOf("--tools"), -1);
 });
 
@@ -130,7 +153,7 @@ test("grok argv: read-only phases pass --tools + --always-approve", () => {
 	assert.ok(ti >= 0);
 	assert.ok(String(args[ti + 1]).includes("read_file"));
 	assert.ok(args.includes("--always-approve"));
-	assert.equal(args[args.indexOf("--sandbox") + 1], "read-only");
+	assert.equal(args[args.indexOf("--sandbox") + 1], "taskflow-readonly");
 });
 
 test("grok argv: model via -m when resolvable", () => {

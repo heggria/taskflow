@@ -18,7 +18,7 @@
 | Five host delivery packages | pi/codex/claude/opencode/grok |
 | Toolchain = TypeScript AST (not ts-morph) | `taskflow-dsl` depends on `typescript` only |
 | MCP request cancellation | concurrent stdio dispatch; `notifications/cancelled` → `AbortSignal` → runtime/host child |
-| Grok sandbox policy | read-only phases: kernel `read-only` + known-good allowlist + independent mutator denies; mutating/default phases: kernel `workspace`; live Grok 0.2.93 E2E proves read-only denial plus in-cwd allow/outside-cwd deny |
+| Grok sandbox policy | read-only and mutating/default phases both require independent operator-configured custom profiles because built-ins may fail open; read-only also has a narrow allowlist + mutator denies; live Grok 0.2.93 E2E probes both profiles |
 | Existing npm version verification | trusted owner + SLSA/GitHub provenance + tag/commit + exact tarball integrity before skip |
 
 ## Honest / qualified
@@ -91,7 +91,7 @@ loop multi-body · route · compensate/saga · watch · experimental C-track run
 35. Runtime/kernel/replay/cache/trace/graft/resume semantics were challenged with executable counterexamples; nested and supervision-tree budgets now use remaining caps, replay fails safe on incomplete/legacy graph evidence, and graft ownership/usage survives definition evolution and collisions.
 36. DSL compiler/decompiler/CLI is fail-closed for unsupported dynamic syntax, round-trips all 12 phase kinds, defaults `check` to TypeScript diagnostics, and passes clean tarball/install E2E.
 37. MCP cancellation tears down the full host process tree; stdio disconnect/error paths are bounded and suppress late work/responses.
-38. Grok read-only and workspace-mutating policies have live 0.2.93 enforcement probes; unavailable usage accounting rejects every nested budget path before spawn.
+38. Grok read-only and custom-profile mutating policies have live 0.2.93 enforcement probes; unavailable usage accounting rejects every nested budget path before spawn; max-turn exhaustion is fatal.
 39. All GitHub Actions are pinned to verified full SHAs; npm publish and GitHub Release use separate least-privilege jobs; published-version reruns verify provenance and exact tarball integrity.
 40. Root typecheck, full unit suite, all package builds, website static export, DSL install E2E, four host MCP E2Es, built-dist comprehensive MCP E2E, and live Codex/OpenCode/Grok executors pass locally.
 

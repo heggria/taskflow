@@ -49,6 +49,7 @@ Then run it.
   </Tab>
   <Tab value="Grok">
     ```bash title="Run on Grok Build"
+    # Requires the custom profile shown in Install below.
     # Ask Grok to call taskflow_verify / taskflow_run via MCP tools.
     ```
   </Tab>
@@ -88,11 +89,17 @@ If you have not installed taskflow yet, pick your host:
     ```
   </Tab>
   <Tab value="Grok">
+    ```toml title="~/.grok/sandbox.toml"
+    [profiles.taskflow-workspace]
+    extends = "workspace"
+    ```
     ```bash title="Register Grok Build MCP"
+    export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
     grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
     # Public plugin source is not published yet. Checkout-only:
     # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
+    Mutating or omitted-tool phases fail closed unless this custom profile is configured.
   </Tab>
 </Tabs>
 

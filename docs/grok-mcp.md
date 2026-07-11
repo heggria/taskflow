@@ -85,8 +85,9 @@ The runner always selects a Grok kernel sandbox profile and maps each phase's
 tool whitelist as follows:
 
 - **Read-only phase** (no `write`/`edit`/`bash` / `run_terminal_cmd` /
-  `search_replace` in the phase/agent `tools`) → a known-good
-  kernel-enforced `--sandbox read-only`, a
+  `search_replace` in the phase/agent `tools`) → rejected unless
+  `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` names a custom profile extending
+  `read-only`, plus a
   `--tools read_file,grep,list_dir` allowlist, an independent
   `--disallowed-tools` mutator denylist, `--deny Bash/Edit/Write/MCPTool`, and
   `--no-subagents`. `--always-approve` then applies only to the surviving
@@ -94,19 +95,39 @@ tool whitelist as follows:
   allowlist entries and can restore the full toolset, so those two tools are
   deliberately unavailable in a read-only phase until the CLI fixes that
   fail-open behavior.
-- **Mutating phase** (or no whitelist) → kernel-enforced `--sandbox workspace`
-  plus `--always-approve`. All tools remain available, but filesystem writes
-  are confined to the phase cwd plus Grok's documented temp/session paths
-  (`/tmp`, `/var/tmp`, platform temp directories, and `~/.grok/`). Reads and
-  network remain available. Prefer `cwd: "worktree"` for disposable changes.
+- **Mutating phase** (or no whitelist) → rejected unless
+  `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` names an explicitly configured
+  **custom** Grok sandbox profile. Grok's built-in profiles can warn and
+  continue unsandboxed when kernel enforcement is unavailable; custom profiles
+  fail closed instead. The runner then uses that profile with
+  `--always-approve`. Built-in names such as `workspace` are rejected.
 
-Both sandbox profiles cover the whole Grok process and spawned tools on
+Configure both fail-closed profiles in
+`~/.grok/sandbox.toml` and export the variable before starting the MCP server:
+
+```toml
+[profiles.taskflow-workspace]
+extends = "workspace"
+
+[profiles.taskflow-readonly]
+extends = "read-only"
+```
+
+```sh
+export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
+export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
+```
+
+Prefer `cwd: "worktree"` for disposable changes. `max_turns_reached` is treated
+as a failed phase, never as a successful partial answer.
+
+Both sandbox modes cover the whole Grok process and spawned tools on
 macOS/Linux. The independent built-in/MCP denies are also required for
 read-only phases because that profile deliberately permits session writes under
 temporary directories; together they keep a read-only phase non-mutating even
 when its workspace itself is under `/tmp`. A live executor E2E additionally
-proves that the workspace profile permits an in-cwd write and rejects a marker
-outside the cwd and documented exceptions.
+proves that the custom workspace-equivalent profile permits an in-cwd write and
+rejects a marker outside the cwd and documented exceptions.
 
 Agent system prompts are passed with `--rules`. Model ids that look like
 unresolved `{{placeholders}}`, multi-segment openrouter paths, or pi thinking

@@ -131,15 +131,15 @@ TUI 里可用 `/plugins`、`/mcps` 打开同一扩展面板。
 
 | Phase tools | 标志 | 含义 |
 |---|---|---|
-| 只读（无 write/edit/bash） | 内核强制的 `--sandbox read-only` + 已知良好的 `--tools read_file,grep,list_dir` + 可变更工具拒绝列表 + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | 即使 workspace 在 `/tmp` 下也 fail-closed（内置 sandbox 本来允许 session 文件写入）。Web 工具被禁用，因为 Grok 0.2.93 会把它们视为无法映射的 allowlist 项。 |
-| 可写 / 无白名单 | 内核强制的 `--sandbox workspace` + `--always-approve` | 可使用全量工具，但写入仅限 phase cwd 与 Grok 文档中约定的临时 / 会话路径。优先 `cwd: "worktree"`。 |
+| 只读（无 write/edit/bash） | 运维方配置的自定义只读 sandbox + `--tools read_file,grep,list_dir` + 可变更工具拒绝列表 + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | 只有当 `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` 指向继承 `read-only` 的自定义 profile 时才运行。Web 工具仍被禁用。 |
+| 可写 / 无白名单 | 运维方配置的自定义 sandbox + `--always-approve` | 只有当 `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` 指向自定义 profile 时才运行。Grok 内置 profile 在无法应用时可能警告后无 sandbox 继续，因此 runner 会拒绝内置 profile。 |
 
-Grok 0.2.93 会把 `web_search` / `web_fetch` 报为无法映射的 allowlist 项，并可能回退到全量工具；因此只读 phase 中暂时禁用这两个 web 工具，并用独立 deny 规则做二次保护。`thinking` 会映射到 `--reasoning-effort`（`off` → `none`）。
+Grok 0.2.93 会把 `web_search` / `web_fetch` 报为无法映射的 allowlist 项，并可能回退到全量工具；因此只读 phase 中暂时禁用这两个 web 工具，并用独立 deny 规则做二次保护。在 `~/.grok/sandbox.toml` 分别配置 `[profiles.taskflow-workspace] extends = "workspace"` 和 `[profiles.taskflow-readonly] extends = "read-only"`，启动 MCP server 前导出对应的 `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` 与 `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE`。`max_turns_reached` 会使 phase 失败。
 
 Grok 0.2.93 的 `streaming-json` 不返回 token / cost usage，所以 Grok MCP 适配器会**拒绝声明了 `budget` 的 flow**，而不是静默忽略上限。
 
 <Callout type="warn">
-  workspace sandbox 仍然允许全局读取、网络访问，以及写入临时目录和 `~/.grok/`。当文件系统变更应视为可丢弃时，请使用一次性 worktree。
+  自定义 profile 在无法应用时会 fail-closed，但仍会保留其基础 profile 授予的访问。当文件系统变更应视为可丢弃时，请使用一次性 worktree。
 </Callout>
 
 ## 长时 flow

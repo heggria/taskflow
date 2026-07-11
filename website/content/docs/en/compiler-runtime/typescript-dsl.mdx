@@ -35,6 +35,12 @@ source spelling. Supported definitions rebuild to semantically equivalent
 Taskflow/FlowIR; unsupported or lossy constructs fail instead of claiming a
 literal round-trip.
 
+`build`, `decompile`, and `new` refuse to replace an existing output unless
+`--force` is explicit. All output paths must remain under `--cwd`; destination
+symlinks are rejected, and writes are atomically committed from a same-directory
+temporary file. With `--emit both`, both destinations are checked before either
+file is written.
+
 ## Authoring shape
 
 ```ts

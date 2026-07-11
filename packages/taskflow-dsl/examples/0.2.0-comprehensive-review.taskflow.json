@@ -339,7 +339,7 @@
   "strictInterpolation": true,
   "concurrency": 6,
   "budget": {
-    "maxTokens": 20000000,
+    "maxTokens": 100000000,
     "maxUSD": 12
   }
 }

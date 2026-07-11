@@ -12,6 +12,7 @@ import {
 	foldOpencodeEventLine,
 	newOpencodeAccumulator,
 	isReadOnlyPhase,
+	runOpencodeAgentTask,
 	resolveOpencodeModel,
 } from "../src/opencode-runner.ts";
 
@@ -127,4 +128,29 @@ test("opencode permissions: a mutating whitelist is NOT read-only", () => {
 test("opencode permissions: a read-only whitelist IS read-only", () => {
 	assert.equal(isReadOnlyPhase(["read", "grep", "find", "ls"]), true);
 	assert.equal(isReadOnlyPhase(["read"]), true);
+});
+
+test("opencode runner: mutating/default fails before spawn without explicit opt-in", async () => {
+	const previousBin = process.env.PI_TASKFLOW_OPENCODE_BIN;
+	const previousOptIn = process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+	try {
+		process.env.PI_TASKFLOW_OPENCODE_BIN = "/definitely/not/an/opencode/binary";
+		delete process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+		const result = await runOpencodeAgentTask(
+			"/tmp",
+			[{ name: "writer", description: "test", systemPrompt: "", source: "project", filePath: "/tmp/writer.md" }],
+			"writer",
+			"change a file",
+			{},
+		);
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.stopReason, "permission_denied");
+		assert.match(result.errorMessage ?? "", /PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1/);
+		assert.doesNotMatch(result.stderr, /ENOENT/);
+	} finally {
+		if (previousBin === undefined) delete process.env.PI_TASKFLOW_OPENCODE_BIN;
+		else process.env.PI_TASKFLOW_OPENCODE_BIN = previousBin;
+		if (previousOptIn === undefined) delete process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+		else process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO = previousOptIn;
+	}
 });

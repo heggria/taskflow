@@ -33,6 +33,10 @@ taskflow-dsl build audit.tf.ts --emit both
 build 为语义等价的 Taskflow/FlowIR；不支持或有损的结构会失败，而不是
 承诺字面 round-trip。
 
+`build`、`decompile`、`new` 默认拒绝替换已有输出，只有显式传入 `--force`
+才允许覆盖。所有输出必须位于 `--cwd` 内，目标 symlink 会被拒绝，写入通过
+同目录临时文件原子提交。`--emit both` 会在写入任一文件前预检两个目标。
+
 ## 写法示例
 
 ```ts

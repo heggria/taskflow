@@ -51,6 +51,10 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build（已发布 MCP 包）
+# 先在 ~/.grok/sandbox.toml 分别定义 taskflow-workspace/taskflow-readonly，
+# 并分别继承 workspace/read-only，然后：
+export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
+export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
 grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
@@ -219,7 +223,18 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 正式发布路径是 MCP 包：
 
+```toml
+# ~/.grok/sandbox.toml
+[profiles.taskflow-workspace]
+extends = "workspace"
+
+[profiles.taskflow-readonly]
+extends = "read-only"
+```
+
 ```bash
+export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
+export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
 grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
@@ -232,7 +247,7 @@ grok plugin enable taskflow
 grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
 ```
 
-公共 Grok plugin marketplace/source 尚未发布；不要代入占位 source。每个阶段的子代理以隔离的 `grok -p --output-format streaming-json` 会话运行。参见 [Grok Build 指南](./docs/grok-mcp.md)。
+公共 Grok plugin marketplace/source 尚未发布；不要代入占位 source。每个阶段的子代理以隔离的 `grok -p --output-format streaming-json` 会话运行。可写或未声明 tools 的阶段必须使用上述自定义 profile，因为 Grok 内置 profile 在内核强制失败时可能 fail open。Grok 0.2.93 不上报 usage，因此带 `budget` 的流程会 fail closed；需要硬性费用上限时请使用 Pi、Codex、Claude Code 或 OpenCode。参见 [Grok Build 指南](./docs/grok-mcp.md)。
 
 ### 简写语法（与内置工具相同的格式）
 

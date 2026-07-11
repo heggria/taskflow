@@ -152,11 +152,11 @@ OpenCode has no per-run tool-whitelist flag, but it honours a per-process config
 
 | Phase tools | Permission policy | What it means |
 |---|---|---|
-| Read-only (no `write`/`edit`/`bash`) | Injected policy that **denies** bash/write/edit | A denied tool call is genuinely rejected (not merely un-approved). This is real enforcement, closer to a read-only OS sandbox than an advisory whitelist. |
-| Mutating (or no whitelist) | `opencode run --auto` | Auto-approves every permission — the workspace-write analogue. Run flows you trust, ideally in a throwaway worktree (`cwd: "worktree"`). |
+| Read-only (no `write`/`edit`/`bash`) | `--pure` + injected deny policy | External plugins are disabled and bash/write/edit are denied. |
+| Mutating (or no whitelist) | Rejected by default | Set `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` only for trusted flows to opt into unsandboxed `--auto`; `--pure` remains enabled. |
 
 <Callout type="warn">
-  Mutating phases run with `--auto` and auto-approve every permission. Prefer a throwaway worktree (`cwd: "worktree"`) for flows that touch the filesystem, and only run flows you trust.
+  OpenCode has no OS sandbox backstop. Unsafe auto mode is an explicit operator opt-in; prefer a throwaway worktree and only run trusted flows.
 </Callout>
 
 ### Model resolution

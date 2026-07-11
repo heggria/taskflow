@@ -11,7 +11,7 @@ import { checkFile } from "./check.ts";
 import { decompileTaskflow } from "./decompile.ts";
 import { formatDiagnostics, hasErrors } from "./diagnostics.ts";
 import { skeletonHello, skeletonJson } from "./new-skeleton.ts";
-import { resolveContainedOut, resolveInput } from "./paths.ts";
+import { assertContainedOutputWritable, resolveInput, writeContainedFileAtomic } from "./paths.ts";
 import { desugar, parseJsonc, validateTaskflow, type Taskflow } from "taskflow-core";
 
 const require = createRequire(import.meta.url);
@@ -38,7 +38,7 @@ Options:
   --emit taskflow|flowir|both   (build, default: taskflow)
   --no-typecheck     (check) skip tsc Program diagnostics
   --json             Machine-readable diagnostics
-  --force            Overwrite existing file (new)
+  --force            Overwrite an existing regular output file
   --json-escape      new: emit JSON skeleton instead of .tf.ts
   -V, --version
   -h, --help
@@ -82,9 +82,9 @@ function main(): void {
 	const cwd = typeof flags.cwd === "string" && flags.cwd ? path.resolve(flags.cwd) : process.cwd();
 	const cmd = positional[0]!;
 	const allowedByCommand: Record<string, Set<string>> = {
-		build: new Set(["cwd", "out", "emit", "json"]),
+		build: new Set(["cwd", "out", "emit", "json", "force"]),
 		check: new Set(["cwd", "typecheck", "noTypecheck", "json"]),
-		decompile: new Set(["cwd", "out"]),
+		decompile: new Set(["cwd", "out", "force"]),
 		new: new Set(["cwd", "out", "force", "jsonEscape"]),
 	};
 	const allowed = allowedByCommand[cmd];
@@ -133,27 +133,40 @@ function main(): void {
 				if (r.diagnostics.length) process.stderr.write(formatDiagnostics(r.diagnostics) + "\n");
 				if (r.ok && r.taskflow) {
 					const stem = input.replace(/\.tf\.ts$/i, "").replace(/\.jsonc?$/i, "");
+					const taskflowOut =
+						emit === "taskflow" || emit === "both"
+							? typeof flags.out === "string" && flags.out && emit === "taskflow"
+								? flags.out
+								: `${stem}.taskflow.json`
+							: undefined;
+					const flowirOut =
+						(emit === "flowir" || emit === "both") && r.flowir
+							? typeof flags.out === "string" && flags.out && emit === "flowir"
+								? flags.out
+								: `${stem}.flowir.json`
+							: undefined;
+					const outputOptions = { force: flags.force === true };
+					// Fail before the first write if either half of `--emit both` is
+					// already unsafe or would overwrite without explicit consent.
+					for (const output of [taskflowOut, flowirOut]) {
+						if (output) assertContainedOutputWritable(cwd, outputRelativeTo(cwd, output), outputOptions);
+					}
 					if (emit === "taskflow" || emit === "both") {
-						let outPath = `${stem}.taskflow.json`;
-						if (typeof flags.out === "string" && flags.out && emit === "taskflow") {
-							const c = resolveContainedOut(cwd, flags.out);
-							if (!c.ok) {
-								process.stderr.write(c.message + "\n");
-								process.exit(2);
-							}
-							outPath = c.path;
-						}
-						fs.writeFileSync(outPath, JSON.stringify(r.taskflow, null, 2) + "\n");
+						const outPath = writeContainedFileAtomic(
+							cwd,
+							outputRelativeTo(cwd, taskflowOut!),
+							JSON.stringify(r.taskflow, null, 2) + "\n",
+							outputOptions,
+						);
 						process.stdout.write(`wrote ${outPath}\n`);
 					}
 					if ((emit === "flowir" || emit === "both") && r.flowir) {
-						let p = `${stem}.flowir.json`;
-						if (typeof flags.out === "string" && flags.out && emit === "flowir") {
-							const c = resolveContainedOut(cwd, flags.out);
-							if (!c.ok) failUsage(c.message);
-							p = c.path;
-						}
-						fs.writeFileSync(p, JSON.stringify({ hash: r.irHash, ir: r.flowir }, null, 2) + "\n");
+						const p = writeContainedFileAtomic(
+							cwd,
+							outputRelativeTo(cwd, flowirOut!),
+							JSON.stringify({ hash: r.irHash, ir: r.flowir }, null, 2) + "\n",
+							outputOptions,
+						);
 						process.stdout.write(`wrote ${p} (${r.irHash})\n`);
 					}
 					process.stdout.write(
@@ -231,22 +244,7 @@ function main(): void {
 			if (out === "-") {
 				process.stdout.write(src);
 			} else {
-				if (!path.isAbsolute(out)) {
-					const c = resolveContainedOut(cwd, out);
-					if (!c.ok) {
-						process.stderr.write(c.message + "\n");
-						process.exit(2);
-					}
-					out = c.path;
-				} else {
-					const c = resolveContainedOut(cwd, path.relative(cwd, out));
-					if (!c.ok) {
-						process.stderr.write(c.message + "\n");
-						process.exit(2);
-					}
-					out = c.path;
-				}
-				fs.writeFileSync(out, src);
+				out = writeContainedFileAtomic(cwd, outputRelativeTo(cwd, out), src, { force: flags.force === true });
 				process.stdout.write(`wrote ${out}\n`);
 			}
 			process.exit(0);
@@ -261,18 +259,7 @@ function main(): void {
 					: flags.jsonEscape
 						? `./${name}.json`
 						: `./${name}.tf.ts`;
-			const c = resolveContainedOut(cwd, outRel);
-			if (!c.ok) {
-				process.stderr.write(c.message + "\n");
-				process.exit(2);
-			}
-			const out = c.path;
-			if (fs.existsSync(out) && !flags.force) {
-				process.stderr.write(`refusing to overwrite ${out} (use --force)\n`);
-				process.exit(2);
-			}
-			fs.mkdirSync(path.dirname(out), { recursive: true });
-			fs.writeFileSync(out, content);
+			const out = writeContainedFileAtomic(cwd, outRel, content, { force: flags.force === true });
 			process.stdout.write(`wrote ${out}\n`);
 			process.exit(0);
 		}
@@ -288,6 +275,10 @@ function main(): void {
 function failUsage(message: string): never {
 	process.stderr.write(`${message}\n`);
 	process.exit(2);
+}
+
+function outputRelativeTo(cwd: string, out: string): string {
+	return path.isAbsolute(out) ? path.relative(path.resolve(cwd), out) : out;
 }
 
 main();

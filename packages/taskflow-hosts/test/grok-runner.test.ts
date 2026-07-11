@@ -41,6 +41,15 @@ test("grok parser: error event is fatal and never the answer", () => {
 	assert.match(acc.lastActivity, /auth failed/);
 });
 
+test("grok parser: max_turns_reached is fatal even after partial text", () => {
+	const acc = newGrokAccumulator();
+	foldGrokEventLine(acc, JSON.stringify({ type: "text", data: "partial" }));
+	const live = foldGrokEventLine(acc, JSON.stringify({ type: "max_turns_reached" }));
+	assert.equal(acc.stopReason, "max_turns_reached");
+	assert.match(acc.fatalError ?? "", /maximum turn limit/);
+	assert.match(live?.text ?? "", /^error:/);
+});
+
 test("grok parser: end may supply text when no prior chunks", () => {
 	const acc = newGrokAccumulator();
 	foldGrokEventLine(acc, JSON.stringify({ type: "end", stopReason: "EndTurn", text: "full answer" }));
@@ -61,14 +70,15 @@ test("grok model resolve: flat ok, openrouter path dropped", () => {
 });
 
 test("grok permissions: read-only vs mutating", () => {
-	assert.deepEqual(permissionArgsForGrokTools(undefined), ["--sandbox", "workspace", "--always-approve"]);
-	assert.ok(permissionArgsForGrokTools(["read"]).includes("--tools"));
+	assert.throws(() => permissionArgsForGrokTools(undefined), /custom sandbox profile/);
+	assert.throws(() => permissionArgsForGrokTools(["read"]), /PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE/);
+	assert.ok(permissionArgsForGrokTools(["read"], undefined, "taskflow-readonly").includes("--tools"));
 	assert.equal(
-		permissionArgsForGrokTools(["read"])[permissionArgsForGrokTools(["read"]).indexOf("--sandbox") + 1],
-		"read-only",
+		permissionArgsForGrokTools(["read"], undefined, "taskflow-readonly")[permissionArgsForGrokTools(["read"], undefined, "taskflow-readonly").indexOf("--sandbox") + 1],
+		"taskflow-readonly",
 	);
-	assert.ok(permissionArgsForGrokTools(["read"]).includes("--disallowed-tools"));
-	assert.deepEqual(permissionArgsForGrokTools(["write"]), ["--sandbox", "workspace", "--always-approve"]);
+	assert.ok(permissionArgsForGrokTools(["read"], undefined, "taskflow-readonly").includes("--disallowed-tools"));
+	assert.deepEqual(permissionArgsForGrokTools(["write"], "taskflow-workspace"), ["--sandbox", "taskflow-workspace", "--always-approve"]);
 });
 
 test("grok runner: invalid global thinking fails before spawning", async () => {

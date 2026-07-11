@@ -22,6 +22,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
 
 ### Fixed
+- **TypeScript DSL decompile now orders dependencies before consumers.** Valid
+  Taskflow JSON may list phases in any order; generated rune bindings now use a
+  stable topological order, so forward-reference gates/reducers rebuild instead
+  of producing unusable source with a successful CLI exit.
 - **MCP cancellation is now real and end-to-end.** The dependency-free stdio
   transport dispatches requests concurrently, handles
   `notifications/cancelled`, and propagates a per-request `AbortSignal` through
@@ -54,17 +58,27 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   host's global reasoning configuration.
 
 ### Security
+- **DSL output writes are contained, no-clobber, and atomic.** `build`,
+  `decompile`, and `new` reject symlink escapes, preserve existing files unless
+  `--force` is explicit, and commit fsynced same-directory temporary files
+  atomically. `--emit both` preflights both destinations before writing either.
 - **Grok read-only phases are kernel-enforced and defence-in-depth.** They now
-  use `--sandbox read-only`, a known-good file-read allowlist, independent
+  require `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` to name a custom profile
+  extending `read-only`, plus a known-good file-read allowlist, independent
   mutator/MCP deny rules, and disabled subagents. `web_search` / `web_fetch` are
   omitted from the Grok 0.2.93 allowlist because that CLI version can label
   them unmappable and restore the full toolset. A live executor E2E verifies a
   write attempt is blocked even when the workspace is under `/tmp`.
-- **Grok mutating/default phases are workspace-sandboxed.** They keep
-  `--always-approve` for non-interactive execution but now also pass
-  `--sandbox workspace`, confining writes to the phase cwd plus Grok's
-  documented temp/session paths. A live executor E2E proves an in-workspace
-  write succeeds while an outside marker is rejected.
+- **Grok mutating/default phases require a fail-closed custom sandbox.** Built-in
+  profiles can warn and continue unsandboxed when kernel enforcement is
+  unavailable, which is unsafe with `--always-approve`. Mutating phases now
+  require `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` to name a configured
+  custom profile; built-in names are rejected. `max_turns_reached` also fails
+  the phase instead of accepting a partial answer.
+- **OpenCode subprocess permissions fail closed.** Every OpenCode child now
+  uses `--pure` so external plugins cannot bypass the tool permission policy.
+  Mutating/default-capable phases are rejected unless the operator explicitly
+  sets `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`; only then is `--auto` added.
 - **Release reruns no longer blindly trust an existing npm version.** Before
   skipping, the publish workflow verifies a trusted npm owner, SLSA provenance
   from this repository/workflow/tag/commit, and exact locally-packed tarball

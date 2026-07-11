@@ -14,6 +14,13 @@ description: Orchestrate multi-phase subagent workflows with Taskflow. Use whene
 how tools are announced). Each phase's subagent runs as an isolated
 `grok -p --output-format streaming-json` session.
 
+**Sandbox prerequisites:** before `taskflow_run`, require custom profiles for
+both capability modes: `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` should name
+a profile extending `workspace`, and `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE`
+one extending `read-only`. If either required variable is absent, explain the
+setup and do not retry with a built-in profile; built-ins may fail open when
+kernel enforcement is unavailable.
+
 | Tool | What it does |
 |------|--------------|
 | `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG, or shorthand `{task}` / `{tasks}` / `{chain}`). Optional `args`, `incremental`. Returns only the final phase output + a `runId`. |

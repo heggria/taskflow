@@ -45,6 +45,10 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build (published MCP package)
+# First define custom taskflow-workspace/taskflow-readonly profiles extending
+# workspace/read-only respectively in ~/.grok/sandbox.toml, then:
+export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
+export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
 grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
@@ -227,7 +231,18 @@ The server runs via `npx` (a version-pinned `opencode-taskflow`), and each phase
 
 The published path is the MCP package:
 
+```toml
+# ~/.grok/sandbox.toml
+[profiles.taskflow-workspace]
+extends = "workspace"
+
+[profiles.taskflow-readonly]
+extends = "read-only"
+```
+
 ```bash
+export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
+export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
 grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
@@ -240,7 +255,7 @@ grok plugin enable taskflow
 grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
 ```
 
-A public Grok plugin marketplace/source is not published yet; do not substitute a placeholder source. Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session. See the [Grok Build guide](./docs/grok-mcp.md).
+A public Grok plugin marketplace/source is not published yet; do not substitute a placeholder source. Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session. Mutating or omitted-tool phases require the custom profile above because Grok's built-in profiles may fail open when kernel enforcement is unavailable. Grok 0.2.93 does not report usage, so budgeted flows fail closed; use Pi, Codex, Claude Code, or OpenCode when a hard spend ceiling is required. See the [Grok Build guide](./docs/grok-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 

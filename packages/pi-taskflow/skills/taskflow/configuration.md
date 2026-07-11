@@ -372,7 +372,10 @@ Each entry is one of:
 | `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting known mutating tools to use narrow `--tools` + `bypassPermissions`; unknown names always fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+| `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` | Explicitly permit trusted OpenCode mutating/default phases to use unsandboxed `--auto`; otherwise they fail before spawn. All OpenCode children still use `--pure`. |
 | `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
+| `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` | Required for Grok mutating/no-whitelist phases. Must name a custom profile from `~/.grok/sandbox.toml`; built-in profiles are rejected because they may fail open on unsupported hosts. |
+| `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` | Required for Grok read-only phases. Must name a custom profile extending `read-only`; built-in names are rejected so hooks/plugins remain kernel-contained if the host cannot enforce a built-in profile. |
 
 ---
 
@@ -450,6 +453,10 @@ node --conditions=development --experimental-strip-types \
 | `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
 | `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
 
+Output commands are create-only by default: pass `--force` to replace an
+existing regular file. Outputs are `--cwd`-contained, reject destination
+symlinks, and commit atomically; `--emit both` preflights both destinations.
+
 **Authoring notes (kinds ↔ runes)**
 
 Import: `import { flow, agent, map, … } from "taskflow-dsl"`. Runes erase to Taskflow
@@ -493,6 +500,8 @@ rely on them for behavior:
   cross-run cache, and Shared Context Tree force the **imperative** path.
 - **`taskflow-dsl decompile`** — generates safe, readable TypeScript whose
   rebuilt Taskflow/FlowIR is semantically equivalent for supported constructs;
+  dependencies are emitted before consumers even when input JSON is out of
+  order;
   it does **not** reproduce original variable names, formatting, comments, or
   source spelling. Unsupported/lossy constructs fail rather than silently
   promising a literal round-trip.

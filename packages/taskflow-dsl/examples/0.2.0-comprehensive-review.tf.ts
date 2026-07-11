@@ -24,7 +24,7 @@ export default flow(
 	},
 	(ctx) => {
 		ctx.concurrency(6);
-		ctx.budget({ maxTokens: 20_000_000, maxUSD: 12 });
+		ctx.budget({ maxTokens: 100_000_000, maxUSD: 12 });
 
 		const repoState = script(
 			[

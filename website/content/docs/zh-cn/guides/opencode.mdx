@@ -152,11 +152,11 @@ OpenCode 没有按运行的 tool-whitelist 标志，但它支持通过 `OPENCODE
 
 | 阶段工具 | 权限策略 | 含义 |
 |---|---|---|
-| 只读（无 `write`/`edit`/`bash`） | 注入一个**拒绝** bash/write/edit 的策略 | 被拒绝的工具调用会被真正拒绝（而非仅未批准）。这是真正的强制，更接近只读 OS 沙箱而非咨询式白名单。 |
-| 变更（或无白名单） | `opencode run --auto` | 自动批准每个权限——workspace-write 的类比。只运行你信任的 flow，最好在一次性 worktree（`cwd: "worktree"`）中。 |
+| 只读（无 `write`/`edit`/`bash`） | `--pure` + 注入拒绝策略 | 禁用外部插件，并拒绝 bash/write/edit。 |
+| 变更（或无白名单） | 默认拒绝 | 仅对可信 flow 设置 `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` 才启用无 sandbox 的 `--auto`；`--pure` 始终保留。 |
 
 <Callout type="warn">
-  变更阶段以 `--auto` 运行，自动批准每个权限。对涉及文件系统的 flow，优先使用一次性 worktree（`cwd: "worktree"`），并只运行你信任的 flow。
+  OpenCode 没有 OS sandbox 兜底。unsafe auto 需要运维方显式 opt-in；优先使用一次性 worktree，且只运行可信 flow。
 </Callout>
 
 ### 模型解析

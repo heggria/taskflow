@@ -12,8 +12,21 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { runGrokAgentTask } from "taskflow-hosts/grok";
+import {
+	GROK_MUTATING_SANDBOX_PROFILE_ENV,
+	GROK_READONLY_SANDBOX_PROFILE_ENV,
+	runGrokAgentTask,
+} from "taskflow-hosts/grok";
 import type { AgentConfig } from "taskflow-core";
+
+assert.ok(
+	process.env[GROK_MUTATING_SANDBOX_PROFILE_ENV]?.trim(),
+	`live mutating probe requires ${GROK_MUTATING_SANDBOX_PROFILE_ENV} to name a custom Grok sandbox profile`,
+);
+assert.ok(
+	process.env[GROK_READONLY_SANDBOX_PROFILE_ENV]?.trim(),
+	`live read-only probe requires ${GROK_READONLY_SANDBOX_PROFILE_ENV} to name a custom Grok sandbox profile`,
+);
 
 // Grok's read-only sandbox intentionally permits /tmp for session internals.
 // Keeping the test workspace there proves the independent tool/MCP deny rules
@@ -73,7 +86,7 @@ try {
 	assert.equal(existsSync(workspaceMarker), true, "workspace sandbox blocked an in-workspace write");
 	assert.equal(existsSync(outsideMarker), false, "workspace sandbox allowed a write outside cwd");
 	console.log(
-		`e2e-grok: ok (${mutatingResult.model ?? readOnlyResult.model ?? "default model"}; read-only + workspace policies enforced)`,
+		`e2e-grok: ok (${mutatingResult.model ?? readOnlyResult.model ?? "default model"}; read-only + custom mutating sandbox policies enforced)`,
 	);
 } finally {
 	await rm(readOnlyCwd, { recursive: true, force: true });

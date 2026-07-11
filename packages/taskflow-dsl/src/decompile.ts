@@ -3,7 +3,7 @@
  * MVP: agent / script / map / parallel / gate / reduce / approval / flow / loop / tournament.
  */
 
-import type { Taskflow, Phase } from "taskflow-core";
+import { dependenciesOf, type Taskflow, type Phase } from "taskflow-core";
 
 /**
  * Encode JSON-compatible data as a standalone JavaScript/TypeScript expression.
@@ -117,8 +117,55 @@ const DECOMPILABLE = new Set([
 	"expand",
 ]);
 
+/**
+ * Produce the least-disruptive topological order: an already-topological input
+ * remains byte-for-byte ordered, while a consumer that precedes its dependency
+ * moves just far enough for generated TypeScript bindings to be in scope.
+ * `topoLayers().flat()` is intentionally not used here because breadth layers
+ * can move unrelated phases across a consumer and break semantic round-trip
+ * ordering even when the input was already valid TypeScript declaration order.
+ */
+function stableTopologicalPhases(phases: readonly Phase[]): Phase[] {
+	const byId = new Map(phases.map((phase) => [phase.id, phase]));
+	const inputIndex = new Map(phases.map((phase, index) => [phase.id, index]));
+	const indegree = new Map(phases.map((phase) => [phase.id, 0]));
+	const dependents = new Map(phases.map((phase) => [phase.id, [] as string[]]));
+
+	for (const phase of phases) {
+		for (const dependency of dependenciesOf(phase)) {
+			if (!byId.has(dependency)) continue;
+			indegree.set(phase.id, (indegree.get(phase.id) ?? 0) + 1);
+			dependents.get(dependency)!.push(phase.id);
+		}
+	}
+
+	const ready = phases
+		.filter((phase) => (indegree.get(phase.id) ?? 0) === 0)
+		.map((phase) => phase.id);
+	const ordered: Phase[] = [];
+	while (ready.length > 0) {
+		ready.sort((a, b) => inputIndex.get(a)! - inputIndex.get(b)!);
+		const id = ready.shift()!;
+		ordered.push(byId.get(id)!);
+		for (const dependent of dependents.get(id) ?? []) {
+			const next = (indegree.get(dependent) ?? 0) - 1;
+			indegree.set(dependent, next);
+			if (next === 0) ready.push(dependent);
+		}
+	}
+	return ordered;
+}
+
 export function decompileTaskflow(def: Taskflow): string {
-	for (const p of def.phases ?? []) {
+	const inputPhases = def.phases ?? [];
+	const phases = stableTopologicalPhases(inputPhases);
+	if (phases.length !== inputPhases.length) {
+		throw new Error(
+			"TFDSL_DECOMPILE_UNSUPPORTED: phase graph cannot be topologically ordered",
+		);
+	}
+
+	for (const p of phases) {
 		const type = p.type ?? "agent";
 		if (!DECOMPILABLE.has(type)) {
 			throw new Error(
@@ -129,7 +176,7 @@ export function decompileTaskflow(def: Taskflow): string {
 
 	const lines: string[] = [];
 	const imports = new Set(["flow"]);
-	for (const p of def.phases ?? []) {
+	for (const p of phases) {
 		const kind = p.type ?? "agent";
 		if (kind === "flow") imports.add("subflow");
 		else imports.add(kind);
@@ -172,11 +219,15 @@ export function decompileTaskflow(def: Taskflow): string {
 		lines.push(`  ctx.args.declare(${sourceLiteral(def.args)});`);
 	}
 
-	const byId = new Map((def.phases ?? []).map((p) => [p.id, p]));
-	const bindings = allocateBindings(def.phases ?? []);
+	const byId = new Map(inputPhases.map((p) => [p.id, p]));
+	const bindings = allocateBindings(inputPhases);
 	let returnBind: string | undefined;
 
-	for (const p of def.phases ?? []) {
+	// Rune references are ordinary TypeScript bindings, so every dependency must
+	// be declared before its consumer even though Taskflow JSON itself permits
+	// phases in any order. Keep binding allocation and implicit-final selection
+	// tied to the input order so topological emission changes no semantics.
+	for (const p of phases) {
 		const bind = bindings.get(p.id)!;
 		if (p.final) returnBind = bind;
 		const line = decompilePhase(p, bind, byId, bindings);

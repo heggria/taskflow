@@ -186,15 +186,17 @@ Optional monorepo convenience (not published): root script `"dsl": "node --condi
 ## §2. CLI surface
 
 Entry: `taskflow-dsl <command> [options] [path…]`
-Global flags (all commands):
+Flags shared by all commands:
 
 | Flag | Meaning |
 |------|---------|
 | `--cwd <dir>` | Project root for path resolution / tsconfig discovery (default: `process.cwd()`) |
-| `--json` | Machine-readable stdout (diagnostics + results as JSON) |
-| `--no-color` | Disable ANSI (also respects `NO_COLOR`) |
 | `-h` / `--help` | Command help |
 | `-V` / `--version` | Package version |
+
+`--json` is command-specific and is published only for `build` and `check`.
+Color-control and strict-warning flags are deferred; they are not part of the
+0.2.0 CLI surface.
 
 Exit codes (stable for agents):
 
@@ -204,7 +206,7 @@ Exit codes (stable for agents):
 | `1` | Diagnostics present at **error** severity (or validation failed) |
 | `2` | Usage / I/O / unexpected internal failure |
 
-Warnings alone → exit `0` (match common compiler UX); `--strict-warnings` (optional MVP-nice) promotes warnings to exit `1`.
+Warnings alone → exit `0` (match common compiler UX).
 
 ### 2.1 `build`
 
@@ -220,13 +222,11 @@ taskflow-dsl build <input> [options]
 
 | Flag | Default | IO |
 |------|---------|-----|
-| `-o` / `--out <path>` | derived (see below) | Write primary artifact |
-| `--emit taskflow\|flowir\|both` | `both` | What to write / print |
-| `--stdout` | off | Print primary artifact to stdout (single emit mode); conflicts with multi-file unless `--emit` is one of taskflow\|flowir |
-| `--pretty` | on for Taskflow JSON | Indent JSON |
-| `--ir-hash` | on when emitting flowir | Include `hash` (`ir:<64-hex>`) in envelope or sidecar line |
-| `--verify` | off | After emit, run `verifyTaskflow` on Taskflow; failures → diagnostics + exit 1 |
-| `--tsconfig <path>` | walk-up `tsconfig.json` | For `.tf.ts` only |
+| `--cwd <dir>` | process cwd | Resolve input/output and enforce containment |
+| `-o` / `--out <path>` | derived (see below) | Write the single selected artifact; invalid with `--emit both` |
+| `--emit taskflow\|flowir\|both` | `taskflow` | What to write |
+| `--json` | off | Print `BuildResult` JSON without writing; incompatible with `--out` |
+| `--force` | off | Atomically replace an existing regular output; symlinks/non-regular files remain rejected |
 
 **Default output paths** (when `-o` omitted, write next to input):
 
@@ -237,7 +237,12 @@ taskflow-dsl build <input> [options]
 | both | both files |
 
 **Stdout human mode (no `--json`):** short summary — name, phase count, `ir:<hash>` if computed, output paths.
-**Stdout `--json`:** `BuildResult` (§3.2).
+**Stdout `--json`:** `BuildResult` (§3.2), with no artifact write.
+
+All filesystem outputs are create-only unless `--force` is explicit, must
+remain beneath `--cwd`, reject destination symlinks, and commit atomically from
+a same-directory temporary file. `--emit both` preflights both destinations
+before writing either.
 
 **MVP non-goals for `build`:** watch mode, multi-file project graph beyond one entry `export default`, bundling imports of other `.tf.ts` (S4.1: `import` of subflow modules).
 
@@ -256,9 +261,10 @@ Lightweight validation **without requiring artifact write**.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--tsconfig <path>` | walk-up | `.tf.ts` only |
+| `--cwd <dir>` | process cwd | Resolve the input and TypeScript project context |
 | `--no-typecheck` | off | Skip tsc; rune/static rules only (faster agent loop) |
-| `--emit-taskflow` | off | Also build in-memory Taskflow and validate (closer to `build`, still no write) |
+| `--typecheck` | on | Explicit form of the default; mutually exclusive with `--no-typecheck` |
+| `--json` | off | Machine-readable `{ ok, diagnostics }` |
 
 Does **not** write FlowIR. Does **not** call the runtime.
 
@@ -273,14 +279,14 @@ taskflow-dsl decompile <input> [options]
 | Input | Behavior |
 |-------|----------|
 | Taskflow JSON (`.json`) | Preferred MVP path: Taskflow → `.tf.ts` codegen |
-| FlowIR JSON | Optional MVP if cheap: require sidecar-complete IR **or** reject with “pass Taskflow JSON” |
+| FlowIR JSON | **Deferred in 0.2.0:** reject and require Taskflow JSON |
 | `.tf.ts` | Error (already DSL) |
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-o` / `--out <path>` | `<stem>.tf.ts` or stdout if `-o -` | Output path |
-| `--name <id>` | from `def.name` | Override `flow("…")` name |
-| `--style compact\|readable` | `readable` | Formatting only (semantic equivalence unchanged) |
+| `--cwd <dir>` | process cwd | Resolve input/output and enforce containment |
+| `--force` | off | Atomically replace an existing regular output |
 
 **Honest contract (DSL v2 §6.2):** semantic equivalence under re-`build`, **not** literal round-trip. Variable names, template vs string placeholders, and formatting may change.
 
@@ -295,6 +301,7 @@ taskflow-dsl new [name] [options]
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-o` / `--out <path>` | `./<name>.tf.ts` or `./hello.tf.ts` | Destination (refuse overwrite unless `--force`) |
+| `--cwd <dir>` | process cwd | Resolve output and enforce containment |
 | `--force` | off | Overwrite existing file |
 | `--json-escape` | off | Emit a minimal **JSON** flow instead (escape hatch skeleton) |
 

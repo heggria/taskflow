@@ -269,23 +269,28 @@ Notes:
   id that is an unresolved `{{placeholder}}`, carries a pi thinking suffix
   (`:xhigh`), or is a multi-segment openrouter path (≥ 2 slashes) is dropped so
   opencode falls back to its configured default; a clean `provider/model` id
-  passes through. Read-only phases inject a deny-mutations permission policy
-  (via `OPENCODE_CONFIG_CONTENT`) so bash/write/edit are genuinely blocked;
-  mutating phases run with `--auto` (auto-approve).
+  passes through. Every child uses `--pure` to disable external plugins.
+  Read-only phases inject a deny-mutations permission policy via
+  `OPENCODE_CONFIG_CONTENT`; mutating/default phases fail closed unless the
+  operator explicitly sets `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`.
 <!-- /host:opencode -->
 <!-- host:grok -->
 - Each phase runs as an isolated `grok -p --output-format streaming-json`
   session. Unresolved `{{placeholder}}`s, multi-segment openrouter paths, and
   pi thinking suffixes (`:xhigh`) are dropped so Grok falls back to its
   configured default. Effective thinking maps to `--reasoning-effort` (`off`
-  → `none`). Read-only phases get Grok's kernel-enforced `--sandbox
-  read-only`, a known-good `--tools
+  → `none`). Read-only phases require
+  `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` to name a custom profile extending
+  `read-only`, plus a known-good `--tools
   read_file,grep,list_dir` allowlist plus independent mutator/MCP deny rules and
   no subagents; web tools are omitted because Grok 0.2.93 can fail open on those
   allowlist ids. `--always-approve` then applies only to surviving tools. Grok
-  mutating/no-whitelist phases use kernel-enforced `--sandbox workspace` plus
-  `--always-approve`, keeping writes inside the phase cwd and Grok's documented
-  temp/session paths. Grok 0.2.93 reports no usage, so its MCP adapter rejects
+  mutating/no-whitelist phases fail closed unless
+  `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` names a custom profile configured
+  in `~/.grok/sandbox.toml`; built-in profiles are rejected because Grok may
+  warn and continue unsandboxed when enforcement is unavailable. The custom
+  profile then runs with `--always-approve`. A `max_turns_reached` event fails
+  the phase rather than returning partial text. Grok 0.2.93 reports no usage, so its MCP adapter rejects
   flows with `budget` rather than pretending to enforce an unobservable ceiling.
 <!-- /host:grok -->
 - The agent's markdown body becomes the subagent's appended system prompt.
@@ -431,7 +436,10 @@ Each entry is one of:
 | `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting known mutating tools to use narrow `--tools` + `bypassPermissions`; unknown names always fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+| `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` | Explicitly permit trusted OpenCode mutating/default phases to use unsandboxed `--auto`; otherwise they fail before spawn. All OpenCode children still use `--pure`. |
 | `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
+| `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` | Required for Grok mutating/no-whitelist phases. Must name a custom profile from `~/.grok/sandbox.toml`; built-in profiles are rejected because they may fail open on unsupported hosts. |
+| `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` | Required for Grok read-only phases. Must name a custom profile extending `read-only`; built-in names are rejected so hooks/plugins remain kernel-contained if the host cannot enforce a built-in profile. |
 
 ---
 
@@ -511,6 +519,10 @@ node --conditions=development --experimental-strip-types \
 | `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
 | `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
 
+Output commands are create-only by default: pass `--force` to replace an
+existing regular file. Outputs are `--cwd`-contained, reject destination
+symlinks, and commit atomically; `--emit both` preflights both destinations.
+
 **Authoring notes (kinds ↔ runes)**
 
 Import: `import { flow, agent, map, … } from "taskflow-dsl"`. Runes erase to Taskflow
@@ -554,6 +566,8 @@ rely on them for behavior:
   cross-run cache, and Shared Context Tree force the **imperative** path.
 - **`taskflow-dsl decompile`** — generates safe, readable TypeScript whose
   rebuilt Taskflow/FlowIR is semantically equivalent for supported constructs;
+  dependencies are emitted before consumers even when input JSON is out of
+  order;
   it does **not** reproduce original variable names, formatting, comments, or
   source spelling. Unsupported/lossy constructs fail rather than silently
   promising a literal round-trip.

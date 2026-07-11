@@ -1,5 +1,5 @@
 {
-  "hash": "ir:c15e423acc3794b3338a58291e00bd23b9fa32a9d2e05904fac0715f2d169696",
+  "hash": "ir:7c8b505ac49cdbb73a34648f9a24e938ff5cd53a7265fe1a621fa01c469ebda9",
   "ir": {
     "name": "comprehensive-release-review",
     "version": 2,
@@ -524,7 +524,7 @@
       }
     ],
     "budget": {
-      "maxTokens": 20000000,
+      "maxTokens": 100000000,
       "maxUSD": 12
     },
     "concurrency": 6,

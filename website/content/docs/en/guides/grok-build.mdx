@@ -129,14 +129,14 @@ Each phase's subagent runs as an isolated `grok -p --output-format streaming-jso
 
 | Phase tools | Flags | What it means |
 |---|---|---|
-| Read-only (no write/edit/bash) | kernel-enforced `--sandbox read-only` + known-good `--tools read_file,grep,list_dir` + mutator denylist + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | Fail-closed even for a workspace under `/tmp` (which the built-in sandbox permits for session files). Web tools are disabled because Grok 0.2.93 treats them as unmappable allowlist entries. |
-| Mutating (or no whitelist) | kernel-enforced `--sandbox workspace` + `--always-approve` | Full tools, but writes are confined to the phase cwd plus Grok's documented temp/session paths. Prefer `cwd: "worktree"`. |
+| Read-only (no write/edit/bash) | operator-configured custom read-only sandbox + known-good `--tools read_file,grep,list_dir` + mutator denylist + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | Rejected unless `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` names a custom profile extending `read-only`. Web tools are disabled because Grok 0.2.93 treats them as unmappable allowlist entries. |
+| Mutating (or no whitelist) | operator-configured custom sandbox + `--always-approve` | Rejected unless `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` names a custom profile. Built-in profiles are rejected because Grok may warn and continue unsandboxed when they cannot be applied. |
 
 <Callout type="warn">
-  The workspace sandbox still allows reads everywhere, network access, and writes to temp directories and `~/.grok/`. Use a throwaway worktree when filesystem changes should be disposable.
+  Configure `[profiles.taskflow-workspace]` with `extends = "workspace"` and `[profiles.taskflow-readonly]` with `extends = "read-only"` in `~/.grok/sandbox.toml`. Export `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace` and `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly` before starting the MCP server. Custom profiles fail closed when enforcement is unavailable.
 </Callout>
 
-Effective `thinking` maps to Grok's `--reasoning-effort` flag (`off` maps to `none`). Grok 0.2.93 emits no token/cost usage in `streaming-json`, so the Grok MCP adapter refuses flows declaring `budget` rather than silently ignoring the ceiling.
+Effective `thinking` maps to Grok's `--reasoning-effort` flag (`off` maps to `none`). A `max_turns_reached` event fails the phase instead of accepting partial text. Grok 0.2.93 emits no token/cost usage in `streaming-json`, so the Grok MCP adapter refuses flows declaring `budget` rather than silently ignoring the ceiling.
 
 ## Long-running flows
 

@@ -77,12 +77,12 @@ tool whitelist the same way the codex runner maps to a sandbox mode:
 
 - **Read-only phase** (no `write`/`edit`/`bash` in the phase/agent `tools`) → a
   permission policy that **denies** bash/write/edit is injected, so a denied
-  tool call is genuinely rejected (not merely un-approved). This is real
-  enforcement, closer to codex's read-only OS sandbox than to an advisory
-  whitelist.
-- **Mutating phase** (or no whitelist) → `opencode run --auto`, which
-  auto-approves every permission — the workspace-write analogue. Run flows you
-  trust, ideally in a throwaway worktree (`cwd: "worktree"`).
+  tool call is genuinely rejected. Every child also uses `--pure`, disabling
+  external plugins that execute outside the tool permission policy.
+- **Mutating phase** (or no whitelist) → rejected by default because OpenCode
+  has no OS sandbox backstop. A trusted operator may explicitly set
+  `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`; only then does the runner add `--auto`.
+  Prefer a throwaway worktree (`cwd: "worktree"`).
 
 ## Model ids
 
