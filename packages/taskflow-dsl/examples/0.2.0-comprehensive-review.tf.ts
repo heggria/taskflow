@@ -30,7 +30,7 @@ export default flow(
 			[
 				"sh",
 				"-lc",
-				"git status --short && git log --oneline -5 && git diff --check origin/main...HEAD && git diff --stat origin/main...HEAD",
+				"git status --short && git log --oneline -5 && git diff --check origin/main...HEAD && git diff --shortstat origin/main...HEAD",
 			],
 			{ id: "repo-state", timeout: 30_000 },
 		);

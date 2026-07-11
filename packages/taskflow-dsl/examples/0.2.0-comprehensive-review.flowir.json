@@ -1,5 +1,5 @@
 {
-  "hash": "ir:d8f6682151a03afe393ea5a81362f393078087fb8861f84cb2790b3806c63c68",
+  "hash": "ir:c15e423acc3794b3338a58291e00bd23b9fa32a9d2e05904fac0715f2d169696",
   "ir": {
     "name": "comprehensive-release-review",
     "version": 2,
@@ -16,7 +16,7 @@
           "run": [
             "sh",
             "-lc",
-            "git status --short && git log --oneline -5 && git diff --check origin/main...HEAD && git diff --stat origin/main...HEAD"
+            "git status --short && git log --oneline -5 && git diff --check origin/main...HEAD && git diff --shortstat origin/main...HEAD"
           ]
         }
       },
