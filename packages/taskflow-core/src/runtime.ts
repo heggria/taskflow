@@ -3523,6 +3523,15 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			}
 			safeEmit(deps, state);
 		});
+		// The signal can flip while a layer is in flight. Checking only at the
+		// beginning of the next layer lets an abort during the final layer fall
+		// through to `completed` (notably when a non-cooperative race branch later
+		// reports success). Cancellation is terminal for this invocation: preserve
+		// the phase evidence gathered above, but classify the run as resumable.
+		if (deps.signal?.aborted) {
+			aborted = true;
+			break;
+		}
 	}
 
 	const fp = finalPhase(def.phases);

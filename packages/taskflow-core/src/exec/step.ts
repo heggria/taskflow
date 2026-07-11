@@ -22,7 +22,7 @@ import {
 	safeParse,
 	type InterpolationContext,
 } from "../interpolate.ts";
-import { abortableDelay, isTransientError, mapWithConcurrencyLimit } from "../runner-core.ts";
+import { abortableDelay, isTransientError, killProcessTree, mapWithConcurrencyLimit } from "../runner-core.ts";
 import {
 	executeApprovalBody,
 	executeFlowBody,
@@ -192,32 +192,26 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 	const cwd = ctx.deps.cwd;
 
 	const result = await new Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
-		const child = spawn(cmd, args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+		const child = spawn(cmd, args, {
+			cwd,
+			env: process.env,
+			stdio: ["ignore", "pipe", "pipe"],
+			detached: process.platform !== "win32",
+		});
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
 		let killedForCap = false;
+		let forceTimer: ReturnType<typeof setTimeout> | undefined;
 		const t = setTimeout(() => {
 			timedOut = true;
-			try {
-				child.kill("SIGTERM");
-			} catch {
-				/* ignore */
-			}
-			setTimeout(() => {
-				try {
-					child.kill("SIGKILL");
-				} catch {
-					/* ignore */
-				}
+			if (child.pid) killProcessTree(child.pid, "SIGTERM", child);
+			forceTimer = setTimeout(() => {
+				if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 			}, 200);
 		}, timeoutMs);
 		const onAbort = () => {
-			try {
-				child.kill("SIGKILL");
-			} catch {
-				/* ignore */
-			}
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 		};
 		ctx.deps.signal?.addEventListener("abort", onAbort, { once: true });
 		if (ctx.deps.signal?.aborted) onAbort();
@@ -226,11 +220,7 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 			if (stdout.length > SCRIPT_STDOUT_CAP) {
 				killedForCap = true;
 				stdout = stdout.slice(0, SCRIPT_STDOUT_CAP);
-				try {
-					child.kill("SIGKILL");
-				} catch {
-					/* ignore */
-				}
+				if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 			}
 		});
 		child.stderr?.on("data", (d) => {
@@ -239,12 +229,18 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 		});
 		child.on("error", (e) => {
 			clearTimeout(t);
+			if (forceTimer) clearTimeout(forceTimer);
 			ctx.deps.signal?.removeEventListener("abort", onAbort);
 			resolve({ code: 1, stdout, stderr: e.message, timedOut: false });
 		});
+		child.once("exit", () => {
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
+		});
 		child.on("close", (code) => {
 			clearTimeout(t);
+			if (forceTimer) clearTimeout(forceTimer);
 			ctx.deps.signal?.removeEventListener("abort", onAbort);
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 			resolve({
 				code: code ?? 1,
 				stdout,

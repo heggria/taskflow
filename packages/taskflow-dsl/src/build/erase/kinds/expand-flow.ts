@@ -31,6 +31,7 @@ export function emitExpandNestedOrSubflowDef(
 		call.arguments[1] as ts.Expression | undefined,
 		ctx.diags,
 		ctx.phases,
+		{ allowKeys: new Set(["with"]) },
 	);
 	Object.assign(draft.raw, opts);
 	if (typeof opts.id === "string") draft.id = opts.id;
@@ -97,6 +98,7 @@ export function emitExpand(
 		call.arguments[1] as ts.Expression | undefined,
 		ctx.diags,
 		ctx.phases,
+		{ allowKeys: new Set(["with"]) },
 	);
 	if (typeof opts.id === "string") draft.id = opts.id;
 	if (cn === "expand.graft") draft.raw.expandMode = "graft";

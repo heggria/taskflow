@@ -26,7 +26,7 @@ taskflow-dsl build audit.tf.ts --emit both
 | Command | Purpose |
 |---------|---------|
 | `new [name]` | Hello skeleton (`.tf.ts` or `--json-escape`) |
-| `check <file>` | Erase + `validateTaskflow` (`--typecheck` for tsc) |
+| `check <file>` | Erase + `validateTaskflow` + tsc by default (`--no-typecheck` to disable) |
 | `build <file>` | Emit Taskflow JSON / FlowIR |
 | `decompile <file>` | Taskflow JSON → readable `.tf.ts` (**semantic**, not literal round-trip) |
 

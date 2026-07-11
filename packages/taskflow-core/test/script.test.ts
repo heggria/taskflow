@@ -282,6 +282,30 @@ test("script robustness: a runaway process is killed at the timeout", async () =
 	assert.ok(elapsed < 5000, `timeout took too long: ${elapsed}ms`);
 });
 
+test("script robustness: timeout kills background descendants that hold the shell open", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "s-tree",
+		phases: [{ id: "a", type: "script", run: ["bash", "-lc", "sleep 5 & wait"], timeout: 1000, final: true }],
+	};
+	const t0 = Date.now();
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	const elapsed = Date.now() - t0;
+	assert.equal(res.ok, false);
+	assert.equal(res.state.phases.a.timedOut, true);
+	assert.ok(elapsed < 2500, `process-tree timeout took too long: ${elapsed}ms`);
+});
+
+test("script robustness: normal exit reaps a background process holding stdio", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "s-background",
+		phases: [{ id: "a", type: "script", run: ["bash", "-lc", "sleep 3 &"], final: true }],
+	};
+	const started = Date.now();
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	assert.equal(res.ok, true);
+	assert.ok(Date.now() - started < 1000, "background descendant must be reaped at direct-child exit");
+});
+
 // ---------------------------------------------------------------------------
 // cancellation
 // ---------------------------------------------------------------------------

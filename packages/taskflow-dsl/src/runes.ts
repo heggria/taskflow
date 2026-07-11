@@ -133,7 +133,7 @@ export function parallel(
 export function map<TItem = unknown, TJson = unknown>(
 	_source: PhaseRef<TItem[]> | string,
 	_fn: (item: TItem) => PhaseRef<unknown>,
-	_opts?: PhaseOptions<TJson>,
+	_opts?: PhaseOptions<TJson> & { as?: string },
 ): PhaseRef<TJson> {
 	return eraseOnly("map");
 }
@@ -195,7 +195,7 @@ export function subflow(
 /** Nested dynamic sub-flow (compiles to type:flow def). */
 export function subflowDef(
 	_def: PhaseRef<unknown> | string | InlineTaskflowDefinition,
-	_opts?: PhaseOptions,
+	_opts?: PhaseOptions & { with?: Record<string, unknown> },
 ): PhaseRef<unknown> {
 	return eraseOnly("subflow.def");
 }
@@ -232,7 +232,7 @@ export function script(
 /** Nested expand (isolated sub-flow). */
 export function expandNested<TDef = unknown>(
 	_def: PhaseRef<TDef> | string | TDef,
-	_opts?: PhaseOptions & { maxNodes?: number },
+	_opts?: PhaseOptions & { maxNodes?: number; with?: Record<string, unknown> },
 ): PhaseRef<unknown> {
 	return eraseOnly("expand.nested");
 }
@@ -240,14 +240,14 @@ export function expandNested<TDef = unknown>(
 /** Graft-promote expand: run fragment then promote phase states onto parent. */
 export function expandGraft<TDef = unknown>(
 	_def: PhaseRef<TDef> | string | TDef,
-	_opts?: PhaseOptions & { maxNodes?: number },
+	_opts?: PhaseOptions & { maxNodes?: number; with?: Record<string, unknown> },
 ): PhaseRef<unknown> {
 	return eraseOnly("expand.graft");
 }
 
 export function expand<TDef = unknown>(
 	_def: PhaseRef<TDef> | string | TDef,
-	_opts?: PhaseOptions & { expandMode?: "nested" | "graft"; maxNodes?: number },
+	_opts?: PhaseOptions & { expandMode?: "nested" | "graft"; maxNodes?: number; with?: Record<string, unknown> },
 ): PhaseRef<unknown> {
 	return eraseOnly("expand");
 }

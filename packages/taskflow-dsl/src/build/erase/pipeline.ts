@@ -19,6 +19,8 @@ const RUNE_ARITY: Readonly<Record<string, readonly [min: number, max: number]>> 
 	gate: [1, 3],
 	"gate.automated": [2, 2],
 	"gate.scored": [2, 2],
+	gateAutomated: [2, 2],
+	gateScored: [2, 2],
 	reduce: [2, 3],
 	approval: [1, 1],
 	subflow: [1, 3],

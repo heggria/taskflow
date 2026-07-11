@@ -44,7 +44,9 @@ export function emitMap(
 	if (fnArg && (ts.isArrowFunction(fnArg) || ts.isFunctionExpression(fnArg))) {
 		const p0 = fnArg.parameters[0];
 		if (p0 && ts.isIdentifier(p0.name)) itemName = p0.name.text;
-		draft.raw.as = itemName;
+		// `item` is the core runtime default. Preserve omission so
+		// decompile → build does not manufacture a field and alter FlowIR identity.
+		if (itemName !== "item") draft.raw.as = itemName;
 		let inner: ts.Expression | undefined;
 		if (ts.isBlock(fnArg.body)) {
 			for (const st of fnArg.body.statements) {
@@ -100,7 +102,11 @@ export function emitMap(
 			}
 		}
 	}
-	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases, { allowKeys: new Set(["as"]) });
+	if (opts.as !== undefined && typeof opts.as !== "string") {
+		ctx.diags.push(diag(ctx.file, ctx.sf, optsArg ?? call, "TFDSL_MAP_AS", `map option 'as' must be a static string.`));
+		delete opts.as;
+	}
 	if (typeof opts.id === "string") draft.id = opts.id;
 	Object.assign(draft.raw, opts);
 	if (Array.isArray(opts.dependsOn)) for (const d of opts.dependsOn as string[]) draft.dependsOn.add(d);

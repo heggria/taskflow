@@ -282,7 +282,7 @@ const activeChildren = new Set<number>();
  * are process-group leaders (`detached:true` at spawn), so a negative pid
  * reaches every descendant in the group. Windows has no equivalent signal;
  * taskkill /T /F is the platform-supported tree termination primitive. */
-function killProcessTree(pid: number, signal: NodeJS.Signals, direct?: ChildProcess): void {
+export function killProcessTree(pid: number, signal: NodeJS.Signals, direct?: ChildProcess): void {
 	if (process.platform === "win32") {
 		try {
 			const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
@@ -507,13 +507,23 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			}
 		});
 
+		// `close` waits for inherited stdio handles. A direct CLI can exit while a
+		// background descendant still owns stdout/stderr, so reap the group at the
+		// earlier `exit` boundary; `close` remains the point where buffered output
+		// is folded and the result is settled.
+		proc.once("exit", () => {
+			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
+		});
+
 		const finish = (code: number, signal?: NodeJS.Signals | null) => {
 			if (settled) return;
 			settled = true;
-			// The direct process may close before a signal-resistant descendant.
-			// Close/error cleanup must not cancel escalation while its process group
-			// is still alive, so make one final tree-wide hard-kill first.
-			if ((wasAborted || idleTimedOut) && proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
+			// The direct CLI may intentionally or accidentally leave background
+			// descendants behind. A phase boundary is also a process-tree boundary:
+			// always reap the group before returning, not only on abort/idle timeout.
+			// Otherwise detached grandchildren can keep mutating the workspace after
+			// the phase has been persisted as complete.
+			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
 			if (proc.pid) activeChildren.delete(proc.pid);
 			clearTimers();
 			removeAbortListener();

@@ -23,14 +23,14 @@ export function eraseStringish(
 	};
 
 	const propToPlaceholder = (expr: ts.Expression): string | undefined => {
-		if (ts.isIdentifier(expr) && itemParam && expr.text === itemParam) return "{item}";
+		if (ts.isIdentifier(expr) && itemParam && expr.text === itemParam) return `{${itemParam}}`;
 		if (
 			ts.isPropertyAccessExpression(expr) &&
 			ts.isIdentifier(expr.expression) &&
 			itemParam &&
 			expr.expression.text === itemParam
 		) {
-			return `{item.${expr.name.text}}`;
+			return `{${itemParam}.${expr.name.text}}`;
 		}
 		if (ts.isPropertyAccessExpression(expr)) {
 			const chain: string[] = [];

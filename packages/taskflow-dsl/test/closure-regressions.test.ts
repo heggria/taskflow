@@ -354,3 +354,161 @@ test("closure: check typechecks by default and decompile emits type-correct opti
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("closure: score-only gate decompile never invents an LLM task", () => {
+	const def: Taskflow = {
+		name: "score-only",
+		phases: [
+			{ id: "seed", type: "agent", task: "ok" },
+			{
+				id: "quality",
+				type: "gate",
+				dependsOn: ["seed"],
+				score: { scorers: [{ type: "contains", value: "ok" }], combine: "all" },
+				final: true,
+			},
+		],
+	};
+	const source = decompileTaskflow(def);
+	assert.match(source, /gate\(seed, \{[^;]+\}\);/);
+	assert.doesNotMatch(source, /\(i\)\s*=>/);
+	const rebuilt = buildSource(source);
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});
+
+test("closure: tournament decompile preserves omitted defaults", () => {
+	const def: Taskflow = {
+		name: "tournament-defaults",
+		phases: [{ id: "contest", type: "tournament", task: "solve", final: true }],
+	};
+	const source = decompileTaskflow(def);
+	assert.doesNotMatch(source, /variants:/);
+	assert.doesNotMatch(source, /mode:/);
+	const rebuilt = buildSource(source);
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});
+
+test("closure: flow def and expand preserve with arguments", () => {
+	const def: Taskflow = {
+		name: "dynamic-with",
+		phases: [
+			{
+				id: "child",
+				type: "flow",
+				def: '{"name":"child","phases":[]}',
+				with: { topic: "hello", nested: { ok: true } },
+			},
+			{
+				id: "fragment",
+				type: "expand",
+				def: '{"name":"fragment","phases":[]}',
+				expandMode: "nested",
+				with: { topic: "world" },
+				final: true,
+			},
+		],
+	};
+	const rebuilt = buildSource(decompileTaskflow(def));
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});
+
+test("closure: named gate sugar exports erase like property sugar", () => {
+	const result = buildSource(`
+import { flow, agent, gateAutomated, gateScored } from "taskflow-dsl";
+export default flow("named-gates", () => {
+  const seed = agent("seed");
+  const automated = gateAutomated(seed, { pass: ["true"], task: "review" });
+  return gateScored(automated, { scorers: [{ type: "contains", value: "ok" }] });
+});
+`);
+	assert.equal(result.ok, true, errors(result));
+	assert.deepEqual(result.taskflow?.phases?.map((p) => p.type), ["agent", "gate", "gate"]);
+	assert.deepEqual(result.taskflow?.phases?.[1]?.eval, ["true"]);
+	assert.deepEqual(result.taskflow?.phases?.[2]?.score, {
+		scorers: [{ type: "contains", value: "ok" }],
+		combine: "all",
+	});
+});
+
+test("closure: map custom as values compile and decompile without identifier restrictions", () => {
+	const authored = buildSource(`
+import { flow, agent, map } from "taskflow-dsl";
+export default flow("custom-map", () => map("{args.rows}", (row) => agent(\`read \${row.path}\`)));
+`);
+	assert.equal(authored.ok, true, errors(authored));
+	assert.equal(authored.taskflow?.phases?.[0]?.as, "row");
+	assert.equal(authored.taskflow?.phases?.[0]?.task, "read {row.path}");
+
+	const def: Taskflow = {
+		name: "hyphen-map",
+		phases: [{
+			id: "mapped",
+			type: "map",
+			over: "{args.rows}",
+			as: "item-name",
+			task: "read {item-name.path}",
+			final: true,
+		}],
+	};
+	const source = decompileTaskflow(def);
+	assert.match(source, /as: "item-name"/);
+	const rebuilt = buildSource(source);
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});
+
+test("closure: map decompile preserves an omitted default as field", () => {
+	const def: Taskflow = {
+		name: "default-map-alias",
+		phases: [{ id: "mapped", type: "map", over: "[]", task: "read {item}", final: true }],
+	};
+	const rebuilt = buildSource(decompileTaskflow(def));
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});
+
+test("closure: unsupported per-branch execution options fail explicitly", () => {
+	for (const [rune, invocation] of [
+		["parallel", `parallel([agent("x", { model: "m" })])`],
+		["race", `race([agent("x", { tools: ["read"] }), agent("y")])`],
+		["tournament", `tournament({ branches: [agent("x", { thinking: "high" }), agent("y")] })`],
+	] as const) {
+		const result = buildSource(`
+import { flow, agent, ${rune} } from "taskflow-dsl";
+export default flow("branch-options", () => ${invocation});
+`);
+		assert.equal(result.ok, false, `${rune}: ${errors(result)}`);
+		assert.ok(result.diagnostics.some((d) => d.code === "TFDSL_BRANCH_OPTS_UNSUPPORTED"), errors(result));
+	}
+
+	assert.throws(
+		() => decompileTaskflow({
+			name: "bad-branch",
+			phases: [{
+				id: "work",
+				type: "parallel",
+				branches: [{ task: "x", model: "m" } as never],
+				final: true,
+			}],
+		}),
+		/unsupported branch option.*model/,
+	);
+});
+
+test("closure: decompile source literals are inert and preserve hostile text", () => {
+	const hostile = `</script><script>globalThis.pwned = true</script>\n"\\\u2028\u2029`;
+	const def: Taskflow = {
+		name: hostile,
+		args: { text: { default: hostile } },
+		phases: [{ id: "main", type: "agent", task: hostile, final: true }],
+	};
+	const source = decompileTaskflow(def);
+	assert.doesNotMatch(source, /<\/script/i);
+	assert.doesNotMatch(source, /[\u2028\u2029]/u);
+	const rebuilt = buildSource(source);
+	assert.equal(rebuilt.ok, true, errors(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, def);
+});

@@ -7,7 +7,7 @@
  */
 
 import type { RunState } from "../store.ts";
-import { resolveArgs, topoLayers, type Taskflow } from "../schema.ts";
+import { dependenciesOf, resolveArgs, topoLayers, type Phase, type Taskflow } from "../schema.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
 import { overBudget as overBudgetCheck } from "../deterministic.ts";
@@ -136,7 +136,7 @@ function emitLifecycle(
 	deps: EventKernelDeps,
 	allEvents: Event[],
 	runId: string,
-	phaseId: string,
+	phase: Phase,
 	status: Event["status"],
 	error?: string,
 ): void {
@@ -144,14 +144,16 @@ function emitLifecycle(
 		v: EVENT_SCHEMA_VERSION,
 		ts: Date.now(),
 		runId,
-		phaseId,
+		phaseId: phase.id,
 		kind: "phase-start",
+		dependencies: dependenciesOf(phase),
+		optional: phase.optional === true,
 	};
 	const end: Event = {
 		v: EVENT_SCHEMA_VERSION,
 		ts: Date.now(),
 		runId,
-		phaseId,
+		phaseId: phase.id,
 		kind: "phase-end",
 		status,
 		error,
@@ -159,7 +161,7 @@ function emitLifecycle(
 	allEvents.push(start, end);
 	safeTraceEmit(deps, start);
 	safeTraceEmit(deps, end);
-	safeTraceFlush(deps, phaseId);
+	safeTraceFlush(deps, phase.id);
 }
 
 /**
@@ -281,7 +283,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 					safeTraceEmit(deps, be);
 				}
 				const startedAt = Date.now();
-				emitLifecycle(deps, allEvents, state.runId, phase.id, "skipped", skipReason);
+				emitLifecycle(deps, allEvents, state.runId, phase, "skipped", skipReason);
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",

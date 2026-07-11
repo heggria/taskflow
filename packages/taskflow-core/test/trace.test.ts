@@ -178,6 +178,29 @@ test("FileTraceSink: buffers per phase and flushes once at flush()", () => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("FileTraceSink: separate phase flushes append without replacing prior events", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-sink-append-"));
+	const file = path.join(dir, "run.trace.jsonl");
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 1, runId: "r", phaseId: "a", kind: "phase-start" });
+	sink.flush("a");
+	sink.emit({ ts: 2, runId: "r", phaseId: "b", kind: "phase-start" });
+	sink.flush("b");
+	assert.deepEqual(readTrace(file).map((event) => event.phaseId), ["a", "b"]);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("FileTraceSink: a crash-truncated tail does not swallow the first event after restart", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-sink-recover-"));
+	const file = path.join(dir, "run.trace.jsonl");
+	fs.writeFileSync(file, '{"ts":1,"runId":"r","phaseId":"broken"');
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 2, runId: "r", phaseId: "recovered", kind: "phase-start" });
+	sink.flush("recovered");
+	assert.deepEqual(readTrace(file).map((event) => event.phaseId), ["recovered"]);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("FileTraceSink: never throws on an unwritable dir (fail-open)", () => {
 	const sink = new FileTraceSink("/no/such/dir/run.trace.jsonl");
 	sink.emit({ ts: 1, runId: "r", phaseId: "p", kind: "phase-start" });

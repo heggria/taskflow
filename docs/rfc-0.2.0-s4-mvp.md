@@ -2,6 +2,15 @@
 
 > Status: **IMPLEMENTED** (package + CLI live; surface extended — see §8.1) · 2026-07-09
 
+> **Final-surface amendment (2026-07-10):** the signature sketches in §3 are
+> historical council proposals, not the published 0.2.0 declaration contract.
+> The shipped synchronous APIs are `buildFile(path, opts?): BuildResult`,
+> `buildSource(source, file?, opts?): BuildResult`, `checkFile(path, opts?):
+> CheckResult`, and `decompileTaskflow(def): string`. `decompileFlowIR` and a
+> structured `DecompileResult` are deferred beyond 0.2.0. The generated `.d.ts`
+> files and package exports are authoritative; this amendment supersedes any
+> conflicting “frozen” sketch below.
+
 > Parent: [`rfc-0.2.0-architecture.md`](./rfc-0.2.0-architecture.md) §4.3 / §9 S4
 > Syntax authority: [`rfc-0.2.0-dsl-syntax.md`](./rfc-0.2.0-dsl-syntax.md) v2 (**FULL language goal**; ship gate is this MVP doc)
 > Route lock: north-star 决策1 + this document §0

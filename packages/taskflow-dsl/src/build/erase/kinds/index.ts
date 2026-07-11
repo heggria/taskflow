@@ -52,7 +52,9 @@ const KIND_HANDLERS: KindHandler[] = [
 		return false;
 	},
 	(ctx, cn, bind, call) => {
-		if (cn === "gate.automated" || cn === "gate.scored") return emitGateSugar(ctx, cn, bind, call);
+		if (cn === "gate.automated" || cn === "gate.scored" || cn === "gateAutomated" || cn === "gateScored") {
+			return emitGateSugar(ctx, cn, bind, call);
+		}
 		return false;
 	},
 	(ctx, cn, bind, call, item) => {

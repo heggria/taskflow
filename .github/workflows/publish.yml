@@ -20,6 +20,29 @@ jobs:
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      # A tag is not protected by the main-branch ruleset. Refuse to publish
+      # unless its peeled commit is already reachable from the canonical main
+      # branch fetched from origin; a tag pushed from any other branch must not
+      # become a release merely because its version happens to match.
+      - name: Verify tag commit belongs to origin/main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin \
+            +refs/heads/main:refs/remotes/origin/main
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          EVENT_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [ "$TAG_COMMIT" != "$EVENT_COMMIT" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME resolves to $TAG_COMMIT, but the event SHA resolves to $EVENT_COMMIT"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME targets $TAG_COMMIT, which is not reachable from origin/main"
+            exit 1
+          fi
+          echo "Verified $GITHUB_REF_NAME at $TAG_COMMIT is reachable from origin/main"
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
@@ -141,7 +164,9 @@ jobs:
 
       - name: Create GitHub Release
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
           node -e "
             const fs = require('fs');
             let body = [];
@@ -158,8 +183,44 @@ jobs:
             const text = body.join('\n').trim();
             fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow.'));
           " "$VERSION"
+
+          TAG_PATH="$(jq -rn --arg tag "$GITHUB_REF_NAME" '$tag | @uri')"
+          ERROR_FILE="$(mktemp)"
+          if RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_PATH}" 2>"$ERROR_FILE")"; then
+            RELEASE_TAG="$(jq -er '.tag_name' <<<"$RELEASE_JSON")"
+            RELEASE_TARGET="$(jq -er '.target_commitish' <<<"$RELEASE_JSON")"
+            RELEASE_DRAFT="$(jq -er '.draft' <<<"$RELEASE_JSON")"
+            RELEASE_PRERELEASE="$(jq -er '.prerelease' <<<"$RELEASE_JSON")"
+            if [ "$RELEASE_TAG" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::Existing release tag $RELEASE_TAG does not match $GITHUB_REF_NAME"
+              exit 1
+            fi
+            case "$RELEASE_TARGET" in
+              "$TAG_COMMIT"|main|refs/heads/main)
+                ;;
+              *)
+                echo "::error::Existing release target $RELEASE_TARGET is neither $TAG_COMMIT nor main"
+                exit 1
+                ;;
+            esac
+            if [ "$RELEASE_DRAFT" != "false" ] || [ "$RELEASE_PRERELEASE" != "false" ]; then
+              echo "::error::Existing release must be published and non-prerelease (draft=$RELEASE_DRAFT, prerelease=$RELEASE_PRERELEASE)"
+              exit 1
+            fi
+            echo "::notice::Release $GITHUB_REF_NAME already exists with a verified target; skipping creation"
+            exit 0
+          fi
+
+          if ! grep -q 'HTTP 404' "$ERROR_FILE"; then
+            cat "$ERROR_FILE" >&2
+            echo "::error::Unable to determine whether release $GITHUB_REF_NAME already exists"
+            exit 1
+          fi
+
           gh release create "$GITHUB_REF_NAME" \
             --notes-file /tmp/release-notes.md \
-            --title "v$VERSION"
+            --title "v$VERSION" \
+            --target "$TAG_COMMIT" \
+            --verify-tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

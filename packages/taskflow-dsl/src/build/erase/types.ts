@@ -45,6 +45,8 @@ export const PHASE_RUNES = new Set([
 	"parallel",
 	"map",
 	"gate",
+	"gateAutomated",
+	"gateScored",
 	"reduce",
 	"approval",
 	"subflow",

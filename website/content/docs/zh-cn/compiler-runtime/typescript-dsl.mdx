@@ -25,7 +25,7 @@ taskflow-dsl build audit.tf.ts --emit both
 | 命令 | 作用 |
 |------|------|
 | `new [name]` | 骨架（`.tf.ts` 或 `--json-escape`） |
-| `check <file>` | erase + `validateTaskflow`（`--typecheck` 走 tsc） |
+| `check <file>` | erase + `validateTaskflow` + 默认 tsc（`--no-typecheck` 可关闭） |
 | `build <file>` | 产出 Taskflow JSON / FlowIR |
 | `decompile <file>` | JSON → 可读 `.tf.ts`（**语义**往返，非字面） |
 

@@ -24,7 +24,7 @@ export interface BuildOptions {
 	emit?: EmitMode;
 	/** Also run validateTaskflow (default true). */
 	validate?: boolean;
-	/** Compute FlowIR hash (default true when flowir requested). */
+	/** Compute FlowIR + hash (default true; set false for Taskflow-only callers). */
 	irHash?: boolean;
 }
 

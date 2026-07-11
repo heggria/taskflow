@@ -23,6 +23,7 @@
 import {
 	openSync,
 	readFileSync,
+	readSync,
 	renameSync,
 	unlinkSync,
 	writeFileSync,
@@ -190,7 +191,7 @@ export class FileTraceSink implements TraceSink {
 			mkdirSync(dirname(this.tracePath), { recursive: true });
 			withExclusiveLock(this.lockPath, () => {
 				const chunk = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
-				appendAtomic(this.tracePath, chunk);
+				appendLocked(this.tracePath, chunk);
 			});
 		} catch {
 			/* fail-open */
@@ -198,17 +199,26 @@ export class FileTraceSink implements TraceSink {
 	}
 }
 
-/** Atomic append: read current (if any) + write combined to temp + rename. */
-function appendAtomic(path: string, chunk: string): void {
-	let existing = "";
+/** Append while the caller holds the exclusive trace lock. O_APPEND avoids the
+ * previous read-whole-file + rewrite cycle (quadratic over many phases). A
+ * crash can leave only the final JSONL line partial, which readTrace already
+ * treats as an incomplete tail and ignores. */
+function appendLocked(path: string, chunk: string): void {
+	const fd = openSync(path, "a+");
 	try {
-		existing = readFileSync(path, "utf8");
-	} catch {
-		existing = "";
+		const size = statSync(path).size;
+		if (size > 0) {
+			const tail = Buffer.allocUnsafe(1);
+			readSync(fd, tail, 0, 1, size - 1);
+			// Isolate a crash-truncated prior record before appending the first new
+			// event. readTrace will discard that bad line without also losing the
+			// following valid JSON object.
+			if (tail[0] !== 0x0a) writeFileSync(fd, "\n", "utf8");
+		}
+		writeFileSync(fd, chunk, "utf8");
+	} finally {
+		closeSync(fd);
 	}
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, existing + chunk, "utf8");
-	renameSync(tmp, path);
 }
 
 /** Hold an exclusive lock for the duration of `fn` via `O_CREAT|O_EXCL`. */

@@ -291,28 +291,31 @@ test("race: cancelLosers false leaves loser running to completion", async () => 
 	assert.ok(!st.phases.r?.warnings?.some((w) => /cancelLosers aborted/.test(w)));
 });
 
-test("race: cancelLosers returns after a bounded grace when loser ignores abort", async () => {
+test("race: late loser usage is counted before budget admits downstream", async () => {
 	const def: Taskflow = {
 		name: "race-noncooperative-loser",
+		budget: { maxUSD: 0.0015 },
 		phases: [
 			{
 				id: "r",
 				type: "race",
+				timeout: 1000,
 				cancelLosers: true,
 				branches: [
 					{ task: "fast-path", agent: "a" },
 					{ task: "slow-ignores-abort", agent: "a" },
 				],
-				final: true,
 			},
+			{ id: "after", type: "agent", agent: "a", task: "must-not-run", dependsOn: ["r"], final: true },
 		],
 	};
 	const st = mkState(def);
-	const started = Date.now();
+	let downstreamRan = false;
 	await executeTaskflow(st, {
 		cwd: process.cwd(),
 		agents: AGENTS,
 		runTask: async (_c, _a, agent, task) => {
+			if (task.includes("must-not-run")) downstreamRan = true;
 			if (task.includes("slow")) {
 				await new Promise((r) => setTimeout(r, 250));
 				return {
@@ -337,10 +340,56 @@ test("race: cancelLosers returns after a bounded grace when loser ignores abort"
 			};
 		},
 	});
-	assert.equal(st.status, "completed");
+	assert.equal(st.status, "blocked");
 	assert.equal(st.phases.r?.output?.trim(), "FAST");
-	assert.ok(Date.now() - started < 180, `race waited for non-cooperative loser`);
-	assert.ok(st.phases.r?.warnings?.some((w) => /did not acknowledge abort/.test(w)));
+	assert.equal(st.phases.r?.usage?.cost, 0.002, "late loser usage must be included before downstream admission");
+	assert.equal(st.phases.after?.status, "skipped");
+	assert.equal(downstreamRan, false);
+});
+
+test("race: unknown loser usage fails closed and skips downstream", async () => {
+	const def: Taskflow = {
+		name: "race-accounting-timeout",
+		phases: [
+			{
+				id: "r",
+				type: "race",
+				timeout: 1000,
+				branches: [
+					{ task: "fast-path", agent: "a" },
+					{ task: "never-reports-usage", agent: "a" },
+				],
+			},
+			{ id: "after", type: "agent", agent: "a", task: "must-not-run", dependsOn: ["r"], final: true },
+		],
+	};
+	const st = mkState(def);
+	let downstreamRan = false;
+	const started = Date.now();
+	await executeTaskflow(st, {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (_c, _a, agent, task) => {
+			if (task.includes("never-reports")) return new Promise<RunResult>(() => {});
+			if (task.includes("must-not-run")) downstreamRan = true;
+			return {
+				agent,
+				task,
+				exitCode: 0,
+				output: "FAST",
+				stderr: "",
+				usage: { ...emptyUsage(), input: 1, output: 1, cost: 0.001, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	});
+	assert.ok(Date.now() - started < 2000, "race accounting wait must be bounded");
+	assert.equal(st.status, "blocked");
+	assert.equal(st.phases.r?.status, "failed");
+	assert.equal(st.phases.r?.budgetTruncated, true);
+	assert.match(st.phases.r?.error ?? "", /incomplete budget accounting/);
+	assert.equal(st.phases.after?.status, "skipped");
+	assert.equal(downstreamRan, false);
 });
 
 test("expand nested: runs fragment as sub-flow", async () => {
@@ -497,6 +546,7 @@ test("race: parent abort bounds wait when branch ignores signal", async () => {
 			{
 				id: "r",
 				type: "race",
+				timeout: 1000,
 				cancelLosers: true,
 				branches: [
 					{ task: "hang-a", agent: "a" },
@@ -515,7 +565,7 @@ test("race: parent abort bounds wait when branch ignores signal", async () => {
 		signal: ac.signal,
 		runTask: async (_c, _a, agent, task) => {
 			// Ignore AbortSignal — would hang forever without race grace.
-			await new Promise((r) => setTimeout(r, 5000));
+			await new Promise((r) => setTimeout(r, 1200));
 			return {
 				agent,
 				task,
@@ -533,6 +583,8 @@ test("race: parent abort bounds wait when branch ignores signal", async () => {
 	await run;
 	const elapsed = Date.now() - started;
 	assert.ok(elapsed < 2000, `expected bounded wait, took ${elapsed}ms`);
-	// Parent abort → all branches aborted; non-cooperative → grace → all-fail path
-	assert.ok(st.phases.r?.status === "failed" || st.phases.r?.status === "done");
+	assert.equal(st.status, "paused");
+	assert.equal(st.phases.r?.status, "failed");
+	assert.equal(st.phases.r?.output, undefined, "late success after parent abort must not be accepted");
+	assert.match(st.phases.r?.error ?? "", /aborted by parent/);
 });

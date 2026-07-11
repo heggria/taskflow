@@ -119,6 +119,33 @@ jobs:
       - name: Build all packages
         run: pnpm run build
 
+  website:
+    name: website (production export)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # The docs source records last-modified timestamps from git history.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+
+      # Match the GitHub Pages deployment settings so base-path-only failures
+      # are caught before merge. `build` runs docs:check before the export.
+      - name: Validate docs and build production export
+        working-directory: website
+        run: pnpm run build
+        env:
+          TASKFLOW_BASE_PATH: /taskflow
+
   codeql:
     name: CodeQL (JS/TS)
     runs-on: ubuntu-latest

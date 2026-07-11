@@ -4,6 +4,7 @@ import { mergeOpts } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
 import type { PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
+import { mergeBranchAgentOpts } from "./branch-opts.ts";
 
 export function emitTournament(
 	ctx: EmitContext,
@@ -48,12 +49,10 @@ export function emitTournament(
 						);
 						const b: Record<string, unknown> = {};
 						if (erased) b.task = erased.text;
-						const bopts = mergeOpts(
-							ctx.sf,
-							ctx.file,
+						const bopts = mergeBranchAgentOpts(
+							ctx,
 							el.arguments[1] as ts.Expression | undefined,
-							ctx.diags,
-							ctx.phases,
+							`tournament branch ${bi + 1}`,
 						);
 						Object.assign(b, bopts);
 						branches.push(b);

@@ -140,7 +140,6 @@ export default flow("twin", () => {
 				id: "each",
 				type: "map",
 				over: "{steps.discover.json}",
-				as: "item",
 				task: "Audit {item.path}",
 				agent: "analyst",
 				dependsOn: ["discover"],

@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	runSubagentProcess,
 	unknownAgentResult,
@@ -88,24 +89,14 @@ test("runSubagentProcess: AbortSignal — an aborted run classifies as aborted (
 test("runSubagentProcess: abort terminates the child process tree", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-process-tree-"));
 	const marker = path.join(dir, "grandchild-survived.txt");
+	const priorMarker = process.env.TASKFLOW_TEST_ABORT_MARKER;
 	try {
-		const grandchild = [
-			`const fs=require("node:fs");`,
-			`process.on("SIGTERM",()=>{});`,
-			`if(process.send)process.send("ready");`,
-			`setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},"survived"),600);`,
-			`setInterval(()=>{},1000);`,
-		].join("");
-		const parent = [
-			`const {spawn}=require("node:child_process");`,
-			`const child=spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:["ignore","ignore","ignore","ipc"]});`,
-			`child.once("message",()=>process.stdout.write(JSON.stringify({spawned:true})+"\\n"));`,
-			`setInterval(()=>{},1000);`,
-		].join("");
+		process.env.TASKFLOW_TEST_ABORT_MARKER = marker;
+		const fixture = fileURLToPath(new URL("./fixtures/process-tree-abort-parent.mjs", import.meta.url));
 		const ac = new AbortController();
 		const pending = runSubagentProcess({
 			agent: "test", task: "tree", model: undefined,
-			bin: "node", args: ["-e", parent], cwd: process.cwd(),
+			bin: "node", args: [fixture], cwd: process.cwd(),
 			idleTimeoutMs: 60_000, signal: ac.signal,
 			acc: makeAcc(), foldLine,
 			onLive: () => ac.abort(),
@@ -115,21 +106,33 @@ test("runSubagentProcess: abort terminates the child process tree", async () => 
 		await new Promise((resolve) => setTimeout(resolve, 750));
 		assert.equal(fs.existsSync(marker), false, "grandchild must not survive cancellation to write its marker");
 	} finally {
+		if (priorMarker === undefined) delete process.env.TASKFLOW_TEST_ABORT_MARKER;
+		else process.env.TASKFLOW_TEST_ABORT_MARKER = priorMarker;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
 
-test("runSubagentProcess: normal completion does not kill a descendant", async () => {
+test("runSubagentProcess: normal completion reaps background descendants", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-process-tree-normal-"));
 	const marker = path.join(dir, "normal-grandchild.txt");
+	const priorMarker = process.env.TASKFLOW_TEST_NORMAL_MARKER;
 	try {
-		const grandchild = `const fs=require("node:fs");setTimeout(()=>fs.writeFileSync(${JSON.stringify(marker)},"ok"),150);`;
-		const parent = `const {spawn}=require("node:child_process");spawn(process.execPath,["-e",${JSON.stringify(grandchild)}],{stdio:"ignore"});process.stdout.write(JSON.stringify({done:true})+"\\n");`;
-		const result = await run(parent);
+		process.env.TASKFLOW_TEST_NORMAL_MARKER = marker;
+		const fixture = new URL("./fixtures/process-tree-parent.mjs", import.meta.url);
+		const started = Date.now();
+		const result = await runSubagentProcess({
+			agent: "test", task: "tree-normal", model: undefined,
+			bin: "node", args: [fileURLToPath(fixture)], cwd: process.cwd(),
+			idleTimeoutMs: 60_000,
+			acc: makeAcc(), foldLine,
+		});
 		assert.equal(result.stopReason, "end");
-		await new Promise((resolve) => setTimeout(resolve, 300));
-		assert.equal(fs.readFileSync(marker, "utf8"), "ok", "normal parent exit must not terminate descendant work");
+		assert.ok(Date.now() - started < 500, "inherited descendant stdio must not delay normal phase completion");
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		assert.equal(fs.existsSync(marker), false, "a completed phase must not leave a descendant running");
 	} finally {
+		if (priorMarker === undefined) delete process.env.TASKFLOW_TEST_NORMAL_MARKER;
+		else process.env.TASKFLOW_TEST_NORMAL_MARKER = priorMarker;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });

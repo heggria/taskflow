@@ -6,6 +6,7 @@
 import type { Phase } from "../../schema.ts";
 import type { PhaseState } from "../../store.ts";
 import { emptyUsage } from "../../usage.ts";
+import { killProcessTree } from "../../runner-core.ts";
 
 const MAX_STDOUT = 1_048_576; // 1 MB cap
 const SIGKILL_GRACE_MS = 5_000;
@@ -35,18 +36,19 @@ export async function runScriptCommand(opts: {
 	const { interpRunText, arrayForm, cwd, signal, stdinInput, timeoutMs } = opts;
 
 	return new Promise((resolve, reject) => {
+		const spawnOptions = {
+			cwd,
+			env: process.env,
+			detached: process.platform !== "win32",
+		};
 		const child = arrayForm
 			? spawn(interpRunText[0], interpRunText.slice(1), {
-					cwd,
-					env: process.env,
+					...spawnOptions,
 					shell: false,
-					signal,
 				})
 			: spawn(interpRunText[0], [], {
-					cwd,
-					env: process.env,
+					...spawnOptions,
 					shell: true,
-					signal,
 				});
 
 		let stdout = "";
@@ -69,24 +71,31 @@ export async function runScriptCommand(opts: {
 		let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
 		const timer = setTimeout(() => {
 			timedOut = true;
-			child.kill("SIGTERM");
+			if (child.pid) killProcessTree(child.pid, "SIGTERM", child);
 			sigkillTimer = setTimeout(() => {
-				try {
-					child.kill("SIGKILL");
-				} catch {
-					/* already dead */
-				}
+				if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 			}, SIGKILL_GRACE_MS);
 		}, timeoutMs);
+		const onAbort = () => {
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
+		if (signal?.aborted) onAbort();
 
 		child.on("error", (err) => {
 			clearTimeout(timer);
 			clearTimeout(sigkillTimer);
+			signal?.removeEventListener("abort", onAbort);
 			reject(err);
+		});
+		child.once("exit", () => {
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 		});
 		child.on("close", (code) => {
 			clearTimeout(timer);
 			clearTimeout(sigkillTimer);
+			signal?.removeEventListener("abort", onAbort);
+			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 			resolve({ stdout, stderr, code, stdoutOversize, timedOut });
 		});
 

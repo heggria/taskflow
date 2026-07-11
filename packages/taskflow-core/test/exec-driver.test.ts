@@ -216,6 +216,43 @@ test("event kernel: when-guard false skips phase and emits decision", async () =
 	}
 	// skipped phase must not call the agent for opt (only once for `a`)
 	assert.equal(res.state.phases.a.status, "done");
+	const skippedStart = events.find((e) => e.kind === "phase-start" && e.phaseId === "opt");
+	assert.deepEqual(skippedStart?.dependencies, ["a"], "synthetic skip traces must retain DAG metadata for replay");
+	assert.equal(skippedStart?.optional, false);
+});
+
+test("event kernel: script timeout terminates the entire process group", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "ek-script-tree-timeout",
+		phases: [{ id: "s", type: "script", run: ["bash", "-lc", "sleep 5 & wait"], timeout: 1000, final: true }],
+	};
+	const started = Date.now();
+	const res = await executeTaskflow(mkState(def), {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async () => { throw new Error("agent must not run"); },
+		persist: () => {},
+		eventKernel: true,
+	});
+	const elapsed = Date.now() - started;
+	assert.equal(res.ok, false);
+	assert.equal(res.state.phases.s.timedOut, true);
+	assert.ok(elapsed < 2500, `process-tree timeout took too long: ${elapsed}ms`);
+});
+
+test("event kernel: normal script exit reaps a background process holding stdio", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "ek-script-background",
+		phases: [{ id: "s", type: "script", run: ["bash", "-lc", "sleep 3 &"], final: true }],
+	};
+	const started = Date.now();
+	const res = await executeTaskflow(mkState(def), {
+		cwd: process.cwd(), agents: AGENTS,
+		runTask: async () => { throw new Error("agent must not run"); },
+		persist: () => {}, eventKernel: true,
+	});
+	assert.equal(res.ok, true);
+	assert.ok(Date.now() - started < 1000, "background descendant must be reaped at direct-child exit");
 });
 
 test("event kernel OFF by default: map flows still run on imperative path", async () => {

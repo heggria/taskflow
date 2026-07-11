@@ -43,7 +43,7 @@ export function emitGateSugar(
 	if (typeof opts.id === "string") draft.id = opts.id;
 	Object.assign(draft.raw, opts);
 
-	if (cn === "gate.automated" && optsArg && ts.isObjectLiteralExpression(optsArg)) {
+	if ((cn === "gate.automated" || cn === "gateAutomated") && optsArg && ts.isObjectLiteralExpression(optsArg)) {
 		for (const p of optsArg.properties) {
 			if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
 			if (p.name.text === "pass") {
@@ -62,7 +62,7 @@ export function emitGateSugar(
 			draft.raw.task = "Gate (automated pre-checks failed or incomplete).";
 		}
 	}
-	if (cn === "gate.scored" && optsArg && ts.isObjectLiteralExpression(optsArg)) {
+	if ((cn === "gate.scored" || cn === "gateScored") && optsArg && ts.isObjectLiteralExpression(optsArg)) {
 		const score: Record<string, unknown> = {};
 		for (const p of optsArg.properties) {
 			if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
