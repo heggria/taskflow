@@ -65,6 +65,7 @@ On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action
 |---|---|
 | `run` | Run an inline or saved flow. |
 | `save` | Persist a flow definition. |
+| `search` | Search the reusable-flow library by purpose/tags. |
 | `resume` | Resume a run by `runId`. |
 | `list` | List saved flows. |
 | `agents` | List the built-in agents. |
@@ -85,7 +86,7 @@ On MCP hosts, taskflow exposes these tools (the model calls them; you usually do
 | `taskflow_list` | List saved flows discoverable in this directory. |
 | `taskflow_show` | Print a saved flow's definition. |
 | `taskflow_verify` | Statically verify a flow (no execution). |
-| `taskflow_compile` | Render a flow as a DAG diagram (SVG image) plus a status line. |
+| `taskflow_compile` | Render a DAG as SVG plus a standalone text outline and verification status; oversized graphs fall back to text only. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). |
 | `taskflow_trace` | Read-only timeline of the run's append-only event log. |
 | `taskflow_replay` | Offline what-if re-judge of thresholds/budget from a recorded trace (zero tokens). |

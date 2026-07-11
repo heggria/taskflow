@@ -17,6 +17,9 @@
     "url": "git+https://github.com/heggria/taskflow.git",
     "directory": "packages/taskflow-dsl"
   },
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"

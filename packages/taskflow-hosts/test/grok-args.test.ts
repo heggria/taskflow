@@ -95,7 +95,8 @@ test("grok thinking: maps taskflow levels to --reasoning-effort", () => {
 	assert.equal(resolveGrokThinking("off"), "none");
 	assert.equal(resolveGrokThinking("high"), "high");
 	assert.equal(resolveGrokThinking("xhigh"), "xhigh");
-	assert.equal(resolveGrokThinking("unknown"), undefined);
+	assert.equal(resolveGrokThinking("ultra"), "max");
+	assert.throws(() => resolveGrokThinking("unknown"), /Unsupported Grok thinking level/);
 });
 
 // --- argv contract ----------------------------------------------------------

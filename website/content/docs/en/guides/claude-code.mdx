@@ -142,10 +142,12 @@ Each phase's subagent runs as an isolated `claude -p` session — a real Claude 
 
 Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is either whitelisted or denied. The runner maps each phase's tool whitelist to a permission mode:
 
+Taskflow requires Claude Code **2.1.169 or newer** for `--safe-mode`. Older CLIs fail closed with an unknown-option error, so upgrade before using this adapter.
+
 | Phase tools | Permission mode | What it means |
 |---|---|---|
-| Read-only or omitted; no mutating/unknown requested tool | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | Mutating tools are denied outright. Note there's no read-only shell — `Bash` is not granted. |
-| Mutating or unknown requested tool | Rejected by default | Set `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` only for trusted flows to opt into `bypassPermissions`. |
+| Read-only or omitted; no mutating/unknown requested tool | matching `--tools` + `--allowedTools` lists | Built-ins are restricted and pre-approved; explicit lists stay narrow. `--safe-mode` disables non-managed customizations, disk setting sources and non-managed hooks are disabled; administrator-managed policy hooks may still run. Note there's no read-only shell — `Bash` is not granted. |
+| Known mutating tool requested | Rejected by default | For trusted flows, `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` opts into `bypassPermissions` while retaining a narrow `--tools` set. Unknown names always fail closed. |
 
 <Callout type="warn">
   Unsafe mode is an explicit operator opt-in, not the default. Even after opting in, prefer a throwaway worktree (`cwd: "worktree"`). The Claude child receives only platform/runtime, proxy/CA, and supported Claude-provider environment variables; unrelated application secrets are removed.

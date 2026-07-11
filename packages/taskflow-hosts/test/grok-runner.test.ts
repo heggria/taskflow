@@ -10,6 +10,7 @@ import {
 	newGrokAccumulator,
 	resolveGrokModel,
 	permissionArgsForGrokTools,
+	runGrokAgentTask,
 } from "../src/grok-runner.ts";
 
 test("grok parser: concatenates text chunks into finalText", () => {
@@ -68,4 +69,24 @@ test("grok permissions: read-only vs mutating", () => {
 	);
 	assert.ok(permissionArgsForGrokTools(["read"]).includes("--disallowed-tools"));
 	assert.deepEqual(permissionArgsForGrokTools(["write"]), ["--sandbox", "workspace", "--always-approve"]);
+});
+
+test("grok runner: invalid global thinking fails before spawning", async () => {
+	const result = await runGrokAgentTask(
+		"/tmp",
+		[{
+			name: "reviewer",
+			description: "test",
+			systemPrompt: "Review carefully.",
+			source: "project",
+			filePath: "/tmp/reviewer.md",
+		}],
+		"reviewer",
+		"review",
+		{},
+		"impossible",
+	);
+	assert.equal(result.exitCode, 1);
+	assert.match(result.errorMessage ?? "", /Unsupported Grok thinking level/);
+	assert.doesNotMatch(result.stderr, /ENOENT/, "thinking validation rejects before the process seam");
 });

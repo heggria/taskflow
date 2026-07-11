@@ -47,16 +47,25 @@ Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is
 either whitelisted or denied. The runner maps each phase's tool whitelist the
 same way the codex runner maps to a sandbox mode:
 
+Taskflow requires Claude Code **2.1.169 or newer** for the `--safe-mode`
+isolation contract. Older CLIs fail closed with an unknown-option error;
+upgrade Claude Code before using the adapter.
+
 - **Read-only or unspecified phase** (no mutating/unknown tool in the resolved
-  phase/agent `tools`, including an omitted list) → `--allowedTools
-  Read,Grep,Glob,WebFetch,WebSearch`. Mutating tools are denied outright. Note
+  phase/agent `tools`, including an omitted list) → matching `--tools` and
+  `--allowedTools` lists. An explicit list remains narrow; omitted tools use
+  `Read,Grep,Glob,WebFetch,WebSearch`. `--safe-mode` disables non-managed
+  project/user customizations; disk setting sources and non-managed hooks are
+  disabled as defense in depth. Administrator-managed policy hooks may still
+  run. Mutating tools are denied outright. Note
   there is **no read-only shell** (unlike codex's read-only OS sandbox), so
   `Bash` is not granted.
-- **Mutating or unknown requested tool** → rejected by default. Headless Claude
+- **Known mutating requested tool** → rejected by default. Headless Claude
   has no OS sandbox backstop, so silently selecting `bypassPermissions` is
   unsafe. A trusted operator may explicitly set
-  `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` to enable that mode. Even then, use only
-  trusted flows and prefer a throwaway worktree (`cwd: "worktree"`).
+  `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` to enable that mode. Even then, the
+  requested built-in set stays narrow. Unknown tool names always fail closed.
+  Use only trusted flows and prefer a throwaway worktree (`cwd: "worktree"`).
 
 The spawned Claude process receives a filtered environment: platform/runtime,
 proxy/CA, and Claude-supported provider variables (`ANTHROPIC_*`, Bedrock,

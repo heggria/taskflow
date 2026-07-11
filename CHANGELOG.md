@@ -2,7 +2,7 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.2.0] — 2026-07-09
+## [0.2.0] — Unreleased
 
 ### Added
 - **S4 TypeScript DSL (`taskflow-dsl`):** compile-time `.tf.ts` runes erase to Taskflow JSON via TypeScript AST (`typescript` package, not ts-morph); CLI `new` / `check` / `build` / `decompile`; modular `erase/kinds/*` registry; parity tests (map + `json` + templates). Hosts still run JSON only (no MCP auto-build of `.tf.ts`).
@@ -76,7 +76,12 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - **Claude permission handling no longer defaults to an unsandboxed permission
   bypass.** Host policy now uses explicit least-privilege execution modes and
   fails closed when the requested tool capability cannot be represented
-  safely. The Claude child also receives a filtered environment that retains
+  safely. Claude Code >=2.1.169 `--safe-mode` disables non-managed
+  customizations, `--tools` restricts built-ins, only that same set is
+  pre-approved, and disk settings/non-managed hooks are disabled (managed
+  policy hooks may still run). Explicit lists remain narrow even after the
+  unsafe opt-in; unknown tool names always fail closed.
+  The Claude child also receives a filtered environment that retains
   platform/proxy/CA and supported provider settings while dropping unrelated
   application secrets.
 - **Published artifacts are consumer-tested before npm is mutated.** CI and

@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -62,6 +62,21 @@ function packedManifest(name) {
 async function importFromConsumer(specifier) {
 	const entry = pathToFileURL(consumerRequire.resolve(specifier)).href;
 	await import(entry);
+}
+
+async function smokeWildcardExports(packageName, excludedImports = new Set()) {
+	const packageRoot = resolve(dirname(consumerRequire.resolve(packageName)), "..");
+	const manifest = packedManifest(packageName);
+	if (!Object.keys(manifest.exports ?? {}).some((key) => key.includes("*"))) return 0;
+	let count = 0;
+	for (const relative of globSync("dist/**/*.js", { cwd: packageRoot })) {
+		const subpath = relative.slice("dist/".length, -".js".length);
+		const specifier = `${packageName}/${subpath}`;
+		consumerRequire.resolve(specifier);
+		if (!excludedImports.has(specifier)) await importFromConsumer(specifier);
+		count += 1;
+	}
+	return count;
 }
 
 function smokeMcpBin(binName) {
@@ -164,6 +179,9 @@ try {
 	// without executing that process entry in the smoke-test process.
 	consumerRequire.resolve("taskflow-core/detached-runner");
 	for (const specifier of publicImports) await importFromConsumer(specifier);
+	const wildcardExports =
+		await smokeWildcardExports("taskflow-core", new Set(["taskflow-core/detached-runner"])) +
+		await smokeWildcardExports("taskflow-hosts");
 
 	const dslVersion = run(join(consumerDir, "node_modules", ".bin", "taskflow-dsl"), ["--version"], {
 		cwd: consumerDir,
@@ -173,7 +191,9 @@ try {
 		smokeMcpBin(binName);
 	}
 
-	process.stdout.write(`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} imports, 5 bins\n`);
+	process.stdout.write(
+		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 5 bins\n`,
+	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });
 }

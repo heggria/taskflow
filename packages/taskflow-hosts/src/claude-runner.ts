@@ -26,8 +26,9 @@
  * Permission mapping (the codex `sandboxForTools` analogue): Claude Code has no
  * OS-level sandbox in -p mode — a tool call is either whitelisted or denied.
  * Read-only and unspecified tool sets get an explicit read-only allowlist.
- * Mutating or unknown tools fail closed unless the user explicitly opts into
- * unsandboxed execution with PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1.
+ * Known mutating tools fail closed unless the user explicitly opts into
+ * narrowly-scoped unsandboxed execution with PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1;
+ * unknown tool names always fail closed.
  *
  * Process handling (idle watchdog, abort, signal-kill detection, stderr cap,
  * error sanitization) mirrors the pi/codex runners so behavior is uniform.
@@ -52,15 +53,23 @@ import { emptyUsage } from "taskflow-core";
  *  read-only commands), so a listed-tools phase without write/edit/bash gets
  *  file reads + search + web only. */
 const READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "WebFetch", "WebSearch"];
-const READ_ONLY_TOOL_REQUESTS = new Set([
-	"read",
-	"grep",
-	"glob",
-	"find",
-	"ls",
-	"webfetch",
-	"websearch",
-]);
+const READ_ONLY_TOOL_MAP: Readonly<Record<string, string>> = {
+	read: "Read",
+	grep: "Grep",
+	glob: "Glob",
+	find: "Glob",
+	ls: "Glob",
+	webfetch: "WebFetch",
+	web_fetch: "WebFetch",
+	websearch: "WebSearch",
+	web_search: "WebSearch",
+};
+const MUTATING_TOOL_MAP: Readonly<Record<string, string>> = {
+	write: "Write",
+	edit: "Edit",
+	bash: "Bash",
+	apply_patch: "Edit",
+};
 
 /** Environment inherited by the Claude process. Keep platform/runtime settings,
  * proxy/CA configuration, and credentials for Claude's supported providers;
@@ -253,25 +262,42 @@ export function claudeBin(): string {
 /**
  * Map a phase's tool whitelist to Claude permission flags. Unspecified and
  * known read-only tool sets are always restricted to the read-only allowlist.
- * Mutating and unknown tools need an explicit caller acknowledgement; this
+ * Known mutating tools need an explicit caller acknowledgement; unknown tools
+ * are never accepted. This
  * function never reads process.env so argv construction remains pure.
  */
 export function permissionArgsForTools(
 	tools: string[] | undefined,
 	allowUnsafeBypass = false,
 ): string[] {
-	const requestsUnsafeAccess = tools?.some(
-		(t) => !READ_ONLY_TOOL_REQUESTS.has(t.trim().toLowerCase()),
-	) ?? false;
+	const requestedNames = tools?.map((t) => t.trim().toLowerCase()) ?? [];
+	const unknown = requestedNames.find((t) => !READ_ONLY_TOOL_MAP[t] && !MUTATING_TOOL_MAP[t]);
+	if (unknown) {
+		throw new Error(
+			`Claude tool '${unknown}' cannot be mapped to a built-in tool and is denied. ` +
+				"Use read, grep, glob, find, ls, webfetch, websearch, write, edit, bash, or apply_patch.",
+		);
+	}
+	const requestsUnsafeAccess = requestedNames.some((t) => Boolean(MUTATING_TOOL_MAP[t]));
 	if (requestsUnsafeAccess) {
-		if (allowUnsafeBypass) return ["--permission-mode", "bypassPermissions"];
+		if (allowUnsafeBypass) {
+			const available = [...new Set(requestedNames.map((t) => READ_ONLY_TOOL_MAP[t] ?? MUTATING_TOOL_MAP[t]))];
+			return ["--tools", available.join(","), "--permission-mode", "bypassPermissions"];
+		}
 		throw new Error(
 			`Claude tools [${tools!.join(", ")}] require unsandboxed permissions. ` +
 				`Claude Code has no OS sandbox in non-interactive mode. ` +
 				`Set ${CLAUDE_UNSAFE_BYPASS_ENV}=1 to explicitly allow this execution.`,
 		);
 	}
-	return ["--allowedTools", READ_ONLY_TOOLS.join(",")];
+	const allowed = requestedNames.length > 0
+		? [...new Set(requestedNames.map((t) => READ_ONLY_TOOL_MAP[t]).filter(Boolean))]
+		: READ_ONLY_TOOLS;
+	const toolList = allowed.join(",");
+	// --tools limits which built-ins exist; --allowedTools only pre-approves
+	// them. Use both, and isolate disk settings/hooks below, so a project policy
+	// cannot silently restore mutating tools in non-interactive mode.
+	return ["--tools", toolList, "--allowedTools", toolList];
 }
 
 /** Resolve the explicit process-level opt-in. Only the exact value `1` is
@@ -317,7 +343,7 @@ export interface ClaudeArgsCtx {
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
 	tools?: string[];
-	/** Explicit acknowledgement for unsandboxed mutating/unknown tools. */
+	/** Explicit acknowledgement for unsandboxed known mutating tools. */
 	allowUnsafeBypass?: boolean;
 }
 
@@ -326,13 +352,25 @@ export interface ClaudeArgsCtx {
  * (no process.env, no spawn). Extracted from `runClaudeAgentTask` so the host's
  * CLI flag contract is unit-testable in CI without a live claude session.
  *
- *   claude -p --output-format stream-json --verbose --strict-mcp-config
- *          [--permission-mode bypassPermissions | --allowedTools ...]
+ *   claude -p --output-format stream-json --verbose --safe-mode --strict-mcp-config
+ *          --setting-sources "" --settings '{"disableAllHooks":true}'
+ *          [--permission-mode bypassPermissions | --tools ... --allowedTools ...]
  *          [--model m] [--append-system-prompt ...] <task>
  */
 export function buildClaudeArgs(ctx: ClaudeArgsCtx): string[] {
 	const claudeModel = resolveClaudeModel(ctx.model);
-	const args: string[] = ["-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config"];
+	const args: string[] = [
+		"-p",
+		"--output-format",
+		"stream-json",
+		"--verbose",
+		"--safe-mode",
+		"--strict-mcp-config",
+		"--setting-sources",
+		"",
+		"--settings",
+		JSON.stringify({ disableAllHooks: true }),
+	];
 	args.push(...permissionArgsForTools(ctx.tools, ctx.allowUnsafeBypass));
 	if (claudeModel) args.push("--model", claudeModel);
 	if (ctx.systemPrompt.trim()) args.push("--append-system-prompt", ctx.systemPrompt.trim());

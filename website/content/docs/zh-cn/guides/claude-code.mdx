@@ -142,10 +142,12 @@ skill 会把请求路由到正确的工具。如果当前项目保存了一个 f
 
 Claude Code 在 headless（`-p`）模式下没有 OS 级沙箱——一个工具调用要么被白名单允许，要么被拒绝。运行时把每个阶段的工具白名单映射到一个权限模式：
 
+Taskflow 要求 Claude Code **2.1.169 或更高版本**以使用 `--safe-mode`。旧版 CLI 会因未知参数而 fail closed，请先升级再使用此适配器。
+
 | 阶段工具 | 权限模式 | 含义 |
 |---|---|---|
-| 只读或未声明；不请求变更类/未知工具 | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | 变更类工具被直接拒绝。注意没有只读 shell——不会授予 `Bash`。 |
-| 请求变更类或未知工具 | 默认拒绝 | 仅对可信 flow 设置 `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1`，显式启用 `bypassPermissions`。 |
+| 只读或未声明；不请求变更类/未知工具 | 对齐的 `--tools` + `--allowedTools` 列表 | 内置工具既被限制又被预批准；显式列表不会被放宽。`--safe-mode` 禁用非托管自定义项，磁盘 settings source 和非托管 hooks 被关闭；管理员托管策略 hooks 仍可能运行。注意没有只读 shell——不会授予 `Bash`。 |
+| 请求已知变更类工具 | 默认拒绝 | 对可信 flow，`PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` 会启用 `bypassPermissions` 并保留收窄的 `--tools`；未知名称始终 fail closed。 |
 
 <Callout type="warn">
   unsafe 模式必须由操作者显式开启，不是默认值。即使开启，也应优先使用一次性 worktree（`cwd: "worktree"`）。Claude 子进程仅继承平台/运行时、代理/CA 与 Claude 支持的 provider 环境变量；无关的应用密钥会被移除。

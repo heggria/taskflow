@@ -123,7 +123,9 @@ test("claude parser: system init sets the model", () => {
 test("claude permissions: no whitelist → explicit read-only allowlist", () => {
 	for (const tools of [undefined, []]) {
 		const args = permissionArgsForTools(tools);
-		assert.equal(args[0], "--allowedTools");
+		assert.equal(args[0], "--tools");
+		assert.equal(args[2], "--allowedTools");
+		assert.equal(args[1], args[3]);
 		assert.ok(!args.includes("bypassPermissions"));
 	}
 });
@@ -131,13 +133,19 @@ test("claude permissions: no whitelist → explicit read-only allowlist", () => 
 test("claude permissions: mutating whitelist is denied unless explicitly acknowledged", () => {
 	for (const tools of [["read", "bash"], ["write"], ["edit", "grep"], ["apply_patch"]]) {
 		assert.throws(() => permissionArgsForTools(tools), /PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1/);
-		assert.deepEqual(permissionArgsForTools(tools, true), ["--permission-mode", "bypassPermissions"]);
+		const optedIn = permissionArgsForTools(tools, true);
+		assert.equal(optedIn[0], "--tools");
+		assert.ok(optedIn.includes("--permission-mode"));
+		assert.ok(optedIn.includes("bypassPermissions"));
 	}
+	assert.throws(() => permissionArgsForTools(["future_tool"], true), /cannot be mapped/);
 });
 
-test("claude permissions: a read-only whitelist → read-only --allowedTools set", () => {
+test("claude permissions: a read-only whitelist → matching narrow tool sets", () => {
 	const args = permissionArgsForTools(["read", "grep", "find", "ls"]);
-	assert.equal(args[0], "--allowedTools");
+	assert.equal(args[0], "--tools");
+	assert.equal(args[2], "--allowedTools");
+	assert.equal(args[1], args[3]);
 	const allowed = args[1].split(",");
 	assert.ok(allowed.includes("Read"));
 	assert.ok(allowed.includes("Grep"));
@@ -183,7 +191,7 @@ test("claude runner seam: unsafe tools fail closed before spawning with actionab
 
 test("claude runner seam: unspecified tools spawn with read-only flags", async () => {
 	await withFakeClaude(
-		`case " $* " in *" --allowedTools Read,Grep,Glob,WebFetch,WebSearch "*) ;; *) exit 64 ;; esac
+		`case " $* " in *" --tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools Read,Grep,Glob,WebFetch,WebSearch "*) ;; *) exit 64 ;; esac
 case " $* " in *" bypassPermissions "*) exit 65 ;; esac
 printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"safe","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
 		async (bin) => {
@@ -207,7 +215,7 @@ printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns
 
 test("claude runner seam: exact user opt-in permits requested unsandboxed tools", async () => {
 	await withFakeClaude(
-		`case " $* " in *" --permission-mode bypassPermissions "*) ;; *) exit 64 ;; esac
+		`case " $* " in *" --tools Write --permission-mode bypassPermissions "*) ;; *) exit 64 ;; esac
 printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"opted-in","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
 		async (bin) => {
 			const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;

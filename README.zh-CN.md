@@ -132,9 +132,9 @@ grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 
 Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在各自领域都很出色。以下是一份诚实的定位图（已对照每个包截至 2026 年 6 月的最新 npm 发布版核实）。完整的对比——每个包的优缺点——请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。更广泛的非 Pi 生态对比（LangGraph、Temporal、CrewAI、Mastra……）请参见 [`COMPETITORS.md`](./docs/internal/COMPETITORS.md)。
 
-| 扩展 | 模型 | 自定义 DSL | DAG | 动态并发分发 | 跨会话恢复 | 质量门控 | 人工审批 | 保存为命令 | 零依赖 |
+| 扩展 | 模型 | 自定义 DSL | DAG | 动态并发分发 | 跨会话恢复 | 质量门控 | 人工审批 | 保存为命令 | 零运行时依赖 |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **taskflow** | **声明式多阶段 taskflow** | **✓** | **✓** | **✓ `map`** | **✓ phase-hash** | **✓** | **✓** | **✓ `/tf:<name>`** | **✓** |
+| **taskflow** | **声明式多阶段 taskflow** | **✓** | **✓** | **✓ `map`** | **✓ phase-hash** | **✓** | **✓** | **✓ `/tf:<name>`** | **✕（1 + peer 依赖）** |
 | [`@pi-agents/orchid`](https://www.npmjs.com/package/@pi-agents/orchid) | 固定 9 阶段流水线 + Ralph 循环 | 固定 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✕ (2) |
 | [`pi-crew`](https://www.npmjs.com/package/pi-crew) | 角色团队 + git worktree + 异步 | 部分 | ✓ | ✓ | ✓ | ✓ | ✓ | – | ✕ (7) |
 | [`ultimate-pi`](https://www.npmjs.com/package/ultimate-pi) | 受管制的 plan→execute→review 框架 | YAML 合约 | ✓（规划时） | ✕ | ✓ | ✓（3 级） | ✓ | ✓ | ✕ (16) |
@@ -203,7 +203,7 @@ claude plugin marketplace add heggria/taskflow
 claude plugin install claude-taskflow@taskflow
 ```
 
-插件通过 `npx`（`claude-taskflow`）声明其 MCP server；每个阶段的子代理以隔离的 `claude -p` 会话运行。参见 [Claude Code 指南](./docs/claude-mcp.md)。
+插件通过 `npx`（`claude-taskflow`）声明其 MCP server；每个阶段的子代理以隔离的 `claude -p` 会话运行。安全模式隔离契约要求 **Claude Code 2.1.169+**。参见 [Claude Code 指南](./docs/claude-mcp.md)。
 
 ### 在 OpenCode 上
 
