@@ -177,7 +177,7 @@ How the gate decides:
 - **`onBlock: "halt"`** — a `BLOCK` verdict stops the run cleanly. The final report phase (which depends on the gate) is skipped, and the run ends with the gate's verdict as the terminal state.
 
 <Callout type="info">
-  taskflow fails open on gate ambiguity. If the gate output cannot be parsed, the run treats it as `PASS` — it never accidentally halts and loses work. If you want the opposite for a merge gate, add a downstream `approval` phase so a human makes the final call.
+  taskflow parses gate verdicts leniently but fails closed for the truly unparseable. If a gate output contains no JSON, no `VERDICT:` marker, and no recognized verdict word, the runtime treats it as `BLOCK` (issue #54) — a gate that cannot reach a verdict cannot be trusted to pass. If you want a human to make the final call for a merge gate, add a downstream `approval` phase.
 </Callout>
 
 ## Phase 5 — the final report
@@ -341,7 +341,7 @@ The `retry` policy on `discover` and `security-each` covers transient provider e
 
 <Cards>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks — including `map`, `parallel`, `reduce`, and `gate` used here.
+    The twelve building blocks — including `map`, `parallel`, `reduce`, and `gate` used here.
   </Card>
   <Card title="Caching" href="/en/docs/syntax/caching">
     Cross-run memoization, fingerprints, and the `why-stale` / `recompute` toolkit.

@@ -83,32 +83,98 @@ TUI 里可用 `/plugins`、`/mcps` 打开同一扩展面板。
 }
 ```
 
+```json title="taskflow_run 运行内联 flow"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [
+      {
+        "id": "discover",
+        "type": "agent",
+        "agent": "scout",
+        "task": "List changed source files under src/. Output ONLY a JSON array of {path} objects.",
+        "output": "json"
+      },
+      {
+        "id": "review-each",
+        "type": "map",
+        "over": "{steps.discover.json}",
+        "as": "file",
+        "agent": "security-reviewer",
+        "task": "Review {file.path} for security risks. Return one paragraph.",
+        "dependsOn": ["discover"],
+        "concurrency": 4
+      },
+      {
+        "id": "summarize",
+        "type": "reduce",
+        "from": ["review-each"],
+        "agent": "writer",
+        "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
+        "dependsOn": ["review-each"],
+        "final": true
+      }
+    ]
+  }
+}
+```
+
 只有标了 `final: true` 的阶段会返回；中间 transcript 留在运行时内。
 
 ## 零 token 静态检查
 
-先用 `taskflow_verify` 查环、悬空依赖与坏配置；再用 `taskflow_compile` 看 DAG 轮廓。
+先用 `taskflow_verify` 查环、悬空依赖与坏配置：
+
+```json title="通过 taskflow_verify 验证 flow"
+{
+  "define": {
+    "name": "quick-review",
+    "phases": [{ "id": "a", "type": "agent", "agent": "executor", "task": "noop", "final": true }]
+  }
+}
+```
+
+或用 `taskflow_compile` 渲染 DAG（文本大纲 + 可选内联 SVG）。
 
 ## 子 agent 如何跑
 
-每个 phase 是隔离的 `grok -p --output-format streaming-json` 进程。
+每个 phase 是隔离的 `grok -p --output-format streaming-json` 进程。MCP 服务器从它的**启动 cwd** 发现已保存 flow 与 agent。
 
-| Phase tools | 行为 |
-|---|---|
-| 只读 | 内核强制的 `--sandbox read-only` + 经 Grok 0.2.93 实测的 `--tools read_file,grep,list_dir` + 可变更工具拒绝列表 + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` |
-| 可写 / 无白名单 | 内核强制的 `--sandbox workspace` + `--always-approve`；可使用全量工具，但写入仅限 phase cwd 与 Grok 约定的临时目录 / `~/.grok/`。优先 `cwd: "worktree"` |
+### 权限映射
+
+| Phase tools | 标志 | 含义 |
+|---|---|---|
+| 只读（无 write/edit/bash） | 内核强制的 `--sandbox read-only` + 已知良好的 `--tools read_file,grep,list_dir` + 可变更工具拒绝列表 + `--deny Bash/Edit/Write/MCPTool` + `--no-subagents` + `--always-approve` | 即使 workspace 在 `/tmp` 下也 fail-closed（内置 sandbox 本来允许 session 文件写入）。Web 工具被禁用，因为 Grok 0.2.93 会把它们视为无法映射的 allowlist 项。 |
+| 可写 / 无白名单 | 内核强制的 `--sandbox workspace` + `--always-approve` | 可使用全量工具，但写入仅限 phase cwd 与 Grok 文档中约定的临时 / 会话路径。优先 `cwd: "worktree"`。 |
 
 Grok 0.2.93 会把 `web_search` / `web_fetch` 报为无法映射的 allowlist 项，并可能回退到全量工具；因此只读 phase 中暂时禁用这两个 web 工具，并用独立 deny 规则做二次保护。`thinking` 会映射到 `--reasoning-effort`（`off` → `none`）。
 
 Grok 0.2.93 的 `streaming-json` 不返回 token / cost usage，所以 Grok MCP 适配器会**拒绝声明了 `budget` 的 flow**，而不是静默忽略上限。
 
+<Callout type="warn">
+  workspace sandbox 仍然允许全局读取、网络访问，以及写入临时目录和 `~/.grok/`。当文件系统变更应视为可丢弃时，请使用一次性 worktree。
+</Callout>
+
 ## 长时 flow
 
-**`taskflow_run` 同步返回**——整图跑完才结束。插件默认 `tool_timeout_sec: 1800`；MCP 不暴露 Pi 的 detach 模式。客户端取消请求时，服务器会中止正在运行的 DAG 和子 agent，不会留下隐藏的后台工作。
+**`taskflow_run` 同步返回**——整图跑完才结束。插件默认 `tool_timeout_sec: 1800`；MCP 不暴露 Pi 的 detach 模式。把大图拆开。如果客户端取消请求，服务器会中止正在运行的 DAG 和子 agent，不会留下隐藏的后台工作。
 
 ## MCP 下的 approval
 
-非交互运行时 `approval` 会 **auto-reject**（对审批决策 fail-closed）。agent 评审请用 `gate`。
+MCP 驱动的运行是非交互的，所以 `approval` 阶段会 **auto-reject**（对审批决策 fail-closed）。agent 评审请用 `gate`。
+
+## 工具参考
+
+| 工具 | 用途 |
+|---|---|
+| `taskflow_run` | 运行已保存或内联 flow。返回最终输出 + `runId`。 |
+| `taskflow_list` / `taskflow_show` | 发现与查看已保存 flow。 |
+| `taskflow_save` / `taskflow_search` | 写入库 + 搜索。 |
+| `taskflow_verify` / `taskflow_compile` | 静态检查与 DAG 渲染（零 token）。 |
+| `taskflow_peek` | 查看已存储运行的中间阶段输出。 |
+| `taskflow_trace` | 只追加事件日志时间线（子 agent I/O + 决策）。 |
+| `taskflow_replay` | 离线 what-if 阈值 / 预算重判（零 token）。 |
+| `taskflow_why_stale` / `taskflow_recompute` | 过期分析（MCP 上 recompute 仅 dry-run）。 |
 
 ## 手动注册 MCP
 

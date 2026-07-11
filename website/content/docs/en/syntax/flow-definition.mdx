@@ -193,7 +193,7 @@ A few rules govern how `incremental` interacts with per-phase settings:
 
 - It is equivalent to setting `cache: { scope: "cross-run" }` on every phase.
 - A phase's own `cache` setting **takes precedence** — `cache.scope: "off"` or `"run-only"` is honored.
-- The cross-run-blocked phase types (`gate`, `approval`, `loop`, `tournament`, `script`) are **never** cached cross-run, even under `incremental` — they must produce a fresh result each run. In the example above, `lint` re-runs every invocation despite `incremental`; `review` is cached.
+- The cross-run-blocked phase types (`gate`, `approval`, `loop`, `tournament`, `script`, `race`, and `expand`) are **never** cached cross-run, even under `incremental` — they must produce a fresh result each run. In the example above, `lint` re-runs every invocation despite `incremental`; `review` is cached.
 - `idempotent: false` phases are excluded from caching entirely. Under `incremental`, this produces a warning so you know the phase won't be reused.
 
 <Callout type="info">

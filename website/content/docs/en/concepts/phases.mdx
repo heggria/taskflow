@@ -1,6 +1,6 @@
 ---
 title: Phases
-description: The ten building blocks of a taskflow, and how to choose between them.
+description: The twelve building blocks of a taskflow, and how to choose between them.
 ---
 
 A **phase** is one unit of work in a taskflow. Each phase runs as an isolated subagent call, shell command, or control decision, and the runtime wires them into a DAG via `dependsOn`.
@@ -153,7 +153,7 @@ Use `gate` when:
 - You want the run to end cleanly on a `BLOCK` verdict rather than crash.
 - You want zero-token pre-checks (`eval`) to skip the LLM gate when conditions are already met.
 
-If the gate output is ambiguous, taskflow fails open and treats it as `PASS` — it never accidentally loses work.
+If the gate output cannot be parsed at all — no JSON, no `VERDICT:` marker, no recognized verdict word — taskflow fails closed and treats it as `BLOCK` (issue #54). A gate that cannot reach a verdict cannot be trusted to pass. An explicit non-blocking JSON verdict (e.g. `{"verdict": "no issues found"}`) is a semantic `PASS`, not ambiguity.
 
 ## The full PR-review flow
 

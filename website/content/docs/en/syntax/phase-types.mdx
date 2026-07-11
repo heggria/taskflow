@@ -1,11 +1,11 @@
 ---
 title: Phase Types
-description: The ten building blocks of a taskflow, and when to reach for each one.
+description: The twelve building blocks of a taskflow, and when to reach for each one.
 ---
 
 A taskflow is a directed graph of **phases**. Each phase is one unit of work — an isolated subagent call, a shell command, or a control decision — and the runtime wires them together with `dependsOn`. This page walks through all twelve phase types the way you will actually meet them: starting with the one you will use 80% of the time, then adding power as the problem demands.
 
-You might be wondering: *do I need to learn all ten before I can do anything useful?* No. Most flows are built from three or four types. The rest exist for specific situations — human approval, iterative refinement, competing drafts — and you can ignore them until you meet one of those situations.
+You might be wondering: *do I need to learn all twelve before I can do anything useful?* No. Most flows are built from three or four types. The rest exist for specific situations — human approval, iterative refinement, competing drafts — and you can ignore them until you meet one of those situations.
 
 ## When to reach for what
 
@@ -21,6 +21,8 @@ You might be wondering: *do I need to learn all ten before I can do anything use
 | "Keep trying until it's good enough" | `loop` | Repeat with a stop condition. |
 | "Generate options, pick the best" | `tournament` | Variants compete, a judge decides. |
 | "Run a build / lint / script" | `script` | Shell command, zero tokens. |
+| "Keep the first approach that succeeds" | `race` | First successful branch wins; hard-fail does not. |
+| "Run a planner-emitted fragment" | `expand` | Nested isolation or graft-promote onto parent. |
 
 <Callout type="tip">
   When in doubt, start with `agent`. Every other type is an optimization or a control-flow addition you can layer on later. The runtime happily runs a flow of three plain `agent` phases.
@@ -227,7 +229,7 @@ Your review tool now produces a summary, but sometimes the summary is wrong. You
 The gate inspects upstream output and emits a verdict. `PASS` lets the flow continue; `BLOCK` halts it.
 
 <Callout type="tip">
-  **Fail-open by design.** If the gate output is ambiguous — neither clear `PASS` nor `BLOCK` — taskflow treats it as `PASS`. A gate never accidentally loses your work.
+  **Lenient parsing, fail-closed fallback.** taskflow tries hard to extract a verdict — JSON fields, `VERDICT:` tokens, and natural-language words. If the output cannot be parsed at all, the gate fails closed (`BLOCK`, issue #54). A confused gate cannot be trusted to pass. Config or resolution slips (unresolved `score.target`, malformed `scorers`) remain fail-open with a warning.
 </Callout>
 
 You can avoid spending a token at all with `eval`: a list of zero-token machine checks. If **all** pass, the gate auto-passes without an LLM call. If **any** fail, the LLM `task` runs as normal.
@@ -460,6 +462,10 @@ When several approaches can answer the same question and **latency** matters mor
 
 Optional `maxNodes` caps fragment size (default 50, hard max 100). Dynamic validation matches `flow{def}` security caps.
 
+<Callout type="warn">
+  **Security caps.** Like `flow{def}`, `expand` enforces max 100 phases, 200 map items, 16 concurrency, 5 nesting levels, no `script`, and `cwd` containment. In `graft` mode, child ids are promoted as `\u003cexpandId\u003e-\u003cchildId\u003e` and any `{steps.X}` references inside the fragment are rewritten with the same prefix.
+</Callout>
+
 ## The complete PR-review flow
 
 Putting the five most common types together — `agent`, `map`, `reduce`, `gate`, with a `script` step for lint — here is the full review flow you can copy and adapt:
@@ -498,7 +504,8 @@ Putting the five most common types together — `agent`, `map`, `reduce`, `gate`
       "from": ["review-each"],
       "agent": "writer",
       "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
-      "dependsOn": ["review-each"]
+      "dependsOn": ["review-each"],
+      "final": true
     },
     {
       "id": "verify",
@@ -572,7 +579,7 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
   - `id` and `agent` must use hyphens, not underscores.
   - `timeout` for agent-running phases must be `>= 1000`; for `script` it must be between `1000` and `300000`.
   - `final: true` may appear on at most one phase.
-  - `cache.scope: "cross-run"` is forbidden on `gate`, `approval`, `loop`, `tournament`, and `script`.
+  - `cache.scope: "cross-run"` is forbidden on `gate`, `approval`, `loop`, `tournament`, `script`, `race`, and `expand`.
   - `retry.max` must be `<= 20`; `backoffMs` between `0` and `60000`; `factor` between `1` and `10`.
 </Callout>
 
@@ -636,6 +643,25 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 - **`def`**: inline or runtime-generated flow definition. A string is interpolated then JSON-parsed; an object is used directly. Accepts a full `Taskflow`, a bare phases array, or `{phases:[...]}` (auto-wrapped). Validated before execution; on failure the phase reports `defError` and the run continues.
 - **`with`** (`Record<string, unknown>`): args passed to the sub-flow. String values support interpolation.
 - Runtime-generated `def` sub-flows are hardened: max `100` phases, `200` map items, `16` concurrency, `5` nesting levels, no `script`, `cwd` contained under the run directory.
+
+</details>
+
+<details>
+<summary><code>race</code> — <code>branches</code>, <code>cancelLosers</code></summary>
+
+- **`branches`** (`{task, agent?}[]`, required): at least 2 competing branches. The first successful branch wins; a fast hard-fail does not.
+- **`cancelLosers`** (`boolean`, default `true`): after the first success, send `AbortSignal` to remaining branches (best-effort). Phase `usage` aggregates all branches for honest budgets. Set `false` to let losers finish.
+- **`task`**: ignored — use `branches` instead.
+
+</details>
+
+<details>
+<summary><code>expand</code> — <code>def</code>, <code>expandMode</code>, <code>maxNodes</code></summary>
+
+- **`def`** (required): inline or runtime-generated fragment definition. A string is interpolated then JSON-parsed; an object is used directly.
+- **`expandMode`** (`"nested"` | `"graft"`, default `"nested"`): `"nested"` isolates the fragment like `flow{def}`; `"graft"` promotes child phase states onto the parent as `\u003cexpandId\u003e-\u003cchildId\u003e`.
+- **`maxNodes`** (`number`, default `50`, max `100`): caps the fragment size. Dynamic validation matches the `flow{def}` security caps.
+- **`task`**: ignored.
 
 </details>
 

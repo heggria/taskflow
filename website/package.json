@@ -5,11 +5,13 @@
 	"type": "module",
 	"scripts": {
 		"dev": "next dev",
-		"build": "npm run docs:check && next build",
+		"build": "npm run docs:check && npm run samples:check && next build && npm run export:check",
 		"start": "next start",
 		"lint": "biome check .",
 		"format": "biome format --write .",
 		"docs:check": "node scripts/check-docs.mjs",
+		"export:check": "node scripts/check-export.mjs",
+		"samples:check": "node --conditions=development --experimental-strip-types scripts/check-home-samples.mjs",
 		"postinstall": "fumadocs-mdx",
 		"prepare-source": "fumadocs-mdx"
 	},

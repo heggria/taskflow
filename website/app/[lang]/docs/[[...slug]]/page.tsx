@@ -104,7 +104,7 @@ export default async function Page({
 		const redirectUrl = `${SITE_URL}${page.data.redirect}`;
 		return (
 			<>
-				<meta httpEquiv="refresh" content={`0; url=${page.data.redirect}`} />
+				<meta httpEquiv="refresh" content={`0; url=${redirectUrl}`} />
 				<main className="container mx-auto flex min-h-[50vh] flex-col items-center justify-center p-8 text-center">
 					<p className="text-lg">
 						{lang === "zh-cn" ? "页面已移动：" : "This page has moved to "}

@@ -92,7 +92,7 @@ A few conventions keep the ecosystem navigable. They are light — most of them 
 - **Required fields are non-negotiable.** `name`, `description`, and `phases` on every flow. `args` must declare `description` (and `required` where the flow cannot run without them). A template without these fails `/tf verify` and will not be merged.
 - **Phases have a clear purpose.** Each phase does one thing. If a `task` prompt tries to do discovery *and* review *and* summarize in one call, split it — that is exactly what `map` and `reduce` are for.
 - **Tests are expected.** Add an example invocation in the README (the `args` to pass and the shape of the result you got). If your flow exercises an unusual branch — a `loop`, a `gate`, a `flow { def }` — add a short note on the input that triggers it. You do not need a full test suite; you need a reproducible run.
-- **Fail open, stay safe.** Follow the runtime's own posture: `when` parse errors run the phase, gate ambiguity passes, tournament judge failure falls back to variant 1. A template should never silently halt a run on a soft error.
+- **Fail open, stay safe.** Follow the runtime's own posture: `when` parse errors run the phase, unparseable gate output fails closed (`BLOCK`, issue #54), tournament judge failure falls back to variant 1. A template should never silently halt a run on a soft error.
 - **Cost is a first-class concern.** Set a `budget` on any flow that fans out. A template that can spend unbounded tokens is a footgun for the next person who runs it.
 
 <Callout type="warn">

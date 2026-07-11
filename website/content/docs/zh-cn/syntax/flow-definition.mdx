@@ -193,7 +193,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 - 它等价于在每个阶段上设 `cache: { scope: "cross-run" }`。
 - 阶段自己的 `cache` 设置**优先** —— `cache.scope: "off"` 或 `"run-only"` 仍被尊重。
-- 被跨运行阻止的阶段类型（`gate`、`approval`、`loop`、`tournament`、`script`）即使在 `incremental` 下也**永不**跨运行缓存 —— 它们每次运行都必须产出新结果。在上面的例子里，`lint` 尽管 `incremental` 仍每次调用都重跑；`review` 会被缓存。
+- 被跨运行阻止的阶段类型（`gate`、`approval`、`loop`、`tournament`、`script`、`race` 和 `expand`）即使在 `incremental` 下也**永不**跨运行缓存 —— 它们每次运行都必须产出新结果。在上面的例子里，`lint` 尽管 `incremental` 仍每次调用都重跑；`review` 会被缓存。
 - `idempotent: false` 的阶段完全排除在缓存之外。在 `incremental` 下这会产生一条警告，让你知道该阶段不会被复用。
 
 <Callout type="info">

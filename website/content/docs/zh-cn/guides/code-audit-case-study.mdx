@@ -177,7 +177,7 @@ gate 如何决策：
 - **`onBlock: "halt"`** —— 一个 `BLOCK` 判决干净地停止运行。最终报告阶段（依赖于 gate）被跳过，运行以 gate 的判决作为终态结束。
 
 <Callout type="info">
-  taskflow 对 gate 的歧义 fail-open。如果 gate 的输出无法解析，运行时把它当作 `PASS`——它绝不会意外地阻断、丢失工作。如果你希望一个合并 gate 反过来，可以在下游加一个 `approval` 阶段，让一个人来做最终决定。
+  taskflow 对 gate 的输出做宽松解析，但完全无法解析时 fail-closed。如果 gate 输出既无 JSON、也无 `VERDICT:` 标记和可识别的裁决词，运行时会把它当作 `BLOCK`（issue #54）——一个无法给出裁决的 gate 不能被认为是安全的。如果你希望合并 gate 的最终决定由人来做，可以在下游加一个 `approval` 阶段。
 </Callout>
 
 ## 阶段 5 —— 最终报告
