@@ -12,7 +12,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	buildClaudeArgs,
+	CLAUDE_UNSAFE_BYPASS_ENV,
 	claudeBin,
+	claudeChildEnv,
+	claudeUnsafeBypassEnabled,
 	permissionArgsForTools,
 	resolveClaudeModel,
 	type ClaudeArgsCtx,
@@ -35,9 +38,12 @@ test("claude bin: defaults to `claude`, honours PI_TASKFLOW_CLAUDE_BIN override"
 
 // --- permission mapping -----------------------------------------------------
 
-test("claude perms: no whitelist → --permission-mode bypassPermissions", () => {
-	assert.deepEqual(permissionArgsForTools(undefined), ["--permission-mode", "bypassPermissions"]);
-	assert.deepEqual(permissionArgsForTools([]), ["--permission-mode", "bypassPermissions"]);
+test("claude perms: no whitelist defaults to an explicit read-only allowlist", () => {
+	for (const tools of [undefined, []]) {
+		const args = permissionArgsForTools(tools);
+		assert.equal(args[0], "--allowedTools");
+		assert.ok(!args.includes("bypassPermissions"));
+	}
 });
 
 test("claude perms: read-only whitelist → --allowedTools with read-only set (Bash EXCLUDED)", () => {
@@ -50,15 +56,49 @@ test("claude perms: read-only whitelist → --allowedTools with read-only set (B
 	assert.ok(!allowed.includes("Bash"), "claude has no read-only shell — Bash must be excluded");
 });
 
-test("claude perms: any mutating tool → --permission-mode bypassPermissions", () => {
-	for (const t of ["write", "edit", "bash", "apply_patch"]) {
-		assert.deepEqual(permissionArgsForTools([t]), ["--permission-mode", "bypassPermissions"]);
+test("claude perms: mutating or unknown tools fail closed without explicit acknowledgement", () => {
+	for (const t of ["write", "edit", "bash", "apply_patch", "future_tool"]) {
+		assert.throws(
+			() => permissionArgsForTools([t]),
+			new RegExp(`${CLAUDE_UNSAFE_BYPASS_ENV}=1`),
+		);
 	}
-	assert.deepEqual(
-		permissionArgsForTools(["read", "bash"]),
-		["--permission-mode", "bypassPermissions"],
-		"mixed (includes bash) → bypass",
-	);
+});
+
+test("claude perms: explicit acknowledgement enables bypass only for unsafe tools", () => {
+	assert.deepEqual(permissionArgsForTools(["bash"], true), ["--permission-mode", "bypassPermissions"]);
+	assert.deepEqual(permissionArgsForTools(["read"], true), ["--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch"]);
+});
+
+test("claude unsafe opt-in: only exact env value 1 is accepted", () => {
+	for (const value of [undefined, "", "0", "true", "yes"]) {
+		const env = value === undefined ? {} : { [CLAUDE_UNSAFE_BYPASS_ENV]: value };
+		assert.equal(claudeUnsafeBypassEnabled(env), false);
+	}
+	assert.equal(claudeUnsafeBypassEnabled({ [CLAUDE_UNSAFE_BYPASS_ENV]: "1" }), true);
+});
+
+test("claude child env: keeps platform/provider settings and drops unrelated secrets", () => {
+	const env = claudeChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		ANTHROPIC_API_KEY: "anthropic-secret",
+		AWS_PROFILE: "bedrock-profile",
+		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
+		https_proxy: "http://proxy.test",
+		OPENAI_API_KEY: "must-not-leak",
+		NPM_TOKEN: "must-not-leak",
+		DATABASE_URL: "must-not-leak",
+		NODE_OPTIONS: "--require /tmp/inject.cjs",
+	});
+	assert.deepEqual(env, {
+		PATH: "/bin",
+		HOME: "/home/test",
+		ANTHROPIC_API_KEY: "anthropic-secret",
+		AWS_PROFILE: "bedrock-profile",
+		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
+		https_proxy: "http://proxy.test",
+	});
 });
 
 // --- model resolution -------------------------------------------------------
@@ -95,7 +135,8 @@ test("claude argv: permission flags follow the core flags", () => {
 	// index 5,6 = the permission args from permissionArgsForTools
 	assert.deepEqual([args[5], args[6]], ["--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch"]);
 
-	const bypass = buildClaudeArgs({ ...baseCtx, tools: ["bash"] });
+	assert.throws(() => buildClaudeArgs({ ...baseCtx, tools: ["bash"] }), /require unsandboxed permissions/);
+	const bypass = buildClaudeArgs({ ...baseCtx, tools: ["bash"], allowUnsafeBypass: true });
 	assert.deepEqual([bypass[5], bypass[6]], ["--permission-mode", "bypassPermissions"]);
 });
 

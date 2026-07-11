@@ -45,7 +45,7 @@ Top-level keys of the taskflow definition object.
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
-| `version` | number | `1` | ⚠️ Declared in schema but **not yet used** by the runtime. |
+| `version` | number | `1` | Informational metadata in 0.2.0; it does not select runtime semantics or migrate a flow. |
 
 ---
 
@@ -214,10 +214,13 @@ For any phase, the effective value is resolved in this **precedence order**
 |---------|-------------------------|
 | **model** | `phase.model` → agent frontmatter `model` (resolved via `modelRoles`) → pi default |
 | **thinking** | `phase.thinking` → agent frontmatter `thinking` → `settings` global thinking → pi default |
-| **tools** | `phase.tools` → agent frontmatter `tools` → all tools |
+| **tools** | `phase.tools` → agent frontmatter `tools` → host default capability policy |
 
 Notes:
-- `tools` is a **whitelist**. Omit it to allow all.
+- `tools` expresses the requested capability set, but enforcement is
+  host-specific. It is a literal whitelist on Pi; Codex maps it to an OS
+  sandbox profile, while the other hosts use their own permission contracts.
+  Omit it to request the host's default capability policy.
 - Each phase runs as an isolated `grok -p --output-format streaming-json`
   session. Unresolved `{{placeholder}}`s, multi-segment openrouter paths, and
   pi thinking suffixes (`:xhigh`) are dropped so Grok falls back to its
@@ -323,7 +326,7 @@ Rather than annotating every phase with `cache: { "scope": "cross-run" }`, set
 Precedence: the invocation `incremental` argument wins over the flow's
 `incremental` field, which is in turn overridden by any **per-phase** `cache`
 setting. The cross-run-blocked phase types (`gate`/`approval`/`loop`/
-`tournament`/`script`) and all per-phase soundness fallbacks still apply. The default
+`tournament`/`script`/`race`/`expand`) and all per-phase soundness fallbacks still apply. The default
 remains `run-only` (each run starts fresh unless something opts in), because
 cross-run reuse silently persists outputs and can serve stale results for phases
 whose agents read files at runtime.
@@ -371,6 +374,7 @@ Each entry is one of:
 | `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
 | `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
+| `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting mutating/unknown tools to use `bypassPermissions`; otherwise they fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
 | `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
@@ -483,10 +487,15 @@ Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
 These keys validate but the runtime does **not** fully act on them yet — don't
 rely on them for behavior:
 
-- `arg.required` — missing required args are not rejected.
-- `flow.version` — informational only.
+- `arg.required` — documents intent for tooling, but missing required args are
+  not rejected at run time in 0.2.0. Use strict interpolation and verify/run
+  argument validation at your integration boundary when absence must block.
+- `flow.version` — informational only; it does not select runtime semantics.
 - **Event kernel** (`eventKernel` / `PI_TASKFLOW_EVENT_KERNEL=1`) — opt-in; does
   **not** run `race`/`expand`; score gates, `retry`, `expect`, reflexion,
   cross-run cache, and Shared Context Tree force the **imperative** path.
-- **`taskflow-dsl decompile`** — semantic readability, **not** literal round-trip
-  (e.g. expand `def` objects may collapse to a placeholder string).
+- **`taskflow-dsl decompile`** — generates safe, readable TypeScript whose
+  rebuilt Taskflow/FlowIR is semantically equivalent for supported constructs;
+  it does **not** reproduce original variable names, formatting, comments, or
+  source spelling. Unsupported/lossy constructs fail rather than silently
+  promising a literal round-trip.

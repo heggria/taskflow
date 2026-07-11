@@ -3,34 +3,21 @@ title: 在 Grok Build 上使用 taskflow
 description: 将 taskflow 作为 Grok Build 插件安装，通过 MCP 编排多阶段工作流。
 ---
 
-[Grok Build](https://docs.x.ai/build/overview) 是 xAI 的终端编码 agent：TUI、无头模式、插件、skills 与 MCP。在 Grok Build 上，taskflow 以插件形式发布，注册零依赖 MCP 服务器与路由 skill，模型在多阶段 / 扇出任务上会自动调用它。
+[Grok Build](https://docs.x.ai/build/overview) 是 xAI 的终端编码 agent。Taskflow 的正式发布路径是 MCP server；仓库 checkout 另带 plugin scaffold。
 
 本页覆盖安装、验证、首次运行、权限与长时 flow。完整说明见仓库 [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md)。
 
 ## 安装
 
-### 已发布包 / 市场
+### 已发布 MCP 包（推荐）
 
-```bash title="安装 taskflow 插件"
-grok plugin install <source> --trust
-grok plugin enable taskflow
+```bash title="注册 taskflow MCP"
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
-一次安装完成三件事：
+要求 **Node.js ≥ 22.19.0**。MCP 协议代码不依赖 MCP SDK。公共 Grok plugin marketplace/source 尚未发布；不要代入一个不存在的 source。
 
-<Steps>
-  <Step>
-    **注册 MCP 服务器。** 插件通过 `npx -y -p grok-taskflow grok-taskflow-mcp` 声明 `taskflow` 服务器。
-  </Step>
-  <Step>
-    **安装路由 skill。** 内置 skill 告诉 Grok 何时该用 taskflow 工具。
-  </Step>
-  <Step>
-    **保持零运行时依赖。** MCP 在 Node 内置 stdio 上讲 JSON-RPC 2.0。
-  </Step>
-</Steps>
-
-### 从 monorepo 检出（发布前 dogfood）
+### 从 monorepo checkout 安装 plugin scaffold
 
 包尚未上 npm 时，本地 build 并指向编译后的 bin：
 

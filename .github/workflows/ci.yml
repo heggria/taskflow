@@ -119,6 +119,29 @@ jobs:
       - name: Build all packages
         run: pnpm run build
 
+  packed-consumer:
+    name: packed consumer (9 packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+
+      # Pack with pnpm so workspace:* is rewritten exactly as it will be for
+      # publish. Install only those tarballs into a clean npm project, then
+      # exercise every explicit export and shipped bin.
+      - name: Build, pack, install, and smoke test all published packages
+        run: pnpm run test:pack
+
   website:
     name: website (production export)
     runs-on: ubuntu-latest

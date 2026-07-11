@@ -43,6 +43,15 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   `budget` rather than silently reporting zero and ignoring the ceiling. The
   runtime capability check applies at every execution boundary, including
   inline object/string flows, saved flows, and nested/graft `expand` fragments.
+- **Script phases without `input` now close stdin immediately.** Commands that
+  read until EOF (for example `cat`) no longer wait for the phase timeout when
+  no input payload was configured.
+- **Codex thinking overrides now reach the host CLI.** Phase → agent → global
+  thinking is mapped to Codex `model_reasoning_effort`, including the supported
+  aliases, instead of silently inheriting an unrelated user-level setting.
+- **Thinking configuration is validated instead of silently ignored.** Invalid
+  values are rejected at the Taskflow boundary so a typo cannot fall back to a
+  host's global reasoning configuration.
 
 ### Security
 - **Grok read-only phases are kernel-enforced and defence-in-depth.** They now
@@ -64,6 +73,17 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   to the official major tag's full commit SHA; npm publish has only
   `contents: read` and `id-token: write`, while GitHub Release creation is
   isolated in a dependent job with only `contents: write`.
+- **Claude permission handling no longer defaults to an unsandboxed permission
+  bypass.** Host policy now uses explicit least-privilege execution modes and
+  fails closed when the requested tool capability cannot be represented
+  safely. The Claude child also receives a filtered environment that retains
+  platform/proxy/CA and supported provider settings while dropping unrelated
+  application secrets.
+- **Published artifacts are consumer-tested before npm is mutated.** CI and
+  the tag workflow pack all nine packages with pnpm, install the exact local
+  tarballs into a clean npm project, reject leaked `workspace:*` ranges, import
+  every explicit public entry point, and exercise all five shipped bins. The
+  same gate therefore protects first publication as well as release reruns.
 
 ## [0.1.8] — 2026-07-09
 

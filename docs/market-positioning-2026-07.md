@@ -92,7 +92,7 @@ Conductor(2026-05 微软开源)和 taskflow 的主张**几乎一一对应**:
 - 但这个差异在缩小(Conductor 也接 MCP + script steps)
 
 ### phase 类型更丰富
-- taskflow 10 种(agent/parallel/map/gate/reduce/approval/flow/loop/tournament/script)
+- taskflow 12 种（agent/parallel/map/gate/reduce/approval/flow/loop/tournament/script/race/expand）
 - Conductor ≈ agent/parallel/script/human-gate(+ routes)
 - 但 Conductor 的 `routes`(Jinja2 条件)很灵活,能模拟不少
 

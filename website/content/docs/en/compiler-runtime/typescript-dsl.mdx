@@ -28,7 +28,12 @@ taskflow-dsl build audit.tf.ts --emit both
 | `new [name]` | Hello skeleton (`.tf.ts` or `--json-escape`) |
 | `check <file>` | Erase + `validateTaskflow` + tsc by default (`--no-typecheck` to disable) |
 | `build <file>` | Emit Taskflow JSON / FlowIR |
-| `decompile <file>` | Taskflow JSON → readable `.tf.ts` (**semantic**, not literal round-trip) |
+| `decompile <file>` | Taskflow JSON → safe, readable `.tf.ts` (**semantic**, not literal round-trip) |
+
+`decompile` does not recover original variable names, formatting, comments, or
+source spelling. Supported definitions rebuild to semantically equivalent
+Taskflow/FlowIR; unsupported or lossy constructs fail instead of claiming a
+literal round-trip.
 
 ## Authoring shape
 
@@ -68,11 +73,14 @@ JSON still has **12** phase types. DSL runes erase to those kinds (plus sugars l
 
 See monorepo `skills` configuration §9 and `docs/rfc-0.2.0-s4-mvp.md`.
 
-## What S4 is not
+## Runtime boundary
 
-- Not a second runtime / event-kernel flip (that is **S5**).
+- The TypeScript DSL is compile-time only; emitted JSON uses the same runtime.
+- The event kernel remains opt-in (`eventKernel` or
+  `PI_TASKFLOW_EVENT_KERNEL=1`). `race` and `expand` use the imperative path;
+  score gates, `onBlock: retry`, reflexion, `retry`, `expect`, cross-run cache,
+  and Shared Context Tree also force a safe imperative fallback.
 - Not an MCP `taskflow_build` tool in the ship bar.
-- Not full PhaseSchema field coverage on day one (FULL language goal vs MVP Y-slice).
 
 ## Next
 

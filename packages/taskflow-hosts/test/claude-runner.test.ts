@@ -9,7 +9,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldClaudeEventLine, newClaudeAccumulator, permissionArgsForTools } from "../src/claude-runner.ts";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	CLAUDE_UNSAFE_BYPASS_ENV,
+	foldClaudeEventLine,
+	newClaudeAccumulator,
+	permissionArgsForTools,
+	runClaudeAgentTask,
+} from "../src/claude-runner.ts";
 
 // A full, real run: system init → assistant tool_use → assistant text →
 // result (authoritative usage + cost).
@@ -111,14 +120,18 @@ test("claude parser: system init sets the model", () => {
 
 // --- permission mapping (the codex sandboxForTools analogue) ---------------
 
-test("claude permissions: no whitelist → bypassPermissions (default-capable agent)", () => {
-	assert.deepEqual(permissionArgsForTools(undefined), ["--permission-mode", "bypassPermissions"]);
-	assert.deepEqual(permissionArgsForTools([]), ["--permission-mode", "bypassPermissions"]);
+test("claude permissions: no whitelist → explicit read-only allowlist", () => {
+	for (const tools of [undefined, []]) {
+		const args = permissionArgsForTools(tools);
+		assert.equal(args[0], "--allowedTools");
+		assert.ok(!args.includes("bypassPermissions"));
+	}
 });
 
-test("claude permissions: a mutating whitelist → bypassPermissions", () => {
+test("claude permissions: mutating whitelist is denied unless explicitly acknowledged", () => {
 	for (const tools of [["read", "bash"], ["write"], ["edit", "grep"], ["apply_patch"]]) {
-		assert.deepEqual(permissionArgsForTools(tools), ["--permission-mode", "bypassPermissions"]);
+		assert.throws(() => permissionArgsForTools(tools), /PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1/);
+		assert.deepEqual(permissionArgsForTools(tools, true), ["--permission-mode", "bypassPermissions"]);
 	}
 });
 
@@ -131,4 +144,86 @@ test("claude permissions: a read-only whitelist → read-only --allowedTools set
 	assert.ok(!allowed.includes("Bash"), "no read-only shell on claude — Bash stays denied");
 	assert.ok(!allowed.includes("Write"));
 	assert.ok(!allowed.includes("Edit"));
+});
+
+const TEST_AGENT = [{
+	name: "reviewer",
+	description: "test",
+	systemPrompt: "Review carefully.",
+	source: "project" as const,
+	filePath: "/tmp/reviewer.md",
+}];
+
+function withFakeClaude(body: string, run: (bin: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "taskflow-claude-runner-"));
+	const bin = join(dir, "claude");
+	writeFileSync(bin, `#!/bin/sh\nset -eu\n${body}\n`, "utf8");
+	chmodSync(bin, 0o755);
+	return run(bin).finally(() => rmSync(dir, { recursive: true, force: true }));
+}
+
+test("claude runner seam: unsafe tools fail closed before spawning with actionable error", async () => {
+	const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+	const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+	try {
+		process.env.PI_TASKFLOW_CLAUDE_BIN = "/definitely/not/a/claude/binary";
+		delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+		const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "change a file", { tools: ["write"] });
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.stopReason, "permission_denied");
+		assert.match(result.errorMessage ?? "", /PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1/);
+		assert.doesNotMatch(result.stderr, /ENOENT/, "permission policy rejects before the process seam");
+	} finally {
+		if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+		else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+		if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+		else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+	}
+});
+
+test("claude runner seam: unspecified tools spawn with read-only flags", async () => {
+	await withFakeClaude(
+		`case " $* " in *" --allowedTools Read,Grep,Glob,WebFetch,WebSearch "*) ;; *) exit 64 ;; esac
+case " $* " in *" bypassPermissions "*) exit 65 ;; esac
+printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"safe","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
+		async (bin) => {
+			const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+			const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+			try {
+				process.env.PI_TASKFLOW_CLAUDE_BIN = bin;
+				delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "inspect", {});
+				assert.equal(result.exitCode, 0, result.stderr);
+				assert.equal(result.output, "safe");
+			} finally {
+				if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+				else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+				if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+			}
+		},
+	);
+});
+
+test("claude runner seam: exact user opt-in permits requested unsandboxed tools", async () => {
+	await withFakeClaude(
+		`case " $* " in *" --permission-mode bypassPermissions "*) ;; *) exit 64 ;; esac
+printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"opted-in","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
+		async (bin) => {
+			const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+			const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+			try {
+				process.env.PI_TASKFLOW_CLAUDE_BIN = bin;
+				process.env[CLAUDE_UNSAFE_BYPASS_ENV] = "1";
+				const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "change", { tools: ["write"] });
+				assert.equal(result.exitCode, 0, result.stderr);
+				assert.equal(result.output, "opted-in");
+			} finally {
+				if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+				else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+				if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+			}
+		},
+	);
 });

@@ -244,7 +244,7 @@ Be specific and actionable. Don't just say "this could be better" — explain wh
 | `description` | Yes | Brief description shown in agent listings and picker UIs. |
 | `tools` | No | Comma-separated tool list: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`. Defaults to all tools if omitted. |
 | `model` | No | Model ID or role reference (e.g., `openai/gpt-4o` or `"{{strong}}"`). Falls back to the host's default model. |
-| `thinking` | No | Thinking level: `off`, `low`, `high`, `xhigh`. Falls back to the `globalThinking` setting. |
+| `thinking` | No | Thinking level: `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Falls back to `globalThinking`; unsupported values fail closed. Host mappings differ. |
 
 <Callout type="info">
   A malformed agent file never breaks discovery. The runtime catches parse errors and skips the bad file with a warning, so the rest of your agents load normally.
@@ -342,8 +342,8 @@ These overrides apply only to this phase invocation. The agent's frontmatter set
 | Override | Effect |
 |---|---|
 | `model` | Replace the agent's model for this phase. Accepts a role (`"{{strong}}"`) or a literal model ID. |
-| `thinking` | Override the thinking level: `off`, `low`, `high`, `xhigh`. |
-| `tools` | Restrict the tool set. Useful for read-only phases that should not modify files. |
+| `thinking` | Override thinking with a supported value. Codex maps it to `model_reasoning_effort` (`max`/`ultra` → `xhigh`). |
+| `tools` | Requested capability set. Pi uses a whitelist; Codex maps read-only vs mutating sets to sandbox profiles rather than enforcing exact names. |
 
 ### Branches and sub-phases
 

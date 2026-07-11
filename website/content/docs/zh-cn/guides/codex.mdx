@@ -11,6 +11,8 @@ description: 把 taskflow 作为 Codex 插件安装，通过 MCP 编排多阶段
 
 taskflow 通过共享的插件市场分发。先添加市场，再安装插件：
 
+要求 **Node.js ≥ 22.19.0**。
+
 ```bash title="安装 taskflow 插件"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
@@ -174,12 +176,23 @@ tool_timeout_sec = 3600
 | `taskflow_list` | 列出当前项目里已保存的 flow。 |
 | `taskflow_show` | 打印一个已保存 flow 的 JSON 定义。 |
 | `taskflow_verify` | 静态验证一个 flow（循环、引用、配置），零成本。 |
-| `taskflow_compile` | 把 DAG 渲染成 Mermaid 图。 |
+| `taskflow_compile` | 渲染内联 SVG **和**文本大纲，并附验证状态。 |
 | `taskflow_peek` | 检查一个存储阶段的输出，用于事后调试。 |
+| `taskflow_trace` | 读取运行的 append-only 事件时间线。 |
+| `taskflow_replay` | 离线重放已记录决策，不调用模型。 |
+| `taskflow_why_stale` | 零 token 解释依赖为何 stale。 |
+| `taskflow_recompute` | 报告 stale frontier（MCP 仅 dry-run）。 |
+| `taskflow_save` | 保存可复用 flow 与可选库元数据。 |
+| `taskflow_search` | 搜索并排序可复用 flow。 |
 
 <Callout type="tip">
   你很少需要记这些。打包的 skill 告诉 Codex 哪个工具适合这个请求——"验证这个 flow"、"给我看图"、"运行它"都会自己正确路由。
 </Callout>
+
+Codex 不会把 `tools` 当作严格的工具名白名单：只读集合映射到
+`-s read-only`，包含变更能力或省略时映射到 `-s workspace-write`。
+thinking 映射到 `model_reasoning_effort`（`off`/`none`/`minimal` → `none`，
+`max`/`ultra` → `xhigh`）；非法值在启动前失败。
 
 ## 卸载
 

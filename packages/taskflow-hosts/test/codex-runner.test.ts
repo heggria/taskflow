@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldCodexEventLine, newCodexAccumulator } from "../src/codex-runner.ts";
+import { foldCodexEventLine, newCodexAccumulator, runCodexAgentTask } from "../src/codex-runner.ts";
 
 // A full, real turn: thread.started → benign errors → command tool call →
 // agent_message (final) → turn.completed (usage).
@@ -83,4 +83,21 @@ test("codex parser: malformed / empty / unknown lines are ignored", () => {
 	assert.equal(foldCodexEventLine(acc, `{"type":"turn.started"}`), null);
 	assert.equal(acc.finalText, "");
 	assert.equal(acc.usage.turns, 0);
+});
+
+test("codex runner: invalid agent/global thinking fails before spawning", async () => {
+	const agents = [
+		{
+			name: "bad-thinking",
+			description: "test",
+			systemPrompt: "",
+			source: "user" as const,
+			filePath: "",
+			thinking: "lo",
+		},
+	];
+	const result = await runCodexAgentTask(process.cwd(), agents, "bad-thinking", "work", {});
+	assert.equal(result.exitCode, 1);
+	assert.equal(result.stopReason, "error");
+	assert.match(result.errorMessage ?? "", /Unsupported Codex thinking level 'lo'/);
 });

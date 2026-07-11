@@ -27,7 +27,11 @@ taskflow-dsl build audit.tf.ts --emit both
 | `new [name]` | 骨架（`.tf.ts` 或 `--json-escape`） |
 | `check <file>` | erase + `validateTaskflow` + 默认 tsc（`--no-typecheck` 可关闭） |
 | `build <file>` | 产出 Taskflow JSON / FlowIR |
-| `decompile <file>` | JSON → 可读 `.tf.ts`（**语义**往返，非字面） |
+| `decompile <file>` | JSON → 安全、可读 `.tf.ts`（**语义**往返，非字面） |
+
+`decompile` 不会恢复原变量名、格式、注释或源码拼写。支持的定义可重新
+build 为语义等价的 Taskflow/FlowIR；不支持或有损的结构会失败，而不是
+承诺字面 round-trip。
 
 ## 写法示例
 
@@ -67,11 +71,14 @@ JSON 仍是 **12** 种 phase。DSL rune erase 到这些 kind（另有 `gate.auto
 
 详见 monorepo skills configuration §9 与 `docs/rfc-0.2.0-s4-mvp.md`。
 
-## S4 不是什么
+## 运行时边界
 
-- 不是第二运行时 / event-kernel 默认 ON（那是 **S5**）。
+- TypeScript DSL 只发生在编译期；产出的 JSON 使用同一运行时。
+- event kernel 保持 opt-in（`eventKernel` 或
+  `PI_TASKFLOW_EVENT_KERNEL=1`）。`race`/`expand` 使用 imperative path；
+  score gate、`onBlock: retry`、reflexion、`retry`、`expect`、跨运行缓存与
+  Shared Context Tree 也会安全回退到 imperative path。
 - 不是出货门内的 MCP `taskflow_build`。
-- 不是 day-one 就覆盖全部 PhaseSchema 字段。
 
 ## 下一步
 

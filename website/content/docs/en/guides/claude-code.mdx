@@ -3,13 +3,15 @@ title: Using taskflow on Claude Code
 description: Install taskflow as a Claude Code plugin and orchestrate multi-phase workflows via MCP.
 ---
 
-[Claude Code](https://claude.com/product/claude-code) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Claude Code, taskflow ships as a plugin that registers a dependency-free MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
+[Claude Code](https://claude.com/product/claude-code) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. The plugin registers the MCP server plus a routing skill; its protocol layer needs no MCP SDK.
 
 This page walks through the whole arc: install the plugin, confirm the MCP server is live, run a flow through a tool call, and understand the permission and long-running-flow model.
 
 ## Install
 
 taskflow is distributed through the shared plugin marketplace. Add the marketplace, then install the plugin:
+
+Requires **Node.js ≥ 22.19.0**.
 
 ```bash title="Install the taskflow plugin"
 claude plugin marketplace add heggria/taskflow
@@ -26,7 +28,7 @@ That single `plugin install` does three things at once:
     **Installs the routing skill.** A bundled skill teaches Claude Code when to reach for the taskflow tools, so you don't have to remember their names.
   </Step>
   <Step>
-    **Keeps zero runtime deps.** The MCP server speaks JSON-RPC 2.0 over stdio on Node built-ins — no `@modelcontextprotocol/sdk`, so taskflow keeps its zero-dependency guarantee.
+    **Avoids an MCP SDK dependency.** The protocol layer speaks JSON-RPC 2.0 over stdio. Delivery packages still depend on taskflow's internal packages, and core peers on `typebox`.
   </Step>
 </Steps>
 
@@ -142,11 +144,11 @@ Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is e
 
 | Phase tools | Permission mode | What it means |
 |---|---|---|
-| Read-only (no `write`/`edit`/`bash`) | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | Mutating tools are denied outright. Note there's no read-only shell — `Bash` is not granted to read-only phases. |
-| Mutating (or no whitelist) | `--permission-mode bypassPermissions` | The subagent can run any tool. Run flows you trust, in a repo you can `git reset`. |
+| Read-only or omitted; no mutating/unknown requested tool | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | Mutating tools are denied outright. Note there's no read-only shell — `Bash` is not granted. |
+| Mutating or unknown requested tool | Rejected by default | Set `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` only for trusted flows to opt into `bypassPermissions`. |
 
 <Callout type="warn">
-  Mutating phases run with `bypassPermissions` and have no OS sandbox backstop. Prefer a throwaway worktree (`cwd: "worktree"`) for flows that touch the filesystem, and only run flows you trust.
+  Unsafe mode is an explicit operator opt-in, not the default. Even after opting in, prefer a throwaway worktree (`cwd: "worktree"`). The Claude child receives only platform/runtime, proxy/CA, and supported Claude-provider environment variables; unrelated application secrets are removed.
 </Callout>
 
 ## Long-running flows
@@ -192,6 +194,10 @@ Here's the full MCP surface the plugin exposes:
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
 | `taskflow_compile` | Render the DAG as a text outline + inline SVG. |
 | `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with no model calls. |
+| `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
+| `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells Claude Code which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.

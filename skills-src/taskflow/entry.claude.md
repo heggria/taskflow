@@ -16,8 +16,18 @@ runs as an isolated `claude -p` session.
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
-| `taskflow_compile` | Render a flow's DAG as a diagram + a verification report — no execution. |
+| `taskflow_compile` | Render a flow's DAG as an inline SVG **and** text outline + a verification report — no execution. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list phases; `json`/`item`/`limit` refine the slice. Hard-truncated, read-only. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
+| `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
+| `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
+| `taskflow_save` | Save a reusable flow and optional library metadata. |
+| `taskflow_search` | Search and rank reusable flows before authoring another one. |
 
 **Always `taskflow_verify` a non-trivial flow before `taskflow_run`** — it is
 free and catches most authoring mistakes.
+
+**Security default:** Claude mutating/unrestricted phases are rejected because
+headless Claude has no OS sandbox. Explicitly opt in only for trusted flows by
+setting `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1`; prefer `cwd: "worktree"`.

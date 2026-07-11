@@ -6,9 +6,8 @@
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=4B4ACF&label=npm" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/dm/pi-taskflow?style=flat-square&color=5A5D63&label=downloads" alt="npm downloads"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-0E8A66?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1400+-4B4ACF?style=flat-square" alt="1400+ tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1500+-4B4ACF?style=flat-square" alt="1500+ tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
 </p>
@@ -51,9 +50,8 @@ claude plugin install claude-taskflow@taskflow
 # OpenCode — 向 opencode.json 添加 MCP server（见 OpenCode 指南）
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
-# Grok Build
-grok plugin install <source> --trust   # 例如 checkout 中: ./packages/grok-taskflow/plugin
-# 或: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+# Grok Build（已发布 MCP 包）
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
 ---
@@ -151,14 +149,14 @@ Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在
 
 **如何选择：**
 
-- **`@pi-agents/orchid`** 是生态中功能最完整的编排器（DAG + worktree + Ralph 循环 + 代理邮箱）——但其 DSL 是*固定*的 9 阶段流水线，携带运行时依赖 + jiti，且处于 beta 阶段。当你想**定义自己的图结构**（而非采用别人的固定观点），并且追求**零依赖**和一条命令安装时，选 `taskflow`。
-- **`pi-crew` / `ultimate-pi`** 更重——worktree 隔离、持久的异步团队、多层治理。如果你想要轻量、声明式、零依赖，那就选本项目。
+- **`@pi-agents/orchid`** 是生态中功能最完整的编排器（DAG + worktree + Ralph 循环 + 代理邮箱）——但其 DSL 是*固定*的 9 阶段流水线，携带运行时依赖 + jiti，且处于 beta 阶段。当你想**定义自己的图结构**并避免宿主 SDK 耦合时，选 `taskflow`。
+- **`pi-crew` / `ultimate-pi`** 更重——worktree 隔离、持久的异步团队、多层治理。如果你想要轻量、声明式且不绑定宿主 SDK，那就选本项目。
 - **`@zhushanwen/pi-workflow`** 精神上最为接近，也是零依赖，但它站在上述分水岭的**命令式**那一边：你要以模型书写并运行的 **JavaScript 脚本**来编写工作流。`taskflow` 的**声明式 JSON DAG** 是可验证的那一边——可静态检查、可可视化、可安全交给 LLM 生成，且恢复粒度精细到阶段级别而非调用缓存去重。
 - **`@fiale-plus/pi-rogue-orchestration`** 拥有真正的**循环至完成**（目标驱动的迭代）。`taskflow` 现在也自带 `loop` 阶段（v0.0.13+）加上竞争选择的 `tournament`——而且与 rogue-orchestration 不同，`taskflow` 拥有带门控、可组合子流程和跨会话恢复的完整 DAG。若只需极少结构的“一直做直到目标达成”，rogue-orchestration 更轻；若需结构化、分支式的流水线，`taskflow` 覆盖同样的能力且更多。
 - **`pi-subagents` / `@gotgenes/pi-subagents`** 是即席"用 reviewer 审查这个 diff"委托和后台作业的成熟选择。`taskflow` 则适用于当这些委托需要变成*可重复、可恢复的流水线*时。
 - **`pi-pipeline` / `pi-agent-flow`** 提供的是*固定观点、固定结构*的流程。`taskflow` 提供的是*一张空白画布*：你（或模型）声明适合任务的图结构。
 
-> 诚实的一句话总结：**`pi-taskflow` 是唯一一个给你一张*声明式、可验证、可恢复*的任务节点 DAG 的 Pi 扩展——保存为一条 `/tf:<name>` 命令，零运行时依赖，且从设计上就上下文隔离（同一引擎也通过 `taskflow_*` MCP 工具运行于 Codex）。** code-mode 的 workflow 让模型去*写脚本*跳动工作，`taskflow` 则让它*声明一张运行时能在执行前证明其正确的图。*
+> 诚实的一句话总结：**`pi-taskflow` 提供一张*声明式、可验证、可恢复*的任务节点 DAG——保存为 `/tf:<name>` 命令，并从设计上隔离上下文。** 引擎避免绑定宿主 SDK；`typebox` 是 peer dependency，TypeScript DSL 自带编译器，交付包依赖 taskflow 内部包。
 
 ## 30 秒快速开始
 
@@ -219,21 +217,22 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 ### 在 Grok Build 上
 
-taskflow 以 Grok Build **插件** 的形式发布——安装一次，`taskflow_*` MCP 工具与路由 skill 便自动生效：
+正式发布路径是 MCP 包：
 
 ```bash
-# 从 monorepo checkout（发布前 dogfood）：
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+```
+
+monorepo checkout 另带 plugin scaffold：
+
+```bash
 pnpm --filter grok-taskflow build
 grok plugin install ./packages/grok-taskflow/plugin --trust
 grok plugin enable taskflow
 grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
-
-# 发布后：
-# grok plugin install <source> --trust
-# # 或: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```
 
-插件在包上 npm 后通过 `npx` 拉起 MCP；checkout 时可指向本地 build 的 bin。每个阶段的子代理以隔离的 `grok -p --output-format streaming-json` 会话运行。参见 [Grok Build 指南](./docs/grok-mcp.md)。
+公共 Grok plugin marketplace/source 尚未发布；不要代入占位 source。每个阶段的子代理以隔离的 `grok -p --output-format streaming-json` 会话运行。参见 [Grok Build 指南](./docs/grok-mcp.md)。
 
 ### 简写语法（与内置工具相同的格式）
 
@@ -773,12 +772,12 @@ provided files. Report violations grouped by file. No fixes.
 
 <div align="center">
 
-**0 个运行时依赖** · **1400+ 测试** · **12 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **FlowIR 编译缝** · **后台（detached）执行** · **`compile` Mermaid 渲染** · **~9k LOC 运行时**
+**Node.js ≥ 22.19.0** · **1500+ 测试 / 100 个测试文件** · **12 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **FlowIR 编译缝** · **后台执行** · **MCP 编译：SVG + 文本** · **Pi 编译：Mermaid**
 
 </div>
 
-- **零运行时依赖。** 没有 `dependencies` 字段——运行时完全基于 Node 内置模块（`fs` / `path` / `os` / `child_process` / `crypto`）。文件锁是 `fs.openSync("wx")`，不是第三方库。
-- **1140 个测试分布在 70 个测试文件中**，涵盖并发、原子文件锁定（8 进程竞争回归测试）、路径穿越防御、跨会话恢复、跨运行缓存新鲜度（流程/推理/工具键隔离、指纹失效、TTL/LRU 淘汰）、逐项 map 缓存、增量重算、FlowIR 编译接缝、门控判决、预算上限、重试/回退、审批流程、循环终止、锦标赛评判、子流程组合、共享上下文树、工作区隔离、后台执行、回调隔离、空闲看门狗、模型角色 init 配置，以及 `compile` Mermaid 渲染器。
+- **准确的依赖边界。** MCP 协议实现不依赖 MCP SDK，使用 Node 内置模块；`taskflow-core` 没有直接 `dependencies`，但 peer 依赖 `typebox`；`taskflow-dsl` 依赖 TypeScript；宿主交付包依赖内部 core/runner/MCP 包。所有包要求 Node.js ≥ 22.19.0。
+- **1500+ 个测试分布在 100 个测试文件中**，覆盖并发、持久化、安全、恢复/缓存、全部 12 种阶段、FlowIR/replay、TypeScript DSL 与各宿主 argv/MCP 契约。
 - **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
 - **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
 
@@ -812,7 +811,7 @@ provided files. Report violations grouped by file. No fixes.
 - **无 `output: "file"`。** 输出只能是文本/JSON——通过代理的 `write` 工具调用写入文件。
 - **`map` 基于一个字符串 `over` 展开出 JSON 数组。** `over` 字段是一个字符串，它要么插值解析为 JSON 数组（例如 `{steps.ID.json}`），要么本身就是一个 JSON 数组字符串。先用一个单代理 `output: "json"` 阶段包装纯文本列表，或对固定列表传入 `JSON.stringify([...])`。（直接写字面量数组会被拒绝——请从某个阶段产出它并引用之。）
 - **DAG 必须是无环的。** 循环会在验证时被拒绝。
-- **跨运行缓存不包含 `gate`、`approval`、`loop`、`tournament` 和 `script`。** 这些阶段每次运行必须产生新结果。
+- **跨运行缓存不包含 `gate`、`approval`、`loop`、`tournament`、`script`、`race` 和 `expand`。** 这些阶段每次运行必须产生新结果。
 - **审批在后台模式下自动拒绝。** 这是一项安全不变量——审批门控绝不会被静默绕过。
 
 ## 开发

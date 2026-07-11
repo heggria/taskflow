@@ -11,6 +11,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -61,6 +65,12 @@ jobs:
 
       - name: Build all packages (emit dist)
         run: pnpm run build
+
+      # This is a release gate, not a post-publish check: it packs the current
+      # tag checkout, installs all nine local tarballs into a clean consumer,
+      # and exercises their exports and bins before the first npm mutation.
+      - name: Verify packed consumer install
+        run: node scripts/smoke-packed-packages.mjs
 
       - name: Verify tag matches workspace versions
         run: |

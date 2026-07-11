@@ -3,11 +3,13 @@ title: Using taskflow on OpenCode
 description: Register taskflow as an MCP server on OpenCode and orchestrate multi-phase workflows.
 ---
 
-[OpenCode](https://opencode.ai) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On OpenCode, taskflow is exposed as a dependency-free MCP server, so the `taskflow_*` tools appear inside the session and each phase's subagent runs as an isolated `opencode run` process.
+[OpenCode](https://opencode.ai) exposes taskflow through an MCP server whose protocol layer has no MCP SDK dependency; each phase runs as an isolated `opencode run` process.
 
 This page walks through the whole arc: register the MCP server, confirm it's live, run a flow through a tool call, and understand the permission and model-resolution model.
 
 ## Install
+
+Requires **Node.js ≥ 22.19.0**.
 
 OpenCode has no git-based plugin marketplace, so you register the MCP server directly — either with the CLI or by editing your `opencode.json`.
 
@@ -210,6 +212,10 @@ Here's the full MCP surface the server exposes:
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
 | `taskflow_compile` | Render the DAG as a text outline + inline SVG. |
 | `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with no model calls. |
+| `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
+| `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells OpenCode which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.

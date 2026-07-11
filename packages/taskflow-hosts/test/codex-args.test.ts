@@ -84,7 +84,7 @@ test("codex thinking: maps Taskflow levels to model_reasoning_effort", () => {
 	assert.equal(resolveCodexThinking("xhigh"), "xhigh");
 	assert.equal(resolveCodexThinking("max"), "xhigh");
 	assert.equal(resolveCodexThinking("ultra"), "xhigh");
-	assert.equal(resolveCodexThinking("unknown"), undefined);
+	assert.throws(() => resolveCodexThinking("unknown"), /Unsupported Codex thinking level/);
 	assert.equal(resolveCodexThinking(undefined), undefined);
 });
 
@@ -138,7 +138,7 @@ test("codex argv: thinking is passed via model_reasoning_effort config", () => {
 
 	const off = buildCodexArgs({ ...baseCtx, thinking: "off" });
 	assert.equal(off[off.indexOf("-c") + 1], "model_reasoning_effort=none");
-	assert.equal(buildCodexArgs({ ...baseCtx, thinking: "unknown" }).indexOf("-c"), -1);
+	assert.throws(() => buildCodexArgs({ ...baseCtx, thinking: "unknown" }), /Unsupported Codex thinking level/);
 });
 
 test("codex argv: prompt is the LAST positional arg; system prompt is prepended", () => {

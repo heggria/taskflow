@@ -13,9 +13,9 @@ directions, both built on the host-neutral `SubagentRunner` seam
    the `claude -p` subagent runner (`packages/claude-taskflow/src/mcp/`). This
    is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install (recommended): the Claude Code plugin
 
@@ -47,15 +47,21 @@ Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is
 either whitelisted or denied. The runner maps each phase's tool whitelist the
 same way the codex runner maps to a sandbox mode:
 
-- **Read-only phase** (no `write`/`edit`/`bash` in the phase/agent `tools`) →
-  `--allowedTools Read,Grep,Glob,WebFetch,WebSearch`. Mutating tools are denied
-  outright. Note there is **no read-only shell** (unlike codex's read-only OS
-  sandbox), so `Bash` is not granted to read-only phases.
-- **Mutating phase** (or no whitelist at all) → `--permission-mode
-  bypassPermissions`. This is the workspace-write equivalent, but **without an
-  OS sandbox backstop** — the subagent can run any tool. Run flows you trust,
-  in a repo you can `git reset`, ideally in a throwaway worktree
-  (`cwd: "worktree"`).
+- **Read-only or unspecified phase** (no mutating/unknown tool in the resolved
+  phase/agent `tools`, including an omitted list) → `--allowedTools
+  Read,Grep,Glob,WebFetch,WebSearch`. Mutating tools are denied outright. Note
+  there is **no read-only shell** (unlike codex's read-only OS sandbox), so
+  `Bash` is not granted.
+- **Mutating or unknown requested tool** → rejected by default. Headless Claude
+  has no OS sandbox backstop, so silently selecting `bypassPermissions` is
+  unsafe. A trusted operator may explicitly set
+  `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` to enable that mode. Even then, use only
+  trusted flows and prefer a throwaway worktree (`cwd: "worktree"`).
+
+The spawned Claude process receives a filtered environment: platform/runtime,
+proxy/CA, and Claude-supported provider variables (`ANTHROPIC_*`, Bedrock,
+Vertex/Google, Azure/Foundry) are retained, while unrelated application secrets
+such as npm tokens, database URLs, and other-provider API keys are not inherited.
 
 ## Long-running flows and the tool-call timeout
 

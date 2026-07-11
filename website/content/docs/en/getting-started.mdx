@@ -60,6 +60,10 @@ You should see the runtime execute one phase and return the final output. That i
 
 If you have not installed taskflow yet, pick your host:
 
+<Callout type="warn">
+  Every taskflow package requires **Node.js 22.19.0 or newer**.
+</Callout>
+
 <Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
   <Tab value="Pi">
     ```bash title="Install pi-taskflow"
@@ -84,10 +88,10 @@ If you have not installed taskflow yet, pick your host:
     ```
   </Tab>
   <Tab value="Grok">
-    ```bash title="Install Grok Build plugin"
-    grok plugin install <source> --trust
-    # From a monorepo checkout: ./packages/grok-taskflow/plugin
-    # Then: grok mcp add taskflow -- node path/to/dist/mcp/bin.js  (pre-publish)
+    ```bash title="Register Grok Build MCP"
+    grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+    # Public plugin source is not published yet. Checkout-only:
+    # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
   </Tab>
 </Tabs>

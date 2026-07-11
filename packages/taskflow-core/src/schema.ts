@@ -61,6 +61,9 @@ export type TournamentMode = (typeof TOURNAMENT_MODES)[number];
 
 const OUTPUT_FORMATS = ["text", "json"] as const;
 const JOIN_MODES = ["all", "any"] as const;
+/** Cross-host thinking levels and compatibility aliases accepted by authored flows. */
+export const THINKING_LEVELS = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 const CACHE_SCOPES = ["run-only", "cross-run", "off"] as const;
 export type CacheScope = (typeof CACHE_SCOPES)[number];
 /** Allowed fingerprint entry prefixes. `glob!:` = content-hash variant of `glob:`. */
@@ -281,7 +284,11 @@ const PhaseSchema = Type.Object(
 			}),
 		),
 		model: Type.Optional(Type.String({ description: "Model override for this phase" })),
-		thinking: Type.Optional(Type.String({ description: "Thinking level override for this phase" })),
+		thinking: Type.Optional(
+			StringEnum(THINKING_LEVELS, {
+				description: "Thinking level override for this phase. Unknown values are rejected instead of silently inheriting the host default.",
+			}),
+		),
 		tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict tools for this phase's agent" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for this phase's subagent. A literal path, or a reserved keyword: 'temp' (ephemeral dir, removed after the phase), 'dedicated' (persistent dir under the run state, kept), or 'worktree' (a git worktree on a throwaway branch, removed after the phase)." })),
 		final: Type.Optional(Type.Boolean({ description: "Mark this phase's output as the workflow result" })),
@@ -687,6 +694,14 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (v !== undefined && typeof v !== "string") {
 				errors.push(`Phase '${p.id}': '${key}' must be a string, got ${typeof v}`);
 			}
+		}
+		if (
+			typeof p.thinking === "string" &&
+			!THINKING_LEVELS.includes(p.thinking as (typeof THINKING_LEVELS)[number])
+		) {
+			errors.push(
+				`Phase '${p.id}': 'thinking' must be one of ${THINKING_LEVELS.join(", ")}; got '${p.thinking}'`,
+			);
 		}
 		if (typeof p.cwd === "string" && CWD_PLACEHOLDER_RE.test(p.cwd)) {
 			errors.push(

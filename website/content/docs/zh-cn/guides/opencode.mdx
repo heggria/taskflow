@@ -3,11 +3,13 @@ title: 在 OpenCode 上使用 taskflow
 description: 在 OpenCode 上将 taskflow 注册为 MCP 服务器，编排多阶段工作流。
 ---
 
-[OpenCode](https://opencode.ai) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。在 OpenCode 上，taskflow 以零依赖 MCP 服务器的形式暴露，`taskflow_*` 工具出现在会话中，每个阶段的 subagent 作为隔离的 `opencode run` 进程运行。
+[OpenCode](https://opencode.ai) 通过协议层不依赖 MCP SDK 的 MCP server 暴露 taskflow；每个阶段作为隔离的 `opencode run` 进程运行。
 
 本页带你走完整个流程：注册 MCP 服务器、确认它已就绪、通过工具调用运行一个 flow，并理解权限与模型解析模型。
 
 ## 安装
+
+要求 **Node.js ≥ 22.19.0**。
 
 OpenCode 没有基于 git 的插件市场，所以你直接注册 MCP 服务器——用 CLI 或编辑 `opencode.json`。
 
@@ -210,6 +212,10 @@ MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**
 | `taskflow_verify` | 静态校验 flow（环、引用、配置），零成本。 |
 | `taskflow_compile` | 把 DAG 渲染为文本大纲 + 内联 SVG。 |
 | `taskflow_peek` | 查看某次运行中某阶段的存储输出，用于事后调试。 |
+| `taskflow_trace` | 读取运行的 append-only 事件时间线。 |
+| `taskflow_replay` | 离线重放已记录决策，不调用模型。 |
+| `taskflow_why_stale` | 零 token 解释依赖为何 stale。 |
+| `taskflow_recompute` | 报告 stale frontier（MCP 仅 dry-run）。 |
 
 <Callout type="tip">
   你很少需要记住这些。内置 skill 会告诉 OpenCode 哪个工具适合请求——"verify this flow"、"show me the diagram"、"run it" 都能自动正确路由。

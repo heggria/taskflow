@@ -116,7 +116,7 @@ taskflow 的整个设计来自一次刻意的权衡：
 
 ### 计划是数据
 
-taskflow 定义是 JSON（或 YAML、或 MDX frontmatter）。它声明**阶段**——离散任务节点（`agent`、`map`、`gate`、`reduce`、`loop`、`tournament`、`approval`、`flow`、`script`）——由 `dependsOn` 边连成一张 DAG，再加上 `when` 守卫、`join`、`retry`、`budget` 等控制流。
+taskflow 定义是 JSON。它声明 **12 种阶段**：`agent`、`parallel`、`map`、`gate`、`reduce`、`approval`、`flow`、`loop`、`tournament`、`script`、`race` 与 `expand`；由 `dependsOn` 连成 DAG，再加上 `when`、`join`、`retry`、`budget` 等控制流。TypeScript DSL 编译到同一 JSON 契约。
 
 正因为它是数据，你可以在代码审查里 diff 它、给它打版本、从另一个模型生成它。
 

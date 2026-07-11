@@ -13,9 +13,9 @@ on the host-neutral `SubagentRunner` seam
    the `opencode run` subagent runner (`packages/opencode-taskflow/src/mcp/`).
    This is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install: register the MCP server
 

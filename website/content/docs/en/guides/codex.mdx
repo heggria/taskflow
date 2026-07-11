@@ -11,6 +11,8 @@ This page walks through the whole arc: install the plugin, confirm the MCP serve
 
 taskflow is distributed through the shared plugin marketplace. Add the marketplace, then install the plugin:
 
+Requires **Node.js ≥ 22.19.0**.
+
 ```bash title="Install the taskflow plugin"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
@@ -174,12 +176,23 @@ Here's the full MCP surface the plugin exposes:
 | `taskflow_list` | List saved flows in the current project. |
 | `taskflow_show` | Print a saved flow's JSON definition. |
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
-| `taskflow_compile` | Render the DAG as a Mermaid diagram. |
+| `taskflow_compile` | Render an inline SVG **and** text outline plus verification status. |
 | `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with no model calls. |
+| `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
+| `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
+| `taskflow_save` | Save a reusable flow and optional library metadata. |
+| `taskflow_search` | Search and rank reusable flows. |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells Codex which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.
 </Callout>
+
+Codex does not enforce `tools` as a strict name whitelist. Read-only sets map
+to `-s read-only`; mutating or omitted sets map to `-s workspace-write`.
+Thinking maps to `model_reasoning_effort` (`off`/`none`/`minimal` → `none`,
+`max`/`ultra` → `xhigh`); unsupported values fail before spawn.
 
 ## Remove
 

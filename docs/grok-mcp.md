@@ -14,9 +14,9 @@ directions, both built on the host-neutral `SubagentRunner` seam
    grok adapter just binds them to the Grok subagent runner
    (`packages/grok-taskflow/src/mcp/`). This is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 Official Grok docs used for this integration:
 
@@ -24,18 +24,15 @@ Official Grok docs used for this integration:
 - MCP servers: `~/.grok/docs/user-guide/07-mcp-servers.md`
 - Headless / streaming-json: `~/.grok/docs/user-guide/14-headless-mode.md`
 
-## Install (recommended): the Grok Build plugin
-
-The zero-config path once `grok-taskflow` is on npm. Install the plugin and its
-MCP server plus a routing skill are registered automatically:
+## Install (recommended): register the published MCP server
 
 ```sh
-# From the published package / marketplace entry (when available):
-grok plugin install <source> --trust
-# e.g. local checkout (skills + plugin manifest):
-grok plugin install /abs/path/to/taskflow/packages/grok-taskflow/plugin --trust
-grok plugin enable taskflow   # plugins may be disabled until enabled
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
+
+A public Grok plugin marketplace/source is not published yet. Do not substitute
+an imaginary source string. The plugin scaffold can be installed only from a
+checkout: `grok plugin install ./packages/grok-taskflow/plugin --trust`.
 
 The plugin declares its MCP server via `npx` (a version-pinned
 `grok-taskflow`), so the server is fetched and launched on demand when the

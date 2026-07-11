@@ -6,9 +6,8 @@
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=4B4ACF&label=npm" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/dm/pi-taskflow?style=flat-square&color=5A5D63&label=downloads" alt="npm downloads"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/runtime%20deps-0-0E8A66?style=flat-square" alt="zero runtime dependencies"></a>
   <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1400+-4B4ACF?style=flat-square" alt="1400+ tests"></a>
+  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1500+-4B4ACF?style=flat-square" alt="1500+ tests"></a>
   <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
 </p>
@@ -45,9 +44,8 @@ claude plugin install claude-taskflow@taskflow
 # OpenCode — add the MCP server to opencode.json (see the OpenCode guide)
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
-# Grok Build
-grok plugin install <source> --trust   # e.g. ./packages/grok-taskflow/plugin from a checkout
-# or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+# Grok Build (published MCP package)
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
 ---
@@ -145,14 +143,14 @@ The Pi ecosystem now has **20+ delegation, workflow, and orchestration extension
 
 **How to choose:**
 
-- **`@pi-agents/orchid`** is the most feature-complete orchestrator in the ecosystem (DAG + worktrees + Ralph loop + agent mailbox) — but its DSL is a *fixed* 9-phase pipeline, it carries runtime deps + jiti, and it's beta. Reach for `taskflow` when you want to **define your own graph** (not adopt an opinionated one) with **zero dependencies** and a one-command install.
-- **`pi-crew` / `ultimate-pi`** go heavier — worktree isolation, durable async teams, multi-tier governance. If you want lightweight, declarative, and zero-dependency, that's this project.
+- **`@pi-agents/orchid`** is the most feature-complete orchestrator in the ecosystem (DAG + worktrees + Ralph loop + agent mailbox) — but its DSL is a *fixed* 9-phase pipeline, it carries runtime deps + jiti, and it's beta. Reach for `taskflow` when you want to **define your own graph** (not adopt an opinionated one) with **no host-SDK coupling** and a one-command install.
+- **`pi-crew` / `ultimate-pi`** go heavier — worktree isolation, durable async teams, multi-tier governance. If you want a lightweight declarative engine with no host-SDK coupling, that's this project.
 - **`@zhushanwen/pi-workflow`** is the closest in spirit and also zero-dep, but it's the **imperative** side of the split above: you author workflows as **JavaScript scripts** the model writes and runs. `taskflow`'s **declarative JSON DAG** is the verifiable side — statically checkable, visualizable, safe to LLM-generate, and resumable at phase granularity rather than call-cache dedup.
 - **`@fiale-plus/pi-rogue-orchestration`** has a real **loop-until-done** (goal-driven iteration). `taskflow` now ships its own `loop` phase (v0.0.13+) plus `tournament` for competitive selection — and unlike rogue-orchestration, `taskflow` has a full DAG with gates, compositional sub-flows, and cross-session resume. For raw "keep going until the goal is met" with minimal structure, rogue-orchestration is still lighter; for structured, branching pipelines, `taskflow` covers the same ground and more.
 - **`pi-subagents` / `@gotgenes/pi-subagents`** are the mature picks for ad-hoc "use reviewer on this diff" delegation and background jobs. `taskflow` is for when those delegations need to become a *repeatable, resumable pipeline*.
 - **`pi-pipeline` / `pi-agent-flow`** ship *opinionated, fixed* flows. `taskflow` ships an *empty canvas*: you (or the model) declare the graph that fits the job.
 
-> The honest one-liner: **`pi-taskflow` is the only Pi extension that gives you a *declarative, verifiable, resumable* DAG of task nodes — saved as a one-word `/tf:<name>` command, with zero runtime dependencies and context isolation by design** (and the same engine runs on Codex via the `taskflow_*` MCP tools). Where code-mode workflows let the model *script* the work, `taskflow` lets it *declare a graph the runtime can prove correct before running.* Recently shipped from the roadmap: the Shared Context Tree (blackboard + supervision) and worktree isolation (see [`docs/internal/STRATEGY.md`](./docs/internal/STRATEGY.md)).
+> The honest one-liner: **`pi-taskflow` gives you a *declarative, verifiable, resumable* DAG of task nodes — saved as a one-word `/tf:<name>` command, with context isolation by design** (and the same engine runs on MCP hosts). The engine avoids host-SDK coupling; `typebox` is a peer dependency, the TypeScript DSL includes the compiler, and delivery packages depend on the internal taskflow packages.
 
 ## 30-second start
 
@@ -227,21 +225,22 @@ The server runs via `npx` (a version-pinned `opencode-taskflow`), and each phase
 
 ### On Grok Build
 
-taskflow ships as a Grok Build **plugin** — install it once and the `taskflow_*` MCP tools plus a routing skill light up automatically:
+The published path is the MCP package:
 
 ```bash
-# From a monorepo checkout (pre-publish):
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+```
+
+A plugin scaffold is also available from a monorepo checkout:
+
+```bash
 pnpm --filter grok-taskflow build
 grok plugin install ./packages/grok-taskflow/plugin --trust
 grok plugin enable taskflow
 grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
-
-# Once published:
-# grok plugin install <source> --trust
-# # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```
 
-The plugin's MCP server runs via `npx` when the package is on npm; from a checkout, point MCP at the built bin as above. Each phase's subagent then runs as an isolated `grok -p --output-format streaming-json` session. See the [Grok Build guide](./docs/grok-mcp.md).
+A public Grok plugin marketplace/source is not published yet; do not substitute a placeholder source. Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session. See the [Grok Build guide](./docs/grok-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 
@@ -898,12 +897,12 @@ Copy one into `.pi/taskflows/<name>.json` (or `~/.pi/agent/taskflows/`) and it r
 
 <div align="center">
 
-**0 runtime dependencies** · **1400+ tests** · **12 phase types** · **shared context tree** · **cross-session resume** · **cross-run memoization** · **per-item map caching** · **incremental recompute** · **FlowIR compile seam** · **detached execution** · **`compile` Mermaid renderer** · **~9k LOC runtime**
+**Node.js ≥ 22.19.0** · **1500+ tests / 100 test files** · **12 phase types** · **shared context tree** · **cross-session resume** · **cross-run memoization** · **per-item map caching** · **incremental recompute** · **FlowIR compile seam** · **detached execution** · **MCP compile: SVG + text** · **Pi compile: Mermaid**
 
 </div>
 
-- **Zero runtime dependencies.** No `dependencies` field — the runtime is built entirely on Node built-ins (`fs` / `path` / `os` / `child_process` / `crypto`). The file lock is `fs.openSync("wx")`, not a third-party library.
-- **1400+ tests across ~95 test files** covering concurrency, atomic file locking (8-process race regressions), path-traversal hardening, cross-session resume, cross-run cache freshness (flow/thinking/tools key isolation, fingerprint invalidation, TTL/LRU eviction), backward-compatible cache-key migration (4-tier legacy fallback), per-phase structural sub-fingerprint (v3:phasefp — editing one phase invalidates only it and its dependents), per-item map caching (one changed item re-executes, N−1 cache hits), the `incremental` flag (run-wide cross-run default), reuse reporting, the FlowIR compile seam (determinism, declared-plane synthesis), incremental recompute (early-cutoff propagation, partial cascade strictly < full, observed ∪ declared union frontier), gate verdicts, budget caps, retry/backoff, approval flows, loop termination, tournament judging, sub-flow composition, the shared context tree (blackboard reuse, supervision spawn, subflow validation/nesting), workspace isolation (temp/dedicated/worktree lifecycle, fail-open degrade, dynamic-flow rejection), dynamic sub-flow security hardening, detached execution (PID persistence, stale detection, crash→failed, resume after failure), live run-history refresh, callback isolation, the idle watchdog, model-role init config, parseModelFromLabel with parenthesized-model-name regression, multi-fence `safeParse` recovery, host argv-contract locking (codex/claude/opencode/grok `buildXxxArgs`), the `compile` Mermaid renderer (id-collision disambiguation, markdown-injection hardening, and full verify-overlay category coverage), plus the library Phase 1 metadata/search/store layer (phaseSignature, generality, CJK text scoring, staleness detection, sidecar persistence, A1 ghost-flow guard).
+- **Accurate dependency boundary.** The MCP protocol implementation has no MCP SDK dependency and uses Node built-ins. `taskflow-core` has no direct `dependencies` but peers on `typebox`; `taskflow-dsl` depends on TypeScript; host delivery packages depend on the internal core/runner/MCP packages. All packages require Node.js ≥ 22.19.0.
+- **1500+ tests across 100 test files** covering concurrency, persistence, security, resume/cache, all 12 phase kinds, FlowIR/replay, the TypeScript DSL, and host argv/MCP contracts.
 - **Hardened by design.** Path-traversal defense (lexical + `realpath` containment check), runId validation, HTML/error sanitization, atomic writes, stale-lock stealing via `rename`, and an idle watchdog that kills wedged subagents (SIGTERM → SIGKILL after 5 minutes of silence). Dynamic sub-flows additionally get breadth caps, `cwd` containment, budget clamping, nesting depth caps, and prototype-pollution defense.
 - **Dogfooded.** Every new feature has to survive the project's own `self-improve` taskflow before it ships.
 
@@ -940,7 +939,7 @@ Known boundaries (tracked, bounded — no surprises mid-flow):
 - **No `output: "file"`.** Outputs are text/JSON only — write files via an agent's `write` tool call.
 - **`map` fans out over a JSON array from a string `over`.** The `over` field is a string that either interpolates to a JSON array (e.g. `{steps.ID.json}`) or is a literal JSON-array string. Wrap a plain text list in a single-agent `output: "json"` phase first, or pass `JSON.stringify([...])` for a fixed list. (A raw literal array is rejected — emit it from a phase and reference that.)
 - **The DAG must be acyclic.** Cycles are rejected at validation.
-- **Cross-run cache excludes `gate`, `approval`, `loop`, `tournament`, and `script`.** These must produce a fresh result each run (a `script` phase may also have side effects).
+- **Cross-run cache excludes `gate`, `approval`, `loop`, `tournament`, `script`, `race`, and `expand`.** These must produce a fresh result each run.
 - **Approval auto-rejects in detached mode.** This is a safety invariant — approval gates are never silently bypassed.
 
 ## Development

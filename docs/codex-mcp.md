@@ -10,9 +10,9 @@ both built on the host-neutral `SubagentRunner` seam
    server**, so the `taskflow_*` tools appear inside codex
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install (recommended): the Codex plugin
 
@@ -36,6 +36,18 @@ codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.0 
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
 fan-out work), so you usually don't have to name them explicitly.
+
+## Sandbox, tools, and thinking
+
+Codex has sandbox profiles, not a strict per-tool-name whitelist. A phase whose
+effective `tools` are read-only maps to `codex exec -s read-only`; a mutating
+tool or an omitted list maps to `-s workspace-write`.
+`danger-full-access` is never selected automatically.
+
+Thinking resolves phase → agent → global and is passed as
+`model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
+`low`/`medium`/`high`/`xhigh` pass through, and `max`/`ultra` → `xhigh`.
+Unknown values fail closed before the subprocess starts.
 
 ## Long-running flows and the tool-call timeout
 

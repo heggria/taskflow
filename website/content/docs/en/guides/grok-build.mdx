@@ -3,34 +3,21 @@ title: Using taskflow on Grok Build
 description: Install taskflow as a Grok Build plugin and orchestrate multi-phase workflows via MCP.
 ---
 
-[Grok Build](https://docs.x.ai/build/overview) is xAI's terminal coding agent: TUI, headless mode, plugins, skills, and MCP. On Grok Build, taskflow ships as a plugin that registers a dependency-free MCP server plus a routing skill, so the model can call it when work spans multiple phases or fans out over many items.
+[Grok Build](https://docs.x.ai/build/overview) is xAI's terminal coding agent. Taskflow's published path is its MCP server; a plugin scaffold is also available in the repository checkout.
 
 This page walks through install, verify, first run, permissions, and long-running flows. The full reference lives in [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md) in the repo.
 
 ## Install
 
-### From a published package / marketplace
+### Published MCP package (recommended)
 
-```bash title="Install the taskflow plugin"
-grok plugin install <source> --trust
-grok plugin enable taskflow
+```bash title="Register taskflow MCP"
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
-That single install does three things at once:
+Requires **Node.js ≥ 22.19.0**. The MCP protocol code has no MCP SDK dependency. A public Grok plugin marketplace/source is not published yet; do not substitute an imaginary source string.
 
-<Steps>
-  <Step>
-    **Registers the MCP server.** The plugin declares a `taskflow` server launched via `npx -y -p grok-taskflow grok-taskflow-mcp`, so Grok can reach the runtime over stdio.
-  </Step>
-  <Step>
-    **Installs the routing skill.** A bundled skill teaches Grok when to reach for the taskflow tools.
-  </Step>
-  <Step>
-    **Keeps zero runtime deps.** The MCP server speaks JSON-RPC 2.0 over stdio on Node built-ins — no `@modelcontextprotocol/sdk`.
-  </Step>
-</Steps>
-
-### From a monorepo checkout (pre-publish)
+### Plugin scaffold from a monorepo checkout
 
 Until the package is on npm, build locally and point MCP at the compiled bin:
 

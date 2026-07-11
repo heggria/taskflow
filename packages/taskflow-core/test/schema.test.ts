@@ -471,6 +471,23 @@ test("validateTaskflow: the full set of string scalars + dependsOn/from entries 
 	}
 });
 
+test("validateTaskflow: thinking rejects unknown values instead of silently inheriting host defaults", () => {
+	const bad = validateTaskflow({
+		name: "x",
+		phases: [{ id: "a", type: "agent", task: "t", thinking: "lo", final: true }],
+	});
+	assert.equal(bad.ok, false);
+	assert.match(bad.errors.join("\n"), /'thinking' must be one of/);
+
+	for (const thinking of ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+		const ok = validateTaskflow({
+			name: "x",
+			phases: [{ id: "a", type: "agent", task: "t", thinking, final: true }],
+		});
+		assert.equal(ok.ok, true, `${thinking}: ${ok.errors.join("; ")}`);
+	}
+});
+
 test("validateTaskflow: non-string id / null phase don't throw", () => {
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [{ id: 1, type: "agent", task: "t" }] }));
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [null] }));

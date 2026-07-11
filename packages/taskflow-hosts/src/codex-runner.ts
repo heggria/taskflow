@@ -31,6 +31,7 @@
 
 import {
 	runSubagentProcess,
+	sanitizeErrorMessage,
 	num,
 	unknownAgentResult,
 	type AgentConfig,
@@ -169,7 +170,9 @@ export function resolveCodexThinking(thinking: string | undefined): string | und
 	if (normalized === "off" || normalized === "none" || normalized === "minimal") return "none";
 	if (normalized === "max" || normalized === "ultra") return "xhigh";
 	if (["low", "medium", "high", "xhigh"].includes(normalized)) return normalized;
-	return undefined;
+	throw new Error(
+		`Unsupported Codex thinking level '${thinking}'. Use off, none, minimal, low, medium, high, xhigh, max, or ultra.`,
+	);
 }
 
 /** Context for {@link buildCodexArgs} — the pure inputs to argv construction. */
@@ -227,14 +230,30 @@ export async function runCodexAgentTask(
 	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 
 	const cwd = opts.cwd ?? defaultCwd;
-	const args = buildCodexArgs({
-		systemPrompt: agent.systemPrompt,
-		task,
-		model,
-		thinking,
-		tools,
-		cwd,
-	});
+	let args: string[];
+	try {
+		args = buildCodexArgs({
+			systemPrompt: agent.systemPrompt,
+			task,
+			model,
+			thinking,
+			tools,
+			cwd,
+		});
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			stopReason: "error",
+			errorMessage: message,
+		};
+	}
 
 	return runSubagentProcess({
 		agent: agentName,
