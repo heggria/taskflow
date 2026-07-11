@@ -129,6 +129,11 @@ when its workspace itself is under `/tmp`. A live executor E2E additionally
 proves that the custom workspace-equivalent profile permits an in-cwd write and
 rejects a marker outside the cwd and documented exceptions.
 
+Grok children receive only platform/proxy/CA plus Grok/xAI/Taskflow-Grok
+environment variables. Unrelated parent secrets are removed; an operator may
+explicitly add task-specific variable names with the comma-separated
+`PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
+
 Agent system prompts are passed with `--rules`. Model ids that look like
 unresolved `{{placeholders}}`, multi-segment openrouter paths, or pi thinking
 suffixes (`:xhigh`) are dropped so Grok uses its configured default.
@@ -140,8 +145,9 @@ Effective Taskflow thinking is passed as `--reasoning-effort` (`off` maps to
 Grok 0.2.93 does not include token or cost usage in its `streaming-json`
 events. Consequently the Grok-bound MCP server **refuses any flow that declares
 `budget`**; accepting it would advertise a ceiling the runtime cannot enforce.
-Unbudgeted flows still run normally. Use another host when a hard token/USD
-ceiling is required.
+Unbudgeted flows still run normally. Other hosts with usage accounting can
+apply an observed-usage stop-loss, but no process-backed host can reserve an
+exact hard token/USD ceiling for an in-flight model call.
 
 ## Long-running flows and the tool-call timeout
 

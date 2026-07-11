@@ -46,9 +46,12 @@ export function emitTournament(
 							undefined,
 							ctx.phases,
 							ctx.diags,
-						);
-						const b: Record<string, unknown> = {};
-						if (erased) b.task = erased.text;
+							);
+							const b: Record<string, unknown> = {};
+							if (erased) {
+								b.task = erased.text;
+								for (const dep of erased.deps) draft.dependsOn.add(dep);
+							}
 						const bopts = mergeBranchAgentOpts(
 							ctx,
 							el.arguments[1] as ts.Expression | undefined,
@@ -67,9 +70,12 @@ export function emitTournament(
 				}
 				draft.raw.branches = branches;
 			}
-			if (p.name.text === "task") {
-				const er = eraseStringish(ctx.sf, ctx.file, p.initializer, undefined, ctx.phases, ctx.diags);
-				if (er) draft.raw.task = er.text;
+				if (p.name.text === "task") {
+					const er = eraseStringish(ctx.sf, ctx.file, p.initializer, undefined, ctx.phases, ctx.diags);
+					if (er) {
+						draft.raw.task = er.text;
+						for (const dep of er.deps) draft.dependsOn.add(dep);
+					}
 			}
 		}
 	}

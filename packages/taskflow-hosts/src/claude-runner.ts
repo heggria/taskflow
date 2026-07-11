@@ -47,6 +47,7 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { filteredChildEnv } from "./child-env.ts";
 
 /** The Claude tools a read-only phase may use. `Bash` is excluded — Claude has
  *  no read-only shell (unlike codex's read-only OS sandbox, which still allows
@@ -138,6 +139,7 @@ export interface ClaudeAccumulator {
 	fatalError?: string;
 	/** True once the authoritative `result` event has been folded. */
 	sawResult: boolean;
+	terminalSeen?: boolean;
 }
 
 export function newClaudeAccumulator(model?: string): ClaudeAccumulator {
@@ -226,6 +228,7 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 		}
 	} else if (event.type === "result") {
 		acc.sawResult = true;
+		acc.terminalSeen = true;
 		const u = event.usage;
 		if (u) {
 			const prev = acc.usage.contextTokens;
@@ -310,18 +313,7 @@ export function claudeUnsafeBypassEnabled(env: NodeJS.ProcessEnv = process.env):
  * Provider-specific credentials are retained so API-key, Bedrock, Vertex, and
  * Foundry authentication continue to work; unrelated secrets are omitted. */
 export function claudeChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-	const filtered: NodeJS.ProcessEnv = {};
-	for (const [key, value] of Object.entries(source)) {
-		if (value === undefined) continue;
-		const normalized = key.toUpperCase();
-		if (
-			CLAUDE_ENV_KEYS.has(normalized) ||
-			CLAUDE_ENV_PREFIXES.some((prefix) => normalized.startsWith(prefix))
-		) {
-			filtered[key] = value;
-		}
-	}
-	return filtered;
+	return filteredChildEnv(source, [...CLAUDE_ENV_KEYS], CLAUDE_ENV_PREFIXES);
 }
 
 /** Resolve a modelRoles/pi model id for `claude --model`, or `undefined` to let
@@ -435,6 +427,8 @@ export async function runClaudeAgentTask(
 		env: claudeChildEnv(),
 		acc: newClaudeAccumulator(model),
 		foldLine: foldClaudeEventLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "Claude result",
 	});
 }
 

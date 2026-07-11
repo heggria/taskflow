@@ -72,7 +72,19 @@ export function emitScript(
 			}
 		}
 	}
-	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases, { allowKeys: new Set(["input"]) });
+	if (optsArg && ts.isObjectLiteralExpression(optsArg)) {
+		for (const property of optsArg.properties) {
+			if (!ts.isPropertyAssignment(property)) continue;
+			const key = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : undefined;
+			if (key !== "input") continue;
+			const erased = eraseStringish(ctx.sf, ctx.file, property.initializer, itemParam, ctx.phases, ctx.diags);
+			if (erased) {
+				opts.input = erased.text;
+				for (const dep of erased.deps) draft.dependsOn.add(dep);
+			}
+		}
+	}
 	if (typeof opts.id === "string") draft.id = opts.id;
 	else draft.id = phaseIdFromBinding(idBase, opts);
 	Object.assign(draft.raw, opts);

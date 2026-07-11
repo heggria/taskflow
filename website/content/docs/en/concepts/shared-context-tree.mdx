@@ -7,6 +7,10 @@ Imagine a security audit flow: ten parallel subagents review ten different files
 
 taskflow solves both problems with the Shared Context Tree.
 
+> **0.2.0 host scope:** `ctx_*` tools are injected by `pi-taskflow`. Codex,
+> Claude, OpenCode, and Grok runners do not expose them yet, so `shareContext`
+> is not portable to those hosts in this release.
+
 ## Two problems, one substrate
 
 The Shared Context Tree is the IPC layer that lets isolated subagent processes cooperate while preserving the context isolation guarantee (intermediate transcripts never enter your conversation). It solves two distinct problems:

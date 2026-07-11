@@ -224,6 +224,43 @@ test("FileTraceSink: creates missing parent dir on first flush (MCP constructs s
 	fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("FileTraceSink: a failed flush retains its batch for retry", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "trace-retry-"));
+	const blocked = path.join(root, "blocked");
+	fs.writeFileSync(blocked, "not-a-directory");
+	const file = path.join(blocked, "run.trace.jsonl");
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 1, runId: "r", phaseId: "p", kind: "phase-start" });
+	assert.doesNotThrow(() => sink.flush("p"));
+	fs.unlinkSync(blocked);
+	fs.mkdirSync(blocked);
+	sink.flush("p");
+	assert.deepEqual(readTrace(file).map((event) => event.kind), ["phase-start"]);
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("trace: records every retry attempt with independent usage", async () => {
+	const events: TraceEvent[] = [];
+	const sink: TraceSink = { emit: (event) => events.push(event), flush: () => {} };
+	let calls = 0;
+	const def: Taskflow = {
+		name: "trace-retries",
+		phases: [{ id: "p", type: "agent", task: "work", retry: { max: 2, backoffMs: 0 }, final: true }],
+	};
+	const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => {
+		calls++;
+		return {
+			agent, task, exitCode: calls < 3 ? 1 : 0, output: calls < 3 ? "" : "ok", stderr: "",
+			usage: { ...emptyUsage(), output: calls }, stopReason: calls < 3 ? "error" : "end",
+			errorMessage: calls < 3 ? "hard failure" : undefined,
+		};
+	};
+	await executeTaskflow(mkState(def), baseDeps(runTask, sink));
+	const attempts = events.filter((event) => event.kind === "subagent-call");
+	assert.deepEqual(attempts.map((event) => event.input?.attempt), [0, 1, 2]);
+	assert.deepEqual(attempts.map((event) => event.output?.usage?.output), [1, 2, 3]);
+});
+
 // ─── decision events: gate verdict + unreplayable marker ─────────────────────
 
 test("trace: a gate phase emits a gate-verdict decision event", async () => {

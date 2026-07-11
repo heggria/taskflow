@@ -158,6 +158,32 @@ jobs:
           publish_one claude-taskflow
           publish_one opencode-taskflow
           publish_one grok-taskflow
+
+          # A successful publish command is not sufficient: registry metadata,
+          # provenance, and tarball bytes can become visible at different times.
+          # Verify every package after the full set is published, retrying only for
+          # bounded npm propagation delay.
+          verify_one() {
+            local pkg="$1"
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if node scripts/verify-published-package.mjs "packages/$pkg"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 6 ]; then sleep $((attempt * 5)); fi
+            done
+            echo "::error::Post-publish verification failed for $pkg"
+            return 1
+          }
+          verify_one taskflow-core
+          verify_one taskflow-mcp-core
+          verify_one taskflow-hosts
+          verify_one taskflow-dsl
+          verify_one pi-taskflow
+          verify_one codex-taskflow
+          verify_one claude-taskflow
+          verify_one opencode-taskflow
+          verify_one grok-taskflow
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TRUSTED_OWNERS: "heggria,muyun"

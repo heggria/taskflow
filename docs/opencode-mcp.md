@@ -76,13 +76,19 @@ injected via the `OPENCODE_CONFIG_CONTENT` env var. The runner maps each phase's
 tool whitelist the same way the codex runner maps to a sandbox mode:
 
 - **Read-only phase** (no `write`/`edit`/`bash` in the phase/agent `tools`) → a
-  permission policy that **denies** bash/write/edit is injected, so a denied
-  tool call is genuinely rejected. Every child also uses `--pure`, disabling
-  external plugins that execute outside the tool permission policy.
+  default-deny permission policy is injected: only the known read/list/search
+  built-ins are allowed, so inherited custom and MCP tools are denied too.
+  Every child also uses `--pure`, disabling external plugins that execute
+  outside the tool permission policy.
 - **Mutating phase** (or no whitelist) → rejected by default because OpenCode
   has no OS sandbox backstop. A trusted operator may explicitly set
   `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`; only then does the runner add `--auto`.
   Prefer a throwaway worktree (`cwd: "worktree"`).
+
+OpenCode children receive only platform/proxy/CA, OpenCode configuration, and
+supported provider environment variables; unrelated parent secrets are
+removed. Explicit task credentials can be added by name through the
+comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
 
 ## Model ids
 

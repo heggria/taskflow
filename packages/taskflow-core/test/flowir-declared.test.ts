@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compileTaskflowToIR } from "../src/flowir/index.ts";
+import { compileTaskflowToIR, translateTaskflow } from "../src/flowir/index.ts";
 import type { Phase, Taskflow } from "../src/schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -326,12 +326,18 @@ test("Sidecar round-trip: every previously-dropped Phase field is preserved", as
 		score: { target: "{steps.x}", scorers: [{ type: "contains", value: "ok" }], combine: "all" },
 		cache: { scope: "cross-run", ttl: "7d", fingerprint: ["git:HEAD"] },
 		shareContext: true,
+		cancelLosers: false,
+		expandMode: "graft",
+		maxNodes: 42,
 	} as Phase;
 	const f = flow([{ id: "x", type: "agent", task: "seed" } as Phase, everyField]);
 	const ir = await compileTaskflowToIR(f);
 	const sidecar = (ir.meta.sidecar as { phases: Record<string, Record<string, unknown>> }).phases["kitchen-sink"];
 	// The 8 previously-dropped fields must all survive the projection.
-	for (const previouslyDropped of ["agent", "run", "input", "timeout", "expect", "reflexion", "idempotent", "score"]) {
+	for (const previouslyDropped of [
+		"agent", "run", "input", "timeout", "expect", "reflexion", "idempotent", "score",
+		"cancelLosers", "expandMode", "maxNodes",
+	]) {
 		assert.ok(
 			previouslyDropped in sidecar,
 			`sidecar dropped '${previouslyDropped}' — SIDECAR_PHASE_FIELDS regression`,
@@ -342,4 +348,16 @@ test("Sidecar round-trip: every previously-dropped Phase field is preserved", as
 		if (key === "id" || key === "type" || key === "when") continue; // FlowIRNode carries these
 		assert.ok(key in sidecar, `sidecar dropped author field '${key}'`);
 	}
+});
+
+test("legacy FlowIR translation preserves race and expand controls", () => {
+	const f = flow([
+		{ id: "race", type: "race", branches: [{ task: "a" }, { task: "b" }], cancelLosers: false },
+		{ id: "expand", type: "expand", def: { name: "child", phases: [{ id: "x", task: "x" }] }, expandMode: "graft", maxNodes: 42 },
+	] as Phase[]);
+	const translated = translateTaskflow(f);
+	const phases = (translated.meta.sidecar as { phases: Record<string, Record<string, unknown>> }).phases;
+	assert.equal(phases.race.cancelLosers, false);
+	assert.equal(phases.expand.expandMode, "graft");
+	assert.equal(phases.expand.maxNodes, 42);
 });

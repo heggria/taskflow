@@ -149,6 +149,14 @@ tool_timeout_sec = 3600
 
 For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. (Resuming a paused run by `runId` is a Pi-only capability — `/tf resume`. On Codex there is no `taskflow_resume` MCP tool, so a paused run is continued by re-running the flow; phases with `cache.scope: "cross-run"` are reused automatically.)
 
+<Callout type="info">
+  Codex reports token usage but not cost. A Codex flow may use `budget.maxTokens`; any `budget.maxUSD` is rejected before execution. The budget is an observed-usage stop-loss, not a zero-overshoot maximum: ordinary calls are admitted serially, while active `race` branches may overshoot together.
+</Callout>
+
+<Callout type="info">
+  Every child uses `--ephemeral --ignore-user-config --ignore-rules` and clears `mcp_servers`, so unrelated parent MCP OAuth failures, plugins, and rules cannot change a phase. The child environment keeps platform/proxy/CA and Codex/OpenAI provider variables only. Add an intentional task variable by name with the comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
+</Callout>
+
 ## Inspect a run after the fact
 
 Every `taskflow_run` returns a `runId`. If something went wrong — a gate blocked, a phase produced odd output — you can inspect a single phase's stored output without re-running the whole flow:

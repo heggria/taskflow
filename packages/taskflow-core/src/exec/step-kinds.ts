@@ -20,7 +20,7 @@ import { verifyTaskflow } from "../verify.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
 import { evaluateCondition, interpolate, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
 import { clampSubFlowBudget, kernelAttemptsOverBudget } from "./kernel-policy.ts";
-import { abortableDelay, isTransientError, mapWithConcurrencyLimit } from "../runner-core.ts";
+import { abortableDelay, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
 import type { StepContext, StepResult } from "./step.ts";
@@ -52,10 +52,6 @@ function baseEvent(
 	};
 }
 
-function isFailedResult(r: RunResult): boolean {
-	return (r.exitCode ?? 0) !== 0 || !!r.errorMessage || r.stopReason === "error" || r.stopReason === "aborted";
-}
-
 async function runAgentCall(
 	ctx: StepContext,
 	phase: Phase,
@@ -75,23 +71,22 @@ async function runAgentCall(
 		if (ctx.deps.signal?.aborted) break;
 		let timedOut = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
 		let onParentAbort: (() => void) | undefined;
 		let callSignal: AbortSignal | undefined = ctx.deps.signal;
+		let timeoutController: AbortController | undefined;
 		if (phaseTimeoutMs) {
 			const ac = new AbortController();
+			timeoutController = ac;
 			callSignal = ac.signal;
 			if (ctx.deps.signal?.aborted) ac.abort();
 			else if (ctx.deps.signal) {
 				onParentAbort = () => ac.abort();
 				ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
 			}
-			timer = setTimeout(() => {
-				timedOut = true;
-				ac.abort();
-			}, phaseTimeoutMs);
 		}
 		try {
-			r = await ctx.deps.runTask(
+			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,
 				agentName,
@@ -99,8 +94,31 @@ async function runAgentCall(
 				{ model: phase.model, thinking: phase.thinking, tools: phase.tools, cwd: ctx.deps.cwd, signal: callSignal },
 				ctx.deps.globalThinking,
 			);
+			if (phaseTimeoutMs) {
+				const timeoutFallback = new Promise<RunResult>((resolve) => {
+					timer = setTimeout(() => {
+						timedOut = true;
+						timeoutController?.abort();
+						forceReturnTimer = setTimeout(() => resolve({
+							agent: agentName,
+							task,
+							exitCode: 1,
+							output: "",
+							stderr: "",
+							usage: emptyUsage(),
+							stopReason: "error",
+							errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
+							phaseTimeout: true,
+						}), PHASE_TIMEOUT_ABORT_GRACE_MS);
+					}, phaseTimeoutMs);
+				});
+				r = await Promise.race([invocation, timeoutFallback]);
+			} else {
+				r = await invocation;
+			}
 		} finally {
 			if (timer) clearTimeout(timer);
+			if (forceReturnTimer) clearTimeout(forceReturnTimer);
 			if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
 		}
 		if (timedOut) {

@@ -16,9 +16,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	isFailed,
 	runSubagentProcess,
 	unknownAgentResult,
 	DEFAULT_IDLE_TIMEOUT_MS,
+	MAX_STDOUT_LINE_BYTES,
 	type SubagentAccumulator,
 } from "../src/runner-core.ts";
 import type { LiveUpdate } from "../src/host/runner-types.ts";
@@ -37,6 +39,10 @@ const foldLine = (acc: SubagentAccumulator, line: string): LiveUpdate | null => 
 	acc.lastActivity = acc.finalText;
 	return { text: acc.lastActivity, usage: { ...acc.usage }, model: undefined };
 };
+
+test("isFailed: an errorMessage cannot be treated as success", () => {
+	assert.equal(isFailed({ agent: "a", task: "t", exitCode: 0, output: "partial", stderr: "", usage: makeAcc().usage, errorMessage: "transport failed" }), true);
+});
 
 /** Spawn a `node -e <script>` child as the subagent, with our shared foldLine. */
 function run(script: string, opts: { idleTimeoutMs?: number; signal?: AbortSignal } = {}) {
@@ -158,17 +164,64 @@ test("runSubagentProcess: removes the abort listener after a child exits", async
 	assert.equal(removed, 1, "completed child must not retain a listener on a long-lived run signal");
 });
 
-test("runSubagentProcess: a throwing foldLine is swallowed (fail-open), run still completes", async () => {
-	// The MI-04 backstop: a foldLine that throws must not crash the host process.
+test("runSubagentProcess: a throwing foldLine fails closed without crashing the host", async () => {
 	const throwingFold = (): LiveUpdate | null => { throw new Error("parser boom"); };
 	const r = await runSubagentProcess({
 		agent: "test", task: "t", model: undefined,
-		bin: "node", args: ["-e", `process.stdout.write("hello\\n");`], cwd: process.cwd(),
+		bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({hello:true})+"\\n");`], cwd: process.cwd(),
 		acc: makeAcc(), foldLine: throwingFold,
 	});
-	// The throwing line is skipped; the process still exits 0 → 'end', not a crash.
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.stopReason, "error");
+	assert.match(r.errorMessage ?? "", /parser failed.*parser boom/i);
+});
+
+test("runSubagentProcess: malformed or truncated stdout fails closed", async () => {
+	const r = await run(`process.stdout.write('{"type":"result"');`);
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.stopReason, "error");
+	assert.match(r.errorMessage ?? "", /malformed|truncated/i);
+});
+
+test("runSubagentProcess: zero exit without a final answer is a transport failure", async () => {
+	const r = await runSubagentProcess({
+		agent: "test", task: "t", model: undefined,
+		bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({type:"heartbeat"})+"\\n");`], cwd: process.cwd(),
+		acc: makeAcc(), foldLine: () => null,
+	});
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.stopReason, "error");
+	assert.match(r.errorMessage ?? "", /without a final output/i);
+});
+
+test("runSubagentProcess: partial answer without a required terminal event fails closed", async () => {
+	const r = await runSubagentProcess({
+		agent: "test", task: "t", model: undefined,
+		bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({answer:"partial"})+"\\n");`], cwd: process.cwd(),
+		acc: makeAcc(), foldLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "test done",
+	});
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.stopReason, "error");
+	assert.match(r.errorMessage ?? "", /before test done/i);
+});
+
+test("runSubagentProcess: unterminated stdout retention is bounded", async () => {
+	const r = await run(`process.stdout.write("x".repeat(${MAX_STDOUT_LINE_BYTES + 4096})); setInterval(()=>{},1000);`, {
+		idleTimeoutMs: 60_000,
+	});
+	assert.equal(r.exitCode, 1);
+	assert.match(r.errorMessage ?? "", /unterminated stdout record/i);
+});
+
+test("runSubagentProcess: stderr activity resets the idle watchdog", async () => {
+	const r = await run(`
+		let n=0;
+		const t=setInterval(()=>{ process.stderr.write("working\\n"); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({done:true})+"\\n"); } }, 60);
+	`, { idleTimeoutMs: 100 });
 	assert.equal(r.exitCode, 0);
-	assert.equal(r.stopReason, "end");
+	assert.equal(r.idleTimeout, undefined);
 });
 
 test("runSubagentProcess: a throwing onLive callback is swallowed (fail-open)", async () => {
@@ -195,7 +248,7 @@ test("runSubagentProcess: fatalError in the accumulator wins as error", async ()
 	const acc = makeAcc();
 	const r = await runSubagentProcess({
 		agent: "test", task: "t", model: undefined,
-		bin: "node", args: ["-e", `process.stdout.write("ok\\n");`], cwd: process.cwd(),
+		bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({ok:true})+"\\n");`], cwd: process.cwd(),
 		acc,
 		foldLine: (a) => { a.fatalError = "synthetic fatal"; return null; },
 	});
@@ -234,7 +287,7 @@ test("runSubagentProcess: PI_TASKFLOW_RUN_LOG emits a structured header to STDER
 		process.stdout.write = ((chunk: any) => { stdoutChunks.push(String(chunk)); return true; }) as any;
 		await runSubagentProcess({
 			agent: "executor", task: "t", model: "gpt-5.5",
-			bin: "node", args: ["-e", `process.stdout.write("ok\\n");`], cwd: process.cwd(),
+			bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({ok:true})+"\\n");`], cwd: process.cwd(),
 			acc: makeAcc(), foldLine,
 		});
 	} finally {
@@ -258,7 +311,7 @@ test("runSubagentProcess: no PI_TASKFLOW_RUN_LOG → no header written (default-
 		process.stderr.write = ((chunk: any) => { stderrChunks.push(String(chunk)); return true; }) as any;
 		await runSubagentProcess({
 			agent: "executor", task: "t", model: undefined,
-			bin: "node", args: ["-e", `process.stdout.write("ok\\n");`], cwd: process.cwd(),
+			bin: "node", args: ["-e", `process.stdout.write(JSON.stringify({ok:true})+"\\n");`], cwd: process.cwd(),
 			acc: makeAcc(), foldLine,
 		});
 	} finally {

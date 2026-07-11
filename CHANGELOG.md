@@ -22,6 +22,19 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
 
 ### Fixed
+- **Budget wording now matches the runtime contract.** User-facing docs, skills,
+  and FlowIR comments describe `budget` as an observed-usage stop-loss: after a
+  threshold is observed, no new call starts, while calls already in flight may
+  overshoot. Ordinary DAG layers and map/parallel/tournament fan-out use serial
+  admission, limiting new-call overshoot to one call; `race` necessarily admits
+  its competing branches together, so its already-active branches may all
+  contribute overshoot. Host limits are explicit: Codex rejects `maxUSD` but
+  accepts `maxTokens`; Grok rejects every budget because it reports no usage.
+- **DSL erase closes remaining dynamic-field gaps.** `map` callback aliases must
+  match explicit `as`, tournament task/branch templates contribute DAG edges,
+  and templated `approval.request` / `script.input` preserve placeholders and
+  dependencies. Invalid or malformed `tsconfig.json` now fails `check` instead
+  of being silently ignored; decompile topology preserves implicit final output.
 - **TypeScript DSL decompile now orders dependencies before consumers.** Valid
   Taskflow JSON may list phases in any order; generated rune bindings now use a
   stable topological order, so forward-reference gates/reducers rebuild instead
@@ -58,6 +71,20 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   host's global reasoning configuration.
 
 ### Security
+- **Host children no longer inherit ambient authority.** Codex subagents are
+  ephemeral, ignore parent user config/rules, and clear unrelated MCP servers;
+  OpenCode read-only phases use a default-deny policy covering custom/MCP tools;
+  Codex, OpenCode, and Grok receive filtered provider/runtime environments.
+  Operators can explicitly pass named task variables with
+  `PI_TASKFLOW_CHILD_ENV_ALLOW`.
+- **Published surfaces are verified as consumers receive them.** Packed
+  manifests strip source-only `development` exports, declaration imports are
+  typechecked, internal dependencies are exact, and the OpenCode tarball now
+  includes its config/skill/assets scaffold. Publish reruns verify all nine
+  registry artifacts after mutation, not only versions that existed before it.
+- **MCP trace responses are bounded.** Human and JSON trace views cap event
+  counts and oversized strings; JSON reports total/returned/truncated instead
+  of flooding the host context with an unbounded transcript.
 - **DSL output writes are contained, no-clobber, and atomic.** `build`,
   `decompile`, and `new` reject symlink escapes, preserve existing files unless
   `--force` is explicit, and commit fsynced same-directory temporary files

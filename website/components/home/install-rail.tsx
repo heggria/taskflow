@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 export type HostId = "pi" | "codex" | "claude" | "opencode" | "grok";
 
@@ -96,9 +97,9 @@ export function InstallRail({
 					<button type="button" className="install-rail__copy" onClick={onCopy}>
 						{copied ? labels.copied : labels.copy}
 					</button>
-					<a className="install-rail__guide" href={`/${lang}${current.guide}`}>
+					<Link className="install-rail__guide" href={`/${lang}${current.guide}`}>
 						{labels.guide}
-					</a>
+					</Link>
 				</div>
 			</div>
 		</div>

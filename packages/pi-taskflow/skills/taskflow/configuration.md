@@ -229,6 +229,10 @@ Notes:
   Omit it to request the host's default capability policy.
 - Each phase runs as an isolated process:
   `pi --mode json -p --no-session [--model …] [--thinking …] [--tools …] [--append-system-prompt <agent>] "Task: …"`.
+
+For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+task-specific environment variables by listing their names in the
+comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -368,6 +372,7 @@ Each entry is one of:
 |----------|--------|
 | `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
 | `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
+| `PI_TASKFLOW_CHILD_ENV_ALLOW` | Comma-separated names of extra task-specific environment variables to pass intentionally to Codex/OpenCode/Grok children. Unlisted application secrets are removed. |
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
 | `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting known mutating tools to use narrow `--tools` + `bypassPermissions`; unknown names always fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |

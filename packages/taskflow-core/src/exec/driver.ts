@@ -7,7 +7,7 @@
  */
 
 import type { RunState } from "../store.ts";
-import { dependenciesOf, resolveArgs, topoLayers, type Phase, type Taskflow } from "../schema.ts";
+import { dependenciesOf, resolveArgs, topoLayers, type Budget, type Phase, type Taskflow } from "../schema.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
 import { overBudget as overBudgetCheck } from "../deterministic.ts";
@@ -41,7 +41,7 @@ export interface EventKernelDeps {
 	runTask: RunTaskFn;
 	signal?: AbortSignal;
 	globalThinking?: string;
-	usageAccounting?: "available" | "unavailable";
+	usageAccounting?: "available" | "tokens-only" | "unavailable";
 	trace?: TraceSink;
 	persist?: (state: RunState) => void;
 	onProgress?: (state: RunState) => void;
@@ -63,6 +63,7 @@ export function canUseEventKernel(
 	def: Taskflow,
 	loadFlow?: (name: string) => Taskflow | undefined,
 	seen: Set<string> = new Set(),
+	inheritedBudget?: Budget,
 ): boolean {
 	if (seen.has(def.name)) return false;
 	const nextSeen = new Set(seen).add(def.name);
@@ -71,7 +72,13 @@ export function canUseEventKernel(
 		return (EVENT_KERNEL_PHASE_TYPES as readonly string[]).includes(t);
 	});
 	if (!typesOk) return false;
-	if (kernelUnsupportedReason(def) !== undefined) return false;
+	// A parent run-wide budget also governs every nested call. Admission must
+	// evaluate the child with that inherited ceiling; otherwise a parent whose
+	// only phase is `flow` can smuggle a budgeted map/parallel/loop/tournament
+	// into the kernel and fail only after execution has already started.
+	const effectiveBudget = def.budget ?? inheritedBudget;
+	const effectiveDef = effectiveBudget === def.budget ? def : { ...def, budget: effectiveBudget };
+	if (kernelUnsupportedReason(effectiveDef) !== undefined) return false;
 	for (const phase of def.phases ?? []) {
 		if ((phase.type ?? "agent") !== "flow") continue;
 		let child: Taskflow | undefined;
@@ -95,7 +102,7 @@ export function canUseEventKernel(
 		} else if (phase.use && loadFlow) {
 			child = loadFlow(phase.use);
 		}
-		if (!child || !canUseEventKernel(child, loadFlow, nextSeen)) return false;
+		if (!child || !canUseEventKernel(child, loadFlow, nextSeen, effectiveBudget)) return false;
 	}
 	return true;
 }
@@ -195,6 +202,13 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				events: [],
 				blocked: false,
 			};
+		}
+		const effectiveBudget = opts.def.budget ?? def.budget;
+		if (deps.usageAccounting === "tokens-only" && effectiveBudget?.maxUSD !== undefined) {
+			throw new Error(
+				"This host reports tokens but not cost, so budget.maxUSD cannot be enforced. " +
+					"Use budget.maxTokens or a host with cost accounting.",
+			);
 		}
 		const parentSpent = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 		const effectiveDef = clampSubFlowBudget(opts.def, def.budget, parentSpent);
@@ -335,6 +349,11 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				attempts: result.attempts,
 				gate: result.gate,
 				approval: result.approval,
+				warnings: result.warnings,
+				// Match the imperative audit marker: an idempotent:false phase
+				// records that its side effect may have fired, unless its guard skipped
+				// all execution.
+				...(phase.idempotent === false && result.status !== "skipped" ? { sideEffect: true as const } : {}),
 				...(result.status === "timedOut" ? { timedOut: true as const } : {}),
 			};
 			if (result.status === "done" && result.output !== undefined) {

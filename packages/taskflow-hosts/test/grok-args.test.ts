@@ -11,6 +11,7 @@ import {
 	GROK_MUTATING_SANDBOX_PROFILE_ENV,
 	GROK_READONLY_SANDBOX_PROFILE_ENV,
 	grokBin,
+	grokChildEnv,
 	permissionArgsForGrokTools,
 	resolveGrokMutatingSandboxProfile,
 	resolveGrokReadOnlySandboxProfile,
@@ -32,6 +33,19 @@ test("grok bin: defaults to `grok`, honours PI_TASKFLOW_GROK_BIN override", () =
 		if (prev === undefined) delete process.env.PI_TASKFLOW_GROK_BIN;
 		else process.env.PI_TASKFLOW_GROK_BIN = prev;
 	}
+});
+
+test("grok env: keeps host credentials/config and drops unrelated secrets", () => {
+	const env = grokChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		XAI_API_KEY: "provider",
+		PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE: "safe",
+		DATABASE_URL: "secret",
+	});
+	assert.equal(env.XAI_API_KEY, "provider");
+	assert.equal(env.PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE, "safe");
+	assert.equal(env.DATABASE_URL, undefined);
 });
 
 // --- permission mapping -----------------------------------------------------

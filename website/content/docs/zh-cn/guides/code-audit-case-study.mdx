@@ -310,7 +310,7 @@ gate 如何决策：
 
 ### 预算
 
-`budget: { maxUSD: 3.0 }` 是一个运行级的上限。如果累计成本超过它，运行时会停止运行并跳过剩余阶段——你绝不会收到一张意外的账单。对于一个 47 文件的审查、用强模型，3 美元很宽裕；用便宜的 `fast` 角色模型快速重跑，0.50 美元可能就够。按仓库调整，并记住 gate 在报告*之前*运行，所以一个 `BLOCK` 判约会省下报告的 token。
+`budget: { maxUSD: 3.0 }` 是基于已上报用量的运行级止损线。观察到累计成本越线后，运行时不再准入新调用并跳过剩余阶段。已经活动的调用仍可能超支，因此它限制的是失控花费，并不保证账单最多 3 美元。请按仓库调整，并记住 gate 在报告*之前*运行，所以一个 `BLOCK` 判约会省下报告的 token。
 
 ### 缓存
 
@@ -347,7 +347,7 @@ gate 如何决策：
     跨运行记忆化、指纹，以及 `why-stale` / `recompute` 工具。
   </Card>
   <Card title="预算" href="/zh-cn/docs/syntax/budget">
-    运行级成本上限，以及 `BLOCK` 判决如何省下下游 token。
+    基于已上报用量的运行级止损线，以及 `BLOCK` 判决如何省下下游 token。
   </Card>
   <Card title="控制流" href="/zh-cn/docs/syntax/control-flow">
     `dependsOn`、`join`、`when` 和 `retry`——塑造 DAG 的字段。

@@ -43,14 +43,19 @@
     "opencode-taskflow-mcp": "./dist/mcp/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "plugin"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs opencode-taskflow",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./mcp/server": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" }
+    }
   },
   "dependencies": {
     "taskflow-core": "workspace:*",

@@ -9,6 +9,14 @@ on:
       - 'README.md'
       - 'README.zh-CN.md'
       - 'docs/**'
+      - 'packages/taskflow-core/**'
+      - 'packages/taskflow-dsl/**'
+      - 'skills-src/**'
+      - 'scripts/build-skills.mjs'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'tsconfig*.json'
       - '.github/workflows/deploy-website.yml'
   workflow_dispatch:
 

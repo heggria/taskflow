@@ -50,6 +50,7 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { filteredChildEnv } from "./child-env.ts";
 
 /**
  * Grok built-in tool ids a read-only phase may use. Web ids are deliberately
@@ -94,6 +95,7 @@ export interface GrokAccumulator {
 	stopReason?: string;
 	/** sessionId from the terminal `end` event (useful for resume diagnostics). */
 	sessionId?: string;
+	terminalSeen?: boolean;
 }
 
 export function newGrokAccumulator(model?: string): GrokAccumulator {
@@ -132,6 +134,7 @@ export function foldGrokEventLine(acc: GrokAccumulator, line: string): LiveUpdat
 			break;
 		}
 		case "end": {
+			acc.terminalSeen = true;
 			if (typeof event.stopReason === "string") acc.stopReason = event.stopReason;
 			if (typeof event.sessionId === "string") acc.sessionId = event.sessionId;
 			// Some builds may put the full text on the end event as a convenience.
@@ -172,6 +175,10 @@ export function foldGrokEventLine(acc: GrokAccumulator, line: string): LiveUpdat
 /** Override the grok binary (tests / unusual installs). */
 export function grokBin(): string {
 	return process.env.PI_TASKFLOW_GROK_BIN || "grok";
+}
+
+export function grokChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return filteredChildEnv(source, [], ["GROK_", "XAI_", "PI_TASKFLOW_GROK_"]);
 }
 
 /**
@@ -382,12 +389,15 @@ export async function runGrokAgentTask(
 		model,
 		bin: grokBin(),
 		args,
+		env: grokChildEnv(),
 		cwd,
 		idleTimeoutMs: opts.idleTimeoutMs,
 		signal: opts.signal,
 		onLive: opts.onLive,
 		acc: newGrokAccumulator(model),
 		foldLine: foldGrokEventLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "Grok end",
 	});
 }
 

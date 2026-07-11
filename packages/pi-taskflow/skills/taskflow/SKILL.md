@@ -58,7 +58,7 @@ task deserves level 3 — the higher levels are where taskflow pays for itself.
 | 0 | shorthand `task` / `tasks` / `chain` | one-off delegation, simple sequence |
 | 1 | linear DAG with `dependsOn` | fixed steps, each consuming the last |
 | 2 | discover → `map` fan-out → `gate` → `reduce` | many items, needs review before reporting |
-| 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost-capped, fails precisely |
+| 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost stop-loss, fails precisely |
 | 4 | + `loop`, `tournament`, `flow{def}` / `expand`, `race` | the work itself is discovered at runtime; one shot is unreliable; try parallel approaches and keep the first win |
 | 5 | + `incremental: true`, `cache.fingerprint` | the flow re-runs as the repo changes; only re-pay for what changed |
 
@@ -508,11 +508,15 @@ phases array, or interpolated `{steps.plan.json}`). Two modes:
 }
 ```
 
-### Budget (cost / token caps)
+### Budget (observed-usage stop-loss)
 
-Add a run-wide ceiling at the top level. When accumulated cost/tokens exceed it,
-remaining phases are skipped (and an in-flight `map`/`parallel` stops spawning
-new items); the run ends as `blocked` with partial outputs preserved.
+Add a run-wide stop-loss at the top level. Ordinary budgeted DAG layers and
+`map`/`parallel`/`tournament` fan-out use serial call admission. Once reported
+cost/tokens exceed the threshold, no new model call is started; the run ends as
+`blocked` with partial outputs preserved. An admitted call may cross the
+threshold. A `race` necessarily starts competing branches together, so all
+already-active race branches may contribute overshoot. This is never a
+zero-overshoot guarantee.
 
 ```jsonc
 { "name": "...", "budget": { "maxUSD": 1.50, "maxTokens": 2000000 }, "phases": [ ... ] }
@@ -520,6 +524,10 @@ new items); the run ends as `blocked` with partial outputs preserved.
 
 **Any flow with a fan-out should have a `budget`** — a map over a
 mis-discovered 500-item array is otherwise unbounded spend.
+
+Host accounting matters: Codex reports tokens but not cost, so Codex accepts
+`maxTokens` and rejects `maxUSD`. Grok 0.2.93 reports neither and rejects every
+flow declaring `budget`. Pi, Claude Code, and OpenCode accept both dimensions.
 
 ### Strict interpolation
 

@@ -56,7 +56,7 @@ grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 
 **A `workflow` flows. A `taskflow` is a *graph*.** Other orchestrators let the model *script* the work — imperative code that flows step by step, with the graph hidden inside control flow. `taskflow` does the opposite: you **declare** the work as a graph of discrete, named **task** nodes connected by `dependsOn` edges — and the runtime *verifies that graph before it spends a single token.*
 
-You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex, Claude Code, OpenCode, and Grok Build you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and a hard spend ceiling.
+You already know your agent's built-in subagent shorthand — `task` / `tasks` / `chain`. `taskflow` speaks the *same* shorthand — so your existing delegations instantly become **tracked, resumable, and saveable by name** (on Pi, a saved flow becomes a one-word `/tf:<name>` command; on Codex, Claude Code, OpenCode, and Grok Build you run it by name through `taskflow_run`). When you outgrow the shorthand, the full DSL gives you a real DAG: dynamic fan-out over dozens of items, conditional routing, quality gates, human approvals, retries, loops, tournaments, and an observed-usage budget stop-loss.
 
 And the whole time, **only the final phase reaches your conversation.** Every intermediate transcript stays in the runtime, never your context window.
 
@@ -99,7 +99,7 @@ Here's the wall you hit with raw subagents: you describe a multi-step plan in pr
 | **Conditional routing** | ✗ | **`when` guards + `join: any` OR-joins** |
 | **Fault tolerance** | ✗ | **per-phase `retry` + auto-retry on transient errors** |
 | **Human-in-the-loop** | ✗ | **`approval` phases (approve / reject / edit)** |
-| **Cost control** | ✗ | **run-wide `budget` (USD / token caps)** |
+| **Cost control** | ✗ | **run-wide observed-usage `budget` stop-losses (USD / tokens)** |
 | **Composition** | ✗ | **`flow` phases run saved *or runtime-generated* sub-flows** |
 | **Iterative loops** | ✗ | **`loop` phases — repeat until condition, convergence, or cap** |
 | **Competitive selection** | ✗ | **`tournament` phases — N variants + judge** |
@@ -255,7 +255,7 @@ grok plugin enable taskflow
 grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
 ```
 
-A public Grok plugin marketplace/source is not published yet; do not substitute a placeholder source. Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session. Mutating or omitted-tool phases require the custom profile above because Grok's built-in profiles may fail open when kernel enforcement is unavailable. Grok 0.2.93 does not report usage, so budgeted flows fail closed; use Pi, Codex, Claude Code, or OpenCode when a hard spend ceiling is required. See the [Grok Build guide](./docs/grok-mcp.md).
+A public Grok plugin marketplace/source is not published yet; do not substitute a placeholder source. Each phase's subagent runs as an isolated `grok -p --output-format streaming-json` session. Mutating or omitted-tool phases require the custom profile above because Grok's built-in profiles may fail open when kernel enforcement is unavailable. Grok 0.2.93 does not report usage, so it rejects every flow that declares `budget`. Codex reports tokens but not cost, so it accepts `maxTokens` and rejects `maxUSD`; Pi, Claude Code, and OpenCode can enforce both dimensions as observed-usage stop-losses. See the [Grok Build guide](./docs/grok-mcp.md).
 
 ### The shorthand (same shape as the built-in tool)
 
@@ -345,7 +345,7 @@ The shorthand is your onramp. The DSL is where `taskflow` earns its keep — dyn
 
 The intermediate summaries never enter your context. The runtime owns them; you get the report. **Save it once → `/tf:summarize-files dir=src` forever.**
 
-### Route, gate, retry, approve, and cap the spend
+### Route, gate, retry, approve, and stop runaway spend
 
 ```jsonc
 {
@@ -369,7 +369,7 @@ The intermediate summaries never enter your context. The runtime owns them; you 
 
 - **`when`** routes to `deep` *or* `quick` from the triage JSON — the other branch is skipped.
 - **`join: "any"`** lets `approve` fire the moment whichever branch ran completes (an OR-join).
-- **`retry`** re-runs a flaky patch with backoff; **`budget`** halts the whole run if it gets too expensive.
+- **`retry`** re-runs a flaky patch with backoff; **`budget`** stops admitting new calls after reported usage crosses the threshold. A call already in flight may overshoot it.
 - **`approval`** pauses for a human (approve / reject / edit) before the final `ship`.
 
 No scripting. No JavaScript `eval`. Just data the runtime executes — safe enough to run LLM-generated definitions directly.
@@ -472,6 +472,10 @@ Every phase needs a unique `id` and a `type` (defaults to `agent`). On top of th
 Flow-level keys: `name`, `description`, `args`, `concurrency` (default 8), `agentScope`, `contextSharing`, `strictInterpolation`, and `budget: { maxUSD?, maxTokens? }`.
 
 ### Shared Context Tree (blackboard + supervision)
+
+> **Host scope in 0.2.0:** `ctx_read` / `ctx_write` / `ctx_report` /
+> `ctx_spawn` tool injection is available through `pi-taskflow`. The Codex,
+> Claude, OpenCode, and Grok runners do not inject these tools yet.
 
 By default subagents are fully isolated — they share nothing and only return a
 final string. Opt a phase in with `shareContext: true` (or `contextSharing: true`

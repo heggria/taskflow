@@ -138,8 +138,22 @@ try {
 	for (const name of packageNames) {
 		const manifest = packedManifest(name);
 		assert.equal(manifest.version, expectedVersion, `${name} installed at the wrong version`);
-		for (const range of Object.values(manifest.dependencies ?? {})) {
+		for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
 			assert.doesNotMatch(range, /^workspace:/, `${name} tarball leaked a workspace dependency`);
+			if (packageNames.includes(dependency)) {
+				assert.equal(range, expectedVersion, `${name} must pin internal dependency ${dependency} exactly`);
+			}
+		}
+		assert.equal(
+			JSON.stringify(manifest.exports ?? {}).includes('"development"'),
+			false,
+			`${name} published exports must not retain source-only development conditions`,
+		);
+		for (const target of exportTargets(manifest.exports, "types")) {
+			assertExportTargetShips(name, target, "TypeScript declaration");
+		}
+		for (const target of exportTargets(manifest.exports, "default")) {
+			assertExportTargetShips(name, target, "runtime export");
 		}
 		const installedEntries = Object.entries(lock.packages ?? {}).filter(([location]) =>
 			location === `node_modules/${name}` || location.endsWith(`/node_modules/${name}`),
@@ -187,6 +201,22 @@ try {
 		cwd: consumerDir,
 	}).trim();
 	assert.equal(dslVersion, expectedVersion, "taskflow-dsl executable reported the wrong version");
+	writeFileSync(join(consumerDir, "types-smoke.ts"), `${publicImports.map((specifier) => `import ${JSON.stringify(specifier)};`).join("\n")}\n`);
+	run(
+		join(consumerDir, "node_modules", ".bin", "tsc"),
+		["--noEmit", "--skipLibCheck", "--module", "NodeNext", "--moduleResolution", "NodeNext", "types-smoke.ts"],
+		{ cwd: consumerDir },
+	);
+	for (const required of [
+		"plugin/opencode.json",
+		"plugin/skills/taskflow/SKILL.md",
+		"plugin/assets/taskflow.svg",
+	]) {
+		assert.ok(
+			readFileSync(join(consumerDir, "node_modules", "opencode-taskflow", required), "utf8").length > 0,
+			`opencode-taskflow tarball is missing ${required}`,
+		);
+	}
 	for (const binName of ["codex-taskflow-mcp", "claude-taskflow-mcp", "opencode-taskflow-mcp", "grok-taskflow-mcp"]) {
 		smokeMcpBin(binName);
 	}
@@ -196,4 +226,22 @@ try {
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });
+}
+
+function exportTargets(exportsValue, condition) {
+	const targets = [];
+	for (const entry of Object.values(exportsValue ?? {})) {
+		if (entry && typeof entry === "object" && typeof entry[condition] === "string") targets.push(entry[condition]);
+	}
+	return targets;
+}
+
+function assertExportTargetShips(packageName, target, label) {
+	const packageRoot = join(consumerDir, "node_modules", packageName);
+	if (target.includes("*")) {
+		const pattern = target.replace(/^\.\//, "").replaceAll("*", "**/*");
+		assert.ok(globSync(pattern, { cwd: packageRoot }).length > 0, `${packageName} ${label} pattern ships no files: ${target}`);
+		return;
+	}
+	assert.ok(readFileSync(join(packageRoot, target), "utf8").length >= 0, `${packageName} is missing ${label}: ${target}`);
 }

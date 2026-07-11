@@ -21,7 +21,7 @@ Qwik 的 "not replayable" 指 hydration 不重执行，与 taskflow 无关。这
 - `subagent-call` — 解析后的任务文本 + 完整输出 + usage
 - `decision` — gate 裁决/分数、when-guard、cache-hit、budget-hit、tournament-winner、unreplayable
 
-用 `/tf trace <runId>`（Pi）或 `taskflow_trace`（MCP）查看；`json: true` 返回完整机器可读记录。
+用 `/tf trace <runId>`（Pi）或 `taskflow_trace`（MCP）查看；`json: true` 返回有上限的机器可读 envelope，`total`、`returned`、`truncated` 会明确标出截断状态，`limit` 最多选择最新 1,000 个事件。
 
 ## 离线重放
 

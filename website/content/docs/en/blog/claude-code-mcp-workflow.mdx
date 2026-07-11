@@ -1,9 +1,9 @@
 ---
 title: "Claude Code + MCP: a workflow that gates itself"
-description: Run a taskflow MCP server inside Claude Code to get declarative task graphs with quality gates, budget caps, and context isolation — without leaving your Claude session.
+description: Run a taskflow MCP server inside Claude Code to get declarative task graphs with quality gates, budget stop-losses, and context isolation — without leaving your Claude session.
 ---
 
-Claude Code is a powerful coding agent on its own. But when a job needs a **repeatable pipeline** — review every changed file, gate on risk, stay under a spend cap — ad-hoc prompting runs into the same limits every agent does: the model re-derives the plan each time, intermediate transcripts fill your context, and there's no way to halt the whole thing if a reviewer finds a critical issue. This post shows how to add a **taskflow MCP server** to Claude Code and run a self-gating review pipeline from inside your session.
+Claude Code is a powerful coding agent on its own. But when a job needs a **repeatable pipeline** — review every changed file, gate on risk, and set an observed-usage stop-loss — ad-hoc prompting runs into the same limits every agent does: the model re-derives the plan each time, intermediate transcripts fill your context, and there's no way to halt the whole thing if a reviewer finds a critical issue. This post shows how to add a **taskflow MCP server** to Claude Code and run a self-gating review pipeline from inside your session.
 
 ## Add the taskflow MCP server to Claude Code
 
@@ -14,11 +14,11 @@ claude plugin marketplace add heggria/taskflow
 claude plugin install claude-taskflow@taskflow
 ```
 
-That's it — the plugin wires up the MCP server (via `npx claude-taskflow-mcp`) and drops in the taskflow skill. Restart Claude Code and you'll have `taskflow_run`, `taskflow_verify`, `taskflow_resume`, and friends available as tools.
+That's it — the plugin wires up the MCP server (via `npx claude-taskflow-mcp`) and drops in the taskflow skill. Restart Claude Code and you'll have `taskflow_run`, `taskflow_verify`, `taskflow_peek`, and the other published MCP tools.
 
 ## The job: a gated security review
 
-You want a pipeline that runs on every PR: discover changed files, fan out a security review per file, run an architecture review in parallel, and **halt** if anything critical turns up — returning a single merged report.
+You want a pipeline that runs on every PR: discover changed files, fan out a security review per file, include an architecture review, and **halt** if anything critical turns up — returning a single merged report.
 
 Declare it as a graph:
 
@@ -35,10 +35,10 @@ Declare it as a graph:
     },
     {
       "id": "sec-review",
-      "map": "{steps.discover.json}",
+      "type": "map",
+      "over": "{steps.discover.json}",
       "agent": "security-reviewer",
-      "task": "Audit {item} for vulnerabilities: injection, auth, secrets, unsafe deserialization. Return a risk level and one-line finding.",
-      "concurrency": 4
+      "task": "Audit {item} for vulnerabilities: injection, auth, secrets, unsafe deserialization. Return a risk level and one-line finding."
     },
     {
       "id": "arch-review",
@@ -74,39 +74,43 @@ That's a quality gate with teeth. The fail-closed rule (unparseable output → `
 
 ## Run it from Claude Code
 
-```text
-# verify the graph for free first
-taskflow_verify pr-security-review
+Ask Claude to call `taskflow_verify` with:
 
-# run it
-taskflow_run pr-security-review
+```json
+{ "defineFile": "pr-security-review.json" }
+```
+
+Then call `taskflow_run` with:
+
+```json
+{ "defineFile": "pr-security-review.json" }
 ```
 
 What Claude Code sees: a **single streaming tool call** that returns the final report. What it doesn't see: the dozens of per-file security-reviewer transcripts. Those stay inside the taskflow runtime — your context window gets the merged report, not the raw noise.
 
-## Budget caps as a first-class field
+## Budget stop-losses as a first-class field
 
 ```json
 "budget": { "maxUSD": 1.50 }
 ```
 
-If a fan-out over an unexpectedly large diff would blow past $1.50, the runtime halts the run with a budget-exceeded outcome. No surprises on the invoice. Pair this with `concurrency: 4` so the fan-out is bounded even before the budget kicks in.
+After observed usage exceeds $1.50, the runtime stops admitting new work and returns a budget-exceeded outcome. This is a stop-loss, not a prepaid reservation: one in-flight call may overshoot. Declaring a budget serializes ordinary DAG/map work for auditable usage; `race` branches necessarily remain concurrent.
 
-## Save it and reuse it
+## Keep the file and reuse it
 
-Describe the pipeline once:
+The JSON file is already the reusable definition. Run it again with the same MCP arguments:
 
-```text
-taskflow_save pr-security-review pr-security-review.json
+```json
+{ "defineFile": "pr-security-review.json" }
 ```
 
-Now every PR review is `taskflow_run pr-security-review` — no re-prompting, no re-deriving the plan. And because phases are cached on their input hash, re-running after a tiny prompt tweak only re-executes the changed phase and its downstream.
+No re-prompting or re-deriving the plan is required. Cross-run reuse is opt-in: add `cache.scope: "cross-run"` to phases that should reuse matching results across separate runs.
 
 ## Takeaways
 
 - The taskflow **MCP server** brings declarative task graphs *into* Claude Code as tools.
 - `gate` phases give you a real halt-on-block quality gate.
-- `budget` caps spend; `map` fans out with bounded concurrency.
+- `budget` stops new work after observed usage exceeds the limit and serializes ordinary fan-out; `race` remains concurrent.
 - Only the final report returns to your session — transcripts stay isolated.
 
 For the full Claude Code surface (permissions, model routing, all available tools), see the [Claude Code guide](/en/docs/guides/claude-code). The [templates gallery](/en/docs/guides/templates) has four more runnable pipelines.

@@ -101,6 +101,24 @@ test("publish workflow pins actions and isolates npm provenance from release per
 	assert.match(release, /Create GitHub Release/);
 });
 
+test("publish workflow verifies every package after registry mutation", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+	assert.match(workflow, /verify_one\(\)/);
+	for (const pkg of [
+		"taskflow-core",
+		"taskflow-mcp-core",
+		"taskflow-hosts",
+		"taskflow-dsl",
+		"pi-taskflow",
+		"codex-taskflow",
+		"claude-taskflow",
+		"opencode-taskflow",
+		"grok-taskflow",
+	]) {
+		assert.match(workflow, new RegExp(`verify_one ${pkg}`));
+	}
+});
+
 test("every repository workflow pins third-party actions to verified full SHAs", () => {
 	const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
 	const trustedPins = new Map([

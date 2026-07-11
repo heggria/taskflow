@@ -1,5 +1,5 @@
 {
-  "hash": "ir:4ba778e9a594ce2fd691165882a6191b830c52aec3fd6f85d8860e68b264ab2b",
+  "hash": "ir:a204405c3264078fcfa87c8dd7d55fefbff4a367bf0e3d81a5d5a9f41ae6bdca",
   "ir": {
     "name": "comprehensive-release-review",
     "version": 2,
@@ -231,6 +231,11 @@
             "cross-cutting",
             "rapid-triage",
             "strategy-tournament"
+          ],
+          "tools": [
+            "read",
+            "grep",
+            "ls"
           ]
         }
       },
@@ -309,7 +314,12 @@
               "verdict",
               "reason"
             ]
-          }
+          },
+          "tools": [
+            "read",
+            "grep",
+            "ls"
+          ]
         }
       },
       {
@@ -350,7 +360,12 @@
               "done",
               "report"
             ]
-          }
+          },
+          "tools": [
+            "read",
+            "grep",
+            "ls"
+          ]
         }
       },
       {
@@ -373,6 +388,11 @@
                 "id": "challenge",
                 "type": "agent",
                 "agent": "critic",
+                "tools": [
+                  "read",
+                  "grep",
+                  "ls"
+                ],
                 "task": "Try to falsify the report below. Return only code-backed counterexamples or NO COUNTEREXAMPLE.\n{args.report}",
                 "final": true
               }
@@ -403,6 +423,11 @@
                 "id": "verify-claims",
                 "type": "agent",
                 "agent": "verifier",
+                "tools": [
+                  "read",
+                  "grep",
+                  "ls"
+                ],
                 "task": "Check the final report against the repository. List unsupported claims, or VERIFIED if all material claims hold.\n{args.report}",
                 "final": true
               }
@@ -439,6 +464,11 @@
             "refined",
             "nested-challenge",
             "expanded-evidence"
+          ],
+          "tools": [
+            "read",
+            "grep",
+            "ls"
           ],
           "final": true
         }
@@ -523,8 +553,7 @@
       }
     ],
     "budget": {
-      "maxTokens": 100000000,
-      "maxUSD": 12
+      "maxTokens": 100000000
     },
     "concurrency": 6,
     "meta": {

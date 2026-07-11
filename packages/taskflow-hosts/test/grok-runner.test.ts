@@ -21,6 +21,7 @@ test("grok parser: concatenates text chunks into finalText", () => {
 	assert.equal(acc.finalText, "Hello world");
 	assert.equal(acc.stopReason, "EndTurn");
 	assert.equal(acc.sessionId, "abc");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined);
 });
 
@@ -31,6 +32,7 @@ test("grok parser: thought is activity only, not answer", () => {
 	assert.match(acc.lastActivity, /planning/);
 	foldGrokEventLine(acc, JSON.stringify({ type: "text", data: "done" }));
 	assert.equal(acc.finalText, "done");
+	assert.equal(acc.terminalSeen, undefined, "text before end is not terminal");
 });
 
 test("grok parser: error event is fatal and never the answer", () => {
@@ -54,6 +56,7 @@ test("grok parser: end may supply text when no prior chunks", () => {
 	const acc = newGrokAccumulator();
 	foldGrokEventLine(acc, JSON.stringify({ type: "end", stopReason: "EndTurn", text: "full answer" }));
 	assert.equal(acc.finalText, "full answer");
+	assert.equal(acc.terminalSeen, true);
 });
 
 test("grok parser: malformed / empty / unknown lines are ignored", () => {

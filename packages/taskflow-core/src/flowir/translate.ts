@@ -78,6 +78,9 @@ const SIDECAR_PHASE_FIELDS = [
 	"score",
 	"cache",
 	"shareContext",
+	"cancelLosers",
+	"expandMode",
+	"maxNodes",
 ] as const;
 
 /** Build the per-phase sidecar record (verbatim copy of non-IR fields). */

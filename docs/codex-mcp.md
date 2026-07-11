@@ -83,6 +83,15 @@ tool_timeout_sec = 3600
 If a flow is genuinely huge, also consider splitting it into a few smaller
 `taskflow_run` calls so each returns well inside the window.
 
+Each spawned Codex subagent is isolated from the parent Codex customization:
+the runner uses `--ephemeral --ignore-user-config --ignore-rules`, clears
+`mcp_servers`, and then applies only Taskflow's sandbox/model/thinking argv.
+This prevents an unrelated user MCP OAuth failure, plugin, or exec rule from
+changing a phase result. The child environment retains platform/proxy/CA and
+Codex/OpenAI provider variables but drops unrelated application secrets. To
+pass a task-specific variable intentionally, list its name in the comma-separated
+`PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting before starting the MCP server.
+
 ## Alternative: register the MCP server manually
 
 If you'd rather not use the plugin, install the package and register its

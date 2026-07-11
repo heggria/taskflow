@@ -152,12 +152,14 @@ OpenCode 没有按运行的 tool-whitelist 标志，但它支持通过 `OPENCODE
 
 | 阶段工具 | 权限策略 | 含义 |
 |---|---|---|
-| 只读（无 `write`/`edit`/`bash`） | `--pure` + 注入拒绝策略 | 禁用外部插件，并拒绝 bash/write/edit。 |
+| 只读（无 `write`/`edit`/`bash`） | `--pure` + 注入默认拒绝策略 | 禁用外部插件；仅允许已知的读取/列举/搜索内置工具，因此继承的自定义与 MCP 工具也会被拒绝。 |
 | 变更（或无白名单） | 默认拒绝 | 仅对可信 flow 设置 `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` 才启用无 sandbox 的 `--auto`；`--pure` 始终保留。 |
 
 <Callout type="warn">
   OpenCode 没有 OS sandbox 兜底。unsafe auto 需要运维方显式 opt-in；优先使用一次性 worktree，且只运行可信 flow。
 </Callout>
+
+子进程只继承平台、代理/CA、OpenCode 配置与受支持 provider 变量；无关的父进程 secret 会被移除。确需额外任务变量时，通过逗号分隔的 `PI_TASKFLOW_CHILD_ENV_ALLOW` 显式列出变量名。
 
 ### 模型解析
 

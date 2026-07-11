@@ -46,7 +46,11 @@
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
+    }
   },
   "peerDependencies": {
     "typebox": "*"

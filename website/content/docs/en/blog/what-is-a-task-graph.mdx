@@ -38,7 +38,8 @@ Most agent "orchestration" is actually a **chain** — step 1, step 2, step 3, l
 ```json
 {
   "id": "review",
-  "map": "{steps.discover.json}",
+  "type": "map",
+  "over": "{steps.discover.json}",
   "agent": "security-reviewer",
   "task": "Audit {item} for vulnerabilities.",
   "concurrency": 4

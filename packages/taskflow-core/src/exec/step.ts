@@ -6,9 +6,8 @@
  * import `runtime.ts` (avoids circular deps with the strangler).
  */
 
-import { spawn } from "node:child_process";
 import type { Phase, Taskflow } from "../schema.ts";
-import { dependenciesOf, PHASE_TYPES } from "../schema.ts";
+import { dependenciesOf, MAX_DYNAMIC_MAP_ITEMS, PHASE_TYPES } from "../schema.ts";
 import type { RunState } from "../store.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
@@ -22,7 +21,12 @@ import {
 	safeParse,
 	type InterpolationContext,
 } from "../interpolate.ts";
-import { abortableDelay, isTransientError, killProcessTree, mapWithConcurrencyLimit } from "../runner-core.ts";
+import { abortableDelay, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
+import {
+	runScriptCommand,
+	scriptResultToPhaseState,
+	scriptSpawnErrorToPhaseState,
+} from "../runtime/phases/script.ts";
 import {
 	executeApprovalBody,
 	executeFlowBody,
@@ -105,6 +109,7 @@ export interface StepResult {
 	attempts?: number;
 	gate?: { verdict: "pass" | "block"; reason?: string };
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
+	warnings?: string[];
 }
 
 type BodyResult = {
@@ -116,6 +121,7 @@ type BodyResult = {
 	attempts?: number;
 	gate?: StepResult["gate"];
 	approval?: StepResult["approval"];
+	warnings?: string[];
 };
 
 function baseEvent(
@@ -151,10 +157,6 @@ export function usageFromEvents(events: readonly Event[]): UsageStats {
 	return u;
 }
 
-function isFailedResult(r: RunResult): boolean {
-	return (r.exitCode ?? 0) !== 0 || !!r.errorMessage || r.stopReason === "error" || r.stopReason === "aborted";
-}
-
 /** Format fan-out results like the imperative runtime's mergePhaseState text. */
 function combineFanoutText(results: RunResult[]): string {
 	return results
@@ -176,94 +178,45 @@ export async function stepAgent(phase: Phase, ctx: StepContext): Promise<StepRes
 	return stepPhase({ ...phase, type: "agent" }, ctx) as Promise<StepResult>;
 }
 
-const SCRIPT_STDOUT_CAP = 1_000_000; // 1 MiB — match imperative runtime
-
 async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
 	const run = phase.run;
 	if (!run || (Array.isArray(run) && run.length === 0)) {
 		const err = "script phase missing `run`";
 		return { midEvents: [], status: "failed", error: err, usage: emptyUsage() };
 	}
-	const argv = Array.isArray(run) ? run.map(String) : ["bash", "-lc", String(run)];
-	const [cmd, ...args] = argv;
-	// Match runtime: default 60s, clamp to [1000, 300_000]
-	const rawT = typeof phase.timeout === "number" && Number.isFinite(phase.timeout) ? phase.timeout : 60_000;
-	const timeoutMs = Math.min(300_000, Math.max(1000, rawT));
-	const cwd = ctx.deps.cwd;
-
-	const result = await new Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }>((resolve) => {
-		const child = spawn(cmd, args, {
-			cwd,
-			env: process.env,
-			stdio: ["ignore", "pipe", "pipe"],
-			detached: process.platform !== "win32",
+	const argv = Array.isArray(run) ? run.map(String) : [String(run)];
+	const timeoutMs = phase.timeout ?? 60_000;
+	let phaseState;
+	try {
+		const result = await runScriptCommand({
+			interpRunText: argv,
+			arrayForm: Array.isArray(run),
+			cwd: ctx.deps.cwd,
+			signal: ctx.deps.signal,
+			timeoutMs,
 		});
-		let stdout = "";
-		let stderr = "";
-		let timedOut = false;
-		let killedForCap = false;
-		let forceTimer: ReturnType<typeof setTimeout> | undefined;
-		const t = setTimeout(() => {
-			timedOut = true;
-			if (child.pid) killProcessTree(child.pid, "SIGTERM", child);
-			forceTimer = setTimeout(() => {
-				if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
-			}, 200);
-		}, timeoutMs);
-		const onAbort = () => {
-			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
-		};
-		ctx.deps.signal?.addEventListener("abort", onAbort, { once: true });
-		if (ctx.deps.signal?.aborted) onAbort();
-		child.stdout?.on("data", (d) => {
-			stdout += d.toString();
-			if (stdout.length > SCRIPT_STDOUT_CAP) {
-				killedForCap = true;
-				stdout = stdout.slice(0, SCRIPT_STDOUT_CAP);
-				if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
-			}
-		});
-		child.stderr?.on("data", (d) => {
-			stderr += d.toString();
-			if (stderr.length > SCRIPT_STDOUT_CAP) stderr = stderr.slice(0, SCRIPT_STDOUT_CAP);
-		});
-		child.on("error", (e) => {
-			clearTimeout(t);
-			if (forceTimer) clearTimeout(forceTimer);
-			ctx.deps.signal?.removeEventListener("abort", onAbort);
-			resolve({ code: 1, stdout, stderr: e.message, timedOut: false });
-		});
-		child.once("exit", () => {
-			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
-		});
-		child.on("close", (code) => {
-			clearTimeout(t);
-			if (forceTimer) clearTimeout(forceTimer);
-			ctx.deps.signal?.removeEventListener("abort", onAbort);
-			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
-			resolve({
-				code: code ?? 1,
-				stdout,
-				stderr: killedForCap ? `${stderr}\n(stdout capped at ${SCRIPT_STDOUT_CAP} bytes)` : stderr,
-				timedOut,
-			});
-		});
-	});
-
-	const status: StepResult["status"] = result.timedOut ? "timedOut" : result.code === 0 ? "done" : "failed";
-	const text = result.stdout.trimEnd();
+		phaseState = scriptResultToPhaseState(phase, result, { inputHash: "", timeoutMs });
+	} catch (err) {
+		phaseState = scriptSpawnErrorToPhaseState(phase.id, err, { inputHash: "" });
+	}
+	const status: StepResult["status"] = phaseState.timedOut
+		? "timedOut"
+		: phaseState.status === "done"
+			? "done"
+			: "failed";
+	const text = phaseState.output ?? "";
 	const usage = emptyUsage();
 	const midEvents: Event[] = [
 		baseEvent(ctx, phase.id, "subagent-call", {
 			input: {
 				agent: "script",
-				task: argv.join(" "),
+				task: Array.isArray(run) ? argv.join(" ") : String(run),
 				nodePath: phase.id,
 			},
 			output: {
 				text,
 				usage,
-				stopReason: result.timedOut ? "timeout" : result.code === 0 ? "end" : "error",
+				stopReason: phaseState.timedOut ? "timeout" : phaseState.status === "done" ? "end" : "error",
 			},
 		}),
 	];
@@ -271,7 +224,7 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 		midEvents,
 		output: text,
 		status,
-		error: status === "failed" ? result.stderr || `exit ${result.code}` : undefined,
+		error: status === "done" ? undefined : phaseState.error,
 		usage,
 	};
 }
@@ -295,23 +248,22 @@ async function runOneAgent(
 		if (ctx.deps.signal?.aborted) break;
 		let timedOut = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
 		let onParentAbort: (() => void) | undefined;
 		let callSignal: AbortSignal | undefined = ctx.deps.signal;
+		let timeoutController: AbortController | undefined;
 		if (phaseTimeoutMs) {
 			const ac = new AbortController();
+			timeoutController = ac;
 			callSignal = ac.signal;
 			if (ctx.deps.signal?.aborted) ac.abort();
 			else if (ctx.deps.signal) {
 				onParentAbort = () => ac.abort();
 				ctx.deps.signal.addEventListener("abort", onParentAbort, { once: true });
 			}
-			timer = setTimeout(() => {
-				timedOut = true;
-				ac.abort();
-			}, phaseTimeoutMs);
 		}
 		try {
-			r = await ctx.deps.runTask(
+			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,
 				agentName,
@@ -325,8 +277,31 @@ async function runOneAgent(
 				},
 				ctx.deps.globalThinking,
 			);
+			if (phaseTimeoutMs) {
+				const timeoutFallback = new Promise<RunResult>((resolve) => {
+					timer = setTimeout(() => {
+						timedOut = true;
+						timeoutController?.abort();
+						forceReturnTimer = setTimeout(() => resolve({
+							agent: agentName,
+							task,
+							exitCode: 1,
+							output: "",
+							stderr: "",
+							usage: emptyUsage(),
+							stopReason: "error",
+							errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
+							phaseTimeout: true,
+						}), PHASE_TIMEOUT_ABORT_GRACE_MS);
+					}, phaseTimeoutMs);
+				});
+				r = await Promise.race([invocation, timeoutFallback]);
+			} else {
+				r = await invocation;
+			}
 		} finally {
 			if (timer) clearTimeout(timer);
+			if (forceReturnTimer) clearTimeout(forceReturnTimer);
 			if (onParentAbort) ctx.deps.signal?.removeEventListener("abort", onParentAbort);
 		}
 		if (timedOut) {
@@ -427,7 +402,10 @@ async function executeMapBody(phase: Phase, ctx: StepContext): Promise<BodyResul
 	}
 	const concurrency = typeof phase.concurrency === "number" && phase.concurrency > 0 ? phase.concurrency : 8;
 	const agentName = phase.agent ?? "executor";
-	const tasks = arr.map((item) => ({
+	const dynamic = (ctx.deps.stack ?? []).some((frame) => frame.startsWith("def:"));
+	const truncated = dynamic && arr.length > MAX_DYNAMIC_MAP_ITEMS;
+	const admitted = truncated ? arr.slice(0, MAX_DYNAMIC_MAP_ITEMS) : arr;
+	const tasks = admitted.map((item) => ({
 		agent: agentName,
 		task: resolveMapTask(phase.task ?? "", phase, ctx, item),
 	}));
@@ -458,6 +436,9 @@ async function executeMapBody(phase: Phase, ctx: StepContext): Promise<BodyResul
 			status: anyTimedOut ? "timedOut" : anyFailed ? "failed" : "done",
 			error: errors.length ? errors.join("; ") : undefined,
 			usage,
+			warnings: truncated
+				? [`map fan-out truncated to MAX_DYNAMIC_MAP_ITEMS (${MAX_DYNAMIC_MAP_ITEMS}) inside a dynamic sub-flow`]
+				: undefined,
 		};
 	} catch (e) {
 		const err = e instanceof Error ? e.message : String(e);
@@ -591,5 +572,6 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		attempts: body.attempts,
 		gate: body.gate,
 		approval: body.approval,
+		warnings: body.warnings,
 	};
 }

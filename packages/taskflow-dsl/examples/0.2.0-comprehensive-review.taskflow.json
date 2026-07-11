@@ -165,6 +165,11 @@
       ],
       "task": "Synthesize an evidence ledger for merge readiness. Deduplicate findings,\n\treject speculation, reconcile contradictions, and separate BLOCKER / IMPORTANT /\n\tNON-BLOCKING. For every retained issue cite file:line and a reproducer or invariant.\n\tEnd with one of: MERGE_READY or NOT_MERGE_READY.\n\n\tMODULE AUDITS:\n\t{steps.module-audits.output}\n\n\tCROSS-CUTTING:\n\t{steps.cross-cutting.output}\n\n\tRAPID TRIAGE:\n\t{steps.rapid-triage.output}\n\n\tBEST ADVERSARIAL REVIEW:\n\t{steps.strategy-tournament.output}",
       "agent": "final-arbiter",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
       "timeout": 900000,
       "dependsOn": [
         "module-audits",
@@ -230,6 +235,11 @@
         "max": 2,
         "backoffMs": 0
       },
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
       "task": "Judge the review REPORT QUALITY, not whether the code is flawless.\n\tPASS only if every blocker is evidence-backed, contradictions are resolved, and the\n\tmerge verdict follows from the evidence. Return ONLY JSON:\n\t{\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}\n\n\tREPORT:\n\t{steps.synthesis.output}",
       "dependsOn": [
         "synthesis"
@@ -247,6 +257,11 @@
       "maxIterations": 3,
       "convergence": true,
       "reflexion": true,
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
       "until": "{steps.refined.json.done} == true",
       "output": "json",
       "expect": {
@@ -276,6 +291,11 @@
             "id": "challenge",
             "type": "agent",
             "agent": "critic",
+            "tools": [
+              "read",
+              "grep",
+              "ls"
+            ],
             "task": "Try to falsify the report below. Return only code-backed counterexamples or NO COUNTEREXAMPLE.\n{args.report}",
             "final": true
           }
@@ -299,6 +319,11 @@
             "id": "verify-claims",
             "type": "agent",
             "agent": "verifier",
+            "tools": [
+              "read",
+              "grep",
+              "ls"
+            ],
             "task": "Check the final report against the repository. List unsupported claims, or VERIFIED if all material claims hold.\n{args.report}",
             "final": true
           }
@@ -322,6 +347,11 @@
       ],
       "task": "Issue the final merge-readiness decision. Preserve proven blockers; discard\n\tunsupported claims. Include: verdict, blocker count, exact evidence, checks run,\n\tremaining uncertainty, and the DSL/runtime features exercised by this workflow.\n\n\tREFINED REPORT:\n\t{steps.refined.output}\n\n\tNESTED ADVERSARIAL CHALLENGE:\n\t{steps.nested-challenge.output}\n\n\tEXPANDED EVIDENCE VERIFICATION:\n\t\t\t\t\t{steps.expanded-evidence.output}",
       "agent": "final-arbiter",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
       "timeout": 900000,
       "final": true,
       "dependsOn": [
@@ -338,7 +368,6 @@
   "strictInterpolation": true,
   "concurrency": 6,
   "budget": {
-    "maxTokens": 100000000,
-    "maxUSD": 12
+    "maxTokens": 100000000
   }
 }

@@ -13,7 +13,9 @@ import assert from "node:assert/strict";
 import {
 	buildOpencodeArgs,
 	OPENCODE_UNSAFE_AUTO_ENV,
+	OPENCODE_READ_ONLY_CONFIG,
 	opencodeBin,
+	opencodeChildEnv,
 	opencodeUnsafeAutoEnabled,
 	isReadOnlyPhase,
 	resolveOpencodeModel,
@@ -105,6 +107,25 @@ test("opencode unsafe auto opt-in: only exact env value 1 is accepted", () => {
 		assert.equal(opencodeUnsafeAutoEnabled(env), false);
 	}
 	assert.equal(opencodeUnsafeAutoEnabled({ [OPENCODE_UNSAFE_AUTO_ENV]: "1" }), true);
+});
+
+test("opencode read-only config denies inherited native, custom, and MCP tools by default", () => {
+	const config = JSON.parse(OPENCODE_READ_ONLY_CONFIG) as { permission: Record<string, string> };
+	assert.equal(config.permission["*"], "deny");
+	for (const tool of ["read", "grep", "glob", "list"]) assert.equal(config.permission[tool], "allow");
+});
+
+test("opencode env: keeps provider/runtime keys and drops unrelated secrets", () => {
+	const env = opencodeChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		OPENCODE_CONFIG: "/safe/config.json",
+		ANTHROPIC_API_KEY: "provider",
+		DATABASE_URL: "secret",
+	});
+	assert.equal(env.ANTHROPIC_API_KEY, "provider");
+	assert.equal(env.OPENCODE_CONFIG, "/safe/config.json");
+	assert.equal(env.DATABASE_URL, undefined);
 });
 
 test("opencode argv: read-only flag returned so the caller injects the env policy", () => {

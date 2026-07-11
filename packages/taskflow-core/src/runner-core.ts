@@ -22,7 +22,7 @@ import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts"
 export type { CoreMessage, LiveUpdate, RunOptions, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 export function isFailed(r: RunResult): boolean {
-	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+	return r.exitCode !== 0 || Boolean(r.errorMessage) || r.stopReason === "error" || r.stopReason === "aborted";
 }
 
 /**
@@ -334,6 +334,17 @@ process.on("exit", killAllChildren);
 /** Same idle window every host runner uses: a child silent this long is wedged. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 
+/** After a phase timeout aborts its runner, allow process-backed hosts enough
+ * time to execute their SIGTERM to SIGKILL escalation. A custom runner that
+ * ignores AbortSignal entirely is still bounded by this grace window. */
+export const PHASE_TIMEOUT_ABORT_GRACE_MS = 5500;
+
+/** Maximum NDJSON line size retained while waiting for a newline. A hostile or
+ * broken host can otherwise stream an unterminated line until the orchestrator
+ * runs out of memory. Host events are expected to be compact; 1 MiB still
+ * leaves ample room for a large final answer while providing a hard bound. */
+export const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
+
 /** The base accumulator contract the shared process runner reads/writes. Each
  *  host's accumulator (Codex/Claude/OpenCode) satisfies this structurally and
  *  may carry extra fields (e.g. claude's `sawResult`) its own foldLine uses. */
@@ -345,6 +356,8 @@ export interface SubagentAccumulator {
 	lastActivity: string;
 	/** Set by the host foldLine when the stream reported a fatal error event. */
 	fatalError?: string;
+	/** Set by hosts whose protocol has an authoritative terminal event. */
+	terminalSeen?: boolean;
 }
 
 /** Standard "unknown agent" RunResult — identical across every host runner. */
@@ -384,6 +397,9 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	/** Per-host event folding: the host's accumulator + its line parser. */
 	acc: TAcc;
 	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
+	/** Fail closed when the CLI exits zero before its authoritative terminal event. */
+	requireTerminalEvent?: boolean;
+	terminalEventLabel?: string;
 }
 
 /** Spawn an isolated subagent process, fold its event stream, and classify the
@@ -408,6 +424,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	let wasAborted = false;
 	let idleTimedOut = false;
 	let killedBySignal: string | undefined;
+	let protocolError: string | undefined;
 	const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
 
 	// Structured run-log header, opt-in via PI_TASKFLOW_RUN_LOG. Written to the
@@ -474,30 +491,65 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		};
 		armIdle();
 
+		const failProtocol = (message: string) => {
+			if (protocolError) return;
+			protocolError = message;
+			signalTree("SIGTERM");
+			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
+			forceTimer.unref();
+		};
 		const processLine = (line: string) => {
-			// A throwing foldLine (malformed/hostile stream line) or a throwing onLive
-			// callback must NEVER crash the run — this is the fail-open backstop that
-			// turns a bad line into a skipped line. It also honours the AGENTS.md
-			// invariant that user callbacks are wrapped in try/catch.
+			if (!line.trim() || protocolError) return;
+			// Every supported host advertises a JSON/NDJSON stream. Treat malformed
+			// records as a protocol failure: silently dropping them can turn a
+			// truncated provider error into a successful phase with empty output.
 			try {
-				const live = foldLine(acc, line);
-				if (live && opts.onLive) opts.onLive(live);
+				JSON.parse(line);
 			} catch {
-				/* malformed stream line / throwing callback — skip, never crash */
+				failProtocol("Subagent emitted malformed or truncated JSON output");
+				return;
+			}
+			let live: LiveUpdate | null;
+			try {
+				live = foldLine(acc, line);
+			} catch (error) {
+				failProtocol(`Subagent output parser failed: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+			// onLive is a user callback and remains fail-open; parser failures above
+			// are part of the transport contract and therefore fail closed.
+			if (live && opts.onLive) {
+				try { opts.onLive(live); } catch { /* user callback must not sink run */ }
 			}
 		};
 
 		proc.stdout.on("data", (data) => {
 			armIdle();
 			buffer += data.toString();
+			if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES && !buffer.includes("\n")) {
+				// Drop the retained bytes before terminating so the bound remains true
+				// even while a non-cooperative child takes time to die.
+				buffer = "";
+				failProtocol(`Subagent emitted an unterminated stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+				return;
+			}
 			const lines = buffer.split("\n");
 			buffer = lines.pop() || "";
-			for (const line of lines) processLine(line);
+			for (const line of lines) {
+				if (Buffer.byteLength(line) > MAX_STDOUT_LINE_BYTES) {
+					failProtocol(`Subagent emitted a stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+					break;
+				}
+				processLine(line);
+			}
 		});
 
 		const STDERR_MAX_LEN = 64 * 1024;
 		let stderrCapped = false;
 		proc.stderr.on("data", (data) => {
+			// Diagnostics are real child activity too. A CLI that is actively
+			// reporting provider retries on stderr must not be killed as idle.
+			armIdle();
 			if (!stderrCapped) {
 				result.stderr += data.toString();
 				if (result.stderr.length >= STDERR_MAX_LEN) {
@@ -568,15 +620,24 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	result.model = acc.model;
 	result.output = acc.finalText;
 
-	if (acc.fatalError) {
+	if (protocolError) {
+		result.exitCode = result.exitCode || 1;
+		result.stopReason = "error";
+		result.errorMessage = protocolError;
+	} else if (acc.fatalError) {
 		result.exitCode = result.exitCode || 1;
 		result.stopReason = "error";
 		result.errorMessage = acc.fatalError;
 	} else {
 		result.stopReason = exitCode === 0 ? "end" : "error";
 	}
+	if (!isFailed(result) && opts.requireTerminalEvent && !acc.terminalSeen) {
+		result.exitCode = 1;
+		result.stopReason = "error";
+		result.errorMessage = `Subagent stream ended before ${opts.terminalEventLabel ?? "the terminal event"}`;
+	}
 
-	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted) {
+	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted && !protocolError) {
 		result.exitCode = 1;
 		result.stopReason = "error";
 		result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
@@ -588,6 +649,14 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	} else if (wasAborted) {
 		result.stopReason = "aborted";
 		result.errorMessage = "Subagent was aborted";
+	}
+	// A zero exit with no answer is not evidence of successful agent work. It is
+	// the characteristic outcome of a truncated/unknown host stream whose lines
+	// were syntactically valid but never contained a terminal answer.
+	if (!isFailed(result) && !result.output.trim()) {
+		result.exitCode = 1;
+		result.stopReason = "error";
+		result.errorMessage = "Subagent exited successfully without a final output";
 	}
 
 	if (isFailed(result)) {

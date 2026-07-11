@@ -33,6 +33,9 @@ breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
 <!-- host:pi -->
 ## Shared Context Tree (blackboard + supervision) — opt-in
 
+> **0.2.0 host scope:** context-tool injection is implemented by `pi-taskflow`.
+> Codex, Claude, OpenCode, and Grok runners do not expose `ctx_*` tools yet.
+
 By default subagents are fully isolated: they share nothing and only return a
 final output string. Opt a phase in with `shareContext: true` (or
 `contextSharing: true` at the flow level for every phase) to give its subagent
@@ -296,6 +299,10 @@ taskflow { action: "trace", runId: "<id>", json: true }   // full machine record
 taskflow_trace { runId: "<id>" }
 taskflow_trace { runId: "<id>", json: true }
 ```
+
+MCP trace responses are bounded. JSON mode returns an envelope with
+`total`/`returned`/`truncated`; use `limit` (default 200, max 1000) to select the
+newest events without flooding the host context.
 <!-- /host:codex,claude,opencode,grok -->
 
 If there is no log (pre-trace run, or no sink injected), the tool reports that

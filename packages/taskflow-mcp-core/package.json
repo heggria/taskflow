@@ -57,7 +57,13 @@
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" },
+      "./server": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" },
+      "./jsonrpc": { "types": "./dist/mcp/jsonrpc.d.ts", "default": "./dist/mcp/jsonrpc.js" },
+      "./svg": { "types": "./dist/mcp/svg.d.ts", "default": "./dist/mcp/svg.js" }
+    }
   },
   "dependencies": {
     "taskflow-core": "workspace:*"

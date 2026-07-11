@@ -52,7 +52,11 @@
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./mcp/server": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" }
+    }
   },
   "dependencies": {
     "taskflow-core": "workspace:*",

@@ -69,6 +69,13 @@
     "typescript": "^6.0.3"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./build": { "types": "./dist/build.d.ts", "default": "./dist/build.js" },
+      "./check": { "types": "./dist/check.d.ts", "default": "./dist/check.js" },
+      "./decompile": { "types": "./dist/decompile.d.ts", "default": "./dist/decompile.js" },
+      "./diagnostics": { "types": "./dist/diagnostics.d.ts", "default": "./dist/diagnostics.js" }
+    }
   }
 }

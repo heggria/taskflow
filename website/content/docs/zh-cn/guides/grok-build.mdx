@@ -136,7 +136,9 @@ TUI 里可用 `/plugins`、`/mcps` 打开同一扩展面板。
 
 Grok 0.2.93 会把 `web_search` / `web_fetch` 报为无法映射的 allowlist 项，并可能回退到全量工具；因此只读 phase 中暂时禁用这两个 web 工具，并用独立 deny 规则做二次保护。在 `~/.grok/sandbox.toml` 分别配置 `[profiles.taskflow-workspace] extends = "workspace"` 和 `[profiles.taskflow-readonly] extends = "read-only"`，启动 MCP server 前导出对应的 `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` 与 `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE`。`max_turns_reached` 会使 phase 失败。
 
-Grok 0.2.93 的 `streaming-json` 不返回 token / cost usage，所以 Grok MCP 适配器会**拒绝声明了 `budget` 的 flow**，而不是静默忽略上限。
+Grok 子进程只继承平台、代理/CA 与 Grok/xAI/Taskflow-Grok 变量；无关的父进程 secret 会被移除。确需额外任务变量时，通过逗号分隔的 `PI_TASKFLOW_CHILD_ENV_ALLOW` 显式列出变量名。
+
+Grok 0.2.93 的 `streaming-json` 不返回 token / cost usage，所以 Grok MCP 适配器会**拒绝任何声明了 `budget` 的 flow**，而不是静默忽略无法观察的阈值。
 
 <Callout type="warn">
   自定义 profile 在无法应用时会 fail-closed，但仍会保留其基础 profile 授予的访问。当文件系统变更应视为可丢弃时，请使用一次性 worktree。

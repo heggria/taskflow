@@ -63,6 +63,27 @@ test("runtime infers unavailable accounting from a bare runner function", async 
 	assert.equal(d.calls.value, 0);
 });
 
+test("tokens-only accounting enforces maxTokens and rejects maxUSD", async () => {
+	const tokenDef: Taskflow = {
+		name: "token-budget",
+		budget: { maxTokens: 10 },
+		phases: [{ id: "work", type: "agent", agent: "a", task: "spend", final: true }],
+	};
+	const tokenDeps = deps();
+	tokenDeps.usageAccounting = "tokens-only";
+	const tokenResult = await executeTaskflow(state(tokenDef), tokenDeps);
+	assert.equal(tokenResult.ok, true);
+	assert.equal(tokenDeps.calls.value, 1);
+
+	const dollarDef: Taskflow = { ...tokenDef, name: "dollar-budget", budget: { maxUSD: 1 } };
+	const dollarDeps = deps();
+	dollarDeps.usageAccounting = "tokens-only";
+	const dollarResult = await executeTaskflow(state(dollarDef), dollarDeps);
+	assert.equal(dollarResult.ok, false);
+	assert.equal(dollarDeps.calls.value, 0);
+	assert.match(dollarResult.finalOutput, /reports tokens but not cost/i);
+});
+
 test("usage-unavailable host rejects every executable nested budget form", async (t) => {
 	const cases: Array<{
 		name: string;

@@ -19,10 +19,14 @@ export function typecheckFile(filePath: string, cwd = process.cwd()): Diagnostic
 		esModuleInterop: true,
 		allowJs: false,
 	};
+	const configDiagnostics: ts.Diagnostic[] = [];
 	if (configPath) {
 		const read = ts.readConfigFile(configPath, ts.sys.readFile);
-		if (!read.error) {
+		if (read.error) {
+			configDiagnostics.push(read.error);
+		} else {
 			const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, path.dirname(configPath));
+			configDiagnostics.push(...parsed.errors);
 			options = { ...parsed.options, noEmit: true };
 		}
 	}
@@ -40,7 +44,7 @@ export function typecheckFile(filePath: string, cwd = process.cwd()): Diagnostic
 		// check even though the binding is consumed by the eraser and execution engine.
 		return d.code !== 6133;
 	});
-	return diags.map((d) => {
+	return [...configDiagnostics, ...diags].map((d) => {
 		const file = d.file;
 		let range: Diagnostic["range"];
 		if (file && d.start !== undefined) {

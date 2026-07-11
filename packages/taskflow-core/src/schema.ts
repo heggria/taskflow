@@ -10,6 +10,7 @@ import { StringEnum } from "./typebox-helpers.ts";
 import { contractShapeErrors } from "./contract.ts";
 import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
+import { Errors as SchemaErrors } from "typebox/value";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
@@ -126,12 +127,12 @@ const CacheSchema = Type.Object(
 /** Run-wide cost / token ceiling. Exceeding it halts the run (remaining phases skipped). */
 const BudgetSchema = Type.Object(
 	{
-		maxUSD: Type.Optional(Type.Number({ description: "Halt the run once accumulated cost exceeds this many USD" })),
+		maxUSD: Type.Optional(Type.Number({ minimum: 0, description: "Halt the run once accumulated cost exceeds this many USD" })),
 		maxTokens: Type.Optional(
-			Type.Number({ description: "Halt the run once accumulated input+output tokens exceed this" }),
+			Type.Number({ minimum: 0, description: "Halt the run once accumulated input+output tokens exceed this" }),
 		),
 	},
-	{ additionalProperties: false },
+	{ additionalProperties: false, minProperties: 1 },
 );
 
 const PhaseSchema = Type.Object(
@@ -575,6 +576,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	}
 	const flow = def as Partial<Taskflow>;
 	const strict = opts.strict ?? flow.strictInterpolation === true;
+	for (const issue of SchemaErrors(TaskflowSchema, def)) {
+		const pathLabel = issue.instancePath || "/";
+		const extras = issue.params && "additionalProperties" in issue.params
+			? (issue.params as { additionalProperties?: unknown }).additionalProperties
+			: undefined;
+		if (Array.isArray(extras) && extras.length > 0) {
+			for (const key of extras) errors.push(`${pathLabel}: unknown field '${String(key)}'`);
+		} else {
+			errors.push(`${pathLabel}: ${issue.message}`);
+		}
+	}
 
 	if (!flow.name || typeof flow.name !== "string") errors.push("Missing or invalid 'name'");
 	if (!Array.isArray(flow.phases) || flow.phases.length === 0) {

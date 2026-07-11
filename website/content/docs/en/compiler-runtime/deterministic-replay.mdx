@@ -22,7 +22,7 @@ Instrumenting runs (default when a host injects `FileTraceSink`) write
 - `subagent-call` — resolved task text + full output + usage
 - `decision` — gate verdict/score, when-guard, cache-hit, budget-hit, tournament-winner, unreplayable
 
-Inspect with `/tf trace <runId>` (Pi) or `taskflow_trace` (MCP). Pass `json: true` for the full machine record.
+Inspect with `/tf trace <runId>` (Pi) or `taskflow_trace` (MCP). Pass `json: true` for a bounded machine-readable envelope; `total`, `returned`, and `truncated` make response limits explicit, and `limit` selects up to 1,000 newest events.
 
 ## Offline replay
 

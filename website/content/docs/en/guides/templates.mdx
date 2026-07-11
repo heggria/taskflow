@@ -417,7 +417,7 @@ Enumerate the project's outdated dependencies, evaluate each for breaking-change
 Every template above is a starting point, not a prescription. The knobs worth turning are the same across all of them:
 
 - **`concurrency`** — raise it on a generous rate limit to finish faster; lower it to avoid 429s. The `retry` policy absorbs the rest.
-- **`budget`** — the run-wide cost ceiling. A `BLOCK` verdict or budget breach halts the run before downstream phases spend more tokens.
+- **`budget`** — a run-wide observed-usage stop-loss. A `BLOCK` verdict or observed breach prevents new downstream calls; calls already active may overshoot (including concurrent `race` branches).
 - **`cache`** — mark pure, expensive phases (`discover`, per-file reviews) `cross-run` with a `git:HEAD` or `glob!:` fingerprint so re-runs reuse work whose inputs did not change.
 - **`retry`** — two attempts with exponential backoff covers most transient provider errors. Raise `max` for phases that hit larger models.
 

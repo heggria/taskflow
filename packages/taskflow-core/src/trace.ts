@@ -182,7 +182,6 @@ export class FileTraceSink implements TraceSink {
 
 	flush(phaseId: string): void {
 		const events = this.buffer.get(phaseId);
-		this.buffer.delete(phaseId);
 		if (!events || events.length === 0) return;
 		// Serialize + append under an exclusive lock. Best-effort: any error is
 		// swallowed (trace is never run-breaking). Create the parent dir on first
@@ -193,8 +192,12 @@ export class FileTraceSink implements TraceSink {
 				const chunk = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
 				appendLocked(this.tracePath, chunk);
 			});
+			// Delete only after a successful append. A transient lock/filesystem
+			// failure can then be retried by the next phase-boundary flush instead of
+			// silently losing the only replay evidence for this phase.
+			this.buffer.delete(phaseId);
 		} catch {
-			/* fail-open */
+			/* fail-open; keep the batch buffered for a later retry */
 		}
 	}
 }

@@ -59,7 +59,15 @@
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./codex": { "types": "./dist/codex-runner.d.ts", "default": "./dist/codex-runner.js" },
+      "./claude": { "types": "./dist/claude-runner.d.ts", "default": "./dist/claude-runner.js" },
+      "./opencode": { "types": "./dist/opencode-runner.d.ts", "default": "./dist/opencode-runner.js" },
+      "./grok": { "types": "./dist/grok-runner.d.ts", "default": "./dist/grok-runner.js" },
+      "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
+    }
   },
   "dependencies": {
     "taskflow-core": "workspace:*"

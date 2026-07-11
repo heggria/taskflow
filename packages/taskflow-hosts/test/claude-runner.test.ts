@@ -35,6 +35,7 @@ test("claude parser: folds a real run into final text + authoritative usage", ()
 	for (const line of REAL_STREAM) foldClaudeEventLine(acc, line);
 
 	assert.equal(acc.finalText, "done", "final answer = the result event's `result`");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined);
 	assert.equal(acc.model, "claude-haiku-4-5", "model updated from the stream");
 	// The result event's cumulative usage wins over the per-turn accumulation.
@@ -62,6 +63,7 @@ test("claude parser: last assistant text is the fallback answer when no result e
 	foldClaudeEventLine(acc, `{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"first draft"}]}}`);
 	foldClaudeEventLine(acc, `{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"final answer"}]}}`);
 	assert.equal(acc.finalText, "final answer");
+	assert.equal(acc.terminalSeen, undefined, "assistant text before result is not terminal");
 });
 
 test("claude parser: an is_error result is fatal and never becomes the answer", () => {

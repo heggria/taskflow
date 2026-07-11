@@ -5,7 +5,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 **流程定义**是一个 JSON 对象，声明一个多阶段工作流：它的名字、它接受的参数、它该多激进地并行、它被允许花多少钱，以及构成其 DAG 的有序阶段数组。每个 taskflow —— 无论保存到磁盘还是作为一行内联传入 —— 都会先被反糖化为同一形状，再由运行时校验和执行。
 
-你可能在想：*这些字段我都得用吗？* 不用。结构上只有 `phases` 是必需的（保存的 flow 还要 `name`）。其余字段都是行为调参 —— 并发、成本上限、缓存默认值、严格度。本页按你实际会需要它们的顺序逐一介绍，详尽的参考材料放在最后。
+你可能在想：*这些字段我都得用吗？* 不用。结构上只有 `phases` 是必需的（保存的 flow 还要 `name`）。其余字段都是行为调参 —— 并发、基于已上报用量的成本止损线、缓存默认值、严格度。本页按你实际会需要它们的顺序逐一介绍，详尽的参考材料放在最后。
 
 ## 快速心智模型
 
@@ -104,7 +104,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 ## 给成本封顶：`budget` [#给成本封顶-budget]
 
-有些 flow 是开放式的 —— 一个深度调研 loop、一个有很多变体的 tournament。`budget` 让你设一个运行级的 USD 成本和/或 token 用量上限。任一超出时，剩余阶段被**跳过**，运行以 `blocked` 状态结束。
+有些 flow 是开放式的 —— 一个深度调研 loop、一个有很多变体的 tournament。`budget` 让你设一个基于已上报 USD 成本和/或 token 用量的运行级止损线。观察到任一越线后，不再准入新调用，剩余阶段被**跳过**，运行以 `blocked` 状态结束。
 
 ```json title="设置预算"
 {
@@ -118,7 +118,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 ```
 
 <Callout type="info">
-  两个字段都可选 —— 设其一或都设。已经在跑的子代理不会在调用中途被中断；上限是在阶段**之间**检查的。`0` 的预算会被当作"立即超出"，只对干跑结构检查有用。
+  两个字段都可选 —— 设其一或都设。已经在跑的子代理不会在调用中途被中断，仍可能超支。普通 budgeted DAG/map/parallel/tournament 调用串行准入；`race` 必须一起启动竞争分支。Codex 只接受 `maxTokens` 并拒绝 `maxUSD`；Grok 拒绝全部 budget。`0` 的预算会被当作"立即超出"，只对干跑结构检查有用。
 </Callout>
 
 ## agent 从哪来？`agentScope`
@@ -202,7 +202,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 ## 在阶段间共享上下文：`contextSharing`
 
-当多个阶段读同样的文件时，你可以用一个标志把它们统统纳入共享上下文树。`contextSharing: true` 是在每个阶段上设 `shareContext: true` 的简写 —— 每个阶段的子代理会得到 `ctx_read`/`ctx_write`（一个与兄弟和祖先共享的 blackboard）以及 `ctx_report`/`ctx_spawn`（向上汇报 + 排队子任务）。个别阶段仍可用 `shareContext: false` 退出。
+当多个阶段读同样的文件时，你可以用一个标志把它们统统纳入共享上下文树。`contextSharing: true` 是在每个阶段上设 `shareContext: true` 的简写。0.2.0 中由 Pi adapter 注入 `ctx_read`/`ctx_write` 和 `ctx_report`/`ctx_spawn`；Codex、Claude、OpenCode 与 Grok runner 暂不注入这些工具。个别阶段仍可用 `shareContext: false` 退出。
 
 ```json title="开启上下文共享"
 {
@@ -349,7 +349,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 | `version` | `number` | `1` | 否 | Schema/flow 版本标签，供作者追踪。不强制。 |
 | `args` | `Record<string, ArgSpec>` | — | 否 | 带默认值的已声明调用参数。见 [`ArgSpec`](#argspec)。 |
 | `concurrency` | `number` | `8` | 否 | 默认最大并发子代理数。被 `map`/`parallel` 阶段继承。 |
-| `budget` | `Budget` | — | 否 | 运行级成本/token 上限。见[`给成本封顶：budget`](#给成本封顶-budget)。 |
+| `budget` | `Budget` | — | 否 | 基于已上报用量的运行级成本/token 止损线。见[`给成本封顶：budget`](#给成本封顶-budget)。 |
 | `agentScope` | `"user" \| "project" \| "both"` | `"user"` | 否 | 在何处发现 agent。 |
 | `strictInterpolation` | `boolean` | `false` | 否 | 把校验警告提升为硬错误。 |
 | `contextSharing` | `boolean` | `false` | 否 | 为所有阶段启用共享上下文树。 |

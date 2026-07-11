@@ -124,6 +124,10 @@ taskflow_trace { runId: "<id>" }
 taskflow_trace { runId: "<id>", json: true }
 ```
 
+MCP trace responses are bounded. JSON mode returns an envelope with
+`total`/`returned`/`truncated`; use `limit` (default 200, max 1000) to select the
+newest events without flooding the host context.
+
 If there is no log (pre-trace run, or no sink injected), the tool reports that
 clearly — it never invents events.
 

@@ -18,6 +18,7 @@ export function emitMap(
 		raw: { type: "map" },
 		dependsOn: new Set(),
 	};
+	const innerOptionKeys = new Set<string>();
 	const overArg = call.arguments[0];
 	const fnArg = call.arguments[1];
 	const optsArg = call.arguments[2] as ts.Expression | undefined;
@@ -86,7 +87,10 @@ export function emitMap(
 					"optional", "idempotent", "context", "contextLimit", "cache", "shareContext",
 				]);
 				for (const [key, value] of Object.entries(iopts)) {
-					if (perItemKeys.has(key)) draft.raw[key] = value;
+					if (perItemKeys.has(key)) {
+						draft.raw[key] = value;
+						innerOptionKeys.add(key);
+					}
 					else {
 						ctx.diags.push(
 							diag(
@@ -107,7 +111,33 @@ export function emitMap(
 		ctx.diags.push(diag(ctx.file, ctx.sf, optsArg ?? call, "TFDSL_MAP_AS", `map option 'as' must be a static string.`));
 		delete opts.as;
 	}
+	const taskUsesCallbackAlias =
+		typeof draft.raw.task === "string" &&
+		new RegExp(`\\{${itemName.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}(?:\\.|\\})`).test(draft.raw.task);
+	if (typeof opts.as === "string" && opts.as !== itemName && taskUsesCallbackAlias) {
+		ctx.diags.push(
+			diag(
+				ctx.file,
+				ctx.sf,
+				optsArg ?? call,
+				"TFDSL_MAP_AS_MISMATCH",
+				`map callback parameter '${itemName}' must match option 'as: ${opts.as}' so emitted placeholders resolve at runtime.`,
+			),
+		);
+	}
 	if (typeof opts.id === "string") draft.id = opts.id;
+	for (const key of Object.keys(opts)) {
+		if (!innerOptionKeys.has(key)) continue;
+		ctx.diags.push(
+			diag(
+				ctx.file,
+				ctx.sf,
+				optsArg ?? call,
+				"TFDSL_MAP_OPTION_SHADOW",
+				`map option '${key}' is declared both inside agent() and on map(); keep exactly one declaration.`,
+			),
+		);
+	}
 	Object.assign(draft.raw, opts);
 	if (Array.isArray(opts.dependsOn)) for (const d of opts.dependsOn as string[]) draft.dependsOn.add(d);
 	if (opts.final === true) draft.final = true;

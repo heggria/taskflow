@@ -243,7 +243,12 @@ Notes:
   `-s workspace-write` (never `danger-full-access`). Effective thinking maps
   to `model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
   `low`/`medium`/`high`/`xhigh` pass through, and `max`/`ultra` → `xhigh`.
-  Any other value fails closed before Codex is spawned.
+  Any other value fails closed before Codex is spawned. Codex usage accounting
+  is tokens-only: budgeted flows may use `maxTokens`, while `maxUSD` is rejected.
+  Children use `--ephemeral --ignore-user-config --ignore-rules` and an empty
+  `mcp_servers` override, so parent plugins/MCP/rules cannot alter the run.
+  Only platform/proxy/CA and Codex/OpenAI provider environment variables are
+  inherited; unrelated secrets are removed.
 <!-- /host:codex -->
 <!-- host:claude -->
 - Each phase runs as an isolated `claude -p --output-format stream-json`
@@ -270,9 +275,12 @@ Notes:
   (`:xhigh`), or is a multi-segment openrouter path (≥ 2 slashes) is dropped so
   opencode falls back to its configured default; a clean `provider/model` id
   passes through. Every child uses `--pure` to disable external plugins.
-  Read-only phases inject a deny-mutations permission policy via
-  `OPENCODE_CONFIG_CONTENT`; mutating/default phases fail closed unless the
+  Read-only phases inject a default-deny permission policy via
+  `OPENCODE_CONFIG_CONTENT`, allowing only known read/list/search built-ins and
+  denying inherited custom/MCP tools; mutating/default phases fail closed unless the
   operator explicitly sets `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`.
+  Children inherit only platform/proxy/CA, OpenCode config, and supported
+  provider variables; unrelated secrets are removed.
 <!-- /host:opencode -->
 <!-- host:grok -->
 - Each phase runs as an isolated `grok -p --output-format streaming-json`
@@ -290,9 +298,16 @@ Notes:
   in `~/.grok/sandbox.toml`; built-in profiles are rejected because Grok may
   warn and continue unsandboxed when enforcement is unavailable. The custom
   profile then runs with `--always-approve`. A `max_turns_reached` event fails
-  the phase rather than returning partial text. Grok 0.2.93 reports no usage, so its MCP adapter rejects
-  flows with `budget` rather than pretending to enforce an unobservable ceiling.
+  the phase rather than returning partial text. Grok 0.2.93 reports no usage, so
+  its MCP adapter rejects every flow with `budget` rather than pretending to
+  enforce an unobservable threshold.
+  Children inherit only platform/proxy/CA and Grok/xAI/Taskflow-Grok variables;
+  unrelated secrets are removed.
 <!-- /host:grok -->
+
+For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+task-specific environment variables by listing their names in the
+comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -432,6 +447,7 @@ Each entry is one of:
 |----------|--------|
 | `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
 | `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
+| `PI_TASKFLOW_CHILD_ENV_ALLOW` | Comma-separated names of extra task-specific environment variables to pass intentionally to Codex/OpenCode/Grok children. Unlisted application secrets are removed. |
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
 | `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting known mutating tools to use narrow `--tools` + `bypassPermissions`; unknown names always fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |

@@ -109,6 +109,16 @@ test("claude child env: keeps platform/provider settings and drops unrelated sec
 	});
 });
 
+test("claude child env: respects the shared explicit allowlist escape hatch", () => {
+	const env = claudeChildEnv({
+		PI_TASKFLOW_CHILD_ENV_ALLOW: "custom_token, mixed_Case",
+		CUSTOM_TOKEN: "kept",
+		mixed_case: "also-kept",
+		OTHER_SECRET: "dropped",
+	});
+	assert.deepEqual(env, { CUSTOM_TOKEN: "kept", mixed_case: "also-kept" });
+});
+
 // --- model resolution -------------------------------------------------------
 
 test("claude model: flat id/alias passes through", () => {

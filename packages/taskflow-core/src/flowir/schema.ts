@@ -143,19 +143,24 @@ export interface FlowIREdge {
 }
 
 // ---------------------------------------------------------------------------
-// FlowIRBudget — run-wide cost / token ceiling
+// FlowIRBudget — run-wide observed-usage stop-loss
 // ---------------------------------------------------------------------------
 
 /**
- * Run-wide budget ceiling. Exceeding it halts the run (remaining phases are
- * skipped). Structurally identical to the DSL `Budget` (schema.ts); mirrored
+ * Run-wide observed-usage stop-loss. Once reported usage exceeds it, no new
+ * model call is admitted and remaining phases are skipped; a call already in
+ * flight may overshoot the threshold. Ordinary budgeted DAG layers and
+ * map/parallel/tournament fan-out use serial admission, limiting new-call
+ * overshoot to one call. A `race` necessarily admits competing branches
+ * together, so all already-active race branches may contribute overshoot.
+ * Structurally identical to the DSL `Budget` (schema.ts); mirrored
  * here so the FlowIR contract is self-contained and doesn't leak DSL types to
  * pure IR consumers (the event-sourced kernel).
  */
 export interface FlowIRBudget {
-	/** Halt once accumulated cost exceeds this many USD. */
+	/** Stop admitting calls once observed accumulated cost exceeds this many USD. */
 	maxUSD?: number;
-	/** Halt once accumulated input+output tokens exceed this. */
+	/** Stop admitting calls once observed accumulated input+output tokens exceed this. */
 	maxTokens?: number;
 }
 
@@ -204,7 +209,7 @@ export interface FlowIR {
 	edges?: FlowIREdge[];
 	/** Declared invocation arguments (DSL `Taskflow.args`). */
 	args?: Record<string, unknown>;
-	/** Run-wide cost / token ceiling. */
+	/** Run-wide observed-usage stop-loss; an in-flight call may overshoot. */
 	budget?: FlowIRBudget;
 	/** Default max concurrent subagents. */
 	concurrency?: number;

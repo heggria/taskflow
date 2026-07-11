@@ -90,16 +90,20 @@ If you have not installed taskflow yet, pick your host:
   </Tab>
   <Tab value="Grok">
     ```toml title="~/.grok/sandbox.toml"
+    [profiles.taskflow-readonly]
+    extends = "read-only"
+
     [profiles.taskflow-workspace]
     extends = "workspace"
     ```
     ```bash title="Register Grok Build MCP"
+    export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
     export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
-    grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+    grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
     # Public plugin source is not published yet. Checkout-only:
     # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
-    Mutating or omitted-tool phases fail closed unless this custom profile is configured.
+    Read-only phases and mutating or omitted-tool phases each fail closed unless their matching custom profile is configured.
   </Tab>
 </Tabs>
 

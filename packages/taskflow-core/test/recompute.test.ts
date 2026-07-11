@@ -112,6 +112,38 @@ test("recompute: cascade — seed output changed → downstream re-runs", async 
 	assert.equal(record.length, executedBefore + 3, "all three phases re-executed");
 });
 
+test("recompute: failed seed stops and preserves the last known-good graph", async () => {
+	const record: string[] = [];
+	let failScout = false;
+	const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => {
+		record.push(task);
+		if (failScout && task === "scan") {
+			return {
+				agent, task, exitCode: 1, output: "", stderr: "provider failed",
+				usage: { ...emptyUsage(), output: 3 }, stopReason: "error", errorMessage: "provider failed",
+			};
+		}
+		return {
+			agent, task, exitCode: 0, output: `good:${task}`, stderr: "",
+			usage: { ...emptyUsage(), output: 3 }, stopReason: "end",
+		};
+	};
+	const deps = baseDeps(runTask);
+	const state = mkState(DEF);
+	await executeTaskflow(state, deps);
+	const before = structuredClone(state.phases);
+	const callsBefore = record.length;
+
+	failScout = true;
+	const result = await recomputeTaskflow(state, deps, ["scout"], { dryRun: false });
+
+	assert.equal(result.report.aborted, true, "a failed speculative recompute must be non-persistable");
+	assert.deepEqual(result.report.rerun, ["scout"]);
+	assert.equal(result.report.decisions.find((d) => d.phaseId === "scout")?.outcome, "failed");
+	assert.deepEqual(result.state.phases, before, "failed phase and valid downstream rows stay untouched");
+	assert.equal(record.length, callsBefore + 1, "downstream recomputation stops immediately");
+});
+
 test("recompute: a phase outside the frontier is reused untouched", async () => {
 	const record: string[] = [];
 	const deps = baseDeps(mockRunner((t) => `out:${t}`, record));

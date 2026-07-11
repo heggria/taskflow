@@ -32,7 +32,7 @@ You've hit the wall when **any** of these become true:
 | **Conditional routing** | ✗ | **`when` guards + `join: any` OR-joins** |
 | **Retry / fault tolerance** | ✗ | **per-phase `retry` + auto-retry on transient errors** |
 | **Human approval** mid-flow | ✗ | **`approval` phases (approve / reject / edit)** |
-| **Spend ceiling** | ✗ | **run-wide `budget` (USD / token caps)** |
+| **Observed-usage stop-loss** | ✗ | **run-wide `budget` (USD / token thresholds; in-flight work may overshoot)** |
 | **Competitive selection** | ✗ | **`tournament` — N variants + a judge** |
 | **Live graph view** | opaque while running | **live DAG render with timing + cost** |
 
@@ -56,7 +56,7 @@ Agent: [12 subagent calls → 12 full transcripts in your context]
   "name": "security-review",
   "phases": [
     { "id": "discover", "agent": "scout", "task": "List files changed since origin/main" },
-    { "id": "review", "map": "{steps.discover.json.files}", "agent": "security-reviewer",
+    { "id": "review", "type": "map", "over": "{steps.discover.json.files}", "agent": "security-reviewer",
       "task": "Audit {item} for vulnerabilities", "concurrency": 4 },
     { "id": "report", "agent": "executor", "dependsOn": ["review"],
       "task": "Merge the per-file reviews into one report" }

@@ -26,6 +26,9 @@ breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
 
 ## Shared Context Tree (blackboard + supervision) — opt-in
 
+> **0.2.0 host scope:** context-tool injection is implemented by `pi-taskflow`.
+> Codex, Claude, OpenCode, and Grok runners do not expose `ctx_*` tools yet.
+
 By default subagents are fully isolated: they share nothing and only return a
 final output string. Opt a phase in with `shareContext: true` (or
 `contextSharing: true` at the flow level for every phase) to give its subagent

@@ -329,3 +329,35 @@ test("a host without usage accounting refuses budgeted runs before spawning", as
 	assert.match(result.content?.[0]?.text ?? "", /does not report token or cost usage/i);
 	assert.equal(calls, 0);
 });
+
+test("a tokens-only host accepts maxTokens but refuses maxUSD before spawning", async () => {
+	let calls = 0;
+	const runner: SubagentRunner<AgentConfig> = {
+		usageAccounting: "tokens-only",
+		runTask: async (_cwd, _agents, agent, task) => {
+			calls++;
+			return { agent, task, exitCode: 0, output: "ok", stderr: "", usage: { ...emptyUsage(), input: 1 } };
+		},
+	};
+	const tools = makeToolHandlers(process.cwd(), runner);
+	const tokenResult = (await tools.taskflow_run?.({
+		define: {
+			name: "token-budget",
+			budget: { maxTokens: 10 },
+			phases: [{ id: "run", type: "agent", agent: "executor", task: "go", final: true }],
+		},
+	})) as { isError?: boolean };
+	assert.equal(tokenResult.isError, false);
+	assert.equal(calls, 1);
+
+	const dollarResult = (await tools.taskflow_run?.({
+		define: {
+			name: "dollar-budget",
+			budget: { maxUSD: 1 },
+			phases: [{ id: "run", type: "agent", agent: "executor", task: "go", final: true }],
+		},
+	})) as { isError?: boolean; content?: Array<{ text?: string }> };
+	assert.equal(dollarResult.isError, true);
+	assert.match(dollarResult.content?.[0]?.text ?? "", /reports token usage but not cost/i);
+	assert.equal(calls, 1);
+});

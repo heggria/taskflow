@@ -69,7 +69,15 @@ export function mergeOpts(
 			) {
 				continue;
 			}
-			if (key === "branches" && ts.isArrayLiteralExpression(p.initializer)) continue;
+				if (key === "branches" && ts.isArrayLiteralExpression(p.initializer)) continue;
+				if (
+					(key === "request" || key === "input") &&
+					(ts.isStringLiteral(p.initializer) ||
+						ts.isNoSubstitutionTemplateLiteral(p.initializer) ||
+						ts.isTemplateExpression(p.initializer))
+				) {
+					continue;
+				}
 			const v = staticValue();
 			if (v !== undefined) out[key] = v;
 			continue;
@@ -167,7 +175,6 @@ export function mergeOpts(
 			key === "judgeAgent" ||
 			key === "mode" ||
 			key === "use" ||
-			key === "onBlock" ||
 			key === "cancelLosers" ||
 			key === "expandMode" ||
 			key === "maxNodes"

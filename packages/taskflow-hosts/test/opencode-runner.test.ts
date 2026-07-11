@@ -28,6 +28,7 @@ test("opencode parser: folds a real turn into final text + usage", () => {
 	for (const line of REAL_STREAM) foldOpencodeEventLine(acc, line);
 
 	assert.equal(acc.finalText, "pong", "final answer = text part");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined);
 	assert.equal(acc.usage.turns, 1, "one step_finish = one turn");
 	assert.equal(acc.usage.input, 15164);
@@ -62,6 +63,7 @@ test("opencode parser: streaming text parts within a step concatenate", () => {
 	foldOpencodeEventLine(acc, `{"type":"text","part":{"type":"text","text":"the ans"}}`);
 	foldOpencodeEventLine(acc, `{"type":"text","part":{"type":"text","text":"wer is X"}}`);
 	assert.equal(acc.finalText, "the answer is X");
+	assert.equal(acc.terminalSeen, false, "text without step_finish is not terminal");
 });
 
 test("opencode parser: a bash tool_use becomes a $-prefixed activity for streaming", () => {

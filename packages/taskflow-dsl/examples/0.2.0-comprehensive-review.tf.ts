@@ -24,7 +24,7 @@ export default flow(
 	},
 	(ctx) => {
 		ctx.concurrency(6);
-		ctx.budget({ maxTokens: 100_000_000, maxUSD: 12 });
+		ctx.budget({ maxTokens: 100_000_000 });
 
 		const repoState = script(
 			[
@@ -182,7 +182,7 @@ export default flow(
 
 	BEST ADVERSARIAL REVIEW:
 	${parts.strategyTournament.output}`,
-					{ agent: "final-arbiter", timeout: 900_000 },
+					{ agent: "final-arbiter", tools: ["read", "grep", "ls"], timeout: 900_000 },
 				),
 			{ id: "synthesis" },
 		);
@@ -214,6 +214,7 @@ export default flow(
 					required: ["verdict", "reason"],
 				},
 				retry: { max: 2, backoffMs: 0 },
+				tools: ["read", "grep", "ls"],
 			},
 			(input) => `Judge the review REPORT QUALITY, not whether the code is flawless.
 	PASS only if every blocker is evidence-backed, contradictions are resolved, and the
@@ -231,6 +232,7 @@ export default flow(
 			maxIterations: 3,
 			convergence: true,
 			reflexion: true,
+			tools: ["read", "grep", "ls"],
 			until: "{steps.refined.json.done} == true",
 			output: json<{ done: boolean; report: string }>(),
 			task: `Produce ONLY JSON {"done":boolean,"report":"..."}.
@@ -261,6 +263,7 @@ export default flow(
 						id: "challenge",
 						type: "agent",
 						agent: "critic",
+						tools: ["read", "grep", "ls"],
 						task: "Try to falsify the report below. Return only code-backed counterexamples or NO COUNTEREXAMPLE.\n{args.report}",
 						final: true,
 					},
@@ -281,6 +284,7 @@ export default flow(
 						id: "verify-claims",
 						type: "agent",
 						agent: "verifier",
+						tools: ["read", "grep", "ls"],
 						task: "Check the final report against the repository. List unsupported claims, or VERIFIED if all material claims hold.\n{args.report}",
 						final: true,
 					},
@@ -310,7 +314,7 @@ export default flow(
 
 	EXPANDED EVIDENCE VERIFICATION:
 					${parts.expandedEvidence.output}`,
-					{ agent: "final-arbiter", timeout: 900_000 },
+					{ agent: "final-arbiter", tools: ["read", "grep", "ls"], timeout: 900_000 },
 					),
 				{ id: "final-decision", final: true },
 			);

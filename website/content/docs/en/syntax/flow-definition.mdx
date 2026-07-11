@@ -5,7 +5,7 @@ description: The top-level fields that wrap phases into a taskflow.
 
 A **flow definition** is a single JSON object that declares a multi-phase workflow: its name, the arguments it accepts, how aggressively it should parallelize, what it is allowed to cost, and the ordered array of phases that form its DAG. Every taskflow — whether saved to disk or passed inline as a one-liner — desugars into the same shape before the runtime validates and executes it.
 
-You might be wondering: *do I need all these fields?* No. Only `phases` is structurally required (and `name` for saved flows). Everything else tunes behavior — concurrency, cost ceilings, caching defaults, strictness. This page introduces each one in the order you will actually need it, then collects the exhaustive reference material at the end.
+You might be wondering: *do I need all these fields?* No. Only `phases` is structurally required (and `name` for saved flows). Everything else tunes behavior — concurrency, observed-usage cost stop-losses, caching defaults, strictness. This page introduces each one in the order you will actually need it, then collects the exhaustive reference material at the end.
 
 ## Quick mental model
 
@@ -104,7 +104,7 @@ Above, the per-phase `concurrency: 4` overrides the flow-level `16` for that pha
 
 ## Cap the cost: `budget`
 
-Some flows are open-ended — a deep research loop, a tournament with many variants. A `budget` lets you set a run-wide ceiling on USD cost and/or token usage. When either is exceeded, remaining phases are **skipped** and the run ends with status `blocked`.
+Some flows are open-ended — a deep research loop, a tournament with many variants. A `budget` sets a run-wide observed-usage stop-loss for USD cost and/or tokens. Once either breach is reported, no new call is admitted, remaining phases are **skipped**, and the run ends with status `blocked`.
 
 ```json title="Setting a budget"
 {
@@ -118,7 +118,7 @@ Some flows are open-ended — a deep research loop, a tournament with many varia
 ```
 
 <Callout type="info">
-  Both fields are optional — set either or both. Already-running subagents are not interrupted mid-call; the ceiling is checked **between** phases. A budget of `0` is treated as "exceed immediately," useful only for dry structural checks.
+  Both fields are optional — set either or both. Already-running subagents are not interrupted mid-call and may overshoot. Ordinary budgeted DAG/map/parallel/tournament calls are admitted serially; a `race` necessarily starts its competitors together. Codex accepts only `maxTokens` and rejects `maxUSD`; Grok rejects every budget. A budget of `0` is treated as "exceed immediately," useful only for dry structural checks.
 </Callout>
 
 ## Where do agents come from? `agentScope`
@@ -202,7 +202,7 @@ A few rules govern how `incremental` interacts with per-phase settings:
 
 ## Share context between phases: `contextSharing`
 
-When several phases read the same files, you can opt them all into the Shared Context Tree with a single flag. `contextSharing: true` is shorthand for `shareContext: true` on every phase — each phase's subagent gets `ctx_read`/`ctx_write` (a blackboard shared with siblings and ancestors) and `ctx_report`/`ctx_spawn` (report upward + queue child tasks). Individual phases can still opt out with `shareContext: false`.
+When several phases read the same files, you can opt them all into the Shared Context Tree with a single flag. `contextSharing: true` is shorthand for `shareContext: true` on every phase. In 0.2.0, the Pi adapter injects `ctx_read`/`ctx_write` and `ctx_report`/`ctx_spawn`; Codex, Claude, OpenCode, and Grok runners do not inject these tools yet. Individual phases can still opt out with `shareContext: false`.
 
 ```json title="Context sharing on"
 {
@@ -349,7 +349,7 @@ The rest of this page is the exhaustive reference — every top-level field, the
 | `version` | `number` | `1` | No | Schema/flow version tag for author tracking. Not enforced. |
 | `args` | `Record<string, ArgSpec>` | — | No | Declared invocation arguments with defaults. See [`ArgSpec`](#argspec). |
 | `concurrency` | `number` | `8` | No | Default max concurrent subagents. Inherited by `map`/`parallel` phases. |
-| `budget` | `Budget` | — | No | Run-wide cost / token ceiling. See [`budget`](#cap-the-cost-budget). |
+| `budget` | `Budget` | — | No | Run-wide observed-usage cost / token stop-loss. See [`budget`](#cap-the-cost-budget). |
 | `agentScope` | `"user" \| "project" \| "both"` | `"user"` | No | Where to discover agents. |
 | `strictInterpolation` | `boolean` | `false` | No | Promote validation warnings to hard errors. |
 | `contextSharing` | `boolean` | `false` | No | Enable the Shared Context Tree for all phases. |

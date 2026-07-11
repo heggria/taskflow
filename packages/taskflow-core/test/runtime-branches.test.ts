@@ -341,6 +341,36 @@ test("budget: maxTokens halts the run when exceeded", async () => {
 	assert.ok(!executed.includes("step3"), `step3 should be skipped, but executed: ${executed}`);
 });
 
+test("budget: independent phases are admitted serially under a hard ceiling", async () => {
+	const def: Taskflow = {
+		name: "budget-concurrent-admission",
+		budget: { maxTokens: 1 },
+		concurrency: 4,
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "a" },
+			{ id: "b", type: "agent", agent: "a", task: "b" },
+		],
+	};
+	let inFlight = 0;
+	let maxInFlight = 0;
+	let calls = 0;
+	const deps = baseDeps(async (_c, _ag, _n, task): Promise<RunResult> => {
+		calls++;
+		inFlight++;
+		maxInFlight = Math.max(maxInFlight, inFlight);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		inFlight--;
+		return {
+			agent: "a", task, exitCode: 0, output: task, stderr: "",
+			usage: { ...emptyUsage(), output: 2 }, stopReason: "end",
+		};
+	});
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(maxInFlight, 1, "budgeted siblings must never be admitted concurrently");
+	assert.equal(calls, 1, "the exhausted first call prevents admission of its sibling");
+	assert.equal(res.state.status, "blocked");
+});
+
 // ════════════════════════════════════════════════════════════════════
 // WHEN CONDITIONAL GUARDS
 // ════════════════════════════════════════════════════════════════════

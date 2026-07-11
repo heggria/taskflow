@@ -79,7 +79,7 @@ summarize every module.
 
 Why each piece: `expect`+`retry` on discover means a chatty scout gets a second
 chance instead of feeding garbage to the map; `concurrency: 4` protects rate
-limits; the gate is a *different* agent than the auditor; `budget` bounds the
+limits; the gate is a *different* agent than the auditor; `budget` limits the
 fan-out.
 
 **Variant — per-item caching for repeated audits:** add

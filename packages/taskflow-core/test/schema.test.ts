@@ -39,6 +39,41 @@ test("validateTaskflow: per-type requirements", () => {
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow" }] }).ok, false); // no use
 });
 
+test("validateTaskflow: rejects unknown fields instead of silently changing phase semantics", () => {
+	const phaseTypo = validateTaskflow({
+		name: "x",
+		phases: [{ id: "review", map: "[1,2]", task: "Audit {item}" }],
+	});
+	assert.equal(phaseTypo.ok, false);
+	assert.match(phaseTypo.errors.join("\n"), /unknown field 'map'/i);
+
+	const flowTypo = validateTaskflow({
+		name: "x",
+		budegt: { maxTokens: 10 },
+		phases: [{ id: "work", task: "ok" }],
+	});
+	assert.equal(flowTypo.ok, false);
+	assert.match(flowTypo.errors.join("\n"), /unknown field 'budegt'/i);
+
+	for (const budget of [
+		{ maxToken: 1 },
+		"none",
+		{ maxTokens: "1" },
+		{ maxUSD: -1 },
+		{},
+	]) {
+		const invalid = validateTaskflow({ name: "x", budget, phases: [{ id: "work", task: "ok" }] });
+		assert.equal(invalid.ok, false, `budget must fail closed: ${JSON.stringify(budget)}`);
+	}
+
+	const branchTypo = validateTaskflow({
+		name: "x",
+		phases: [{ id: "fan", type: "parallel", branches: [{ task: "x", agnent: "a" }] }],
+	});
+	assert.equal(branchTypo.ok, false);
+	assert.match(branchTypo.errors.join("\n"), /unknown field 'agnent'/i);
+});
+
 test("validateTaskflow: new phase types and fields", () => {
 	// flow with use is valid
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow", use: "other" }] }).ok, true);

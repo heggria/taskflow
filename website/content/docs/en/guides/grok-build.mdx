@@ -136,7 +136,9 @@ Each phase's subagent runs as an isolated `grok -p --output-format streaming-jso
   Configure `[profiles.taskflow-workspace]` with `extends = "workspace"` and `[profiles.taskflow-readonly]` with `extends = "read-only"` in `~/.grok/sandbox.toml`. Export `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace` and `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly` before starting the MCP server. Custom profiles fail closed when enforcement is unavailable.
 </Callout>
 
-Effective `thinking` maps to Grok's `--reasoning-effort` flag (`off` maps to `none`). A `max_turns_reached` event fails the phase instead of accepting partial text. Grok 0.2.93 emits no token/cost usage in `streaming-json`, so the Grok MCP adapter refuses flows declaring `budget` rather than silently ignoring the ceiling.
+Effective `thinking` maps to Grok's `--reasoning-effort` flag (`off` maps to `none`). A `max_turns_reached` event fails the phase instead of accepting partial text. Grok 0.2.93 emits no token/cost usage in `streaming-json`, so the Grok MCP adapter refuses every flow declaring `budget` rather than silently ignoring an unobservable threshold.
+
+Grok children inherit only platform/proxy/CA plus Grok/xAI/Taskflow-Grok variables. Unrelated parent secrets are removed. Add an intentional task variable by name with the comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
 
 ## Long-running flows
 

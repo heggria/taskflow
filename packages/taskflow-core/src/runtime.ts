@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { contractViolations } from "./contract.ts";
-import { isFailed, isTransientError, mapWithConcurrencyLimit, sanitizeErrorMessage } from "./runner-core.ts";
+import { isFailed, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS, sanitizeErrorMessage } from "./runner-core.ts";
 import type { LiveUpdate, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 /** The host-neutral subagent runner signature the engine drives. A host adapter
@@ -34,6 +34,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 	errorMessage: "No subagent runner injected",
 	stopReason: "error",
 });
+export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
@@ -75,7 +76,7 @@ export interface RuntimeDeps {
 	/** Whether the host reports authoritative token/cost usage. A host that
 	 *  cannot observe usage must reject every actually-executed budgeted flow,
 	 *  including nested/dynamic flows, rather than silently bypassing the cap. */
-	usageAccounting?: "available" | "unavailable";
+	usageAccounting?: "available" | "tokens-only" | "unavailable";
 	signal?: AbortSignal;
 	/** Persist run state after each phase (for resume). */
 	persist?: (state: RunState) => void;
@@ -1142,10 +1143,13 @@ async function executePhaseInner(
 			// Deterministic: a timed-out call is never retried (would double-spend).
 			let timedOut = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
+			let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
 			const removers: Array<() => void> = [];
 			let callSignal: AbortSignal | undefined;
+			let timeoutController: AbortController | undefined;
 			if (phaseTimeoutMs || extraSignal) {
 				const ac = new AbortController();
+				timeoutController = ac;
 				callSignal = ac.signal;
 				if (deps.signal?.aborted || extraSignal?.aborted) ac.abort();
 				else {
@@ -1160,17 +1164,34 @@ async function executePhaseInner(
 						removers.push(() => extraSignal.removeEventListener("abort", fn));
 					}
 				}
-				if (phaseTimeoutMs) {
-					timer = setTimeout(() => {
-						timedOut = true;
-						ac.abort();
-					}, phaseTimeoutMs);
-				}
 			}
 			try {
-				last = await baseRun(agentName, task, onLive, ctxNodeId, callSignal);
+				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal);
+				if (phaseTimeoutMs && timeoutController) {
+					const timeoutFallback = new Promise<RunResult>((resolve) => {
+						timer = setTimeout(() => {
+							timedOut = true;
+							timeoutController?.abort();
+							forceReturnTimer = setTimeout(() => resolve({
+								agent: agentName,
+								task,
+								exitCode: 1,
+								output: "",
+								stderr: "",
+								usage: emptyUsage(),
+								stopReason: "error",
+								errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
+								phaseTimeout: true,
+							}), PHASE_TIMEOUT_ABORT_GRACE_MS);
+						}, phaseTimeoutMs);
+					});
+					last = await Promise.race([invocation, timeoutFallback]);
+				} else {
+					last = await invocation;
+				}
 			} finally {
 				if (timer) clearTimeout(timer);
+				if (forceReturnTimer) clearTimeout(forceReturnTimer);
 				for (const r of removers) r();
 			}
 			if (timedOut) {
@@ -1185,6 +1206,12 @@ async function executePhaseInner(
 					phaseTimeout: true,
 				};
 				usages.push(last.usage);
+				traceEmit(deps, {
+					ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "subagent-call",
+					input: { agent: agentName, model: phase.model, task, preRead, nodePath: ctxNodeId ?? phase.id, attempt },
+					output: { text: last.output, model: last.model, usage: last.usage, stopReason: last.stopReason },
+				});
+				traceFlush(deps, phase.id);
 				break;
 			}
 			usages.push(last.usage);
@@ -1206,6 +1233,15 @@ async function executePhaseInner(
 			// so the TUI / budget guard see the in-flight spend on every attempt.
 			const liveRetry = state.phases[phase.id];
 			if (liveRetry) liveRetry.usage = aggregateUsage(usages);
+			// Persist every attempt, not only the final aggregate. This is required
+			// for honest replay/cost accounting when a transient or explicit retry
+			// succeeds after earlier spend.
+			traceEmit(deps, {
+				ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "subagent-call",
+				input: { agent: agentName, model: phase.model, task, preRead, nodePath: ctxNodeId ?? phase.id, attempt },
+				output: { text: last.output, model: last.model, usage: last.usage, stopReason: last.stopReason },
+			});
+			traceFlush(deps, phase.id);
 			if (!isFailed(last)) break;
 			// Stop retrying on abort (run-level or race cancel) or once over budget.
 			if (deps.signal?.aborted || extraSignal?.aborted || overBudget(state).over) break;
@@ -1273,29 +1309,6 @@ async function executePhaseInner(
 		}
 		if (usages.length > 1) last.usage = aggregateUsage(usages);
 		last.attempts = usages.length;
-		// Trace: record this subagent call (the load-bearing record a future
-		// replay consumes). Fail-open. nodePath carries the item/variant
-		// discriminator (e.g. "review", "review-item-3", "gate-judge").
-		traceEmit(deps, {
-			ts: Date.now(),
-			runId: state.runId,
-			phaseId: phase.id,
-			kind: "subagent-call",
-			input: {
-				agent: agentName,
-				model: phase.model,
-				task,
-				preRead,
-				nodePath: ctxNodeId ?? phase.id,
-				attempt: usages.length > 0 ? usages.length - 1 : undefined,
-			},
-			output: {
-				text: last.output,
-				model: last.model,
-				usage: last.usage,
-				stopReason: last.stopReason,
-			},
-		});
 		return last;
 	};
 
@@ -1340,7 +1353,11 @@ async function executePhaseInner(
 			emitProgress();
 		};
 		refresh();
-		return mapWithConcurrencyLimit(items, concurrency, async (it, idx) => {
+		// Usage is only authoritative after a call reports it. Serial admission for
+		// budgeted fan-out prevents N siblings from all observing the same remaining
+		// allowance and overshooting it concurrently.
+		const admissionConcurrency = state.def.budget ? 1 : concurrency;
+		return mapWithConcurrencyLimit(items, admissionConcurrency, async (it, idx) => {
 			// Budget guard: stop spawning new fan-out items once the run is over budget.
 			if (overBudget(state).over) {
 				done++;
@@ -3181,6 +3198,19 @@ export async function recomputeTaskflow(
 		const changedUpstreams = depsFor(id).filter((u) => outputMoved.has(u));
 		try {
 			const ps = await executePhase(phase, newState, deps, newState.phases[id], noop, 0, execOpts);
+			if (ps.status === "failed") {
+				// Recompute is speculative. Preserve the last known-good row for the
+				// failed phase and every downstream phase, then stop. Mark the report
+				// aborted so callers cannot persist a partially refreshed graph.
+				rerun.push(id);
+				decisions.push({
+					phaseId: id,
+					outcome: "failed",
+					reason: ps.error ?? "re-execution returned a failed phase",
+				});
+				aborted = true;
+				break;
+			}
 			newState.phases[id] = ps;
 			// A phase counts as "rerun" if it was a forced seed OR its result moved;
 			// otherwise it hit its cache (inputHash unchanged) → early cutoff.
@@ -3208,11 +3238,16 @@ export async function recomputeTaskflow(
 						: undefined,
 				});
 			}
-		} catch {
+		} catch (error) {
 			// A failing recompute phase is recorded as rerun (it was attempted).
 			rerun.push(id);
-			outputMoved.add(id);
-			decisions.push({ phaseId: id, outcome: "failed", reason: "re-execution attempted but the phase failed" });
+			decisions.push({
+				phaseId: id,
+				outcome: "failed",
+				reason: `re-execution threw: ${error instanceof Error ? error.message : String(error)}`,
+			});
+			aborted = true;
+			break;
 		}
 	}
 	// Frontier-external phases were never touched — record them as reused.
@@ -3237,7 +3272,7 @@ export async function recomputeTaskflow(
 
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
-	const runnerUsageAccounting = (deps.runTask as (RunTaskFn & { usageAccounting?: "available" | "unavailable" }) | undefined)
+	const runnerUsageAccounting = (deps.runTask as (RunTaskFn & { usageAccounting?: "available" | "tokens-only" | "unavailable" }) | undefined)
 		?.usageAccounting;
 	if (!deps.usageAccounting && runnerUsageAccounting) {
 		// Preserve a runner-advertised capability across the wrapper functions used
@@ -3249,6 +3284,12 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 		if (deps.usageAccounting === "unavailable" && def.budget) {
 			throw new Error(
 				`Usage accounting is unavailable for this host; refusing budgeted flow '${def.name}' because its token/USD ceiling cannot be enforced`,
+			);
+		}
+		if (deps.usageAccounting === "tokens-only" && def.budget?.maxUSD !== undefined) {
+			throw new Error(
+				"This host reports tokens but not cost, so budget.maxUSD cannot be enforced. " +
+					"Use budget.maxTokens or a host with cost accounting.",
 			);
 		}
 		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
@@ -3403,7 +3444,11 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			break;
 		}
 		// Phases within a layer have no inter-dependencies → run concurrently.
-		const layerConcurrency = Math.max(1, def.concurrency ?? 8);
+		// A usage report arrives only after a subagent call. With a declared hard
+		// budget, concurrent layer admission would let every sibling observe the
+		// same remaining allowance. Serialize admission so no additional call can
+		// begin after a previous call has exhausted the cap.
+		const layerConcurrency = def.budget ? 1 : Math.max(1, def.concurrency ?? 8);
 		await mapWithConcurrencyLimit(layer, layerConcurrency, async (phase) => {
 			// Snapshot prior state BEFORE marking running, so resume cache checks work.
 			const prior = state.phases[phase.id];

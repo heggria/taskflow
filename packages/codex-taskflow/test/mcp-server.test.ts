@@ -13,6 +13,8 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { serveStdio } from "taskflow-mcp-core/jsonrpc";
 import { makeMcpHandlers, makeToolHandlers } from "../src/mcp/server.ts";
+import { persistTerminalRun } from "taskflow-mcp-core/server";
+import type { RunState } from "taskflow-core";
 
 /** Send a list of JSON-RPC messages through the server, collect responses. */
 async function rpcRoundtrip(messages: object[]): Promise<any[]> {
@@ -177,11 +179,44 @@ test("mcp: taskflow_verify with a missing defineFile returns a clear error", asy
 	assert.match(res.error.message, /defineFile not found:/);
 });
 
+test("mcp: defineFile cannot escape cwd or the OS temp directory", async (t) => {
+	const fs = await import("node:fs");
+	const path = await import("node:path");
+	const outside = process.platform === "win32"
+		? path.join(process.env.SystemRoot ?? "C:\\Windows", "win.ini")
+		: "/etc/hosts";
+	if (!fs.existsSync(outside)) return t.skip(`no stable outside fixture at ${outside}`);
+	const [res] = await rpcRoundtrip([
+		{
+			jsonrpc: "2.0",
+			id: 101,
+			method: "tools/call",
+			params: { name: "taskflow_verify", arguments: { defineFile: outside } },
+		},
+	]);
+	assert.equal(res.error.code, -32602);
+	assert.match(res.error.message, /contained in the server cwd or OS temp directory/i);
+});
+
 test("mcp: tools/call unknown tool returns invalid-params", async () => {
 	const [res] = await rpcRoundtrip([
 		{ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "nope", arguments: {} } },
 	]);
 	assert.equal(res.error.code, -32602);
+});
+
+test("mcp: tools/call enforces advertised argument schemas before dispatch", async () => {
+	for (const [id, arguments_] of [
+		[61, { query: "x", scope: "porject" }],
+		[62, { query: 42 }],
+		[63, { query: "x", unexpected: true }],
+	] as const) {
+		const [res] = await rpcRoundtrip([
+			{ jsonrpc: "2.0", id, method: "tools/call", params: { name: "taskflow_search", arguments: arguments_ } },
+		]);
+		assert.equal(res.error.code, -32602);
+		assert.match(res.error.message, /Invalid taskflow_search arguments/);
+	}
 });
 
 test("mcp: makeToolHandlers exposes the tools", () => {
@@ -190,6 +225,24 @@ test("mcp: makeToolHandlers exposes the tools", () => {
 		Object.keys(tools).sort(),
 		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
+});
+
+test("mcp: terminal persistence failure is surfaced", () => {
+	const state = {
+		runId: "persist-failure",
+		flowName: "persist-failure",
+		def: { name: "persist-failure", phases: [] },
+		args: {},
+		status: "completed",
+		phases: {},
+		createdAt: Date.now(),
+		updatedAt: Date.now(),
+		cwd: process.cwd(),
+	} as RunState;
+	const error = persistTerminalRun(state, { maxKeep: 1, maxAgeDays: 1 }, () => {
+		throw new Error("disk full");
+	});
+	assert.equal(error, "disk full");
 });
 
 test("mcp: taskflow_save + taskflow_search round-trip (the reuse flywheel)", async () => {
@@ -233,6 +286,33 @@ test("mcp: taskflow_search with empty query returns an error", async () => {
 	const res = (await tools.taskflow_search({ query: "" })) as { isError?: boolean; content: { text: string }[] };
 	assert.equal(res.isError, true);
 	assert.match(res.content[0].text, /requires `query`/);
+});
+
+test("mcp: inline run cannot increment a different saved flow's reuse metadata", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-inline-reuse-"));
+	fs.mkdirSync(path.join(cwd, ".pi", "taskflows"), { recursive: true });
+	const tools = makeToolHandlers(cwd);
+	try {
+		await tools.taskflow_save({
+			name: "saved-a",
+			definition: { name: "saved-a", phases: [{ id: "s", type: "script", run: "printf saved", final: true }] },
+			purpose: "saved flow",
+		});
+		const run = (await tools.taskflow_run({
+			name: "saved-a",
+			define: { name: "inline-b", phases: [{ id: "s", type: "script", run: "printf inline", final: true }] },
+			reusedFromSearch: true,
+		})) as { isError?: boolean };
+		assert.equal(run.isError, false);
+		const show = (await tools.taskflow_show({ name: "saved-a", json: true })) as { content: Array<{ text: string }> };
+		const parsed = JSON.parse(show.content[0].text) as { library?: { reuseCount?: number } };
+		assert.equal(parsed.library?.reuseCount, 0);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 // --- Codex-rendering ergonomics (see docs/codex-mcp.md) -------------------
