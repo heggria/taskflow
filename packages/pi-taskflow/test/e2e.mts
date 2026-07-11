@@ -9,6 +9,8 @@ import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const FLOW: Taskflow = {
 	name: "e2e-smoke",
@@ -52,7 +54,7 @@ async function main() {
 	console.log("valid ✓");
 
 	const settings = readSubagentSettings();
-	const { agents } = discoverAgents(process.cwd(), "user", settings.agentOverrides, settings.modelRoles, settings.taskflow);
+	const { agents } = discoverAgents(process.cwd(), "user", settings.modelRoles, settings.taskflow);
 	console.log(`discovered ${agents.length} agents; has scout: ${agents.some((a) => a.name === "scout")}`);
 
 	const state: RunState = {
@@ -67,47 +69,53 @@ async function main() {
 		cwd: process.cwd(),
 	};
 
-	console.log("== executing (real subagents) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(),
-		agents,
-		globalThinking: settings.globalThinking,
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			const running = Object.values(s.phases)
-				.filter((p) => p.status === "running")
-				.map((p) => p.id);
-			process.stdout.write(`\r  progress: ${done}/${s.def.phases.length} done` + (running.length ? ` | running: ${running.join(",")}` : "") + "        ");
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-smoke");
+	try {
+		console.log("== executing (real subagents) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				const running = Object.values(s.phases)
+					.filter((p) => p.status === "running")
+					.map((p) => p.id);
+				process.stdout.write(`\r  progress: ${done}/${s.def.phases.length} done` + (running.length ? ` | running: ${running.join(",")}` : "") + "        ");
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
 
-	console.log("\nPhase states:");
-	for (const p of FLOW.phases) {
-		const ps = res.state.phases[p.id];
-		console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}] -> ${JSON.stringify(ps?.output?.slice(0, 80))}`);
+		console.log("\nPhase states:");
+		for (const p of FLOW.phases) {
+			const ps = res.state.phases[p.id];
+			console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}] -> ${JSON.stringify(ps?.output?.slice(0, 80))}`);
+		}
+
+		console.log("\nFinal output:\n  ", res.finalOutput);
+
+		// Assertions
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["list phase done", res.state.phases.list?.status === "done"],
+			["map produced 3 sub-results", (res.state.phases.shout?.output?.match(/\[\d+\/3\]/g) ?? []).length === 3],
+			["final mentions ALPHA", /ALPHA/i.test(res.finalOutput)],
+			["final mentions BETA", /BETA/i.test(res.finalOutput)],
+			["final mentions GAMMA", /GAMMA/i.test(res.finalOutput)],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [name, ok] of checks) {
+			console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
+			if (!ok) allPass = false;
+		}
+		console.log(allPass ? "\n✅ E2E PASSED" : "\n❌ E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
 	}
-
-	console.log("\nFinal output:\n  ", res.finalOutput);
-
-	// Assertions
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["list phase done", res.state.phases.list?.status === "done"],
-		["map produced 3 sub-results", (res.state.phases.shout?.output?.match(/\[\d+\/3\]/g) ?? []).length === 3],
-		["final mentions ALPHA", /ALPHA/i.test(res.finalOutput)],
-		["final mentions BETA", /BETA/i.test(res.finalOutput)],
-		["final mentions GAMMA", /GAMMA/i.test(res.finalOutput)],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [name, ok] of checks) {
-		console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
-		if (!ok) allPass = false;
-	}
-	console.log(allPass ? "\n✅ E2E PASSED" : "\n❌ E2E FAILED");
-	process.exit(allPass ? 0 : 1);
 }
 
 main().catch((e) => {

@@ -16,6 +16,8 @@ import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
 import { runsDir, type RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const FLOW: Taskflow = {
 	name: "e2e-spawn-subflow",
@@ -31,7 +33,7 @@ const FLOW: Taskflow = {
 				`Call ctx_spawn with ONE assignment that uses "subflow" (not "task"). The ` +
 				`subflow must be {"phases":[ ... ]} with exactly two phases:\n` +
 				`  1. id "investigate" (type agent, agent "scout") — task: "List the exported ` +
-				`functions of extensions/usage.ts".\n` +
+				`functions of packages/taskflow-core/src/usage.ts".\n` +
 				`  2. id "summary" (type agent, agent "analyst", dependsOn ["investigate"], ` +
 				`final true) — task: "In one sentence, summarize: {steps.investigate.output}".\n` +
 				`Set "defaultAgent" to "scout". After the ctx_spawn call, reply DONE.`,
@@ -53,38 +55,46 @@ async function main() {
 		phases: {}, createdAt: Date.now(), updatedAt: Date.now(), cwd: process.cwd(),
 	};
 
-	console.log("== executing (real subagents) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(), agents, globalThinking: settings.globalThinking,
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			process.stdout.write(`\r  ${done}/${s.def.phases.length} done            `);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-spawn");
+	try {
+		console.log("== executing (real subagents) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				process.stdout.write(`\r  ${done}/${s.def.phases.length} done            `);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
 
-	const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
-	let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
-	try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
-	const spawnedChildren = (tree.nodes ?? []).filter((n) => n.parentNodeId === "lead");
-	const out = res.finalOutput ?? "";
+		const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
+		let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
+		try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
+		const spawnedChildren = (tree.nodes ?? []).filter((n) => n.parentNodeId === "lead");
+		const out = res.finalOutput ?? "";
 
-	console.log("\ntree nodes:", (tree.nodes ?? []).map((n) => `${n.nodeId}<-${n.parentNodeId ?? "-"}`).join(", "));
-	console.log("folded output (tail):\n", out.slice(-500));
+		console.log("\ntree nodes:", (tree.nodes ?? []).map((n) => `${n.nodeId}<-${n.parentNodeId ?? "-"}`).join(", "));
+		console.log("folded output (tail):\n", out.slice(-500));
 
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["lead spawned a child (subflow node registered)", spawnedChildren.length >= 1],
-		["spawn fold marker present", /ctx_spawn: \d+ child report/.test(out)],
-		["subflow did NOT fail validation/shape", !/failed validation|failed verification|not a Taskflow/.test(out)],
-		["subflow produced a summary (final inner phase ran)", out.length > 0 && !/zero phases|no-op/.test(out)],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
-	console.log(allPass ? "\n✅ SPAWN-SUBFLOW E2E PASSED" : "\n❌ SPAWN-SUBFLOW E2E FAILED");
-	process.exit(allPass ? 0 : 1);
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["lead spawned a child (subflow node registered)", spawnedChildren.length >= 1],
+			["spawn fold marker present", /ctx_spawn: \d+ child report/.test(out)],
+			["subflow did NOT fail validation/shape", !/failed validation|failed verification|not a Taskflow/.test(out)],
+			["subflow produced a summary (final inner phase ran)", out.length > 0 && !/zero phases|no-op/.test(out)],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
+		console.log(allPass ? "\n✅ SPAWN-SUBFLOW E2E PASSED" : "\n❌ SPAWN-SUBFLOW E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
+	}
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

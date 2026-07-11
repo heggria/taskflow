@@ -34,6 +34,8 @@ import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
 import { runsDir, saveRun, type RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const MARKER = `MAP-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
@@ -54,15 +56,15 @@ const FLOW: Taskflow = {
 				`The subflow MUST be {"phases":[...]} with these phases (use these EXACT ids and ` +
 				`fields, do not add others):\n\n` +
 				`1. {"id":"recon","type":"agent","agent":"scout","shareContext":true,"task":` +
-				`"Skim extensions/context-store.ts. Then ctx_write key 'map' with JSON ` +
+				`"Skim packages/taskflow-core/src/context-store.ts. Then ctx_write key 'map' with JSON ` +
 				`{marker:'${MARKER}',notes:'1 line on how the blackboard locking works'}. The ` +
 				`marker MUST be exactly ${MARKER}. Reply DONE."}\n\n` +
 				`2. {"id":"audit","type":"agent","agent":"analyst","shareContext":true,` +
 				`"dependsOn":["recon"],"task":"FIRST ctx_read key 'map' to reuse recon's survey ` +
-				`(do not re-derive it). Audit extensions/context-store.ts for ONE concrete issue ` +
+				`(do not re-derive it). Audit packages/taskflow-core/src/context-store.ts for ONE concrete issue ` +
 				`(cite a function). You MUST then call ctx_spawn with a 'subflow' of two phases ` +
 				`(this is required, not optional): ` +
-				`{id:'triage',agent:'analyst',task:'name the riskiest function in context-store.ts'} ` +
+				`{id:'triage',agent:'analyst',task:'name the riskiest function in packages/taskflow-core/src/context-store.ts'} ` +
 				`and {id:'fixplan',agent:'analyst',dependsOn:['triage'],final:true,` +
 				`task:'propose a concrete fix for {steps.triage.output}'}. END your reply with the ` +
 				`marker from the map you read."}\n\n` +
@@ -88,81 +90,89 @@ async function main() {
 		phases: {}, createdAt: Date.now(), updatedAt: Date.now(), cwd: process.cwd(),
 	};
 
-	console.log("== executing: lead → [recon → map(audit, may spawn grandchild) → roadmap] ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(), agents, globalThinking: settings.globalThinking,
-		persist: (s) => { saveRun(s); },
-		onProgress: (s) => {
-			const lead = s.phases.lead;
-			const sub = lead?.subProgress ? ` | subflow ${lead.subProgress.done}/${lead.subProgress.total}` : "";
-			process.stdout.write(`\r  lead ${lead?.status ?? "?"}${sub}                         `);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
-
-	const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
-	let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
-	try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
-	const nodes = tree.nodes ?? [];
-	const out = res.finalOutput ?? "";
-
-	// A spawned subflow runs as its OWN isolated nested run, so it gets its OWN
-	// ctx dir (named <childNodeId>-inline-*). The org tree therefore spans MULTIPLE
-	// tree.json files linked by the `-inline` naming — not one flat tree. To prove
-	// recursive depth (a phase INSIDE a spawned subflow itself spawning a child),
-	// we walk into the spawned subflow's ctx dir and look for a grandchild node.
-	const ctxRoot = path.join(runsDir(process.cwd()), "ctx");
-	let subflowCtxDirs: string[] = [];
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-org-tree");
 	try {
-		subflowCtxDirs = fs.readdirSync(ctxRoot)
-			.filter((d) => d.includes("-inline-"))
-			.map((d) => path.join(ctxRoot, d));
-	} catch { /* none */ }
-	// Pick the most recently modified inline ctx dir (this run's subflow).
-	subflowCtxDirs.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-	let grandchildFound = false;
-	let subflowTreeNodes: Array<{ nodeId: string; parentNodeId?: string; status: string }> = [];
-	if (subflowCtxDirs[0]) {
+		console.log("== executing: lead → [recon → map(audit, may spawn grandchild) → roadmap] ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			persist: (s) => { saveRun(s); },
+			onProgress: (s) => {
+				const lead = s.phases.lead;
+				const sub = lead?.subProgress ? ` | subflow ${lead.subProgress.done}/${lead.subProgress.total}` : "";
+				process.stdout.write(`\r  lead ${lead?.status ?? "?"}${sub}                         `);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+
+		const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
+		let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
+		try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
+		const nodes = tree.nodes ?? [];
+		const out = res.finalOutput ?? "";
+
+		// A spawned subflow runs as its OWN isolated nested run, so it gets its OWN
+		// ctx dir (named <childNodeId>-inline-*). The org tree therefore spans MULTIPLE
+		// tree.json files linked by the `-inline` naming — not one flat tree. To prove
+		// recursive depth (a phase INSIDE a spawned subflow itself spawning a child),
+		// we walk into the spawned subflow's ctx dir and look for a grandchild node.
+		const ctxRoot = path.join(runsDir(process.cwd()), "ctx");
+		let subflowCtxDirs: string[] = [];
 		try {
-			const st = JSON.parse(fs.readFileSync(path.join(subflowCtxDirs[0], "tree.json"), "utf-8"));
-			subflowTreeNodes = st.nodes ?? [];
-			// A grandchild = a node whose parent is itself a non-root node in the subflow tree.
-			grandchildFound = subflowTreeNodes.some((n) => n.parentNodeId && n.parentNodeId !== undefined);
+			subflowCtxDirs = fs.readdirSync(ctxRoot)
+				.filter((d) => d.includes("-inline-"))
+				.map((d) => path.join(ctxRoot, d));
 		} catch { /* none */ }
+		// Pick the most recently modified inline ctx dir (this run's subflow).
+		subflowCtxDirs.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+		let grandchildFound = false;
+		let subflowTreeNodes: Array<{ nodeId: string; parentNodeId?: string; status: string }> = [];
+		if (subflowCtxDirs[0]) {
+			try {
+				const st = JSON.parse(fs.readFileSync(path.join(subflowCtxDirs[0], "tree.json"), "utf-8"));
+				subflowTreeNodes = st.nodes ?? [];
+				// A grandchild = a node whose parent is itself a non-root node in the subflow tree.
+				grandchildFound = subflowTreeNodes.some((n) => n.parentNodeId && n.parentNodeId !== undefined);
+			} catch { /* none */ }
+		}
+
+		const spawnedUnderLead = nodes.filter((n) => n.parentNodeId === "lead");
+
+		console.log("\nparent tree nodes:");
+		for (const n of nodes) console.log(`  ${n.nodeId} <- ${n.parentNodeId ?? "-"} [${n.status}]`);
+		console.log("spawned subflow tree nodes (the org sub-tree):");
+		for (const n of subflowTreeNodes) console.log(`  ${n.nodeId} <- ${n.parentNodeId ?? "-"} [${n.status}]`);
+
+		// Did any auditor inside the spawned subflow reuse the shared map? (marker echo)
+		const markerHits = (out.match(new RegExp(MARKER, "g")) ?? []).length;
+		const hasPrioritized = /P0|P1|P2/.test(out);
+		const noShapeError = !/failed validation|failed verification|not a Taskflow/.test(out);
+
+		console.log(`\nmarker "${MARKER}" echoed ${markerHits}× in folded output (blackboard reuse inside spawned subflow)`);
+		console.log("── roadmap (tail 800) ──\n" + out.slice(-800));
+
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["lead spawned subflow A", spawnedUnderLead.length >= 1],
+			["spawn fold marker present", /ctx_spawn: \d+ child report/.test(out)],
+			["subflow validated & ran (no shape error)", noShapeError],
+			["horizontal reuse: an auditor echoed the shared map marker", markerHits >= 1],
+			["recursive org tree: a phase inside the spawned subflow spawned a grandchild", grandchildFound],
+			["nested DAG produced a prioritized roadmap", hasPrioritized],
+			["deliverable is substantial (>400 chars)", out.length > 400],
+			["stayed within budget", res.state.status !== "blocked"],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
+		console.log(allPass ? "\n✅ ORG-TREE E2E PASSED" : "\n❌ ORG-TREE E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
 	}
-
-	const spawnedUnderLead = nodes.filter((n) => n.parentNodeId === "lead");
-
-	console.log("\nparent tree nodes:");
-	for (const n of nodes) console.log(`  ${n.nodeId} <- ${n.parentNodeId ?? "-"} [${n.status}]`);
-	console.log("spawned subflow tree nodes (the org sub-tree):");
-	for (const n of subflowTreeNodes) console.log(`  ${n.nodeId} <- ${n.parentNodeId ?? "-"} [${n.status}]`);
-
-	// Did any auditor inside the spawned subflow reuse the shared map? (marker echo)
-	const markerHits = (out.match(new RegExp(MARKER, "g")) ?? []).length;
-	const hasPrioritized = /P0|P1|P2/.test(out);
-	const noShapeError = !/failed validation|failed verification|not a Taskflow/.test(out);
-
-	console.log(`\nmarker "${MARKER}" echoed ${markerHits}× in folded output (blackboard reuse inside spawned subflow)`);
-	console.log("── roadmap (tail 800) ──\n" + out.slice(-800));
-
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["lead spawned subflow A", spawnedUnderLead.length >= 1],
-		["spawn fold marker present", /ctx_spawn: \d+ child report/.test(out)],
-		["subflow validated & ran (no shape error)", noShapeError],
-		["horizontal reuse: an auditor echoed the shared map marker", markerHits >= 1],
-		["recursive org tree: a phase inside the spawned subflow spawned a grandchild", grandchildFound],
-		["nested DAG produced a prioritized roadmap", hasPrioritized],
-		["deliverable is substantial (>400 chars)", out.length > 400],
-		["stayed within budget", res.state.status !== "blocked"],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
-	console.log(allPass ? "\n✅ ORG-TREE E2E PASSED" : "\n❌ ORG-TREE E2E FAILED");
-	process.exit(allPass ? 0 : 1);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

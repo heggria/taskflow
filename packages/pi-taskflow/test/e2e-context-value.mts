@@ -2,7 +2,7 @@
  * REAL, value-demonstrating end-to-end test for the Shared Context Tree.
  *
  * This exercises BOTH core capabilities against a REAL codebase (this repo's
- * own extensions/), with real `pi` subagents and a real model:
+ * own `packages/taskflow-core/src/` files), with real `pi` subagents and a real model:
  *
  *   PART A — Horizontal blackboard reuse (avoid duplicated work)
  *     1. `survey` maps shared project conventions ONCE and ctx_write's them
@@ -28,7 +28,9 @@ import * as crypto from "node:crypto";
 import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
-import type { RunState } from "taskflow-core";
+import { saveRun, type RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const MARKER = `CONV-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
@@ -44,7 +46,7 @@ const FLOW: Taskflow = {
 			agent: "scout",
 			task:
 				`Inspect this TypeScript project's coding conventions by reading AGENTS.md ` +
-				`and one or two files under extensions/. Summarize the 3 most important ` +
+				`and one or two files under packages/taskflow-core/src/. Summarize the 3 most important ` +
 				`conventions in one short sentence each.\n\n` +
 				`Then call ctx_write with key "conventions" and a value that is a JSON ` +
 				`object of the form:\n` +
@@ -55,7 +57,7 @@ const FLOW: Taskflow = {
 		{
 			id: "audit",
 			type: "map",
-			over: '["extensions/usage.ts","extensions/cache.ts","extensions/verify.ts"]',
+			over: '["packages/taskflow-core/src/usage.ts","packages/taskflow-core/src/cache.ts","packages/taskflow-core/src/verify.ts"]',
 			as: "item",
 			agent: "analyst",
 			dependsOn: ["survey"],
@@ -106,59 +108,62 @@ async function main() {
 		cwd: process.cwd(),
 	};
 
-	console.log("== executing (real subagents) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(),
-		agents,
-		globalThinking: settings.globalThinking,
-		persist: (s) => {
-			try {
-				// best-effort save so the run is inspectable afterward
-				import("../extensions/store.ts").then((m) => m.saveRun(s)).catch(() => {});
-			} catch { /* ignore */ }
-		},
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			const running = Object.values(s.phases)
-				.filter((p) => p.status === "running")
-				.map((p) => p.id);
-			process.stdout.write(
-				`\r  progress: ${done}/${s.def.phases.length} done` +
-					(running.length ? ` | running: ${running.join(",")}` : "") +
-					"          ",
-			);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-context-value");
+	try {
+		console.log("== executing (real subagents) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			persist: (s) => {
+				try { saveRun(s); } catch { /* best-effort; the E2E result is authoritative */ }
+			},
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				const running = Object.values(s.phases)
+					.filter((p) => p.status === "running")
+					.map((p) => p.id);
+				process.stdout.write(
+					`\r  progress: ${done}/${s.def.phases.length} done` +
+						(running.length ? ` | running: ${running.join(",")}` : "") +
+						"          ",
+				);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
 
-	console.log("\nPhase states:");
-	for (const p of FLOW.phases) {
-		const ps = res.state.phases[p.id];
-		console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}] -> ${JSON.stringify(ps?.output?.slice(0, 100))}`);
+		console.log("\nPhase states:");
+		for (const p of FLOW.phases) {
+			const ps = res.state.phases[p.id];
+			console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}] -> ${JSON.stringify(ps?.output?.slice(0, 100))}`);
+		}
+
+		const auditOut = res.state.phases.audit?.output ?? "";
+		// The map output concatenates sub-results, each tagged "[i/N] ...".
+		const markerHits = (auditOut.match(new RegExp(MARKER, "g")) ?? []).length;
+		console.log(`\nMarker "${MARKER}" appeared ${markerHits}× in the audit fan-out (expected ≥2 of 3).`);
+
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["survey done", res.state.phases.survey?.status === "done"],
+			["audit fan-out done", res.state.phases.audit?.status === "done"],
+			["≥2 of 3 auditors reused the shared marker (blackboard reuse, not re-derived)", markerHits >= 2],
+			["final summary produced", (res.finalOutput?.length ?? 0) > 0],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [name, ok] of checks) {
+			console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
+			if (!ok) allPass = false;
+		}
+		console.log("\nFinal summary:\n  ", (res.finalOutput ?? "").slice(0, 400));
+		console.log(allPass ? "\n✅ CONTEXT-VALUE E2E PASSED" : "\n❌ CONTEXT-VALUE E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
 	}
-
-	const auditOut = res.state.phases.audit?.output ?? "";
-	// The map output concatenates sub-results, each tagged "[i/N] ...".
-	const markerHits = (auditOut.match(new RegExp(MARKER, "g")) ?? []).length;
-	console.log(`\nMarker "${MARKER}" appeared ${markerHits}× in the audit fan-out (expected ≥2 of 3).`);
-
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["survey done", res.state.phases.survey?.status === "done"],
-		["audit fan-out done", res.state.phases.audit?.status === "done"],
-		["≥2 of 3 auditors reused the shared marker (blackboard reuse, not re-derived)", markerHits >= 2],
-		["final summary produced", (res.finalOutput?.length ?? 0) > 0],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [name, ok] of checks) {
-		console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
-		if (!ok) allPass = false;
-	}
-	console.log("\nFinal summary:\n  ", (res.finalOutput ?? "").slice(0, 400));
-	console.log(allPass ? "\n✅ CONTEXT-VALUE E2E PASSED" : "\n❌ CONTEXT-VALUE E2E FAILED");
-	process.exit(allPass ? 0 : 1);
 }
 
 main().catch((e) => {
