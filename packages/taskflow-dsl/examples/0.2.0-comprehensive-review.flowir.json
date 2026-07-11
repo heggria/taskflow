@@ -1,5 +1,5 @@
 {
-  "hash": "ir:428a104996934c74750a772aa2c587ff7a0f6e39801f9412b0c2d3da08fe93df",
+  "hash": "ir:d8f6682151a03afe393ea5a81362f393078087fb8861f84cb2790b3806c63c68",
   "ir": {
     "name": "comprehensive-release-review",
     "version": 2,
@@ -33,7 +33,7 @@
         "deps": [
           "repo-state"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "agent": "scout",
           "retry": {
@@ -83,7 +83,7 @@
         "deps": [
           "review-plan"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "agent": "risk-reviewer",
           "over": "{steps.review-plan.json}",
@@ -111,7 +111,7 @@
         "deps": [
           "repo-state"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "branches": [
             {
@@ -147,7 +147,7 @@
         "deps": [
           "repo-state"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "branches": [
             {
@@ -179,7 +179,7 @@
         "deps": [
           "repo-state"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "branches": [
             {
@@ -224,7 +224,7 @@
           "rapid-triage",
           "strategy-tournament"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "agent": "final-arbiter",
           "from": [
@@ -433,7 +433,7 @@
           "nested-challenge",
           "expanded-evidence"
         ],
-        "timeout": 300000,
+        "timeout": 900000,
         "payload": {
           "agent": "final-arbiter",
           "from": [

@@ -47,7 +47,7 @@
         "max": 2,
         "backoffMs": 0
       },
-      "timeout": 300000,
+      "timeout": 900000,
       "dependsOn": [
         "repo-state"
       ],
@@ -63,7 +63,7 @@
         "grep",
         "ls"
       ],
-      "timeout": 300000,
+      "timeout": 900000,
       "as": "surface",
       "concurrency": 4,
       "cache": {
@@ -96,7 +96,7 @@
         "grep",
         "ls"
       ],
-      "timeout": 300000,
+      "timeout": 900000,
       "dependsOn": [
         "repo-state"
       ],
@@ -123,7 +123,7 @@
         "grep",
         "ls"
       ],
-      "timeout": 300000,
+      "timeout": 900000,
       "id": "rapid-triage"
     },
     {
@@ -138,7 +138,7 @@
         "grep",
         "ls"
       ],
-      "timeout": 300000,
+      "timeout": 900000,
       "judge": "Select the review with the strongest code-backed evidence, counterexample quality, and actionable closure. Return ONLY JSON {\"winner\":1|2|3,\"reason\":\"...\"}.",
       "branches": [
         {
@@ -166,7 +166,7 @@
       ],
       "task": "Synthesize an evidence ledger for merge readiness. Deduplicate findings,\n\treject speculation, reconcile contradictions, and separate BLOCKER / IMPORTANT /\n\tNON-BLOCKING. For every retained issue cite file:line and a reproducer or invariant.\n\tEnd with one of: MERGE_READY or NOT_MERGE_READY.\n\n\tMODULE AUDITS:\n\t{steps.module-audits.output}\n\n\tCROSS-CUTTING:\n\t{steps.cross-cutting.output}\n\n\tRAPID TRIAGE:\n\t{steps.rapid-triage.output}\n\n\tBEST ADVERSARIAL REVIEW:\n\t{steps.strategy-tournament.output}",
       "agent": "final-arbiter",
-      "timeout": 300000,
+      "timeout": 900000,
       "dependsOn": [
         "module-audits",
         "cross-cutting",
@@ -323,7 +323,7 @@
       ],
       "task": "Issue the final merge-readiness decision. Preserve proven blockers; discard\n\tunsupported claims. Include: verdict, blocker count, exact evidence, checks run,\n\tremaining uncertainty, and the DSL/runtime features exercised by this workflow.\n\n\tREFINED REPORT:\n\t{steps.refined.output}\n\n\tNESTED ADVERSARIAL CHALLENGE:\n\t{steps.nested-challenge.output}\n\n\tEXPANDED EVIDENCE VERIFICATION:\n\t\t\t\t\t{steps.expanded-evidence.output}",
       "agent": "final-arbiter",
-      "timeout": 300000,
+      "timeout": 900000,
       "final": true,
       "dependsOn": [
         "refined",

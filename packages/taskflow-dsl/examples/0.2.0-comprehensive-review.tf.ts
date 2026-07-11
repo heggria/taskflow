@@ -50,7 +50,7 @@ export default flow(
 				tools: ["read", "grep", "ls"],
 				output: json<{ area: string; paths: string; focus: string }[]>(),
 				retry: { max: 2, backoffMs: 0 },
-				timeout: 300_000,
+				timeout: 900_000,
 			},
 		);
 
@@ -68,7 +68,7 @@ export default flow(
 					{
 						agent: "risk-reviewer",
 						tools: ["read", "grep", "ls"],
-						timeout: 300_000,
+						timeout: 900_000,
 					},
 				),
 			{
@@ -108,7 +108,7 @@ export default flow(
 				id: "cross-cutting",
 				concurrency: 3,
 				tools: ["read", "grep", "ls"],
-				timeout: 300_000,
+				timeout: 900_000,
 			},
 		);
 
@@ -131,7 +131,7 @@ export default flow(
 				cancelLosers: true,
 				dependsOn: [repoState],
 				tools: ["read", "grep", "ls"],
-				timeout: 300_000,
+				timeout: 900_000,
 			},
 		);
 
@@ -141,7 +141,7 @@ export default flow(
 			judgeAgent: "final-arbiter",
 			dependsOn: [repoState],
 			tools: ["read", "grep", "ls"],
-			timeout: 300_000,
+			timeout: 900_000,
 			judge:
 				"Select the review with the strongest code-backed evidence, counterexample quality, and actionable closure. Return ONLY JSON {\"winner\":1|2|3,\"reason\":\"...\"}.",
 			branches: [
@@ -183,7 +183,7 @@ export default flow(
 
 	BEST ADVERSARIAL REVIEW:
 	${parts.strategyTournament.output}`,
-					{ agent: "final-arbiter", timeout: 300_000 },
+					{ agent: "final-arbiter", timeout: 900_000 },
 				),
 			{ id: "synthesis" },
 		);
@@ -311,7 +311,7 @@ export default flow(
 
 	EXPANDED EVIDENCE VERIFICATION:
 					${parts.expandedEvidence.output}`,
-					{ agent: "final-arbiter", timeout: 300_000 },
+					{ agent: "final-arbiter", timeout: 900_000 },
 					),
 				{ id: "final-decision", final: true },
 			);
