@@ -200,7 +200,7 @@ FlowIR canonicalizes the graph and gives it a content hash. That compiled identi
 |---|---|---:|
 | `verify` / `compile` | Is the graph structurally safe to run? | **0** |
 | `ir` | What is the canonical graph and content hash? | **0** |
-| `resume` | What unfinished work remains? | Only unfinished phases |
+| `resume` | What unfinished work remains? (forks a new run; original untouched) | Only unfinished phases |
 | `trace` | What calls and runtime decisions actually happened? | **0** to inspect |
 | `replay` | What if thresholds or budgets had been different? | **0** |
 | `why-stale` | What changed, and what depends on it? | **0** |

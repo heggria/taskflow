@@ -113,6 +113,14 @@ proper flow, so you still get progress, persistence, and resume.
   (per-file `contextLimit`, default 8000 chars). In **parallel `tasks` mode**
   all branches SHARE the union of step contexts. In **chain mode** declare
   `context` on individual steps; a top-level `context` is ignored (with a warning).
+- `cwd` (optional, top-level or per-step): working directory for the subagent —
+  same as the full-DSL `Phase.cwd`. A top-level `cwd` is the default for every
+  step; a per-step `cwd` overrides it. For **single** and **chain** it lands on
+  each `Phase.cwd` (full workspace-keyword lifecycle: `temp`/`dedicated`/
+  `worktree`). For **parallel `tasks`**, the top-level `cwd` is the shared phase
+  cwd, and each branch may set its own **literal-path** `cwd` (mixed branch cwds
+  are honored independently). Per-branch workspace keywords are **rejected**
+  (the workspace lifecycle is per-phase — use the top-level `cwd` for isolation).
 - Add `name` to label the run.
 - Precedence if several are given: `chain` > `tasks` > `task`.
 - Pass these as the `define` argument to `taskflow_run`.

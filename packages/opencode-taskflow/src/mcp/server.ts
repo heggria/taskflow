@@ -18,15 +18,15 @@ import { opencodeSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with opencode subagent execution bound in. */
 export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, opencodeSubagentRunner);
+	return coreMakeToolHandlers(cwd, opencodeSubagentRunner, { host: "opencode" });
 }
 
 /** Full MCP method dispatch table (protocol + tools), opencode-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, opencodeSubagentRunner);
+	return coreMakeMcpHandlers(cwd, opencodeSubagentRunner, { host: "opencode" });
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(opencodeSubagentRunner, cwd);
+	return coreStartMcpServer(opencodeSubagentRunner, cwd, { host: "opencode" });
 }

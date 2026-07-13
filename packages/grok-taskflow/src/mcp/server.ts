@@ -19,15 +19,15 @@ import { grokSubagentRunner } from "taskflow-hosts";
 export function makeToolHandlers(
 	cwd: string,
 ): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, grokSubagentRunner);
+	return coreMakeToolHandlers(cwd, grokSubagentRunner, { host: "grok" });
 }
 
 /** Full MCP method dispatch table (protocol + tools), grok-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, grokSubagentRunner);
+	return coreMakeMcpHandlers(cwd, grokSubagentRunner, { host: "grok" });
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(grokSubagentRunner, cwd);
+	return coreStartMcpServer(grokSubagentRunner, cwd, { host: "grok" });
 }

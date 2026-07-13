@@ -12,6 +12,7 @@ import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
 import { Errors as SchemaErrors } from "typebox/value";
 import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
+import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
@@ -75,6 +76,12 @@ const ParallelTaskSchema = Type.Object(
 	{
 		task: Type.String({ description: "Task for this parallel branch (supports interpolation)" }),
 		agent: Type.Optional(Type.String({ description: "Override the phase agent for this branch" })),
+		cwd: Type.Optional(
+			Type.String({
+				description:
+					"Working directory for this branch's subagent (a literal path). Overrides the phase-level cwd for this branch only. Reserved workspace keywords ('temp'/'dedicated'/'worktree') are NOT supported per-branch (the workspace lifecycle is per-phase) — use the phase-level cwd for those.",
+			}),
+	),
 	},
 	{ additionalProperties: false },
 );
@@ -529,6 +536,10 @@ export interface ShorthandStep {
 	context?: string[];
 	/** Max characters per context file (pass-through to Phase.contextLimit). */
 	contextLimit?: number;
+	/** Working directory for this step's subagent (pass-through to Phase.cwd).
+	 *  A literal path or a reserved workspace keyword ('temp'/'dedicated'/
+	 *  'worktree'). A top-level `cwd` is the default; a step cwd overrides it. */
+	cwd?: string;
 }
 
 /** True when `def` is a shorthand spec (no `phases`, but a task/tasks/chain field). */
@@ -558,6 +569,7 @@ function readStep(s: unknown): ShorthandStep {
 		const ctx = readContextList(o.context);
 		if (ctx) step.context = ctx;
 		if (typeof o.contextLimit === "number") step.contextLimit = o.contextLimit;
+		if (typeof o.cwd === "string") step.cwd = o.cwd;
 		return step;
 	}
 	return { task: "" };
@@ -579,6 +591,13 @@ export function desugar(def: unknown): Taskflow {
 	if (d.args && typeof d.args === "object") meta.args = d.args as Taskflow["args"];
 	if (d.budget) meta.budget = d.budget;
 	if (typeof d.strictInterpolation === "boolean") meta.strictInterpolation = d.strictInterpolation;
+	/** Top-level shorthand cwd (literal path or workspace keyword). Becomes the
+	 *  default for every step; a per-step cwd overrides it. For single/chain it
+	 *  lands on each Phase.cwd (full workspace lifecycle). For parallel it lands
+	 *  on the phase cwd (shared), with per-branch cwds overriding per-branch.
+	 *  Note: `cwd` is a Phase field, NOT a Taskflow field, so it is distributed
+	 *  to each phase below rather than placed on the Taskflow object. */
+	const topCwd = typeof d.cwd === "string" && d.cwd.trim() ? d.cwd : undefined;
 	const nameOf = (fallback: string) => (typeof d.name === "string" && d.name.trim() ? d.name.trim() : fallback);
 
 	// chain → sequential agent phases
@@ -596,6 +615,8 @@ export function desugar(def: unknown): Taskflow {
 			if (s.agent) phase.agent = s.agent;
 			if (s.context) phase.context = s.context;
 			if (s.contextLimit !== undefined) phase.contextLimit = s.contextLimit;
+			const stepCwd = s.cwd ?? topCwd;
+			if (stepCwd) phase.cwd = stepCwd;
 			if (i > 0) phase.dependsOn = [`step${i}`];
 			if (i === steps.length - 1) phase.final = true;
 			return phase;
@@ -608,8 +629,15 @@ export function desugar(def: unknown): Taskflow {
 	// per branch): spec-level context plus the union of step-level contexts.
 	if (Array.isArray(d.tasks) && d.tasks.length > 0) {
 		const steps = d.tasks.map(readStep);
-		const branches: ParallelTask[] = steps.map((s) => (s.agent ? { task: s.task, agent: s.agent } : { task: s.task }));
+		const branches: ParallelTask[] = steps.map((s) => {
+			const b: ParallelTask = { task: s.task };
+			if (s.agent) b.agent = s.agent;
+			// Per-branch literal cwd (workspace keywords are rejected by validation).
+			if (s.cwd) b.cwd = s.cwd;
+			return b;
+		});
 		const phase: Phase = { id: "parallel", type: "parallel", branches, final: true };
+		if (topCwd) phase.cwd = topCwd;
 		const shared = [...(readContextList(d.context) ?? []), ...steps.flatMap((s) => s.context ?? [])];
 		if (shared.length) phase.context = Array.from(new Set(shared));
 		const limits = [
@@ -627,6 +655,7 @@ export function desugar(def: unknown): Taskflow {
 		const ctx = readContextList(d.context);
 		if (ctx) phase.context = ctx;
 		if (typeof d.contextLimit === "number") phase.contextLimit = d.contextLimit;
+		if (topCwd) phase.cwd = topCwd;
 		return { name: nameOf("task"), ...meta, phases: [phase] };
 	}
 
@@ -962,6 +991,22 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 					errors.push(`Phase '${p.id}': branches[${i}] must be an object with a 'task', got ${b === null ? "null" : typeof b}`);
 				else if (typeof (b as { task?: unknown }).task !== "string")
 					errors.push(`Phase '${p.id}': branches[${i}].task must be a string`);
+				else {
+					// Per-branch cwd: a literal path is honored per-branch; a reserved
+					// workspace keyword ('temp'/'dedicated'/'worktree') is NOT supported
+					// per-branch (the workspace lifecycle is per-phase — a branch cannot
+					// safely allocate/teardown its own workspace). Reject that shape
+					// precisely rather than silently using the wrong cwd. Use the
+					// phase-level `cwd` for workspace isolation.
+					const bcwd = (b as { cwd?: unknown }).cwd;
+					if (typeof bcwd === "string") {
+						if (hasCwdPlaceholder(bcwd)) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd does not support interpolation placeholders (${bcwd}). Use a literal path.`);
+						} else if (WORKSPACE_KEYWORDS.includes(bcwd as (typeof WORKSPACE_KEYWORDS)[number])) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd '${bcwd}' is a reserved workspace keyword not supported per-branch (the workspace lifecycle is per-phase). Use the phase-level 'cwd' for workspace isolation.`);
+						}
+					}
+				}
 			});
 		}
 		// tools entries are matched against a Set by the adapters (t => set.has(t));

@@ -289,7 +289,7 @@ Three **different** reuse tools; do not conflate them:
 
 | Tool | Spends tokens? | Mutates the run? | Answers |
 |------|----------------|------------------|---------|
-| **`resume`** | Only unfinished / cache-miss phases | Continues the same run | "Pick up where we stopped" |
+| **`resume`** | Only unfinished / cache-miss phases | **Forks a new run** (parent untouched; child carries `parentRunId`) | "Pick up where we stopped" |
 | **`why-stale` → `recompute`** | Dry-run free; `--apply` / `dryRun:false` spends | Optional write of recompute result | "World/input changed — which phases re-run?" |
 | **`trace` → `replay`** | **Never** | Never | "If the gate threshold / budget had been different, would we have blocked?" |
 
@@ -340,6 +340,45 @@ runtime or event kernel — offline replay cannot accidentally spend tokens.
 | "Would a stricter gate have blocked last night's run?" | `trace` → `replay` with new `thresholds` |
 | "Would a $0.10 cap have stopped the fan-out?" | `replay` with `budgetMaxUSD` |
 | Need fresh model judgment under a new model id | `replay` will say `needs-live-rerun` → live `recompute`/`run` |
+
+---
+
+## Resume overrides (re-run one phase with a patch)
+
+`action: "resume"` now **forks a new run** — the original run file is never
+modified or overwritten (the child carries `parentRunId` pointing at it).
+Completed unaffected phases are reused (within-run cache hits); the target
+phase + its transitive downstream re-run.
+
+To re-run **exactly one phase** with a patched task/model/timeout/idleTimeout,
+pass override fields alongside `phaseId` (at least one override is required):
+
+```
+taskflow { action: "resume", runId: "<id>", phaseId: "audit",
+           resumeTask: "re-audit src/api with the new checklist",
+           resumeModel: "gpt-5" }
+```
+
+The overrides are applied to the **child's** def only — the parent def +
+persisted file stay untouched. `validateResumeOverrides` checks the target
+phase exists, that at least one override is supplied, and that the patched def
+passes the normal Taskflow validator (so a bad ref is caught before re-run).
+
+Without overrides, ordinary resume forks a new run and re-runs the non-done
+(failed/paused) phases.
+
+---
+
+## `version` — build/host identity
+
+`action: "version"` (or `/tf version`) reports the engine package version, the
+git commit the dist was built from, the run-state schema version, and the host
+(`pi`). The git commit is stamped at build time — `git` is never run at
+runtime (source/dev checkouts report `unknown`).
+```
+taskflow { action: "version" }
+/tf version
+```
 
 ---
 

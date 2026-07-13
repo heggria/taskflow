@@ -47,7 +47,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.id, 1);
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
-	assert.equal(res.result.serverInfo.name, "taskflow");
+	assert.equal(res.result.serverInfo.name, "taskflow-codex");
 	assert.equal(res.result.serverInfo.version, "0.2.1");
 });
 
@@ -56,12 +56,23 @@ test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
 		assert.equal(t.inputSchema.type, "object");
 	}
+});
+
+test("mcp: tools/call taskflow_version reports package/host/commit identity", async () => {
+	const [res] = await rpcRoundtrip([
+		{ jsonrpc: "2.0", id: 99, method: "tools/call", params: { name: "taskflow_version", arguments: {} } },
+	]);
+	const text: string = res.result.content[0].text;
+	// Reports the codex host identity (0.2.0 dogfood issue 4).
+	assert.match(text, /host codex/);
+	assert.match(text, /git commit:/);
+	assert.match(text, /run-state schema: v\d+/);
 });
 
 test("mcp: notification (no id) yields no response", async () => {
@@ -231,7 +242,7 @@ test("mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
 	);
 });
 

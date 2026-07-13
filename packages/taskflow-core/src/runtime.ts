@@ -36,7 +36,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 });
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, asArray, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -48,6 +48,7 @@ export { parseGateVerdict };
 import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
+import { resolveFinalOutput } from "./final-output.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 import { compileTaskflowToIR, phaseFingerprint } from "./flowir/index.ts";
 import { computeStaleFrontier, declaredReadMapOfDef, readMapOf } from "./stale.ts";
@@ -160,6 +161,13 @@ export interface RuntimeResult {
 	finalOutput: string;
 	ok: boolean;
 	totalUsage: UsageStats;
+	/** The id of the PhaseState whose output supplied `finalOutput`. For the
+	 *  normal case this is the (fallback) final phase that actually completed.
+	 *  For gate/budget prefixes, it is retained when underlying partial output
+	 *  is included (the blocking gate/approval phase, or the fallback final
+	 *  phase for a budget halt); `undefined` when no phase output is available
+	 *  (no phase completed). Never the designated skipped/failed final phase. */
+	outputSourcePhaseId?: string;
 	/** Incremental-reuse summary: how many phases were reused from cache vs.
 	 *  freshly executed this run, and the cost the reused work would otherwise
 	 *  have incurred (known only for within-run resume; cross-run hits zero
@@ -167,6 +175,16 @@ export interface RuntimeResult {
 	 *  additive — callers that ignore it are unaffected. */
 	reuse?: ReuseSummary;
 }
+
+// Re-export the shared final-output helper + types so callers importing from
+// the runtime barrel get them from one place. The event kernel
+// (`exec/driver.ts`) imports these directly from `./final-output.ts` to avoid
+// a static runtime↔driver import cycle.
+export {
+	resolveFinalOutput,
+	type FinalOutputBlockedCtx,
+	type FinalOutputResolution,
+} from "./final-output.ts";
 
 /** A run's incremental-reuse accounting (see RuntimeResult.reuse). */
 export interface ReuseSummary {
@@ -1459,13 +1477,15 @@ async function executePhaseInner(
 		onLive?: (l: LiveUpdate) => void,
 		ctxNodeId?: string,
 		signal?: AbortSignal,
+		callCwd?: string,
 		onTerminalCommit?: () => void,
 	) => {
+		const invocationCwd = callCwd ?? effCwd;
 		const runOptions = {
 			model: phase.model,
 			thinking: phase.thinking,
 			tools: phase.tools,
-			cwd: effCwd,
+			cwd: invocationCwd,
 			signal: signal ?? deps.signal,
 			onLive,
 			ctxDir: ctxDir,
@@ -1474,7 +1494,7 @@ async function executePhaseInner(
 			onTerminalCommit,
 		};
 		const invoke = () => run(
-			effCwd,
+			invocationCwd,
 			deps.agents,
 			agentName,
 			task,
@@ -1520,6 +1540,10 @@ async function executePhaseInner(
 		check?: (r: RunResult) => string[],
 		/** Extra abort (e.g. race branch cancelLosers) — chained with run + phase timeout. */
 		extraSignal?: AbortSignal,
+		/** Per-call cwd override (e.g. a parallel branch's literal cwd). Falls back
+		 *  to the phase effective cwd when absent. Workspace keywords are rejected
+		 *  by validation for branches, so this is always a literal path or undefined. */
+		callCwd?: string,
 	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
@@ -1564,7 +1588,7 @@ async function executePhaseInner(
 						timer = undefined;
 					}
 				};
-				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal, onTerminalCommit);
+				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal, callCwd, onTerminalCommit);
 				if (phaseTimeoutMs && timeoutController) {
 					const timeoutFallback = new Promise<RunResult>((resolve) => {
 						timer = setTimeout(() => {
@@ -1757,7 +1781,7 @@ async function executePhaseInner(
 	// recorded so a later run with that item unchanged hits per-item. When
 	// `perItem` is undefined (parallel, or non-cacheable maps) the path is inert.
 	const runFanout = async (
-		items: Array<{ agent: string; task: string }>,
+		items: Array<{ agent: string; task: string; cwd?: string }>,
 		perItem?: { keyOf: (idx: number) => CacheKeys | null; cc: PhaseCacheCtx },
 	): Promise<RunResult[]> => {
 		let done = 0;
@@ -1829,7 +1853,7 @@ async function executePhaseInner(
 				if (l.text) latestText = l.text;
 				if (l.model) latestModel = l.model;
 				refresh();
-			}, ctxDir ? nodeIdFor(String(idx)) : undefined);
+			}, ctxDir ? nodeIdFor(String(idx)) : undefined, undefined, undefined, it.cwd);
 			running--;
 			done++;
 			if (isFailed(r)) failed++;
@@ -2431,6 +2455,7 @@ async function executePhaseInner(
 			return {
 				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
 				task: preRead + r.text,
+				cwd: typeof b.cwd === "string" ? b.cwd : undefined,
 			};
 		});
 		const ck = cacheKeys(cc, [phase.id, phase.model ?? "", JSON.stringify(branches)]);
@@ -4250,6 +4275,8 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	let gateBlocked = false;
 	let gateReason = "";
 	let gateOutput = "";
+	/** Id of the blocking gate/approval phase (source of `gateOutput`). */
+	let gatePhaseId: string | undefined;
 	// `budgetBlocked` gates the skipping of remaining phases once the cap is hit
 	// and also drives the terminal "blocked" status — a maxUSD ceiling must never
 	// silently do nothing.
@@ -4360,6 +4387,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				gateBlocked = true;
 				gateReason = ps.gate.reason ?? "";
 				gateOutput = ps.output ?? "";
+				gatePhaseId = phase.id;
 			}
 			// A fan-out cut short by the cap is itself a budget skip.
 			if (ps.budgetTruncated) {
@@ -4398,14 +4426,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		}
 	}
 
-	const fp = finalPhase(def.phases);
-	let finalState = state.phases[fp.id];
-	// If the designated final phase produced no output (skipped/blocked), fall
-	// back to the last phase (in definition order) that actually completed.
-	if (!finalState || finalState.status !== "done") {
-		const doneInOrder = def.phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
-		if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
-	}
 	// A failed non-optional phase fails the run; optional failures are tolerated.
 	const anyFailed = Object.entries(state.phases).some(
 		([id, p]) => p.status === "failed" && !byId.get(id)?.optional && !p.optional,
@@ -4420,12 +4440,14 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				: "completed";
 	safeEmit(deps, state);
 
-	let finalOutput = finalState?.output ?? "(no output)";
-	if (gateBlocked) {
-		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${gateOutput ? `\n\n${gateOutput}` : ""}`;
-	} else if (budgetBlocked) {
-		finalOutput = `Budget exceeded — run halted.${budgetReason ? `\nReason: ${budgetReason}` : ""}${finalState?.output ? `\n\n${finalState.output}` : ""}`;
-	}
+	const { finalOutput, outputSourcePhaseId } = resolveFinalOutput(def.phases, state, {
+		gate: gateBlocked,
+		gateReason,
+		gateOutput,
+		gatePhaseId,
+		budget: budgetBlocked,
+		budgetReason,
+	});
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	return {
@@ -4434,5 +4456,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		ok: state.status === "completed",
 		totalUsage,
 		reuse: summarizeReuse(state),
+		outputSourcePhaseId,
 	};
 }

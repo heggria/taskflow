@@ -36,6 +36,9 @@ packages/
 │  │  │                                       (S0: compileTaskflowToFlowIR + hashFlowIR → ir:<64-hex>)
 │  │  ├─ exec/             ← event log schema + fold + S2 kernel (step/driver; default OFF)
 │  │  ├─ replay.ts         ← offline what-if replayRun (zero tokens; no runtime/driver import)
+│  │  ├─ resume.ts          ← fork/apply/validate resume overrides + transitiveDownstream (issue 5)
+│  │  ├─ final-output.ts    ← shared resolveFinalOutput: final-phase selection + output source attribution (issue 6)
+│  │  ├─ build-info.ts      ← getBuildInfo(): packageVersion/gitCommit/schemaVersion (build-time stamp; issue 4)
 │  │  ├─ trace.ts          ← TraceEvent / FileTraceSink / readTrace
 │  │  ├─ host/runner-types.ts ← the host-neutral SubagentRunner contract + vendored CoreMessage
 │  │  ├─ runner-core.ts  ← ALSO hosts the shared `runSubagentProcess` (spawn/idle/abort/classify) +
@@ -146,7 +149,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 - **Trace:** every run may record `runs/<flow>/<runId>.trace.jsonl` via `RuntimeDeps.trace` (`FileTraceSink`). Decisions include gate/when/cache/budget/tournament/unreplayable.
 - **Event kernel (S2 complete, default OFF):** set `RuntimeDeps.eventKernel: true` or `PI_TASKFLOW_EVENT_KERNEL=1`. Core kinds run on `exec/driver` when enabled **unless** the flow uses unsupported advanced features (score gates, `onBlock:retry`, reflexion, retry, expect, cross-run cache, shareContext) — those fall back to the imperative path. **`race` / `expand` stay on the imperative path** (excluded from `EVENT_KERNEL_PHASE_TYPES` until step handlers exist). Budget, join/optional deps, dynamic `flow{def}` hardening, and agent timeouts are enforced on the kernel path.
 - **Offline replay (S3, zero tokens):** `replayRun(events, overrides)` in `replay.ts` — **must not** import `runtime` / `exec/driver` / `exec/step` (guarded by `replay-import-lint.test.ts`). Surfaces: pi `action=replay` + `/tf replay`; MCP `taskflow_replay`. Distinct from **resume** / **recompute** (those re-execute live phases).
-- **MCP roster (13):** `taskflow_run|list|show|verify|compile|peek|trace|replay|why_stale|recompute|reconcile_workspace|save|search`.
+- **MCP roster (15):** `taskflow_run|resume|list|show|verify|compile|peek|trace|replay|why_stale|recompute|reconcile_workspace|save|search|version`.
 
 ### Control Flow Fields
 - `when` — conditional guard (expression must be truthy)

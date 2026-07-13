@@ -8,6 +8,7 @@
 
 import type { RunState } from "../store.ts";
 import { dependenciesOf, resolveArgs, topoLayers, type Budget, type Phase, type Taskflow, validateTaskflow } from "../schema.ts";
+import { resolveFinalOutput } from "../final-output.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
 import { overBudget as overBudgetCheck } from "../deterministic.ts";
@@ -57,6 +58,11 @@ export interface EventKernelResult {
 	finalOutput: string;
 	ok: boolean;
 	totalUsage: UsageStats;
+	/** Id of the PhaseState whose output supplied finalOutput (0.2.0 dogfood
+	 *  issue 6). Mirrors `RuntimeResult.outputSourcePhaseId`; the event kernel
+	 *  delegates final-phase selection to the shared `resolveFinalOutput`
+	 *  helper so attribution matches the imperative path exactly. */
+	outputSourcePhaseId?: string;
 }
 
 /** True when types are known AND no advanced features force imperative fall-back. */
@@ -187,6 +193,10 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 	const allEvents: Event[] = [];
 	let gateBlocked = false;
 	let gateReason = "";
+	/** Output of the blocking gate/approval phase (included in the gate prefix). */
+	let gateOutput = "";
+	/** Id of the blocking gate/approval phase (source of `gateOutput`). */
+	let gatePhaseId: string | undefined;
 	let budgetBlocked = false;
 	let budgetReason = "";
 
@@ -383,6 +393,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 			if (result.gate?.verdict === "block") {
 				gateBlocked = true;
 				gateReason = result.gate.reason || "Gate blocked";
+				gateOutput = result.output ?? "";
+				gatePhaseId = phase.id;
 			}
 			const ob = runOverBudget(state);
 			if (ob.over) {
@@ -428,19 +440,6 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		const anyFailed = Object.entries(state.phases).some(
 			([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
 		);
-		const finals = def.phases.filter((p) => p.final);
-		const finalPhase = finals[finals.length - 1] ?? def.phases[def.phases.length - 1];
-		let finalState = finalPhase ? state.phases[finalPhase.id] : undefined;
-		if (!finalState || finalState.status !== "done") {
-			const doneInOrder = def.phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
-			if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
-		}
-		let finalOutput = finalState?.output ?? "";
-	if (gateBlocked) {
-		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${finalOutput ? `\n\n${finalOutput}` : ""}`;
-	} else if (budgetBlocked) {
-		finalOutput = `Budget exceeded — run halted.${budgetReason ? `\nReason: ${budgetReason}` : ""}${finalOutput ? `\n\n${finalOutput}` : ""}`;
-	}
 
 	// Match imperative priority: aborted → gate/budget blocked → failed → completed
 	state.status = deps.signal?.aborted
@@ -450,6 +449,15 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 			: anyFailed
 				? "failed"
 				: "completed";
+
+	const { finalOutput, outputSourcePhaseId } = resolveFinalOutput(def.phases, state, {
+		gate: gateBlocked,
+		gateReason,
+		gateOutput,
+		gatePhaseId,
+		budget: budgetBlocked,
+		budgetReason,
+	});
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	try {
@@ -462,5 +470,6 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		finalOutput,
 		ok: state.status === "completed",
 		totalUsage,
+		outputSourcePhaseId,
 	};
 }

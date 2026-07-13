@@ -17,15 +17,15 @@ import { claudeSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with claude subagent execution bound in. */
 export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, claudeSubagentRunner);
+	return coreMakeToolHandlers(cwd, claudeSubagentRunner, { host: "claude" });
 }
 
 /** Full MCP method dispatch table (protocol + tools), claude-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, claudeSubagentRunner);
+	return coreMakeMcpHandlers(cwd, claudeSubagentRunner, { host: "claude" });
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(claudeSubagentRunner, cwd);
+	return coreStartMcpServer(claudeSubagentRunner, cwd, { host: "claude" });
 }

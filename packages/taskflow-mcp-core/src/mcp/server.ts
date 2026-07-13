@@ -75,6 +75,8 @@ import {
 	workspaceReconcileAllowedFromEnv,
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
+import { getBuildInfo, type BuildInfo } from "taskflow-core";
+import { forkRunForResume, validateResumeOverrides, type ResumeOverrides } from "taskflow-core";
 import {
 	runsDir,
 	traceFilePath,
@@ -90,7 +92,15 @@ import {
 
 const PROTOCOL_VERSION = "2025-06-18";
 const SERVER_VERSION = readServerVersion();
-const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: SERVER_VERSION } as const;
+
+/** Build the MCP serverInfo, reflecting the bound host identity (0.2.0 dogfood
+ *  issue 4). The base name is `taskflow`; when a host adapter binds its runner
+ *  (codex/claude/opencode/grok), the name becomes `taskflow-<host>` so a
+ *  client can tell which host is executing subagents. */
+function serverInfoFor(host?: string) {
+	const name = host && host !== "taskflow" ? `taskflow-${host}` : "taskflow";
+	return { name, title: "Taskflow", version: SERVER_VERSION } as const;
+}
 
 function readServerVersion(): string {
 	try {
@@ -409,6 +419,25 @@ const TOOLS: McpTool[] = [
 		},
 	},
 	{
+		name: "taskflow_resume",
+		title: "Resume a paused/failed run (forks a new run)",
+		description:
+			"Resume a stored run by forking a NEW run (the original run file is never modified). The child carries parentRunId pointing at the original. Reusable completed phases are copied (cache hits); the target phase + its transitive downstream re-run. With no overrides, ordinary resume re-runs the non-done phases. With overrides (requires phaseId + at least one of task/model/timeout/idleTimeout), exactly one phase is re-run with the patched values applied to the child's def only.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run to resume (from a prior taskflow_run)." },
+				phaseId: { type: "string", description: "Target phase to re-run with overrides (required when any override field is supplied)." },
+				task: { type: "string", description: "Override the target phase's task (requires phaseId). Applied to the forked child only — the parent is never modified." },
+				model: { type: "string", description: "Override the target phase's model (requires phaseId)." },
+				timeout: { type: "number", description: "Override the target phase's timeout in ms (>= 1000, requires phaseId)." },
+				idleTimeout: { type: "number", description: "Override the target phase's idleTimeout in ms (>= 1000 or 0 to disable, requires phaseId)." },
+			},
+			required: ["runId"],
+		},
+	},
+	{
 		name: "taskflow_list",
 		title: "List saved taskflows",
 		description: "List the saved taskflows discoverable from the current working directory (user + project scope).",
@@ -600,6 +629,13 @@ const TOOLS: McpTool[] = [
 			required: ["query"],
 		},
 	},
+	{
+		name: "taskflow_version",
+		title: "Show taskflow build/host identity",
+		description:
+			"Report the engine package version, the git commit the dist was built from, the bound host identity (codex/claude/opencode/grok), and the run-state schema version. Zero tokens, no execution. Use to verify which taskflow build a host is running.",
+		inputSchema: { type: "object", additionalProperties: false, properties: {} },
+	},
 ];
 
 /** Resolve a flow from params: inline `define` (desugared), `defineFile` (disk), or saved `name`. */
@@ -649,8 +685,27 @@ function resolveFlow(cwd: string, params: { name?: string; define?: unknown; def
 	throw new RpcError(RPC.INVALID_PARAMS, "Provide either `name` (a saved flow) or `define` (an inline flow).");
 }
 
-function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): RunState {
-	return {
+/** Optional host-identity options for the MCP server (0.2.0 dogfood issue 4).
+ *  `host` is the bound host identity (codex/claude/opencode/grok); it is
+ *  stamped onto RunState.host and reported by `taskflow_version`. Defaults to
+ *  `"taskflow"` when omitted so existing callers are unaffected. */
+export interface McpHostOptions {
+	host?: string;
+}
+
+/** Stamp a freshly-created RunState with build/host identity (0.2.0 dogfood
+ *  issue 4). Backward-compatible: only sets optional fields. Pure (mutates the
+ *  passed state in place for convenience). */
+export function stampRunIdentity(state: RunState, host?: string): void {
+	const info = getBuildInfo();
+	state.packageVersion = info.packageVersion;
+	state.gitCommit = info.gitCommit;
+	state.schemaVersion = info.schemaVersion;
+	if (host) state.host = host;
+}
+
+function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string, host?: string): RunState {
+	const state: RunState = {
 		runId: newRunId(def.name ?? "flow"),
 		flowName: def.name ?? "flow",
 		def,
@@ -662,6 +717,8 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): 
 		cwd,
 		invocationRootSnapshot: directoryIdentity(cwd),
 	};
+	stampRunIdentity(state, host);
+	return state;
 }
 
 export function persistTerminalRun(
@@ -686,7 +743,9 @@ export function persistTerminalRun(
 export function makeToolHandlers(
 	cwd: string,
 	runner: SubagentRunner<AgentConfig>,
+	opts?: McpHostOptions,
 ): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
+	const host = opts?.host;
 	return {
 		taskflow_run: async (args, context) => {
 			const reusedSavedName =
@@ -730,7 +789,7 @@ export function makeToolHandlers(
 				usageAccounting,
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
 			};
-			const state = mkRunState(def, resolvedArgs, cwd);
+			const state = mkRunState(def, resolvedArgs, cwd, host);
 			// Deterministic-replay trace (best-effort, fail-open).
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
@@ -768,8 +827,69 @@ export function makeToolHandlers(
 			}
 			const header = res.ok ? "✓ taskflow complete" : "✗ taskflow did not fully succeed";
 			const u = res.totalUsage;
+			// Label the output with the ACTUAL source phase (0.2.0 dogfood issue 6):
+			// the phase whose output supplied finalOutput — never the designated
+			// skipped/failed final phase. Omit the label only when no attribution is
+			// available (no phase output).
+			const sourceLabel = res.outputSourcePhaseId ? `--- ${res.outputSourcePhaseId} ---\n` : "";
 			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;
-			return textContent(`${header}\n\n${res.finalOutput}${usageLine}`, !res.ok);
+			return textContent(`${header}\n\n${sourceLabel}${res.finalOutput}${usageLine}`, !res.ok);
+		},
+
+		taskflow_resume: async (args, context) => {
+			// 0.2.0 dogfood issue 5: resume forks a NEW run; the original is never
+			// mutated or overwritten. Optional overrides re-run exactly one phase.
+			const runId = String(args.runId ?? "");
+			if (!runId) return textContent("taskflow_resume requires `runId`.", true);
+			const prevR = loadRunDiagnosed(cwd, runId);
+			if (!prevR.ok) return textContent(describeLoadFailure(prevR, `Run "${runId}"`), true);
+			const prev = prevR.value;
+			const hasOverrideField =
+				args.task !== undefined || args.model !== undefined ||
+				args.timeout !== undefined || args.idleTimeout !== undefined;
+			let overrides: ResumeOverrides | undefined;
+			if (hasOverrideField) {
+				if (typeof args.phaseId !== "string" || !args.phaseId)
+					return textContent("taskflow_resume with overrides requires `phaseId` (the target phase to re-run).", true);
+				overrides = {
+					phaseId: String(args.phaseId),
+					...(args.task !== undefined ? { task: String(args.task) } : {}),
+					...(args.model !== undefined ? { model: String(args.model) } : {}),
+					...(args.timeout !== undefined ? { timeout: Number(args.timeout) } : {}),
+					...(args.idleTimeout !== undefined ? { idleTimeout: Number(args.idleTimeout) } : {}),
+				};
+				const v = validateResumeOverrides(prev, overrides);
+				if (!v.ok) return textContent(`Invalid resume overrides:\n- ${v.errors.join("\n- ")}`, true);
+			}
+			const child = forkRunForResume(prev, { overrides, cwd });
+			// Carry the host identity onto the child (forkRunForResume copies it,
+			// but the parent may predate the metadata fields — re-stamp defensively).
+			if (host && !child.host) child.host = host;
+			const settings = readSubagentSettings();
+			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const deps: RuntimeDeps = {
+				cwd,
+				agents,
+				runTask: runner.runTask,
+				signal: context?.signal,
+				usageAccounting: runner.usageAccounting,
+				trace: new FileTraceSink(traceFilePath(runsDir(cwd), child.flowName, child.runId)),
+			};
+			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+			let lastPersist = 0;
+			deps.persist = (s) => { if (Date.now() - lastPersist >= 1000) { lastPersist = Date.now(); saveRun(s, cleanupConfig); } };
+			let terminalPersistError: string | undefined;
+			const res = await executeTaskflow(child, deps).finally(() => {
+				terminalPersistError = persistTerminalRun(child, cleanupConfig);
+			});
+			if (terminalPersistError !== undefined)
+				return textContent(`Resume finished, but terminal run persistence failed: ${terminalPersistError}`, true);
+			const header = res.ok ? "✓ taskflow resume complete" : "✗ taskflow resume did not fully succeed";
+			const parent = child.parentRunId ? ` (forked from ${child.parentRunId})` : "";
+			const u = res.totalUsage;
+			const sourceLabel = res.outputSourcePhaseId ? `--- ${res.outputSourcePhaseId} ---\n` : "";
+			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${child.runId}${parent}`;
+			return textContent(`${header}\n\n${sourceLabel}${res.finalOutput}${usageLine}`, !res.ok);
 		},
 
 		taskflow_peek: async (args) => {
@@ -1032,12 +1152,26 @@ export function makeToolHandlers(
 			if (svg) return imageContent(svgToBase64(svg), "image/svg+xml", [textReport], !passed);
 			return textContent(textReport, !passed);
 		},
+
+		taskflow_version: async () => {
+			// 0.2.0 dogfood issue 4: report package/build/host identity.
+			const info: BuildInfo = getBuildInfo();
+			const hostName = host ?? "taskflow";
+			const lines = [
+				`taskflow ${info.packageVersion} · host ${hostName}`,
+				`git commit: ${info.gitCommit}`,
+				`run-state schema: v${info.schemaVersion}`,
+			];
+			if (info.buildTime !== undefined) lines.push(`built: ${new Date(info.buildTime).toISOString()}`);
+			return textContent(lines.join("\n"));
+		},
 	};
 }
 
 /** Build the full MCP method dispatch table (protocol + tools). */
-export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>): Record<string, RpcHandler> {
-	const tools = makeToolHandlers(cwd, runner);
+export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>, opts?: McpHostOptions): Record<string, RpcHandler> {
+	const tools = makeToolHandlers(cwd, runner, opts);
+	const serverInfo = serverInfoFor(opts?.host);
 	let initialized = false;
 
 	return {
@@ -1046,7 +1180,7 @@ export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>
 			return {
 				protocolVersion: PROTOCOL_VERSION,
 				capabilities: { tools: { listChanged: false } },
-				serverInfo: SERVER_INFO,
+				serverInfo,
 			};
 		},
 		// Client tells us it's ready — notification, no response.
@@ -1069,6 +1203,6 @@ export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
-export function startMcpServer(runner: SubagentRunner<AgentConfig>, cwd: string = process.cwd()): Promise<void> {
-	return serveStdio(makeMcpHandlers(cwd, runner));
+export function startMcpServer(runner: SubagentRunner<AgentConfig>, cwd: string = process.cwd(), opts?: McpHostOptions): Promise<void> {
+	return serveStdio(makeMcpHandlers(cwd, runner, opts));
 }

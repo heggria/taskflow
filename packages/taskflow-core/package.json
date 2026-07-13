@@ -43,7 +43,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-agents.mjs && node ../../scripts/copy-readme.mjs taskflow-core",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-agents.mjs && node ../../scripts/copy-readme.mjs taskflow-core && node ../../scripts/stamp-build-info.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
