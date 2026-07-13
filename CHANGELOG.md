@@ -98,6 +98,9 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Security
 
+- Pi CLI typed-argument parsing now uses bounded linear scanners for decimal
+  coercion and `key=value` tokenization, eliminating worst-case polynomial
+  regular-expression backtracking on user-controlled invocation text.
 - Native sandbox policy construction is fail-closed behind a checked-in exact
   Host/OS/binary evidence cell. Evidence uses a strict versioned schema with
   complete named boolean checks, one no-follow file snapshot for hashing and

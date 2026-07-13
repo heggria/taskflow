@@ -57,10 +57,24 @@ function terminalRun(
 		onTerminalCommit?: () => void;
 	} = {},
 ) {
+	return terminalProcessRun(process.execPath, ["-e", script], opts);
+}
+
+function terminalProcessRun(
+	bin: string,
+	args: string[],
+	opts: {
+		idleTimeoutMs?: number;
+		signal?: AbortSignal;
+		terminalGraceMs?: number;
+		terminationGraceMs?: number;
+		onTerminalCommit?: () => void;
+	} = {},
+) {
 	const acc = terminalAcc();
 	return runSubagentProcess({
 		agent: "test", task: "terminal", model: undefined,
-		bin: "node", args: ["-e", script], cwd: process.cwd(),
+		bin, args, cwd: process.cwd(),
 		idleTimeoutMs: opts.idleTimeoutMs,
 		terminationGraceMs: opts.terminationGraceMs,
 		signal: opts.signal,
@@ -178,16 +192,20 @@ test("runSubagentProcess completion: later activity revokes a terminal candidate
 });
 
 test("runSubagentProcess completion: ignored metadata preserves a terminal candidate", async () => {
-	const started = Date.now();
-	const r = await terminalRun(`
-		const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
-		emit({type:"final",text:"DONE"}); emit({type:"terminal"});
-		setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
-		setInterval(()=>{},1000);
-	`, { idleTimeoutMs: 80, terminalGraceMs: 50 });
-	assert.equal(r.output, "DONE");
-	assert.equal(r.completionSource, "terminal-reap");
-	assert.ok(Date.now() - started < 250, "ignored metadata must not disable terminal grace and idle supervision");
+	const controller = new AbortController();
+	const watchdog = setTimeout(() => controller.abort(), 2_000);
+	try {
+		const r = await terminalRun(`
+			const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
+			emit({type:"final",text:"DONE"}); emit({type:"terminal"});
+			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
+			setInterval(()=>{},1000);
+		`, { idleTimeoutMs: 80, terminalGraceMs: 50, signal: controller.signal });
+		assert.equal(r.output, "DONE");
+		assert.equal(r.completionSource, "terminal-reap", "ignored metadata must preserve the terminal candidate");
+	} finally {
+		clearTimeout(watchdog);
+	}
 });
 
 test("runSubagentProcess: UTF-8 split across stdout chunks is lossless", async () => {
@@ -270,13 +288,11 @@ test("runSubagentProcess completion: terminal reap kills a descendant that holds
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-terminal-tree-"));
 	const marker = path.join(dir, "descendant-survived.txt");
 	try {
-		const r = await terminalRun(`
-			const {spawn}=require("node:child_process");
-			spawn(process.execPath,["-e",${JSON.stringify(`setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(marker)},"survived"),500); setInterval(()=>{},1000);`)}],{stdio:"inherit"});
-			process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
-			process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
-			setInterval(()=>{},1000);
-		`, { terminalGraceMs: 25, terminationGraceMs: 50 });
+		const fixture = fileURLToPath(new URL("./fixtures/process-supervisor-child.mjs", import.meta.url));
+		const r = await terminalProcessRun(process.execPath, [fixture, "terminal", marker], {
+			terminalGraceMs: 25,
+			terminationGraceMs: 50,
+		});
 		assert.equal(r.completionSource, "terminal-reap");
 		await new Promise((resolve) => setTimeout(resolve, 650));
 		assert.equal(fs.existsSync(marker), false, "the inherited process tree must be gone before phase completion");

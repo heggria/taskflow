@@ -2005,11 +2005,111 @@ function finalResult(action: string, result: RuntimeResult): ToolResult {
 }
 
 /** Parse a CLI-ish arg string into an args object. Accepts JSON or key=value pairs. */
+function parseFiniteDecimal(value: string): number | undefined {
+	let index = 0;
+	if (value[index] === "+" || value[index] === "-") index++;
+	let digits = 0;
+	while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) {
+		index++;
+		digits++;
+	}
+	if (value[index] === ".") {
+		index++;
+		while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) {
+			index++;
+			digits++;
+		}
+	}
+	if (digits === 0) return undefined;
+	if (value[index] === "e" || value[index] === "E") {
+		index++;
+		if (value[index] === "+" || value[index] === "-") index++;
+		const exponentStart = index;
+		while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) index++;
+		if (index === exponentStart) return undefined;
+	}
+	if (index !== value.length) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isArgWhitespace(code: number): boolean {
+	return code === 32 || (code >= 9 && code <= 13);
+}
+
+function isArgKeyChar(code: number): boolean {
+	return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || code === 95 || (code >= 97 && code <= 122);
+}
+
+function unescapeQuotedArg(value: string): string {
+	let output = "";
+	for (let index = 0; index < value.length; index++) {
+		if (value[index] === "\\" && value[index + 1] === '"') {
+			output += '"';
+			index++;
+		} else {
+			output += value[index];
+		}
+	}
+	return output;
+}
+
+/** Linear scanner for the deliberately small `key=value` command syntax. */
+function parseArgPairs(input: string): Array<[string, string]> {
+	const pairs: Array<[string, string]> = [];
+	let index = 0;
+	while (index < input.length) {
+		while (index < input.length && isArgWhitespace(input.charCodeAt(index))) index++;
+		const keyStart = index;
+		while (index < input.length && isArgKeyChar(input.charCodeAt(index))) index++;
+		if (index === keyStart || input[index] !== "=") {
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			continue;
+		}
+		const key = input.slice(keyStart, index++);
+		if (index >= input.length) continue;
+		if (input[index] !== '"') {
+			const valueStart = index;
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			if (index > valueStart) pairs.push([key, input.slice(valueStart, index)]);
+			continue;
+		}
+
+		const quotedStart = index++;
+		const valueStart = index;
+		let closedAt = -1;
+		while (index < input.length) {
+			if (input[index] === "\\" && index + 1 < input.length) {
+				index += 2;
+				continue;
+			}
+			if (input[index] === '"') {
+				closedAt = index++;
+				break;
+			}
+			index++;
+		}
+		if (closedAt >= 0) {
+			pairs.push([key, unescapeQuotedArg(input.slice(valueStart, closedAt))]);
+			// A quoted value is one token. Ignore any adjacent suffix instead of
+			// accidentally treating a substring of it as another declared argument.
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+		} else {
+			// Preserve the legacy fallback for an unterminated quote: the entire
+			// non-whitespace token remains a string and boundary validation decides.
+			index = quotedStart;
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			pairs.push([key, input.slice(quotedStart, index)]);
+		}
+	}
+	return pairs;
+}
+
 function coerceDeclaredArg(def: Taskflow, key: string, value: string): unknown {
 	const spec = def.args?.[key] as { type?: string; values?: Array<string | number> } | undefined;
-	if (spec?.type === "number" && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/.test(value)) {
-		const parsed = Number(value);
-		if (Number.isFinite(parsed)) return parsed;
+	if (spec?.type === "number") {
+		const parsed = parseFiniteDecimal(value);
+		if (parsed !== undefined) return parsed;
 	}
 	if (spec?.type === "boolean") {
 		if (value === "true") return true;
@@ -2017,8 +2117,8 @@ function coerceDeclaredArg(def: Taskflow, key: string, value: string): unknown {
 	}
 	if (spec?.type === "enum" && spec.values?.some((candidate) => typeof candidate === "number")) {
 		if (spec.values.some((candidate) => typeof candidate === "string" && candidate === value)) return value;
-		const parsed = Number(value);
-		if (Number.isFinite(parsed) && spec.values.some((candidate) => typeof candidate === "number" && Object.is(candidate, parsed))) {
+		const parsed = parseFiniteDecimal(value);
+		if (parsed !== undefined && spec.values.some((candidate) => typeof candidate === "number" && Object.is(candidate, parsed))) {
 			return parsed;
 		}
 	}
@@ -2037,14 +2137,10 @@ export function parseArgsString(input: string, def: Taskflow): Record<string, un
 	}
 	// key=value pairs
 	const out: Record<string, unknown> = {};
-	const pairs = trimmed.match(/(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g);
-	if (pairs) {
-		for (const p of pairs) {
-			const idx = p.indexOf("=");
-			const k = p.slice(0, idx);
-			let v: string = p.slice(idx + 1);
-			if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1).replace(/\\"/g, '"');
-			out[k] = coerceDeclaredArg(def, k, v);
+	const pairs = parseArgPairs(trimmed);
+	if (pairs.length > 0) {
+		for (const [key, value] of pairs) {
+			out[key] = coerceDeclaredArg(def, key, value);
 		}
 		return out;
 	}

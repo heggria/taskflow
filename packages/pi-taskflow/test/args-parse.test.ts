@@ -30,3 +30,14 @@ test("parseArgsString preserves an exact string member in a mixed enum", () => {
 test("parseArgsString leaves invalid typed text for boundary validation", () => {
 	assert.deepEqual(parseArgsString("count=nope enabled=yes", def), { count: "nope", enabled: "yes" });
 });
+
+test("parseArgsString scans quoted values and decimal forms without backtracking", () => {
+	assert.deepEqual(parseArgsString('label="hello \\"world\\"" count=-.5 numeric=2e0', def), {
+		label: 'hello "world"',
+		count: -0.5,
+		numeric: 2,
+	});
+	assert.deepEqual(parseArgsString(`count=${"0".repeat(100_000)}x`, def), {
+		count: `${"0".repeat(100_000)}x`,
+	});
+});
