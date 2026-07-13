@@ -38,7 +38,8 @@ Most agent "orchestration" is actually a **chain** — step 1, step 2, step 3, l
 ```json
 {
   "id": "review",
-  "map": "{steps.discover.json}",
+  "type": "map",
+  "over": "{steps.discover.json}",
   "agent": "security-reviewer",
   "task": "Audit {item} for vulnerabilities.",
   "concurrency": 4
@@ -87,4 +88,4 @@ A task graph is the wrong tool when:
 
 A **task graph** is a DAG of discrete, declared task nodes connected by dependency edges. Making it **declarative data** (not imperative code) is what unlocks verification, observation, resume, and safe LLM authoring. That's the bet taskflow makes.
 
-Want to see one in action? The [templates gallery](/en/docs/templates) has five complete graphs, and [What is taskflow?](/en/docs/what-is-taskflow) walks through the motivation end to end.
+Want to see one in action? The [templates gallery](/en/docs/guides/templates) has five complete graphs, and [What is taskflow?](/en/docs/what-is-taskflow) walks through the motivation end to end.

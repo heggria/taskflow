@@ -1,9 +1,9 @@
 ---
 title: "Claude Code + MCP：会自我门禁的 workflow"
-description: 在 Claude Code 里跑一个 taskflow MCP server，获得带质量门禁、预算上限和上下文隔离的声明式任务图——不用离开你的 Claude 会话。
+description: 在 Claude Code 里跑一个 taskflow MCP server，获得带质量门禁、预算止损和上下文隔离的声明式任务图——不用离开你的 Claude 会话。
 ---
 
-Claude Code 本身是个强大的编程 agent。但当工作需要一条**可重复的流水线**——审查每个改动文件、按风险 gate、控制在花费上限内——临时提示词会遇到每个 agent 都有的限制：模型每次重新推导计划，中间逐字稿填满你的上下文，而且如果审查者发现严重问题，没法把整个流程叫停。本文讲的是如何给 Claude Code 加一个 **taskflow MCP server**，在你的会话里跑一条会自我门禁的审查流水线。
+Claude Code 本身是个强大的编程 agent。但当工作需要一条**可重复的流水线**——审查每个改动文件、按风险 gate、设置已观测用量止损——临时提示词会遇到每个 agent 都有的限制：模型每次重新推导计划，中间逐字稿填满你的上下文，而且如果审查者发现严重问题，没法把整个流程叫停。本文讲的是如何给 Claude Code 加一个 **taskflow MCP server**，在你的会话里跑一条会自我门禁的审查流水线。
 
 ## 给 Claude Code 加 taskflow MCP server
 
@@ -14,11 +14,11 @@ claude plugin marketplace add heggria/taskflow
 claude plugin install claude-taskflow@taskflow
 ```
 
-就这样——插件接好 MCP server（通过 `npx claude-taskflow-mcp`）并放进 taskflow skill。重启 Claude Code，你就会有 `taskflow_run`、`taskflow_verify`、`taskflow_resume` 等工具可用。
+就这样——插件接好 MCP server（通过 `npx claude-taskflow-mcp`）并放进 taskflow skill。重启 Claude Code，你就会有 `taskflow_run`、`taskflow_verify`、`taskflow_peek` 等已发布 MCP 工具可用。
 
 ## 任务：带门禁的安全审查
 
-你要一条每个 PR 都跑的流水线：发现改动文件、逐文件扇出安全审查、并行跑一个架构审查，并在发现任何严重问题时**叫停**——最后返回一份合并报告。
+你要一条每个 PR 都跑的流水线：发现改动文件、逐文件扇出安全审查、加入架构审查，并在发现任何严重问题时**叫停**——最后返回一份合并报告。
 
 把它声明成一张图：
 
@@ -35,10 +35,10 @@ claude plugin install claude-taskflow@taskflow
     },
     {
       "id": "sec-review",
-      "map": "{steps.discover.json}",
+      "type": "map",
+      "over": "{steps.discover.json}",
       "agent": "security-reviewer",
-      "task": "审计 {item} 的漏洞：注入、鉴权、密钥、不安全反序列化。返回风险等级和一行发现。",
-      "concurrency": 4
+      "task": "审计 {item} 的漏洞：注入、鉴权、密钥、不安全反序列化。返回风险等级和一行发现。"
     },
     {
       "id": "arch-review",
@@ -70,43 +70,52 @@ claude plugin install claude-taskflow@taskflow
 - 如果 `plan-arbiter` 给 `VERDICT: PASS` → 流程继续到 `report`。
 - 如果给 `VERDICT: BLOCK` → 流程**立即停止**。`report` 永不运行。你拿到的是阻塞发现，而不是一份把问题埋掉的漂亮报告。
 
-这是一个有牙齿的质量门禁。fail-open 规则（输出模糊时 → PASS）意味着一个犯迷糊的 gate 不会误停好工作——但一个明确的 `BLOCK` 是终局的。
+这是一个有牙齿的质量门禁。fail-closed 规则（完全无法解析的输出 → `BLOCK`）意味着一个犯迷糊的 gate 不会误放坏工作——但一个明确的 `BLOCK` 是终局的。而明确的非阻塞 JSON 裁决（例如 `{"verdict": "no issues found"}`）仍会被当作 `PASS`。
 
 ## 从 Claude Code 运行
 
-```text
-# 先免费校验这张图
-taskflow_verify pr-security-review
+请 Claude 调用 `taskflow_verify`，并传入：
 
-# 运行
-taskflow_run pr-security-review
+```json
+{ "defineFile": "pr-security-review.json" }
+```
+
+然后调用 `taskflow_run`，并传入：
+
+```json
+{ "defineFile": "pr-security-review.json" }
 ```
 
 Claude Code 看到的是：一个**单次流式工具调用**返回最终报告。它看不到的是：几十份逐文件 security-reviewer 逐字稿。那些留在 taskflow runtime 里——你的上下文窗口拿到的是合并报告，不是原始噪声。
 
-## 预算上限是一等字段
+## 预算止损是一等字段
 
 ```json
 "budget": { "maxUSD": 1.50 }
 ```
 
-如果对意外大的 diff 扇出会超过 $1.50，运行时会以 budget-exceeded 结果叫停。账单没有惊喜。配合 `concurrency: 4`，扇出在预算生效之前就是有界的。
+已观测用量超过 $1.50 后，运行时会停止接纳新工作并返回 budget-exceeded。这是止损线，不是预付费预留：单个进行中的调用仍可能超出。声明 budget 会串行化普通 DAG/map 工作以保持用量可审计；`race` 分支仍必然并发。
 
-## 存起来复用
+## 保留文件并复用
 
-描述一次流水线：
+JSON 文件本身就是可复用定义。下次用相同的 MCP 参数再运行：
 
-```text
-taskflow_save pr-security-review pr-security-review.json
+```json
+{ "defineFile": "pr-security-review.json" }
 ```
 
-现在每次 PR 审查都是 `taskflow_run pr-security-review`——不用重新提示，不用重新推导计划。而且因为阶段按输入哈希缓存，改了一行提示词后重跑只会重新执行改动阶段及其下游。
+无需重新提示或推导计划。跨运行复用是显式选项：对需要在不同运行间复用匹配结果的 phase 设置 `cache.scope: "cross-run"`。
 
 ## 要点
 
 - taskflow **MCP server** 把声明式任务图作为工具*带进* Claude Code。
 - `gate` 阶段给你一个真能遇 BLOCK 叫停的质量门禁。
-- `budget` 封顶花费；`map` 按有界并发扇出。
+- `budget` 在已观测用量超过限制后停止新工作并串行化普通扇出；`race` 仍并发。
 - 只有最终报告返回你的会话——逐字稿保持隔离。
 
-完整的 Claude Code 接口（权限、模型路由、所有可用工具）见 [Claude Code 指南](/zh-cn/docs/guides/claude-code)。[模板库](/zh-cn/docs/templates) 还有四个可运行流水线。
+完整的 Claude Code 接口（权限、模型路由、所有可用工具）见 [Claude Code 指南](/zh-cn/docs/guides/claude-code)。[模板库](/zh-cn/docs/guides/templates) 还有四个可运行流水线。
+
+
+## 也适用于其他宿主
+
+同一引擎与 `taskflow_*` 工具也在 **Pi**、**Codex**、**OpenCode** 和 **[Grok Build](/zh-cn/docs/guides/grok-build)** 上运行——只是安装路径不同。见[指南索引](/zh-cn/docs/guides)。

@@ -3,7 +3,7 @@ title: taskflow vs built-in subagents
 description: When your agent's native task/tasks/chain shorthand is enough, and when you outgrow it — DAGs, gates, resume, and context isolation that the built-in tool can't give you.
 ---
 
-Every modern coding agent ships a built-in subagent shorthand — on Pi it's `task` / `tasks` / `chain`; on Codex, Claude Code, and OpenCode the same idea exists under different names. **taskflow does not replace it.** taskflow speaks the *same* shorthand, so your existing delegations instantly become tracked, resumable, and saveable. Then, when you outgrow the shorthand, the full DSL gives you a real DAG.
+Every modern coding agent ships a built-in subagent shorthand — on Pi it's `task` / `tasks` / `chain`; on Codex, Claude Code, OpenCode, and Grok Build the same idea exists under different names. **taskflow does not replace it.** taskflow speaks the *same* shorthand, so your existing delegations instantly become tracked, resumable, and saveable. Then, when you outgrow the shorthand, the full DSL gives you a real DAG.
 
 The honest question is: **when is the built-in shorthand enough, and when do you need taskflow?**
 
@@ -32,7 +32,7 @@ You've hit the wall when **any** of these become true:
 | **Conditional routing** | ✗ | **`when` guards + `join: any` OR-joins** |
 | **Retry / fault tolerance** | ✗ | **per-phase `retry` + auto-retry on transient errors** |
 | **Human approval** mid-flow | ✗ | **`approval` phases (approve / reject / edit)** |
-| **Spend ceiling** | ✗ | **run-wide `budget` (USD / token caps)** |
+| **Observed-usage stop-loss** | ✗ | **run-wide `budget` (USD / token thresholds; in-flight work may overshoot)** |
 | **Competitive selection** | ✗ | **`tournament` — N variants + a judge** |
 | **Live graph view** | opaque while running | **live DAG render with timing + cost** |
 
@@ -56,7 +56,7 @@ Agent: [12 subagent calls → 12 full transcripts in your context]
   "name": "security-review",
   "phases": [
     { "id": "discover", "agent": "scout", "task": "List files changed since origin/main" },
-    { "id": "review", "map": "{steps.discover.json.files}", "agent": "security-reviewer",
+    { "id": "review", "type": "map", "over": "{steps.discover.json.files}", "agent": "security-reviewer",
       "task": "Audit {item} for vulnerabilities", "concurrency": 4 },
     { "id": "report", "agent": "executor", "dependsOn": ["review"],
       "task": "Merge the per-file reviews into one report" }
@@ -84,7 +84,7 @@ The other big shift is **reuse**. Describe a pipeline once, save it:
 ```
 
 ```bash
-# Codex / Claude Code / OpenCode — run a saved flow by name
+# Codex / Claude Code / OpenCode / Grok — run a saved flow by name
 taskflow_run code-audit
 ```
 

@@ -19,6 +19,8 @@ import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
 import type { RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 // A random token the reader phase cannot possibly guess — it can only obtain it
 // from the blackboard via ctx_read.
@@ -78,48 +80,54 @@ async function main() {
 		cwd: process.cwd(),
 	};
 
-	console.log("== executing (real subagents) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(),
-		agents,
-		globalThinking: settings.globalThinking,
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			const running = Object.values(s.phases)
-				.filter((p) => p.status === "running")
-				.map((p) => p.id);
-			process.stdout.write(
-				`\r  progress: ${done}/${s.def.phases.length} done` +
-					(running.length ? ` | running: ${running.join(",")}` : "") +
-					"        ",
-			);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-context");
+	try {
+		console.log("== executing (real subagents) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				const running = Object.values(s.phases)
+					.filter((p) => p.status === "running")
+					.map((p) => p.id);
+				process.stdout.write(
+					`\r  progress: ${done}/${s.def.phases.length} done` +
+						(running.length ? ` | running: ${running.join(",")}` : "") +
+						"        ",
+				);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
 
-	console.log("\nPhase states:");
-	for (const p of FLOW.phases) {
-		const ps = res.state.phases[p.id];
-		console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} -> ${JSON.stringify(ps?.output?.slice(0, 120))}`);
-	}
-	console.log("\nFinal output (reader):\n  ", JSON.stringify(res.finalOutput));
+		console.log("\nPhase states:");
+		for (const p of FLOW.phases) {
+			const ps = res.state.phases[p.id];
+			console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} -> ${JSON.stringify(ps?.output?.slice(0, 120))}`);
+		}
+		console.log("\nFinal output (reader):\n  ", JSON.stringify(res.finalOutput));
 
-	const readerOut = res.state.phases.reader?.output ?? "";
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["writer phase done", res.state.phases.writer?.status === "done"],
-		["reader phase done", res.state.phases.reader?.status === "done"],
-		["reader output contains the value it could only get from the blackboard", readerOut.includes(CODE)],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [name, ok] of checks) {
-		console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
-		if (!ok) allPass = false;
+		const readerOut = res.state.phases.reader?.output ?? "";
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["writer phase done", res.state.phases.writer?.status === "done"],
+			["reader phase done", res.state.phases.reader?.status === "done"],
+			["reader output contains the value it could only get from the blackboard", readerOut.includes(CODE)],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [name, ok] of checks) {
+			console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
+			if (!ok) allPass = false;
+		}
+		console.log(allPass ? "\n✅ CONTEXT-SHARE E2E PASSED" : "\n❌ CONTEXT-SHARE E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
 	}
-	console.log(allPass ? "\n✅ CONTEXT-SHARE E2E PASSED" : "\n❌ CONTEXT-SHARE E2E FAILED");
-	process.exit(allPass ? 0 : 1);
 }
 
 main().catch((e) => {

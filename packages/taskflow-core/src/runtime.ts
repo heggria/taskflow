@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { contractViolations } from "./contract.ts";
-import { isFailed, isTransientError, mapWithConcurrencyLimit, sanitizeErrorMessage } from "./runner-core.ts";
+import { isFailed, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS, sanitizeErrorMessage } from "./runner-core.ts";
 import type { LiveUpdate, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 /** The host-neutral subagent runner signature the engine drives. A host adapter
@@ -34,11 +34,13 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 	errorMessage: "No subagent runner injected",
 	stopReason: "error",
 });
+export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
-import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors, WINNER_TOKEN_RE } from "./scorers.ts";
-import { parseGateVerdict, overBudget as overBudgetCheck, type BudgetCheckInput } from "./deterministic.ts";
+import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
+import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
+export { parseTournamentWinner } from "./deterministic.ts";
 import { type TraceEvent, type TraceSink } from "./trace.ts";
 // Re-export so existing `import { parseGateVerdict } from "./runtime.ts"` callers
 // (and tests) keep working; the implementation now lives in deterministic.ts.
@@ -71,6 +73,10 @@ export interface RuntimeDeps {
 	cwd: string;
 	agents: AgentConfig[];
 	globalThinking?: string;
+	/** Whether the host reports authoritative token/cost usage. A host that
+	 *  cannot observe usage must reject every actually-executed budgeted flow,
+	 *  including nested/dynamic flows, rather than silently bypassing the cap. */
+	usageAccounting?: "available" | "tokens-only" | "unavailable";
 	signal?: AbortSignal;
 	/** Persist run state after each phase (for resume). */
 	persist?: (state: RunState) => void;
@@ -91,6 +97,12 @@ export interface RuntimeDeps {
 	 *  append-only trace for offline replay. Absent → no-op (runs behave
 	 *  identically to today). See `trace.ts`. */
 	trace?: TraceSink;
+	/**
+	 * S2 strangler: when true, eligible flows run on `exec/driver` (event kernel).
+	 * Covers core kinds except `race`/`expand`; advanced features force imperative
+	 * fallback. Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
+	 */
+	eventKernel?: boolean;
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 	/** Internal: pre-resolved Shared Context Tree dir for this run (sub-flows inherit the parent's). */
@@ -341,12 +353,22 @@ function normalizeInlineDef(parsed: unknown, phaseId: string): Taskflow | undefi
  * than the parent's, never looser. A generated def cannot raise the spend cap by
  * declaring its own large budget. Each dimension becomes min(child, parent).
  */
-function clampSubFlowBudget(sub: Taskflow, parentBudget: Budget | undefined): Taskflow {
+function clampSubFlowBudget(
+	sub: Taskflow,
+	parentBudget: Budget | undefined,
+	spent: UsageStats = emptyUsage(),
+): Taskflow {
 	if (!parentBudget) return sub;
 	const child = sub.budget;
+	const remainingUSD =
+		parentBudget.maxUSD === undefined ? Infinity : Math.max(0, parentBudget.maxUSD - spent.cost);
+	const remainingTokens =
+		parentBudget.maxTokens === undefined
+			? Infinity
+			: Math.max(0, parentBudget.maxTokens - (spent.input + spent.output));
 	const clamped: Budget = {
-		maxUSD: Math.min(child?.maxUSD ?? Infinity, parentBudget.maxUSD ?? Infinity),
-		maxTokens: Math.min(child?.maxTokens ?? Infinity, parentBudget.maxTokens ?? Infinity),
+		maxUSD: Math.min(child?.maxUSD ?? Infinity, remainingUSD),
+		maxTokens: Math.min(child?.maxTokens ?? Infinity, remainingTokens),
 	};
 	// Drop Infinity dimensions (no cap on that axis).
 	const budget: Budget = {};
@@ -435,6 +457,49 @@ function traceEmit(deps: RuntimeDeps, event: TraceEvent): void {
 	}
 }
 
+/** Emit a `decision` event (S1: full decision coverage for fold/replay). Fail-open. */
+function traceDecision(
+	deps: RuntimeDeps,
+	state: RunState,
+	phaseId: string,
+	decision: NonNullable<TraceEvent["decision"]>,
+): void {
+	traceEmit(deps, {
+		ts: Date.now(),
+		runId: state.runId,
+		phaseId,
+		kind: "decision",
+		decision,
+	});
+}
+
+/** Emit gate decision as gate-score when scores present, else gate-verdict. */
+function traceGateDecision(
+	deps: RuntimeDeps,
+	state: RunState,
+	phaseId: string,
+	gate: NonNullable<PhaseState["gate"]>,
+	judgeOutput?: string,
+): void {
+	if (gate.scores) {
+		traceDecision(deps, state, phaseId, {
+			type: "gate-score",
+			target: "",
+			results: gate.scores.results,
+			combined: gate.scores.combined,
+			threshold: gate.scores.threshold,
+			verdict: gate.verdict,
+			judgeOutput,
+		});
+	} else {
+		traceDecision(deps, state, phaseId, {
+			type: "gate-verdict",
+			value: gate.verdict,
+			reason: gate.reason,
+		});
+	}
+}
+
 /** Fail-open trace flush at phase-end. */
 function traceFlush(deps: RuntimeDeps, phaseId: string): void {
 	try {
@@ -446,7 +511,7 @@ function traceFlush(deps: RuntimeDeps, phaseId: string): void {
 
 /** Emit a `decision: unreplayable` marker for a phase whose inputs the trace
  *  cannot fully capture (Shared Context Tree, inner sub-flows, context files,
- *  unobservable interpolation deps). A future replay marks such phases
+ *  unobservable interpolation deps). Offline replay marks such phases
  *  `needs-live-rerun` instead of silently reusing a recorded output.
  *  Single-phase analog of `hasUnobservedDependencies`. Fail-open. */
 function emitUnreplayableMarker(deps: RuntimeDeps, state: RunState, phase: Phase): void {
@@ -461,7 +526,7 @@ function emitUnreplayableMarker(deps: RuntimeDeps, state: RunState, phase: Phase
 /** Why (if at all) a single phase cannot be deterministically replayed. */
 function unreplayableReason(state: RunState, phase: Phase): "context-sharing" | "inner-flow" | "context-files" | "unobservable-deps" | undefined {
 	if (phase.shareContext === true || state.def.contextSharing === true) return "context-sharing";
-	if (phase.type === "flow") return "inner-flow";
+	if (phase.type === "flow" || phase.type === "expand") return "inner-flow";
 	if (phase.context && phase.context.length > 0) return "context-files";
 	// Interpolation refs that don't resolve through steps.*/args.*/item.* are
 	// unobservable to the trace (previous.output is observable via dependsOn).
@@ -583,6 +648,26 @@ interface SpawnedResult {
 }
 
 /**
+ * Spend produced by the current ctx_spawn supervision tree but not yet folded
+ * into `state.phases`.  A single ledger is shared by siblings and descendants,
+ * otherwise every recursive call observes the same stale parent state and can
+ * independently spend the full remaining allowance.
+ */
+interface SpawnBudgetLedger {
+	usage: UsageStats;
+}
+
+function spawnedOverBudget(state: RunState, local: UsageStats): boolean {
+	const budget = state.def.budget;
+	if (!budget) return false;
+	return overBudgetCheck({
+		maxUSD: budget.maxUSD,
+		maxTokens: budget.maxTokens,
+		usages: [...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), local],
+	}).over;
+}
+
+/**
  * Run an inline sub-flow queued via `ctx_spawn({subflow})`. Reuses the SAME
  * validation + execution machinery as a `flow{def}` phase (normalizeInlineDef →
  * validateTaskflow(dynamic) → verifyTaskflow → nested executeTaskflow), so a
@@ -613,6 +698,7 @@ async function runInlineSubflow(
 	phase: Phase,
 	deps: RuntimeDeps,
 	state: RunState,
+	localSpawnUsage: UsageStats,
 ): Promise<{ output: string; usage: UsageStats }> {
 	const stack = deps._stack ?? [];
 	const inlineDepth = stack.filter((s) => s.startsWith("def:")).length;
@@ -635,7 +721,16 @@ async function runInlineSubflow(
 		const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 		return { output: `(spawned subflow failed verification: ${errs.join("; ")})`, usage: emptyUsage() };
 	}
-	const subDef = clampSubFlowBudget(wrapped, state.def.budget);
+	// The generated sub-flow gets only what remains after both already-folded
+	// parent spend and siblings/ancestors in this still-running spawn batch.  USD
+	// and tokens are clamped independently by clampSubFlowBudget.  Like the main
+	// runtime, this is an atomic-call ceiling: one call may cross the cap, then no
+	// subsequent call is admitted.
+	const parentAndBatchSpent = aggregateUsage([
+		...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()),
+		localSpawnUsage,
+	]);
+	const subDef = clampSubFlowBudget(wrapped, state.def.budget, parentAndBatchSpent);
 	const subState: RunState = {
 		runId: newRunId(subDef.name),
 		flowName: subDef.name,
@@ -680,6 +775,7 @@ async function runSpawnedChildren(
 	deps: RuntimeDeps,
 	state: RunState,
 	run: RunTaskFn,
+	ledger: SpawnBudgetLedger = { usage: emptyUsage() },
 ): Promise<SpawnedResult> {
 	const capped = assignments.slice(0, MAX_DYNAMIC_MAP_ITEMS);
 	const lines: string[] = [];
@@ -689,7 +785,7 @@ async function runSpawnedChildren(
 	const spawnCwd = resolveEffCwd(deps, phase);
 	let idx = 0;
 	for (const a of capped) {
-		if (deps.signal?.aborted || overBudget(state).over) break;
+		if (deps.signal?.aborted || spawnedOverBudget(state, ledger.usage)) break;
 		idx++;
 		const childNodeId = `${parentNodeId}--c${idx}`.replace(/[^A-Za-z0-9._-]+/g, "_");
 		const isSubflow = a.subflow !== undefined && a.subflow !== null;
@@ -698,9 +794,18 @@ async function runSpawnedChildren(
 		let out = "";
 		try {
 			if (isSubflow) {
-				const sub = await runInlineSubflow(a.subflow, a.defaultAgent ?? phase.agent, childNodeId, phase, deps, state);
+				const sub = await runInlineSubflow(
+					a.subflow,
+					a.defaultAgent ?? phase.agent,
+					childNodeId,
+					phase,
+					deps,
+					state,
+					ledger.usage,
+				);
 				out = sub.output;
 				usages.push(sub.usage);
+				ledger.usage = aggregateUsage([ledger.usage, sub.usage]);
 				setNodeStatus(ctxDir, childNodeId, "done");
 			} else {
 				const r = await run(
@@ -712,12 +817,15 @@ async function runSpawnedChildren(
 					deps.globalThinking,
 				);
 				out = r.output ?? "";
-				if (r.usage) usages.push(r.usage);
+				if (r.usage) {
+					usages.push(r.usage);
+					ledger.usage = aggregateUsage([ledger.usage, r.usage]);
+				}
 				setNodeStatus(ctxDir, childNodeId, isFailed(r) ? "failed" : "done");
 				// A child may itself have queued spawns — recurse (depth-capped by the tool).
 				const grand = drainPendingSpawns(ctxDir, childNodeId);
-				if (grand.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run);
+				if (grand.length > 0 && !deps.signal?.aborted && !spawnedOverBudget(state, ledger.usage)) {
+					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger);
 					if (rec.reports) out += rec.reports;
 					usages.push(rec.usage);
 				}
@@ -759,8 +867,15 @@ async function executePhase(
 	opts?: PhaseExecOpts,
 ): Promise<PhaseState> {
 	// Trace: phase-start (fail-open). Record whether this phase is replayable
-	// up front so a future replay can short-circuit it without walking events.
-	traceEmit(deps, { ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-start" });
+	// up front so replay can short-circuit it without guessing from output.
+	traceEmit(deps, {
+		ts: Date.now(),
+		runId: state.runId,
+		phaseId: phase.id,
+		kind: "phase-start",
+		dependencies: dependenciesOf(phase),
+		optional: phase.optional === true,
+	});
 	if (deps.trace) emitUnreplayableMarker(deps, state, phase);
 	let result: PhaseState;
 	let threw = false;
@@ -777,6 +892,13 @@ async function executePhase(
 		throw e;
 	}
 	if (threw) return result; // unreachable; satisfies TS
+	// S1: cache-hit decision (within-run or cross-run) for fold/replay.
+	if (result.cacheHit) {
+		traceDecision(deps, state, phase.id, {
+			type: "cache-hit",
+			scope: result.cacheHit === "cross-run" ? "cross-run" : "run-only",
+		});
+	}
 	// Trace: phase-end with the real status, then flush buffered events.
 	traceEmit(deps, {
 		ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "phase-end",
@@ -800,6 +922,7 @@ async function executePhaseImpl(
 	// every type branch inside executePhaseInner is covered. A skipped phase ran
 	// nothing — no side effect to record.
 	const stamp = (ps: PhaseState): PhaseState => {
+		if (phase.optional === true) ps.optional = true;
 		if (phase.idempotent === false && ps.status !== "skipped") {
 			ps.sideEffect = true;
 			// Resume double-fire warning (issue #20): a non-idempotent phase is never
@@ -900,7 +1023,13 @@ async function executePhaseInner(
 	// interpolation is captured by the shared onRead hook, not silently dropped
 	// by a separate out-of-band context.
 	if (phase.when !== undefined) {
-		if (!evaluateCondition(phase.when, ctx)) {
+		const whenResult = evaluateCondition(phase.when, ctx);
+		traceDecision(deps, state, phase.id, {
+			type: "when-guard",
+			expression: phase.when,
+			result: whenResult,
+		});
+		if (!whenResult) {
 			return {
 				id: phase.id,
 				status: "skipped",
@@ -922,7 +1051,7 @@ async function executePhaseInner(
 	// each run (schema already rejects explicit cross-run, but the default-scope
 	// path must also be blocked). If flowDefHash failed, cross-run is unsafe
 	// because the key degrades to flowName-only and reopens cross-flow collisions.
-	const CROSS_RUN_BLOCKED_TYPES = new Set(["gate", "approval", "loop", "tournament", "script"]);
+	const CROSS_RUN_BLOCKED_TYPES = new Set(["gate", "approval", "loop", "tournament", "script", "race", "expand"]);
 	if (cacheScope === "cross-run" && CROSS_RUN_BLOCKED_TYPES.has(type)) {
 		cacheScope = "run-only";
 	}
@@ -952,6 +1081,9 @@ async function executePhaseInner(
 		thinking: phase.thinking,
 		tools: phase.tools,
 		preRead,
+		agentScope: state.def.agentScope,
+		contextSharing: state.def.contextSharing === true,
+		agentDefinitions: agentDefinitionsIdentity(deps.agents),
 	};
 
 	const baseRun = (agentName: string, task: string, onLive?: (l: LiveUpdate) => void, ctxNodeId?: string, signal?: AbortSignal) =>
@@ -991,39 +1123,76 @@ async function executePhaseInner(
 		type !== "script" && typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
 			? phase.timeout
 			: undefined;
-	const runOne = async (agentName: string, task: string, onLive?: (l: LiveUpdate) => void, ctxNodeId?: string, check?: (r: RunResult) => string[]): Promise<RunResult> => {
+	const runOne = async (
+		agentName: string,
+		task: string,
+		onLive?: (l: LiveUpdate) => void,
+		ctxNodeId?: string,
+		check?: (r: RunResult) => string[],
+		/** Extra abort (e.g. race branch cancelLosers) — chained with run + phase timeout. */
+		extraSignal?: AbortSignal,
+	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
 		const maxAttempts = Math.max(explicitMax, 1 + DEFAULT_TRANSIENT_RETRIES);
 		const usages: UsageStats[] = [];
 		let last: RunResult | undefined;
 		for (let attempt = 0; attempt < maxAttempts; attempt++) {
-			if (deps.signal?.aborted) break;
-			// Phase timeout — an AbortController chained to the run's signal that also
-			// fires after `phase.timeout` ms. Deterministic: a timed-out call is never
-			// retried (retrying a call that just burned its full cap would double-spend).
+			if (deps.signal?.aborted || extraSignal?.aborted) break;
+			// AbortController chains: run signal + optional extra (race cancel) + phase timeout.
+			// Deterministic: a timed-out call is never retried (would double-spend).
 			let timedOut = false;
 			let timer: ReturnType<typeof setTimeout> | undefined;
-			let onParentAbort: (() => void) | undefined;
+			let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
+			const removers: Array<() => void> = [];
 			let callSignal: AbortSignal | undefined;
-			if (phaseTimeoutMs) {
+			let timeoutController: AbortController | undefined;
+			if (phaseTimeoutMs || extraSignal) {
 				const ac = new AbortController();
+				timeoutController = ac;
 				callSignal = ac.signal;
-				if (deps.signal?.aborted) ac.abort();
-				else if (deps.signal) {
-					onParentAbort = () => ac.abort();
-					deps.signal.addEventListener("abort", onParentAbort, { once: true });
+				if (deps.signal?.aborted || extraSignal?.aborted) ac.abort();
+				else {
+					if (deps.signal) {
+						const fn = () => ac.abort();
+						deps.signal.addEventListener("abort", fn, { once: true });
+						removers.push(() => deps.signal?.removeEventListener("abort", fn));
+					}
+					if (extraSignal) {
+						const fn = () => ac.abort();
+						extraSignal.addEventListener("abort", fn, { once: true });
+						removers.push(() => extraSignal.removeEventListener("abort", fn));
+					}
 				}
-				timer = setTimeout(() => {
-					timedOut = true;
-					ac.abort();
-				}, phaseTimeoutMs);
 			}
 			try {
-				last = await baseRun(agentName, task, onLive, ctxNodeId, callSignal);
+				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal);
+				if (phaseTimeoutMs && timeoutController) {
+					const timeoutFallback = new Promise<RunResult>((resolve) => {
+						timer = setTimeout(() => {
+							timedOut = true;
+							timeoutController?.abort();
+							forceReturnTimer = setTimeout(() => resolve({
+								agent: agentName,
+								task,
+								exitCode: 1,
+								output: "",
+								stderr: "",
+								usage: emptyUsage(),
+								stopReason: "error",
+								errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
+								phaseTimeout: true,
+							}), PHASE_TIMEOUT_ABORT_GRACE_MS);
+						}, phaseTimeoutMs);
+					});
+					last = await Promise.race([invocation, timeoutFallback]);
+				} else {
+					last = await invocation;
+				}
 			} finally {
 				if (timer) clearTimeout(timer);
-				if (onParentAbort) deps.signal?.removeEventListener("abort", onParentAbort);
+				if (forceReturnTimer) clearTimeout(forceReturnTimer);
+				for (const r of removers) r();
 			}
 			if (timedOut) {
 				// Reclassify the abort as a phase timeout: a distinct, deterministic
@@ -1037,6 +1206,12 @@ async function executePhaseInner(
 					phaseTimeout: true,
 				};
 				usages.push(last.usage);
+				traceEmit(deps, {
+					ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "subagent-call",
+					input: { agent: agentName, model: phase.model, task, preRead, nodePath: ctxNodeId ?? phase.id, attempt },
+					output: { text: last.output, model: last.model, usage: last.usage, stopReason: last.stopReason },
+				});
+				traceFlush(deps, phase.id);
 				break;
 			}
 			usages.push(last.usage);
@@ -1058,9 +1233,18 @@ async function executePhaseInner(
 			// so the TUI / budget guard see the in-flight spend on every attempt.
 			const liveRetry = state.phases[phase.id];
 			if (liveRetry) liveRetry.usage = aggregateUsage(usages);
+			// Persist every attempt, not only the final aggregate. This is required
+			// for honest replay/cost accounting when a transient or explicit retry
+			// succeeds after earlier spend.
+			traceEmit(deps, {
+				ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "subagent-call",
+				input: { agent: agentName, model: phase.model, task, preRead, nodePath: ctxNodeId ?? phase.id, attempt },
+				output: { text: last.output, model: last.model, usage: last.usage, stopReason: last.stopReason },
+			});
+			traceFlush(deps, phase.id);
 			if (!isFailed(last)) break;
-			// Stop retrying on abort or once the run is over budget.
-			if (deps.signal?.aborted || overBudget(state).over) break;
+			// Stop retrying on abort (run-level or race cancel) or once over budget.
+			if (deps.signal?.aborted || extraSignal?.aborted || overBudget(state).over) break;
 			// Decide whether THIS failure warrants another attempt. Explicit retry
 			// policy covers all failures up to its cap; the transient fallback covers
 			// only retryable provider errors. A non-transient failure with no explicit
@@ -1088,7 +1272,26 @@ async function executePhaseInner(
 			// backoff.
 			const factor = retry ? (retry.factor ?? 1) : DEFAULT_TRANSIENT_FACTOR;
 			const wait = Math.min(60000, Math.round(baseMs * factor ** attempt));
-			if (wait > 0) await delay(wait, deps.signal);
+			if (wait > 0) {
+				// Honor run abort and/or race-branch cancel during backoff.
+				if (deps.signal && extraSignal) {
+					const ac = new AbortController();
+					const ab = () => ac.abort();
+					if (deps.signal.aborted || extraSignal.aborted) ac.abort();
+					else {
+						deps.signal.addEventListener("abort", ab, { once: true });
+						extraSignal.addEventListener("abort", ab, { once: true });
+					}
+					try {
+						await delay(wait, ac.signal);
+					} finally {
+						deps.signal.removeEventListener("abort", ab);
+						extraSignal.removeEventListener("abort", ab);
+					}
+				} else {
+					await delay(wait, extraSignal ?? deps.signal);
+				}
+			}
 		}
 		// Aborted before any attempt ran → return a clean aborted result (no crash).
 		if (!last) {
@@ -1106,29 +1309,6 @@ async function executePhaseInner(
 		}
 		if (usages.length > 1) last.usage = aggregateUsage(usages);
 		last.attempts = usages.length;
-		// Trace: record this subagent call (the load-bearing record a future
-		// replay consumes). Fail-open. nodePath carries the item/variant
-		// discriminator (e.g. "review", "review-item-3", "gate-judge").
-		traceEmit(deps, {
-			ts: Date.now(),
-			runId: state.runId,
-			phaseId: phase.id,
-			kind: "subagent-call",
-			input: {
-				agent: agentName,
-				model: phase.model,
-				task,
-				preRead,
-				nodePath: ctxNodeId ?? phase.id,
-				attempt: usages.length > 0 ? usages.length - 1 : undefined,
-			},
-			output: {
-				text: last.output,
-				model: last.model,
-				usage: last.usage,
-				stopReason: last.stopReason,
-			},
-		});
 		return last;
 	};
 
@@ -1173,7 +1353,11 @@ async function executePhaseInner(
 			emitProgress();
 		};
 		refresh();
-		return mapWithConcurrencyLimit(items, concurrency, async (it, idx) => {
+		// Usage is only authoritative after a call reports it. Serial admission for
+		// budgeted fan-out prevents N siblings from all observing the same remaining
+		// allowance and overshooting it concurrently.
+		const admissionConcurrency = state.def.budget ? 1 : concurrency;
+		return mapWithConcurrencyLimit(items, admissionConcurrency, async (it, idx) => {
 			// Budget guard: stop spawning new fan-out items once the run is over budget.
 			if (overBudget(state).over) {
 				done++;
@@ -1395,6 +1579,7 @@ async function executePhaseInner(
 							endedAt: Date.now(),
 						};
 						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+						traceGateDecision(deps, state, phase.id, ps.gate!, undefined);
 						return ps;
 					}
 
@@ -1430,6 +1615,7 @@ async function executePhaseInner(
 							const verdict: "pass" | "block" = final.passed ? "pass" : "block";
 							ps.gate = { verdict, reason: judged.reason, scores: { results, combined: final.combined, threshold } };
 							ps.json = scoreResultJSON(results, final.combined, verdict, threshold, { score: judged.score, reason: judged.reason });
+							traceGateDecision(deps, state, phase.id, ps.gate, r.output);
 						}
 						if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 						return ps;
@@ -1555,12 +1741,8 @@ async function executePhaseInner(
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
 		if (type === "gate" && ps.status === "done") {
 			ps.gate = parseGateVerdict(r.output);
-			// Trace: record the gate verdict decision (fail-open). A future replay
-			// re-adjudicates this against a changed threshold.
-			if (ps.gate) traceEmit(deps, {
-				ts: Date.now(), runId: state.runId, phaseId: phase.id, kind: "decision",
-				decision: { type: "gate-verdict", value: ps.gate.verdict, reason: ps.gate.reason },
-			});
+			// Trace: gate decision (fail-open). Replay re-adjudicates thresholds.
+			if (ps.gate) traceGateDecision(deps, state, phase.id, ps.gate);
 		}
 
 		// Shared Context Tree: register this node, mark its terminal status, and
@@ -1627,9 +1809,10 @@ async function executePhaseInner(
 		return ps;
 	}
 
-	// script — zero-token shell command. Spawns a child process, pipes
-	// interpolated `input` to stdin, captures stdout as the phase output.
+	// script — zero-token shell (spawn/timeout/size caps in runtime/phases/script.ts)
 	if (type === "script") {
+		const { runScriptCommand, scriptResultToPhaseState, scriptSpawnErrorToPhaseState } =
+			await import("./runtime/phases/script.ts");
 		const cmd = phase.run;
 		if (!cmd) {
 			return {
@@ -1640,18 +1823,15 @@ async function executePhaseInner(
 				usage: emptyUsage(),
 			};
 		}
-		// Interpolate the command.
 		// Array form: interpolate each element (safe — schema rejects placeholders in string form).
 		// String form: skip interpolation — schema already guarantees no {placeholders}.
 		const interpRun = Array.isArray(cmd)
 			? cmd.map((s) => interpolate(s, ctx))
-			: [{ text: cmd, missing: [] }];
-		// Warn unresolved references.
+			: [{ text: cmd, missing: [] as string[] }];
 		for (const r of interpRun) {
 			if (r.missing.length) warnUnresolvedRefs(phase.id, r.missing);
 		}
 		const interpRunText = interpRun.map((r) => r.text);
-		// Interpolate stdin input if provided.
 		const stdinInterp = phase.input !== undefined ? interpolate(phase.input, ctx) : undefined;
 		if (stdinInterp?.missing.length) warnUnresolvedRefs(phase.id, stdinInterp.missing);
 		const stdinInput = stdinInterp?.text;
@@ -1661,122 +1841,36 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		const MAX_STDOUT = 1_048_576; // 1 MB cap
-		const SCRIPT_TIMEOUT_MS = (phase.timeout ?? 60_000); // default 60 s, configurable via phase.timeout
-		const SIGKILL_GRACE_MS = 5_000; // grace period after SIGTERM before SIGKILL
-
+		const SCRIPT_TIMEOUT_MS = phase.timeout ?? 60_000;
+		const reads = readRefs.length ? readRefsToReads(readRefs, state) : undefined;
 		try {
-			const { spawn } = await import("node:child_process");
-			const result = await new Promise<{ stdout: string; stderr: string; code: number | null; stdoutOversize: boolean; timedOut: boolean }>((resolve, reject) => {
-				// Array command → direct spawn (safe); string → shell (rejected at validation if it has placeholders).
-				const child = Array.isArray(cmd)
-					? spawn(interpRunText[0], interpRunText.slice(1), {
-							cwd: effCwd,
-							env: process.env,
-							shell: false,
-							signal: deps.signal,
-					  })
-					: spawn(interpRunText[0], [], {
-							cwd: effCwd,
-							env: process.env,
-							shell: true,
-							signal: deps.signal,
-					  });
-
-				let stdout = "";
-				let stderr = "";
-				let stdoutOversize = false;
-				let timedOut = false;
-				child.stdout?.on("data", (d: Buffer) => {
-					if (stdout.length < MAX_STDOUT) {
-						const need = MAX_STDOUT - stdout.length;
-						stdout += d.toString().slice(0, need);
-						if (stdout.length >= MAX_STDOUT) stdoutOversize = true;
-					}
-				});
-				child.stderr?.on("data", (d: Buffer) => {
-					if (stderr.length < 500) {
-						stderr += d.toString().slice(0, 500 - stderr.length);
-					}
-				});
-
-				// Timeout guard: SIGTERM first, then SIGKILL after grace period.
-				let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
-				const timer = setTimeout(() => {
-					timedOut = true;
-					child.kill("SIGTERM");
-					// SIGKILL fallback if process ignores SIGTERM.
-					sigkillTimer = setTimeout(() => {
-						try { child.kill("SIGKILL"); } catch { /* already dead */ }
-					}, SIGKILL_GRACE_MS);
-				}, SCRIPT_TIMEOUT_MS);
-
-				child.on("error", (err) => {
-					clearTimeout(timer);
-					clearTimeout(sigkillTimer);
-					reject(err);
-				});
-				child.on("close", (code) => {
-					clearTimeout(timer);
-					clearTimeout(sigkillTimer);
-					resolve({ stdout, stderr, code, stdoutOversize, timedOut });
-				});
-
-				if (stdinInput !== undefined) {
-					child.stdin?.on("error", () => {}); // swallow EPIPE when child closes stdin early
-					child.stdin?.write(stdinInput);
-					child.stdin?.end();
-				}
+			const result = await runScriptCommand({
+				interpRunText,
+				arrayForm: Array.isArray(cmd),
+				cwd: effCwd,
+				signal: deps.signal,
+				stdinInput,
+				timeoutMs: SCRIPT_TIMEOUT_MS,
 			});
-
-			if (result.code !== 0 || result.timedOut) {
-				const ps: PhaseState = {
-					id: phase.id,
-					status: "failed",
-					output: result.stdout,
-					error: result.timedOut
-						? `Script timed out after ${SCRIPT_TIMEOUT_MS}ms`
-						: `Script exited with code ${result.code}${result.stderr ? ": " + result.stderr.slice(0, 500) : ""}${result.stdoutOversize ? " [stdout truncated at 1 MB]" : ""}`,
-					timedOut: result.timedOut || undefined,
-					usage: emptyUsage(),
-					inputHash,
-					endedAt: Date.now(),
-				};
-				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-				// Non-zero exit: cache (deterministic failure). Timeout: don't cache (transient, like spawn errors).
-				if (!result.timedOut) recordCache(cc, ps);
-				return ps;
-			}
-
-			const ps: PhaseState = {
-				id: phase.id,
-				status: "done",
-				output: result.stdout.trimEnd() + (result.stdoutOversize ? "\n[stdout truncated at 1 MB]" : ""),
-				usage: emptyUsage(),
+			const ps = scriptResultToPhaseState(phase, result, {
 				inputHash,
-				endedAt: Date.now(),
-			};
-			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-			recordCache(cc, ps);
+				timeoutMs: SCRIPT_TIMEOUT_MS,
+				reads,
+			});
+			// Non-zero exit: cache (deterministic). Timeout/spawn: don't cache (transient).
+			if (ps.status === "done" || (ps.status === "failed" && !ps.timedOut)) {
+				recordCache(cc, ps);
+			}
 			return ps;
 		} catch (err: unknown) {
-			const msg = err instanceof Error ? err.message : String(err);
-			// Note: intentionally NOT cached — spawn errors (ENOENT, permission denied, etc.)
-			// are treated as transient. The phase will re-execute on resume/retry.
-			const ps: PhaseState = {
-				id: phase.id,
-				status: "failed",
-				error: `Script error: ${msg}`,
-				usage: emptyUsage(),
-				inputHash,
-				endedAt: Date.now(),
-			};
-			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-			return ps;
+			// Spawn errors intentionally NOT cached — re-execute on resume/retry.
+			return scriptSpawnErrorToPhaseState(phase.id, err, { inputHash, reads });
 		}
 	}
 
+	// parallel — all branches; merge via shared mergePhaseState (phases/parallel.ts)
 	if (type === "parallel") {
+		const { executeParallelBranches } = await import("./runtime/phases/parallel.ts");
 		const branches = (phase.branches ?? []).map((b) => {
 			const r = interpolate(b.task, ctx);
 			return {
@@ -1789,9 +1883,37 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		const results = await runFanout(branches);
-		const ps = mergePhaseState(phase.id, results, inputHash, parseJson);
-		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+		const ps = await executeParallelBranches(phase, branches, runFanout, mergePhaseState, {
+			inputHash,
+			parseJson,
+			reads: readRefs.length ? readRefsToReads(readRefs, state) : undefined,
+		});
+		recordCache(cc, ps);
+		return ps;
+	}
+
+	// Horizon B: race — implementation lives in runtime/phases/race.ts
+	if (type === "race") {
+		const { executeRaceBranches } = await import("./runtime/phases/race.ts");
+		const branches = (phase.branches ?? []).map((b) => {
+			const r = interpolate(b.task, ctx);
+			return {
+				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
+				task: preRead + r.text,
+			};
+		});
+		const ck = cacheKeys(cc, [phase.id, "race", phase.model ?? "", JSON.stringify(branches)]);
+		const inputHash = ck.key;
+		const cached = cachedPhase(cc, ck);
+		if (cached) return cached;
+		const raceRunOne = (agent: string, task: string, branchSignal?: AbortSignal) =>
+			runOne(agent, task, undefined, undefined, undefined, branchSignal);
+		const ps = await executeRaceBranches(phase, branches, raceRunOne, isFailed, {
+			inputHash,
+			parseJson,
+			readRefs: readRefs.length ? readRefsToReads(readRefs, state) : undefined,
+			parentSignal: deps.signal,
+		});
 		recordCache(cc, ps);
 		return ps;
 	}
@@ -1891,7 +2013,9 @@ async function executePhaseInner(
 		return ps;
 	}
 
+	// approval — HITL pause (decision → PhaseState in runtime/phases/approval.ts)
 	if (type === "approval") {
+		const { approvalDecisionToPhaseState } = await import("./runtime/phases/approval.ts");
 		const readRefs: string[] = [];
 		const ctx = buildInterpolationContext(state, previousOutput, undefined, (ref) => readRefs.push(ref));
 		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
@@ -1900,50 +2024,55 @@ async function executePhaseInner(
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
-		// Non-interactive (headless/CI/detached): auto-REJECT, fail-open, but record it.
-		// Approval gates are safety boundaries — bypassing them silently in CI would
-		// let unreviewed work ship. Detached/CI runs must not bypass approval gates.
+		const reads = readRefsToReads(readRefs, state);
+		// Non-interactive (headless/CI/detached): auto-REJECT — safety boundary, never bypass.
 		if (!deps.requestApproval) {
-			return {
-				id: phase.id,
-				status: "done",
-				output: "(auto-rejected: no interactive approver available)",
-				approval: { decision: "reject", auto: true },
-				gate: { verdict: "block", reason: "(auto-rejected: no interactive approver available)" },
-				usage: emptyUsage(),
+			return approvalDecisionToPhaseState(phase.id, { decision: "reject" }, {
 				inputHash,
-				reads: readRefsToReads(readRefs, state),
-				endedAt: Date.now(),
-			};
+				reads,
+				auto: true,
+			});
 		}
-		const decision = await deps.requestApproval({ phaseId: phase.id, message, upstream: previousOutput });
-		const note = decision.note?.trim();
-		const ps: PhaseState = {
-			id: phase.id,
-			status: "done",
-			output: note || `(${decision.decision})`,
-			approval: { decision: decision.decision, note },
-			usage: emptyUsage(),
-			inputHash,
-			reads: readRefsToReads(readRefs, state),
-			endedAt: Date.now(),
-		};
-		// A rejection halts the flow via the same mechanism as a blocking gate.
-		if (decision.decision === "reject") {
-			ps.gate = { verdict: "block", reason: note || "Rejected by user" };
-		}
-		return ps;
+		const decision = await deps.requestApproval({
+			phaseId: phase.id,
+			message,
+			upstream: previousOutput,
+		});
+		return approvalDecisionToPhaseState(phase.id, decision, { inputHash, reads });
 	}
 
-	if (type === "flow") {
+	if (type === "flow" || type === "expand") {
 		const readRefs: string[] = [];
 		const ctx = buildInterpolationContext(state, previousOutput, undefined, (ref) => readRefs.push(ref));
-		const hasDef = (phase as { def?: unknown }).def !== undefined;
+		// expand always requires `def`; flow may use `use` or `def`.
+		const hasDef =
+			type === "expand" ? (phase as { def?: unknown }).def !== undefined : (phase as { def?: unknown }).def !== undefined;
 		const stack = deps._stack ?? [];
+		const { resolveExpandMode, resolveMaxNodes, prefixGraftFragment, promoteGraftPhases } =
+			await import("./runtime/phases/expand.ts");
+		const expandMode = type === "expand" ? resolveExpandMode(phase) : "nested";
+		const maxNodes = type === "expand" ? resolveMaxNodes(phase, MAX_DYNAMIC_PHASES) : 50;
+		if (type === "expand" && expandMode === "graft") {
+			// Rerun replacement semantics: prior promoted children belong to the old
+			// fragment and must disappear before ANY new resolution path. This is
+			// intentionally before parse/validation/empty/sub-flow failure returns so
+			// stale children and their usage cannot survive a failed or empty v2 plan.
+			const declaredIds = new Set(state.def.phases.map((p) => p.id));
+			for (const oldId of Object.keys(prior?.promotedPhases ?? {})) {
+				// Definition evolution may promote an old dynamic id into a real
+				// authored parent phase. That declared phase owns its state now and must
+				// never be deleted by stale graft metadata.
+				if (!declaredIds.has(oldId)) delete state.phases[oldId];
+			}
+		}
 
 		let subDef: Taskflow | undefined;
 		let name: string;
 		let recursionKey: string; // identity used for cache key + recursion guard
+
+		if (type === "expand" && !hasDef) {
+			return failPhase(phase.id, `expand phase '${phase.id}' requires 'def'`);
+		}
 
 		if (hasDef) {
 			// --- Inline `def`: resolve at runtime, validate, fail-OPEN on any error. ---
@@ -1980,7 +2109,7 @@ async function executePhaseInner(
 				parsed = rawDef;
 			}
 			// Accept a full Taskflow, a bare phases array, or {phases:[...]}; wrap the latter two.
-			const wrapped = normalizeInlineDef(parsed, phase.id);
+			let wrapped = normalizeInlineDef(parsed, phase.id);
 			if (!wrapped) {
 				return defFailOpen("inline def is not a Taskflow, phases array, or {phases:[...]}");
 			}
@@ -1993,10 +2122,21 @@ async function executePhaseInner(
 					output: "",
 					json: parseJson ? safeParse("") : undefined,
 					usage: emptyUsage(),
-					inputHash: hashInput(phase.id, "flow-def-empty"),
+					inputHash: hashInput(phase.id, type === "expand" ? "expand-def-empty" : "flow-def-empty"),
 					reads: readRefsToReads(readRefs, state),
 					endedAt: Date.now(),
 				};
+			}
+			// expand: cap fragment size + prefix ids for graft (helpers in phases/expand.ts).
+			if (type === "expand") {
+				if (wrapped.phases.length > maxNodes) {
+					return defFailOpen(
+						`expand fragment has ${wrapped.phases.length} phases (maxNodes=${maxNodes})`,
+					);
+				}
+				if (expandMode === "graft") {
+					wrapped = prefixGraftFragment(wrapped, phase.id);
+				}
 			}
 			// Validate with `dynamic` hardening (breadth caps + cwd containment) since
 			// this content is LLM-authored / untrusted. cwd anchors containment checks.
@@ -2037,20 +2177,32 @@ async function executePhaseInner(
 			provided[k] = typeof v === "string" ? interpolate(v, ctx).text : v;
 		}
 		const subArgs = resolveArgs(subDef, provided);
-		// For inline defs the cache identity must include the resolved def content so
-		// that a different generated plan yields a different key (and an identical plan
-		// hits cache). For saved flows the name is the identity (historical behavior).
-		const flowIdentity = hasDef ? `def:${JSON.stringify(subDef)}` : `flow:${name}`;
+		// Every sub-flow cache identity includes the resolved definition. A saved
+		// flow's name alone is insufficient: its contents can change without the
+		// parent definition moving.
+		const flowIdentity = `${hasDef ? "def" : "flow"}:${name}:${JSON.stringify(subDef)}`;
 		const ck = cacheKeys(cc, [phase.id, flowIdentity, preRead, JSON.stringify(subArgs)]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);
-		if (cached) return cached;
+		if (cached) {
+			if (type === "expand" && expandMode === "graft" && cached.promotedPhases) {
+				const promo = promoteGraftPhases(state, cached.promotedPhases);
+				if (promo.promotedIds.length > 0) {
+					cached.promotedPhases = Object.fromEntries(
+						promo.promotedIds.map((id) => [id, { ...cached.promotedPhases![id] }]),
+					);
+				} else {
+					delete cached.promotedPhases;
+				}
+			}
+			return cached;
+		}
 
 		const live = state.phases[phase.id];
-		// Sub-flows enforce their own budget; if they declare none, inherit the
-		// parent cap as a soft per-flow ceiling (best-effort — spend does not cross
-		// flow boundaries, so the parent's already-spent total is not subtracted).
-		const subDefEffective = subDef.budget || !state.def.budget ? subDef : { ...subDef, budget: state.def.budget };
+			// A nested flow receives only the parent's remaining allowance, then its
+			// own cap (if any) may tighten each dimension independently.
+			const parentSpent = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
+			const subDefEffective = clampSubFlowBudget(subDef, state.def.budget, parentSpent);
 		const subState: RunState = {
 			runId: newRunId(subDef.name),
 			flowName: subDef.name,
@@ -2069,6 +2221,9 @@ async function executePhaseInner(
 			baseRunTask(cwd, agents, agentName, preRead + subTask, opts, globalThinking);
 		const subResult = await executeTaskflow(subState, {
 			...deps,
+			// A trace file is scoped to one runId. The parent flow phase carries an
+			// unreplayable marker; nested events must not be mixed into that file.
+			trace: undefined,
 			// Override deps.cwd with the flow phase's own cwd so that sub-flow
 			// phases without an explicit cwd derive their subagents from the
 			// flow's cwd (not the caller's cwd).
@@ -2100,12 +2255,33 @@ async function executePhaseInner(
 			},
 		});
 		const sp = Object.values(subState.phases);
+		// expand graft promote — pure helper (see runtime/phases/expand.ts)
+		const warnings: string[] = [];
+		let graftPromotedIds: string[] = [];
+		if (type === "expand" && expandMode === "graft" && subResult.ok) {
+			const promo = promoteGraftPhases(state, subState.phases);
+			warnings.push(...promo.warnings);
+			graftPromotedIds = promo.promotedIds;
+		}
+		// Graft accounting is ownership-based. Successfully promoted children carry
+		// their own usage in parent state; children skipped on id collision remain
+		// owned by the expand phase and their residual usage must stay here. This
+		// yields: all promoted => 0, all collision => all child usage, mixed => only
+		// collision residual (no loss and no double count).
+		const phaseUsage =
+			type === "expand" && expandMode === "graft" && subResult.ok
+				? aggregateUsage(
+						Object.entries(subState.phases)
+							.filter(([id]) => !graftPromotedIds.includes(id))
+							.map(([, ps]) => ps.usage ?? emptyUsage()),
+					)
+				: subResult.totalUsage;
 		const flowPs: PhaseState = {
 			id: phase.id,
 			status: subResult.ok ? "done" : "failed",
 			output: subResult.finalOutput,
 			json: parseJson ? safeParse(subResult.finalOutput) : undefined,
-			usage: subResult.totalUsage,
+			usage: phaseUsage,
 			// B-F015: include failed in `done` so the renderer's
 			// `done - failed` formula gives the success count (matches the
 			// map/parallel runner's overlapping-counter convention).
@@ -2119,6 +2295,10 @@ async function executePhaseInner(
 			inputHash,
 			reads: readRefsToReads(readRefs, state),
 			endedAt: Date.now(),
+			...(warnings.length ? { warnings } : {}),
+			...(type === "expand" && expandMode === "graft" && subResult.ok && graftPromotedIds.length > 0
+				? { promotedPhases: Object.fromEntries(graftPromotedIds.map((id) => [id, { ...subState.phases[id] }])) }
+				: {}),
 		};
 		recordCache(cc, flowPs);
 		return flowPs;
@@ -2375,6 +2555,12 @@ async function executePhaseInner(
 		}
 		// Only one competitor survived → no contest; it wins by default (skip judge).
 		if (ok.length === 1) {
+			const w = ranIdx(ok[0]);
+			traceDecision(deps, state, phase.id, {
+				type: "tournament-winner",
+				value: w,
+				reason: "only surviving variant",
+			});
 			return {
 				id: phase.id,
 				status: "done",
@@ -2383,7 +2569,7 @@ async function executePhaseInner(
 				usage: variantUsage,
 				model: ok[0].model,
 				budgetTruncated: budgetSkipCount > 0 || undefined,
-				tournament: { variants: competitors.length, winner: ranIdx(ok[0]), mode, reason: "only surviving variant" },
+				tournament: { variants: competitors.length, winner: w, mode, reason: "only surviving variant" },
 				inputHash,
 				reads: readRefsToReads(readRefs, state),
 				endedAt: Date.now(),
@@ -2451,6 +2637,11 @@ async function executePhaseInner(
 		const chosen = winnerIneligible ? ok[0] : winnerResult;
 		const winnerIdx = ranIdx(chosen);
 		const output = mode === "aggregate" ? judgeRes.output : chosen.output;
+		traceDecision(deps, state, phase.id, {
+			type: "tournament-winner",
+			value: winnerIdx,
+			reason,
+		});
 		return {
 			id: phase.id,
 			status: "done",
@@ -2528,6 +2719,13 @@ export interface PhaseCacheCtx {
 	 *  whether a given branch happens to fold preRead into its task string
 	 *  (previously this was only incidentally true via `fullTask`). */
 	preRead?: string;
+	/** Flow-level semantics retained even by per-item cache contexts, which
+	 * deliberately omit phaseFp/flowDefHash for partial reuse. */
+	agentScope?: Taskflow["agentScope"];
+	contextSharing?: boolean;
+	/** Resolved agent content/config. Same name+scope can still change prompt,
+	 * model, tools, or thinking and must invalidate cached output. */
+	agentDefinitions?: string;
 	/** Content fingerprint of the desugared flow definition — folded into the
 	 *  key so two structurally-different flows that share a name can never
 	 *  collide, and a changed flow never serves a stale cross-run hit. */
@@ -2545,12 +2743,31 @@ export interface PhaseCacheCtx {
 	forceRerun?: boolean;
 }
 
+/** Stable cache identity for the fully resolved agent pool. File paths are
+ * excluded: content/config, not installation location, determines output. */
+export function agentDefinitionsIdentity(agents: readonly AgentConfig[]): string {
+	return JSON.stringify(
+		agents
+			.map((a) => ({
+				name: a.name,
+				description: a.description,
+				systemPrompt: a.systemPrompt,
+				model: a.model ?? "",
+				thinking: a.thinking ?? "",
+				tools: [...(a.tools ?? [])].sort(),
+				source: a.source,
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name) || a.source.localeCompare(b.source)),
+	);
+}
+
 /** Fold the phase fingerprint into the base hash parts to form the final cache key. */
 /** A computed cache identity: the new (versioned) key plus the read-only
  *  fallback keys used to honor entries written by older releases. The `key`
  *  is what we WRITE under and what `PhaseState.inputHash` carries; the
- *  `v2Key`/`bareKey`/`legacyKey` are consulted READ-ONLY on a miss so an
- *  upgrade never produces a miss-storm. See docs/internal/cache-migration.md. */
+ *  `v2Key`/`bareKey` are consulted READ-ONLY on a miss. `legacyKey` is exposed
+ *  only for tooling/tests and is never read because it lacks structural
+ *  identity. See docs/internal/cache-migration.md. */
 export interface CacheKeys {
 	/** Current key: folds `v3:phasefp:<subfp>` (the per-phase structural
 	 *  sub-fingerprint; degrades to the whole-flow hash when per-phase
@@ -2568,7 +2785,7 @@ export interface CacheKeys {
 
 /** Fold the phase fingerprint into the base hash parts to form the cache keys.
  *
- *  Four keys are produced for backward compatibility (see
+	 *  Four keys are derived for tooling/backward compatibility (see
  *  docs/internal/cache-migration.md):
  *    - `key`      : `v3:phasefp:<subfp>` — the current write key (per-phase
  *      structural sub-fingerprint; falls back to the whole-flow hash when
@@ -2576,9 +2793,9 @@ export interface CacheKeys {
  *    - `v2Key`    : `v2:flowdef:<flowDefHash>` — pre-M6 whole-flow key.
  *    - `bareKey`  : bare `flowdef:<flowDefHash>` (unversioned) — pre-H1 entries.
  *    - `legacyKey`: the flowdef line omitted — pre-flowDefHash entries.
- *  `cachedPhase` consults all four READ-ONLY on a miss; `recordCache` writes
- *  only `key`. This means an upgrade never produces a miss-storm: existing
- *  entries (whichever shape) still hit, and new writes converge on `key`. */
+	 *  `cachedPhase` consults the first three safe tiers READ-ONLY on a miss;
+	 *  `legacyKey` is never read because it has no structural identity.
+	 *  `recordCache` writes only `key`. */
 export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
 	// Fold the full cache identity into the hash: flow name (prevents collisions
 	// across different flows that share a phase.id + task + model), the per-phase
@@ -2589,6 +2806,9 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
 		`think:${cc.thinking ?? ""}`,
 		`tools:${JSON.stringify(cc.tools ?? [])}`,
 		`ctx:${cc.preRead ?? ""}`,
+		`agent-scope:${cc.agentScope ?? "user"}`,
+		`context-sharing:${cc.contextSharing === true ? "1" : "0"}`,
+		`agents:${cc.agentDefinitions ?? ""}`,
 	];
 	const fold = (parts: string[]): string =>
 		cc.fingerprint ? hashInput(...parts, cc.fingerprint) : hashInput(...parts);
@@ -2609,13 +2829,13 @@ export function cacheKeys(cc: PhaseCacheCtx, baseParts: string[]): CacheKeys {
  *   - "off":      never reuse (even within-run).
  *   - "run-only": within-run resume only (historical behavior).
  *   - "cross-run": within-run first, then the persistent cross-run store.
- * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
- *
- * The cross-run read is FOUR-TIER and READ-ONLY for fallback keys: it tries
+	 * On a cross-run hit, usage is zeroed and `cacheHit` records the source.
+	 *
+ * The cross-run read is three-tier and READ-ONLY for fallback keys: it tries
  * `keys.key` (current `v3:phasefp:` shape) first, then `keys.v2Key` (pre-M6
- * `v2:flowdef:`), then `keys.bareKey` (pre-H1 bare `flowdef:`), then
- * `keys.legacyKey` (pre-flowDefHash, no flowdef line).
- * A hit on ANY tier is restored as a cache hit; we do NOT write-through (no
+ * `v2:flowdef:`), then `keys.bareKey` (pre-H1 bare `flowdef:`). The older
+ * no-flowdef key is deliberately unsafe and ignored.
+ * A hit on any safe tier is restored as a cache hit; we do NOT write-through (no
  * re-store under the new key) so the cache size stays stable and the legacy
  * entry ages out naturally. See docs/internal/cache-migration.md.
  */
@@ -2631,9 +2851,13 @@ function cachedPhase(cc: PhaseCacheCtx, keys: CacheKeys): PhaseState | null {
 		return { ...cc.prior, status: "done", cacheHit: "run-only" };
 	}
 
-	// 2. cross-run memoization (opt-in) — four-tier read-only fallback.
+	// 2. cross-run memoization (opt-in) — three safe read-only tiers.
 	if (cc.scope === "cross-run") {
-		for (const k of [keys.key, keys.v2Key, keys.bareKey, keys.legacyKey]) {
+		// The pre-flow-definition legacy key is intentionally NOT read: it omits
+		// all structural identity and can return stale output after any semantic
+		// flow change. v2/bare remain safe because they include today's definition
+		// hash; old entries whose historical hash omitted new fields simply miss.
+		for (const k of [keys.key, keys.v2Key, keys.bareKey]) {
 			const e = cc.store.get(k, cc.ttlMs);
 			if (!e) continue;
 			// If we stored the full PhaseState, restore it (preserving gate,
@@ -2718,13 +2942,8 @@ function defaultAgent(deps: RuntimeDeps): string {
  * JSON verdict object whose value is non-blocking (e.g. `{"verdict":"No issues
  * found"}`) is an *explicit* pass, not ambiguity, and still resolves to pass.
  */
-// `parseGateVerdict` is implemented in `deterministic.ts` (a pure seam a
-// future replay can import without dragging in the process-spawning runner).
-// It is imported at the top of this file and re-exported from the barrel.
-
-function asReason(v: unknown): string | undefined {
-	return typeof v === "string" && v.trim() ? v.trim() : undefined;
-}
+// `parseGateVerdict` / `parseTournamentWinner` live in `deterministic.ts`
+// (pure seam for replay + event kernel). Re-exported via the barrel.
 
 /**
  * If a gate phase relies on free-text verdict parsing (no `output:"json"` +
@@ -2749,28 +2968,7 @@ function appendGateFormatSuffix(task: string, phase: Phase): string {
 	);
 }
 
-/**
- * Parse a judge's pick of the winning variant. Accepts JSON ({"winner":n} or
- * {"best":n}) or a `WINNER: n` line (last match wins). Clamps to [1, count].
- * Fail-open: an unreadable verdict defaults to variant 1 so the work is never
- * lost. Returns the 1-based index plus an optional reason.
- */
-export function parseTournamentWinner(output: string, count: number): { winner: number; reason?: string } {
-	const clamp = (n: number) => Math.min(Math.max(1, Math.floor(n)), Math.max(1, count));
-	const json = safeParse(output);
-	if (json && typeof json === "object") {
-		const o = json as Record<string, unknown>;
-		const raw = o.winner ?? o.best ?? o.choice;
-		const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
-		if (Number.isFinite(n)) return { winner: clamp(n), reason: asReason(o.reason) };
-	}
-	const matches = [...output.matchAll(WINNER_TOKEN_RE)];
-	if (matches.length) {
-		const n = Number(matches[matches.length - 1][1]);
-		if (Number.isFinite(n)) return { winner: clamp(n) };
-	}
-	return { winner: 1, reason: "no parseable winner; defaulted to variant 1" };
-}
+/* parseTournamentWinner lives in deterministic.ts (shared with event kernel). */
 
 /**
  * Best-effort invocation of the user-provided `persist` + `onProgress` callbacks.
@@ -3000,6 +3198,19 @@ export async function recomputeTaskflow(
 		const changedUpstreams = depsFor(id).filter((u) => outputMoved.has(u));
 		try {
 			const ps = await executePhase(phase, newState, deps, newState.phases[id], noop, 0, execOpts);
+			if (ps.status === "failed") {
+				// Recompute is speculative. Preserve the last known-good row for the
+				// failed phase and every downstream phase, then stop. Mark the report
+				// aborted so callers cannot persist a partially refreshed graph.
+				rerun.push(id);
+				decisions.push({
+					phaseId: id,
+					outcome: "failed",
+					reason: ps.error ?? "re-execution returned a failed phase",
+				});
+				aborted = true;
+				break;
+			}
 			newState.phases[id] = ps;
 			// A phase counts as "rerun" if it was a forced seed OR its result moved;
 			// otherwise it hit its cache (inputHash unchanged) → early cutoff.
@@ -3027,11 +3238,16 @@ export async function recomputeTaskflow(
 						: undefined,
 				});
 			}
-		} catch {
+		} catch (error) {
 			// A failing recompute phase is recorded as rerun (it was attempted).
 			rerun.push(id);
-			outputMoved.add(id);
-			decisions.push({ phaseId: id, outcome: "failed", reason: "re-execution attempted but the phase failed" });
+			decisions.push({
+				phaseId: id,
+				outcome: "failed",
+				reason: `re-execution threw: ${error instanceof Error ? error.message : String(error)}`,
+			});
+			aborted = true;
+			break;
 		}
 	}
 	// Frontier-external phases were never touched — record them as reused.
@@ -3056,7 +3272,53 @@ export async function recomputeTaskflow(
 
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	const runnerUsageAccounting = (deps.runTask as (RunTaskFn & { usageAccounting?: "available" | "tokens-only" | "unavailable" }) | undefined)
+		?.usageAccounting;
+	if (!deps.usageAccounting && runnerUsageAccounting) {
+		// Preserve a runner-advertised capability across the wrapper functions used
+		// by nested flow/context execution; those wrappers would otherwise erase a
+		// property attached to the original runTask function.
+		deps = { ...deps, usageAccounting: runnerUsageAccounting };
+	}
 	try {
+		if (deps.usageAccounting === "unavailable" && def.budget) {
+			throw new Error(
+				`Usage accounting is unavailable for this host; refusing budgeted flow '${def.name}' because its token/USD ceiling cannot be enforced`,
+			);
+		}
+		if (deps.usageAccounting === "tokens-only" && def.budget?.maxUSD !== undefined) {
+			throw new Error(
+				"This host reports tokens but not cost, so budget.maxUSD cannot be enforced. " +
+					"Use budget.maxTokens or a host with cost accounting.",
+			);
+		}
+		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
+		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
+		// Existing phase state requires the imperative cache/inputHash machinery to
+		// validate definition and idempotency before reuse. The event kernel does
+		// not yet persist compatible input hashes, so it must never blindly trust a
+		// prior `done` row.
+		const hasPriorState = Object.keys(state.phases).length > 0;
+		if (eventKernelEnabled(deps) && !hasPriorState && canUseEventKernel(def, deps.loadFlow)) {
+			if (!deps.runTask) {
+				throw new Error("event kernel requires RuntimeDeps.runTask");
+			}
+			return await runEventKernel(state, {
+				cwd: deps.cwd,
+				agents: deps.agents,
+				runTask: deps.runTask,
+				signal: deps.signal,
+				globalThinking: deps.globalThinking,
+				usageAccounting: deps.usageAccounting,
+				trace: deps.trace,
+				persist: deps.persist,
+				onProgress: deps.onProgress,
+				eventKernel: deps.eventKernel,
+				requestApproval: deps.requestApproval,
+				loadFlow: deps.loadFlow,
+				_stack: deps._stack,
+			});
+		}
 		return await runTaskflowLayers(state, deps);
 	} catch (e) {
 		// A thrown phase must not leave the run wedged in "running" (which breaks
@@ -3078,6 +3340,31 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 
 async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	// Ownership migration must happen before ANY phase in the new definition is
+	// scheduled. Definition evolution may remove/rename ordinary phases as well
+	// as graft children; neither their terminal failure nor their usage may leak
+	// into the new run. Dynamic promoted state is intentionally cleared here too
+	// and is restored only by its owning expand phase (from its current result or
+	// cache). An id newly promoted to a real authored phase is preserved because
+	// it is present in `declaredPhaseIds` and the scheduler will validate/rerun it.
+	// Cleaning inside the expand phase would be too late: an unrelated authored
+	// phase may already have been scheduled and stale usage already counted.
+	const declaredPhaseIds = new Set(def.phases.map((p) => p.id));
+	// A pre-seeded state may intentionally supply an external dependency (for
+	// example an embedding host injects `src` and the definition starts at a map
+	// that depends on it). Those ids are part of the new definition's dependency
+	// contract even though they have no executable Phase row, so preserve them.
+	const externalDependencyIds = new Set(
+		def.phases.flatMap((phase) => dependenciesOf(phase)).filter((id) => !declaredPhaseIds.has(id)),
+	);
+	for (const oldId of Object.keys(state.phases)) {
+		if (!declaredPhaseIds.has(oldId) && !externalDependencyIds.has(oldId)) delete state.phases[oldId];
+	}
+	for (const previous of Object.values(state.phases)) {
+		for (const oldId of Object.keys(previous.promotedPhases ?? {})) {
+			if (!declaredPhaseIds.has(oldId)) delete state.phases[oldId];
+		}
+	}
 	const layers = topoLayers(def.phases);
 	// Content-fingerprint the desugared definition ONCE per run and fold it into
 	// every phase's cache key (overstory hash algorithm; see ./flowir/hash.ts).
@@ -3091,17 +3378,21 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	// plane) is persisted for audit/provenance. The declared plane is also
 	// derived fresh from `def` in recompute (so old runs get union semantics
 	// too); the persisted copy is for display.
-	if (state.flowDefHash === undefined) {
-		try {
-			const ir = await compileTaskflowToIR(def);
-			state.flowDefHash = ir.hash ?? "failed";
-			state.declaredDeps = ir.meta.declaredDeps;
-			if (ir.errors.length) {
-				console.warn(
-					`[taskflow] IR compile errors for '${def.name}': ${ir.errors.map((e) => e.message).join("; ")}`,
-				);
-			}
-		} catch (e) {
+	try {
+		const ir = await compileTaskflowToIR(def);
+		const nextHash = ir.hash ?? "failed";
+		if (state.flowDefHash !== nextHash) {
+			state.flowDefHash = nextHash;
+			state.phaseFingerprints = undefined;
+		}
+		state.declaredDeps = ir.meta.declaredDeps;
+		if (ir.errors.length) {
+			console.warn(
+				`[taskflow] IR compile errors for '${def.name}': ${ir.errors.map((e) => e.message).join("; ")}`,
+			);
+		}
+	} catch (e) {
+		if (state.flowDefHash === undefined) {
 			// Fail-safe: warn loudly rather than silently degrading to the legacy
 			// flowName-only key, which would reopen the cross-flow collision hole.
 			console.warn(
@@ -3153,7 +3444,11 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			break;
 		}
 		// Phases within a layer have no inter-dependencies → run concurrently.
-		const layerConcurrency = Math.max(1, def.concurrency ?? 8);
+		// A usage report arrives only after a subagent call. With a declared hard
+		// budget, concurrent layer admission would let every sibling observe the
+		// same remaining allowance. Serialize admission so no additional call can
+		// begin after a previous call has exhausted the cap.
+		const layerConcurrency = def.budget ? 1 : Math.max(1, def.concurrency ?? 8);
 		await mapWithConcurrencyLimit(layer, layerConcurrency, async (phase) => {
 			// Snapshot prior state BEFORE marking running, so resume cache checks work.
 			const prior = state.phases[phase.id];
@@ -3178,7 +3473,27 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				skipReason = join === "any" ? "All dependencies failed or were skipped" : "Upstream dependency not satisfied";
 
 			if (skipReason) {
-				if (skipReason.startsWith("Budget exceeded")) budgetBlocked = true;
+				if (skipReason.startsWith("Budget exceeded")) {
+					budgetBlocked = true;
+					// S1: budget-hit decision so fold/replay can re-tally under new caps.
+					traceDecision(deps, state, phase.id, {
+						type: "budget-hit",
+						value: budgetReason || "budget",
+						reason: skipReason,
+					});
+					// executePhase already flushed its phase-end batch. Flush this
+					// post-completion decision too so FileTraceSink cannot strand it.
+					traceFlush(deps, phase.id);
+				}
+				// Synthetic phase-start/end so fold sees a complete phase lifecycle.
+				traceEmit(deps, {
+					ts: Date.now(),
+					runId: state.runId,
+					phaseId: phase.id,
+					kind: "phase-start",
+					dependencies: dependenciesOf(phase),
+					optional: phase.optional === true,
+				});
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
@@ -3186,6 +3501,15 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
+				traceEmit(deps, {
+					ts: Date.now(),
+					runId: state.runId,
+					phaseId: phase.id,
+					kind: "phase-end",
+					status: "skipped",
+					error: skipReason,
+				});
+				traceFlush(deps, phase.id);
 				safeEmit(deps, state);
 				return;
 			}
@@ -3230,11 +3554,29 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			// acceptable: budgetBlocked prevents cascading into subsequent layers.
 			const ob = overBudget(state);
 			if (ob.over) {
+				if (!budgetBlocked) {
+					// First time we detect the ceiling after a phase completes.
+					traceDecision(deps, state, phase.id, {
+						type: "budget-hit",
+						value: "budget",
+						reason: ob.reason,
+					});
+					traceFlush(deps, phase.id);
+				}
 				budgetBlocked = true;
 				budgetReason = ob.reason;
 			}
 			safeEmit(deps, state);
 		});
+		// The signal can flip while a layer is in flight. Checking only at the
+		// beginning of the next layer lets an abort during the final layer fall
+		// through to `completed` (notably when a non-cooperative race branch later
+		// reports success). Cancellation is terminal for this invocation: preserve
+		// the phase evidence gathered above, but classify the run as resumable.
+		if (deps.signal?.aborted) {
+			aborted = true;
+			break;
+		}
 	}
 
 	const fp = finalPhase(def.phases);
@@ -3247,7 +3589,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	}
 	// A failed non-optional phase fails the run; optional failures are tolerated.
 	const anyFailed = Object.entries(state.phases).some(
-		([id, p]) => p.status === "failed" && !byId.get(id)?.optional,
+		([id, p]) => p.status === "failed" && !byId.get(id)?.optional && !p.optional,
 	);
 
 	state.status = aborted

@@ -55,7 +55,7 @@ workflow 跑起来时，你对它的观察只有模型碰巧写的那些 `consol
 
 ### 3. 逐阶段续跑，跨会话
 
-workflow 的续跑是粗粒度的：靠缓存去重相同调用。taskflow 按**阶段解析后的输入哈希**续跑，跨会话。编辑某个阶段后重跑整个流程，只会重新执行该阶段及其下游；上游全部从缓存复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+workflow 的续跑是粗粒度的：靠缓存去重相同调用。taskflow 按**阶段解析后的输入哈希**续跑，跨会话。编辑某个阶段后重跑整个流程，只会重新执行该阶段及其下游；上游全部从缓存复用。详见[增量重算](/zh-cn/docs/compiler-runtime/incremental-recompute)。
 
 ### 4. 能安全地让 LLM 生成
 

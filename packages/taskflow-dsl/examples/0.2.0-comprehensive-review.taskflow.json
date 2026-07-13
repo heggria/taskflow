@@ -1,0 +1,373 @@
+{
+  "name": "comprehensive-release-review",
+  "phases": [
+    {
+      "type": "script",
+      "run": [
+        "sh",
+        "-lc",
+        "git status --short && git log --oneline -5 && git diff --check origin/main...HEAD && git diff --shortstat origin/main...HEAD"
+      ],
+      "timeout": 30000,
+      "id": "repo-state"
+    },
+    {
+      "type": "agent",
+      "task": "Inspect the taskflow 0.2.0 branch and the repository evidence below.\n\tReturn ONLY a JSON array with exactly four objects. Each object must contain:\n\t{\"area\": string, \"paths\": string, \"focus\": string}.\n\tCover these distinct surfaces: runtime/process semantics, TypeScript DSL compiler,\n\thost/MCP delivery, and website/release automation. Use real repository paths.\n\n\tRepository evidence:\n\t{steps.repo-state.output}",
+      "agent": "scout",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "output": "json",
+      "expect": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "area": {
+              "type": "string"
+            },
+            "paths": {
+              "type": "string"
+            },
+            "focus": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "area",
+            "paths",
+            "focus"
+          ]
+        }
+      },
+      "retry": {
+        "max": 2,
+        "backoffMs": 0
+      },
+      "timeout": 900000,
+      "dependsOn": [
+        "repo-state"
+      ],
+      "id": "review-plan"
+    },
+    {
+      "type": "map",
+      "over": "{steps.review-plan.json}",
+      "task": "Act as an adversarial code reviewer for {item.area}.\n\tPaths: {item.paths}\n\tFocus: {item.focus}\n\tInspect the actual files and tests. Review correctness, failure semantics, backward\n\tcompatibility, security, performance, observability, and missing boundary tests.\n\tEvery finding must include severity, file:line evidence, exploit/failure scenario,\n\tand the smallest safe fix. Explicitly say NO BLOCKER when none is proven.",
+      "agent": "risk-reviewer",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "concurrency": 4,
+      "cache": {
+        "scope": "off"
+      },
+      "dependsOn": [
+        "review-plan"
+      ],
+      "id": "module-audits"
+    },
+    {
+      "type": "parallel",
+      "branches": [
+        {
+          "task": "Audit cancellation, budgets, races, retries, trace durability, child-process\n\tcleanup, and resume invariants. Prove issues from code and tests; do not speculate.\n\tRepository evidence:\n\t{steps.repo-state.output}",
+          "agent": "critic"
+        },
+        {
+          "task": "Audit the public 0.2.0 DSL for typecheck/build/decompile/FlowIR parity,\n\tstrict fail-closed diagnostics, hostile literals, all phase kinds, and docs accuracy.\n\tRepository evidence:\n\t{steps.repo-state.output}",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Audit supply-chain and delivery closure: package exports, dist contents,\n\tpublish tag-to-SHA validation, CI required checks, host argv contracts, and base-path\n\twebsite export correctness. Cite exact evidence.\n\tRepository evidence:\n\t{steps.repo-state.output}",
+          "agent": "security-reviewer"
+        }
+      ],
+      "concurrency": 3,
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "dependsOn": [
+        "repo-state"
+      ],
+      "id": "cross-cutting"
+    },
+    {
+      "type": "race",
+      "branches": [
+        {
+          "task": "Find the single highest-confidence merge blocker in origin/main...HEAD.\n\tIf none is provable, return NO PROVEN BLOCKER with the strongest supporting checks.",
+          "agent": "reviewer"
+        },
+        {
+          "task": "Attack the 0.2.0 changes from malformed input, abort timing, crash recovery,\n\tand release rerun angles. Return the first concrete blocker with file:line proof,\n\tor NO PROVEN BLOCKER.",
+          "agent": "risk-reviewer"
+        }
+      ],
+      "cancelLosers": true,
+      "dependsOn": [
+        "repo-state"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "id": "rapid-triage"
+    },
+    {
+      "type": "tournament",
+      "mode": "best",
+      "judgeAgent": "final-arbiter",
+      "dependsOn": [
+        "repo-state"
+      ],
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "judge": "Select the review with the strongest code-backed evidence, counterexample quality, and actionable closure. Return ONLY JSON {\"winner\":1|2|3,\"reason\":\"...\"}.",
+      "branches": [
+        {
+          "task": "Review origin/main...HEAD conservatively: search only for correctness and data-loss blockers.\n\tUse actual source and tests. {steps.repo-state.output}",
+          "agent": "analyst"
+        },
+        {
+          "task": "Review origin/main...HEAD as a hostile integrator: find compatibility, packaging,\n\tand operational failures that happy-path tests miss. {steps.repo-state.output}",
+          "agent": "critic"
+        },
+        {
+          "task": "Review origin/main...HEAD as a release engineer: verify tests actually prove the\n\tclaims, artifacts are publishable, and reruns are safe. {steps.repo-state.output}",
+          "agent": "verifier"
+        }
+      ],
+      "id": "strategy-tournament"
+    },
+    {
+      "type": "reduce",
+      "from": [
+        "module-audits",
+        "cross-cutting",
+        "rapid-triage",
+        "strategy-tournament"
+      ],
+      "task": "Synthesize an evidence ledger for merge readiness. Deduplicate findings,\n\treject speculation, reconcile contradictions, and separate BLOCKER / IMPORTANT /\n\tNON-BLOCKING. For every retained issue cite file:line and a reproducer or invariant.\n\tEnd with one of: MERGE_READY or NOT_MERGE_READY.\n\n\tMODULE AUDITS:\n\t{steps.module-audits.output}\n\n\tCROSS-CUTTING:\n\t{steps.cross-cutting.output}\n\n\tRAPID TRIAGE:\n\t{steps.rapid-triage.output}\n\n\tBEST ADVERSARIAL REVIEW:\n\t{steps.strategy-tournament.output}",
+      "agent": "final-arbiter",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "dependsOn": [
+        "module-audits",
+        "cross-cutting",
+        "rapid-triage",
+        "strategy-tournament"
+      ],
+      "id": "synthesis"
+    },
+    {
+      "type": "gate",
+      "dependsOn": [
+        "synthesis"
+      ],
+      "score": {
+        "target": "{steps.synthesis.output}",
+        "scorers": [
+          {
+            "type": "length-range",
+            "name": "substantive",
+            "min": 500,
+            "max": 30000
+          },
+          {
+            "type": "contains",
+            "name": "has-verdict",
+            "value": "MERGE_READY"
+          },
+          {
+            "type": "regex",
+            "name": "no-draft-markers",
+            "pattern": "TODO|TBD|PLACEHOLDER",
+            "negate": true
+          }
+        ],
+        "combine": "all"
+      },
+      "id": "machine-quality"
+    },
+    {
+      "type": "gate",
+      "agent": "reviewer",
+      "output": "json",
+      "expect": {
+        "type": "object",
+        "properties": {
+          "verdict": {
+            "enum": [
+              "pass",
+              "block"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "reason"
+        ]
+      },
+      "retry": {
+        "max": 2,
+        "backoffMs": 0
+      },
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "task": "Judge the review REPORT QUALITY, not whether the code is flawless.\n\tPASS only if every blocker is evidence-backed, contradictions are resolved, and the\n\tmerge verdict follows from the evidence. Return ONLY JSON:\n\t{\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}\n\n\tREPORT:\n\t{steps.synthesis.output}",
+      "dependsOn": [
+        "synthesis"
+      ],
+      "id": "evidence-gate"
+    },
+    {
+      "type": "loop",
+      "agent": "final-arbiter",
+      "dependsOn": [
+        "synthesis",
+        "machine-quality",
+        "evidence-gate"
+      ],
+      "maxIterations": 3,
+      "convergence": true,
+      "reflexion": true,
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "until": "{steps.refined.json.done} == true",
+      "output": "json",
+      "expect": {
+        "type": "object",
+        "properties": {
+          "done": {
+            "type": "boolean"
+          },
+          "report": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "done",
+          "report"
+        ]
+      },
+      "task": "Produce ONLY JSON {\"done\":boolean,\"report\":\"...\"}.\n\tSet done=true only when the report is concise, preserves all proven blockers,\n\tstates exact verification evidence, and ends in MERGE_READY or NOT_MERGE_READY.\n\tDo not invent evidence. This is refinement round {loop.iteration}/{loop.maxIterations}.\n\n\tSYNTHESIS:\n\t{steps.synthesis.output}\n\n\tMACHINE QUALITY:\n\t{steps.machine-quality.output}\n\n\tEVIDENCE GATE:\n\t{steps.evidence-gate.output}\n\n\tPRIOR ROUND:\n\t{loop.lastOutput}\n\n\t{reflexion}",
+      "id": "refined"
+    },
+    {
+      "type": "flow",
+      "def": {
+        "name": "nested-challenge",
+        "phases": [
+          {
+            "id": "challenge",
+            "type": "agent",
+            "agent": "critic",
+            "tools": [
+              "read",
+              "grep",
+              "ls"
+            ],
+            "task": "Try to falsify the report below. Return only code-backed counterexamples or NO COUNTEREXAMPLE.\n{args.report}",
+            "final": true
+          }
+        ]
+      },
+      "with": {
+        "report": "{steps.refined.output}"
+      },
+      "dependsOn": [
+        "refined"
+      ],
+      "id": "nested-challenge"
+    },
+    {
+      "type": "expand",
+      "expandMode": "nested",
+      "def": {
+        "name": "expanded-evidence-check",
+        "phases": [
+          {
+            "id": "verify-claims",
+            "type": "agent",
+            "agent": "verifier",
+            "tools": [
+              "read",
+              "grep",
+              "ls"
+            ],
+            "task": "Check the final report against the repository. List unsupported claims, or VERIFIED if all material claims hold.\n{args.report}",
+            "final": true
+          }
+        ]
+      },
+      "with": {
+        "report": "{steps.refined.output}"
+      },
+      "dependsOn": [
+        "refined"
+      ],
+      "maxNodes": 8,
+      "id": "expanded-evidence"
+    },
+    {
+      "type": "reduce",
+      "from": [
+        "refined",
+        "nested-challenge",
+        "expanded-evidence"
+      ],
+      "task": "Issue the final merge-readiness decision. Preserve proven blockers; discard\n\tunsupported claims. Include: verdict, blocker count, exact evidence, checks run,\n\tremaining uncertainty, and the DSL/runtime features exercised by this workflow.\n\n\tREFINED REPORT:\n\t{steps.refined.output}\n\n\tNESTED ADVERSARIAL CHALLENGE:\n\t{steps.nested-challenge.output}\n\n\tEXPANDED EVIDENCE VERIFICATION:\n\t\t\t\t\t{steps.expanded-evidence.output}",
+      "agent": "final-arbiter",
+      "tools": [
+        "read",
+        "grep",
+        "ls"
+      ],
+      "timeout": 900000,
+      "final": true,
+      "dependsOn": [
+        "refined",
+        "nested-challenge",
+        "expanded-evidence"
+      ],
+      "id": "final-decision"
+    }
+  ],
+  "description": "Adversarial, evidence-backed review of the taskflow 0.2.0 release branch",
+  "version": 2,
+  "agentScope": "both",
+  "strictInterpolation": true,
+  "concurrency": 6,
+  "budget": {
+    "maxTokens": 100000000
+  }
+}

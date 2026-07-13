@@ -1,9 +1,9 @@
 ---
 title: 用任务图编排 Codex subagent
-description: 如何用 taskflow 把临时的 OpenAI Codex subagent 委派变成有名字、静态可校验、可跨会话续跑的流水线——含扇出审查、gate 和预算上限。
+description: 如何用 taskflow 把临时的 OpenAI Codex subagent 委派变成有名字、静态可校验、可重复运行的流水线——含扇出审查、gate 和 token 止损。
 ---
 
-OpenAI Codex 能 spawn subagent 做聚焦的工作——但一旦超过两三个调用，你就会撞上一堵熟悉的墙：模型每次都重新推导计划，中间逐字稿淹没你的会话，一次失败的调用意味着从头来过，而且你在付钱之前根本没法*检查*这个计划。本文讲的是怎么用 **taskflow** 把 Codex subagent 工作包起来——一张运行前先校验、跨会话可续跑、中间结果不进你上下文的声明式图。
+OpenAI Codex 能 spawn subagent 做聚焦的工作——但一旦超过两三个调用，你就会撞上一堵熟悉的墙：模型每次都重新推导计划，中间逐字稿淹没你的会话，一次失败的调用意味着从头来过，而且你在付钱之前根本没法*检查*这个计划。本文讲的是怎么用 **taskflow** 把 Codex subagent 工作包起来——一张运行前先校验、可存储检查与重复运行、中间结果不进你上下文的声明式图。
 
 ## 那堵墙
 
@@ -42,7 +42,7 @@ codex plugin add taskflow@taskflow
   "args": {
     "base": { "default": "origin/main", "description": "要对比的 git ref。" }
   },
-  "budget": { "maxUSD": 2.00 },
+  "budget": { "maxTokens": 2000000 },
   "phases": [
     {
       "id": "discover",
@@ -51,10 +51,10 @@ codex plugin add taskflow@taskflow
     },
     {
       "id": "review",
-      "map": "{steps.discover.json}",
+      "type": "map",
+      "over": "{steps.discover.json}",
       "agent": "risk-reviewer",
-      "task": "审计 {item} 的破坏性变更。返回一行风险判定。",
-      "concurrency": 4
+      "task": "审计 {item} 的破坏性变更。返回一行风险判定。"
     },
     {
       "id": "changelog",
@@ -82,24 +82,25 @@ codex plugin add taskflow@taskflow
 
 花一个 token 之前，先检查这张图：
 
-```bash
-# 在你的 Codex 会话里通过 taskflow 工具
-taskflow_verify release-readiness
+请 Codex 调用 `taskflow_verify` MCP 工具，并传入：
+
+```json
+{ "defineFile": "release-readiness.json" }
 ```
 
 `verify` 跑静态分析——不调模型。它能抓到环、死端阶段、`map` 产不出数组、阶段数让 `budget` 不可行、以及悬空的 `{steps.*}` 引用。这些你都在*付钱之前*修掉。
 
-然后运行：
+然后请 Codex 调用 `taskflow_run`，并传入：
 
-```text
-taskflow_run release-readiness --base origin/main
+```json
+{ "defineFile": "release-readiness.json", "args": { "base": "origin/main" } }
 ```
 
 运行时会：
 
 1. 解析图并 spawn `discover` 阶段。
-2. 每个发现的文件扇出一个 `risk-reviewer`，**并发上限 4**。
-3. `changelog` 与审查并行跑。
+2. 每个发现的文件扇出一个 `risk-reviewer`。因为该 flow 声明了 budget，普通 map 与 DAG 工作会串行准入，以保持用量可审计。
+3. `changelog` 按同样的 budget-safe 调度在审查后运行（`race` 是显式并发例外）。
 4. 命中 `gate`——如果它给 `VERDICT: BLOCK`，流程立即停止，`report` 永不运行。
 5. **只把最终报告**返回给你的会话。
 
@@ -109,21 +110,23 @@ taskflow_run release-readiness --base origin/main
 
 | 关注点 | 临时 Codex | taskflow |
 |---|---|---|
-| **复用** | 每次重新描述 | 按名字跑 `release-readiness` |
-| **成本控制** | 没有 | `budget: { maxUSD: 2.00 }` 叫停运行 |
-| **失败** | 从头来 | 逐阶段 `retry` + 跨会话续跑 |
+| **复用** | 每次重新描述 | 通过 `defineFile` 运行已入库的 `release-readiness.json` |
+| **成本控制** | 没有 | `budget: { maxTokens: 2000000 }` 在已观测用量超过限制后停止新工作 |
+| **失败** | 从头来 | 逐阶段 `retry`；重复运行可显式启用跨运行缓存 |
 | **质量门禁** | 自己过目 | `gate` 阶段遇 `BLOCK` 叫停 |
 | **上下文** | 每份逐字稿都返回 | 只有最终报告返回 |
 
-## 跨会话续跑
+## 跨会话检查或重跑
 
-跑起来，走开，明天回来：
+Codex MCP 不提供 `taskflow_resume` 工具。保留运行返回的 run id，可以检查已存储运行：
 
-```text
-taskflow_resume <runId>
+用结构化参数调用 `taskflow_peek`：
+
+```json
+{ "runId": "<runId>" }
 ```
 
-已完成的阶段从缓存复用（按解析后的输入键入）。如果你夜里改了 `changelog` 的提示词，只有 `changelog`、`gate`、`report` 会重跑——`discover` 和所有审查都复用。详见[增量重算](/zh-cn/docs/reference/incremental-recompute)。
+要再次执行，请重新调用 `taskflow_run`。跨运行复用必须显式设置 `cache.scope: "cross-run"`；没有该设置时，新运行会重新执行阶段。按 run id 精确续跑暂停任务目前仅 Pi 支持（`/tf resume`）。详见[增量重算](/zh-cn/docs/compiler-runtime/incremental-recompute)。
 
 ## 什么时候保持临时
 
@@ -132,9 +135,14 @@ taskflow_resume <runId>
 ## 要点
 
 - taskflow 是**数据**而不是代码——所以你能在运行前校验。
-- `map` 按有界并发对每个 item 扇出一个 subagent。
+- `map` 会对每个 item 扇出一个 subagent；声明 budget 后普通扇出会串行准入，以保持用量可审计。
 - `gate` 阶段给你一个真能叫停的质量门禁。
-- `budget` 封顶花费；续跑免费且跨会话。
+- 在 Codex 上，`maxTokens` 是基于已观测用量的止损线：报告用量超过限制后停止接纳新工作，但单个进行中的调用仍可能超出。
 - 只有最终阶段进入你的 Codex 上下文。
 
-去 [模板库](/zh-cn/docs/templates) 拿另外五个开箱即用的流程，或读 [Codex 指南](/zh-cn/docs/guides/codex) 看完整的 host 专属接口。
+去 [模板库](/zh-cn/docs/guides/templates) 拿另外五个开箱即用的流程，或读 [Codex 指南](/zh-cn/docs/guides/codex) 看完整的 host 专属接口。
+
+
+## 也适用于其他宿主
+
+同一引擎与 `taskflow_*` 工具也在 **Pi**、**Claude Code**、**OpenCode** 和 **[Grok Build](/zh-cn/docs/guides/grok-build)** 上运行——只是安装路径不同。见[指南索引](/zh-cn/docs/guides)。

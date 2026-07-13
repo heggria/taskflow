@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import { CacheStore } from "../src/cache.ts";
 import { phaseFingerprint } from "../src/flowir/index.ts";
-import { executeTaskflow, cacheKeys, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
+import { agentDefinitionsIdentity, executeTaskflow, cacheKeys, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
 import type { RunResult, RunOptions } from "../src/runner-core.ts";
 import type { Taskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
@@ -209,6 +209,7 @@ test("phasefp: pre-v3 (v2) entry still hits — no miss-storm", async () => {
 		scope: "cross-run", fingerprint: "", store, prior: undefined,
 		phaseId: "p", flowName: def.name, runId: "old",
 		flowDefHash: ir.hash, phaseFp: (await phaseFingerprint(def, "p")) ?? ir.hash,
+		agentDefinitions: agentDefinitionsIdentity(AGENTS),
 		thinking: undefined, tools: undefined, preRead: "",
 	};
 	const ck = cacheKeys(cc, ["p", "a", "", "fixed"]);

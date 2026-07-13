@@ -1,0 +1,57 @@
+---
+title: Deterministic Replay
+description: Offline what-if re-judgment of gate thresholds and budgets from a recorded event trace — zero tokens, never re-runs the model.
+---
+
+**Deterministic replay** (also *replayable-for-what-if*) answers a different question from [Resume](/en/docs/concepts/resume) or [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
+
+| Mechanism | Question | Tokens? |
+|-----------|----------|---------|
+| **Resume** | Continue a paused/failed run; reuse finished phases whose inputs are unchanged | Only unfinished / cache-miss work |
+| **Recompute** | The *world* changed (file, commit) — which phases of a stored run must re-run? | Dry-run free; apply spends tokens on the stale frontier |
+| **Deterministic replay** | If decision knobs (gate threshold, budget) had been different, what would the *recorded* run have decided? | **Never** — re-folds the event log only |
+
+Qwik's "not replayable" means something else (no hydration re-execution). taskflow's replay is **decision what-if** on an append-only evidence log.
+
+## The event trace
+
+Instrumenting runs (default when a host injects `FileTraceSink`) write
+`runs/<flow>/<runId>.trace.jsonl`. Each line is a lifecycle or decision event:
+
+- `phase-start` / `phase-end`
+- `subagent-call` — resolved task text + full output + usage
+- `decision` — gate verdict/score, when-guard, cache-hit, budget-hit, tournament-winner, unreplayable
+
+Inspect with `/tf trace <runId>` (Pi) or `taskflow_trace` (MCP). Pass `json: true` for a bounded machine-readable envelope; `total`, `returned`, and `truncated` make response limits explicit, and `limit` selects up to 1,000 newest events.
+
+## Offline replay
+
+```bash title="Pi"
+/tf replay <runId> --threshold review=0.9 --budget-usd 0.05
+/tf replay <runId> --json
+```
+
+```json title="MCP / tool action"
+{
+  "runId": "nightly-audit-abc123",
+  "thresholds": { "review": 0.9 },
+  "budgetMaxUSD": 0.05
+}
+```
+
+Per-phase outcomes include `reused`, `would-block`, `verdict-flipped`,
+`would-exceed-budget`, `threshold-changed`, `needs-live-rerun`, and `failed`.
+
+Model or args overrides currently map to **`needs-live-rerun`**: quality cannot be re-scored offline without a new subagent call — use live recompute or a fresh run.
+
+## Guarantees
+
+- **Zero tokens** by construction: `replayRun` imports only pure modules (events, fold, deterministic helpers). It never imports the process-spawning runtime or event kernel (CI: `replay-import-lint`).
+- **No mutation** of the stored run — the report is counterfactual only.
+- **No log** → the tool fails clearly (pre-trace run or missing sink).
+
+## See also
+
+- [Resume](/en/docs/concepts/resume) — cross-session continuation and cache reuse
+- [Incremental recompute](/en/docs/compiler-runtime/incremental-recompute) — FlowIR, staleness, surgical re-run
+- [Commands](/en/docs/reference/commands) — `/tf trace`, `/tf replay`, `taskflow_replay`

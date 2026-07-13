@@ -11,6 +11,8 @@ This page walks through the whole arc: install the plugin, confirm the MCP serve
 
 taskflow is distributed through the shared plugin marketplace. Add the marketplace, then install the plugin:
 
+Requires **Node.js ≥ 22.19.0**.
+
 ```bash title="Install the taskflow plugin"
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
@@ -142,10 +144,18 @@ tool_timeout_sec = 3600
 ```
 
 <Callout type="warn">
-  Don't set this timeout lower than your longest expected run. If the tool call times out, the run keeps executing in the background — but Codex will have already given up on the result.
+  Don't set this timeout lower than your longest expected run. Codex sends MCP cancellation when it gives up; taskflow propagates that cancellation to the DAG and active subagent. MCP does not turn the request into a detached background run.
 </Callout>
 
 For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. (Resuming a paused run by `runId` is a Pi-only capability — `/tf resume`. On Codex there is no `taskflow_resume` MCP tool, so a paused run is continued by re-running the flow; phases with `cache.scope: "cross-run"` are reused automatically.)
+
+<Callout type="info">
+  Codex reports token usage but not cost. A Codex flow may use `budget.maxTokens`; any `budget.maxUSD` is rejected before execution. The budget is an observed-usage stop-loss, not a zero-overshoot maximum: ordinary calls are admitted serially, while active `race` branches may overshoot together.
+</Callout>
+
+<Callout type="info">
+  Every child uses `--ephemeral --ignore-user-config --ignore-rules` and clears `mcp_servers`, so unrelated parent MCP OAuth failures, plugins, and rules cannot change a phase. The child environment keeps platform/proxy/CA and Codex/OpenAI provider variables only. Add an intentional task variable by name with the comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
+</Callout>
 
 ## Inspect a run after the fact
 
@@ -174,12 +184,23 @@ Here's the full MCP surface the plugin exposes:
 | `taskflow_list` | List saved flows in the current project. |
 | `taskflow_show` | Print a saved flow's JSON definition. |
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
-| `taskflow_compile` | Render the DAG as a Mermaid diagram. |
+| `taskflow_compile` | Render an inline SVG **and** text outline plus verification status. |
 | `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with no model calls. |
+| `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
+| `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
+| `taskflow_save` | Save a reusable flow and optional library metadata. |
+| `taskflow_search` | Search and rank reusable flows. |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells Codex which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.
 </Callout>
+
+Codex does not enforce `tools` as a strict name whitelist. Read-only sets map
+to `-s read-only`; mutating or omitted sets map to `-s workspace-write`.
+Thinking maps to `model_reasoning_effort` (`off`/`none`/`minimal` → `none`,
+`max`/`ultra` → `xhigh`); unsupported values fail before spawn.
 
 ## Remove
 
@@ -198,7 +219,7 @@ This unregisters the MCP server and removes the skill. Any saved flow definition
     The five-minute tour, if you haven't seen it yet.
   </Card>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks you can compose into a DAG.
+    The twelve building blocks you can compose into a DAG.
   </Card>
   <Card title="Using taskflow on Pi" href="/en/docs/guides/pi">
     The same runtime, wired into the Pi coding agent.

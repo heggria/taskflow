@@ -264,9 +264,9 @@ pi 适配器在构造 tool handler 时创建 `LibraryDeps` 并传给 `saveFlowWi
 - **冷启动警告**：文档须在 `command` kind 段落显著标注：「⚠️ 若 embedding 工具有冷启动延迟（如 board-cli 60s+），每次 save 都会阻塞等冷启动。推荐改用 `http` kind 指向已预热的 proxy。」
 - **实现约束（R2R1 安全修复）**：**必须使用 `child_process.spawn(command[0], command.slice(1), { stdio: ["pipe", "pipe", "pipe"] })`**，禁止使用 `child_process.exec()` 或任何 shell 调用。输入文本通过 `stdin.write()` 传入，不经过 shell 解析。此约束消除 command 数组元素中 shell 元字符（`; | & $()` 等）的注入风险。
 
-**pi 适配器的默认 wiring**：pi 适配器读 `settings.json`，若 `taskflow.embedder` 存在且 `library.enabled`，构造一个 `Embedder` 实现注入 `LibraryDeps`。**其他宿主（codex/claude/opencode）的 MCP server 同样读这个配置**——配置在 `settings.json`，跨宿主一致。
+**pi 适配器的默认 wiring**：pi 适配器读 `settings.json`，若 `taskflow.embedder` 存在且 `library.enabled`，构造一个 `Embedder` 实现注入 `LibraryDeps`。**其他宿主（codex/claude/opencode/grok）的 MCP server 同样读这个配置**——配置在 `settings.json`，跨宿主一致。
 
-**跨宿主配置路径说明（C4 修复）**：所有宿主读 `~/.pi/agent/settings.json`，这是 taskflow 的现有跨宿主惯例。非 Pi 用户（codex/claude/opencode）：须手动创建此文件，或使用 `<host>-taskflow init`（若该命令提供）。**不引入备用路径**（如 `~/.taskflow/settings.json`），以避免偏离现有跨宿主约定。
+**跨宿主配置路径说明（C4 修复）**：所有宿主读 `~/.pi/agent/settings.json`，这是 taskflow 的现有跨宿主惯例。非 Pi 用户（codex/claude/opencode/grok）：须手动创建此文件，或使用 `<host>-taskflow init`（若该命令提供）。**不引入备用路径**（如 `~/.taskflow/settings.json`），以避免偏离现有跨宿主约定。
 
 ### 4.3 降级矩阵（核心保证：永远能搜）
 
@@ -288,7 +288,7 @@ pi 适配器在构造 tool handler 时创建 `LibraryDeps` 并传给 `saveFlowWi
 ```jsonc
 // pi 形式
 { "action": "search", "query": "审计 API endpoint 是否缺少鉴权", "limit": 5 }
-// MCP 形式（codex/claude/opencode）—— 新工具 taskflow_search（见 §5.4）
+// MCP 形式（codex/claude/opencode/grok）—— 新工具 taskflow_search（见 §5.4）
 { "name": "taskflow_search", "arguments": { "query": "...", "limit": 5 } }
 ```
 

@@ -36,37 +36,49 @@ importers:
   packages/claude-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-mcp-core
 
   packages/codex-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.8
+        specifier: workspace:*
+        version: link:../taskflow-mcp-core
+
+  packages/grok-taskflow:
+    dependencies:
+      taskflow-core:
+        specifier: workspace:*
+        version: link:../taskflow-core
+      taskflow-hosts:
+        specifier: workspace:*
+        version: link:../taskflow-hosts
+      taskflow-mcp-core:
+        specifier: workspace:*
         version: link:../taskflow-mcp-core
 
   packages/opencode-taskflow:
     dependencies:
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
       taskflow-hosts:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-hosts
       taskflow-mcp-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-mcp-core
 
   packages/pi-taskflow:
@@ -84,7 +96,7 @@ importers:
         specifier: '*'
         version: 0.80.3
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
       typebox:
         specifier: '*'
@@ -96,10 +108,19 @@ importers:
         specifier: '*'
         version: 1.3.3
 
+  packages/taskflow-dsl:
+    dependencies:
+      taskflow-core:
+        specifier: workspace:*
+        version: link:../taskflow-core
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/taskflow-hosts:
     dependencies:
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
     devDependencies:
       typescript:
@@ -109,7 +130,7 @@ importers:
   packages/taskflow-mcp-core:
     dependencies:
       taskflow-core:
-        specifier: 0.1.8
+        specifier: workspace:*
         version: link:../taskflow-core
 
   website:
@@ -158,8 +179,11 @@ importers:
         specifier: 4.3.2
         version: 4.3.2
       typescript:
-        specifier: 7.0.2
-        version: 7.0.2
+        specifier: 6.0.3
+        version: 6.0.3
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
 packages:
 
@@ -2597,6 +2621,11 @@ packages:
 
   typebox@1.3.6:
     resolution: {integrity: sha512-Sc8RA0NCMEFmApHNU9ZMzqcpQj46She44J8ffpLM/bdhLNUZKq7DJumcLcsFx1gRmDfQPgCgOmFFJ7rcnfWNyA==}
+
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -5437,6 +5466,8 @@ snapshots:
   typebox@1.3.3: {}
 
   typebox@1.3.6: {}
+
+  typescript@6.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:

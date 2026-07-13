@@ -1,8 +1,14 @@
 # RFC: FlowIR Compilation Shadow (DSL → overstory FlowIR)
 
-> Status: **Proposed** · Date: 2026-06-24
-> Roadmap: [`overstory-convergence-roadmap.md`](./overstory-convergence-roadmap.md) §3 M1 (first of 5 milestones toward an overstory-kernel swap)
-> Verifies: `overstory/packages/core/src/ir/` (vendored); bridges to `extensions/{schema,compile,verify}.ts`
+> Status: **Superseded in part by 0.2.0 S0** · Original: **Proposed** · Date: 2026-06-24
+> Roadmap: [`overstory-convergence-roadmap.md`](./overstory-convergence-roadmap.md) §3 M1
+> **Implementation note (2026-07-09):** The *shadow* / vendor-overstory plan below is **historical**.
+> 0.2.0 S0 shipped a **self-owned** genuine compiler in `packages/taskflow-core/src/flowir/`:
+> `compileTaskflowToFlowIR` + `hashFlowIR` → `ir:<64-hex>`, `usedFallbackHash: false` on well-formed IR.
+> Public seam remains `compileTaskflowToIR(def)`. Stub `translate.ts` still exists for comparison /
+> legacy paths but is **not** what `/tf ir` content-addresses after S0.
+> Architecture parent: [`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md).
+> Verifies (original intent): overstory IR contract; bridges to schema/compile/verify.
 
 ## TL;DR
 

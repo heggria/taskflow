@@ -1,6 +1,6 @@
 {
   "name": "opencode-taskflow",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "Run taskflow on OpenCode: an OpenCode subagent runner plus an MCP server (and an opencode.json config scaffold) that exposes the taskflow_* tools to OpenCode users.",
   "keywords": [
     "opencode",
@@ -43,18 +43,23 @@
     "opencode-taskflow-mcp": "./dist/mcp/bin.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "plugin"
   ],
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs opencode-taskflow",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./mcp/server": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" }
+    }
   },
   "dependencies": {
-    "taskflow-core": "0.1.8",
-    "taskflow-hosts": "0.1.8",
-    "taskflow-mcp-core": "0.1.8"
+    "taskflow-core": "workspace:*",
+    "taskflow-hosts": "workspace:*",
+    "taskflow-mcp-core": "workspace:*"
   }
 }

@@ -83,6 +83,9 @@ Isolation is the safe default, but some workflows fight it. Suppose ten security
 
 For those cases, a phase can opt into the **Shared Context Tree**:
 
+> In 0.2.0, `ctx_*` tool injection is available through `pi-taskflow` only.
+> Codex, Claude, OpenCode, and Grok runners do not expose these tools yet.
+
 ```json title="Opting into shared context"
 {
   "id": "review-each",
@@ -145,7 +148,7 @@ Together they mean a flow can be large, long-running, and verbose without that v
     Isolation is what makes cross-session replay possible.
   </Card>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks, and how they isolate.
+    The twelve building blocks, and how they isolate.
   </Card>
   <Card title="Caching" href="/en/docs/syntax/caching">
     Cross-run memoization builds on the same on-disk state.

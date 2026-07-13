@@ -13,9 +13,9 @@ on the host-neutral `SubagentRunner` seam
    the `opencode run` subagent runner (`packages/opencode-taskflow/src/mcp/`).
    This is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install: register the MCP server
 
@@ -76,13 +76,19 @@ injected via the `OPENCODE_CONFIG_CONTENT` env var. The runner maps each phase's
 tool whitelist the same way the codex runner maps to a sandbox mode:
 
 - **Read-only phase** (no `write`/`edit`/`bash` in the phase/agent `tools`) → a
-  permission policy that **denies** bash/write/edit is injected, so a denied
-  tool call is genuinely rejected (not merely un-approved). This is real
-  enforcement, closer to codex's read-only OS sandbox than to an advisory
-  whitelist.
-- **Mutating phase** (or no whitelist) → `opencode run --auto`, which
-  auto-approves every permission — the workspace-write analogue. Run flows you
-  trust, ideally in a throwaway worktree (`cwd: "worktree"`).
+  default-deny permission policy is injected: only the known read/list/search
+  built-ins are allowed, so inherited custom and MCP tools are denied too.
+  Every child also uses `--pure`, disabling external plugins that execute
+  outside the tool permission policy.
+- **Mutating phase** (or no whitelist) → rejected by default because OpenCode
+  has no OS sandbox backstop. A trusted operator may explicitly set
+  `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`; only then does the runner add `--auto`.
+  Prefer a throwaway worktree (`cwd: "worktree"`).
+
+OpenCode children receive only platform/proxy/CA, OpenCode configuration, and
+supported provider environment variables; unrelated parent secrets are
+removed. Explicit task credentials can be added by name through the
+comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
 
 ## Model ids
 
@@ -107,6 +113,10 @@ OpenCode's configured default model.
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
 | `taskflow_compile` | Render a flow's DAG as a text outline + a compact status line (with an inline SVG image for clients that render images). |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Hard-truncated, read-only. |
+| `taskflow_trace` | Read-only timeline of a run's append-only event log (subagent I/O + runtime decisions). |
+| `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
+| `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
 
 ## Use it
 
@@ -119,7 +129,7 @@ Inside an OpenCode session, just ask — OpenCode will call the tools:
 ```
 
 > **Note on approvals.** MCP-driven runs are non-interactive, so an `approval`
-> phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows
+> phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows
 > you run through the `taskflow_*` tools; use `approval` only in flows a human
 > runs interactively.
 

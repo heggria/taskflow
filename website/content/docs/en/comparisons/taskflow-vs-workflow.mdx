@@ -55,7 +55,7 @@ When a workflow runs, your window into it is whatever `console.log` statements t
 
 ### 3. Phase-by-phase resume, cross-session
 
-A workflow's resume is coarse: dedup of identical calls via a cache. taskflow resumes **per phase, keyed on the phase's resolved input hash**, across sessions. Re-running a flow after editing one phase re-executes only that phase and its downstream; everything upstream is served from cache. See [incremental recompute](/en/docs/reference/incremental-recompute).
+A workflow's resume is coarse: dedup of identical calls via a cache. taskflow resumes **per phase, keyed on the phase's resolved input hash**, across sessions. Re-running a flow after editing one phase re-executes only that phase and its downstream; everything upstream is served from cache. See [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
 
 ### 4. Safe to generate with an LLM
 

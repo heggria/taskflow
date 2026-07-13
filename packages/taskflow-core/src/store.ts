@@ -86,6 +86,9 @@ export type PhaseStatus = "pending" | "running" | "done" | "failed" | "skipped";
 export interface PhaseState {
 	id: string;
 	status: PhaseStatus;
+	/** Persisted execution policy for dynamically promoted phases. Parent-level
+	 *  terminal accounting cannot look these ids up in the original definition. */
+	optional?: boolean;
 	output?: string;
 	json?: unknown;
 	usage?: UsageStats;
@@ -139,6 +142,9 @@ export interface PhaseState {
 	/** Set when a `flow { def }` inline sub-flow definition could not be resolved,
 	 *  parsed, validated, or verified. The phase fails-open: this records why. */
 	defError?: string;
+	/** Child states promoted by an expand:graft phase. Retained on the expand
+	 *  result so a within-run resume cache hit can restore the same parent DAG. */
+	promotedPhases?: Record<string, PhaseState>;
 	/** Non-fatal diagnostic warnings accumulated during this phase (e.g.
 	 *  unresolved interpolation placeholders, suspicious templates). */
 	warnings?: string[];

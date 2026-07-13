@@ -35,17 +35,20 @@ I review issues and PRs ~weekly. If you need a faster turnaround, mention why in
 
 ## Architecture
 
-See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of seven published packages:
+See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of **nine** published packages:
 
 | Package / directory | What |
 |---------------------|------|
 | `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store (zero host-SDK deps) |
 | `packages/taskflow-core/src/agents/` | 18 built-in agent definitions (`.md` with YAML frontmatter) |
 | `packages/taskflow-mcp-core/` | Host-neutral MCP server: stdio JSON-RPC + `taskflow_*` tools + DAG SVG/outline renderer (depends on taskflow-core) |
+| `packages/taskflow-hosts/` | Shared host runners (codex/claude/opencode/grok) + argv builders + event-stream parsers |
+| `packages/taskflow-dsl/` | TypeScript DSL CLI — erase `.tf.ts` → Taskflow JSON / FlowIR |
 | `packages/pi-taskflow/` | Pi extension adapter (`taskflow` tool + `/tf` commands, TUI) + `skills/` |
-| `packages/codex-taskflow/` | Codex subagent runner + MCP bin + Codex plugin |
-| `packages/claude-taskflow/` | Claude Code subagent runner + MCP bin + Claude Code plugin |
-| `packages/opencode-taskflow/` | OpenCode subagent runner + MCP bin + opencode.json scaffold |
+| `packages/codex-taskflow/` | Codex delivery package + MCP bin + Codex plugin |
+| `packages/claude-taskflow/` | Claude Code delivery package + MCP bin + Claude Code plugin |
+| `packages/opencode-taskflow/` | OpenCode delivery package + MCP bin + opencode.json scaffold |
+| `packages/grok-taskflow/` | Grok Build delivery package + MCP bin + Grok plugin |
 | `examples/` | Runnable flow definitions (`.json`) |
 | `docs/` | Design docs, RFCs, dogfooding reports |
 

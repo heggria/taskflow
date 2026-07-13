@@ -9,7 +9,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldClaudeEventLine, newClaudeAccumulator, permissionArgsForTools } from "../src/claude-runner.ts";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	CLAUDE_UNSAFE_BYPASS_ENV,
+	foldClaudeEventLine,
+	newClaudeAccumulator,
+	permissionArgsForTools,
+	runClaudeAgentTask,
+} from "../src/claude-runner.ts";
 
 // A full, real run: system init → assistant tool_use → assistant text →
 // result (authoritative usage + cost).
@@ -26,6 +35,7 @@ test("claude parser: folds a real run into final text + authoritative usage", ()
 	for (const line of REAL_STREAM) foldClaudeEventLine(acc, line);
 
 	assert.equal(acc.finalText, "done", "final answer = the result event's `result`");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined);
 	assert.equal(acc.model, "claude-haiku-4-5", "model updated from the stream");
 	// The result event's cumulative usage wins over the per-turn accumulation.
@@ -53,6 +63,7 @@ test("claude parser: last assistant text is the fallback answer when no result e
 	foldClaudeEventLine(acc, `{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"first draft"}]}}`);
 	foldClaudeEventLine(acc, `{"type":"assistant","message":{"model":"m","content":[{"type":"text","text":"final answer"}]}}`);
 	assert.equal(acc.finalText, "final answer");
+	assert.equal(acc.terminalSeen, undefined, "assistant text before result is not terminal");
 });
 
 test("claude parser: an is_error result is fatal and never becomes the answer", () => {
@@ -111,24 +122,118 @@ test("claude parser: system init sets the model", () => {
 
 // --- permission mapping (the codex sandboxForTools analogue) ---------------
 
-test("claude permissions: no whitelist → bypassPermissions (default-capable agent)", () => {
-	assert.deepEqual(permissionArgsForTools(undefined), ["--permission-mode", "bypassPermissions"]);
-	assert.deepEqual(permissionArgsForTools([]), ["--permission-mode", "bypassPermissions"]);
-});
-
-test("claude permissions: a mutating whitelist → bypassPermissions", () => {
-	for (const tools of [["read", "bash"], ["write"], ["edit", "grep"], ["apply_patch"]]) {
-		assert.deepEqual(permissionArgsForTools(tools), ["--permission-mode", "bypassPermissions"]);
+test("claude permissions: no whitelist → explicit read-only allowlist", () => {
+	for (const tools of [undefined, []]) {
+		const args = permissionArgsForTools(tools);
+		assert.equal(args[0], "--tools");
+		assert.equal(args[2], "--allowedTools");
+		assert.equal(args[1], args[3]);
+		assert.ok(!args.includes("bypassPermissions"));
 	}
 });
 
-test("claude permissions: a read-only whitelist → read-only --allowedTools set", () => {
+test("claude permissions: mutating whitelist is denied unless explicitly acknowledged", () => {
+	for (const tools of [["read", "bash"], ["write"], ["edit", "grep"], ["apply_patch"]]) {
+		assert.throws(() => permissionArgsForTools(tools), /PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1/);
+		const optedIn = permissionArgsForTools(tools, true);
+		assert.equal(optedIn[0], "--tools");
+		assert.ok(optedIn.includes("--permission-mode"));
+		assert.ok(optedIn.includes("bypassPermissions"));
+	}
+	assert.throws(() => permissionArgsForTools(["future_tool"], true), /cannot be mapped/);
+});
+
+test("claude permissions: a read-only whitelist → matching narrow tool sets", () => {
 	const args = permissionArgsForTools(["read", "grep", "find", "ls"]);
-	assert.equal(args[0], "--allowedTools");
+	assert.equal(args[0], "--tools");
+	assert.equal(args[2], "--allowedTools");
+	assert.equal(args[1], args[3]);
 	const allowed = args[1].split(",");
 	assert.ok(allowed.includes("Read"));
 	assert.ok(allowed.includes("Grep"));
 	assert.ok(!allowed.includes("Bash"), "no read-only shell on claude — Bash stays denied");
 	assert.ok(!allowed.includes("Write"));
 	assert.ok(!allowed.includes("Edit"));
+});
+
+const TEST_AGENT = [{
+	name: "reviewer",
+	description: "test",
+	systemPrompt: "Review carefully.",
+	source: "project" as const,
+	filePath: "/tmp/reviewer.md",
+}];
+
+function withFakeClaude(body: string, run: (bin: string) => Promise<void>): Promise<void> {
+	const dir = mkdtempSync(join(tmpdir(), "taskflow-claude-runner-"));
+	const bin = join(dir, "claude");
+	writeFileSync(bin, `#!/bin/sh\nset -eu\n${body}\n`, "utf8");
+	chmodSync(bin, 0o755);
+	return run(bin).finally(() => rmSync(dir, { recursive: true, force: true }));
+}
+
+test("claude runner seam: unsafe tools fail closed before spawning with actionable error", async () => {
+	const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+	const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+	try {
+		process.env.PI_TASKFLOW_CLAUDE_BIN = "/definitely/not/a/claude/binary";
+		delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+		const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "change a file", { tools: ["write"] });
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.stopReason, "permission_denied");
+		assert.match(result.errorMessage ?? "", /PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1/);
+		assert.doesNotMatch(result.stderr, /ENOENT/, "permission policy rejects before the process seam");
+	} finally {
+		if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+		else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+		if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+		else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+	}
+});
+
+test("claude runner seam: unspecified tools spawn with read-only flags", async () => {
+	await withFakeClaude(
+		`case " $* " in *" --tools Read,Grep,Glob,WebFetch,WebSearch --allowedTools Read,Grep,Glob,WebFetch,WebSearch "*) ;; *) exit 64 ;; esac
+case " $* " in *" bypassPermissions "*) exit 65 ;; esac
+printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"safe","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
+		async (bin) => {
+			const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+			const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+			try {
+				process.env.PI_TASKFLOW_CLAUDE_BIN = bin;
+				delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "inspect", {});
+				assert.equal(result.exitCode, 0, result.stderr);
+				assert.equal(result.output, "safe");
+			} finally {
+				if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+				else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+				if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+			}
+		},
+	);
+});
+
+test("claude runner seam: exact user opt-in permits requested unsandboxed tools", async () => {
+	await withFakeClaude(
+		`case " $* " in *" --tools Write --permission-mode bypassPermissions "*) ;; *) exit 64 ;; esac
+printf '%s\\n' '{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"opted-in","total_cost_usd":0,"usage":{"input_tokens":1,"output_tokens":1}}'`,
+		async (bin) => {
+			const previousBin = process.env.PI_TASKFLOW_CLAUDE_BIN;
+			const previousOptIn = process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+			try {
+				process.env.PI_TASKFLOW_CLAUDE_BIN = bin;
+				process.env[CLAUDE_UNSAFE_BYPASS_ENV] = "1";
+				const result = await runClaudeAgentTask("/tmp", TEST_AGENT, "reviewer", "change", { tools: ["write"] });
+				assert.equal(result.exitCode, 0, result.stderr);
+				assert.equal(result.output, "opted-in");
+			} finally {
+				if (previousBin === undefined) delete process.env.PI_TASKFLOW_CLAUDE_BIN;
+				else process.env.PI_TASKFLOW_CLAUDE_BIN = previousBin;
+				if (previousOptIn === undefined) delete process.env[CLAUDE_UNSAFE_BYPASS_ENV];
+				else process.env[CLAUDE_UNSAFE_BYPASS_ENV] = previousOptIn;
+			}
+		},
+	);
 });

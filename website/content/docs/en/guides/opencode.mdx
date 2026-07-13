@@ -3,11 +3,13 @@ title: Using taskflow on OpenCode
 description: Register taskflow as an MCP server on OpenCode and orchestrate multi-phase workflows.
 ---
 
-[OpenCode](https://opencode.ai) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On OpenCode, taskflow is exposed as a dependency-free MCP server, so the `taskflow_*` tools appear inside the session and each phase's subagent runs as an isolated `opencode run` process.
+[OpenCode](https://opencode.ai) exposes taskflow through an MCP server whose protocol layer has no MCP SDK dependency; each phase runs as an isolated `opencode run` process.
 
 This page walks through the whole arc: register the MCP server, confirm it's live, run a flow through a tool call, and understand the permission and model-resolution model.
 
 ## Install
+
+Requires **Node.js ≥ 22.19.0**.
 
 OpenCode has no git-based plugin marketplace, so you register the MCP server directly — either with the CLI or by editing your `opencode.json`.
 
@@ -150,12 +152,14 @@ OpenCode has no per-run tool-whitelist flag, but it honours a per-process config
 
 | Phase tools | Permission policy | What it means |
 |---|---|---|
-| Read-only (no `write`/`edit`/`bash`) | Injected policy that **denies** bash/write/edit | A denied tool call is genuinely rejected (not merely un-approved). This is real enforcement, closer to a read-only OS sandbox than an advisory whitelist. |
-| Mutating (or no whitelist) | `opencode run --auto` | Auto-approves every permission — the workspace-write analogue. Run flows you trust, ideally in a throwaway worktree (`cwd: "worktree"`). |
+| Read-only (no `write`/`edit`/`bash`) | `--pure` + injected default-deny policy | External plugins are disabled; only known read/list/search built-ins are allowed, so inherited custom and MCP tools are denied. |
+| Mutating (or no whitelist) | Rejected by default | Set `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` only for trusted flows to opt into unsandboxed `--auto`; `--pure` remains enabled. |
 
 <Callout type="warn">
-  Mutating phases run with `--auto` and auto-approve every permission. Prefer a throwaway worktree (`cwd: "worktree"`) for flows that touch the filesystem, and only run flows you trust.
+  OpenCode has no OS sandbox backstop. Unsafe auto mode is an explicit operator opt-in; prefer a throwaway worktree and only run trusted flows.
 </Callout>
+
+Children inherit only platform/proxy/CA, OpenCode configuration, and supported provider variables. Unrelated parent secrets are removed. Add an intentional task variable by name with the comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting.
 
 ### Model resolution
 
@@ -194,7 +198,7 @@ Omit `phaseId` to list every phase with its status and output size. Output is ha
 
 ## Approvals in MCP mode
 
-MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows you run through the `taskflow_*` tools; use `approval` only in flows a human runs interactively.
+MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows you run through the `taskflow_*` tools; use `approval` only in flows a human runs interactively.
 
 ## Tool reference
 
@@ -210,6 +214,10 @@ Here's the full MCP surface the server exposes:
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
 | `taskflow_compile` | Render the DAG as a text outline + inline SVG. |
 | `taskflow_peek` | Inspect a stored phase's output for post-hoc debugging. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with no model calls. |
+| `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
+| `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells OpenCode which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.
@@ -243,7 +251,7 @@ Any saved flow definitions on disk are left untouched.
     The five-minute tour, if you haven't seen it yet.
   </Card>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks you can compose into a DAG.
+    The twelve building blocks you can compose into a DAG.
   </Card>
   <Card title="Using taskflow on Claude Code" href="/en/docs/guides/claude-code">
     The same runtime, wired into Claude Code.

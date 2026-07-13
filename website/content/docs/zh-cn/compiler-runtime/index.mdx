@@ -1,0 +1,77 @@
+---
+title: taskflow 0.2 新能力
+description: 编译器 / 运行时转身：TypeScript 编写、FlowIR、replay 与最小重算。
+---
+
+taskflow 0.2 保留声明式 DAG 模型，但改变了运行时可以如何处理这张图。一个 flow 现在可以通过**编译期 TypeScript 前端**编写，编译为**内容寻址的 FlowIR**，通过确定性事件轨迹解释运行决策，并在输入变化后只重算最小 stale frontier，而不是从头重跑整张图。
+
+<Callout type="info">
+  **核心心智模型：** JSON 仍是跨宿主的可移植执行合同；TypeScript 是编写前端；FlowIR 是让 provenance、replay 与增量重算变得可解释的编译表示。
+</Callout>
+
+## 0.2 学习路径
+
+<Steps>
+  <Step>
+    **编写。** 继续使用普通 Taskflow JSON，或通过编译期 [TypeScript DSL](/zh-cn/docs/compiler-runtime/typescript-dsl) 将 `.tf.ts` runes erase 为 JSON 与 FlowIR。
+  </Step>
+  <Step>
+    **编译与检查。** 使用 `/tf ir` 查看规范化的 [FlowIR 与增量重算模型](/zh-cn/docs/compiler-runtime/incremental-recompute)，再决定哪些阶段需要重新执行。
+  </Step>
+  <Step>
+    **解释决策。** 记录事件轨迹，通过[确定性 replay](/zh-cn/docs/compiler-runtime/deterministic-replay) 在零 token 下评估新的 gate 阈值或预算。
+  </Step>
+  <Step>
+    **把长任务移出当前会话。** 在 Pi 上启动[后台运行](/zh-cn/docs/compiler-runtime/background-runs)，保留 `runId`，之后再检查或续跑。
+  </Step>
+</Steps>
+
+## 我现在需要哪个操作？
+
+| 场景 | 操作 | 是否调用模型 |
+|---|---|---:|
+| 花 token 前检查图结构 | `verify` / `compile` | 否 |
+| 检查编译后的图和内容哈希 | `ir` | 否 |
+| 输入不变，继续未完成工作 | `resume` | 只执行未完成阶段 |
+| 用新阈值重判已完成轨迹 | `replay` | 否 |
+| 解释输入变化后哪些阶段过期 | `why-stale` | 否 |
+| 只重跑受影响的 frontier | `recompute` | 只执行受影响阶段 |
+| 让长时间 Pi 运行跨会话存活 | `detach: true` | 正常运行成本 |
+
+## 从 Compiler Bench 开始
+
+<Cards>
+  <Card title="TypeScript DSL" href="/zh-cn/docs/compiler-runtime/typescript-dsl">
+    编写 `.tf.ts`，erase runes，并产出可移植的 Taskflow JSON / FlowIR。
+  </Card>
+  <Card title="FlowIR 与增量重算" href="/zh-cn/docs/compiler-runtime/incremental-recompute">
+    内容寻址、provenance、stale frontier 分析与最小重执行。
+  </Card>
+  <Card title="确定性 Replay" href="/zh-cn/docs/compiler-runtime/deterministic-replay">
+    不调用模型，重新裁决已经记录的运行时决策。
+  </Card>
+  <Card title="后台运行" href="/zh-cn/docs/compiler-runtime/background-runs">
+    分离长时间 Pi 运行，通过 runId 轮询，并在失败后续跑。
+  </Card>
+</Cards>
+
+## 哪些东西没有改变
+
+- JSON 仍是 Pi、Codex、Claude Code、OpenCode 与 Grok Build 之间的可移植执行格式。
+- 中间 transcript 仍不会进入宿主对话，除非你显式检查它们。
+- `verify` 仍发生在 token 消耗之前，DAG 语义仍是执行基础。
+- Resume、replay 与 recompute 是三件不同的事：继续工作、重判历史、或重跑变化部分。
+
+## 下一步
+
+<Cards>
+  <Card title="运行 Quickstart" href="/zh-cn/docs/getting-started">
+    在你的宿主上安装并执行第一个 flow。
+  </Card>
+  <Card title="理解核心模型" href="/zh-cn/docs/concepts">
+    DAG、阶段类型、插值、验证与隔离。
+  </Card>
+  <Card title="查询命令" href="/zh-cn/docs/reference/commands">
+    按操作查看 Pi 命令与 MCP 工具。
+  </Card>
+</Cards>

@@ -13,9 +13,9 @@ directions, both built on the host-neutral `SubagentRunner` seam
    the `claude -p` subagent runner (`packages/claude-taskflow/src/mcp/`). This
    is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install (recommended): the Claude Code plugin
 
@@ -35,7 +35,7 @@ Verify:
 
 ```sh
 claude plugin list   # → claude-taskflow@taskflow  installed, enabled
-claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.1.7 claude-taskflow-mcp)
+claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.2.0 claude-taskflow-mcp)
 ```
 
 The bundled skill tells Claude Code *when* to reach for the tools (multi-phase
@@ -47,15 +47,30 @@ Claude Code has no OS-level sandbox in headless (`-p`) mode — a tool call is
 either whitelisted or denied. The runner maps each phase's tool whitelist the
 same way the codex runner maps to a sandbox mode:
 
-- **Read-only phase** (no `write`/`edit`/`bash` in the phase/agent `tools`) →
-  `--allowedTools Read,Grep,Glob,WebFetch,WebSearch`. Mutating tools are denied
-  outright. Note there is **no read-only shell** (unlike codex's read-only OS
-  sandbox), so `Bash` is not granted to read-only phases.
-- **Mutating phase** (or no whitelist at all) → `--permission-mode
-  bypassPermissions`. This is the workspace-write equivalent, but **without an
-  OS sandbox backstop** — the subagent can run any tool. Run flows you trust,
-  in a repo you can `git reset`, ideally in a throwaway worktree
-  (`cwd: "worktree"`).
+Taskflow requires Claude Code **2.1.169 or newer** for the `--safe-mode`
+isolation contract. Older CLIs fail closed with an unknown-option error;
+upgrade Claude Code before using the adapter.
+
+- **Read-only or unspecified phase** (no mutating/unknown tool in the resolved
+  phase/agent `tools`, including an omitted list) → matching `--tools` and
+  `--allowedTools` lists. An explicit list remains narrow; omitted tools use
+  `Read,Grep,Glob,WebFetch,WebSearch`. `--safe-mode` disables non-managed
+  project/user customizations; disk setting sources and non-managed hooks are
+  disabled as defense in depth. Administrator-managed policy hooks may still
+  run. Mutating tools are denied outright. Note
+  there is **no read-only shell** (unlike codex's read-only OS sandbox), so
+  `Bash` is not granted.
+- **Known mutating requested tool** → rejected by default. Headless Claude
+  has no OS sandbox backstop, so silently selecting `bypassPermissions` is
+  unsafe. A trusted operator may explicitly set
+  `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` to enable that mode. Even then, the
+  requested built-in set stays narrow. Unknown tool names always fail closed.
+  Use only trusted flows and prefer a throwaway worktree (`cwd: "worktree"`).
+
+The spawned Claude process receives a filtered environment: platform/runtime,
+proxy/CA, and Claude-supported provider variables (`ANTHROPIC_*`, Bedrock,
+Vertex/Google, Azure/Foundry) are retained, while unrelated application secrets
+such as npm tokens, database URLs, and other-provider API keys are not inherited.
 
 ## Long-running flows and the tool-call timeout
 
@@ -106,6 +121,10 @@ subagent a flow spawns is itself a `claude -p` process — no pi process needed.
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
 | `taskflow_compile` | Render a flow's DAG as a text outline + a compact status line (with an inline SVG image for clients that render images). |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Hard-truncated, read-only. |
+| `taskflow_trace` | Read-only timeline of a run's append-only event log (subagent I/O + runtime decisions). |
+| `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
+| `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
 
 ## How output is rendered
 
@@ -134,7 +153,7 @@ Inside a Claude Code session, just ask — Claude will call the tools:
 ```
 
 > **Note on approvals.** MCP-driven runs are non-interactive, so an `approval`
-> phase **auto-rejects** (fail-open). Prefer a `gate` (agent review) in flows
+> phase **auto-rejects** (fail-closed for the approval decision). Prefer a `gate` (agent review) in flows
 > you run through the `taskflow_*` tools; use `approval` only in flows a human
 > runs interactively.
 

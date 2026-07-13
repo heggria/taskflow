@@ -8,7 +8,7 @@ You shipped a feature and now you need one thing: the release-note headline. It 
 This guide builds a taskflow that does the headline properly. We start with the naive single-agent baseline, show why it is weak, then replace it with a `tournament` phase that spawns four competing variants and a judge that picks the winner. By the end you will have a complete, saveable flow you can run for every release.
 
 <Callout type="info">
-  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
 </Callout>
 
 ## The problem

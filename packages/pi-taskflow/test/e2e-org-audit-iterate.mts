@@ -34,14 +34,16 @@ import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
 import { runsDir, saveRun, type RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const MARKER = `REPO-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 const DOMAINS = JSON.stringify([
-	{ domain: "runtime", file: "extensions/runtime.ts" },
-	{ domain: "schema", file: "extensions/schema.ts" },
-	{ domain: "storage", file: "extensions/store.ts" },
-	{ domain: "cache", file: "extensions/cache.ts" },
-	{ domain: "context-tree", file: "extensions/context-store.ts" },
+	{ domain: "runtime", file: "packages/taskflow-core/src/runtime.ts" },
+	{ domain: "schema", file: "packages/taskflow-core/src/schema.ts" },
+	{ domain: "storage", file: "packages/taskflow-core/src/store.ts" },
+	{ domain: "cache", file: "packages/taskflow-core/src/cache.ts" },
+	{ domain: "context-tree", file: "packages/taskflow-core/src/context-store.ts" },
 ]);
 
 const FLOW: Taskflow = {
@@ -57,7 +59,7 @@ const FLOW: Taskflow = {
 			shareContext: true,
 			task:
 				`You are the recon lead for a repo-wide audit. Skim AGENTS.md and the file ` +
-				`extensions/context-store.ts. Your PRIMARY deliverable is a ctx_write call: ` +
+				`packages/taskflow-core/src/context-store.ts. Your PRIMARY deliverable is a ctx_write call: ` +
 				`ctx_write key 'map' with JSON {"marker":"${MARKER}","conventions":"2 one-line ` +
 				`rules every auditor should know"}. The marker MUST be exactly ${MARKER}. ` +
 				`If you did not call ctx_write you failed. Reply DONE.`,
@@ -150,58 +152,66 @@ async function main() {
 		phases: {}, createdAt: Date.now(), updatedAt: Date.now(), cwd: process.cwd(),
 	};
 
-	console.log("== executing (large org: recon → map×5(+grandchild) → synth → loop → gate → final) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(), agents, globalThinking: settings.globalThinking,
-		persist: (s) => { saveRun(s); },
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			const running = Object.values(s.phases).filter((p) => p.status === "running").map((p) => p.id);
-			const da = s.phases["domain-audit"]?.subProgress;
-			const fan = da ? ` | fan-out ${da.done}/${da.total}` : "";
-			process.stdout.write(`\r  ${done}/${s.def.phases.length} done${fan}${running.length ? " | " + running.join(",") : ""}              `);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-org-audit");
+	try {
+		console.log("== executing (large org: recon → map×5(+grandchild) → synth → loop → gate → final) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			persist: (s) => { saveRun(s); },
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				const running = Object.values(s.phases).filter((p) => p.status === "running").map((p) => p.id);
+				const da = s.phases["domain-audit"]?.subProgress;
+				const fan = da ? ` | fan-out ${da.done}/${da.total}` : "";
+				process.stdout.write(`\r  ${done}/${s.def.phases.length} done${fan}${running.length ? " | " + running.join(",") : ""}              `);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
 
-	const out = res.finalOutput ?? "";
-	const auditOut = res.state.phases["domain-audit"]?.output ?? "";
-	const markerHits = (auditOut.match(new RegExp(MARKER, "g")) ?? []).length;
+		const out = res.finalOutput ?? "";
+		const auditOut = res.state.phases["domain-audit"]?.output ?? "";
+		const markerHits = (auditOut.match(new RegExp(MARKER, "g")) ?? []).length;
 
-	// Grandchildren register as `<mapItem>--cN` nodes parented to a domain-audit
-	// item in THIS run's ctx tree (a spawned subflow may also create its own
-	// `-inline-` ctx dir, but the supervision node is what proves it ran).
-	const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
-	let treeNodes: Array<{ nodeId: string; parentNodeId?: string }> = [];
-	try { treeNodes = (JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")).nodes ?? []); } catch { /* none */ }
-	const grandchildren = treeNodes.filter((n) => /^domain-audit-\d+--c\d+$/.test(n.nodeId));
+		// Grandchildren register as `<mapItem>--cN` nodes parented to a domain-audit
+		// item in THIS run's ctx tree (a spawned subflow may also create its own
+		// `-inline-` ctx dir, but the supervision node is what proves it ran).
+		const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
+		let treeNodes: Array<{ nodeId: string; parentNodeId?: string }> = [];
+		try { treeNodes = (JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")).nodes ?? []); } catch { /* none */ }
+		const grandchildren = treeNodes.filter((n) => /^domain-audit-\d+--c\d+$/.test(n.nodeId));
 
-	console.log("\nPhase states:");
-	for (const p of FLOW.phases) console.log(`  ${res.state.phases[p.id]?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}]`);
-	console.log(`\nmarker "${MARKER}" echoed ${markerHits}× across the 5-way fan-out (shared-map reuse)`);
-	console.log(`spawned grandchild deep-dives this run: ${grandchildren.length} (${grandchildren.map((g) => g.nodeId).join(", ")})`);
-	console.log("\n── governance report (tail 900) ──\n" + out.slice(-900));
+		console.log("\nPhase states:");
+		for (const p of FLOW.phases) console.log(`  ${res.state.phases[p.id]?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}]`);
+		console.log(`\nmarker "${MARKER}" echoed ${markerHits}× across the 5-way fan-out (shared-map reuse)`);
+		console.log(`spawned grandchild deep-dives this run: ${grandchildren.length} (${grandchildren.map((g) => g.nodeId).join(", ")})`);
+		console.log("\n── governance report (tail 900) ──\n" + out.slice(-900));
 
-	const totalCost = Object.values(res.state.phases).reduce((s, p) => s + (p.usage?.cost ?? 0), 0);
-	console.log(`\ntotal accounted cost across all phases (incl. spawned): $${totalCost.toFixed(4)}`);
+		const totalCost = Object.values(res.state.phases).reduce((s, p) => s + (p.usage?.cost ?? 0), 0);
+		console.log(`\ntotal accounted cost across all phases (incl. spawned): $${totalCost.toFixed(4)}`);
 
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["recon published shared map (marker)", markerHits >= 1],
-		["all 5 domains audited (fan-out done)", res.state.phases["domain-audit"]?.status === "done"],
-		["≥3 of 5 auditors reused the shared map (horizontal reuse at scale)", markerHits >= 3],
-		["≥3 grandchild deep-dives spawned by map items (recursive org tree ×N)", grandchildren.length >= 3],
-		["iterative refine loop ran", res.state.phases.refine?.status === "done"],
-		["risk gate ran (not blocked)", res.state.phases["risk-gate"]?.status === "done"],
-		["final prioritized governance report produced", /P0|P1|P2/.test(out) && out.length > 500],
-		["budget accounted & not exceeded", res.state.status !== "blocked" && totalCost > 0],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
-	console.log(allPass ? "\n✅ ORG-AUDIT-ITERATE E2E PASSED" : "\n❌ ORG-AUDIT-ITERATE E2E FAILED");
-	process.exit(allPass ? 0 : 1);
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["recon published shared map (marker)", markerHits >= 1],
+			["all 5 domains audited (fan-out done)", res.state.phases["domain-audit"]?.status === "done"],
+			["≥3 of 5 auditors reused the shared map (horizontal reuse at scale)", markerHits >= 3],
+			["≥3 grandchild deep-dives spawned by map items (recursive org tree ×N)", grandchildren.length >= 3],
+			["iterative refine loop ran", res.state.phases.refine?.status === "done"],
+			["risk gate ran (not blocked)", res.state.phases["risk-gate"]?.status === "done"],
+			["final prioritized governance report produced", /P0|P1|P2/.test(out) && out.length > 500],
+			["budget accounted & not exceeded", res.state.status !== "blocked" && totalCost > 0],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [n, okk] of checks) { console.log(`  ${okk ? "PASS" : "FAIL"}  ${n}`); if (!okk) allPass = false; }
+		console.log(allPass ? "\n✅ ORG-AUDIT-ITERATE E2E PASSED" : "\n❌ ORG-AUDIT-ITERATE E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
+	}
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });

@@ -21,10 +21,17 @@
  *   - taskflow_verify  : statically verify a flow (no execution)
  *   - taskflow_compile : render a flow as a DAG diagram (SVG image) + status line
  *   - taskflow_peek    : inspect a stored run's intermediate phase output
+ *   - taskflow_trace   : read a run's append-only event trace
+ *   - taskflow_replay  : re-evaluate a recorded trace under alternate knobs (zero tokens)
+ *   - taskflow_why_stale / taskflow_recompute / taskflow_save / taskflow_search
  */
 
-import { RpcError, RPC, serveStdio, type RpcHandler } from "./jsonrpc.ts";
+import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
+import { readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
 	discoverAgents,
 	executeTaskflow,
@@ -55,6 +62,10 @@ import {
 	type Taskflow,
 	type VerificationIssue,
 	type TraceEvent,
+	replayRun,
+	upgradeTraceEvent,
+	type ReplayReport,
+	type ReplayOverrides,
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import {
@@ -71,7 +82,22 @@ import {
 } from "taskflow-core";
 
 const PROTOCOL_VERSION = "2025-06-18";
-const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: "0.1.5" } as const;
+const SERVER_VERSION = readServerVersion();
+const SERVER_INFO = { name: "taskflow", title: "Taskflow", version: SERVER_VERSION } as const;
+
+function readServerVersion(): string {
+	try {
+		const packageJsonPath = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
+		const pkg: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+		if (typeof pkg === "object" && pkg !== null && "version" in pkg) {
+			const version = (pkg as { version?: unknown }).version;
+			if (typeof version === "string" && version) return version;
+		}
+	} catch {
+		// Keep the handshake available even in unusual embedded/bundled layouts.
+	}
+	return "0.2.0";
+}
 
 /** An MCP tool definition as returned by tools/list. */
 interface McpTool {
@@ -79,6 +105,55 @@ interface McpTool {
 	title: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
+}
+
+function validateToolValue(value: unknown, schema: Record<string, unknown>, path: string): string[] {
+	const errors: string[] = [];
+	const enumValues = Array.isArray(schema.enum) ? schema.enum : undefined;
+	if (enumValues && !enumValues.some((candidate) => Object.is(candidate, value))) {
+		errors.push(`${path} must be one of ${enumValues.map(String).join(", ")}`);
+		return errors;
+	}
+	const type = schema.type;
+	if (type === "object") {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+			return [`${path} must be an object`];
+		}
+		const object = value as Record<string, unknown>;
+		const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+		for (const required of Array.isArray(schema.required) ? schema.required : []) {
+			if (typeof required === "string" && !(required in object)) errors.push(`${path}.${required} is required`);
+		}
+		if (schema.additionalProperties === false) {
+			for (const key of Object.keys(object)) {
+				if (!(key in properties)) errors.push(`${path}.${key} is not allowed`);
+			}
+		}
+		for (const [key, childSchema] of Object.entries(properties)) {
+			if (key in object) errors.push(...validateToolValue(object[key], childSchema, `${path}.${key}`));
+		}
+		return errors;
+	}
+	if (type === "array") {
+		if (!Array.isArray(value)) return [`${path} must be an array`];
+		const itemSchema = schema.items;
+		if (typeof itemSchema === "object" && itemSchema !== null) {
+			value.forEach((item, index) => errors.push(...validateToolValue(item, itemSchema as Record<string, unknown>, `${path}[${index}]`)));
+		}
+		return errors;
+	}
+	if (type === "string" && typeof value !== "string") errors.push(`${path} must be a string`);
+	if (type === "number" && (typeof value !== "number" || !Number.isFinite(value))) errors.push(`${path} must be a finite number`);
+	if (type === "integer" && (typeof value !== "number" || !Number.isSafeInteger(value))) errors.push(`${path} must be an integer`);
+	if (type === "boolean" && typeof value !== "boolean") errors.push(`${path} must be a boolean`);
+	return errors;
+}
+
+function validateToolArguments(tool: McpTool, value: unknown): Record<string, unknown> {
+	const args = value ?? {};
+	const errors = validateToolValue(args, tool.inputSchema, "arguments");
+	if (errors.length > 0) throw new RpcError(RPC.INVALID_PARAMS, `Invalid ${tool.name} arguments: ${errors.join("; ")}`);
+	return args as Record<string, unknown>;
 }
 
 /**
@@ -173,8 +248,50 @@ function count(n: number, noun: string): string {
  *  Output text is truncated so a fan-out's full transcripts don't flood the
  *  host context — pass json:true for the complete record. Mirrors the pi
  *  adapter's formatTrace. */
-function formatTraceMcp(events: TraceEvent[], runId: string, flowName: string): string {
+const TRACE_DEFAULT_LIMIT = 200;
+const TRACE_MAX_LIMIT = 1000;
+const TRACE_MAX_RESPONSE_CHARS = 120_000;
+const TRACE_JSON_STRING_LIMIT = 4_000;
+
+function traceLimit(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return TRACE_DEFAULT_LIMIT;
+	return Math.max(1, Math.min(TRACE_MAX_LIMIT, Math.floor(value)));
+}
+
+function boundedTraceEvents(events: TraceEvent[], requested: unknown): { total: number; events: TraceEvent[] } {
+	const limit = traceLimit(requested);
+	const bounded = events.slice(-limit).map((event) =>
+		JSON.parse(
+			JSON.stringify(event, (_key, value) =>
+				typeof value === "string" && value.length > TRACE_JSON_STRING_LIMIT
+					? `${value.slice(0, TRACE_JSON_STRING_LIMIT)}… (+${value.length - TRACE_JSON_STRING_LIMIT} chars)`
+					: value,
+			),
+		) as TraceEvent,
+	);
+	while (bounded.length > 1) {
+		const candidate = JSON.stringify({ total: events.length, returned: bounded.length, truncated: bounded.length < events.length, events: bounded }, null, 2);
+		if (candidate.length <= TRACE_MAX_RESPONSE_CHARS) break;
+		bounded.shift();
+	}
+	return { total: events.length, events: bounded };
+}
+
+export function formatTraceJsonMcp(events: TraceEvent[], requested?: unknown): string {
+	const bounded = boundedTraceEvents(events, requested);
+	return JSON.stringify({
+		total: bounded.total,
+		returned: bounded.events.length,
+		truncated: bounded.events.length < bounded.total,
+		events: bounded.events,
+	}, null, 2);
+}
+
+function formatTraceMcp(events: TraceEvent[], runId: string, flowName: string, requested?: unknown): string {
+	const bounded = boundedTraceEvents(events, requested);
+	events = bounded.events;
 	const lines: string[] = [`Trace — ${flowName} / ${runId}  (${events.length} events)`];
+	if (events.length < bounded.total) lines.push(`Showing newest ${events.length} of ${bounded.total} events.`);
 	lines.push("");
 	const out = (text: string | undefined, limit = 400): string => {
 		if (!text) return "";
@@ -203,8 +320,49 @@ function formatTraceMcp(events: TraceEvent[], runId: string, flowName: string): 
 		}
 	}
 	lines.push("");
-	lines.push("(Pass json:true for the complete machine-readable trace, including full subagent outputs.)");
+	lines.push("(Pass json:true for a bounded machine-readable envelope; total/returned/truncated report omitted events.)");
 	return lines.join("\n");
+}
+
+/** Human-readable offline replay report (MCP). Zero tokens — re-folds the
+ *  recorded trace under alternate decision knobs. */
+function formatReplayMcp(r: ReplayReport, runId: string, flowName: string): string {
+	const lines: string[] = [
+		`Replay — ${flowName} / ${runId}  (${r.decisions.length} phase decision(s), zero tokens)`,
+	];
+	lines.push("");
+	if (r.needsLiveRerun) lines.push("⚠ Some phases need a live re-run (model/args override).");
+	lines.push(`Recorded usage cost ≈ $${r.totalUsage.cost.toFixed(4)}  tokens in=${r.totalUsage.input} out=${r.totalUsage.output}`);
+	lines.push("");
+	for (const d of r.decisions) {
+		const prior = d.priorOutcome ? ` prior=${d.priorOutcome}` : "";
+		const next = d.replayedOutcome ? ` → ${d.replayedOutcome}` : "";
+		lines.push(`  • ${d.phaseId}: [${d.outcome}]${prior}${next} — ${d.reason}`);
+	}
+	lines.push("");
+	lines.push("(Pass json:true for the full ReplayReport machine-readable record.)");
+	return lines.join("\n");
+}
+
+function parseReplayOverrides(args: Record<string, unknown>): ReplayOverrides {
+	const o: ReplayOverrides = {};
+	if (typeof args.budgetMaxUSD === "number") o.budgetMaxUSD = args.budgetMaxUSD;
+	if (typeof args.budgetMaxTokens === "number") o.budgetMaxTokens = args.budgetMaxTokens;
+	if (args.thresholds && typeof args.thresholds === "object" && !Array.isArray(args.thresholds)) {
+		const t: Record<string, number> = {};
+		for (const [k, v] of Object.entries(args.thresholds as Record<string, unknown>)) {
+			if (typeof v === "number") t[k] = v;
+		}
+		if (Object.keys(t).length) o.thresholds = t;
+	}
+	if (args.models && typeof args.models === "object" && !Array.isArray(args.models)) {
+		const m: Record<string, string> = {};
+		for (const [k, v] of Object.entries(args.models as Record<string, unknown>)) {
+			if (typeof v === "string") m[k] = v;
+		}
+		if (Object.keys(m).length) o.models = m;
+	}
+	return o;
 }
 
 /** Human-readable recompute dry-run report (MCP). Mirrors the pi adapter's
@@ -310,13 +468,41 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_trace",
 		title: "Show a run's deterministic-replay event trace",
 		description:
-			"Read the append-only event trace a run recorded (each subagent call's input/output + the runtime's own decisions: gate verdicts, when-guard results, budget hits, cache hits, unreplayable markers). This is the foundation for deterministic replay (re-evaluating a run against changed thresholds/budget offline, zero tokens — landing in a future release). For now it is a read-only observability view of exactly what the run did. Output is human-readable by default; pass json:true for the complete machine-readable record.",
+			"Read the append-only event trace a run recorded (each subagent call's input/output + runtime decisions). Foundation for taskflow_replay. Responses are bounded; use limit to select up to 1000 newest events.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
 			properties: {
 				runId: { type: "string", description: "The run to inspect (from a prior taskflow_run or the runs index)." },
-				json: { type: "boolean", description: "Return the complete machine-readable trace (JSON) instead of a human-readable timeline. Use when you need the full subagent outputs (the human form truncates them)." },
+				json: { type: "boolean", description: "Return a bounded machine-readable envelope instead of a human timeline. The envelope reports total/returned/truncated; oversized strings are truncated." },
+				limit: { type: "number", minimum: 1, maximum: 1000, description: "Maximum newest trace events to return (default 200, max 1000). Large string fields and total response size are also bounded." },
+			},
+			required: ["runId"],
+		},
+	},
+	{
+		name: "taskflow_replay",
+		title: "Replay a recorded run under alternate decision knobs (zero tokens)",
+		description:
+			"Re-evaluate a stored run's event trace offline against changed gate thresholds, budget caps, or model routes — without calling any model (zero tokens). Reports per-phase outcomes: reused, would-block, verdict-flipped, would-exceed-budget, needs-live-rerun, etc. Use after taskflow_trace when you want counterfactual analysis of a finished run.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run whose trace to replay (from a prior taskflow_run)." },
+				json: { type: "boolean", description: "Return the full ReplayReport as JSON." },
+				budgetMaxUSD: { type: "number", description: "Alternate max USD budget for would-exceed-budget checks." },
+				budgetMaxTokens: { type: "number", description: "Alternate max token budget." },
+				thresholds: {
+					type: "object",
+					additionalProperties: { type: "number" },
+					description: "Map of phaseId → new score threshold (re-judges recorded gate-score events).",
+				},
+				models: {
+					type: "object",
+					additionalProperties: { type: "string" },
+					description: "Map of phaseId → model id (currently marks needs-live-rerun; quality cannot be re-judged offline).",
+				},
 			},
 			required: ["runId"],
 		},
@@ -391,9 +577,38 @@ const TOOLS: McpTool[] = [
 ];
 
 /** Resolve a flow from params: inline `define` (desugared), `defineFile` (disk), or saved `name`. */
+function resolvePermittedDefineFile(cwd: string, requested: string): string {
+	const lexical = resolve(cwd, requested);
+	let candidate = lexical;
+	try {
+		candidate = realpathSync(lexical);
+	} catch {
+		// Keep the lexical path so a permitted-but-missing file still receives the
+		// normal "not found" diagnostic from readDefineFile. Resolve its existing
+		// parent so aliases such as macOS /tmp -> /private/tmp remain contained.
+		try { candidate = join(realpathSync(dirname(lexical)), basename(lexical)); } catch { /* parent missing */ }
+	}
+	const rootCandidates = [cwd, tmpdir(), ...(process.platform === "win32" ? [] : ["/tmp"])]
+		.map((root) => {
+			try { return realpathSync(resolve(root)); } catch { return resolve(root); }
+		});
+	const allowed = rootCandidates.some((root) => {
+		const rel = relative(root, candidate);
+		return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+	});
+	if (!allowed) {
+		throw new RpcError(
+			RPC.INVALID_PARAMS,
+			`defineFile must be contained in the server cwd or OS temp directory: ${requested}`,
+		);
+	}
+	return candidate;
+}
+
 function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
 	if (params.define === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
-		const fromFile = readDefineFile(params.defineFile);
+		const filePath = resolvePermittedDefineFile(cwd, params.defineFile);
+		const fromFile = readDefineFile(filePath);
 		if (!fromFile.ok) throw new RpcError(RPC.INVALID_PARAMS, describeLoadFailure(fromFile, "defineFile"));
 		params = { ...params, define: fromFile.value };
 	}
@@ -422,6 +637,19 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): 
 	};
 }
 
+export function persistTerminalRun(
+	state: RunState,
+	cleanupConfig: Parameters<typeof saveRun>[1],
+	write: typeof saveRun = saveRun,
+): string | undefined {
+	try {
+		write(state, cleanupConfig);
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
 /**
  * Build the per-call tool handlers. `cwd` is the directory the server was
  * launched in (where saved flows + agents are discovered, and where subagents
@@ -431,12 +659,29 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): 
 export function makeToolHandlers(
 	cwd: string,
 	runner: SubagentRunner<AgentConfig>,
-): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
 	return {
-		taskflow_run: async (args) => {
+		taskflow_run: async (args, context) => {
+			const reusedSavedName =
+				args.define === undefined && args.defineFile === undefined && typeof args.name === "string" && args.name.trim()
+					? args.name.trim()
+					: undefined;
 			const def = resolveFlow(cwd, args);
 			const v = validateTaskflow(def);
 			if (!v.ok) return textContent(`Flow is invalid:\n- ${v.errors.join("\n- ")}`, true);
+			const usageAccounting = runner.usageAccounting;
+			if (def.budget && usageAccounting === "unavailable") {
+				return textContent(
+					"This host does not report token or cost usage, so taskflow refuses to run a budgeted flow: the declared ceiling could not be enforced. Remove `budget` only if unmetered execution is intentional, or use a host with usage accounting.",
+					true,
+				);
+			}
+			if (def.budget?.maxUSD !== undefined && usageAccounting === "tokens-only") {
+				return textContent(
+					"This host reports token usage but not cost, so taskflow refuses budget.maxUSD: the declared dollar ceiling could not be enforced. Use budget.maxTokens or a host with cost accounting.",
+					true,
+				);
+			}
 
 			// Resolve model roles (e.g. {{fast}} -> a real model id) so the built-in
 			// agents' placeholder models map to something the host can launch. This is
@@ -448,6 +693,8 @@ export function makeToolHandlers(
 				cwd,
 				agents,
 				runTask: runner.runTask,
+				signal: context?.signal,
+				usageAccounting,
 			};
 			const state = mkRunState(def, (args.args as Record<string, unknown>) ?? {}, cwd);
 			// Deterministic-replay trace (best-effort, fail-open).
@@ -466,18 +713,21 @@ export function makeToolHandlers(
 				}
 			};
 
+			let terminalPersistError: string | undefined;
 			const res = await executeTaskflow(state, deps).finally(() => {
 				// Terminal persist must survive a throwing runtime ("never lose work") —
 				// and persistence itself must never sink a completed run.
-				try {
-					saveRun(state, cleanupConfig);
-				} catch {
-					/* fail-open */
-				}
+				terminalPersistError = persistTerminalRun(state, cleanupConfig);
 			});
-			if (res.ok && args.reusedFromSearch === true && typeof args.name === "string" && args.name.trim()) {
+			if (terminalPersistError !== undefined) {
+				return textContent(
+					`Taskflow execution finished, but terminal run persistence failed; no durable run ID can be promised: ${terminalPersistError}`,
+					true,
+				);
+			}
+			if (res.ok && args.reusedFromSearch === true && reusedSavedName) {
 				try {
-					bumpReuseInSidecar(cwd, args.name);
+					bumpReuseInSidecar(cwd, reusedSavedName);
 				} catch {
 					/* fail-open: reuse bookkeeping is best-effort */
 				}
@@ -509,8 +759,23 @@ export function makeToolHandlers(
 			const events = readTrace(traceFilePath(runsDir(cwd), run.flowName, run.runId));
 			if (events.length === 0)
 				return textContent(`No trace recorded for run "${runId}" (the run predates tracing, or no trace sink was injected).`, true);
-			if (args.json === true) return textContent(JSON.stringify(events, null, 2));
-			return textContent(formatTraceMcp(events, run.runId, run.flowName));
+			if (args.json === true) return textContent(formatTraceJsonMcp(events, args.limit));
+			return textContent(formatTraceMcp(events, run.runId, run.flowName, args.limit));
+		},
+
+		taskflow_replay: async (args) => {
+			const runId = String(args.runId ?? "");
+			if (!runId) return textContent("taskflow_replay requires `runId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const raw = readTrace(traceFilePath(runsDir(cwd), run.flowName, run.runId));
+			if (raw.length === 0)
+				return textContent(`No trace recorded for run "${runId}" (the run predates tracing, or no trace sink was injected).`, true);
+			const events = raw.map((e) => upgradeTraceEvent(e as unknown as Record<string, unknown>));
+			const report = replayRun(events, parseReplayOverrides(args));
+			if (args.json === true) return textContent(JSON.stringify(report, null, 2));
+			return textContent(formatReplayMcp(report, run.runId, run.flowName));
 		},
 
 		taskflow_why_stale: async (args) => {
@@ -525,7 +790,7 @@ export function makeToolHandlers(
 			return textContent(formatWhyStale(run.runId, run.flowName, reads, seeds, declared));
 		},
 
-		taskflow_recompute: async (args) => {
+		taskflow_recompute: async (args, context) => {
 			// MCP exposes recompute as DRY-RUN ONLY (never spends tokens). To actually
 			// re-execute, hosts use the Pi adapter's /tf recompute --apply.
 			const runId = String(args.runId ?? "");
@@ -536,7 +801,7 @@ export function makeToolHandlers(
 			const run = runR.value;
 			const settings = readSubagentSettings();
 			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
-			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask };
+			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask, signal: context?.signal };
 			const { report } = await recomputeTaskflow(run, deps, [phaseId], { dryRun: true });
 			return textContent(formatRecomputeMcp(report));
 		},
@@ -731,12 +996,15 @@ export function makeMcpHandlers(cwd: string, runner: SubagentRunner<AgentConfig>
 		},
 		ping: () => ({}),
 		"tools/list": () => ({ tools: TOOLS }),
-		"tools/call": async (params) => {
+		"tools/call": async (params, context) => {
 			const p = (params ?? {}) as { name?: string; arguments?: Record<string, unknown> };
 			const tool = tools[p.name ?? ""];
 			if (!tool) throw new RpcError(RPC.INVALID_PARAMS, `Unknown tool: ${p.name}`);
+			const descriptor = TOOLS.find((candidate) => candidate.name === p.name);
+			if (!descriptor) throw new RpcError(RPC.INVALID_PARAMS, `Unknown tool schema: ${p.name}`);
+			const args = validateToolArguments(descriptor, p.arguments);
 			void initialized; // tolerant: we don't hard-gate on initialize ordering
-			return await tool(p.arguments ?? {});
+			return await tool(args, context);
 		},
 	};
 }

@@ -152,7 +152,7 @@ Shorthand specs accept the same top-level metadata as a full flow. These are pas
 | `concurrency` | Default max concurrent subagents. |
 | `agentScope` | Agent discovery scope (`user` / `project` / `both`). |
 | `args` | Declared invocation arguments. |
-| `budget` | Run-wide cost / token ceiling. |
+| `budget` | Run-wide observed-usage cost / token stop-loss; in-flight calls may overshoot. |
 | `strictInterpolation` | Promote unresolved-placeholder warnings to errors. |
 
 ```json title="shorthand-with-meta.json"

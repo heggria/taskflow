@@ -1,0 +1,95 @@
+---
+title: TypeScript DSL (`taskflow-dsl`)
+description: Compile-time .tf.ts authoring — erase runes to Taskflow JSON, then FlowIR.
+---
+
+# TypeScript DSL (`taskflow-dsl`)
+
+S4 adds a **compile-time** TypeScript frontend. You author `*.tf.ts` with **runes** (`agent`, `map`, `race`, …). A CLI erases them to ordinary Taskflow JSON. Hosts still run **JSON** via `taskflow_run` / `/tf run` — there is **no** interpret path and **no** host auto-build of `.tf.ts`.
+
+<Callout type="info">
+  **Package status.** `taskflow-dsl` lives in the monorepo (`packages/taskflow-dsl`). It is **not** required for JSON authors. Package manifests are `0.2.0` on this release line; npm availability updates after the `v0.2.0` publish job — prefer a workspace install / local path until then.
+</Callout>
+
+## Workflow
+
+```bash
+# monorepo / built package
+taskflow-dsl new audit
+# edit audit.tf.ts
+taskflow-dsl check audit.tf.ts
+taskflow-dsl build audit.tf.ts --emit both
+# → audit.taskflow.json (+ optional FlowIR)
+# Then: taskflow_verify / taskflow_run with defineFile=audit.taskflow.json
+```
+
+| Command | Purpose |
+|---------|---------|
+| `new [name]` | Hello skeleton (`.tf.ts` or `--json-escape`) |
+| `check <file>` | Erase + `validateTaskflow` + tsc by default (`--no-typecheck` to disable) |
+| `build <file>` | Emit Taskflow JSON / FlowIR |
+| `decompile <file>` | Taskflow JSON → safe, readable `.tf.ts` (**semantic**, not literal round-trip) |
+
+`decompile` does not recover original variable names, formatting, comments, or
+source spelling. Supported definitions rebuild to semantically equivalent
+Taskflow/FlowIR; unsupported or lossy constructs fail instead of claiming a
+literal round-trip.
+
+`build`, `decompile`, and `new` refuse to replace an existing output unless
+`--force` is explicit. All output paths must remain under `--cwd`; destination
+symlinks are rejected, and writes are atomically committed from a same-directory
+temporary file. With `--emit both`, both destinations are checked before either
+file is written.
+
+## Authoring shape
+
+```ts
+import { flow, agent, map, reduce, json, race, expand } from "taskflow-dsl";
+
+export default flow("audit", (ctx) => {
+  ctx.budget({ maxUSD: 2 });
+  const discover = agent("List files under {args.dir}", {
+    output: json<{ path: string }[]>(),
+  });
+  const each = map(discover, (item) => agent(`Audit ${item.path}`));
+  return reduce([each], () => agent("Write one summary"));
+});
+```
+
+Unbuilt `.tf.ts` must **not** be executed as a Node program — runes throw `TFDSL_ERASE_ONLY`.
+
+## Kinds ↔ runes (summary)
+
+JSON still has **12** phase types. DSL runes erase to those kinds (plus sugars like `gate.automated` / `gate.scored`, `expand.nested` / `expand.graft`, `subflow.def`).
+
+| JSON kind | Primary rune(s) |
+|---|---|
+| `agent` | `agent()` |
+| `parallel` | `parallel()` |
+| `map` | `map()` |
+| `gate` | `gate()`, `gate.automated()`, `gate.scored()` |
+| `reduce` | `reduce()` |
+| `approval` | `approval()` |
+| `flow` | `subflow()` |
+| `loop` | `loop()` |
+| `tournament` | `tournament()` |
+| `script` | `script()` |
+| `race` | `race()` |
+| `expand` | `expand()`, `expand.nested()`, `expand.graft()` |
+
+See monorepo `skills` configuration §9 and `docs/rfc-0.2.0-s4-mvp.md`.
+
+## Runtime boundary
+
+- The TypeScript DSL is compile-time only; emitted JSON uses the same runtime.
+- The event kernel remains opt-in (`eventKernel` or
+  `PI_TASKFLOW_EVENT_KERNEL=1`). `race` and `expand` use the imperative path;
+  score gates, `onBlock: retry`, reflexion, `retry`, `expect`, cross-run cache,
+  and Shared Context Tree also force a safe imperative fallback.
+- Not an MCP `taskflow_build` tool in the ship bar.
+
+## Next
+
+- [Phase Types](/en/docs/syntax/phase-types) — JSON kinds including `race` / `expand`
+- [Commands](/en/docs/reference/commands) — host MCP / `/tf` surfaces
+- Monorepo: `docs/rfc-0.2.0-s4-mvp.md`, `docs/internal/claim-vs-impl-0.2.0.md`

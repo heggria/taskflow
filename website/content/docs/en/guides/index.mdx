@@ -1,57 +1,65 @@
 ---
-title: Guides
-description: Practical guides for using taskflow on different hosts and patterns.
+title: Guides & Recipes
+description: Install taskflow on your host, reuse a proven flow shape, or follow an end-to-end case study.
 ---
 
-The Guides are the *practical* half of these docs. Where [Concepts](/en/docs/concepts) explains the model and the [Syntax Reference](/en/docs/syntax) lists every field, the Guides walk you through doing something real end to end — install on a specific host, run a flow, save it, debug it, and reach for an advanced pattern when the work demands it.
-
-They come in two flavors:
-
-- **By host.** taskflow runs on Pi, Codex, Claude Code, and OpenCode. Each host has its own install path and invocation surface, so each gets a dedicated walkthrough.
-- **By pattern.** Once the basics work, some problems want a specific shape — a model that plans its own sub-flow at runtime, or a tournament that spawns competing drafts and picks a winner.
+This section is organized around work you want to complete, not fields you need to memorize.
 
 <Callout type="tip">
-  New to taskflow? Start with the host you already use. Both host guides end with the same runnable review flow, so you can compare notes across hosts afterwards.
+  New to taskflow? Run the [five-minute quickstart](/en/docs/getting-started), then return here for your host-specific setup and a reusable recipe.
 </Callout>
 
-## By host
+## Host guides
 
 <Cards>
-  <Card title="Using taskflow on Pi" href="/en/docs/guides/pi">
-    Install the extension, run with `/tf`, save flows, and configure model roles.
+  <Card title="Pi" href="/en/docs/guides/pi">
+    Install the extension, use `/tf`, save flows, inspect runs, and configure model roles.
   </Card>
-  <Card title="Using taskflow on Codex" href="/en/docs/guides/codex">
-    Install the plugin, call `taskflow_run` over MCP, and handle long-running flows.
+  <Card title="Codex" href="/en/docs/guides/codex">
+    Install the plugin and call the taskflow MCP surface from Codex.
+  </Card>
+  <Card title="Claude Code" href="/en/docs/guides/claude-code">
+    Install the Claude plugin and run multi-phase work through MCP.
+  </Card>
+  <Card title="OpenCode" href="/en/docs/guides/opencode">
+    Register the MCP server and run isolated OpenCode subagents.
+  </Card>
+  <Card title="Grok Build" href="/en/docs/guides/grok-build">
+    Install the Grok plugin and use the Grok runner safely.
+  </Card>
+  <Card title="Agents & Model Roles" href="/en/docs/guides/agents-and-model-roles">
+    Understand agent discovery and role-to-model resolution.
   </Card>
 </Cards>
 
-## By pattern
+## Recipes
 
 <Cards>
+  <Card title="Templates Gallery" href="/en/docs/guides/templates">
+    Copy a ready-to-run flow and adapt it to your project.
+  </Card>
   <Card title="Dynamic Planning" href="/en/docs/guides/dynamic-planning">
-    Generate sub-flows at runtime and validate them before execution.
+    Generate a sub-flow at runtime and validate it before execution.
   </Card>
   <Card title="Tournament Selection" href="/en/docs/guides/tournament">
-    Spawn competing variants and let a judge pick the best.
+    Generate competing variants and let a judge pick or aggregate them.
   </Card>
 </Cards>
 
 ## Case studies
 
-End-to-end walkthroughs of real tasks, showing how multiple phase types work together.
-
 <Cards>
   <Card title="Code Audit" href="/en/docs/guides/code-audit-case-study">
-    Review changed files for security and architecture risks, then gate on high-severity findings.
+    Discover changed files, fan out reviews, gate severe findings, and reduce a report.
   </Card>
   <Card title="Release Note Headlines" href="/en/docs/guides/headline-tournament-case-study">
-    Use a tournament to pick the strongest release-note headline from competing variants.
+    Use a tournament to choose the strongest release-note headline.
   </Card>
   <Card title="Migration Planner" href="/en/docs/guides/migration-planner-case-study">
-    Plan a codebase migration dynamically, validate the plan, execute it, and loop until done.
+    Plan, validate, execute, and iterate through a risky codebase migration.
   </Card>
 </Cards>
 
-## Submit your own
+## 0.2 runtime operations
 
-Have a taskflow that saved you hours? [Share it with the community](/en/docs/community).
+Background runs, FlowIR, deterministic replay, and incremental recompute are grouped under [New in 0.2](/en/docs/compiler-runtime), so the host and recipe guides stay focused on practical workflows.

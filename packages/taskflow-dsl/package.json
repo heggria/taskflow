@@ -1,0 +1,81 @@
+{
+  "name": "taskflow-dsl",
+  "version": "0.2.0",
+  "description": "Compile-time TypeScript DSL frontend for taskflow: erase .tf.ts runes to Taskflow JSON, then FlowIR via taskflow-core.",
+  "keywords": [
+    "taskflow",
+    "dsl",
+    "typescript",
+    "dag",
+    "orchestration"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/taskflow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/taskflow-dsl"
+  },
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "taskflow-dsl": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./build": {
+      "development": "./src/build.ts",
+      "types": "./dist/build.d.ts",
+      "default": "./dist/build.js"
+    },
+    "./check": {
+      "development": "./src/check.ts",
+      "types": "./dist/check.d.ts",
+      "default": "./dist/check.js"
+    },
+    "./decompile": {
+      "development": "./src/decompile.ts",
+      "types": "./dist/decompile.d.ts",
+      "default": "./dist/decompile.js"
+    },
+    "./diagnostics": {
+      "development": "./src/diagnostics.ts",
+      "types": "./dist/diagnostics.d.ts",
+      "default": "./dist/diagnostics.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-dsl",
+    "test:e2e": "node --experimental-strip-types test/e2e-dist-cli.mts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "taskflow-core": "workspace:*",
+    "typescript": "^6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./build": { "types": "./dist/build.d.ts", "default": "./dist/build.js" },
+      "./check": { "types": "./dist/check.d.ts", "default": "./dist/check.js" },
+      "./decompile": { "types": "./dist/decompile.d.ts", "default": "./dist/decompile.js" },
+      "./diagnostics": { "types": "./dist/diagnostics.d.ts", "default": "./dist/diagnostics.js" }
+    }
+  }
+}

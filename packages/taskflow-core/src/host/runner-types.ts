@@ -102,6 +102,9 @@ export interface RunOptions {
  * instead, so the engine's retry and fail-soft logic can act on it.
  */
 export interface SubagentRunner<TAgent = unknown> {
+	/** Whether this host reports authoritative token/cost usage. `unavailable`
+	 * makes runtime budget declarations fail closed at every execution boundary. */
+	readonly usageAccounting?: "available" | "tokens-only" | "unavailable";
 	runTask(
 		defaultCwd: string,
 		agents: TAgent[],

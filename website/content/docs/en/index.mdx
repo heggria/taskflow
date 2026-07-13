@@ -1,77 +1,120 @@
 ---
-title: Introduction
-description: A declarative, verifiable graph of task nodes for coding-agent subagents.
+title: taskflow Documentation
+description: Start with taskflow 0.2, run your first verified graph, or jump straight to the compiler/runtime reference.
 ---
 
-Welcome to the **taskflow** docs. taskflow is a declarative, verifiable *graph of tasks* for coding-agent subagents — you describe multi-step agent work as a DAG, the runtime verifies it before a single token is spent, and only the final result ever reaches your context window.
+taskflow is a declarative orchestration runtime for coding-agent subagents. You define a graph, verify it before token spend, execute each phase in isolation, and return only the final result to the host conversation.
 
-Here is the whole idea in four lines of JSON:
+In **0.2**, that graph also becomes a compiled contract: author with TypeScript, inspect FlowIR, replay recorded decisions, and recompute only the phases made stale by a change.
 
-```json title="A complete taskflow"
-{
-  "task": "Summarize the architecture of src/",
-  "agent": "explorer"
-}
-```
+## Choose your path
 
-That is a complete taskflow. The runtime turns it into a graph, runs one subagent, and returns the result. Add more phases, wire them with `dependsOn`, and the same shape scales to fan-out over hundreds of files — with retries, gates, loops, and cross-session resume handled for you.
+<Cards>
+  <Card title="Run a flow in five minutes" href="/en/docs/getting-started">
+    Choose a host, install taskflow, and run a first verified flow.
+  </Card>
+  <Card title="Understand taskflow 0.2" href="/en/docs/compiler-runtime">
+    TypeScript DSL, FlowIR, deterministic replay, background runs, and minimal recompute.
+  </Card>
+  <Card title="Why use a task graph?" href="/en/docs/what-is-taskflow">
+    The tradeoff behind declarative, inspectable, resumable agent orchestration.
+  </Card>
+</Cards>
 
-## Who is this for?
+<Callout type="tip">
+  If you are evaluating 0.2, start with **[New in taskflow 0.2](/en/docs/compiler-runtime)** rather than reading the reference front to back.
+</Callout>
 
-taskflow is for anyone who delegates multi-step work to a coding agent and has hit one of these:
+## Install on your host
 
-- **Context-window pressure.** Every subagent transcript floods your conversation, and a five-step audit eats your context before you ever see a result.
-- **Plans that only exist while they run.** You describe a workflow in prose, the model re-derives it every run, and there is nothing to diff, reuse, or hand to a reviewer.
-- **No recovery.** A run dies at the last step and you start over from scratch — paying for every subagent call again.
-- **Reusable pipelines.** You want to name a workflow once and invoke it by name, on Pi, Codex, Claude Code, or OpenCode.
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build']}>
+  <Tab value="Pi">
+    ```bash title="Install the Pi extension"
+    pi install npm:pi-taskflow
+    ```
 
-If any of that sounds familiar, taskflow was built for you.
+    Continue with the [Pi guide](/en/docs/guides/pi).
+  </Tab>
+  <Tab value="Codex">
+    ```bash title="Install the Codex plugin"
+    codex plugin marketplace add heggria/taskflow
+    codex plugin add taskflow@taskflow
+    ```
 
-## How to read these docs
+    Continue with the [Codex guide](/en/docs/guides/codex).
+  </Tab>
+  <Tab value="Claude Code">
+    ```bash title="Install the Claude Code plugin"
+    claude plugin marketplace add heggria/taskflow
+    claude plugin install claude-taskflow@taskflow
+    ```
 
-The docs are organized as a learning path. Read them in order the first time; jump around once you know what you are looking for.
+    Continue with the [Claude Code guide](/en/docs/guides/claude-code).
+  </Tab>
+  <Tab value="OpenCode">
+    ```bash title="Register the OpenCode MCP server"
+    opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+    ```
+
+    Continue with the [OpenCode guide](/en/docs/guides/opencode).
+  </Tab>
+  <Tab value="Grok Build">
+    Follow the current package and local-build instructions in the [Grok Build guide](/en/docs/guides/grok-build).
+  </Tab>
+</Tabs>
+
+## Learn the model
+
+<Cards>
+  <Card title="Core Concepts" href="/en/docs/concepts">
+    DAGs, phase types, interpolation, verification, isolation, and resume.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax">
+    Exact flow fields, phase requirements, control flow, caching, budgets, and scorers.
+  </Card>
+  <Card title="Guides & Recipes" href="/en/docs/guides">
+    Host walkthroughs, templates, dynamic planning, tournaments, and case studies.
+  </Card>
+  <Card title="Commands & Shorthand" href="/en/docs/reference">
+    The Pi command surface, MCP tools, and task/tasks/chain shortcuts.
+  </Card>
+</Cards>
+
+## The compiler/runtime path
 
 <Steps>
   <Step>
-    **[What is taskflow?](/en/docs/what-is-taskflow)** — the *why*. The problem with imperative subagent scripts, and the one trade that makes a declarative graph worth it.
+    **Verify before spend.** Start with `/tf verify` or `taskflow_verify`; structural errors cost zero tokens.
   </Step>
   <Step>
-    **[Getting Started](/en/docs/getting-started)** — the *how*. Run your first taskflow in under five minutes, then meet a real fan-out example.
+    **Compile the contract.** Inspect FlowIR and the content hash with `/tf ir`.
   </Step>
   <Step>
-    **[Core Concepts](/en/docs/concepts)** — the *model*. The DAG, phase types, interpolation, verification, context isolation, and resume.
+    **Resume or replay intentionally.** Resume unfinished work; replay a finished trace only for zero-token what-if decisions.
   </Step>
   <Step>
-    **[Syntax Reference](/en/docs/syntax)** — the *details*. Every field on every phase type, control flow, caching, and budget.
-  </Step>
-  <Step>
-    **[Guides](/en/docs/guides)** — the *practice*. Per-host walkthroughs (Pi, Codex) and pattern guides (dynamic planning, tournament).
+    **Recompute the stale frontier.** Use `why-stale` before applying a minimal recompute.
   </Step>
 </Steps>
 
-<Callout type="tip">
-  In a hurry? Skim [Getting Started](/en/docs/getting-started), then keep the [Syntax Reference](/en/docs/syntax) open as you write your first real flow. Run `/tf verify` early and often — it is zero-token.
-</Callout>
+## More resources
 
-## The chapters
+These resources remain available, but are intentionally outside the primary documentation path:
 
 <Cards>
-  <Card title="What is taskflow?" href="/en/docs/what-is-taskflow">
-    Why a declarative graph beats an imperative script.
+  <Card title="Templates Gallery" href="/en/docs/guides/templates">
+    Ready-to-run flows organized with the practical guides.
   </Card>
-  <Card title="Getting Started" href="/en/docs/getting-started">
-    Run your first taskflow in five minutes.
+  <Card title="Comparisons" href="/en/docs/comparisons">
+    Compare taskflow with imperative workflows, built-in subagents, and LangGraph.
   </Card>
-  <Card title="Core Concepts" href="/en/docs/concepts">
-    The DAG model, phases, interpolation, verification, isolation, resume.
+  <Card title="Blog" href="/en/docs/blog">
+    Longer essays and host-specific workflow articles.
   </Card>
-  <Card title="Syntax Reference" href="/en/docs/syntax">
-    Every field, every phase type, exhaustively.
+  <Card title="Community" href="/en/docs/community">
+    Contribute examples, report issues, and join discussions.
   </Card>
-  <Card title="Guides" href="/en/docs/guides">
-    Per-host walkthroughs and pattern guides.
-  </Card>
-  <Card title="Reference" href="/en/docs/reference">
-    Commands and shorthand, at a glance.
+  <Card title="Showcase" href="/en/docs/showcase">
+    See examples of how teams use taskflow.
   </Card>
 </Cards>

@@ -14,10 +14,11 @@
  * runTask, so the class of bug cannot recur silently.
  */
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 
 const SRC = readFileSync(new URL("../src/index.ts", import.meta.url), "utf-8");
+const TEST_DIR = new URL("./", import.meta.url);
 
 /**
  * Verify every `const deps: RuntimeDeps = { ... }` block in the source sets
@@ -59,6 +60,20 @@ function assertAllDepsInjectRunTask(): void {
 
 test("regression: every executeTaskflow / recomputeTaskflow deps in pi index.ts injects runTask", () => {
 	assertAllDepsInjectRunTask();
+});
+
+test("regression: every direct-execution .mts test injects runTask", () => {
+	const offenders: string[] = [];
+	for (const name of readdirSync(TEST_DIR).filter((entry) => entry.endsWith(".mts"))) {
+		const source = readFileSync(new URL(name, TEST_DIR), "utf-8");
+		if (!/\bexecuteTaskflow\s*\(/.test(source)) continue;
+		if (!/\brunTask\s*:/.test(source)) offenders.push(name);
+	}
+	assert.deepEqual(
+		offenders,
+		[],
+		`direct-execution .mts tests must inject a real or mock host runner: ${offenders.join(", ")}`,
+	);
 });
 
 test("regression: the detached context file carries a runnerModule (runner injection for the child process)", () => {

@@ -81,11 +81,11 @@ On a cross-run hit, the **full phase state is restored** (preserving `gate` verd
 | You run the same flow repeatedly against a codebase that rarely changes | ✅ Yes | Pays $0 for unchanged phases across sessions. |
 | A phase reads `context` files that change often | ✅ Yes, with a `file:` or `glob!:` fingerprint | The fingerprint makes the cache miss when the files change. |
 | A phase produces a side effect (deploy, webhook, DB write) | ❌ No | Use `idempotent: false` instead — side effects must never be replayed from cache. |
-| The phase is a `gate`, `approval`, `loop`, `tournament`, or `script` | ❌ No | These are blocked from cross-run (see [below](#blocked-phase-types)). |
+| The phase is a `gate`, `approval`, `loop`, `tournament`, `script`, `race`, or `expand` | ❌ No | These are blocked from cross-run (see [below](#blocked-phase-types)). |
 | You only need cheap resume after an abort | ❌ No need | The default `run-only` already covers this. |
 
 <Callout type="warn">
-  `"cross-run"` is **rejected** on `gate`, `approval`, `loop`, `tournament`, and `script` phases. A gate's verdict must reflect the *current* upstream output; a cached `PASS` could let broken work through. The schema catches this at verify time; the runtime downgrades it as defense in depth.
+  `"cross-run"` is **rejected** on `gate`, `approval`, `loop`, `tournament`, `script`, `race`, and `expand` phases. A gate's verdict must reflect the *current* upstream output; a cached `PASS` could let broken work through. The schema catches this at verify time; the runtime downgrades it as defense in depth.
 </Callout>
 
 ## The `cache` field
@@ -242,7 +242,7 @@ Now re-running the flow reuses unchanged phases across runs and sessions. The pr
     A phase that explicitly sets `cache.scope` keeps that scope. Set a phase to `"run-only"` or `"off"` to opt it out.
   </Step>
   <Step title="Blocked types are still blocked">
-    `gate`/`approval`/`loop`/`tournament`/`script` are downgraded to `"run-only"` even under `incremental`.
+    `gate`/`approval`/`loop`/`tournament`/`script`/`race`/`expand` are downgraded to `"run-only"` even under `incremental`.
   </Step>
   <Step title="Side effects still win">
     `idempotent: false` phases are downgraded to `"off"` — they re-run every invocation, even under `incremental`.
@@ -278,6 +278,8 @@ These phase types **cannot** use `cache.scope: "cross-run"`:
 | `loop` | Convergence is stateful — the loop must re-walk its iteration trajectory against current inputs. |
 | `tournament` | Variants and the judge must be regenerated fresh. |
 | `script` | Shell commands frequently have side effects; caching them is unsound. |
+| `race` | First-success semantics depend on the live execution of competing branches; a cached "first" result would be stale or misleading. |
+| `expand` | Dynamic fragments (especially `graft`) are evaluated against the current parent context and promoted ids; caching them is unsound. |
 
 This is enforced **twice**: schema validation rejects it at `/tf verify` (zero cost), and the runtime downgrades it to `"run-only"` as defense in depth.
 
@@ -401,7 +403,7 @@ cat .pi/taskflows/cache/<key>.json | jq '{flowName, phaseId, runId, createdAt, o
 | Phase re-runs despite `cross-run` | No `fingerprint`, and a declared input changed (e.g. `{args.X}`) | Expected — add a fingerprint if the change shouldn't invalidate. |
 | Phase re-runs despite unchanged inputs | `git checkout` reset mtimes and you used `glob:` | Switch to `glob!:` (content-hash). |
 | Cross-run never hits | `idempotent: false` (effective scope `"off"`) | Remove it, or accept the phase must re-run. |
-| Cross-run never hits | Phase is a blocked type (`gate`/`approval`/`loop`/`tournament`/`script`) | Expected — these can't be cross-run cached. |
+| Cross-run never hits | Phase is a blocked type (`gate`/`approval`/`loop`/`tournament`/`script`/`race`/`expand`) | Expected — these can't be cross-run cached. |
 | Cross-run never hits | `flowDefHash === "failed"` (whole-flow downgrade) | Run `/tf verify` for flow-definition errors. |
 | Stale result after editing a flow | Old entry still matches a legacy key shape | The four-tier read falls back to legacy keys; edit the phase structurally to move its `phaseFp`, or clear the cache. |
 | TTL seems ignored | Entry is under the 90-day backstop but TTL is longer | TTL is a *maximum*; the 90-day backstop always applies. |
@@ -424,7 +426,7 @@ rm -rf .pi/taskflows/cache/
 | Error | Cause | Fix |
 |---|---|---|
 | `unknown cache.scope '...'` | Scope is not `run-only`, `cross-run`, or `off`. | Use a valid scope. |
-| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script` | A blocked phase type opted into `cross-run`. | Use `"run-only"` (the default) or restructure the flow. |
+| `cache.scope 'cross-run' is not allowed for gate/approval/loop/tournament/script/race/expand` | A blocked phase type opted into `cross-run`. | Use `"run-only"` (the default) or restructure the flow. |
 | `invalid cache.fingerprint entry '...'` | Entry lacks a known prefix or has an empty value. | Use `git:`, `glob:`, `glob!:`, `file:`, or `env:` with a non-empty value. |
 | `invalid cache.ttl '...'` | TTL doesn't match the `<number>[<unit>]` grammar or is non-positive. | Use e.g. `"30m"`, `"6h"`, `"7d"`. |
 | `'cache' must be an object` | `cache` is set to a non-object. | Set `cache` to an object `{ ... }`. |

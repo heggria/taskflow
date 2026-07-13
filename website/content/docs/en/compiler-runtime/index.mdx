@@ -1,0 +1,77 @@
+---
+title: New in taskflow 0.2
+description: "The compiler/runtime turn: TypeScript authoring, FlowIR, replay, and minimal recompute."
+---
+
+taskflow 0.2 keeps the declarative DAG model, but changes what the runtime can do with that graph. A flow can now be **authored through a compile-time TypeScript frontend**, compiled into a **content-addressed FlowIR**, inspected as a deterministic event trace, and recomputed from the smallest stale frontier instead of replaying the whole run.
+
+<Callout type="info">
+  **The mental model:** JSON remains the portable execution contract. TypeScript is an authoring frontend. FlowIR is the compiled representation that makes provenance, replay, and incremental recompute explainable.
+</Callout>
+
+## The 0.2 path
+
+<Steps>
+  <Step>
+    **Author.** Write ordinary Taskflow JSON, or use the compile-time [TypeScript DSL](/en/docs/compiler-runtime/typescript-dsl) to erase `.tf.ts` runes into JSON and FlowIR.
+  </Step>
+  <Step>
+    **Compile and inspect.** Use `/tf ir` to see the canonical [FlowIR and incremental recompute model](/en/docs/compiler-runtime/incremental-recompute) before deciding what must run again.
+  </Step>
+  <Step>
+    **Explain decisions.** Record an event trace and use [deterministic replay](/en/docs/compiler-runtime/deterministic-replay) for zero-token what-if checks against changed gate thresholds or budgets.
+  </Step>
+  <Step>
+    **Keep long work out of the prompt.** On Pi, launch [background runs](/en/docs/compiler-runtime/background-runs), keep the `runId`, and inspect or resume them later.
+  </Step>
+</Steps>
+
+## Which operation do I need?
+
+| Situation | Operation | Model calls? |
+|---|---|---:|
+| Validate graph structure before spending | `verify` / `compile` | No |
+| Inspect the compiled graph and content hash | `ir` | No |
+| Continue unfinished work with unchanged inputs | `resume` | Only unfinished phases |
+| Re-evaluate a finished trace under new decision knobs | `replay` | No |
+| Explain what became stale after an input changed | `why-stale` | No |
+| Re-run only the affected frontier | `recompute` | Only affected phases |
+| Let a long Pi run survive the current session | `detach: true` | Normal run cost |
+
+## Start with the compiler bench
+
+<Cards>
+  <Card title="TypeScript DSL" href="/en/docs/compiler-runtime/typescript-dsl">
+    Author `.tf.ts`, erase runes, and emit portable Taskflow JSON / FlowIR.
+  </Card>
+  <Card title="FlowIR & Incremental Recompute" href="/en/docs/compiler-runtime/incremental-recompute">
+    Content addressing, provenance, stale-frontier analysis, and surgical re-execution.
+  </Card>
+  <Card title="Deterministic Replay" href="/en/docs/compiler-runtime/deterministic-replay">
+    Re-adjudicate recorded runtime decisions without calling a model.
+  </Card>
+  <Card title="Background Runs" href="/en/docs/compiler-runtime/background-runs">
+    Detach long Pi runs, poll by runId, and resume after failure.
+  </Card>
+</Cards>
+
+## What did not change
+
+- JSON is still the portable execution format across Pi, Codex, Claude Code, OpenCode, and Grok Build.
+- Intermediate transcripts still remain outside the host conversation unless you explicitly inspect them.
+- `verify` still runs before token spend, and the same DAG semantics remain the execution foundation.
+- Resume, replay, and recompute are different operations: continue work, re-judge history, or re-run changed work.
+
+## Next
+
+<Cards>
+  <Card title="Run the quickstart" href="/en/docs/getting-started">
+    Install on your host and execute a first flow.
+  </Card>
+  <Card title="Learn the core model" href="/en/docs/concepts">
+    DAGs, phase types, interpolation, verification, and isolation.
+  </Card>
+  <Card title="Look up commands" href="/en/docs/reference/commands">
+    Pi commands and the MCP tool surface by operation.
+  </Card>
+</Cards>

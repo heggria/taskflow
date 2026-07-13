@@ -115,7 +115,19 @@ export async function phaseFingerprint(def: Taskflow, phaseId: string): Promise<
 	// sorts OBJECT keys but preserves ARRAY order, so we sort the array
 	// explicitly for determinism independent of dependency walk order.
 	const depsPayload = closurePhases.map((p) => ({ id: p.id, def: stripPolicy(p) }));
-	const payload = { self: stripPolicy(phase), deps: depsPayload };
+	// Agent discovery scope is a flow-level input to every agent-running phase:
+	// the same agent name may resolve to different user/project definitions.
+	// Fold it into every phase fingerprint so per-item and per-phase cache reuse
+	// cannot cross that semantic boundary. contextSharing is included as an
+	// explicit belt-and-suspenders marker (sharing already falls back above).
+	const payload = {
+		flow: {
+			agentScope: def.agentScope ?? "user",
+			contextSharing: def.contextSharing ?? false,
+		},
+		self: stripPolicy(phase),
+		deps: depsPayload,
+	};
 
 	return hashCanonical(canonicalJson(payload));
 }

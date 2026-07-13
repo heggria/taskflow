@@ -3,13 +3,15 @@ title: 在 Claude Code 上使用 taskflow
 description: 将 taskflow 作为 Claude Code 插件安装，通过 MCP 编排多阶段工作流。
 ---
 
-[Claude Code](https://claude.com/product/claude-code) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。在 Claude Code 上，taskflow 以插件形式发布，注册一个零依赖的 MCP 服务器外加一个路由 skill，这样模型一看到多步骤任务就能调用它。
+[Claude Code](https://claude.com/product/claude-code) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。插件注册 MCP server 与路由 skill；协议层不依赖 MCP SDK。
 
 本页带你走完整个流程：安装插件、确认 MCP 服务器已就绪、通过工具调用运行一个 flow，并理解权限与长时运行 flow 的模型。
 
 ## 安装
 
 taskflow 通过共享的插件市场分发。先添加市场，再安装插件：
+
+要求 **Node.js ≥ 22.19.0**。
 
 ```bash title="安装 taskflow 插件"
 claude plugin marketplace add heggria/taskflow
@@ -26,7 +28,7 @@ claude plugin install claude-taskflow@taskflow
     **安装路由 skill。** 一个内置 skill 教会 Claude Code 何时该调用 taskflow 工具，这样你不必记住它们的名字。
   </Step>
   <Step>
-    **保持零运行时依赖。** MCP 服务器在 Node 内置能力上通过 stdio 讲 JSON-RPC 2.0——不需要 `@modelcontextprotocol/sdk`，taskflow 因此保持了零依赖承诺。
+    **不依赖 MCP SDK。** 协议层直接通过 stdio 讲 JSON-RPC 2.0。交付包仍依赖 taskflow 内部包，core peer 依赖 `typebox`。
   </Step>
 </Steps>
 
@@ -140,13 +142,15 @@ skill 会把请求路由到正确的工具。如果当前项目保存了一个 f
 
 Claude Code 在 headless（`-p`）模式下没有 OS 级沙箱——一个工具调用要么被白名单允许，要么被拒绝。运行时把每个阶段的工具白名单映射到一个权限模式：
 
+Taskflow 要求 Claude Code **2.1.169 或更高版本**以使用 `--safe-mode`。旧版 CLI 会因未知参数而 fail closed，请先升级再使用此适配器。
+
 | 阶段工具 | 权限模式 | 含义 |
 |---|---|---|
-| 只读（无 `write`/`edit`/`bash`） | `--allowedTools Read,Grep,Glob,WebFetch,WebSearch` | 变更类工具被直接拒绝。注意没有只读 shell——`Bash` 不会授予只读阶段。 |
-| 变更（或无白名单） | `--permission-mode bypassPermissions` | subagent 可以运行任何工具。只运行你信任的 flow，在一个你能 `git reset` 的仓库里。 |
+| 只读或未声明；不请求变更类/未知工具 | 对齐的 `--tools` + `--allowedTools` 列表 | 内置工具既被限制又被预批准；显式列表不会被放宽。`--safe-mode` 禁用非托管自定义项，磁盘 settings source 和非托管 hooks 被关闭；管理员托管策略 hooks 仍可能运行。注意没有只读 shell——不会授予 `Bash`。 |
+| 请求已知变更类工具 | 默认拒绝 | 对可信 flow，`PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` 会启用 `bypassPermissions` 并保留收窄的 `--tools`；未知名称始终 fail closed。 |
 
 <Callout type="warn">
-  变更阶段以 `bypassPermissions` 运行，没有 OS 沙箱兜底。对涉及文件系统的 flow，优先使用一次性 worktree（`cwd: "worktree"`），并只运行你信任的 flow。
+  unsafe 模式必须由操作者显式开启，不是默认值。即使开启，也应优先使用一次性 worktree（`cwd: "worktree"`）。Claude 子进程仅继承平台/运行时、代理/CA 与 Claude 支持的 provider 环境变量；无关的应用密钥会被移除。
 </Callout>
 
 ## 长时运行的 flow
@@ -176,7 +180,7 @@ claude -p "run the nightly-audit taskflow" &
 
 ## MCP 模式下的审批
 
-MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**（fail-open）。在你通过 `taskflow_*` 工具运行的 flow 中，优先使用 `gate`（agent 审查）；`approval` 只用在人工交互运行的 flow 中。
+MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**（对审批决策 fail-closed）。在你通过 `taskflow_*` 工具运行的 flow 中，优先使用 `gate`（agent 审查）；`approval` 只用在人工交互运行的 flow 中。
 
 ## 工具参考
 
@@ -192,6 +196,10 @@ MCP 驱动的运行是非交互的，所以 `approval` 阶段会**自动拒绝**
 | `taskflow_verify` | 静态校验 flow（环、引用、配置），零成本。 |
 | `taskflow_compile` | 把 DAG 渲染为文本大纲 + 内联 SVG。 |
 | `taskflow_peek` | 查看某次运行中某阶段的存储输出，用于事后调试。 |
+| `taskflow_trace` | 读取运行的 append-only 事件时间线。 |
+| `taskflow_replay` | 离线重放已记录决策，不调用模型。 |
+| `taskflow_why_stale` | 零 token 解释依赖为何 stale。 |
+| `taskflow_recompute` | 报告 stale frontier（MCP 仅 dry-run）。 |
 
 <Callout type="tip">
   你很少需要记住这些。内置 skill 会告诉 Claude Code 哪个工具适合请求——"verify this flow"、"show me the diagram"、"run it" 都能自动正确路由。
@@ -232,7 +240,7 @@ claude mcp remove taskflow                          # 如果手动注册
     五分钟速览（如果你还没看过）。
   </Card>
   <Card title="阶段" href="/zh-cn/docs/concepts/phases">
-    可组合成 DAG 的十个构建块。
+    可组合成 DAG 的十二个构建块。
   </Card>
   <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
     同一个运行时，接入 OpenAI Codex。

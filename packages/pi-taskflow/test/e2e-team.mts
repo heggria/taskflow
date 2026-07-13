@@ -3,7 +3,8 @@
  *
  * A multi-role engineering team collaborates on ONE real deliverable: a
  * prioritized improvement plan for this repo's IPC subsystem
- * (extensions/context-store.ts + extensions/runner.ts). It exercises the whole
+ * (`packages/taskflow-core/src/context-store.ts` +
+ * `packages/pi-taskflow/src/runner.ts`). It exercises the whole
  * collaboration surface against real `pi` subagents + a real model:
  *
  *   1. scout  — surveys the subsystem ONCE, ctx_write's a shared "map"
@@ -33,11 +34,13 @@ import * as path from "node:path";
 import { discoverAgents, readSubagentSettings } from "taskflow-core";
 import { executeTaskflow } from "taskflow-core";
 import { validateTaskflow, type Taskflow } from "taskflow-core";
-import { runsDir } from "taskflow-core";
+import { runsDir, saveRun } from "taskflow-core";
 import type { RunState } from "taskflow-core";
+import { installNoExtPiWrapper } from "./e2e-helpers.mts";
+import { piSubagentRunner } from "../src/runner.ts";
 
 const MARKER = `INV-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
-const TARGET = "extensions/context-store.ts + extensions/runner.ts";
+const TARGET = "packages/taskflow-core/src/context-store.ts + packages/pi-taskflow/src/runner.ts";
 
 const FLOW: Taskflow = {
 	name: "e2e-team",
@@ -184,91 +187,97 @@ async function main() {
 		cwd: process.cwd(),
 	};
 
-	console.log("== executing (real team of subagents) ==");
-	const t0 = Date.now();
-	const res = await executeTaskflow(state, {
-		cwd: process.cwd(),
-		agents,
-		globalThinking: settings.globalThinking,
-		persist: (s) => {
-			import("../extensions/store.ts").then((m) => m.saveRun(s)).catch(() => {});
-		},
-		onProgress: (s) => {
-			const done = Object.values(s.phases).filter((p) => p.status === "done").length;
-			const running = Object.values(s.phases)
-				.filter((p) => p.status === "running")
-				.map((p) => p.id);
-			process.stdout.write(
-				`\r  ${done}/${s.def.phases.length} done` +
-					(running.length ? ` | running: ${running.join(",")}` : "") +
-					"                    ",
-			);
-		},
-	});
-	console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
-
-	console.log("\nPhase states:");
-	for (const p of FLOW.phases) {
-		const ps = res.state.phases[p.id];
-		console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}]`);
-	}
-
-	// ── Ground-truth inspection of the blackboard ──
-	const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
-	const findingsDir = path.join(ctxDir, "findings");
-	let findingFiles: string[] = [];
+	const restorePiBin = installNoExtPiWrapper("pi-taskflow-e2e-team");
 	try {
-		findingFiles = fs.readdirSync(findingsDir).filter((f) => f.endsWith(".json") && !f.includes(".lock"));
-	} catch { /* none */ }
-	const blackboardKeys = new Set<string>();
-	let mapHasMarker = false;
-	for (const f of findingFiles) {
+		console.log("== executing (real team of subagents) ==");
+		const t0 = Date.now();
+		const res = await executeTaskflow(state, {
+			cwd: process.cwd(),
+			agents,
+			globalThinking: settings.globalThinking,
+			runTask: piSubagentRunner.runTask,
+			persist: (s) => {
+				try { saveRun(s); } catch { /* best-effort; the E2E result is authoritative */ }
+			},
+			onProgress: (s) => {
+				const done = Object.values(s.phases).filter((p) => p.status === "done").length;
+				const running = Object.values(s.phases)
+					.filter((p) => p.status === "running")
+					.map((p) => p.id);
+				process.stdout.write(
+					`\r  ${done}/${s.def.phases.length} done` +
+						(running.length ? ` | running: ${running.join(",")}` : "") +
+						"                    ",
+				);
+			},
+		});
+		console.log(`\n== done in ${((Date.now() - t0) / 1000).toFixed(1)}s ==`);
+
+		console.log("\nPhase states:");
+		for (const p of FLOW.phases) {
+			const ps = res.state.phases[p.id];
+			console.log(`  ${ps?.status === "done" ? "✓" : "✗"} ${p.id} [${p.type}]`);
+		}
+
+		// ── Ground-truth inspection of the blackboard ──
+		const ctxDir = path.join(runsDir(process.cwd()), "ctx", runId);
+		const findingsDir = path.join(ctxDir, "findings");
+		let findingFiles: string[] = [];
 		try {
-			const obj = JSON.parse(fs.readFileSync(path.join(findingsDir, f), "utf-8"));
-			for (const k of Object.keys(obj)) blackboardKeys.add(k);
-			if (typeof obj.map === "string" && obj.map.includes(MARKER)) mapHasMarker = true;
-		} catch { /* skip */ }
+			findingFiles = fs.readdirSync(findingsDir).filter((f) => f.endsWith(".json") && !f.includes(".lock"));
+		} catch { /* none */ }
+		const blackboardKeys = new Set<string>();
+		let mapHasMarker = false;
+		for (const f of findingFiles) {
+			try {
+				const obj = JSON.parse(fs.readFileSync(path.join(findingsDir, f), "utf-8"));
+				for (const k of Object.keys(obj)) blackboardKeys.add(k);
+				if (typeof obj.map === "string" && obj.map.includes(MARKER)) mapHasMarker = true;
+			} catch { /* skip */ }
+		}
+		let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
+		try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
+		const spawnedChildren = (tree.nodes ?? []).filter((n) => n.parentNodeId === "lead");
+
+		console.log("\nBlackboard ground truth:");
+		console.log(`  keys written: ${[...blackboardKeys].join(", ") || "(none)"}`);
+		console.log(`  scout map carries marker ${MARKER}: ${mapHasMarker}`);
+		console.log(`  lead spawned children: ${spawnedChildren.length}`);
+
+		// Marker reuse by the experts (only obtainable from the shared map).
+		const expertOut = [
+			res.state.phases["expert-correctness"]?.output ?? "",
+			res.state.phases["expert-architecture"]?.output ?? "",
+			res.state.phases["expert-risk"]?.output ?? "",
+		];
+		const expertsReusedMap = expertOut.filter((o) => o.includes(MARKER)).length;
+		console.log(`  experts that echoed the shared marker: ${expertsReusedMap}/3`);
+
+		const leadOut = res.state.phases.lead?.output ?? "";
+		const plan = res.finalOutput ?? "";
+
+		const checks: Array<[string, boolean]> = [
+			["overall ok", res.ok],
+			["scout published the shared map (marker on blackboard)", mapHasMarker],
+			["≥2 experts reused the shared map (collaboration, not re-deriving)", expertsReusedMap >= 2],
+			["≥2 of 3 experts wrote findings back to the blackboard", ["find.correctness", "find.architecture", "find.risk"].filter((k) => blackboardKeys.has(k)).length >= 2],
+			["lead dynamically spawned a deep-dive (recursive supervision)", spawnedChildren.length >= 1 || /spawned child/i.test(leadOut)],
+			["gate ran", res.state.phases.gate?.status === "done"],
+			["final plan has prioritized sections", /P0/.test(plan) && /P1/.test(plan)],
+			["plan is substantial (>400 chars)", plan.length > 400],
+		];
+		console.log("\n== assertions ==");
+		let allPass = true;
+		for (const [name, ok] of checks) {
+			console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
+			if (!ok) allPass = false;
+		}
+		console.log("\n── Final prioritized plan ──\n" + plan.slice(0, 1200));
+		console.log(allPass ? "\n✅ TEAM E2E PASSED" : "\n❌ TEAM E2E FAILED");
+		process.exit(allPass ? 0 : 1);
+	} finally {
+		restorePiBin();
 	}
-	let tree: { nodes?: Array<{ nodeId: string; phaseId: string; parentNodeId?: string }> } = {};
-	try { tree = JSON.parse(fs.readFileSync(path.join(ctxDir, "tree.json"), "utf-8")); } catch { /* none */ }
-	const spawnedChildren = (tree.nodes ?? []).filter((n) => n.parentNodeId === "lead");
-
-	console.log("\nBlackboard ground truth:");
-	console.log(`  keys written: ${[...blackboardKeys].join(", ") || "(none)"}`);
-	console.log(`  scout map carries marker ${MARKER}: ${mapHasMarker}`);
-	console.log(`  lead spawned children: ${spawnedChildren.length}`);
-
-	// Marker reuse by the experts (only obtainable from the shared map).
-	const expertOut = [
-		res.state.phases["expert-correctness"]?.output ?? "",
-		res.state.phases["expert-architecture"]?.output ?? "",
-		res.state.phases["expert-risk"]?.output ?? "",
-	];
-	const expertsReusedMap = expertOut.filter((o) => o.includes(MARKER)).length;
-	console.log(`  experts that echoed the shared marker: ${expertsReusedMap}/3`);
-
-	const leadOut = res.state.phases.lead?.output ?? "";
-	const plan = res.finalOutput ?? "";
-
-	const checks: Array<[string, boolean]> = [
-		["overall ok", res.ok],
-		["scout published the shared map (marker on blackboard)", mapHasMarker],
-		["≥2 experts reused the shared map (collaboration, not re-deriving)", expertsReusedMap >= 2],
-		["≥2 of 3 experts wrote findings back to the blackboard", ["find.correctness", "find.architecture", "find.risk"].filter((k) => blackboardKeys.has(k)).length >= 2],
-		["lead dynamically spawned a deep-dive (recursive supervision)", spawnedChildren.length >= 1 || /spawned child/i.test(leadOut)],
-		["gate ran", res.state.phases.gate?.status === "done"],
-		["final plan has prioritized sections", /P0/.test(plan) && /P1/.test(plan)],
-		["plan is substantial (>400 chars)", plan.length > 400],
-	];
-	console.log("\n== assertions ==");
-	let allPass = true;
-	for (const [name, ok] of checks) {
-		console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}`);
-		if (!ok) allPass = false;
-	}
-	console.log("\n── Final prioritized plan ──\n" + plan.slice(0, 1200));
-	console.log(allPass ? "\n✅ TEAM E2E PASSED" : "\n❌ TEAM E2E FAILED");
-	process.exit(allPass ? 0 : 1);
 }
 
 main().catch((e) => {

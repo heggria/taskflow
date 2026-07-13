@@ -2,7 +2,7 @@
 
 > Status: **living document**. Records the structural decisions behind the
 > multi-host layout (taskflow-core / taskflow-mcp-core / taskflow-hosts / pi-taskflow /
-> codex-taskflow / claude-taskflow / opencode-taskflow), the trade-offs that
+> codex-taskflow / claude-taskflow / opencode-taskflow / grok-taskflow), the trade-offs that
 > were considered, and the direction to take as the host count grows.
 >
 > Written as the output of the PR #26 (claude + opencode hosts) architecture
@@ -14,8 +14,7 @@
 ## The invariant that must never break
 
 **The engine (`taskflow-core/src/runtime.ts`) is host-agnostic.** It speaks
-only to the `SubagentRunner` contract (`runTask → RunResult`). Adding 4 hosts
-(codex, claude, opencode, + pi) changed **zero** lines of engine code. Any
+only to the `SubagentRunner` contract (`runTask → RunResult`). Adding hosts (codex, claude, opencode, grok, + pi) changed **zero** lines of engine code. Any
 future restructuring MUST preserve this seam — it is the single reason a host
 SDK breaking change cannot force an engine release.
 
@@ -30,19 +29,20 @@ bug waiting to happen (the original 3-way copy-paste already diverged on
 ## Decision A — taskflow-hosts: a shared host-runner package (DONE)
 
 ### Status
-**Implemented.** The three host runners (codex / claude / opencode) now live
-in a single `taskflow-hosts` package. The three legacy delivery packages
-(`codex-taskflow` / `claude-taskflow` / `opencode-taskflow`) keep their npm
+**Implemented.** Non-pi host runners (codex / claude / opencode / **grok**) live
+in a single `taskflow-hosts` package. Delivery packages
+(`codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow`) keep their npm
 names, install paths, version pins, and plugin scaffolds, and import their
 runner from `taskflow-hosts`; each also re-exports the runner so its existing
-public surface (`import ... from "codex-taskflow"`) is unchanged. A 4th host
-now lands as one `<host>-runner.ts` in `taskflow-hosts`, not a whole new
-runner-owning package.
+public surface (`import ... from "codex-taskflow"`) is unchanged. A new host
+lands as one `<host>-runner.ts` in `taskflow-hosts`, not a whole new
+runner-owning package. **Grok Build** shipped this way (`grok-runner.ts` +
+`grok-taskflow` delivery + `.grok-plugin` scaffold).
 
 ### Context
-codex-taskflow, claude-taskflow, and opencode-taskflow are each published as a
+codex-taskflow, claude-taskflow, opencode-taskflow, and grok-taskflow are each published as a
 **separate npm package**. This was reasonable at 1 host (codex) and tolerable
-at 3. The review's concern: at ~10–15 hosts this becomes the dominant
+at 3–4 delivery adapters. The review's concern: at ~10–15 hosts this becomes the dominant
 maintenance cost.
 
 ### The tension
@@ -51,17 +51,17 @@ host ecosystem's delivery artifact (`codex plugin add taskflow@taskflow`,
 `npm i -g codex-taskflow`, an MCP server a user points their client at). But
 there is *no* reason their release cadence is independent — adapters almost
 never change except when `taskflow-core`'s contract changes or a host CLI
-changes its flags. Today all seven packages are **lockstep versioned** at the
+changes its flags. Today all **nine** packages are **lockstep versioned** at the
 same number, which makes a per-package semver meaningless: a codex flag fix
 forces a new version of the untouched core engine.
 
 ### Cost projection at N hosts
-| | 3 hosts (now) | 12 hosts (projected) |
+| | 5 hosts (now: pi + 4 MCP) | 12 hosts (projected) |
 |---|---|---|
-| npm publishes per release | 7 | 7 |
-| `package.json` to keep version-pinned | 7 | 7 |
-| README/CHANGELOG package rows | 7 | 7 |
-| npm names consumed (`*-taskflow`) | 3 | 3 (new hosts live inside `taskflow-hosts`) |
+| npm publishes per release | 8 | 8 (+ thin delivery only if install brand requires it) |
+| `package.json` to keep version-pinned | 8 | ~8 |
+| README/CHANGELOG package rows | 8 | ~8 |
+| npm names consumed (`*-taskflow` delivery) | 4 | 4+ only when a host needs its own install brand |
 
 ### Decision
 **Keep the three existing packages for backward compatibility** (their names
@@ -75,12 +75,13 @@ taskflow-hosts
 ├─ codex-runner.ts        ← lives here directly
 ├─ claude-runner.ts       ← lives here directly
 ├─ opencode-runner.ts     ← lives here directly
+├─ grok-runner.ts         ← lives here directly (Grok Build)
 ├─ <future-host-a>.ts     ← lives here directly
 ├─ test/                  ← all host arg-contract + parser tests
-└─ index.ts               ← barrel re-exporting the three runners
+└─ index.ts               ← barrel re-exporting the host runners
 ```
 
-- Current publishes: `core → mcp → hosts → pi/codex/claude/opencode` (7 publishes). Future hosts ship inside `taskflow-hosts`, so the publish count stops growing.
+- Current publishes: `core → mcp → hosts → pi/codex/claude/opencode/grok` (8 publishes). Future *runners* ship inside `taskflow-hosts`; new delivery packages only when the host needs a branded install (`grok plugin install`, `codex plugin add`, …).
 - Future hosts ship in `taskflow-hosts` and are discovered via
   `npx -p taskflow-hosts <host>-mcp` or static import.
 - The three legacy packages can later become thin re-exports of
@@ -89,15 +90,17 @@ taskflow-hosts
 
 ### Trigger to act
 ✅ Done at 3 hosts (the moment adoption is lowest, so the migration is
-cheapest). `taskflow-hosts` now exists; future hosts go here.
+cheapest). `taskflow-hosts` now exists; **Grok Build was added as the 4th
+non-pi runner without a second process-lifecycle copy** — future hosts go here.
 
 ### What we explicitly reject
 - **A unified `HostConfig` interface / generic command-builder.** Each host's
   argv genuinely differs (codex pastes the prompt; claude uses
-  `--append-system-prompt`; opencode uses `provider/model` ids where codex/claude
-  use flat ids; permission models are sandbox vs `--allowedTools` vs `--auto`).
+  `--append-system-prompt`; opencode uses `provider/model` ids where codex/claude/grok
+  use flat ids; permission models are sandbox vs `--allowedTools` vs `--auto` vs
+  Grok's `--tools` + `--always-approve`).
   Forcing these into one interface produces an abstraction with a per-host
-  parameter for every flag — more complex than the three ~15-line builders it
+  parameter for every flag — more complex than the short pure builders it
   replaces. Instead: each host owns a **pure, exported `buildXxxArgs`** builder
   (extracted in this PR) that is independently unit-tested. Shared *shape*,
   not shared *code*.
@@ -107,7 +110,7 @@ cheapest). `taskflow-hosts` now exists; future hosts go here.
 ## Decision B — host CLI contracts are locked by unit tests, not e2e
 
 ### Context
-The executor e2e suites (`e2e-codex.mts`, `e2e-claude.mts`, `e2e-opencode.mts`)
+The executor e2e suites (`e2e-codex.mts`, `e2e-claude.mts`, `e2e-opencode.mts`, plus `e2e-grok-mcp.mts` for MCP)
 spawn a **live** host CLI and need auth + spend tokens, so they never run in
 CI. That left each host's argv construction (the `--json` / `--format json` /
 `--output-format stream-json` flags, the permission→flag mapping, the
@@ -141,7 +144,7 @@ CI-checked. A flag rename trips a unit test, not a user.
 ### Context
 Cross-host debugging ("why did my flow fail?") previously had only
 `taskflow_peek` (phase output) and a 64KB-capped raw stderr per child. With 4
-hosts, each child's stderr has a different CLI prefix (`codex exec`, `claude
+hosts, each child's stderr has a different CLI prefix (`codex exec`, `grok -p`, `claude
 -p`, `opencode run`), making it hard to tell which agent/bin produced a given
 error blob.
 
@@ -171,11 +174,11 @@ error blob.
   comma host list; the skill body is shared. Do not per-host the skill body.
 - **MCP server is its own package (`taskflow-mcp-core`)** — a pure presentation
   layer over core. Pi users never pull MCP code. This boundary is correct.
-- **Lockstep versioning is kept for now** (all seven packages share a version).
+- **Lockstep versioning is kept for now** (all nine packages share a version).
   It is crude but it is *less* work than tracking which subset of packages need
-  a given bump, and at 7 packages the cost is still low. `taskflow-hosts` now
-  exists; the next revisit is when core genuinely needs to move on its own
-  cadence independent of host CLI flag churn.
+  a given bump, and at 9 packages the cost is still low. `taskflow-hosts` and
+  `taskflow-dsl` exist; the next revisit is when core genuinely needs to move
+  on its own cadence independent of host CLI flag churn.
 
 ---
 

@@ -8,7 +8,7 @@ You need to migrate from an old HTTP client to a new one. The old call site is `
 This guide builds a taskflow that does the migration safely. We start with a one-shot discover-and-plan, add a gate that sanity-checks the plan, execute the plan via a generated sub-flow, and finish with a loop that re-plans until no old calls remain. By the end you will have a complete, saveable flow you can point at any mechanical migration.
 
 <Callout type="info">
-  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
 </Callout>
 
 ## The problem
@@ -241,9 +241,9 @@ When a cap is exceeded, validation fails and the phase fails open with a `defErr
 
 ### Budget clamping
 
-A generated sub-flow inherits the parent run's budget, but never exceeds it. The child's `budget` is clamped to the smaller of its own declared budget and the parent's **remaining** budget. A plan that declares `budget: { maxUSD: 50 }` inside a parent run that has $5 left runs with a $5 ceiling.
+A generated sub-flow inherits the parent run's budget threshold and cannot declare a looser one. The child's `budget` is clamped to the smaller of its own declared threshold and the parent's **remaining** threshold. It remains an observed-usage stop-loss, so active calls may overshoot.
 
-This means a model cannot grant itself more spending room than the parent flow allowed. The parent's `budget: { maxUSD: 4.0 }` is the true ceiling — raise it if your migration is large, lower it if you want a hard stop on a risky run.
+This means a model cannot grant itself a looser stop-loss than the parent flow declared. The parent's `budget: { maxUSD: 4.0 }` is the controlling threshold, not a guaranteed maximum: ordinary calls are admitted serially, while already-active `race` branches can all contribute overshoot.
 
 ### Cache the discover phase
 

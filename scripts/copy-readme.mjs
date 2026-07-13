@@ -21,7 +21,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
 
 // Packages that are published to npm and should carry the README.
-const PUBLISHABLE = new Set(["taskflow-core", "taskflow-mcp-core", "pi-taskflow", "codex-taskflow", "claude-taskflow", "opencode-taskflow"]);
+const PUBLISHABLE = new Set([
+	"taskflow-core",
+	"taskflow-mcp-core",
+	"taskflow-dsl",
+	"pi-taskflow",
+	"codex-taskflow",
+	"claude-taskflow",
+	"opencode-taskflow",
+	"grok-taskflow",
+]);
 
 const REPO = "heggria/taskflow";
 const BRANCH = "main";

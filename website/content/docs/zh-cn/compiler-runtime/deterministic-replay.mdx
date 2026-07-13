@@ -1,0 +1,55 @@
+---
+title: 确定性重放
+description: 基于已录制事件轨迹，离线对门控阈值与预算做 what-if 重判——零 token，绝不重跑模型。
+---
+
+**确定性重放**（*deterministic replay* / *replayable-for-what-if*）回答的问题，与[恢复（Resume）](/zh-cn/docs/concepts/resume)或[增量重算](/zh-cn/docs/compiler-runtime/incremental-recompute)不同。
+
+| 机制 | 问题 | 是否花 token |
+|------|------|----------------|
+| **Resume** | 续跑暂停/失败的运行；输入未变的已完成阶段复用 | 仅未完成 / 缓存未命中 |
+| **Recompute** | *世界*变了（文件、提交）——已存运行的哪些阶段要重跑？ | dry-run 免费；apply 只对陈旧前沿花费 |
+| **确定性重放** | 若决策旋钮（门控阈值、预算）不同，*已录制*运行会如何裁决？ | **永不**——只对事件日志再 fold |
+
+Qwik 的 "not replayable" 指 hydration 不重执行，与 taskflow 无关。这里的 replay 是**决策 what-if**。
+
+## 事件轨迹
+
+主机注入 `FileTraceSink` 时，运行会写入 `runs/<flow>/<runId>.trace.jsonl`，包含：
+
+- `phase-start` / `phase-end`
+- `subagent-call` — 解析后的任务文本 + 完整输出 + usage
+- `decision` — gate 裁决/分数、when-guard、cache-hit、budget-hit、tournament-winner、unreplayable
+
+用 `/tf trace <runId>`（Pi）或 `taskflow_trace`（MCP）查看；`json: true` 返回有上限的机器可读 envelope，`total`、`returned`、`truncated` 会明确标出截断状态，`limit` 最多选择最新 1,000 个事件。
+
+## 离线重放
+
+```bash title="Pi"
+/tf replay <runId> --threshold review=0.9 --budget-usd 0.05
+/tf replay <runId> --json
+```
+
+```json title="MCP / 工具动作"
+{
+  "runId": "nightly-audit-abc123",
+  "thresholds": { "review": 0.9 },
+  "budgetMaxUSD": 0.05
+}
+```
+
+每阶段结果包括：`reused`、`would-block`、`verdict-flipped`、`would-exceed-budget`、`threshold-changed`、`needs-live-rerun`、`failed`。
+
+模型或 args 覆盖目前映射为 **`needs-live-rerun`**：离线无法重评质量，请改用 live recompute 或新跑。
+
+## 保证
+
+- **零 token（结构性）**：`replayRun` 只依赖纯模块；CI 用 `replay-import-lint` 禁止 import runtime/driver。
+- **不修改**已存运行——报告只是反事实分析。
+- **无日志**时明确失败（trace 之前的运行或未注入 sink）。
+
+## 另见
+
+- [恢复](/zh-cn/docs/concepts/resume)
+- [增量重算](/zh-cn/docs/compiler-runtime/incremental-recompute)
+- [命令参考](/zh-cn/docs/reference/commands)

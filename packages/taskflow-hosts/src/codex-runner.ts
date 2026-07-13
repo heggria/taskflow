@@ -31,6 +31,7 @@
 
 import {
 	runSubagentProcess,
+	sanitizeErrorMessage,
 	num,
 	unknownAgentResult,
 	type AgentConfig,
@@ -41,6 +42,7 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { filteredChildEnv } from "./child-env.ts";
 
 /** Benign codex `error` items that are warnings, not failures. Matched as a
  *  prefix/substring so version drift in the message tail still classifies. */
@@ -62,6 +64,7 @@ export interface CodexAccumulator {
 	lastActivity: string;
 	/** Set when a fatal (non-benign) error item is seen. */
 	fatalError?: string;
+	terminalSeen?: boolean;
 }
 
 export function newCodexAccumulator(model?: string): CodexAccumulator {
@@ -89,16 +92,26 @@ export function foldCodexEventLine(acc: CodexAccumulator, line: string): LiveUpd
 	}
 	let activity = "";
 
-	if (event.type === "turn.completed" && event.usage) {
+	if (event.type === "turn.completed") {
+		acc.terminalSeen = true;
 		const u = event.usage;
-		acc.usage.turns++;
-		acc.usage.input += num(u.input_tokens);
-		acc.usage.output += num(u.output_tokens) + num(u.reasoning_output_tokens);
-		acc.usage.cacheRead += num(u.cached_input_tokens);
-		// contextTokens is a host-specific point-in-time gauge (NOT additive — excluded from aggregateUsage):
-		// each host's formula differs because each accounts for cache differently. Codex's input_tokens
-		// already includes cached tokens, so input+output = full last-turn context.
-		acc.usage.contextTokens = num(u.input_tokens) + num(u.output_tokens);
+		if (u) {
+			acc.usage.turns++;
+			acc.usage.input += num(u.input_tokens);
+			acc.usage.output += num(u.output_tokens) + num(u.reasoning_output_tokens);
+			acc.usage.cacheRead += num(u.cached_input_tokens);
+			// contextTokens is a host-specific point-in-time gauge (NOT additive — excluded from aggregateUsage):
+			// each host's formula differs because each accounts for cache differently. Codex's input_tokens
+			// already includes cached tokens, so input+output = full last-turn context.
+			acc.usage.contextTokens = num(u.input_tokens) + num(u.output_tokens);
+		}
+	} else if (event.type === "turn.failed" || event.type === "error") {
+		const message =
+			(typeof event.error?.message === "string" && event.error.message) ||
+			(typeof event.message === "string" && event.message) ||
+			"codex turn failed";
+		acc.fatalError = message;
+		activity = `error: ${message}`;
 	} else if (event.type === "item.completed" || event.type === "item.started") {
 		const item = event.item;
 		if (!item) return null;
@@ -136,6 +149,10 @@ export function codexBin(): string {
 	return process.env.PI_TASKFLOW_CODEX_BIN || "codex";
 }
 
+export function codexChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return filteredChildEnv(source, ["CODEX_HOME"], ["CODEX_", "OPENAI_", "AZURE_OPENAI_"]);
+}
+
 /**
  * Map a phase's tool whitelist to a codex sandbox mode. Codex has no per-tool
  * whitelist; it has sandbox policies. The conservative mapping: a phase that
@@ -162,12 +179,26 @@ export function resolveCodexModel(model: string | undefined): string | undefined
 	return model;
 }
 
+/** Map Taskflow/Pi thinking levels to Codex's model_reasoning_effort config. */
+export function resolveCodexThinking(thinking: string | undefined): string | undefined {
+	if (!thinking) return undefined;
+	const normalized = thinking.trim().toLowerCase();
+	if (normalized === "off" || normalized === "none" || normalized === "minimal") return "none";
+	if (normalized === "max" || normalized === "ultra") return "xhigh";
+	if (["low", "medium", "high", "xhigh"].includes(normalized)) return normalized;
+	throw new Error(
+		`Unsupported Codex thinking level '${thinking}'. Use off, none, minimal, low, medium, high, xhigh, max, or ultra.`,
+	);
+}
+
 /** Context for {@link buildCodexArgs} — the pure inputs to argv construction. */
 export interface CodexArgsCtx {
 	systemPrompt: string;
 	task: string;
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
+	/** Already-resolved thinking level (opts.thinking ?? agent.thinking ?? global). */
+	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 }
@@ -177,16 +208,30 @@ export interface CodexArgsCtx {
  * (no process.env, no spawn). Extracted from `runCodexAgentTask` so the host's
  * CLI flag contract is unit-testable in CI without a live codex session.
  *
- *   codex exec --json --skip-git-repo-check -s <sandbox> [-m model] [-C cwd] <prompt>
+ *   codex exec --json --skip-git-repo-check -s <sandbox>
+ *        [-m model] [-c model_reasoning_effort=level] [-C cwd] <prompt>
  */
 export function buildCodexArgs(ctx: CodexArgsCtx): string[] {
 	const sandbox = sandboxForTools(ctx.tools);
 	const codexModel = resolveCodexModel(ctx.model);
+	const codexThinking = resolveCodexThinking(ctx.thinking);
 	const fullPrompt = ctx.systemPrompt.trim()
 		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
 		: `Task: ${ctx.task}`;
-	const args: string[] = ["exec", "--json", "--skip-git-repo-check", "-s", sandbox];
+	const args: string[] = [
+		"exec",
+		"--json",
+		"--ephemeral",
+		"--ignore-user-config",
+		"--ignore-rules",
+		"--skip-git-repo-check",
+		"-c",
+		"mcp_servers={}",
+		"-s",
+		sandbox,
+	];
 	if (codexModel) args.push("-m", codexModel);
+	if (codexThinking) args.push("-c", `model_reasoning_effort=${codexThinking}`);
 	if (ctx.cwd) args.push("-C", ctx.cwd);
 	args.push(fullPrompt);
 	return args;
@@ -209,16 +254,33 @@ export async function runCodexAgentTask(
 
 	const model = opts.model ?? agent.model;
 	const tools = opts.tools ?? agent.tools;
-	void globalThinking; // codex has no thinking-level flag on exec; reserved.
+	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 
 	const cwd = opts.cwd ?? defaultCwd;
-	const args = buildCodexArgs({
-		systemPrompt: agent.systemPrompt,
-		task,
-		model,
-		tools,
-		cwd,
-	});
+	let args: string[];
+	try {
+		args = buildCodexArgs({
+			systemPrompt: agent.systemPrompt,
+			task,
+			model,
+			thinking,
+			tools,
+			cwd,
+		});
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			stopReason: "error",
+			errorMessage: message,
+		};
+	}
 
 	return runSubagentProcess({
 		agent: agentName,
@@ -226,12 +288,15 @@ export async function runCodexAgentTask(
 		model,
 		bin: codexBin(),
 		args,
+		env: codexChildEnv(),
 		cwd,
 		idleTimeoutMs: opts.idleTimeoutMs,
 		signal: opts.signal,
 		onLive: opts.onLive,
 		acc: newCodexAccumulator(model),
 		foldLine: foldCodexEventLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "Codex turn.completed",
 	});
 }
 
@@ -241,4 +306,7 @@ export async function runCodexAgentTask(
  */
 export const codexSubagentRunner: SubagentRunner<AgentConfig> = {
 	runTask: runCodexAgentTask,
+	usageAccounting: "tokens-only",
 };
+
+(runCodexAgentTask as typeof runCodexAgentTask & { usageAccounting: "tokens-only" }).usageAccounting = "tokens-only";

@@ -1,6 +1,6 @@
 ---
 title: Scoring Gates
-description: Deterministic output validation with zero-token scorers, optional LLM judges, and fail-open semantics.
+description: Deterministic output validation with zero-token scorers, optional LLM judges, and a lenient-but-fail-closed verdict parser.
 ---
 
 A scoring gate is a quality checkpoint that validates upstream output against a list of deterministic rules before spending a single token on an LLM. You declare what "good" looks like — a substring present, a regex matched, a JSON schema satisfied, a length in range, or code that compiles — and taskflow evaluates every check at zero cost. When all checks pass, the gate auto-passes. When they fail, an optional LLM judge can decide whether to let the flow continue or halt it.
@@ -416,7 +416,7 @@ Names appear in the scorer report that's appended to the judge's prompt, making 
 
 ## Fail-open semantics
 
-Scoring gates follow the same fail-open principle as the rest of taskflow: ambiguity must not block the flow.
+Scoring gates follow the same lenient-but-fail-closed principle as regular gates: scorer failures fall through to the judge or task, but a gate output that cannot be parsed at all is treated as `BLOCK` (issue #54). Config slips (malformed scorers, unresolved targets) remain fail-open with a warning.
 
 | Scenario | Behavior |
 |---|---|
@@ -546,7 +546,7 @@ VERDICT: HALT    → block
 - Last occurrence wins (if the output contains multiple `VERDICT:` lines).
 - Supports both `:` and `=` separators: `VERDICT=PASS` works.
 
-**Fail-open:** Ambiguous output (no JSON, no `VERDICT:` marker) passes. A gate never accidentally loses your work.
+**Fail-closed for truly unparseable output.** If a gate emits neither a recognized JSON verdict nor a `VERDICT:` marker, the runtime falls back to `BLOCK` (issue #54) — a gate that cannot reach a verdict cannot be trusted to pass. An explicit non-blocking JSON verdict (e.g. `{"verdict": "no issues found"}`) is still a semantic `PASS`, not ambiguity.
 
 ### Tournament winner grammar
 
@@ -609,7 +609,7 @@ WINNER=1          → variant 1 (supports = separator)
 
 <Cards>
   <Card title="Phase Types" href="/en/docs/syntax/phase-types">
-    The ten building blocks of a taskflow, including the gate type.
+    The twelve building blocks of a taskflow, including the gate type.
   </Card>
   <Card title="Control Flow" href="/en/docs/syntax/control-flow">
     Deep dive into `when`, `join`, `retry`, and gates.

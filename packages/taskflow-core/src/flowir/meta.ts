@@ -111,14 +111,14 @@ export interface TaskflowIRMeta {
 
 /**
  * The composite compile result (RFC §5). `ir`/`hash` are present unless
- * synthesis failed (stub never fails). `usedFallbackHash` is `true` whenever
- * the stub cannot produce an overstory-canonical hash (always, in the stub:
- * the hash is the `flowDefHash` fallback; flips to `false` once the genuine
- * compiler is vendored).
+ * synthesis failed. `usedFallbackHash` is `false` once the genuine compiler
+ * (S0 / `flowir/compile.ts`) content-addresses the IR via `hashFlowIR`; it is
+ * `true` only when IR could not be produced (empty phases / hard errors).
  */
 export interface TaskflowIR {
 	ir?: FlowIR;
 	meta: TaskflowIRMeta;
+	/** Content-addressed IR hash: `ir:<64-hex>` from `hashFlowIR` (S0). */
 	hash?: string;
 	warnings: CompileWarning[];
 	errors: CompileError[];

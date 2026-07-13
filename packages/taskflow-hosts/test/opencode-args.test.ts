@@ -12,7 +12,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	buildOpencodeArgs,
+	OPENCODE_UNSAFE_AUTO_ENV,
+	OPENCODE_READ_ONLY_CONFIG,
 	opencodeBin,
+	opencodeChildEnv,
+	opencodeUnsafeAutoEnabled,
 	isReadOnlyPhase,
 	resolveOpencodeModel,
 	type OpencodeArgsCtx,
@@ -35,7 +39,7 @@ test("opencode bin: defaults to `opencode`, honours PI_TASKFLOW_OPENCODE_BIN ove
 
 // --- read-only / permission mapping ----------------------------------------
 
-test("opencode read-only: no whitelist → NOT read-only (default-capable → --auto)", () => {
+test("opencode read-only: no whitelist → NOT read-only (default-capable)", () => {
 	assert.equal(isReadOnlyPhase(undefined), false);
 	assert.equal(isReadOnlyPhase([]), false);
 });
@@ -70,16 +74,21 @@ test("opencode model: undefined → undefined", () => {
 
 // --- full argv contract -----------------------------------------------------
 
-const baseCtx: OpencodeArgsCtx = { systemPrompt: "", task: "count files", model: undefined, tools: undefined, cwd: undefined };
+const baseCtx: OpencodeArgsCtx = { systemPrompt: "", task: "count files", model: undefined, tools: undefined, cwd: undefined, allowUnsafeAuto: true };
 
 test("opencode argv: starts with `run <prompt> --format json`", () => {
 	const { args } = buildOpencodeArgs({ ...baseCtx });
 	assert.equal(args[0], "run");
 	assert.equal(args[2], "--format");
 	assert.equal(args[3], "json", "opencode uses `--format json`, not `--json`");
+	assert.ok(args.includes("--pure"), "every OpenCode child must disable external plugins");
 });
 
-test("opencode argv: mutating / no-whitelist phase gets `--auto`; read-only phase omits it", () => {
+test("opencode argv: mutating/default fails closed unless explicitly acknowledged", () => {
+	assert.throws(
+		() => buildOpencodeArgs({ ...baseCtx, allowUnsafeAuto: false }),
+		new RegExp(`${OPENCODE_UNSAFE_AUTO_ENV}=1`),
+	);
 	assert.ok(buildOpencodeArgs({ ...baseCtx }).args.includes("--auto"), "no whitelist → --auto (bypass)");
 	assert.ok(
 		buildOpencodeArgs({ ...baseCtx, tools: ["bash"] }).args.includes("--auto"),
@@ -90,6 +99,33 @@ test("opencode argv: mutating / no-whitelist phase gets `--auto`; read-only phas
 		false,
 		"read-only phase omits --auto (deny-mutations policy injected via env instead)",
 	);
+});
+
+test("opencode unsafe auto opt-in: only exact env value 1 is accepted", () => {
+	for (const value of [undefined, "", "0", "true", "yes"]) {
+		const env = value === undefined ? {} : { [OPENCODE_UNSAFE_AUTO_ENV]: value };
+		assert.equal(opencodeUnsafeAutoEnabled(env), false);
+	}
+	assert.equal(opencodeUnsafeAutoEnabled({ [OPENCODE_UNSAFE_AUTO_ENV]: "1" }), true);
+});
+
+test("opencode read-only config denies inherited native, custom, and MCP tools by default", () => {
+	const config = JSON.parse(OPENCODE_READ_ONLY_CONFIG) as { permission: Record<string, string> };
+	assert.equal(config.permission["*"], "deny");
+	for (const tool of ["read", "grep", "glob", "list"]) assert.equal(config.permission[tool], "allow");
+});
+
+test("opencode env: keeps provider/runtime keys and drops unrelated secrets", () => {
+	const env = opencodeChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		OPENCODE_CONFIG: "/safe/config.json",
+		ANTHROPIC_API_KEY: "provider",
+		DATABASE_URL: "secret",
+	});
+	assert.equal(env.ANTHROPIC_API_KEY, "provider");
+	assert.equal(env.OPENCODE_CONFIG, "/safe/config.json");
+	assert.equal(env.DATABASE_URL, undefined);
 });
 
 test("opencode argv: read-only flag returned so the caller injects the env policy", () => {

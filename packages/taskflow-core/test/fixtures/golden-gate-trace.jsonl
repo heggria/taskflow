@@ -1,0 +1,7 @@
+{"v":1,"ts":1000,"runId":"golden-1","phaseId":"work","kind":"phase-start"}
+{"v":1,"ts":1001,"runId":"golden-1","phaseId":"work","kind":"subagent-call","input":{"agent":"a","task":"do work","nodePath":"work"},"output":{"text":"result text","usage":{"input":50,"output":20,"cacheRead":0,"cacheWrite":0,"cost":0.02,"contextTokens":0,"turns":1},"stopReason":"end"}}
+{"v":1,"ts":1002,"runId":"golden-1","phaseId":"work","kind":"phase-end","status":"done"}
+{"v":1,"ts":1100,"runId":"golden-1","phaseId":"review","kind":"phase-start"}
+{"v":1,"ts":1101,"runId":"golden-1","phaseId":"review","kind":"subagent-call","input":{"agent":"a","task":"score","nodePath":"review"},"output":{"text":"ok","usage":{"input":30,"output":10,"cacheRead":0,"cacheWrite":0,"cost":0.01,"contextTokens":0,"turns":1},"stopReason":"end"}}
+{"v":1,"ts":1102,"runId":"golden-1","phaseId":"review","kind":"decision","decision":{"type":"gate-score","target":"quality","results":[{"name":"x","type":"contains","passed":true,"score":0.55}],"combined":0.55,"threshold":0.5,"verdict":"pass"}}
+{"v":1,"ts":1103,"runId":"golden-1","phaseId":"review","kind":"phase-end","status":"done"}

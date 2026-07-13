@@ -12,7 +12,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
 	buildClaudeArgs,
+	CLAUDE_UNSAFE_BYPASS_ENV,
 	claudeBin,
+	claudeChildEnv,
+	claudeUnsafeBypassEnabled,
 	permissionArgsForTools,
 	resolveClaudeModel,
 	type ClaudeArgsCtx,
@@ -35,14 +38,19 @@ test("claude bin: defaults to `claude`, honours PI_TASKFLOW_CLAUDE_BIN override"
 
 // --- permission mapping -----------------------------------------------------
 
-test("claude perms: no whitelist → --permission-mode bypassPermissions", () => {
-	assert.deepEqual(permissionArgsForTools(undefined), ["--permission-mode", "bypassPermissions"]);
-	assert.deepEqual(permissionArgsForTools([]), ["--permission-mode", "bypassPermissions"]);
+test("claude perms: no whitelist defaults to an explicit read-only allowlist", () => {
+	for (const tools of [undefined, []]) {
+		const args = permissionArgsForTools(tools);
+		assert.equal(args[0], "--tools");
+		assert.equal(args[2], "--allowedTools");
+		assert.equal(args[1], args[3]);
+		assert.ok(!args.includes("bypassPermissions"));
+	}
 });
 
 test("claude perms: read-only whitelist → --allowedTools with read-only set (Bash EXCLUDED)", () => {
 	const args = permissionArgsForTools(["read", "grep", "glob"]);
-	assert.equal(args[0], "--allowedTools");
+	assert.equal(args[0], "--tools");
 	const allowed = String(args[1]).split(",");
 	assert.ok(allowed.includes("Read"));
 	assert.ok(allowed.includes("Grep"));
@@ -50,15 +58,65 @@ test("claude perms: read-only whitelist → --allowedTools with read-only set (B
 	assert.ok(!allowed.includes("Bash"), "claude has no read-only shell — Bash must be excluded");
 });
 
-test("claude perms: any mutating tool → --permission-mode bypassPermissions", () => {
+test("claude perms: mutating or unknown tools fail closed without explicit acknowledgement", () => {
 	for (const t of ["write", "edit", "bash", "apply_patch"]) {
-		assert.deepEqual(permissionArgsForTools([t]), ["--permission-mode", "bypassPermissions"]);
+		assert.throws(
+			() => permissionArgsForTools([t]),
+			new RegExp(`${CLAUDE_UNSAFE_BYPASS_ENV}=1`),
+		);
 	}
-	assert.deepEqual(
-		permissionArgsForTools(["read", "bash"]),
-		["--permission-mode", "bypassPermissions"],
-		"mixed (includes bash) → bypass",
-	);
+	assert.throws(() => permissionArgsForTools(["future_tool"], true), /cannot be mapped/);
+});
+
+test("claude perms: explicit acknowledgement enables bypass only for unsafe tools", () => {
+	assert.deepEqual(permissionArgsForTools(["bash"], true), ["--tools", "Bash", "--permission-mode", "bypassPermissions"]);
+	assert.deepEqual(permissionArgsForTools(["read", "write"], true), ["--tools", "Read,Write", "--permission-mode", "bypassPermissions"]);
+	assert.deepEqual(permissionArgsForTools(["read"], true), ["--tools", "Read", "--allowedTools", "Read"]);
+});
+
+test("claude perms: an explicit read request is not broadened to network or search tools", () => {
+	assert.deepEqual(permissionArgsForTools(["read"]), ["--tools", "Read", "--allowedTools", "Read"]);
+});
+
+test("claude unsafe opt-in: only exact env value 1 is accepted", () => {
+	for (const value of [undefined, "", "0", "true", "yes"]) {
+		const env = value === undefined ? {} : { [CLAUDE_UNSAFE_BYPASS_ENV]: value };
+		assert.equal(claudeUnsafeBypassEnabled(env), false);
+	}
+	assert.equal(claudeUnsafeBypassEnabled({ [CLAUDE_UNSAFE_BYPASS_ENV]: "1" }), true);
+});
+
+test("claude child env: keeps platform/provider settings and drops unrelated secrets", () => {
+	const env = claudeChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		ANTHROPIC_API_KEY: "anthropic-secret",
+		AWS_PROFILE: "bedrock-profile",
+		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
+		https_proxy: "http://proxy.test",
+		OPENAI_API_KEY: "must-not-leak",
+		NPM_TOKEN: "must-not-leak",
+		DATABASE_URL: "must-not-leak",
+		NODE_OPTIONS: "--require /tmp/inject.cjs",
+	});
+	assert.deepEqual(env, {
+		PATH: "/bin",
+		HOME: "/home/test",
+		ANTHROPIC_API_KEY: "anthropic-secret",
+		AWS_PROFILE: "bedrock-profile",
+		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
+		https_proxy: "http://proxy.test",
+	});
+});
+
+test("claude child env: respects the shared explicit allowlist escape hatch", () => {
+	const env = claudeChildEnv({
+		PI_TASKFLOW_CHILD_ENV_ALLOW: "custom_token, mixed_Case",
+		CUSTOM_TOKEN: "kept",
+		mixed_case: "also-kept",
+		OTHER_SECRET: "dropped",
+	});
+	assert.deepEqual(env, { CUSTOM_TOKEN: "kept", mixed_case: "also-kept" });
 });
 
 // --- model resolution -------------------------------------------------------
@@ -85,18 +143,26 @@ test("claude model: undefined → undefined", () => {
 
 const baseCtx: ClaudeArgsCtx = { systemPrompt: "", task: "count files", model: undefined, tools: undefined };
 
-test("claude argv: core flags are exactly `-p --output-format stream-json --verbose --strict-mcp-config`", () => {
+test("claude argv: safe mode isolates customizations, settings, and hooks", () => {
 	const args = buildClaudeArgs({ ...baseCtx });
-	assert.deepEqual(args.slice(0, 5), ["-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config"]);
+	assert.ok(args.includes("--safe-mode"));
+	assert.ok(args.includes("--strict-mcp-config"));
+	assert.equal(args[args.indexOf("--setting-sources") + 1], "");
+	assert.deepEqual(JSON.parse(String(args[args.indexOf("--settings") + 1])), { disableAllHooks: true });
 });
 
 test("claude argv: permission flags follow the core flags", () => {
 	const args = buildClaudeArgs({ ...baseCtx, tools: ["read"] });
-	// index 5,6 = the permission args from permissionArgsForTools
-	assert.deepEqual([args[5], args[6]], ["--allowedTools", "Read,Grep,Glob,WebFetch,WebSearch"]);
+	assert.deepEqual(
+		args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 4),
+		["--tools", "Read", "--allowedTools", "Read"],
+	);
 
-	const bypass = buildClaudeArgs({ ...baseCtx, tools: ["bash"] });
-	assert.deepEqual([bypass[5], bypass[6]], ["--permission-mode", "bypassPermissions"]);
+	assert.throws(() => buildClaudeArgs({ ...baseCtx, tools: ["bash"] }), /require unsandboxed permissions/);
+	const bypass = buildClaudeArgs({ ...baseCtx, tools: ["bash"], allowUnsafeBypass: true });
+	assert.deepEqual(bypass.slice(bypass.indexOf("--tools"), bypass.indexOf("--tools") + 2), ["--tools", "Bash"]);
+	const permissionIndex = bypass.indexOf("--permission-mode");
+	assert.deepEqual(bypass.slice(permissionIndex, permissionIndex + 2), ["--permission-mode", "bypassPermissions"]);
 });
 
 test("claude argv: model passed via `--model <id>` only when resolvable", () => {

@@ -11,10 +11,10 @@ save (with a good `purpose` + `tags`), the better future search gets.
 **Host binding (pi):** use the `taskflow` tool with `action: "search"` /
 `action: "save"`, and `/tf list` / `/tf show <name>`.
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 **Host binding:** use the `taskflow_search`, `taskflow_save`, `taskflow_list`,
 `taskflow_show` tools.
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 ## Before authoring a non-trivial flow: SEARCH first
 
@@ -27,11 +27,11 @@ can adapt.
 { "action": "search", "query": "audit API endpoints for missing auth", "limit": 5 }
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_search", "arguments": { "query": "audit API endpoints for missing auth", "limit": 5 } }
 ```
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 Read the results and the `→ reuseHint`:
 
@@ -60,14 +60,14 @@ without them is nearly invisible to future search.
   "tags": ["audit", "security", "auth", "fan-out"] }
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_save",
   "arguments": { "name": "audit-endpoints", "definition": { "phases": [ ... ] },
     "purpose": "Audit a directory of API endpoints for missing auth checks",
     "tags": ["audit", "security", "auth", "fan-out"] } }
 ```
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 `save` auto-derives structural metadata (phase signature, a `generality` score
 in 0–1) and writes a sidecar `.meta.json` next to the flow file. You don't
@@ -102,12 +102,12 @@ measures "found-via-search reuse", the high-quality signal for later auto-prune)
 { "action": "run", "name": "audit-endpoints", "args": { "dir": "src/api" }, "reusedFromSearch": true }
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 ```jsonc
 { "name": "taskflow_run",
   "arguments": { "name": "audit-endpoints", "args": { "dir": "src/api" }, "reusedFromSearch": true } }
 ```
-<!-- /host:codex,claude,opencode -->
+<!-- /host:codex,claude,opencode,grok -->
 
 ## Judicious reuse — not every task needs the library
 

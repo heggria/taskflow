@@ -1,11 +1,11 @@
 ---
 title: 预算
-description: 运行级成本与 token 上限。
+description: 基于已上报用量的运行级成本与 token 止损线。
 ---
 
 你把一个 `map` 阶段指向你的仓库，让一个 scout agent 列出变更的文件。scout 返回 500 个。每一个都生成一个安全审查器。四个同时运行。等你注意到时，你已在一个本该花四毛钱的 flow 上花了十二美元。
 
-`budget` 就是防止这件事的字段。它是对累计成本或 token 的运行级上限。当超出上限时，taskflow 中止运行，保留此前产生的所有部分输出，并返回一个诊断。把它设在**任何**可能无界 fan-out 的 flow 上 —— `map`、`parallel`、`loop`、`tournament` —— 它就成了一个被错误发现的数组与失控支出之间唯一的防线。
+`budget` 用来限制这类事故的爆炸半径。它是基于 provider 已上报累计成本或 token 的运行级止损线。观察到用量越线后，taskflow 不再准入新的模型调用，保留此前产生的所有部分输出，并返回诊断；已经在途的调用仍可能把用量推过阈值。应把它设在**任何**可能无界 fan-out 的 flow 上 —— `map`、`parallel`、`loop`、`tournament`、`race`。
 
 <Callout type="info">
   预算执行不花费额外 token。它读取每个子代理已经写入的 `usage` 记录，并在每次重试、每个 fan-out 项、每次 DAG 层切换时检查。
@@ -39,7 +39,7 @@ description: 运行级成本与 token 上限。
 }
 ```
 
-两个维度都可选。`maxUSD` 限制累计成本；`maxTokens` 限制累计输入 + 输出 token。设其一或两者。省略一个维度即关闭该上限。
+两个维度都可选。`maxUSD` 监测已上报累计成本；`maxTokens` 监测已上报累计输入 + 输出 token。设其一或两者。省略一个维度即关闭该止损线。
 
 ```json title="budget-both-dimensions.json"
 {
@@ -53,14 +53,22 @@ description: 运行级成本与 token 上限。
 ```
 
 <Callout type="tip">
-  将 `maxUSD` 与 `maxTokens` 配对以纵深防御。一次模型切换或定价变化可能把花费从成本转移到 token（或反之）。同时设置两者可防止任一上限被击穿。
+  在 host 同时上报两个维度时，将 `maxUSD` 与 `maxTokens` 配对以纵深防御。一次模型切换或定价变化可能把花费从成本转移到 token（或反之）。
 </Callout>
+
+各 host 的支持范围取决于 CLI 实际上报的 usage：
+
+| Host | 支持的预算维度 |
+|---|---|
+| Pi、Claude Code、OpenCode | `maxUSD` 和/或 `maxTokens` |
+| Codex | 只支持 `maxTokens`；Codex 不上报 cost，因此拒绝 `maxUSD` |
+| Grok Build 0.2.93 | 全部不支持；Grok 不上报 token 或 cost，因此拒绝任何声明了 `budget` 的 flow |
 
 schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 合法但是空操作 —— `maxUSD` / `maxTokens` 至少应设置一个。
 
 ## 触及上限时会发生什么
 
-累计花费超出上限的那一刻，运行时接管。不再生成新阶段。进行中的 fan-out 停止生成项。运行以 `blocked` 结束 —— 不是 `failed` —— 并且超限前产生的每个部分输出都被保留。
+观察到累计用量超出阈值后，运行时不再准入新的模型调用。运行以 `blocked` 结束 —— 不是 `failed` —— 并且已经产生的每个部分输出都被保留。活动调用在返回前尚无最终 usage，不能仅因预算而在调用中途撤销。
 
 | 层 | 发生什么 |
 |---|---|
@@ -81,12 +89,12 @@ schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 
 
 检查用严格 `>`，不是 `>=`。恰好落在上限上的运行**不**被阻止 —— 只有超过它的下一个美分或 token 才触发中止。`maxUSD: 2.0` 的预算允许成本恰好为 `$2.000` 的运行。
 
-### 有界超支
+### 普通准入限制超支，race 是例外
 
-在单个 DAG 层内，阶段并发运行至多到 `concurrency`（默认 `8`）。预算检查在每个阶段*完成后*触发，因此同一层中至多有 `concurrency - 1` 个额外阶段可能在超限被检测到之前就开始。
+provider 只有在调用返回后才上报 usage，因此基于已观察用量的预算无法保证零超支。即使只有一个活动调用，它也可能让用量从阈值下方跃迁到上方。
 
 <Callout type="warn">
-  这种有界超支是设计使然 —— 一旦 `budgetBlocked` 被设置，它阻止级联到后续层，但无法撤销已经在途的花费。如果你需要零超支的硬上限，将 flow 的 `concurrency` 设为 `1`。阶段随后严格顺序运行，守卫在每个开始前重新评估。
+  普通 budgeted DAG 层以及 `map` / `parallel` / `tournament` fan-out 会串行准入模型调用，不受正常 `concurrency` 设置影响。每次准入前都会检查守卫；观察到越线后不会再启动调用，因此新调用的超支限于已准入的那一次。`race` 为保持 first-success 语义，必须一起准入竞争分支，所以所有已活动的 race 分支都可能贡献超支。两种情况都不保证固定美元/token 上限，更不保证零超支。
 </Callout>
 
 ## 各阶段类型的成本如何累计
@@ -98,7 +106,7 @@ schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 
 | `agent` | 子代理在每次尝试上的 `usage`。失败重试在重试决策前被累加。 |
 | `parallel` | 每个分支 `usage` 之和。 |
 | `map` | 每个*已开始*项目 `usage` 之和。预算跳过的项贡献零。 |
-| `loop` | 每次迭代累计的 `usage`，在**循环中**折入（而非覆盖）—— 因此 reflexion loop 无法在迭代之间不知不觉地超过上限。 |
+| `loop` | 每次迭代累计的 `usage`，在**循环中**折入（而非覆盖）—— 因此越线会在准入下一次迭代前被观察到。 |
 | `tournament` | 每个变体的 `usage` 加上评委的（当评委运行时）。 |
 | `flow` | 子 flow 运行其**自身**预算（见[下方](#子流程中的预算)）。父阶段记录子 flow 的累计 usage。 |
 | `gate` | gate 子代理的 `usage`。 |
@@ -134,7 +142,7 @@ schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 
 
 `flow` 阶段运行子 taskflow。子流程的预算如何与父预算交互，取决于子流程是**内联生成**（`def`）还是**按名加载**（`use`）。
 
-### 内联 `def` 子流程 —— 硬钳制
+### 内联 `def` 子流程 —— 阈值钳制
 
 生成的内联定义不能抬高父上限。运行时每个维度取 `min(child, parent)`：
 
@@ -150,11 +158,11 @@ schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 
 }
 ```
 
-如果父 flow 有 `budget: { maxUSD: 2.0 }`，内层子流程的有效上限变为 `$2.0`，无论其声明的 `$5.0`。它只能比父更**紧**。如果钳制后没有有限维度剩下，子流程的 `budget` 被设为 `undefined` —— 但父的守卫仍能看到子流程的花费，因为父阶段记录了累计的子阶段 usage。
+如果父 flow 有 `budget: { maxUSD: 2.0 }`，内层子流程的有效阈值变为 `$2.0`，无论其声明的 `$5.0`。它只能声明比父更**紧的阈值**，但在途调用仍可能越线。如果钳制后没有有限维度剩下，子流程的 `budget` 被设为 `undefined` —— 但父的守卫仍能看到子流程的花费，因为父阶段记录了累计的子阶段 usage。
 
 ### 已保存 `use` 子流程 —— 软继承
 
-按 `use` 加载的子流程执行其**自身**声明的预算。如果未声明，它**继承**父上限作为软性每流上限。
+按 `use` 加载的子流程执行其**自身**声明的预算。如果未声明，它**继承**父阈值作为尽力而为的每 flow 止损线。
 
 <Callout type="info">
   此继承是**尽力而为**：花费不跨 flow 边界。父已花费总额*不*从子继承的上限中扣除，因此继承 `$2.0` 的子流程即使父已花费 `$1.50`，自身仍可花费至多 `$2.0`。父自身的守卫在子流程返回时仍会捕获合并总额。
@@ -240,7 +248,7 @@ reflexion `loop` 可能在精炼同一输出上花费多次迭代。`tournament`
 
 | 字段 | 告诉你什么 |
 |---|---|
-| `def.budget` | 生效的上限（`{ maxUSD?, maxTokens? }`）。 |
+| `def.budget` | 生效的已观察用量阈值（`{ maxUSD?, maxTokens? }`）。 |
 | `status` | 超出预算时为 `"blocked"`；否则为 `"completed"` / `"failed"` / `"paused"`。 |
 | `phases.<id>.usage` | 该阶段的 `{ input, output, cacheRead, cacheWrite, cost, contextTokens, turns }`。`input + output` 是 token 上限所汇总的。 |
 | `phases.<id>.budgetTruncated` | 当 `map` / `parallel` fan-out 被上限（或 `MAX_DYNAMIC_MAP_ITEMS` 安全限制）截断时为 `true`。 |

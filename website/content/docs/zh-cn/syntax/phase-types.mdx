@@ -1,11 +1,11 @@
 ---
 title: 阶段类型
-description: taskflow 的十个构建块，以及何时选用各自。
+description: taskflow 的十二个构建块，以及何时选用各自。
 ---
 
-一个 taskflow 是由**阶段**组成的有向图。每个阶段是一个工作单元 —— 一次隔离的子代理调用、一次 shell 命令、或一个控制决策 —— 运行时通过 `dependsOn` 把它们连起来。本页按你实际会遇到它们的顺序，逐一讲解全部十种阶段类型：从你 80% 场景都会用的那个开始，再随着问题变复杂逐步加上能力。
+一个 taskflow 是由**阶段**组成的有向图。每个阶段是一个工作单元 —— 一次隔离的子代理调用、一次 shell 命令、或一个控制决策 —— 运行时通过 `dependsOn` 把它们连起来。本页按你实际会遇到它们的顺序，逐一讲解全部十二种阶段类型：从你 80% 场景都会用的那个开始，再随着问题变复杂逐步加上能力。
 
-你可能在想：*我得先把十种全学会才能干活吗？* 不用。大多数 flow 只用三四种类型就建起来了。其余几种是给特定场景准备的 —— 人工审批、迭代精修、竞争草稿 —— 在你撞上那些场景之前，完全可以无视它们。
+你可能在想：*我得先把十二种全学会才能干活吗？* 不用。大多数 flow 只用三四种类型就建起来了。其余几种是给特定场景准备的 —— 人工审批、迭代精修、竞争草稿 —— 在你撞上那些场景之前，完全可以无视它们。
 
 ## 何时用什么
 
@@ -21,6 +21,8 @@ description: taskflow 的十个构建块，以及何时选用各自。
 | "反复尝试直到足够好" | `loop` | 带停止条件地重复。 |
 | "生成多个方案，挑最好的" | `tournament` | 变体竞争，评委裁决。 |
 | "跑个 build / lint / 脚本" | `script` | shell 命令，零 token。 |
+| "保留第一个成功的方法" | `race` | 第一个成功的分支获胜；硬失败不算。 |
+| "执行规划器生成的小片段" | `expand` | 嵌套隔离或 graft 提升到父流程。 |
 
 <Callout type="tip">
   拿不准时，从 `agent` 开始。其他每种类型都是你之后可以叠加的优化或控制流增强。运行时很乐意跑一个由三个普通 `agent` 阶段组成的 flow。
@@ -227,7 +229,7 @@ description: taskflow 的十个构建块，以及何时选用各自。
 gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止它。
 
 <Callout type="tip">
-  **设计上 fail-open。** 如果 gate 输出是模糊的 —— 既不是明确的 `PASS` 也不是 `BLOCK` —— taskflow 把它当作 `PASS`。gate 永远不会意外丢失你的工作。
+  **宽松解析，fail-closed 回退。** taskflow 会尽力提取裁决——JSON 字段、`VERDICT:` 标记、自然语言词汇。如果输出完全无法解析，gate 会 fail-closed（`BLOCK`，issue #54）。一个无法给出裁决的 gate 不能被认为是安全的。配置或解析错误（如未解析的 `score.target`、格式错误的 `scorers`）仍保持 fail-open，并附带警告。
 </Callout>
 
 你甚至可以一个 token 都不花：用 `eval`，一组零 token 的机器检查。如果**全部**通过，gate 无需 LLM 调用就自动通过。如果**任一**失败，LLM `task` 照常运行。
@@ -419,6 +421,51 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
   `script` 阶段不能用 `retry` 或 `output: "json"`。`timeout` 默认 `60000`、上限 `300000` ms。
 </Callout>
 
+## 先成功者胜：`race`
+
+当多种路径都能回答同一问题、且**延迟**比等齐所有分支更重要时，用 `race`。各分支同时启动，**第一个成功完成**的输出成为阶段结果（快速硬失败**不会**赢）。`parallel` 会等全部；`tournament` 会等齐后由裁判比质量。
+
+```json title="race — 先成功者胜"
+{
+  "id": "quick",
+  "type": "race",
+  "branches": [
+    { "task": "用简短启发式作答…", "agent": "executor" },
+    { "task": "查一下文档再作答…", "agent": "researcher" }
+  ],
+  "final": true
+}
+```
+
+<Callout type="info">
+  **`cancelLosers`（默认 true）：** 第一个**成功**后，其余分支收到 `AbortSignal`（尽力而为）。阶段 `usage` 汇总所有分支以便预算诚实。设 `false` 可让败者跑完。
+</Callout>
+
+## 动态片段：`expand`
+
+`expand` 从 `def` 运行一段片段 Taskflow（内联对象、phases 数组，或 `{steps.plan.json}`）。两种模式：
+
+| `expandMode` | 行为 |
+|---|---|
+| `nested`（默认） | 隔离子流（类似 `flow`+`def`）；子阶段 id 不进入父 run |
+| `graft` | 成功后把子阶段状态提升到父 run，id 为 `<expandId>-<childId>` |
+
+```json title="expand — graft 提升"
+{
+  "id": "grow",
+  "type": "expand",
+  "expandMode": "graft",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"]
+}
+```
+
+可选 `maxNodes` 限制片段规模（默认 50，硬上限 100）。动态校验与 `flow{def}` 安全帽一致。
+
+<Callout type="warn">
+  **安全帽。** 与 `flow{def}` 一样，`expand` 强制执行：最多 100 个阶段、200 个 map 项、16 并发、5 层嵌套、不允许 `script`，以及 `cwd` 必须留在运行目录内。`graft` 模式下，子阶段 id 会被提升为 `\u003cexpandId\u003e-\u003cchildId\u003e`，片段内部的 `{steps.X}` 引用也会以同样前缀重写。
+</Callout>
+
 ## 完整的 PR 审查 flow
 
 把五种最常用的类型 —— `agent`、`map`、`reduce`、`gate`，加一个用于 lint 的 `script` —— 拼到一起，这就是你可以直接复制改造的完整审查 flow：
@@ -457,7 +504,8 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
       "from": ["review-each"],
       "agent": "writer",
       "task": "Combine these reviews into one prioritized summary:\n{steps.review-each.output}",
-      "dependsOn": ["review-each"]
+      "dependsOn": ["review-each"],
+      "final": true
     },
     {
       "id": "verify",
@@ -503,7 +551,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `id` | `string` | — | **必需。** 唯一标识符，在 `dependsOn` 和 `{steps.<id>.output}` 中被引用。用连字符，不用下划线。 |
-| `type` | `string` | `"agent"` | 十种阶段类型之一。 |
+| `type` | `string` | `"agent"` | 十二种阶段类型之一。 |
 | `agent` | `string` | 第一个发现的 agent | agent 名称。必须用连字符。 |
 | `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches`）。 |
 | `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
@@ -531,7 +579,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
   - `id` 和 `agent` 必须用连字符，不用下划线。
   - 运行 agent 的阶段 `timeout` 必须 `>= 1000`；`script` 必须在 `1000` 到 `300000` 之间。
   - `final: true` 至多出现在一个阶段上。
-  - `cache.scope: "cross-run"` 在 `gate`、`approval`、`loop`、`tournament`、`script` 上禁用。
+  - `cache.scope: "cross-run"` 在 `gate`、`approval`、`loop`、`tournament`、`script`、`race` 和 `expand` 上禁用。
   - `retry.max` 必须 `<= 20`；`backoffMs` 在 `0` 到 `60000` 之间；`factor` 在 `1` 到 `10` 之间。
 </Callout>
 
@@ -549,8 +597,10 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | `loop` | 必需 | — | — | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — |
 | `tournament` | 必需³ | — | — | 可选³ | — | — | — | — | — | — | — | 可选 | 可选 | — | — |
 | `script` | 忽略 | — | — | — | — | — | — | 必需 | 可选 | — | — | — | — | — | — |
+| `race` | 忽略 | — | — | 必需⁴ | — | — | — | — | — | — | — | — | — | — | — |
+| `expand` | 忽略 | — | — | — | — | 必需（`def`） | 可选 | — | — | — | — | — | — | — | — |
 
-¹ `gate` 在不用 `score` 时需要 `task`。² `flow` 需要 `use` 或 `def` 恰好其一。³ `tournament` 在不用 `branches` 时需要 `task`。
+¹ `gate` 在不用 `score` 时需要 `task`。² `flow` 需要 `use` 或 `def` 恰好其一。³ `tournament` 在不用 `branches` 时需要 `task`。⁴ `race` 至少 2 条 `branches`。`expand` 另有 `expandMode`（`nested`\|`graft`）与 `maxNodes`。
 
 ### 按类型的字段细节
 
@@ -593,6 +643,25 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 - **`def`**：内联或运行时生成的 flow 定义。字符串会被插值再 JSON 解析；对象直接使用。接受完整的 `Taskflow`、一个裸 phases 数组、或 `{phases:[...]}`（自动包装）。执行前会校验；失败时阶段报告 `defError` 且运行继续。
 - **`with`**（`Record<string, unknown>`）：传给子流程的参数。字符串值支持插值。
 - 运行时生成的 `def` 子流程会被加固：最多 `100` 阶段、`200` map 项、`16` 并发、`5` 层嵌套、不允许 `script`、`cwd` 必须在运行目录内。
+
+</details>
+
+<details>
+<summary><code>race</code> — <code>branches</code>、<code>cancelLosers</code></summary>
+
+- **`branches`**（`{task, agent?}[]`，必需）：至少两条竞争分支。第一个成功的分支获胜；快速硬失败不算赢。
+- **`cancelLosers`**（`boolean`，默认 `true`）：第一个成功后，向剩余分支发送 `AbortSignal`（尽力而为）。阶段 `usage` 汇总所有分支以便预算诚实。设 `false` 让败者跑完。
+- **`task`**：忽略 —— 用 `branches` 代替。
+
+</details>
+
+<details>
+<summary><code>expand</code> — <code>def</code>、<code>expandMode</code>、<code>maxNodes</code></summary>
+
+- **`def`**（必需）：内联或运行时生成的片段定义。字符串会被插值再 JSON 解析；对象直接使用。
+- **`expandMode`**（`"nested"` | `"graft"`，默认 `"nested"`）：`"nested"` 像 `flow{def}` 一样隔离片段；`"graft"` 把子阶段状态提升到父 run，id 为 `\u003cexpandId\u003e-\u003cchildId\u003e`。
+- **`maxNodes`**（`number`，默认 `50`，硬上限 `100`）：限制片段规模。动态校验与 `flow{def}` 安全帽一致。
+- **`task`**：忽略。
 
 </details>
 

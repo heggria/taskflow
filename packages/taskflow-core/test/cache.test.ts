@@ -7,7 +7,7 @@ import type { AgentConfig } from "../src/agents.ts";
 import { CacheStore, resolveFingerprint } from "../src/cache.ts";
 import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
 import type { RunResult, RunOptions } from "../src/runner-core.ts";
-import { parseTtlMs, type Taskflow, validateTaskflow } from "../src/schema.ts";
+import { parseTtlMs, type Taskflow, type ThinkingLevel, validateTaskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { emptyUsage } from "../src/usage.ts";
 
@@ -412,7 +412,7 @@ test("runtime: cross-run does NOT leak across different flows sharing a phase id
 test("runtime: cross-run misses when phase 'thinking' changes (P0-2)", async () => {
 	const dir = tmpDir();
 	const store = new CacheStore(dir);
-	const mk = (thinking?: string): Taskflow => ({
+	const mk = (thinking?: ThinkingLevel): Taskflow => ({
 		name: "think-cr",
 		phases: [{ id: "p", type: "agent", agent: "a", task: "go", thinking, cache: { scope: "cross-run" }, final: true }],
 	});

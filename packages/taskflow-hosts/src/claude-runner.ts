@@ -24,11 +24,11 @@
  *   - failure      = result.is_error, a stream-level error, or a non-zero exit
  *
  * Permission mapping (the codex `sandboxForTools` analogue): Claude Code has no
- * OS-level sandbox in -p mode — a tool call is either whitelisted or denied. A
- * phase whose tool whitelist is read-only gets `--allowedTools <read-only set>`
- * (mutating tools are denied outright); anything else gets
- * `--permission-mode bypassPermissions`, which behaves like codex's
- * workspace-write but WITHOUT an OS sandbox backstop — document accordingly.
+ * OS-level sandbox in -p mode — a tool call is either whitelisted or denied.
+ * Read-only and unspecified tool sets get an explicit read-only allowlist.
+ * Known mutating tools fail closed unless the user explicitly opts into
+ * narrowly-scoped unsandboxed execution with PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1;
+ * unknown tool names always fail closed.
  *
  * Process handling (idle watchdog, abort, signal-kill detection, stderr cap,
  * error sanitization) mirrors the pi/codex runners so behavior is uniform.
@@ -36,6 +36,7 @@
 
 import {
 	runSubagentProcess,
+	sanitizeErrorMessage,
 	num,
 	unknownAgentResult,
 	type AgentConfig,
@@ -46,12 +47,86 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { filteredChildEnv } from "./child-env.ts";
 
 /** The Claude tools a read-only phase may use. `Bash` is excluded — Claude has
  *  no read-only shell (unlike codex's read-only OS sandbox, which still allows
  *  read-only commands), so a listed-tools phase without write/edit/bash gets
  *  file reads + search + web only. */
 const READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "WebFetch", "WebSearch"];
+const READ_ONLY_TOOL_MAP: Readonly<Record<string, string>> = {
+	read: "Read",
+	grep: "Grep",
+	glob: "Glob",
+	find: "Glob",
+	ls: "Glob",
+	webfetch: "WebFetch",
+	web_fetch: "WebFetch",
+	websearch: "WebSearch",
+	web_search: "WebSearch",
+};
+const MUTATING_TOOL_MAP: Readonly<Record<string, string>> = {
+	write: "Write",
+	edit: "Edit",
+	bash: "Bash",
+	apply_patch: "Edit",
+};
+
+/** Environment inherited by the Claude process. Keep platform/runtime settings,
+ * proxy/CA configuration, and credentials for Claude's supported providers;
+ * drop unrelated application secrets (for example OPENAI_API_KEY, npm tokens,
+ * database passwords) from the default child boundary. */
+const CLAUDE_ENV_KEYS = new Set([
+	"ALL_PROXY",
+	"APPDATA",
+	"COLORTERM",
+	"COMSPEC",
+	"FORCE_COLOR",
+	"HOME",
+	"HOMEDRIVE",
+	"HOMEPATH",
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"LOCALAPPDATA",
+	"LOGNAME",
+	"NODE_EXTRA_CA_CERTS",
+	"NO_COLOR",
+	"NO_PROXY",
+	"PATH",
+	"PATHEXT",
+	"SHELL",
+	"SSL_CERT_DIR",
+	"SSL_CERT_FILE",
+	"SYSTEMROOT",
+	"TEMP",
+	"TERM",
+	"TMP",
+	"TMPDIR",
+	"USER",
+	"USERPROFILE",
+	"WINDIR",
+	"XDG_CACHE_HOME",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_STATE_HOME",
+]);
+const CLAUDE_ENV_PREFIXES = [
+	"ANTHROPIC_",
+	"AWS_",
+	"AZURE_",
+	"CLAUDE_CODE_",
+	"CLOUD_ML_",
+	"GCLOUD_",
+	"GOOGLE_",
+	"VERTEX_",
+];
+
+/** Explicit user-level acknowledgement required before Claude may run tools
+ * without an OS sandbox or interactive permission prompts. */
+export const CLAUDE_UNSAFE_BYPASS_ENV = "PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS";
 
 /** Accumulated state folded from a claude stream-json event stream. */
 export interface ClaudeAccumulator {
@@ -64,6 +139,7 @@ export interface ClaudeAccumulator {
 	fatalError?: string;
 	/** True once the authoritative `result` event has been folded. */
 	sawResult: boolean;
+	terminalSeen?: boolean;
 }
 
 export function newClaudeAccumulator(model?: string): ClaudeAccumulator {
@@ -152,6 +228,7 @@ export function foldClaudeEventLine(acc: ClaudeAccumulator, line: string): LiveU
 		}
 	} else if (event.type === "result") {
 		acc.sawResult = true;
+		acc.terminalSeen = true;
 		const u = event.usage;
 		if (u) {
 			const prev = acc.usage.contextTokens;
@@ -186,20 +263,57 @@ export function claudeBin(): string {
 }
 
 /**
- * Map a phase's tool whitelist to claude permission flags — the codex
- * `sandboxForTools` analogue. A phase that only reads (no write/edit/bash in
- * its whitelist) gets a read-only `--allowedTools` set; anything else gets
- * `--permission-mode bypassPermissions` (non-interactive -p runs cannot answer
- * permission prompts, so the codex workspace-write equivalent is bypass —
- * WITHOUT an OS sandbox backstop). No whitelist → bypass (the engine's
- * default-capable agent).
+ * Map a phase's tool whitelist to Claude permission flags. Unspecified and
+ * known read-only tool sets are always restricted to the read-only allowlist.
+ * Known mutating tools need an explicit caller acknowledgement; unknown tools
+ * are never accepted. This
+ * function never reads process.env so argv construction remains pure.
  */
-export function permissionArgsForTools(tools: string[] | undefined): string[] {
-	if (!tools || tools.length === 0) return ["--permission-mode", "bypassPermissions"];
-	const mutating = new Set(["write", "edit", "bash", "apply_patch"]);
-	const canMutate = tools.some((t) => mutating.has(t));
-	if (canMutate) return ["--permission-mode", "bypassPermissions"];
-	return ["--allowedTools", READ_ONLY_TOOLS.join(",")];
+export function permissionArgsForTools(
+	tools: string[] | undefined,
+	allowUnsafeBypass = false,
+): string[] {
+	const requestedNames = tools?.map((t) => t.trim().toLowerCase()) ?? [];
+	const unknown = requestedNames.find((t) => !READ_ONLY_TOOL_MAP[t] && !MUTATING_TOOL_MAP[t]);
+	if (unknown) {
+		throw new Error(
+			`Claude tool '${unknown}' cannot be mapped to a built-in tool and is denied. ` +
+				"Use read, grep, glob, find, ls, webfetch, websearch, write, edit, bash, or apply_patch.",
+		);
+	}
+	const requestsUnsafeAccess = requestedNames.some((t) => Boolean(MUTATING_TOOL_MAP[t]));
+	if (requestsUnsafeAccess) {
+		if (allowUnsafeBypass) {
+			const available = [...new Set(requestedNames.map((t) => READ_ONLY_TOOL_MAP[t] ?? MUTATING_TOOL_MAP[t]))];
+			return ["--tools", available.join(","), "--permission-mode", "bypassPermissions"];
+		}
+		throw new Error(
+			`Claude tools [${tools!.join(", ")}] require unsandboxed permissions. ` +
+				`Claude Code has no OS sandbox in non-interactive mode. ` +
+				`Set ${CLAUDE_UNSAFE_BYPASS_ENV}=1 to explicitly allow this execution.`,
+		);
+	}
+	const allowed = requestedNames.length > 0
+		? [...new Set(requestedNames.map((t) => READ_ONLY_TOOL_MAP[t]).filter(Boolean))]
+		: READ_ONLY_TOOLS;
+	const toolList = allowed.join(",");
+	// --tools limits which built-ins exist; --allowedTools only pre-approves
+	// them. Use both, and isolate disk settings/hooks below, so a project policy
+	// cannot silently restore mutating tools in non-interactive mode.
+	return ["--tools", toolList, "--allowedTools", toolList];
+}
+
+/** Resolve the explicit process-level opt-in. Only the exact value `1` is
+ * accepted so an inherited or accidentally truthy value cannot enable it. */
+export function claudeUnsafeBypassEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env[CLAUDE_UNSAFE_BYPASS_ENV] === "1";
+}
+
+/** Resolve a least-privilege environment for the Claude child process.
+ * Provider-specific credentials are retained so API-key, Bedrock, Vertex, and
+ * Foundry authentication continue to work; unrelated secrets are omitted. */
+export function claudeChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return filteredChildEnv(source, [...CLAUDE_ENV_KEYS], CLAUDE_ENV_PREFIXES);
 }
 
 /** Resolve a modelRoles/pi model id for `claude --model`, or `undefined` to let
@@ -221,6 +335,8 @@ export interface ClaudeArgsCtx {
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
 	tools?: string[];
+	/** Explicit acknowledgement for unsandboxed known mutating tools. */
+	allowUnsafeBypass?: boolean;
 }
 
 /**
@@ -228,14 +344,26 @@ export interface ClaudeArgsCtx {
  * (no process.env, no spawn). Extracted from `runClaudeAgentTask` so the host's
  * CLI flag contract is unit-testable in CI without a live claude session.
  *
- *   claude -p --output-format stream-json --verbose --strict-mcp-config
- *          [--permission-mode bypassPermissions | --allowedTools ...]
+ *   claude -p --output-format stream-json --verbose --safe-mode --strict-mcp-config
+ *          --setting-sources "" --settings '{"disableAllHooks":true}'
+ *          [--permission-mode bypassPermissions | --tools ... --allowedTools ...]
  *          [--model m] [--append-system-prompt ...] <task>
  */
 export function buildClaudeArgs(ctx: ClaudeArgsCtx): string[] {
 	const claudeModel = resolveClaudeModel(ctx.model);
-	const args: string[] = ["-p", "--output-format", "stream-json", "--verbose", "--strict-mcp-config"];
-	args.push(...permissionArgsForTools(ctx.tools));
+	const args: string[] = [
+		"-p",
+		"--output-format",
+		"stream-json",
+		"--verbose",
+		"--safe-mode",
+		"--strict-mcp-config",
+		"--setting-sources",
+		"",
+		"--settings",
+		JSON.stringify({ disableAllHooks: true }),
+	];
+	args.push(...permissionArgsForTools(ctx.tools, ctx.allowUnsafeBypass));
 	if (claudeModel) args.push("--model", claudeModel);
 	if (ctx.systemPrompt.trim()) args.push("--append-system-prompt", ctx.systemPrompt.trim());
 	args.push(ctx.task);
@@ -262,12 +390,29 @@ export async function runClaudeAgentTask(
 	const tools = opts.tools ?? agent.tools;
 	void globalThinking; // claude -p has no thinking-level flag; reserved.
 
-	const args = buildClaudeArgs({
-		systemPrompt: agent.systemPrompt,
-		task,
-		model,
-		tools,
-	});
+	let args: string[];
+	try {
+		args = buildClaudeArgs({
+			systemPrompt: agent.systemPrompt,
+			task,
+			model,
+			tools,
+			allowUnsafeBypass: claudeUnsafeBypassEnabled(),
+		});
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			errorMessage: message,
+			stopReason: "permission_denied",
+		};
+	}
 
 	return runSubagentProcess({
 		agent: agentName,
@@ -279,8 +424,11 @@ export async function runClaudeAgentTask(
 		idleTimeoutMs: opts.idleTimeoutMs,
 		signal: opts.signal,
 		onLive: opts.onLive,
+		env: claudeChildEnv(),
 		acc: newClaudeAccumulator(model),
 		foldLine: foldClaudeEventLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "Claude result",
 	});
 }
 

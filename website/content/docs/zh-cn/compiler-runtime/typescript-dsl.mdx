@@ -1,0 +1,91 @@
+---
+title: TypeScript DSL（`taskflow-dsl`）
+description: 编译期 .tf.ts 写法 —— rune erase 成 Taskflow JSON，再进 FlowIR。
+---
+
+# TypeScript DSL（`taskflow-dsl`）
+
+S4 增加**编译期** TypeScript 前端：用 rune（`agent`、`map`、`race`…）写 `*.tf.ts`，CLI erase 成普通 Taskflow JSON。宿主仍通过 `taskflow_run` / `/tf run` 跑 **JSON**——**没有**解释执行路径，也**没有**宿主对 `.tf.ts` 的自动 build。
+
+<Callout type="info">
+  **包状态。** `taskflow-dsl` 在 monorepo 的 `packages/taskflow-dsl`。纯 JSON 作者不需要它。本发布线 manifest 为 `0.2.0`；npm 在 `v0.2.0` 发布任务完成后更新——此前请用 workspace / 本地 path。
+</Callout>
+
+## 工作流
+
+```bash
+taskflow-dsl new audit
+# 编辑 audit.tf.ts
+taskflow-dsl check audit.tf.ts
+taskflow-dsl build audit.tf.ts --emit both
+# → audit.taskflow.json
+# 然后 taskflow_verify / taskflow_run + defineFile=
+```
+
+| 命令 | 作用 |
+|------|------|
+| `new [name]` | 骨架（`.tf.ts` 或 `--json-escape`） |
+| `check <file>` | erase + `validateTaskflow` + 默认 tsc（`--no-typecheck` 可关闭） |
+| `build <file>` | 产出 Taskflow JSON / FlowIR |
+| `decompile <file>` | JSON → 安全、可读 `.tf.ts`（**语义**往返，非字面） |
+
+`decompile` 不会恢复原变量名、格式、注释或源码拼写。支持的定义可重新
+build 为语义等价的 Taskflow/FlowIR；不支持或有损的结构会失败，而不是
+承诺字面 round-trip。
+
+`build`、`decompile`、`new` 默认拒绝替换已有输出，只有显式传入 `--force`
+才允许覆盖。所有输出必须位于 `--cwd` 内，目标 symlink 会被拒绝，写入通过
+同目录临时文件原子提交。`--emit both` 会在写入任一文件前预检两个目标。
+
+## 写法示例
+
+```ts
+import { flow, agent, map, reduce, json } from "taskflow-dsl";
+
+export default flow("audit", (ctx) => {
+  ctx.budget({ maxUSD: 2 });
+  const discover = agent("List files under {args.dir}", {
+    output: json<{ path: string }[]>(),
+  });
+  const each = map(discover, (item) => agent(`Audit ${item.path}`));
+  return reduce([each], () => agent("Write one summary"));
+});
+```
+
+未 build 的 `.tf.ts` **不要**当 Node 程序执行——rune 会抛 `TFDSL_ERASE_ONLY`。
+
+## 种类 ↔ rune
+
+JSON 仍是 **12** 种 phase。DSL rune erase 到这些 kind（另有 `gate.automated` / `gate.scored`、`expand.nested` / `expand.graft`、`subflow.def` 等糖）。
+
+| JSON kind | 主要 rune |
+|---|---|
+| `agent` | `agent()` |
+| `parallel` | `parallel()` |
+| `map` | `map()` |
+| `gate` | `gate()`、`gate.automated()`、`gate.scored()` |
+| `reduce` | `reduce()` |
+| `approval` | `approval()` |
+| `flow` | `subflow()` |
+| `loop` | `loop()` |
+| `tournament` | `tournament()` |
+| `script` | `script()` |
+| `race` | `race()` |
+| `expand` | `expand()`、`expand.nested()`、`expand.graft()` |
+
+详见 monorepo skills configuration §9 与 `docs/rfc-0.2.0-s4-mvp.md`。
+
+## 运行时边界
+
+- TypeScript DSL 只发生在编译期；产出的 JSON 使用同一运行时。
+- event kernel 保持 opt-in（`eventKernel` 或
+  `PI_TASKFLOW_EVENT_KERNEL=1`）。`race`/`expand` 使用 imperative path；
+  score gate、`onBlock: retry`、reflexion、`retry`、`expect`、跨运行缓存与
+  Shared Context Tree 也会安全回退到 imperative path。
+- 不是出货门内的 MCP `taskflow_build`。
+
+## 下一步
+
+- [阶段类型](/zh-cn/docs/syntax/phase-types) — 含 `race` / `expand` 的 JSON kinds
+- [命令参考](/zh-cn/docs/reference/commands)
+- monorepo：`docs/rfc-0.2.0-s4-mvp.md`、`docs/internal/claim-vs-impl-0.2.0.md`

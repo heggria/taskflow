@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import { emptyUsage } from "../src/usage.ts";
-import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
+import { executeTaskflow, PHASE_TIMEOUT_ABORT_GRACE_MS, type RuntimeDeps } from "../src/runtime.ts";
 import { validateTaskflow, type Taskflow } from "../src/schema.ts";
 import { verifyTaskflow } from "../src/verify.ts";
 import type { RunState } from "../src/store.ts";
@@ -279,6 +279,23 @@ test("timeout: a hanging subagent is aborted; the phase fails with a timedOut ma
 	assert.match(res.state.phases.p.error ?? "", /timed out after 1000ms/);
 	assert.equal(calls, 1, "a timed-out call must not be retried");
 	assert.ok(Date.now() - t0 < 5000, "should return promptly after the cap");
+});
+
+test("timeout: a runner that ignores AbortSignal is still bounded", async () => {
+	const nonCooperative: RuntimeDeps["runTask"] = () => new Promise<RunResult>(() => {});
+	const def: Taskflow = {
+		name: "bounded-noncooperative-timeout",
+		phases: [{ id: "p", type: "agent", agent: "a", task: "hang", timeout: 1000, final: true }],
+	};
+	const started = Date.now();
+	const res = await executeTaskflow(mkState(def), baseDeps(nonCooperative));
+	const elapsed = Date.now() - started;
+	assert.equal(res.state.phases.p.timedOut, true);
+	assert.equal(res.state.phases.p.status, "failed");
+	assert.ok(
+		elapsed < 1000 + PHASE_TIMEOUT_ABORT_GRACE_MS + 2000,
+		`non-cooperative runner exceeded timeout bound: ${elapsed}ms`,
+	);
 });
 
 test("timeout: a fast subagent under the cap is unaffected", async () => {

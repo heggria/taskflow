@@ -24,13 +24,13 @@ jobs:
       matrix:
         node: ["22", "24"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       # pnpm via corepack — the version is pinned by the `packageManager` field
       # in package.json, so every contributor and CI run use the same pnpm.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ matrix.node }}
           registry-url: "https://registry.npmjs.org"
@@ -49,11 +49,11 @@ jobs:
     name: e2e (codex MCP, network-free)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -93,15 +93,19 @@ jobs:
       - name: OpenCode MCP e2e (stdio handshake + tool calls)
         run: pnpm run test:e2e-opencode-mcp
 
+      # Grok MCP e2e is also stdio-only and does not require a live Grok model.
+      - name: Grok MCP e2e (stdio handshake + tool calls)
+        run: pnpm run test:e2e-grok-mcp
+
   build:
     name: build (dist emit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -115,6 +119,56 @@ jobs:
       - name: Build all packages
         run: pnpm run build
 
+  packed-consumer:
+    name: packed consumer (9 packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+
+      # Pack with pnpm so workspace:* is rewritten exactly as it will be for
+      # publish. Install only those tarballs into a clean npm project, then
+      # exercise every explicit export and shipped bin.
+      - name: Build, pack, install, and smoke test all published packages
+        run: pnpm run test:pack
+
+  website:
+    name: website (production export)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # The docs source records last-modified timestamps from git history.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+
+      # Match the GitHub Pages deployment settings so base-path-only failures
+      # are caught before merge. `build` runs docs:check before the export.
+      - name: Validate docs and build production export
+        working-directory: website
+        run: pnpm run build
+        env:
+          TASKFLOW_BASE_PATH: /taskflow
+
   codeql:
     name: CodeQL (JS/TS)
     runs-on: ubuntu-latest
@@ -122,8 +176,8 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4
         with:
           languages: javascript-typescript
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4

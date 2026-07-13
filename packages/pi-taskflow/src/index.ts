@@ -30,7 +30,23 @@ import { renderRunResult, summarizeRun } from "./render.ts";
 import { piSubagentRunner, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
-import { executeTaskflow, recomputeTaskflow, summarizeReuse, traceFilePath, FileTraceSink, runsDir, type ApprovalDecision, type ApprovalRequest, type RecomputeReport, type RuntimeDeps, type RuntimeResult } from "taskflow-core";
+import {
+	executeTaskflow,
+	recomputeTaskflow,
+	summarizeReuse,
+	traceFilePath,
+	FileTraceSink,
+	runsDir,
+	replayRun,
+	upgradeTraceEvent,
+	type ApprovalDecision,
+	type ApprovalRequest,
+	type RecomputeReport,
+	type ReplayReport,
+	type ReplayOverrides,
+	type RuntimeDeps,
+	type RuntimeResult,
+} from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
 import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
@@ -101,8 +117,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute", "cache-clear", "search"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's deterministic-replay event trace, explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "cache-clear", "search"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -146,10 +162,14 @@ const TaskflowParams = Type.Object({
 		}),
 	),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Invocation arguments for the flow" })),
-	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume), inspect (provenance/trace/why-stale), or recompute" })),
+	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume), inspect (provenance/trace/replay/why-stale), or recompute" })),
 	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale, or the phase to re-run for action=recompute" })),
-	json: Type.Optional(Type.Boolean({ description: "For action=trace: return the raw event trace as machine-readable JSON instead of a human-readable timeline." })),
+	json: Type.Optional(Type.Boolean({ description: "For action=trace/replay: return machine-readable JSON instead of a human-readable report." })),
 	dryRun: Type.Optional(Type.Boolean({ description: "For action=recompute: compute the stale frontier without re-executing anything (no tokens spent). Defaults to true (safe); set false to actually re-run the seed + stale frontier and persist the updated run" })),
+	budgetMaxUSD: Type.Optional(Type.Number({ description: "For action=replay: alternate max USD budget (would-exceed-budget checks)." })),
+	budgetMaxTokens: Type.Optional(Type.Number({ description: "For action=replay: alternate max token budget." })),
+	thresholds: Type.Optional(Type.Record(Type.String(), Type.Number(), { description: "For action=replay: map of phaseId → new score threshold." })),
+	models: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "For action=replay: map of phaseId → model (marks needs-live-rerun)." })),
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
 	),
@@ -194,7 +214,7 @@ function formatFlowIR(ir: TaskflowIR): string {
 	lines.push(`# FlowIR — "${ir.meta.sourceFlowName}"`);
 	lines.push("");
 	if (ir.hash) {
-		lines.push(`**content hash:** \`${ir.hash}\`${ir.usedFallbackHash ? "  (fallback — stub projection)" : "  (overstory-canonical)"}`);
+		lines.push(`**content hash:** \`${ir.hash}\`${ir.usedFallbackHash ? "  (fallback — not IR-canonical)" : "  (ir-canonical)"}`);
 		lines.push("");
 	} else {
 		lines.push("**content hash:** _(unavailable — computation failed)_");
@@ -316,6 +336,41 @@ function formatTrace(events: TraceEvent[], runId: string, flowName: string): str
 	lines.push("");
 	lines.push("(Use action=trace with json:true for the complete machine-readable trace.)");
 	return lines.join("\n");
+}
+
+/** Offline replay report (zero tokens). */
+function formatReplay(r: ReplayReport, runId: string, flowName: string): string {
+	const lines: string[] = [
+		`Replay — ${flowName} / ${runId}  (${r.decisions.length} phase decision(s), zero tokens)`,
+	];
+	lines.push("");
+	if (r.needsLiveRerun) lines.push("⚠ Some phases need a live re-run (model/args override).");
+	lines.push(
+		`Recorded usage cost ≈ $${r.totalUsage.cost.toFixed(4)}  tokens in=${r.totalUsage.input} out=${r.totalUsage.output}`,
+	);
+	lines.push("");
+	for (const d of r.decisions) {
+		const prior = d.priorOutcome ? ` prior=${d.priorOutcome}` : "";
+		const next = d.replayedOutcome ? ` → ${d.replayedOutcome}` : "";
+		lines.push(`  • ${d.phaseId}: [${d.outcome}]${prior}${next} — ${d.reason}`);
+	}
+	lines.push("");
+	lines.push("(Use action=replay with json:true for the full ReplayReport.)");
+	return lines.join("\n");
+}
+
+function parseToolReplayOverrides(params: {
+	budgetMaxUSD?: number;
+	budgetMaxTokens?: number;
+	thresholds?: Record<string, number>;
+	models?: Record<string, string>;
+}): ReplayOverrides {
+	const o: ReplayOverrides = {};
+	if (typeof params.budgetMaxUSD === "number") o.budgetMaxUSD = params.budgetMaxUSD;
+	if (typeof params.budgetMaxTokens === "number") o.budgetMaxTokens = params.budgetMaxTokens;
+	if (params.thresholds && Object.keys(params.thresholds).length) o.thresholds = params.thresholds;
+	if (params.models && Object.keys(params.models).length) o.models = params.models;
+	return o;
 }
 
 function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): RunState {
@@ -981,6 +1036,37 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			if (action === "replay") {
+				if (!params.runId)
+					return errorResult(action, "action=replay requires 'runId'");
+				const runR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!runR.ok) return errorResult(action, describeLoadFailure(runR, `Run "${params.runId}"`));
+				const run = runR.value;
+				const raw = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (raw.length === 0)
+					return errorResult(action, `No trace recorded for run "${params.runId}" (the run predates tracing, or no trace sink was injected).`);
+				const events = raw.map((e) => upgradeTraceEvent(e as unknown as Record<string, unknown>));
+				const report = replayRun(
+					events,
+					parseToolReplayOverrides({
+						budgetMaxUSD: params.budgetMaxUSD,
+						budgetMaxTokens: params.budgetMaxTokens,
+						thresholds: params.thresholds as Record<string, number> | undefined,
+						models: params.models as Record<string, string> | undefined,
+					}),
+				);
+				if (params.json) {
+					return {
+						content: [{ type: "text", text: JSON.stringify(report, null, 2) }],
+						details: { action } satisfies TaskflowDetails,
+					};
+				}
+				return {
+					content: [{ type: "text", text: formatReplay(report, run.runId, run.flowName) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
 			if (action === "why-stale") {
 				if (!params.runId)
 					return errorResult(action, "action=why-stale requires 'runId'");
@@ -1314,7 +1400,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "why-stale", "recompute"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1439,6 +1525,53 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				ctx.ui.notify(json ? JSON.stringify(events, null, 2) : formatTrace(events, run.runId, run.flowName), "info");
+				return;
+			}
+
+			if (sub === "replay") {
+				if (!arg) {
+					ctx.ui.notify(
+						"Usage: /tf replay <runId> [--json] [--budget-usd N] [--budget-tokens N] [--threshold phase=0.8]",
+						"warning",
+					);
+					return;
+				}
+				const tokens = arg.trim().split(/\s+/).filter(Boolean);
+				const rid = tokens[0];
+				const json = tokens.includes("--json");
+				const overrides: ReplayOverrides = {};
+				for (let i = 1; i < tokens.length; i++) {
+					const t = tokens[i];
+					if (t === "--budget-usd" && tokens[i + 1]) {
+						overrides.budgetMaxUSD = Number(tokens[++i]);
+					} else if (t === "--budget-tokens" && tokens[i + 1]) {
+						overrides.budgetMaxTokens = Number(tokens[++i]);
+					} else if (t === "--threshold" && tokens[i + 1]) {
+						const spec = tokens[++i];
+						const eq = spec.indexOf("=");
+						if (eq > 0) {
+							const phase = spec.slice(0, eq);
+							const thr = Number(spec.slice(eq + 1));
+							if (phase && Number.isFinite(thr)) {
+								overrides.thresholds = { ...(overrides.thresholds ?? {}), [phase]: thr };
+							}
+						}
+					}
+				}
+				const runR = loadRunDiagnosed(ctx.cwd, rid);
+				if (!runR.ok) {
+					ctx.ui.notify(describeLoadFailure(runR, `Run "${rid}"`), "error");
+					return;
+				}
+				const run = runR.value;
+				const raw = readTrace(traceFilePath(runsDir(ctx.cwd), run.flowName, run.runId));
+				if (raw.length === 0) {
+					ctx.ui.notify(`No trace recorded for run "${rid}" (the run predates tracing, or no trace sink was injected).`, "warning");
+					return;
+				}
+				const events = raw.map((e) => upgradeTraceEvent(e as unknown as Record<string, unknown>));
+				const report = replayRun(events, overrides);
+				ctx.ui.notify(json ? JSON.stringify(report, null, 2) : formatReplay(report, run.runId, run.flowName), "info");
 				return;
 			}
 

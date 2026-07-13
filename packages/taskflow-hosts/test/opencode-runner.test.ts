@@ -12,6 +12,7 @@ import {
 	foldOpencodeEventLine,
 	newOpencodeAccumulator,
 	isReadOnlyPhase,
+	runOpencodeAgentTask,
 	resolveOpencodeModel,
 } from "../src/opencode-runner.ts";
 
@@ -27,6 +28,7 @@ test("opencode parser: folds a real turn into final text + usage", () => {
 	for (const line of REAL_STREAM) foldOpencodeEventLine(acc, line);
 
 	assert.equal(acc.finalText, "pong", "final answer = text part");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined);
 	assert.equal(acc.usage.turns, 1, "one step_finish = one turn");
 	assert.equal(acc.usage.input, 15164);
@@ -61,6 +63,7 @@ test("opencode parser: streaming text parts within a step concatenate", () => {
 	foldOpencodeEventLine(acc, `{"type":"text","part":{"type":"text","text":"the ans"}}`);
 	foldOpencodeEventLine(acc, `{"type":"text","part":{"type":"text","text":"wer is X"}}`);
 	assert.equal(acc.finalText, "the answer is X");
+	assert.equal(acc.terminalSeen, false, "text without step_finish is not terminal");
 });
 
 test("opencode parser: a bash tool_use becomes a $-prefixed activity for streaming", () => {
@@ -127,4 +130,29 @@ test("opencode permissions: a mutating whitelist is NOT read-only", () => {
 test("opencode permissions: a read-only whitelist IS read-only", () => {
 	assert.equal(isReadOnlyPhase(["read", "grep", "find", "ls"]), true);
 	assert.equal(isReadOnlyPhase(["read"]), true);
+});
+
+test("opencode runner: mutating/default fails before spawn without explicit opt-in", async () => {
+	const previousBin = process.env.PI_TASKFLOW_OPENCODE_BIN;
+	const previousOptIn = process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+	try {
+		process.env.PI_TASKFLOW_OPENCODE_BIN = "/definitely/not/an/opencode/binary";
+		delete process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+		const result = await runOpencodeAgentTask(
+			"/tmp",
+			[{ name: "writer", description: "test", systemPrompt: "", source: "project", filePath: "/tmp/writer.md" }],
+			"writer",
+			"change a file",
+			{},
+		);
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.stopReason, "permission_denied");
+		assert.match(result.errorMessage ?? "", /PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1/);
+		assert.doesNotMatch(result.stderr, /ENOENT/);
+	} finally {
+		if (previousBin === undefined) delete process.env.PI_TASKFLOW_OPENCODE_BIN;
+		else process.env.PI_TASKFLOW_OPENCODE_BIN = previousBin;
+		if (previousOptIn === undefined) delete process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO;
+		else process.env.PI_TASKFLOW_OPENCODE_UNSAFE_AUTO = previousOptIn;
+	}
 });

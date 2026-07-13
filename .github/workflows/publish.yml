@@ -1,8 +1,9 @@
 name: Publish & Release
 
-# Publishes taskflow-core + taskflow-mcp-core + taskflow-hosts + pi-taskflow + codex-taskflow +
-# claude-taskflow + opencode-taskflow to npmjs.com and creates a GitHub Release, when a v* tag is
-# pushed (e.g. `git tag v0.1.0 && git push origin v0.1.0`). All seven workspace
+# Publishes all nine packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
+# taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
+# grok-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
+# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All nine workspace
 # versions must equal the tag.
 
 on:
@@ -10,17 +11,44 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write    # create GitHub Release
+      contents: read     # checkout source for build + publish
       id-token: write    # npm provenance
 
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+
+      # A tag is not protected by the main-branch ruleset. Refuse to publish
+      # unless its peeled commit is already reachable from the canonical main
+      # branch fetched from origin; a tag pushed from any other branch must not
+      # become a release merely because its version happens to match.
+      - name: Verify tag commit belongs to origin/main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin \
+            +refs/heads/main:refs/remotes/origin/main
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          EVENT_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [ "$TAG_COMMIT" != "$EVENT_COMMIT" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME resolves to $TAG_COMMIT, but the event SHA resolves to $EVENT_COMMIT"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME targets $TAG_COMMIT, which is not reachable from origin/main"
+            exit 1
+          fi
+          echo "Verified $GITHUB_REF_NAME at $TAG_COMMIT is reachable from origin/main"
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -38,6 +66,12 @@ jobs:
       - name: Build all packages (emit dist)
         run: pnpm run build
 
+      # This is a release gate, not a post-publish check: it packs the current
+      # tag checkout, installs all nine local tarballs into a clean consumer,
+      # and exercises their exports and bins before the first npm mutation.
+      - name: Verify packed consumer install
+        run: node scripts/smoke-packed-packages.mjs
+
       - name: Verify tag matches workspace versions
         run: |
           TAG="${GITHUB_REF_NAME}"
@@ -46,7 +80,7 @@ jobs:
             echo "::error::Tag $TAG does not match root version $EXPECT"
             exit 1
           fi
-          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts pi-taskflow codex-taskflow claude-taskflow opencode-taskflow; do
+          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
@@ -66,6 +100,11 @@ jobs:
             echo "::error::Tag $TAG does not match claude plugin.json version $CLAUDE_PLUGIN_V"
             exit 1
           fi
+          GROK_PLUGIN_V="v$(node -p "require('./packages/grok-taskflow/plugin/.grok-plugin/plugin.json').version")"
+          if [ "$GROK_PLUGIN_V" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match grok plugin.json version $GROK_PLUGIN_V"
+            exit 1
+          fi
           CODEX_PINNED="v$(node -p "require('./packages/codex-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('codex-taskflow@')).split('@')[1]")"
           if [ "$CODEX_PINNED" != "$TAG" ]; then
             echo "::error::codex .mcp.json pins codex-taskflow@${CODEX_PINNED#v} but tag is $TAG"
@@ -74,6 +113,11 @@ jobs:
           CLAUDE_PINNED="v$(node -p "require('./packages/claude-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('claude-taskflow@')).split('@')[1]")"
           if [ "$CLAUDE_PINNED" != "$TAG" ]; then
             echo "::error::claude .mcp.json pins claude-taskflow@${CLAUDE_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
+          GROK_PINNED="v$(node -p "require('./packages/grok-taskflow/plugin/.mcp.json').mcpServers.taskflow.args.find(a => a.startsWith('grok-taskflow@')).split('@')[1]")"
+          if [ "$GROK_PINNED" != "$TAG" ]; then
+            echo "::error::grok .mcp.json pins grok-taskflow@${GROK_PINNED#v} but tag is $TAG"
             exit 1
           fi
           # OpenCode has no plugin manifest; its scaffold opencode.json pins the
@@ -86,17 +130,20 @@ jobs:
 
       - name: Publish workspaces to npmjs.com
         # Order matters: taskflow-core first (the adapters depend on it).
-        # Idempotent: if this exact version is already on npm (e.g. a re-run or a
-        # partial earlier publish), skip that package instead of failing the job.
+        # Idempotent but fail-closed: an existing version is skipped only after
+        # its trusted npm owner, GitHub/SLSA provenance, source commit, and exact
+        # locally-packed tarball integrity have all been verified. A squatter
+        # pre-publishing name@version must never be mistaken for our release.
         run: |
-          set -e
+          set -euo pipefail
           publish_one() {
             local pkg="$1"
             local name version
             name="$(node -p "require('./packages/$pkg/package.json').name")"
             version="$(node -p "require('./packages/$pkg/package.json').version")"
             if pnpm view "$name@$version" version >/dev/null 2>&1; then
-              echo "::notice::$name@$version already published — skipping"
+              node scripts/verify-published-package.mjs "packages/$pkg"
+              echo "::notice::$name@$version already published and verified — skipping"
             else
               echo "Publishing $name@$version"
               pnpm publish --filter "$pkg" --provenance --access public --no-git-checks
@@ -105,16 +152,57 @@ jobs:
           publish_one taskflow-core
           publish_one taskflow-mcp-core
           publish_one taskflow-hosts
+          publish_one taskflow-dsl
           publish_one pi-taskflow
           publish_one codex-taskflow
           publish_one claude-taskflow
           publish_one opencode-taskflow
+          publish_one grok-taskflow
+
+          # A successful publish command is not sufficient: registry metadata,
+          # provenance, and tarball bytes can become visible at different times.
+          # Verify every package after the full set is published, retrying only for
+          # bounded npm propagation delay.
+          verify_one() {
+            local pkg="$1"
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              if node scripts/verify-published-package.mjs "packages/$pkg"; then
+                return 0
+              fi
+              if [ "$attempt" -lt 6 ]; then sleep $((attempt * 5)); fi
+            done
+            echo "::error::Post-publish verification failed for $pkg"
+            return 1
+          }
+          verify_one taskflow-core
+          verify_one taskflow-mcp-core
+          verify_one taskflow-hosts
+          verify_one taskflow-dsl
+          verify_one pi-taskflow
+          verify_one codex-taskflow
+          verify_one claude-taskflow
+          verify_one opencode-taskflow
+          verify_one grok-taskflow
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TRUSTED_OWNERS: "heggria,muyun"
+          PUBLISH_REPOSITORY_URL: "https://github.com/heggria/taskflow"
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create GitHub Release
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Create GitHub Release
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
           node -e "
             const fs = require('fs');
             let body = [];
@@ -129,10 +217,46 @@ jobs:
               }
             } catch {}
             const text = body.join('\n').trim();
-            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow.'));
+            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow.'));
           " "$VERSION"
+
+          TAG_PATH="$(jq -rn --arg tag "$GITHUB_REF_NAME" '$tag | @uri')"
+          ERROR_FILE="$(mktemp)"
+          if RELEASE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_PATH}" 2>"$ERROR_FILE")"; then
+            RELEASE_TAG="$(jq -er '.tag_name' <<<"$RELEASE_JSON")"
+            RELEASE_TARGET="$(jq -er '.target_commitish' <<<"$RELEASE_JSON")"
+            RELEASE_DRAFT="$(jq -er '.draft' <<<"$RELEASE_JSON")"
+            RELEASE_PRERELEASE="$(jq -er '.prerelease' <<<"$RELEASE_JSON")"
+            if [ "$RELEASE_TAG" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::Existing release tag $RELEASE_TAG does not match $GITHUB_REF_NAME"
+              exit 1
+            fi
+            case "$RELEASE_TARGET" in
+              "$TAG_COMMIT"|main|refs/heads/main)
+                ;;
+              *)
+                echo "::error::Existing release target $RELEASE_TARGET is neither $TAG_COMMIT nor main"
+                exit 1
+                ;;
+            esac
+            if [ "$RELEASE_DRAFT" != "false" ] || [ "$RELEASE_PRERELEASE" != "false" ]; then
+              echo "::error::Existing release must be published and non-prerelease (draft=$RELEASE_DRAFT, prerelease=$RELEASE_PRERELEASE)"
+              exit 1
+            fi
+            echo "::notice::Release $GITHUB_REF_NAME already exists with a verified target; skipping creation"
+            exit 0
+          fi
+
+          if ! grep -q 'HTTP 404' "$ERROR_FILE"; then
+            cat "$ERROR_FILE" >&2
+            echo "::error::Unable to determine whether release $GITHUB_REF_NAME already exists"
+            exit 1
+          fi
+
           gh release create "$GITHUB_REF_NAME" \
             --notes-file /tmp/release-notes.md \
-            --title "v$VERSION"
+            --title "v$VERSION" \
+            --target "$TAG_COMMIT" \
+            --verify-tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

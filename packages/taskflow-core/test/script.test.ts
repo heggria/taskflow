@@ -170,6 +170,18 @@ test("script run: 'input' is piped to stdin with interpolation", async () => {
 	assert.equal(res.finalOutput, "in[payload-7]");
 });
 
+test("script run: omitted input still closes stdin so EOF-waiting commands finish", async () => {
+	const waitForEof = "process.stdin.resume();process.stdin.on('end',()=>process.stdout.write('eof'))";
+	const def: Taskflow = {
+		name: "s",
+		phases: [{ id: "a", type: "script", run: ["node", "-e", waitForEof], timeout: 1000, final: true }],
+	};
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	assert.equal(res.ok, true);
+	assert.equal(res.state.phases.a.status, "done");
+	assert.equal(res.finalOutput, "eof");
+});
+
 test("script run: array element interpolation resolves upstream refs", async () => {
 	const def: Taskflow = {
 		name: "s",
@@ -280,6 +292,30 @@ test("script robustness: a runaway process is killed at the timeout", async () =
 	assert.equal(res.state.phases.a.status, "failed");
 	assert.match(res.state.phases.a.error ?? "", /timed out after 1000ms/);
 	assert.ok(elapsed < 5000, `timeout took too long: ${elapsed}ms`);
+});
+
+test("script robustness: timeout kills background descendants that hold the shell open", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "s-tree",
+		phases: [{ id: "a", type: "script", run: ["bash", "-lc", "sleep 5 & wait"], timeout: 1000, final: true }],
+	};
+	const t0 = Date.now();
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	const elapsed = Date.now() - t0;
+	assert.equal(res.ok, false);
+	assert.equal(res.state.phases.a.timedOut, true);
+	assert.ok(elapsed < 2500, `process-tree timeout took too long: ${elapsed}ms`);
+});
+
+test("script robustness: normal exit reaps a background process holding stdio", { skip: process.platform === "win32" }, async () => {
+	const def: Taskflow = {
+		name: "s-background",
+		phases: [{ id: "a", type: "script", run: ["bash", "-lc", "sleep 3 &"], final: true }],
+	};
+	const started = Date.now();
+	const res = await executeTaskflow(mkState(def), baseDeps());
+	assert.equal(res.ok, true);
+	assert.ok(Date.now() - started < 1000, "background descendant must be reaped at direct-child exit");
 });
 
 // ---------------------------------------------------------------------------

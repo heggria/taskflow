@@ -1,57 +1,65 @@
 ---
-title: 指南
-description: 在不同宿主和模式下使用 taskflow 的实用指南。
+title: 指南与 Recipes
+description: 在宿主上安装 taskflow，复用成熟 flow 形状，或跟随端到端案例完成真实工作。
 ---
 
-指南是这些文档中*实用*的那一半。[核心概念](/zh-cn/docs/concepts)解释模型，[语法参考](/zh-cn/docs/syntax)列举每个字段，而指南带你端到端地做一件真实的事——在某个宿主上安装、跑一个 flow、保存它、调试它，并在工作需要时上手一个进阶模式。
-
-它们分两种：
-
-- **按宿主。** taskflow 跑在 Pi、Codex、Claude Code 和 OpenCode 上。每个宿主有自己的安装路径和调用入口，所以各自有专门的走查。
-- **按模式。** 基础跑通之后，有些问题想要特定的形状——一个在运行时规划自己子流程的模型，或者一个生成多份竞争草稿再由评委挑出最佳的锦标赛。
+这一章围绕你要完成的工作组织，而不是要求你先记住所有字段。
 
 <Callout type="tip">
-  刚接触 taskflow？从你已经在用的宿主开始。两个宿主指南都以同一个可运行的 review flow 收尾，所以之后你可以跨宿主对照着看。
+  第一次使用 taskflow？先完成[五分钟 quickstart](/zh-cn/docs/getting-started)，再回到这里看宿主专属配置和可复用 recipe。
 </Callout>
 
-## 按宿主
+## 宿主指南
 
 <Cards>
-  <Card title="在 Pi 上使用 taskflow" href="/zh-cn/docs/guides/pi">
-    安装扩展、用 `/tf` 运行、保存 flow，并配置模型角色。
+  <Card title="Pi" href="/zh-cn/docs/guides/pi">
+    安装扩展、使用 `/tf`、保存 flow、检查运行并配置 model roles。
   </Card>
-  <Card title="在 Codex 上使用 taskflow" href="/zh-cn/docs/guides/codex">
-    安装插件、通过 MCP 调用 `taskflow_run`，并处理长时间运行的 flow。
+  <Card title="Codex" href="/zh-cn/docs/guides/codex">
+    安装插件并从 Codex 调用 taskflow MCP 接口。
+  </Card>
+  <Card title="Claude Code" href="/zh-cn/docs/guides/claude-code">
+    安装 Claude 插件并通过 MCP 运行多阶段工作。
+  </Card>
+  <Card title="OpenCode" href="/zh-cn/docs/guides/opencode">
+    注册 MCP server 并运行隔离的 OpenCode subagents。
+  </Card>
+  <Card title="Grok Build" href="/zh-cn/docs/guides/grok-build">
+    安装 Grok 插件并安全使用 Grok runner。
+  </Card>
+  <Card title="Agents 与 Model Roles" href="/zh-cn/docs/guides/agents-and-model-roles">
+    理解 agent 发现机制与 role-to-model 解析。
   </Card>
 </Cards>
 
-## 按模式
+## Recipes
 
 <Cards>
+  <Card title="模板库" href="/zh-cn/docs/guides/templates">
+    复制可直接运行的 flow，并按项目需要调整。
+  </Card>
   <Card title="动态规划" href="/zh-cn/docs/guides/dynamic-planning">
-    在运行时生成子流程，并在执行前验证它们。
+    在运行时生成子流程，并在执行前验证它。
   </Card>
   <Card title="锦标赛选择" href="/zh-cn/docs/guides/tournament">
-    生成竞争变体，让评委选出最佳结果。
+    生成竞争变体，再由 judge 选择或合并结果。
   </Card>
 </Cards>
 
 ## 案例研究
 
-端到端的真实任务走查，展示多种 phase 类型如何协同工作。
-
 <Cards>
   <Card title="代码审计" href="/zh-cn/docs/guides/code-audit-case-study">
-    审查变更文件的安全与架构风险，遇到严重问题时通过 gate 拦截。
+    发现变更文件、fan-out 审查、gate 严重问题并汇总报告。
   </Card>
   <Card title="发布说明标题" href="/zh-cn/docs/guides/headline-tournament-case-study">
-    用锦标赛从多个候选中选出最有力的发布说明标题。
+    用锦标赛选出最强的发布说明标题。
   </Card>
   <Card title="迁移规划器" href="/zh-cn/docs/guides/migration-planner-case-study">
-    动态规划代码迁移、验证计划、执行并循环直到完成。
+    对高风险代码迁移进行规划、验证、执行与迭代。
   </Card>
 </Cards>
 
-## 提交你的案例
+## 0.2 运行时操作
 
-有哪个 taskflow 帮你省下了大量时间？[分享给社区](/zh-cn/docs/community)。
+后台运行、FlowIR、确定性 replay 与增量重算统一归入 [0.2 新能力](/zh-cn/docs/compiler-runtime)，让宿主指南和 recipes 保持任务导向。

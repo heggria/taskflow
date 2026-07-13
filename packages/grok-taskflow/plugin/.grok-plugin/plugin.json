@@ -1,0 +1,23 @@
+{
+  "name": "taskflow",
+  "version": "0.2.0",
+  "description": "Declarative, verifiable DAG orchestration for Grok Build subagents — fan-out, gates, loops, tournaments, approvals, resumable runs, and saveable commands, with intermediate transcripts kept out of your context.",
+  "author": {
+    "name": "heggria",
+    "email": "bshengtao@gmail.com"
+  },
+  "homepage": "https://github.com/heggria/taskflow",
+  "repository": "https://github.com/heggria/taskflow",
+  "license": "MIT",
+  "keywords": [
+    "taskflow",
+    "orchestration",
+    "subagents",
+    "workflow",
+    "dag",
+    "mcp",
+    "grok",
+    "grok-build"
+  ],
+  "logo": "assets/taskflow.svg"
+}

@@ -1,26 +1,30 @@
 ---
 title: Reference
-description: Quick reference for shorthand and commands.
+description: Quick lookup for commands and shorthand invocation forms.
 ---
 
-The Reference pages are *lookup material*. They are not a tutorial — read them when you already know what you want and just need the exact shape. For the why behind any of this, see [Concepts](/en/docs/concepts); for exhaustive field-by-field detail, see the [Syntax Reference](/en/docs/syntax).
+Reference pages are lookup material. Use them when you already know the operation you need and want its exact invocation.
 
-Two pages live here:
-
-- **[Shorthand](/en/docs/reference/shorthand)** — the `task`, `tasks`, and `chain` shortcuts, and the exact full-flow JSON each one expands into.
-- **[Commands](/en/docs/reference/commands)** — every Pi `/tf` command and every Codex / Claude / OpenCode MCP tool, grouped by purpose, with a worked example session.
+- **[Commands](/en/docs/reference/commands)** — Pi `/tf` commands and Codex / Claude Code / OpenCode / Grok MCP tools, grouped by lifecycle and inspection task.
+- **[Shorthand](/en/docs/reference/shorthand)** — `task`, `tasks`, and `chain`, plus the full flow each form expands into.
 
 <Callout type="info">
-  On Pi, saved flows become slash-command shortcuts automatically: `/tf:review-changes` is the same as `/tf run review-changes`. On MCP hosts, you run a saved flow by name through `taskflow_run`.
+  Compiler/runtime operations such as TypeScript authoring, FlowIR, replay, and recompute now live together in [New in taskflow 0.2](/en/docs/compiler-runtime). Exact DSL fields remain in the [Syntax Reference](/en/docs/syntax).
 </Callout>
 
-## The pages
+## Lookup pages
 
 <Cards>
-  <Card title="Shorthand" href="/en/docs/reference/shorthand">
-    `task`, `tasks`, `chain` — the quick-delegation shortcuts.
-  </Card>
   <Card title="Commands" href="/en/docs/reference/commands">
-    Pi `/tf` commands and Codex / Claude / OpenCode MCP tools.
+    Run, save, inspect, trace, replay, explain staleness, and recompute.
+  </Card>
+  <Card title="Shorthand" href="/en/docs/reference/shorthand">
+    Fast single, parallel, and sequential delegation forms.
+  </Card>
+  <Card title="Syntax Reference" href="/en/docs/syntax">
+    Complete field and phase-type definitions.
+  </Card>
+  <Card title="New in 0.2" href="/en/docs/compiler-runtime">
+    TypeScript DSL, FlowIR, replay, background runs, and incremental recompute.
   </Card>
 </Cards>

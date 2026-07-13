@@ -1,8 +1,17 @@
 {
   "name": "taskflow-hosts",
-  "version": "0.1.8",
-  "description": "Shared host-runner collection for taskflow — the codex, claude, and opencode SubagentRunner implementations + their argv builders and event-stream parsers. The per-host MCP servers, plugin scaffolds, and bins live in codex-taskflow / claude-taskflow / opencode-taskflow; this package holds just the runners so a new host can be added in one place.",
+  "version": "0.2.0",
+  "description": "Shared host-runner collection for taskflow — the codex, claude, opencode, and grok SubagentRunner implementations + their argv builders and event-stream parsers. The per-host MCP servers, plugin scaffolds, and bins live in codex-taskflow / claude-taskflow / opencode-taskflow / grok-taskflow; this package holds just the runners so a new host can be added in one place.",
   "homepage": "https://github.com/heggria/taskflow#readme",
+  "author": "heggria <bshengtao@gmail.com>",
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/taskflow-hosts"
+  },
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
@@ -28,6 +37,11 @@
       "types": "./dist/opencode-runner.d.ts",
       "default": "./dist/opencode-runner.js"
     },
+    "./grok": {
+      "development": "./src/grok-runner.ts",
+      "types": "./dist/grok-runner.d.ts",
+      "default": "./dist/grok-runner.js"
+    },
     "./*": {
       "development": "./src/*.ts",
       "types": "./dist/*.d.ts",
@@ -41,10 +55,22 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./codex": { "types": "./dist/codex-runner.d.ts", "default": "./dist/codex-runner.js" },
+      "./claude": { "types": "./dist/claude-runner.d.ts", "default": "./dist/claude-runner.js" },
+      "./opencode": { "types": "./dist/opencode-runner.d.ts", "default": "./dist/opencode-runner.js" },
+      "./grok": { "types": "./dist/grok-runner.d.ts", "default": "./dist/grok-runner.js" },
+      "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
+    }
   },
   "dependencies": {
-    "taskflow-core": "0.1.8"
+    "taskflow-core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
@@ -55,6 +81,8 @@
     "codex",
     "claude",
     "opencode",
+    "grok",
+    "grok-build",
     "orchestration"
   ],
   "license": "MIT"

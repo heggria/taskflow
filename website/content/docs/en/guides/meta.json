@@ -1,0 +1,21 @@
+{
+	"title": "Guides & Recipes",
+	"pages": [
+		"index",
+		"---Hosts---",
+		"pi",
+		"codex",
+		"claude-code",
+		"opencode",
+		"grok-build",
+		"agents-and-model-roles",
+		"---Recipes---",
+		"templates",
+		"dynamic-planning",
+		"tournament",
+		"---Case Studies---",
+		"code-audit-case-study",
+		"headline-tournament-case-study",
+		"migration-planner-case-study"
+	]
+}

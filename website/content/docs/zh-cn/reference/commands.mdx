@@ -1,9 +1,9 @@
 ---
 title: 命令
-description: Pi 斜杠命令和 Codex MCP 工具。
+description: Pi 斜杠命令与 MCP 工具（Codex、Claude、OpenCode、Grok）。
 ---
 
-taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/tf run` 和 `/tf:review-changes` 这样的斜杠命令。在 **Codex**（以及 Claude Code、OpenCode）上，相同的操作是模型调用的 MCP 工具——`taskflow_run`、`taskflow_list` 等等。
+taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/tf run` 和 `/tf:review-changes` 这样的斜杠命令。在 **Codex**（以及 Claude Code、OpenCode、Grok）上，相同的操作是模型调用的 MCP 工具——`taskflow_run`、`taskflow_list` 等等。
 
 本页是两者的分组参考。每个命令有一行用途说明，并在有用处时给出具体示例。如果你只想略读，跳到末尾的[示例会话](#示例会话)。
 
@@ -42,16 +42,19 @@ taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/
 | `/tf provenance <runId>` | 显示一个运行观察到的读集合来源。 |
 | `/tf why-stale <runId> [phaseId]` | 解释为什么一个缓存的运行已过期——哪个 fingerprint 输入变了。 |
 | `/tf recompute <runId> <phaseId> [--apply]` | 最小化地重算一个过期阶段。默认是安全的 dry-run；`--apply` 花 token。 |
+| `/tf trace <runId> [--json]` | 显示追加写事件日志（subagent I/O + 运行时决策）。 |
+| `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | 基于已录制轨迹的离线阈值/预算 what-if（**零 token**）。 |
 
 ### 生命周期
 
 | 命令 | 说明 |
 |---|---|
 | `/tf save` | 把最近的内联 flow 定义保存到一个名称下（让 `/tf:<name>` 立即可用）。 |
+| `/tf search` | 按 purpose/tags 搜索可复用 flow 库。 |
 | `/tf init` | 配置模型角色——把内置 agent 角色映射到你的模型。 |
 
 <Callout type="tip">
-  `peek`、`provenance`、`why-stale` 和 `recompute` 是调试工具包。当一个运行做了意料之外的事、你需要在不重跑的情况下看*为什么*时使用它们。
+  `peek` / `provenance` / `why-stale` / `recompute` 回答「会重跑什么」；`trace` + `replay` 回答「当时如何裁决」与反事实旋钮——见[确定性重放](/zh-cn/docs/compiler-runtime/deterministic-replay)。
 </Callout>
 
 ## `taskflow` 工具（Pi）
@@ -62,16 +65,18 @@ taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/
 |---|---|
 | `run` | 运行内联或已保存的 flow。 |
 | `save` | 持久化一个 flow 定义。 |
+| `search` | 按 purpose/tags 搜索可复用 flow 库。 |
 | `resume` | 按 `runId` 续跑。 |
 | `list` | 列出已保存的 flow。 |
 | `agents` | 列出内置 agent。 |
 | `verify` | 静态检查。 |
 | `compile` | Mermaid 图 + 验证报告。 |
 | `ir` / `provenance` / `why-stale` / `recompute` | 增量重算工具包。 |
+| `trace` / `replay` | 事件日志查看 + 离线决策 what-if（零 token）。 |
 | `cache-clear` | 清除跨运行记忆化缓存。 |
 | `init` | 配置模型角色。 |
 
-## Codex / Claude / OpenCode MCP 工具
+## Codex / Claude / OpenCode / Grok MCP 工具
 
 在 MCP 宿主上，taskflow 暴露这些工具（模型调用它们；你通常不输入它们）：
 
@@ -81,11 +86,17 @@ taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/
 | `taskflow_list` | 列出在此目录下可发现的已保存 flow。 |
 | `taskflow_show` | 打印一个已保存 flow 的定义。 |
 | `taskflow_verify` | 静态验证一个 flow（不执行）。 |
-| `taskflow_compile` | 把 flow 渲染为 DAG 图（SVG 图像）加一行状态。 |
+| `taskflow_compile` | 把 DAG 渲染为 SVG、独立文本大纲与验证状态；超大图回退为纯文本。 |
 | `taskflow_peek` | 查看一个已存储运行的某个阶段的中间输出（事后调试）。 |
+| `taskflow_trace` | 运行追加写事件日志的只读时间线。 |
+| `taskflow_replay` | 基于已录制轨迹的离线阈值/预算 what-if（零 token）。 |
+| `taskflow_why_stale` | 解释观测/声明依赖的陈旧性。 |
+| `taskflow_recompute` | 报告陈旧前沿（MCP 上**仅 dry-run**）。 |
+| `taskflow_save` | 将 flow 连同 purpose/tags 保存到库。 |
+| `taskflow_search` | 搜索可复用 flow 库。 |
 
 <Callout type="info">
-  在 MCP 宿主上没有 `/tf` 斜杠命令——你用自然语言描述工作，模型调用 `taskflow_run`。当你需要查看中间输出时，使用 `taskflow_peek` 配合 `taskflow_run` 返回的 `runId`。
+  在 MCP 宿主上没有 `/tf` 斜杠命令——你用自然语言描述工作，模型调用 `taskflow_run`。事后排查与离线 what-if 使用 `taskflow_peek` / `taskflow_trace` / `taskflow_replay` 配合 `runId`。
 </Callout>
 
 ## 示例会话

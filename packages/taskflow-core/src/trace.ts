@@ -20,8 +20,18 @@
  * migration. See `replay.ts` for the `ReplayDecision` type stub.
  */
 
-import { openSync, readFileSync, renameSync, unlinkSync, writeFileSync, closeSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+	openSync,
+	readFileSync,
+	readSync,
+	renameSync,
+	unlinkSync,
+	writeFileSync,
+	closeSync,
+	statSync,
+	mkdirSync,
+} from "node:fs";
+import { dirname } from "node:path";
 import type { UsageStats } from "./usage.ts";
 import type { ScorerResult } from "./scorers.ts";
 
@@ -48,6 +58,10 @@ export interface TraceEvent {
 	runId: string;
 	phaseId: string;
 	kind: "phase-start" | "phase-end" | "subagent-call" | "decision";
+	/** Static graph metadata emitted on phase-start. It lets offline replay
+	 *  propagate counterfactual gate/budget outcomes without importing runtime. */
+	dependencies?: string[];
+	optional?: boolean;
 	// — subagent-call (the load-bearing record a replay consumes) —
 	input?: {
 		agent: string;
@@ -148,19 +162,12 @@ export class FileTraceSink implements TraceSink {
 	private readonly buffer = new Map<string, TraceEvent[]>();
 	private readonly tracePath: string;
 	private readonly lockPath: string;
-	private readonly dirOk: boolean;
 
 	constructor(tracePath: string) {
 		this.tracePath = tracePath;
 		this.lockPath = `${tracePath}.lock`;
-		// Probe writability of the parent dir once; if unwritable, degrade to
-		// no-op silently (fail-open — trace is best-effort, never run-breaking).
-		try {
-			const dir = join(tracePath, "..");
-			this.dirOk = existsSync(dir);
-		} catch {
-			this.dirOk = false;
-		}
+		// Do NOT probe parent-dir existence here: the flow run directory is often
+		// created later by the first saveRun(). mkdir is deferred to flush().
 	}
 
 	emit(event: TraceEvent): void {
@@ -175,32 +182,46 @@ export class FileTraceSink implements TraceSink {
 
 	flush(phaseId: string): void {
 		const events = this.buffer.get(phaseId);
-		this.buffer.delete(phaseId);
-		if (!events || events.length === 0 || !this.dirOk) return;
+		if (!events || events.length === 0) return;
 		// Serialize + append under an exclusive lock. Best-effort: any error is
-		// swallowed (trace is never run-breaking).
+		// swallowed (trace is never run-breaking). Create the parent dir on first
+		// flush so a sink constructed before saveRun still records events.
 		try {
+			mkdirSync(dirname(this.tracePath), { recursive: true });
 			withExclusiveLock(this.lockPath, () => {
 				const chunk = events.map((e) => JSON.stringify(e)).join("\n") + "\n";
-				appendAtomic(this.tracePath, chunk);
+				appendLocked(this.tracePath, chunk);
 			});
+			// Delete only after a successful append. A transient lock/filesystem
+			// failure can then be retried by the next phase-boundary flush instead of
+			// silently losing the only replay evidence for this phase.
+			this.buffer.delete(phaseId);
 		} catch {
-			/* fail-open */
+			/* fail-open; keep the batch buffered for a later retry */
 		}
 	}
 }
 
-/** Atomic append: read current (if any) + write combined to temp + rename. */
-function appendAtomic(path: string, chunk: string): void {
-	let existing = "";
+/** Append while the caller holds the exclusive trace lock. O_APPEND avoids the
+ * previous read-whole-file + rewrite cycle (quadratic over many phases). A
+ * crash can leave only the final JSONL line partial, which readTrace already
+ * treats as an incomplete tail and ignores. */
+function appendLocked(path: string, chunk: string): void {
+	const fd = openSync(path, "a+");
 	try {
-		existing = readFileSync(path, "utf8");
-	} catch {
-		existing = "";
+		const size = statSync(path).size;
+		if (size > 0) {
+			const tail = Buffer.allocUnsafe(1);
+			readSync(fd, tail, 0, 1, size - 1);
+			// Isolate a crash-truncated prior record before appending the first new
+			// event. readTrace will discard that bad line without also losing the
+			// following valid JSON object.
+			if (tail[0] !== 0x0a) writeFileSync(fd, "\n", "utf8");
+		}
+		writeFileSync(fd, chunk, "utf8");
+	} finally {
+		closeSync(fd);
 	}
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	writeFileSync(tmp, existing + chunk, "utf8");
-	renameSync(tmp, path);
 }
 
 /** Hold an exclusive lock for the duration of `fn` via `O_CREAT|O_EXCL`. */

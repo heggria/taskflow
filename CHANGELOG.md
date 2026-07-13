@@ -2,6 +2,135 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.0] — Unreleased
+
+### Added
+- **S4 TypeScript DSL (`taskflow-dsl`):** compile-time `.tf.ts` runes erase to Taskflow JSON via TypeScript AST (`typescript` package, not ts-morph); CLI `new` / `check` / `build` / `decompile`; modular `erase/kinds/*` registry; parity tests (map + `json` + templates). Hosts still run JSON only (no MCP auto-build of `.tf.ts`).
+- **Horizon B engine kinds (`race`, `expand`):** `PHASE_TYPES` is **12**. Imperative runtime + FlowIR 1:1; `race` = **first-success** wins (failed settles do not win); cooperative loser usage is aggregated; non-cooperative losers and **parent abort** are bounded by a cancellation grace (gate is woken on parent abort so the race cannot hang forever); `expand` = nested or graft-promote (`def`, `expandMode`, `maxNodes`) with template rewrite on graft. DSL runes + skills + website phase docs + examples. **`cancelLosers` (default true)** aborts losers via best-effort `AbortSignal` after the first **success**. Event kernel still covers the original **10** kinds (excludes `race`/`expand`); advanced features continue to force imperative fallback; **nested** `flow{def}/use` re-checks kernel admission (fail-closed if child has race/expand or unsupported features).
+- **S5 plan:** `docs/internal/s5-kernel-default-on-plan.md` — parity harness first, then feature gaps, then default ON + flagship recompute metric.
+- **Claim-vs-impl alignment:** `docs/internal/claim-vs-impl-0.2.0.md` ledger; S4 RFCs toolchain corrected; architecture S4 ✅ / S5 next; skills + README phase/test/package counts; website homepage **12** phases / **5** hosts; reference page **TypeScript DSL** (en/zh).
+- **Docs complete for Phase 2 surfaces:** website FlowIR docs (`ir:<64-hex>`, `usedFallbackHash: false`); new concepts **Deterministic Replay** (en/zh) + resume disambiguation; host MCP guides + Grok website + `reference/commands` list all 12 tools including `taskflow_replay`; README en/zh Commands tables; skills `advanced.md` trace/replay vs recompute; `AGENTS.md` exec/trace/replay + kernel flag; architecture RFC status table S0–S5 + internal FlowIR RFC superseded note.
+- **Grok Build host.** New `grok-taskflow` delivery package + `taskflow-hosts` `grokSubagentRunner` (`grok -p --output-format streaming-json`). Plugin scaffold (`.grok-plugin/plugin.json` + `.mcp.json` + skills), repo marketplace index (`.grok-plugin/marketplace.json`), docs (`docs/grok-mcp.md`, website en/zh guides). Install: `grok plugin install … --trust` or local bin for dogfood.
+- **0.2.0 Phase 2 / S0–S3 foundations (event-sourced kernel path):**
+  - `flowir/compile.ts` (`compileTaskflowToFlowIR`) — genuine Taskflow→canonical FlowIR compiler; `compileTaskflowToIR` now content-addresses with `hashFlowIR` (`ir:<64-hex>`) and sets `usedFallbackHash: false`.
+  - `exec/fold.ts` — pure `foldEvents(log) →` per-phase snapshot (S1 differential building block).
+  - `replay.ts` — implements `replayRun(log, overrides)` (threshold / budget / model / args knobs; zero tokens; no import of runtime/driver).
+  - **S1 decision coverage:** runtime emits `gate-score` / `gate-verdict`, `when-guard`, `cache-hit`, `tournament-winner`, `budget-hit`, plus synthetic phase lifecycle for budget/dep skips. Fold differential tests pin fold ↔ RunState agreement.
+  - **S2 event kernel (strangler, default OFF, kernel-eligible kinds = PHASE_TYPES minus `race`/`expand`):** `exec/step.ts` + `step-kinds.ts` + `exec/driver.ts` when `RuntimeDeps.eventKernel` or `PI_TASKFLOW_EVENT_KERNEL=1`. Imperative remains default. Hardening: budget enforcement + `budget-hit` events; deps/`join`/`optional` parity; gate eval fail-safe; `steps.*.json` population; agent timeout; script stdout cap; `flow{def}` dynamic validation + nesting cap + recursion stack; feature fall-back for score/retry/expect/reflexion/onBlock/cross-run cache/shareContext.
+  - **S1 hard gate + import lint:** fold(log) rebuilds phase statuses matching RunState after a captured run (kill-9 oracle); `replay-import-lint` keeps `replay.ts` off the runtime/driver/step import graph.
+  - **North-star slogan:** `compiled · resumable · incremental · replayable-for-what-if` (drops Qwik "not replayable" collision with deterministic replay).
+  - **S3 replay surface:** `taskflow_replay` MCP tool; pi `action=replay` and `/tf replay <runId> [--threshold phase=n] [--budget-usd n]`; golden trace fixture under `test/fixtures/`.
+
+### Fixed
+- **Budget wording now matches the runtime contract.** User-facing docs, skills,
+  and FlowIR comments describe `budget` as an observed-usage stop-loss: after a
+  threshold is observed, no new call starts, while calls already in flight may
+  overshoot. Ordinary DAG layers and map/parallel/tournament fan-out use serial
+  admission, limiting new-call overshoot to one call; `race` necessarily admits
+  its competing branches together, so its already-active branches may all
+  contribute overshoot. Host limits are explicit: Codex rejects `maxUSD` but
+  accepts `maxTokens`; Grok rejects every budget because it reports no usage.
+- **DSL erase closes remaining dynamic-field gaps.** `map` callback aliases must
+  match explicit `as`, tournament task/branch templates contribute DAG edges,
+  and templated `approval.request` / `script.input` preserve placeholders and
+  dependencies. Invalid or malformed `tsconfig.json` now fails `check` instead
+  of being silently ignored; decompile topology preserves implicit final output.
+- **TypeScript DSL decompile now orders dependencies before consumers.** Valid
+  Taskflow JSON may list phases in any order; generated rune bindings now use a
+  stable topological order, so forward-reference gates/reducers rebuild instead
+  of producing unusable source with a successful CLI exit.
+- **MCP cancellation is now real and end-to-end.** The dependency-free stdio
+  transport dispatches requests concurrently, handles
+  `notifications/cancelled`, and propagates a per-request `AbortSignal` through
+  `taskflow_run` into the runtime and active host subprocess. A cancelled tool
+  call returns JSON-RPC `-32800` instead of leaving hidden background work.
+  Input disconnect aborts active requests and notifications; duplicate request
+  ids abort the original controller instead of overwriting it. Completed host
+  subprocesses remove their abort listeners, avoiding long-DAG listener leaks.
+  Transport shutdown is grace-bounded and suppresses late writes; explicit
+  cancellation also races non-cooperative handlers and observes any late
+  rejection, so neither a hung promise nor an unhandled rejection can wedge the
+  MCP process. Asynchronous stdio `error` events (including output `EPIPE`) use
+  the same bounded teardown, abort active work, suppress late responses, and
+  remove their transport listeners after settling.
+- **Grok thinking overrides now work.** Phase → agent → global thinking is
+  mapped to `grok --reasoning-effort` (`off` → `none`).
+- **Grok budgets no longer fail open.** Grok 0.2.93 streaming JSON contains no
+  token/cost usage, so the Grok MCP adapter explicitly rejects flows declaring
+  `budget` rather than silently reporting zero and ignoring the ceiling. The
+  runtime capability check applies at every execution boundary, including
+  inline object/string flows, saved flows, and nested/graft `expand` fragments.
+- **Script phases without `input` now close stdin immediately.** Commands that
+  read until EOF (for example `cat`) no longer wait for the phase timeout when
+  no input payload was configured.
+- **Codex thinking overrides now reach the host CLI.** Phase → agent → global
+  thinking is mapped to Codex `model_reasoning_effort`, including the supported
+  aliases, instead of silently inheriting an unrelated user-level setting.
+- **Thinking configuration is validated instead of silently ignored.** Invalid
+  values are rejected at the Taskflow boundary so a typo cannot fall back to a
+  host's global reasoning configuration.
+
+### Security
+- **Host children no longer inherit ambient authority.** Codex subagents are
+  ephemeral, ignore parent user config/rules, and clear unrelated MCP servers;
+  OpenCode read-only phases use a default-deny policy covering custom/MCP tools;
+  Codex, OpenCode, and Grok receive filtered provider/runtime environments.
+  Operators can explicitly pass named task variables with
+  `PI_TASKFLOW_CHILD_ENV_ALLOW`.
+- **Published surfaces are verified as consumers receive them.** Packed
+  manifests strip source-only `development` exports, declaration imports are
+  typechecked, internal dependencies are exact, and the OpenCode tarball now
+  includes its config/skill/assets scaffold. Publish reruns verify all nine
+  registry artifacts after mutation, not only versions that existed before it.
+- **MCP trace responses are bounded.** Human and JSON trace views cap event
+  counts and oversized strings; JSON reports total/returned/truncated instead
+  of flooding the host context with an unbounded transcript.
+- **DSL output writes are contained, no-clobber, and atomic.** `build`,
+  `decompile`, and `new` reject symlink escapes, preserve existing files unless
+  `--force` is explicit, and commit fsynced same-directory temporary files
+  atomically. `--emit both` preflights both destinations before writing either.
+- **Grok read-only phases are kernel-enforced and defence-in-depth.** They now
+  require `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` to name a custom profile
+  extending `read-only`, plus a known-good file-read allowlist, independent
+  mutator/MCP deny rules, and disabled subagents. `web_search` / `web_fetch` are
+  omitted from the Grok 0.2.93 allowlist because that CLI version can label
+  them unmappable and restore the full toolset. A live executor E2E verifies a
+  write attempt is blocked even when the workspace is under `/tmp`.
+- **Grok mutating/default phases require a fail-closed custom sandbox.** Built-in
+  profiles can warn and continue unsandboxed when kernel enforcement is
+  unavailable, which is unsafe with `--always-approve`. Mutating phases now
+  require `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` to name a configured
+  custom profile; built-in names are rejected. `max_turns_reached` also fails
+  the phase instead of accepting a partial answer.
+- **OpenCode subprocess permissions fail closed.** Every OpenCode child now
+  uses `--pure` so external plugins cannot bypass the tool permission policy.
+  Mutating/default-capable phases are rejected unless the operator explicitly
+  sets `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1`; only then is `--auto` added.
+- **Release reruns no longer blindly trust an existing npm version.** Before
+  skipping, the publish workflow verifies a trusted npm owner, SLSA provenance
+  from this repository/workflow/tag/commit, and exact locally-packed tarball
+  integrity. A preclaimed `name@version` now fails the release. Every
+  third-party action across CI, Pages, and publish/release workflows is pinned
+  to the official major tag's full commit SHA; npm publish has only
+  `contents: read` and `id-token: write`, while GitHub Release creation is
+  isolated in a dependent job with only `contents: write`.
+- **Claude permission handling no longer defaults to an unsandboxed permission
+  bypass.** Host policy now uses explicit least-privilege execution modes and
+  fails closed when the requested tool capability cannot be represented
+  safely. Claude Code >=2.1.169 `--safe-mode` disables non-managed
+  customizations, `--tools` restricts built-ins, only that same set is
+  pre-approved, and disk settings/non-managed hooks are disabled (managed
+  policy hooks may still run). Explicit lists remain narrow even after the
+  unsafe opt-in; unknown tool names always fail closed.
+  The Claude child also receives a filtered environment that retains
+  platform/proxy/CA and supported provider settings while dropping unrelated
+  application secrets.
+- **Published artifacts are consumer-tested before npm is mutated.** CI and
+  the tag workflow pack all nine packages with pnpm, install the exact local
+  tarballs into a clean npm project, reject leaked `workspace:*` ranges, import
+  every explicit public entry point, and exercise all five shipped bins. The
+  same gate therefore protects first publication as well as release reruns.
+
 ## [0.1.8] — 2026-07-09
 
 ### Fixed

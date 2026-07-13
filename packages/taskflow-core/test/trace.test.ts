@@ -178,11 +178,87 @@ test("FileTraceSink: buffers per phase and flushes once at flush()", () => {
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("FileTraceSink: separate phase flushes append without replacing prior events", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-sink-append-"));
+	const file = path.join(dir, "run.trace.jsonl");
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 1, runId: "r", phaseId: "a", kind: "phase-start" });
+	sink.flush("a");
+	sink.emit({ ts: 2, runId: "r", phaseId: "b", kind: "phase-start" });
+	sink.flush("b");
+	assert.deepEqual(readTrace(file).map((event) => event.phaseId), ["a", "b"]);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("FileTraceSink: a crash-truncated tail does not swallow the first event after restart", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "trace-sink-recover-"));
+	const file = path.join(dir, "run.trace.jsonl");
+	fs.writeFileSync(file, '{"ts":1,"runId":"r","phaseId":"broken"');
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 2, runId: "r", phaseId: "recovered", kind: "phase-start" });
+	sink.flush("recovered");
+	assert.deepEqual(readTrace(file).map((event) => event.phaseId), ["recovered"]);
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("FileTraceSink: never throws on an unwritable dir (fail-open)", () => {
 	const sink = new FileTraceSink("/no/such/dir/run.trace.jsonl");
 	sink.emit({ ts: 1, runId: "r", phaseId: "p", kind: "phase-start" });
 	// flush must not throw.
 	assert.doesNotThrow(() => sink.flush("p"));
+});
+
+test("FileTraceSink: creates missing parent dir on first flush (MCP constructs sink before saveRun)", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "trace-mkdir-"));
+	const nested = path.join(root, "flow-name", "run.trace.jsonl");
+	// Parent flow-name/ does not exist yet — mirrors first-run MCP path.
+	assert.equal(fs.existsSync(path.dirname(nested)), false);
+	const sink = new FileTraceSink(nested);
+	sink.emit({ ts: 1, runId: "r", phaseId: "hello", kind: "phase-start" });
+	sink.emit({ ts: 2, runId: "r", phaseId: "hello", kind: "phase-end", status: "done" });
+	assert.doesNotThrow(() => sink.flush("hello"));
+	const events = readTrace(nested);
+	assert.equal(events.length, 2);
+	assert.equal(events[0]!.kind, "phase-start");
+	assert.equal(events[1]!.kind, "phase-end");
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("FileTraceSink: a failed flush retains its batch for retry", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "trace-retry-"));
+	const blocked = path.join(root, "blocked");
+	fs.writeFileSync(blocked, "not-a-directory");
+	const file = path.join(blocked, "run.trace.jsonl");
+	const sink = new FileTraceSink(file);
+	sink.emit({ ts: 1, runId: "r", phaseId: "p", kind: "phase-start" });
+	assert.doesNotThrow(() => sink.flush("p"));
+	fs.unlinkSync(blocked);
+	fs.mkdirSync(blocked);
+	sink.flush("p");
+	assert.deepEqual(readTrace(file).map((event) => event.kind), ["phase-start"]);
+	fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("trace: records every retry attempt with independent usage", async () => {
+	const events: TraceEvent[] = [];
+	const sink: TraceSink = { emit: (event) => events.push(event), flush: () => {} };
+	let calls = 0;
+	const def: Taskflow = {
+		name: "trace-retries",
+		phases: [{ id: "p", type: "agent", task: "work", retry: { max: 2, backoffMs: 0 }, final: true }],
+	};
+	const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => {
+		calls++;
+		return {
+			agent, task, exitCode: calls < 3 ? 1 : 0, output: calls < 3 ? "" : "ok", stderr: "",
+			usage: { ...emptyUsage(), output: calls }, stopReason: calls < 3 ? "error" : "end",
+			errorMessage: calls < 3 ? "hard failure" : undefined,
+		};
+	};
+	await executeTaskflow(mkState(def), baseDeps(runTask, sink));
+	const attempts = events.filter((event) => event.kind === "subagent-call");
+	assert.deepEqual(attempts.map((event) => event.input?.attempt), [0, 1, 2]);
+	assert.deepEqual(attempts.map((event) => event.output?.usage?.output), [1, 2, 3]);
 });
 
 // ─── decision events: gate verdict + unreplayable marker ─────────────────────

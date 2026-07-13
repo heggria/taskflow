@@ -1,0 +1,25 @@
+{
+  "name": "race-first-win",
+  "description": "Horizon B: first successful branch wins (latency over exhaustive wait; fast hard-fail does not win).",
+  "budget": { "maxUSD": 0.5 },
+  "phases": [
+    {
+      "id": "answer",
+      "type": "race",
+      "branches": [
+        {
+          "task": "Answer quickly with a short heuristic for: {args.q}",
+          "agent": "executor"
+        },
+        {
+          "task": "Answer carefully after a brief structured think for: {args.q}",
+          "agent": "executor"
+        }
+      ],
+      "final": true
+    }
+  ],
+  "args": {
+    "q": { "default": "What is a DAG?" }
+  }
+}

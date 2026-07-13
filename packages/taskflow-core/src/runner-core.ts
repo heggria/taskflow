@@ -12,7 +12,7 @@
  * hosts.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
@@ -22,7 +22,7 @@ import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts"
 export type { CoreMessage, LiveUpdate, RunOptions, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 export function isFailed(r: RunResult): boolean {
-	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+	return r.exitCode !== 0 || Boolean(r.errorMessage) || r.stopReason === "error" || r.stopReason === "aborted";
 }
 
 /**
@@ -41,6 +41,25 @@ export function isTransientError(r: RunResult): boolean {
 	if (r.phaseTimeout) return false;
 	const hay = `${r.errorMessage ?? ""} ${r.stderr ?? ""} ${r.output ?? ""}`;
 	return TRANSIENT_ERROR_RE.test(hay);
+}
+
+/** Wait for a retry backoff, but release immediately when the run is aborted.
+ * Resolves (rather than rejects) on abort so callers can leave their retry loop
+ * through the normal `signal.aborted` branch and preserve paused semantics. */
+export function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+	if (ms <= 0 || signal?.aborted) return Promise.resolve();
+	return new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, ms);
+		signal?.addEventListener("abort", finish, { once: true });
+	});
 }
 
 /** Placeholder written to a failed phase's `output` so downstream interpolation
@@ -258,15 +277,73 @@ export function num(v: unknown): number {
  *  Module-global (not per-host): a single exit handler must reach every host's
  *  children, so all host runners register here. */
 const activeChildren = new Set<number>();
+
+/** Signal the whole process tree rooted at a spawned subagent. POSIX children
+ * are process-group leaders (`detached:true` at spawn), so a negative pid
+ * reaches every descendant in the group. Windows has no equivalent signal;
+ * taskkill /T /F is the platform-supported tree termination primitive. */
+export function killProcessTree(pid: number, signal: NodeJS.Signals, direct?: ChildProcess): void {
+	if (process.platform === "win32") {
+		try {
+			const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+				shell: false,
+				stdio: "ignore",
+				windowsHide: true,
+			});
+			killer.once("error", () => {
+				try { direct?.kill(); } catch { /* already dead */ }
+			});
+			killer.unref();
+		} catch {
+			try { direct?.kill(); } catch { /* already dead */ }
+		}
+		return;
+	}
+	try {
+		process.kill(-pid, signal);
+	} catch {
+		// A process can exit between the liveness check and group signal. Falling
+		// back to the direct handle also covers platforms that reject group kills.
+		try { direct?.kill(signal); } catch { /* already dead */ }
+	}
+}
+
+/** Synchronous variant for the host's `exit` event, where asynchronous taskkill
+ * cannot be awaited and would never get a chance to run. */
+function killProcessTreeSync(pid: number): void {
+	if (process.platform === "win32") {
+		try {
+			spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+				shell: false,
+				stdio: "ignore",
+				windowsHide: true,
+			});
+		} catch { /* already dead / taskkill unavailable */ }
+		return;
+	}
+	try { process.kill(-pid, "SIGKILL"); } catch { /* already dead */ }
+}
+
 const killAllChildren = () => {
 	for (const pid of activeChildren) {
-		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
+		killProcessTreeSync(pid);
 	}
 };
 process.on("exit", killAllChildren);
 
 /** Same idle window every host runner uses: a child silent this long is wedged. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
+
+/** After a phase timeout aborts its runner, allow process-backed hosts enough
+ * time to execute their SIGTERM to SIGKILL escalation. A custom runner that
+ * ignores AbortSignal entirely is still bounded by this grace window. */
+export const PHASE_TIMEOUT_ABORT_GRACE_MS = 5500;
+
+/** Maximum NDJSON line size retained while waiting for a newline. A hostile or
+ * broken host can otherwise stream an unterminated line until the orchestrator
+ * runs out of memory. Host events are expected to be compact; 1 MiB still
+ * leaves ample room for a large final answer while providing a hard bound. */
+export const MAX_STDOUT_LINE_BYTES = 1024 * 1024;
 
 /** The base accumulator contract the shared process runner reads/writes. Each
  *  host's accumulator (Codex/Claude/OpenCode) satisfies this structurally and
@@ -279,6 +356,8 @@ export interface SubagentAccumulator {
 	lastActivity: string;
 	/** Set by the host foldLine when the stream reported a fatal error event. */
 	fatalError?: string;
+	/** Set by hosts whose protocol has an authoritative terminal event. */
+	terminalSeen?: boolean;
 }
 
 /** Standard "unknown agent" RunResult — identical across every host runner. */
@@ -318,6 +397,9 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	/** Per-host event folding: the host's accumulator + its line parser. */
 	acc: TAcc;
 	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
+	/** Fail closed when the CLI exits zero before its authoritative terminal event. */
+	requireTerminalEvent?: boolean;
+	terminalEventLabel?: string;
 }
 
 /** Spawn an isolated subagent process, fold its event stream, and classify the
@@ -342,6 +424,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	let wasAborted = false;
 	let idleTimedOut = false;
 	let killedBySignal: string | undefined;
+	let protocolError: string | undefined;
 	const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
 
 	// Structured run-log header, opt-in via PI_TASKFLOW_RUN_LOG. Written to the
@@ -360,20 +443,44 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	}
 
 	const exitCode = await new Promise<number>((resolve) => {
-		const proc = spawn(bin, args, { cwd, shell: false, stdio: ["ignore", "pipe", "pipe"], env });
+		const proc = spawn(bin, args, {
+			cwd,
+			shell: false,
+			stdio: ["ignore", "pipe", "pipe"],
+			env,
+			// On POSIX this makes the subagent a process-group leader while retaining
+			// piped stdout/stderr. Cancellation can then signal `-pid` and cannot
+			// strand grandchildren that outlive the direct CLI process.
+			detached: process.platform !== "win32",
+			windowsHide: true,
+		});
 		if (proc.pid) activeChildren.add(proc.pid);
 
 		let buffer = "";
 		let idleTimer: NodeJS.Timeout | undefined;
 		let forceTimer: NodeJS.Timeout | undefined;
+		let settled = false;
+		let removeAbortListener = () => {};
 		const clearTimers = () => {
-			if (idleTimer) clearTimeout(idleTimer);
-			if (forceTimer) clearTimeout(forceTimer);
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = undefined;
+			}
+			if (forceTimer) {
+				clearTimeout(forceTimer);
+				forceTimer = undefined;
+			}
+		};
+		const signalTree = (signal: NodeJS.Signals) => {
+			if (proc.pid) killProcessTree(proc.pid, signal, proc);
+			else {
+				try { proc.kill(signal); } catch { /* spawn failed / already dead */ }
+			}
 		};
 		const hardKill = () => {
 			idleTimedOut = true;
-			proc.kill("SIGTERM");
-			forceTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
+			signalTree("SIGTERM");
+			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
 			forceTimer.unref();
 		};
 		const armIdle = () => {
@@ -384,30 +491,65 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		};
 		armIdle();
 
+		const failProtocol = (message: string) => {
+			if (protocolError) return;
+			protocolError = message;
+			signalTree("SIGTERM");
+			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
+			forceTimer.unref();
+		};
 		const processLine = (line: string) => {
-			// A throwing foldLine (malformed/hostile stream line) or a throwing onLive
-			// callback must NEVER crash the run — this is the fail-open backstop that
-			// turns a bad line into a skipped line. It also honours the AGENTS.md
-			// invariant that user callbacks are wrapped in try/catch.
+			if (!line.trim() || protocolError) return;
+			// Every supported host advertises a JSON/NDJSON stream. Treat malformed
+			// records as a protocol failure: silently dropping them can turn a
+			// truncated provider error into a successful phase with empty output.
 			try {
-				const live = foldLine(acc, line);
-				if (live && opts.onLive) opts.onLive(live);
+				JSON.parse(line);
 			} catch {
-				/* malformed stream line / throwing callback — skip, never crash */
+				failProtocol("Subagent emitted malformed or truncated JSON output");
+				return;
+			}
+			let live: LiveUpdate | null;
+			try {
+				live = foldLine(acc, line);
+			} catch (error) {
+				failProtocol(`Subagent output parser failed: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+			// onLive is a user callback and remains fail-open; parser failures above
+			// are part of the transport contract and therefore fail closed.
+			if (live && opts.onLive) {
+				try { opts.onLive(live); } catch { /* user callback must not sink run */ }
 			}
 		};
 
 		proc.stdout.on("data", (data) => {
 			armIdle();
 			buffer += data.toString();
+			if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES && !buffer.includes("\n")) {
+				// Drop the retained bytes before terminating so the bound remains true
+				// even while a non-cooperative child takes time to die.
+				buffer = "";
+				failProtocol(`Subagent emitted an unterminated stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+				return;
+			}
 			const lines = buffer.split("\n");
 			buffer = lines.pop() || "";
-			for (const line of lines) processLine(line);
+			for (const line of lines) {
+				if (Buffer.byteLength(line) > MAX_STDOUT_LINE_BYTES) {
+					failProtocol(`Subagent emitted a stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+					break;
+				}
+				processLine(line);
+			}
 		});
 
 		const STDERR_MAX_LEN = 64 * 1024;
 		let stderrCapped = false;
 		proc.stderr.on("data", (data) => {
+			// Diagnostics are real child activity too. A CLI that is actively
+			// reporting provider retries on stderr must not be killed as idle.
+			armIdle();
 			if (!stderrCapped) {
 				result.stderr += data.toString();
 				if (result.stderr.length >= STDERR_MAX_LEN) {
@@ -417,19 +559,37 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			}
 		});
 
-		proc.on("close", (code, signal) => {
+		// `close` waits for inherited stdio handles. A direct CLI can exit while a
+		// background descendant still owns stdout/stderr, so reap the group at the
+		// earlier `exit` boundary; `close` remains the point where buffered output
+		// is folded and the result is settled.
+		proc.once("exit", () => {
+			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
+		});
+
+		const finish = (code: number, signal?: NodeJS.Signals | null) => {
+			if (settled) return;
+			settled = true;
+			// The direct CLI may intentionally or accidentally leave background
+			// descendants behind. A phase boundary is also a process-tree boundary:
+			// always reap the group before returning, not only on abort/idle timeout.
+			// Otherwise detached grandchildren can keep mutating the workspace after
+			// the phase has been persisted as complete.
+			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
 			if (proc.pid) activeChildren.delete(proc.pid);
 			clearTimers();
+			removeAbortListener();
 			if (buffer.trim()) processLine(buffer);
-			if (code === null && signal) killedBySignal = signal;
-			resolve(code ?? 0);
+			if (signal) killedBySignal = signal;
+			resolve(code);
+		};
+		proc.on("close", (code, signal) => {
+			finish(code ?? 0, code === null ? signal : undefined);
 		});
 		proc.on("error", (err) => {
-			clearTimers();
-			if (proc.pid) activeChildren.delete(proc.pid); // defensive: close usually fires after error, but don't rely on it
 			if (!result.stderr) result.stderr = err.message;
 			if (!result.errorMessage) result.errorMessage = err.message;
-			resolve(1);
+			finish(1);
 		});
 
 		if (opts.signal) {
@@ -440,12 +600,18 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				// set and the post-exit classify chain (which checks idle BEFORE
 				// abort) would misreport a user abort as an idle stall.
 				clearTimers();
-				proc.kill("SIGTERM");
-				const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
-				forceKill.unref();
+				signalTree("SIGTERM");
+				forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
+				forceTimer.unref();
 			};
 			if (opts.signal.aborted) kill();
-			else opts.signal.addEventListener("abort", kill, { once: true });
+			else {
+				opts.signal.addEventListener("abort", kill, { once: true });
+				removeAbortListener = () => {
+					opts.signal?.removeEventListener("abort", kill);
+					removeAbortListener = () => {};
+				};
+			}
 		}
 	});
 
@@ -454,15 +620,24 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	result.model = acc.model;
 	result.output = acc.finalText;
 
-	if (acc.fatalError) {
+	if (protocolError) {
+		result.exitCode = result.exitCode || 1;
+		result.stopReason = "error";
+		result.errorMessage = protocolError;
+	} else if (acc.fatalError) {
 		result.exitCode = result.exitCode || 1;
 		result.stopReason = "error";
 		result.errorMessage = acc.fatalError;
 	} else {
 		result.stopReason = exitCode === 0 ? "end" : "error";
 	}
+	if (!isFailed(result) && opts.requireTerminalEvent && !acc.terminalSeen) {
+		result.exitCode = 1;
+		result.stopReason = "error";
+		result.errorMessage = `Subagent stream ended before ${opts.terminalEventLabel ?? "the terminal event"}`;
+	}
 
-	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted) {
+	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted && !protocolError) {
 		result.exitCode = 1;
 		result.stopReason = "error";
 		result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
@@ -474,6 +649,14 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	} else if (wasAborted) {
 		result.stopReason = "aborted";
 		result.errorMessage = "Subagent was aborted";
+	}
+	// A zero exit with no answer is not evidence of successful agent work. It is
+	// the characteristic outcome of a truncated/unknown host stream whose lines
+	// were syntactically valid but never contained a terminal answer.
+	if (!isFailed(result) && !result.output.trim()) {
+		result.exitCode = 1;
+		result.stopReason = "error";
+		result.errorMessage = "Subagent exited successfully without a final output";
 	}
 
 	if (isFailed(result)) {

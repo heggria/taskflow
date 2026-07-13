@@ -18,11 +18,21 @@ runs as an isolated `claude -p` session.
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
-| `taskflow_compile` | Render a flow's DAG as a diagram + a verification report — no execution. |
+| `taskflow_compile` | Render a flow's DAG as an inline SVG **and** text outline + a verification report — no execution. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list phases; `json`/`item`/`limit` refine the slice. Hard-truncated, read-only. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
+| `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
+| `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
+| `taskflow_save` | Save a reusable flow and optional library metadata. |
+| `taskflow_search` | Search and rank reusable flows before authoring another one. |
 
 **Always `taskflow_verify` a non-trivial flow before `taskflow_run`** — it is
 free and catches most authoring mistakes.
+
+**Security default:** Claude mutating/unrestricted phases are rejected because
+headless Claude has no OS sandbox. Explicitly opt in only for trusted flows by
+setting `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1`; prefer `cwd: "worktree"`.
 
 Build and run **declarative, multi-phase workflows** of subagents. The runtime
 holds intermediate results and the phase DAG, so your main context only receives
@@ -37,7 +47,7 @@ mistakes that break flows. Load the companion files **only when needed**:
 |------|--------------------|
 | `patterns.md` | **Designing a non-trivial flow.** Proven flow archetypes (audit fan-out, self-healing rework, plan→approve→execute, dynamic replanning, tournament synthesis, incremental audit), anti-patterns, and the production-flow quality checklist. |
 | `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, and workspace isolation (`cwd: temp/dedicated/worktree`). |
-| `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. |
+| `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. **TypeScript DSL CLI** (`taskflow-dsl` / S4). |
 | `library.md` | **Before authoring a non-trivial flow — SEARCH the reusable-flow library.** Save reusable flows with `purpose`+`tags` so future search finds them; reuse + generalize instead of rewriting from scratch. The compounding flywheel. |
 
 > Rule of thumb: writing a flow with ≥ 4 phases, a gate, or any fan-out?
@@ -68,8 +78,8 @@ task deserves level 3 — the higher levels are where taskflow pays for itself.
 | 0 | shorthand `task` / `tasks` / `chain` | one-off delegation, simple sequence |
 | 1 | linear DAG with `dependsOn` | fixed steps, each consuming the last |
 | 2 | discover → `map` fan-out → `gate` → `reduce` | many items, needs review before reporting |
-| 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost-capped, fails precisely |
-| 4 | + `loop`, `tournament`, `flow{def}` dynamic planning | the work itself is discovered at runtime; one shot is unreliable |
+| 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost stop-loss, fails precisely |
+| 4 | + `loop`, `tournament`, `flow{def}` / `expand`, `race` | the work itself is discovered at runtime; one shot is unreliable; try parallel approaches and keep the first win |
 | 5 | + `incremental: true`, `cache.fingerprint` | the flow re-runs as the repo changes; only re-pay for what changed |
 
 **A production-grade flow (level 3+) usually has:** machine checks before LLM
@@ -165,12 +175,12 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 }
 ```
 
-### Phase types (10)
+### Phase types (12)
 
 | type | meaning | details |
 |------|---------|---------|
 | `agent` | one subagent runs `task` | this file |
-| `parallel` | run static `branches[]` concurrently | this file |
+| `parallel` | run static `branches[]` concurrently (all complete) | this file |
 | `map` | fan out over `over` (an array) — one subagent per item, `{item}` bound | this file |
 | `gate` | quality/review step that can **halt the flow** | Gate phases below |
 | `reduce` | aggregate `from[]` phases into one output | this file |
@@ -179,6 +189,8 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `loop` | repeat a body until a condition / convergence / `maxIterations` | Loop phases below |
 | `tournament` | run N competing `variants`, a `judge` picks best or aggregates | Tournament phases below |
 | `script` | run a **shell command** (no LLM, zero tokens) — stdout is the output | Script phases below |
+| `race` | run `branches[]` concurrently; **first success wins** (unlike parallel) | Race phases below |
+| `expand` | run a dynamic fragment (`def`); `nested` (isolated) or `graft` (promote onto parent) | Expand phases below |
 
 ### Control-flow fields (any phase)
 
@@ -187,7 +199,7 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `when` | conditional guard — skip the phase unless the expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& \|\| !`, parentheses, quoted strings/numbers. Parse errors fail **open** (phase runs). |
 | `join` | dependency join: `"all"` (default — wait for every dep) or `"any"` (OR-join — run as soon as one dep completes). |
 | `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
-| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
+| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/race/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow/expand. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
 | `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with per-path diagnostics (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
 | `idempotent` | side-effect classification. Default `true` (safe to cache + auto-retry). Set `false` on phases with **irreversible side effects** (webhook POSTs, deploys, DB writes, file mutations): transient provider errors are **not** auto-retried (an explicit `retry{}` IS still honored — it's your declaration that repeats are acceptable) and the result is **never cached** in any scope (within-run resume, cross-run, `incremental` — the phase re-runs every time). The phase state records `sideEffect: true` (rendered as ⚡). |
 | `optional` | fail-soft — a failed/blocked phase won't abort the run; downstream sees empty output. Pair with a fallback phase guarded by `when`. |
@@ -464,11 +476,68 @@ output is exact.
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```
 
-### Budget (cost / token caps)
+### Race phases (first success wins)
 
-Add a run-wide ceiling at the top level. When accumulated cost/tokens exceed it,
-remaining phases are skipped (and an in-flight `map`/`parallel` stops spawning
-new items); the run ends as `blocked` with partial outputs preserved.
+A `race` phase runs static `branches[]` concurrently and **returns the first
+branch that finishes successfully** (failed settles do **not** win — a slower
+success still wins over a fast hard-fail). Unlike `parallel` (waits for all) or
+`tournament` (judges quality after all variants), use race when latency matters
+more than comparing every approach.
+
+- `branches` — **required**, at least two `{task, agent?}`.
+- `cancelLosers` — optional boolean (default `true`). After the first **success**,
+  abort other branches via `AbortSignal` (best-effort — host must honor the
+  signal). Set `false` to let losers finish naturally.
+- Phase `usage` **aggregates all branches** (including aborted partials) so
+  budgets stay honest.
+- Output of the winning branch becomes the race phase output; a warning records
+  which branch won.
+
+```jsonc
+{
+  "id": "quick", "type": "race",
+  "branches": [
+    { "task": "Answer with a short heuristic…", "agent": "executor" },
+    { "task": "Answer with a thorough search…", "agent": "researcher" }
+  ],
+  "final": true
+}
+```
+
+### Expand phases (dynamic fragment: nested or graft)
+
+An `expand` phase runs a **fragment Taskflow** from `def` (inline object,
+phases array, or interpolated `{steps.plan.json}`). Two modes:
+
+| `expandMode` | Behavior |
+|--------------|----------|
+| `nested` (default) | Run as an isolated sub-flow (like `flow{def}`); child phase ids stay **off** the parent. |
+| `graft` | After success, **promote** child phase states onto the parent as `<expandId>-<childId>` so later phases can read `{steps.grow-leaf.output}`. |
+
+- `def` — **required** for expand.
+- `maxNodes` — optional cap on fragment phase count (default 50, hard max 100).
+- Dynamic validation + nesting caps match `flow{def}` (see `advanced.md`).
+- Prefer `expand` when the planner fragment is a first-class kind; prefer
+  `flow` + `use` for saved reusable flows; prefer `flow` + `def` when you want
+  the classic nested sub-flow without graft promote.
+
+```jsonc
+{
+  "id": "grow", "type": "expand", "expandMode": "graft",
+  "def": "{steps.plan.json}",
+  "dependsOn": ["plan"], "final": true
+}
+```
+
+### Budget (observed-usage stop-loss)
+
+Add a run-wide stop-loss at the top level. Ordinary budgeted DAG layers and
+`map`/`parallel`/`tournament` fan-out use serial call admission. Once reported
+cost/tokens exceed the threshold, no new model call is started; the run ends as
+`blocked` with partial outputs preserved. An admitted call may cross the
+threshold. A `race` necessarily starts competing branches together, so all
+already-active race branches may contribute overshoot. This is never a
+zero-overshoot guarantee.
 
 ```jsonc
 { "name": "...", "budget": { "maxUSD": 1.50, "maxTokens": 2000000 }, "phases": [ ... ] }
@@ -476,6 +545,10 @@ new items); the run ends as `blocked` with partial outputs preserved.
 
 **Any flow with a fan-out should have a `budget`** — a map over a
 mis-discovered 500-item array is otherwise unbounded spend.
+
+Host accounting matters: Codex reports tokens but not cost, so Codex accepts
+`maxTokens` and rejects `maxUSD`. Grok 0.2.93 reports neither and rejects every
+flow declaring `budget`. Pi, Claude Code, and OpenCode accept both dimensions.
 
 ### Strict interpolation
 
@@ -580,6 +653,10 @@ re-run blind — `taskflow_peek` the run: omit `phaseId` to list phase statuses
 and output sizes, then peek the suspicious phase (`json: true` for parsed
 output, `item: n` for one fan-out section). Output is hard-truncated
 (default 4000 chars, max 32000) so a peek never floods your context.
+
+Use `taskflow_trace` to inspect the append-only event log for a finished run,
+then `taskflow_replay` to re-judge it under alternate thresholds/budget **offline
+(zero tokens)** — e.g. "would a 0.9 gate threshold have blocked this run?"
 
 For flows re-run as the repo evolves, pass `incremental: true` to
 `taskflow_run` — every phase defaults to **cross-run cache reuse**: identical

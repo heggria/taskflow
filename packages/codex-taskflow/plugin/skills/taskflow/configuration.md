@@ -45,7 +45,7 @@ Top-level keys of the taskflow definition object.
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
-| `version` | number | `1` | ⚠️ Declared in schema but **not yet used** by the runtime. |
+| `version` | number | `1` | Informational metadata in 0.2.0; it does not select runtime semantics or migrate a flow. |
 
 ---
 
@@ -56,14 +56,16 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 ```jsonc
 {
   "id": "audit",            // required, unique — referenced via {steps.audit.output}
-  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script (default: agent)
+  "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script | race | expand (default: agent)
   "agent": "analyst",       // agent name to run this phase
   "task": "Audit {item.route}…",
   "dependsOn": ["discover"],// DAG edges
   "over": "{steps.discover.json}",  // [map] array to fan out over
   "as": "item",             // [map] loop var name (default: item)
-  "branches": [ /* … */ ],  // [parallel] static task list
+  "branches": [ /* … */ ],  // [parallel|race] static task list
   "from": ["audit"],        // [reduce] phase ids to aggregate
+  "def": "{steps.plan.json}", // [expand|flow] inline fragment / dynamic sub-flow
+  "expandMode": "nested",   // [expand] nested | graft
   "output": "json",         // text | json (default: text)
   "model": "claude-sonnet-4-5",   // per-phase model override
   "thinking": "high",       // per-phase thinking override
@@ -77,13 +79,17 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | Key | Applies to | Default | Notes |
 |-----|-----------|---------|-------|
 | `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
-| `type` | all | `agent` | One of the 10 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script). |
+| `type` | all | `agent` | One of the **12** phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, **race**, **expand**). |
 | `agent` | all | first available | Agent name; resolved from the scoped pool. |
 | `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types. |
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
-| `branches` | parallel | — | **Required for parallel.** `[{task, agent?}]`. |
+| `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
+| `cancelLosers` | race | `true` | Abort in-flight losers after first **success** (best-effort AbortSignal). |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
+| `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
+| `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |
+| `maxNodes` | expand | `50` | Cap fragment phase count (1..100). |
 | `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
 | `input` | script | — | Text piped to the command's stdin; supports interpolation. |
 | `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. |
@@ -99,12 +105,12 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `cache` | all | `run-only` | Per-phase cache policy (`scope`/`ttl`/`fingerprint`). See §11. |
 | `final` | all | last phase | Exactly one phase may be `final`; its output is returned. |
 
-> Gate-only control fields (`eval`, `onBlock`), the loop/tournament control
+> Gate-only control fields (`eval`, `onBlock`, score), the loop/tournament control
 > fields (`until`/`maxIterations`/`convergence`, `variants`/`judge`/`judgeAgent`/`mode`),
-> the script fields (`run`/`input`/`timeout`), and the cross-phase contract
-> fields (`expect`, `timeout`, `optional`, `strictInterpolation`) are documented
-> in `SKILL.md` next to their phase types. `shareContext` and the workspace
-> `cwd` keywords (`temp`/`dedicated`/`worktree`) are in `advanced.md`.
+> the script fields (`run`/`input`/`timeout`), race/expand fields above, and the
+> cross-phase contract fields (`expect`, `timeout`, `optional`, `strictInterpolation`)
+> are documented in `SKILL.md` next to their phase types. `shareContext` and the
+> workspace `cwd` keywords (`temp`/`dedicated`/`worktree`) are in `advanced.md`.
 
 ---
 
@@ -208,13 +214,31 @@ For any phase, the effective value is resolved in this **precedence order**
 |---------|-------------------------|
 | **model** | `phase.model` → agent frontmatter `model` (resolved via `modelRoles`) → pi default |
 | **thinking** | `phase.thinking` → agent frontmatter `thinking` → `settings` global thinking → pi default |
-| **tools** | `phase.tools` → agent frontmatter `tools` → all tools |
+| **tools** | `phase.tools` → agent frontmatter `tools` → host default capability policy |
 
 Notes:
-- `tools` is a **whitelist**. Omit it to allow all.
+- `tools` expresses the requested capability set, but enforcement is
+  host-specific. It is a literal whitelist on Pi; Codex maps it to an OS
+  sandbox profile, while the other hosts use their own permission contracts.
+  Omit it to request the host's default capability policy.
 - Each phase runs as an isolated `codex exec --json` session. A model id that
   still looks like a pi-provider path (contains `/`) or an unresolved
   `{{placeholder}}` is dropped so codex falls back to its configured default.
+  Codex does **not** offer a strict per-tool name whitelist: read-only tool sets
+  map to `-s read-only`; any mutating tool or no list maps to
+  `-s workspace-write` (never `danger-full-access`). Effective thinking maps
+  to `model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
+  `low`/`medium`/`high`/`xhigh` pass through, and `max`/`ultra` → `xhigh`.
+  Any other value fails closed before Codex is spawned. Codex usage accounting
+  is tokens-only: budgeted flows may use `maxTokens`, while `maxUSD` is rejected.
+  Children use `--ephemeral --ignore-user-config --ignore-rules` and an empty
+  `mcp_servers` override, so parent plugins/MCP/rules cannot alter the run.
+  Only platform/proxy/CA and Codex/OpenAI provider environment variables are
+  inherited; unrelated secrets are removed.
+
+For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+task-specific environment variables by listing their names in the
+comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.
 
 ---
@@ -307,7 +331,7 @@ Rather than annotating every phase with `cache: { "scope": "cross-run" }`, set
 Precedence: the invocation `incremental` argument wins over the flow's
 `incremental` field, which is in turn overridden by any **per-phase** `cache`
 setting. The cross-run-blocked phase types (`gate`/`approval`/`loop`/
-`tournament`/`script`) and all per-phase soundness fallbacks still apply. The default
+`tournament`/`script`/`race`/`expand`) and all per-phase soundness fallbacks still apply. The default
 remains `run-only` (each run starts fresh unless something opts in), because
 cross-run reuse silently persists outputs and can serve stale results for phases
 whose agents read files at runtime.
@@ -354,9 +378,15 @@ Each entry is one of:
 |----------|--------|
 | `PI_TASKFLOW_PI_BIN` | Override the `pi` binary used to spawn subagents. Used by tests and unusual launch setups (e.g. `PI_TASKFLOW_PI_BIN=pi`). Normally auto-detected. |
 | `PI_TASKFLOW_CODEX_BIN` | Override the `codex` binary used to spawn Codex subagents. |
+| `PI_TASKFLOW_CHILD_ENV_ALLOW` | Comma-separated names of extra task-specific environment variables to pass intentionally to Codex/OpenCode/Grok children. Unlisted application secrets are removed. |
 | `PI_TASKFLOW_CLAUDE_BIN` | Override the `claude` binary used to spawn Claude Code subagents. |
+| `PI_TASKFLOW_CLAUDE_UNSAFE_BYPASS=1` | Explicitly allow trusted Claude phases requesting known mutating tools to use narrow `--tools` + `bypassPermissions`; unknown names always fail closed. |
 | `PI_TASKFLOW_OPENCODE_BIN` | Override the `opencode` binary used to spawn OpenCode subagents. |
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
+| `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` | Explicitly permit trusted OpenCode mutating/default phases to use unsandboxed `--auto`; otherwise they fail before spawn. All OpenCode children still use `--pure`. |
+| `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
+| `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` | Required for Grok mutating/no-whitelist phases. Must name a custom profile from `~/.grok/sandbox.toml`; built-in profiles are rejected because they may fail open on unsupported hosts. |
+| `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` | Required for Grok read-only phases. Must name a custom profile extending `read-only`; built-in names are rejected so hooks/plugins remain kernel-contained if the host cannot enforce a built-in profile. |
 
 ---
 
@@ -404,10 +434,83 @@ Each entry is one of:
 
 ---
 
-## Caveats (declared but not yet enforced)
+## 9. TypeScript DSL CLI (`taskflow-dsl` / S4)
 
-These keys validate but the runtime does **not** act on them yet — don't rely on
-them for behavior:
+Author flows as **`.tf.ts`** (compile-time runes), then run the emitted JSON
+through existing `taskflow_*` tools. JSON remains first-class (escape hatch).
 
-- `arg.required` — missing required args are not rejected.
-- `flow.version` — informational only.
+```bash
+# From a monorepo checkout (dev):
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts new audit
+# edit audit.tf.ts
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts check audit.tf.ts
+# Fast rune/static-only pass (skip the default full tsc Program check):
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts check audit.tf.ts --no-typecheck
+node --conditions=development --experimental-strip-types \
+  packages/taskflow-dsl/src/cli.ts build audit.tf.ts --emit both
+# → audit.taskflow.json (+ audit.flowir.json)
+# Then: taskflow_verify / taskflow_run with defineFile=audit.taskflow.json
+```
+
+| Command | Purpose |
+|---------|---------|
+| `new [name]` | ≤5-line hello skeleton (`.tf.ts` or `--json-escape` JSON) |
+| `check <file>` | Erase + `validateTaskflow` + tsc (use `--no-typecheck` for a faster static-only pass) |
+| `build <file>` | Erase → Taskflow JSON; optional FlowIR hash (`--emit taskflow\|flowir\|both`) |
+| `decompile <file>` | Taskflow JSON → readable `.tf.ts` (semantic, not literal) |
+
+Output commands are create-only by default: pass `--force` to replace an
+existing regular file. Outputs are `--cwd`-contained, reject destination
+symlinks, and commit atomically; `--emit both` preflights both destinations.
+
+**Authoring notes (kinds ↔ runes)**
+
+Import: `import { flow, agent, map, … } from "taskflow-dsl"`. Runes erase to Taskflow
+JSON kinds (single source: `PHASE_TYPES` in core + `erase/kinds/*` registry).
+
+| JSON `type` | DSL rune(s) | Notes |
+|-------------|-------------|--------|
+| `agent` | `agent(task, opts?)` | templates → `{steps.*}` / `{item.*}` |
+| `parallel` | `parallel([agent…])` | waits for all branches |
+| `map` | `map(source, item => agent…)` | `over` + `as` |
+| `gate` | `gate(up, opts?, task?)` · `gate.automated` · `gate.scored` | sugar → `eval` / `score` |
+| `reduce` | `reduce([…], () => agent…)` | `from` |
+| `approval` | `approval({ request })` | |
+| `flow` | `subflow("name")` · `subflow.def(plan)` | use vs def |
+| `loop` | `loop({ task, until?, … })` | |
+| `tournament` | `tournament({ branches/variants, judge, … })` | |
+| `script` | `script(run, opts?)` | string or argv array |
+| `race` | `race([agent…], { cancelLosers? })` | first **success** wins; cooperative loser usage is counted |
+| `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode` |
+
+- `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.
+- `race([...])` does **not** support array destructure — bind as one phase: `const winner = race([...])`.
+- Unbuilt `.tf.ts` must **not** be executed as a Node program (runes throw `TFDSL_ERASE_ONLY`).
+- Modular erase: new kind → `packages/taskflow-dsl/src/build/erase/kinds/<kind>.ts` + registry entry (see `docs/internal/modularization-0.2.0.md`).
+
+Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
+
+---
+
+## Caveats (declared but not yet enforced / partial)
+
+These keys validate but the runtime does **not** fully act on them yet — don't
+rely on them for behavior:
+
+- `arg.required` — documents intent for tooling, but missing required args are
+  not rejected at run time in 0.2.0. Use strict interpolation and verify/run
+  argument validation at your integration boundary when absence must block.
+- `flow.version` — informational only; it does not select runtime semantics.
+- **Event kernel** (`eventKernel` / `PI_TASKFLOW_EVENT_KERNEL=1`) — opt-in; does
+  **not** run `race`/`expand`; score gates, `retry`, `expect`, reflexion,
+  cross-run cache, and Shared Context Tree force the **imperative** path.
+- **`taskflow-dsl decompile`** — generates safe, readable TypeScript whose
+  rebuilt Taskflow/FlowIR is semantically equivalent for supported constructs;
+  dependencies are emitted before consumers even when input JSON is out of
+  order;
+  it does **not** reproduce original variable names, formatting, comments, or
+  source spelling. Unsupported/lossy constructs fail rather than silently
+  promising a literal round-trip.

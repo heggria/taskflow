@@ -8,7 +8,7 @@ A real PR lands and it is big: **47 files changed across 3 packages.** You need 
 This guide builds a taskflow that does the review properly. We start with one phase that discovers the changed files, add a fan-out for per-file security review, layer in a parallel architecture review, gate the whole thing on risk, and finish with a single merged report. By the end you will have a complete, saveable flow you can run on every PR.
 
 <Callout type="info">
-  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode (`taskflow_run`). See the [Pi guide](/en/docs/guides/pi) or [Codex guide](/en/docs/guides/codex) for the host-specific invocation surface.
+  This is a *pattern* guide, not a host guide. It works the same on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
 </Callout>
 
 ## The problem
@@ -177,7 +177,7 @@ How the gate decides:
 - **`onBlock: "halt"`** — a `BLOCK` verdict stops the run cleanly. The final report phase (which depends on the gate) is skipped, and the run ends with the gate's verdict as the terminal state.
 
 <Callout type="info">
-  taskflow fails open on gate ambiguity. If the gate output cannot be parsed, the run treats it as `PASS` — it never accidentally halts and loses work. If you want the opposite for a merge gate, add a downstream `approval` phase so a human makes the final call.
+  taskflow parses gate verdicts leniently but fails closed for the truly unparseable. If a gate output contains no JSON, no `VERDICT:` marker, and no recognized verdict word, the runtime treats it as `BLOCK` (issue #54) — a gate that cannot reach a verdict cannot be trusted to pass. If you want a human to make the final call for a merge gate, add a downstream `approval` phase.
 </Callout>
 
 ## Phase 5 — the final report
@@ -310,7 +310,7 @@ The flow above is a sensible default. These are the knobs worth turning for your
 
 ### Budget
 
-`budget: { maxUSD: 3.0 }` is a run-wide ceiling. If accumulated cost exceeds it, the runtime halts the run and skips remaining phases — you never get a surprise bill. For a 47-file review on strong models, $3 is comfortable; for a quick re-run on cheap `fast`-role models, $0.50 may be plenty. Tune per repo, and remember the gate runs *before* the report, so a `BLOCK` verdict saves the report's tokens.
+`budget: { maxUSD: 3.0 }` is an observed-usage stop-loss. Once reported accumulated cost exceeds it, the runtime admits no new call and skips remaining phases. An already-active call can overshoot, so this limits runaway spend rather than guaranteeing a $3 maximum. For a 47-file review on strong models, $3 may be comfortable; tune per repo, and remember the gate runs *before* the report, so a `BLOCK` verdict saves the report's tokens.
 
 ### Cache
 
@@ -341,13 +341,13 @@ The `retry` policy on `discover` and `security-each` covers transient provider e
 
 <Cards>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks — including `map`, `parallel`, `reduce`, and `gate` used here.
+    The twelve building blocks — including `map`, `parallel`, `reduce`, and `gate` used here.
   </Card>
   <Card title="Caching" href="/en/docs/syntax/caching">
     Cross-run memoization, fingerprints, and the `why-stale` / `recompute` toolkit.
   </Card>
   <Card title="Budget" href="/en/docs/syntax/budget">
-    Run-wide cost ceilings and how a `BLOCK` verdict saves downstream tokens.
+    Run-wide observed-usage stop-losses and how a `BLOCK` verdict saves downstream tokens.
   </Card>
   <Card title="Control Flow" href="/en/docs/syntax/control-flow">
     `dependsOn`, `join`, `when`, and `retry` — the fields that shape the DAG.

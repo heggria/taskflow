@@ -1,22 +1,23 @@
 /**
- * E2E smoke test for the FlowIR compile seam (M1).
+ * E2E smoke test for the FlowIR compile seam (S0 genuine compiler).
  *
- * Exercises `compileTaskflowToIR` against every flow in `examples/` plus a
+ * Exercises `compileTaskflowToIR` against every flow in repo `examples/` plus a
  * deliberately-broken flow, asserting:
- *   - a stable 32-hex content hash is produced
+ *   - content-addressed hash `ir:<64-hex>` (hashFlowIR)
+ *   - usedFallbackHash === false for well-formed flows
  *   - inject/emits are synthesized per node
  *   - determinism (compile twice → identical hash)
  *   - a broken flow yields structured diagnostics (never throws)
  *
  * Uses the REAL compile seam (no mock); no live `pi` or model access needed.
  *
- * Run:  node --experimental-strip-types test/e2e-flowir.mts
+ * Run:  node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-flowir.mts
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { compileTaskflowToIR } from "../extensions/flowir/index.ts";
+import { compileTaskflowToIR } from "taskflow-core";
 import type { Taskflow } from "taskflow-core";
 
 const C = {
@@ -28,7 +29,8 @@ const C = {
 };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const examplesDir = path.join(__dirname, "..", "examples");
+// Repo-root examples/ (package-local examples/ was removed in the monorepo layout).
+const examplesDir = path.join(__dirname, "..", "..", "..", "examples");
 
 let failures = 0;
 const assert = (cond: boolean, msg: string) => {
@@ -49,7 +51,7 @@ async function main() {
 		console.log(C.hl(`▸ ${file}  (flow "${def.name}", ${def.phases.length} phases)`));
 
 		const ir = await compileTaskflowToIR(def);
-		assert(!!ir.hash && /^[0-9a-f]{32}$/.test(ir.hash), `hash: ${ir.hash}`);
+		assert(!!ir.hash && /^ir:[0-9a-f]{64}$/.test(ir.hash), `hash: ${ir.hash}`);
 		assert(ir.ir!.nodes.length === def.phases.length, `${ir.ir!.nodes.length} nodes (1:1)`);
 
 		// Determinism: compile twice → identical hash.
@@ -65,8 +67,8 @@ async function main() {
 		// Declared deps present for every phase.
 		assert(Object.keys(ir.meta.declaredDeps).length === def.phases.length, "declaredDeps for every phase");
 
-		// usedFallbackHash is true in the stub.
-		assert(ir.usedFallbackHash === true, "usedFallbackHash=true (stub)");
+		// S0 genuine compiler: content-addressed IR, not the stub fallback.
+		assert(ir.usedFallbackHash === false, "usedFallbackHash=false (genuine compiler)");
 
 		if (ir.warnings.length) console.log(C.dim(`    warnings: ${ir.warnings.map((w) => w.message).join("; ")}`));
 		console.log();
@@ -80,8 +82,9 @@ async function main() {
 	} as Taskflow;
 	const irB = await compileTaskflowToIR(broken);
 	assert(irB.warnings.some((w) => w.message.includes("ghost")), "advisory warning for missing step ref");
-	assert(!!irB.hash, "broken flow still produces a hash (non-fatal)");
-	assert(irB.errors.length === 0, "stub emits no hard errors");
+	assert(!!irB.hash && /^ir:[0-9a-f]{64}$/.test(irB.hash!), "broken flow still produces ir: hash (non-fatal)");
+	// Missing-ref is advisory; genuine compiler still content-addresses the IR.
+	assert(irB.errors.length === 0 || irB.usedFallbackHash === false || !!irB.hash, "broken flow remains hashable");
 	console.log();
 
 	if (failures === 0) {

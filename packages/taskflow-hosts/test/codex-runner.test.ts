@@ -7,7 +7,15 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { foldCodexEventLine, newCodexAccumulator } from "../src/codex-runner.ts";
+import { codexSubagentRunner, foldCodexEventLine, newCodexAccumulator, runCodexAgentTask } from "../src/codex-runner.ts";
+
+test("codex runner: declares tokens-only accounting", () => {
+	assert.equal(codexSubagentRunner.usageAccounting, "tokens-only");
+	assert.equal(
+		(runCodexAgentTask as typeof runCodexAgentTask & { usageAccounting?: string }).usageAccounting,
+		"tokens-only",
+	);
+});
 
 // A full, real turn: thread.started → benign errors → command tool call →
 // agent_message (final) → turn.completed (usage).
@@ -27,6 +35,7 @@ test("codex parser: folds a real turn into final text + usage", () => {
 	for (const line of REAL_STREAM) foldCodexEventLine(acc, line);
 
 	assert.equal(acc.finalText, "5", "final answer = last agent_message text");
+	assert.equal(acc.terminalSeen, true);
 	assert.equal(acc.fatalError, undefined, "benign warning errors are NOT fatal");
 	assert.equal(acc.usage.turns, 1);
 	assert.equal(acc.usage.input, 48650);
@@ -40,12 +49,25 @@ test("codex parser: last agent_message wins as final answer", () => {
 	foldCodexEventLine(acc, `{"type":"item.completed","item":{"type":"agent_message","text":"first draft"}}`);
 	foldCodexEventLine(acc, `{"type":"item.completed","item":{"type":"agent_message","text":"final answer"}}`);
 	assert.equal(acc.finalText, "final answer");
+	assert.equal(acc.terminalSeen, undefined, "an answer before turn.completed is not terminal");
 });
 
 test("codex parser: a non-benign error item is fatal", () => {
 	const acc = newCodexAccumulator();
 	foldCodexEventLine(acc, `{"type":"item.completed","item":{"type":"error","message":"model request failed: 500"}}`);
 	assert.equal(acc.fatalError, "model request failed: 500");
+});
+
+test("codex parser: top-level and turn.failed errors are fatal", () => {
+	for (const line of [
+		JSON.stringify({ type: "error", message: "usage limit" }),
+		JSON.stringify({ type: "turn.failed", error: { message: "provider failed" } }),
+	]) {
+		const acc = newCodexAccumulator();
+		const live = foldCodexEventLine(acc, line);
+		assert.match(acc.fatalError ?? "", /usage limit|provider failed/);
+		assert.match(live?.text ?? "", /^error:/);
+	}
 });
 
 test("codex parser: benign warnings never set fatalError", () => {
@@ -83,4 +105,21 @@ test("codex parser: malformed / empty / unknown lines are ignored", () => {
 	assert.equal(foldCodexEventLine(acc, `{"type":"turn.started"}`), null);
 	assert.equal(acc.finalText, "");
 	assert.equal(acc.usage.turns, 0);
+});
+
+test("codex runner: invalid agent/global thinking fails before spawning", async () => {
+	const agents = [
+		{
+			name: "bad-thinking",
+			description: "test",
+			systemPrompt: "",
+			source: "user" as const,
+			filePath: "",
+			thinking: "lo",
+		},
+	];
+	const result = await runCodexAgentTask(process.cwd(), agents, "bad-thinking", "work", {});
+	assert.equal(result.exitCode, 1);
+	assert.equal(result.stopReason, "error");
+	assert.match(result.errorMessage ?? "", /Unsupported Codex thinking level 'lo'/);
 });

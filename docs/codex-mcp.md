@@ -10,9 +10,9 @@ both built on the host-neutral `SubagentRunner` seam
    server**, so the `taskflow_*` tools appear inside codex
    (`packages/codex-taskflow/src/mcp/`). This is the direction described here.
 
-The MCP server is dependency-free: it speaks JSON-RPC 2.0 over stdio on Node
-built-ins (`packages/taskflow-mcp-core/src/mcp/jsonrpc.ts`), so taskflow keeps its
-**zero runtime dependencies** guarantee — no `@modelcontextprotocol/sdk`.
+Requires **Node.js ≥ 22.19.0**. The MCP protocol layer speaks JSON-RPC 2.0 over
+stdio without `@modelcontextprotocol/sdk`; published delivery packages still
+depend on the internal taskflow packages, and core peers on `typebox`.
 
 ## Install (recommended): the Codex plugin
 
@@ -31,11 +31,23 @@ globally, and the plugin version binds the exact code that runs. Verify:
 
 ```sh
 codex plugin list   # → taskflow@taskflow  installed, enabled
-codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.1.7 codex-taskflow-mcp)
+codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.0 codex-taskflow-mcp)
 ```
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
 fan-out work), so you usually don't have to name them explicitly.
+
+## Sandbox, tools, and thinking
+
+Codex has sandbox profiles, not a strict per-tool-name whitelist. A phase whose
+effective `tools` are read-only maps to `codex exec -s read-only`; a mutating
+tool or an omitted list maps to `-s workspace-write`.
+`danger-full-access` is never selected automatically.
+
+Thinking resolves phase → agent → global and is passed as
+`model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
+`low`/`medium`/`high`/`xhigh` pass through, and `max`/`ultra` → `xhigh`.
+Unknown values fail closed before the subprocess starts.
 
 ## Long-running flows and the tool-call timeout
 
@@ -53,7 +65,7 @@ To stop large flows from being cut off, the plugin's `.mcp.json` ships a
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.1.7", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.2.0", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }
@@ -70,6 +82,15 @@ tool_timeout_sec = 3600
 
 If a flow is genuinely huge, also consider splitting it into a few smaller
 `taskflow_run` calls so each returns well inside the window.
+
+Each spawned Codex subagent is isolated from the parent Codex customization:
+the runner uses `--ephemeral --ignore-user-config --ignore-rules`, clears
+`mcp_servers`, and then applies only Taskflow's sandbox/model/thinking argv.
+This prevents an unrelated user MCP OAuth failure, plugin, or exec rule from
+changing a phase result. The child environment retains platform/proxy/CA and
+Codex/OpenAI provider variables but drops unrelated application secrets. To
+pass a task-specific variable intentionally, list its name in the comma-separated
+`PI_TASKFLOW_CHILD_ENV_ALLOW` operator setting before starting the MCP server.
 
 ## Alternative: register the MCP server manually
 
@@ -102,13 +123,18 @@ subagent a flow spawns is itself a `codex exec` process — no pi process needed
 
 | Tool | What it does |
 |------|--------------|
-| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output. |
+| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output + a `runId`. |
 | `taskflow_list` | List saved flows discoverable from the cwd, now with library metadata (`purpose`, `generality`, `reuseCount`) when available. |
 | `taskflow_show` | Show a saved flow as `{definition, library}` — the `library` object holds the sidecar metadata (`purpose`, `tags`, `generality`, `reuseCount`, `phaseSignature`, …). |
 | `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. Writes the flow JSON plus a sidecar `.meta.json`. |
 | `taskflow_search` | Search the library before authoring. Returns ranked reusable flows with score, why, and a reuse hint. Structural + CJK-aware keyword scoring; embedding is Phase 2. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs) — no execution. |
 | `taskflow_compile` | Render a flow's DAG as a **diagram** (an inline SVG image, shown by the desktop app) **plus a text outline** (shown by the CLI/TUI, which can't render images) + a compact status line. Very large graphs return the text outline alone. |
+| `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Hard-truncated, read-only. |
+| `taskflow_trace` | Read-only timeline of a run's append-only event log (subagent I/O + runtime decisions). |
+| `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
+| `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
 
 ## How output is rendered (Codex desktop app)
 

@@ -39,6 +39,41 @@ test("validateTaskflow: per-type requirements", () => {
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow" }] }).ok, false); // no use
 });
 
+test("validateTaskflow: rejects unknown fields instead of silently changing phase semantics", () => {
+	const phaseTypo = validateTaskflow({
+		name: "x",
+		phases: [{ id: "review", map: "[1,2]", task: "Audit {item}" }],
+	});
+	assert.equal(phaseTypo.ok, false);
+	assert.match(phaseTypo.errors.join("\n"), /unknown field 'map'/i);
+
+	const flowTypo = validateTaskflow({
+		name: "x",
+		budegt: { maxTokens: 10 },
+		phases: [{ id: "work", task: "ok" }],
+	});
+	assert.equal(flowTypo.ok, false);
+	assert.match(flowTypo.errors.join("\n"), /unknown field 'budegt'/i);
+
+	for (const budget of [
+		{ maxToken: 1 },
+		"none",
+		{ maxTokens: "1" },
+		{ maxUSD: -1 },
+		{},
+	]) {
+		const invalid = validateTaskflow({ name: "x", budget, phases: [{ id: "work", task: "ok" }] });
+		assert.equal(invalid.ok, false, `budget must fail closed: ${JSON.stringify(budget)}`);
+	}
+
+	const branchTypo = validateTaskflow({
+		name: "x",
+		phases: [{ id: "fan", type: "parallel", branches: [{ task: "x", agnent: "a" }] }],
+	});
+	assert.equal(branchTypo.ok, false);
+	assert.match(branchTypo.errors.join("\n"), /unknown field 'agnent'/i);
+});
+
 test("validateTaskflow: new phase types and fields", () => {
 	// flow with use is valid
 	assert.equal(validateTaskflow({ name: "x", phases: [{ id: "p", type: "flow", use: "other" }] }).ok, true);
@@ -468,6 +503,23 @@ test("validateTaskflow: the full set of string scalars + dependsOn/from entries 
 		const r = validateTaskflow({ name: "x", phases: [phase] });
 		assert.equal(r.ok, false, `${key} with a non-string entry is invalid`);
 		assert.ok(r.errors.some((e) => e.includes(`${key}[0]`)), `expected a ${key}[0] error, got: ${r.errors}`);
+	}
+});
+
+test("validateTaskflow: thinking rejects unknown values instead of silently inheriting host defaults", () => {
+	const bad = validateTaskflow({
+		name: "x",
+		phases: [{ id: "a", type: "agent", task: "t", thinking: "lo", final: true }],
+	});
+	assert.equal(bad.ok, false);
+	assert.match(bad.errors.join("\n"), /'thinking' must be one of/);
+
+	for (const thinking of ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
+		const ok = validateTaskflow({
+			name: "x",
+			phases: [{ id: "a", type: "agent", task: "t", thinking, final: true }],
+		});
+		assert.equal(ok.ok, true, `${thinking}: ${ok.errors.join("; ")}`);
 	}
 });
 

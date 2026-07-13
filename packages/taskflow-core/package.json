@@ -1,7 +1,7 @@
 {
   "name": "taskflow-core",
-  "version": "0.1.8",
-  "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow, codex-taskflow, claude-taskflow, and opencode-taskflow.",
+  "version": "0.2.0",
+  "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, and grok-taskflow.",
   "keywords": [
     "taskflow",
     "dag",
@@ -16,6 +16,9 @@
     "type": "git",
     "url": "git+https://github.com/heggria/taskflow.git",
     "directory": "packages/taskflow-core"
+  },
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
   },
   "type": "module",
   "engines": {
@@ -43,7 +46,11 @@
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
+    }
   },
   "peerDependencies": {
     "typebox": "*"

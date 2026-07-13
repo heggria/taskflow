@@ -13,8 +13,10 @@ import assert from "node:assert/strict";
 import {
 	buildCodexArgs,
 	codexBin,
+	codexChildEnv,
 	sandboxForTools,
 	resolveCodexModel,
+	resolveCodexThinking,
 	type CodexArgsCtx,
 } from "../src/codex-runner.ts";
 
@@ -73,26 +75,74 @@ test("codex model: undefined → undefined", () => {
 	assert.equal(resolveCodexModel(undefined), undefined);
 });
 
+// --- thinking resolution ----------------------------------------------------
+
+test("codex thinking: maps Taskflow levels to model_reasoning_effort", () => {
+	assert.equal(resolveCodexThinking("off"), "none");
+	assert.equal(resolveCodexThinking("none"), "none");
+	assert.equal(resolveCodexThinking("minimal"), "none");
+	assert.equal(resolveCodexThinking("low"), "low");
+	assert.equal(resolveCodexThinking("xhigh"), "xhigh");
+	assert.equal(resolveCodexThinking("max"), "xhigh");
+	assert.equal(resolveCodexThinking("ultra"), "xhigh");
+	assert.throws(() => resolveCodexThinking("unknown"), /Unsupported Codex thinking level/);
+	assert.equal(resolveCodexThinking(undefined), undefined);
+});
+
 // --- full argv contract -----------------------------------------------------
 
 const baseCtx: CodexArgsCtx = { systemPrompt: "", task: "count files", model: undefined, tools: undefined, cwd: undefined };
 
-test("codex argv: starts with `exec --json --skip-git-repo-check -s <sandbox>`", () => {
+test("codex argv: isolates user config, rules, MCP, and session persistence", () => {
 	const args = buildCodexArgs({ ...baseCtx });
-	assert.deepEqual(args.slice(0, 5), ["exec", "--json", "--skip-git-repo-check", "-s", "workspace-write"]);
+	assert.deepEqual(args.slice(0, 4), ["exec", "--json", "--ephemeral", "--ignore-user-config"]);
+	assert.ok(args.includes("--ignore-rules"));
+	assert.ok(args.includes("--skip-git-repo-check"));
+	assert.equal(args[args.indexOf("-c") + 1], "mcp_servers={}");
+	assert.equal(args[args.indexOf("-s") + 1], "workspace-write");
 });
 
 test("codex argv: `-s` reflects the sandbox for the tool whitelist", () => {
 	assert.equal(
-		buildCodexArgs({ ...baseCtx, tools: ["read", "grep"] })[4],
+		buildCodexArgs({ ...baseCtx, tools: ["read", "grep"] })[
+			buildCodexArgs({ ...baseCtx, tools: ["read", "grep"] }).indexOf("-s") + 1
+		],
 		"read-only",
 		"read-only tools → -s read-only",
 	);
 	assert.equal(
-		buildCodexArgs({ ...baseCtx, tools: ["bash"] })[4],
+		buildCodexArgs({ ...baseCtx, tools: ["bash"] })[
+			buildCodexArgs({ ...baseCtx, tools: ["bash"] }).indexOf("-s") + 1
+		],
 		"workspace-write",
 		"mutating tools → -s workspace-write",
 	);
+});
+
+test("codex env: keeps auth/runtime keys and drops unrelated secrets", () => {
+	const env = codexChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		OPENAI_API_KEY: "provider",
+		CODEX_HOME: "/codex",
+		DATABASE_URL: "secret",
+		UNRELATED_TOKEN: "secret",
+	});
+	assert.equal(env.OPENAI_API_KEY, "provider");
+	assert.equal(env.CODEX_HOME, "/codex");
+	assert.equal(env.PATH, "/bin");
+	assert.equal(env.DATABASE_URL, undefined);
+	assert.equal(env.UNRELATED_TOKEN, undefined);
+});
+
+test("codex env: operator can explicitly allow a task-specific credential", () => {
+	const env = codexChildEnv({
+		PI_TASKFLOW_CHILD_ENV_ALLOW: "NPM_TOKEN",
+		NPM_TOKEN: "explicit",
+		DATABASE_URL: "secret",
+	});
+	assert.equal(env.NPM_TOKEN, "explicit");
+	assert.equal(env.DATABASE_URL, undefined);
 });
 
 test("codex argv: model passed via `-m <id>` only when resolvable; never a `/` path", () => {
@@ -113,6 +163,15 @@ test("codex argv: cwd passed via `-C <dir>` when present", () => {
 	assert.ok(idx >= 0);
 	assert.equal(withCwd[idx + 1], "/repo");
 	assert.equal(buildCodexArgs({ ...baseCtx }).indexOf("-C"), -1, "no cwd → no -C flag");
+});
+
+test("codex argv: thinking is passed via model_reasoning_effort config", () => {
+	const low = buildCodexArgs({ ...baseCtx, thinking: "low" });
+	assert.ok(low.includes("model_reasoning_effort=low"));
+
+	const off = buildCodexArgs({ ...baseCtx, thinking: "off" });
+	assert.ok(off.includes("model_reasoning_effort=none"));
+	assert.throws(() => buildCodexArgs({ ...baseCtx, thinking: "unknown" }), /Unsupported Codex thinking level/);
 });
 
 test("codex argv: prompt is the LAST positional arg; system prompt is prepended", () => {

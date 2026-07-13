@@ -38,6 +38,7 @@
 
 import {
 	runSubagentProcess,
+	sanitizeErrorMessage,
 	num,
 	unknownAgentResult,
 	type AgentConfig,
@@ -48,11 +49,36 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { filteredChildEnv } from "./child-env.ts";
 
 /** The permission policy injected (via OPENCODE_CONFIG_CONTENT) for a read-only
  *  phase: deny every mutating capability so a listed-tools phase without
  *  write/edit/bash cannot change the workspace. */
-const READ_ONLY_CONFIG = JSON.stringify({ permission: { bash: "deny", write: "deny", edit: "deny" } });
+export const OPENCODE_READ_ONLY_CONFIG = JSON.stringify({
+	permission: {
+		"*": "deny",
+		read: "allow",
+		grep: "allow",
+		glob: "allow",
+		list: "allow",
+	},
+});
+
+/** Explicit operator acknowledgement required before OpenCode may use its
+ * unsandboxed `--auto` mode for mutating/default-capable phases. */
+export const OPENCODE_UNSAFE_AUTO_ENV = "PI_TASKFLOW_OPENCODE_UNSAFE_AUTO";
+
+export function opencodeUnsafeAutoEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env[OPENCODE_UNSAFE_AUTO_ENV] === "1";
+}
+
+export function opencodeChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	return filteredChildEnv(
+		source,
+		["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"],
+		["OPENCODE_", "OPENAI_", "ANTHROPIC_", "GOOGLE_", "GEMINI_", "AWS_", "AZURE_", "XAI_", "GROQ_", "MISTRAL_", "COHERE_"],
+	);
+}
 
 /** Accumulated state folded from an opencode JSON event stream. */
 export interface OpencodeAccumulator {
@@ -63,6 +89,7 @@ export interface OpencodeAccumulator {
 	lastActivity: string;
 	/** Set when the stream reported a fatal `error` event. */
 	fatalError?: string;
+	terminalSeen?: boolean;
 }
 
 export function newOpencodeAccumulator(model?: string): OpencodeAccumulator {
@@ -100,6 +127,7 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 
 	switch (event.type) {
 		case "text":
+			acc.terminalSeen = false;
 			if (part && typeof part.text === "string" && part.text) {
 				// Text parts stream; concatenate within the current step. A tool call
 				// (below) resets this, so only the LAST step's text is the answer.
@@ -108,16 +136,18 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 			}
 			break;
 		case "tool_use":
+			acc.terminalSeen = false;
 			// A tool call means any text so far was intermediate reasoning, not the
 			// final answer — drop it and keep only text that follows the last tool.
 			acc.finalText = "";
 			if (part) activity = shortTool(part);
 			break;
 		case "step_finish": {
+			acc.terminalSeen = true;
 			acc.usage.turns++;
 			const tk = part?.tokens;
 			if (tk) {
-			acc.usage.input += num(tk.input);
+				acc.usage.input += num(tk.input);
 				acc.usage.output += num(tk.output) + num(tk.reasoning);
 				acc.usage.cacheRead += num(tk.cache?.read);
 				acc.usage.cacheWrite += num(tk.cache?.write);
@@ -137,8 +167,11 @@ export function foldOpencodeEventLine(acc: OpencodeAccumulator, line: string): L
 			activity = `error: ${msg}`;
 			break;
 		}
+		case "step_start":
+			acc.terminalSeen = false;
+			return null;
 		default:
-			return null; // step_start / other — nothing to fold.
+			return null; // other — nothing to fold.
 	}
 
 	if (activity) acc.lastActivity = activity.replace(/\s+/g, " ").trim();
@@ -191,6 +224,8 @@ export interface OpencodeArgsCtx {
 	model?: string;
 	tools?: string[];
 	cwd?: string;
+	/** Explicit acknowledgement for OpenCode's unsandboxed `--auto` mode. */
+	allowUnsafeAuto?: boolean;
 }
 
 /** Result of {@link buildOpencodeArgs}: the argv plus whether a read-only
@@ -217,7 +252,15 @@ export function buildOpencodeArgs(ctx: OpencodeArgsCtx): OpencodeArgs {
 	const fullPrompt = ctx.systemPrompt.trim()
 		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
 		: `Task: ${ctx.task}`;
-	const args: string[] = ["run", fullPrompt, "--format", "json"];
+	if (!readOnly && !ctx.allowUnsafeAuto) {
+		throw new Error(
+			`OpenCode mutating/default-capable phases require unsandboxed --auto permissions. ` +
+				`Set ${OPENCODE_UNSAFE_AUTO_ENV}=1 to explicitly allow this execution.`,
+		);
+	}
+	// --pure prevents user/project plugins from executing outside the tool
+	// permission policy. It is mandatory for both read-only and unsafe runs.
+	const args: string[] = ["run", fullPrompt, "--format", "json", "--pure"];
 	if (ctx.cwd) args.push("--dir", ctx.cwd);
 	if (opencodeModel) args.push("-m", opencodeModel);
 	if (!readOnly) args.push("--auto");
@@ -245,13 +288,32 @@ export async function runOpencodeAgentTask(
 	void globalThinking; // opencode's --variant is provider-specific; reserved.
 
 	const cwd = opts.cwd ?? defaultCwd;
-	const { args, readOnly } = buildOpencodeArgs({
-		systemPrompt: agent.systemPrompt,
-		task,
-		model,
-		tools,
-		cwd,
-	});
+	const childEnv = opencodeChildEnv();
+	let args: string[];
+	let readOnly: boolean;
+	try {
+		({ args, readOnly } = buildOpencodeArgs({
+			systemPrompt: agent.systemPrompt,
+			task,
+			model,
+			tools,
+			cwd,
+			allowUnsafeAuto: opencodeUnsafeAutoEnabled(),
+		}));
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			errorMessage: message,
+			stopReason: "permission_denied",
+		};
+	}
 
 	return runSubagentProcess({
 		agent: agentName,
@@ -261,13 +323,15 @@ export async function runOpencodeAgentTask(
 		args,
 		// A read-only phase injects the deny-mutations permission policy; the
 		// shared runner merges this over the parent env.
-		env: readOnly ? { ...process.env, OPENCODE_CONFIG_CONTENT: READ_ONLY_CONFIG } : undefined,
+		env: readOnly ? { ...childEnv, OPENCODE_CONFIG_CONTENT: OPENCODE_READ_ONLY_CONFIG } : childEnv,
 		cwd,
 		idleTimeoutMs: opts.idleTimeoutMs,
 		signal: opts.signal,
 		onLive: opts.onLive,
 		acc: newOpencodeAccumulator(model),
 		foldLine: foldOpencodeEventLine,
+		requireTerminalEvent: true,
+		terminalEventLabel: "OpenCode step_finish",
 	});
 }
 

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import { CacheStore } from "../src/cache.ts";
-import { executeTaskflow, cacheKeys, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
+import { agentDefinitionsIdentity, executeTaskflow, cacheKeys, type PhaseCacheCtx, type RuntimeDeps } from "../src/runtime.ts";
 import type { RunResult, RunOptions } from "../src/runner-core.ts";
 import type { Taskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
@@ -67,6 +67,7 @@ async function ccFor(def: Taskflow, cwd: string, store: CacheStore, phaseId: str
 		runId: "seed",
 		flowDefHash: fdh,
 		phaseFp: subfp,
+		agentDefinitions: agentDefinitionsIdentity(AGENTS),
 	};
 }
 
@@ -95,10 +96,11 @@ test("cacheKeys: key, v2Key, bareKey, legacyKey are all distinct (M6 4-tier)", a
 });
 
 // ---------------------------------------------------------------------------
-// Legacy fallback: a pre-flowDefHash-era entry (no flowdef line) still hits.
+// Legacy safety: a pre-flowDefHash-era entry has no structural identity and
+// must never be trusted after an upgrade.
 // ---------------------------------------------------------------------------
 
-test("cache migration: legacy (no-flowdef) entry still hits via fallback", async () => {
+test("cache migration: legacy (no-flowdef) entry is ignored to prevent stale reuse", async () => {
 	const dir = tmpDir();
 	const def: Taskflow = {
 		name: "legacy",
@@ -121,13 +123,14 @@ test("cache migration: legacy (no-flowdef) entry still hits via fallback", async
 		runId: "old",
 	});
 
-	// Run — must hit the legacy entry (NOT execute). counter stays 0.
+	// Run — must execute and write the current structurally-versioned key.
 	const counter = { n: 0 };
 	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
 	const r = await executeTaskflow(mkState(def, dir), deps);
-	assert.equal(counter.n, 0, "legacy entry must hit — no execution");
-	assert.equal(r.state.phases.p.cacheHit, "cross-run");
-	assert.equal(r.state.phases.p.output, "LEGACY-OUTPUT");
+	assert.equal(counter.n, 1, "unsafe legacy entry must not be served");
+	assert.equal(r.state.phases.p.cacheHit, undefined);
+	assert.equal(r.state.phases.p.output, "out:fixed#1");
+	assert.ok(store.get(ck.key), "fresh output is stored under the current key");
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -167,10 +170,10 @@ test("cache migration: bare (unversioned flowdef) entry still hits via 3rd-tier 
 });
 
 // ---------------------------------------------------------------------------
-// Read-only fallback: a legacy hit does NOT write-through under the new key.
+// Unsafe legacy data is left untouched while a fresh current-key entry is written.
 // ---------------------------------------------------------------------------
 
-test("cache migration: legacy hit is read-only (no write-through under v2 key)", async () => {
+test("cache migration: unsafe legacy entry is not read and fresh result uses current key", async () => {
 	const dir = tmpDir();
 	const def: Taskflow = {
 		name: "no-write-through",
@@ -190,9 +193,11 @@ test("cache migration: legacy hit is read-only (no write-through under v2 key)",
 	const deps: RuntimeDeps = { cwd: dir, agents: AGENTS, runTask: countingRunner(counter), cacheStore: store };
 	await executeTaskflow(mkState(def, dir), deps);
 
-	// The v2 key file must NOT have been created (no write-through).
+	// The current key contains a newly executed result, not the legacy value.
 	const v2Entry = store.get(ck.key);
-	assert.equal(v2Entry, null, "no v2 write-through — legacy entry left to age out");
+	assert.ok(v2Entry, "fresh current-key entry was written");
+	assert.equal(v2Entry?.output, "out:fixed#1");
+	assert.equal(counter.n, 1);
 	// The legacy entry is still there.
 	assert.ok(store.get(ck.legacyKey), "legacy entry untouched");
 	fs.rmSync(dir, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-# pnpm workspace — the six published packages.
+# pnpm workspace — nine packages under packages/ + website.
 # (Replaces the npm `workspaces` field in the root package.json; pnpm ignores
 # that field and requires this file instead.)
 packages:
@@ -9,4 +9,11 @@ packages:
   - "packages/codex-taskflow"
   - "packages/claude-taskflow"
   - "packages/opencode-taskflow"
+  - "packages/grok-taskflow"
+  - "packages/taskflow-dsl"
   - "website"
+allowBuilds:
+  "@google/genai": true
+  esbuild: true
+  protobufjs: true
+  sharp: true

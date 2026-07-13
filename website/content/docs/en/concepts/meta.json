@@ -1,0 +1,14 @@
+{
+	"title": "Core Concepts",
+	"pages": [
+		"index",
+		"dag",
+		"phases",
+		"interpolation",
+		"verification",
+		"context-isolation",
+		"workspace-isolation",
+		"shared-context-tree",
+		"resume"
+	]
+}

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compileTaskflowToIR } from "../src/flowir/index.ts";
-import { flowDefHash } from "../src/flowir/hash.ts";
+import { compileTaskflowToIR, compileTaskflowToFlowIR, hashFlowIR } from "../src/flowir/index.ts";
 import type { Phase, Taskflow } from "../src/schema.ts";
 
 // ---------------------------------------------------------------------------
@@ -16,13 +15,10 @@ function flow(phases: Phase[], overrides?: Partial<Taskflow>): Taskflow {
 }
 
 // ---------------------------------------------------------------------------
-// compileTaskflowToIR — hash contract (stub == flowDefHash, but stable)
+// compileTaskflowToIR — S0 genuine compiler (IR content hash, not flowDefHash)
 // ---------------------------------------------------------------------------
 
 test("compileTaskflowToIR: deterministic across key reordering / whitespace", async () => {
-	// 1000 reorder variants of the same fixture must all hash identically.
-	// We reorder KEYS WITHIN each phase object (not the array — array order is
-	// structurally meaningful), mirroring canonicalJson's key-sorted contract.
 	const base = flow([agent("a"), agent("b", ["a"], { final: true })]);
 	const h0 = await compileTaskflowToIR(base);
 	for (let i = 0; i < 1000; i++) {
@@ -42,62 +38,108 @@ test("compileTaskflowToIR: deterministic across key reordering / whitespace", as
 	}
 });
 
-test("compileTaskflowToIR: hash matches the vendored flowDefHash (stub parity)", async () => {
+test("compileTaskflowToIR: hash is IR content-addressed (ir:<64-hex>), not flowDefHash", async () => {
 	const f = flow([agent("a", undefined, { final: true })]);
 	const ir = await compileTaskflowToIR(f);
-	assert.equal(ir.hash, await flowDefHash(f));
+	assert.match(ir.hash!, /^ir:[0-9a-f]{64}$/);
+	const c = compileTaskflowToFlowIR(f);
+	assert.equal(ir.hash, hashFlowIR(c.canonical));
 });
 
 test("compileTaskflowToIR: single-field mutation changes the hash", async () => {
 	const base = flow([agent("a", undefined, { final: true })]);
 	const h0 = await compileTaskflowToIR(base);
 
-	// change task text
 	const changedTask = flow([agent("a", undefined, { final: true, task: "DIFFERENT" })]);
 	assert.notEqual((await compileTaskflowToIR(changedTask)).hash, h0.hash);
 
-	// add a phase
 	const added = flow([agent("a"), agent("b", ["a"], { final: true })]);
 	assert.notEqual((await compileTaskflowToIR(added)).hash, h0.hash);
 
-	// rename a phase id
 	const renamed = flow([{ id: "a-renamed", type: "agent", task: "task for a", final: true } as Phase]);
 	assert.notEqual((await compileTaskflowToIR(renamed)).hash, h0.hash);
 });
 
+test("compileTaskflowToIR: hash changes for non-agent runtime payload fields", async () => {
+	const cases: Array<[string, Taskflow, Taskflow]> = [
+		[
+			"parallel branch task",
+			flow([{ id: "p", type: "parallel", branches: [{ agent: "a", task: "alpha" }], final: true } as Phase]),
+			flow([{ id: "p", type: "parallel", branches: [{ agent: "a", task: "beta" }], final: true } as Phase]),
+		],
+		[
+			"script run",
+			flow([{ id: "s", type: "script", run: ["echo", "alpha"], final: true } as Phase]),
+			flow([{ id: "s", type: "script", run: ["echo", "beta"], final: true } as Phase]),
+		],
+		[
+			"map source",
+			flow([{ id: "m", type: "map", over: "{steps.a.json}", task: "{item}", final: true } as Phase]),
+			flow([{ id: "m", type: "map", over: "{steps.b.json}", task: "{item}", final: true } as Phase]),
+		],
+		[
+			"flow definition",
+			flow([{ id: "f", type: "flow", def: { name: "child", phases: [{ id: "a", task: "alpha" }] }, final: true } as Phase]),
+			flow([{ id: "f", type: "flow", def: { name: "child", phases: [{ id: "a", task: "beta" }] }, final: true } as Phase]),
+		],
+		[
+			"race cancelLosers",
+			flow([{ id: "r", type: "race", branches: [{ task: "a" }, { task: "b" }], cancelLosers: true, final: true } as Phase]),
+			flow([{ id: "r", type: "race", branches: [{ task: "a" }, { task: "b" }], cancelLosers: false, final: true } as Phase]),
+		],
+		[
+			"expand maxNodes",
+			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 5, final: true } as Phase]),
+			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 6, final: true } as Phase]),
+		],
+	];
+
+	for (const [label, a, b] of cases) {
+		assert.notEqual((await compileTaskflowToIR(a)).hash, (await compileTaskflowToIR(b)).hash, label);
+	}
+});
+
 test("compileTaskflowToIR: structured diagnostics, never throws", async () => {
-	// A flow referencing a non-existent step — translate emits an advisory
-	// warning but does NOT throw (validation is the source of truth; /tf ir
-	// is a read-only diagnostic and must surface a clean error table).
 	const f = flow([
 		{ id: "a", type: "agent", task: "read {steps.ghost.output}", final: true } as Phase,
 	]);
 	const ir = await compileTaskflowToIR(f);
 	assert.ok(ir.warnings.length >= 1, "missing-step ref → advisory warning");
 	assert.ok(ir.warnings.some((w) => w.message.includes("ghost")));
-	assert.equal(ir.errors.length, 0, "stub never emits hard errors");
+	assert.equal(ir.errors.length, 0);
 });
 
 test("compileTaskflowToIR: advisory non-fatality — errors-bearing flow still hashes", async () => {
 	const f = flow([{ id: "a", type: "agent", task: "read {steps.ghost.output}", final: true } as Phase]);
 	const ir = await compileTaskflowToIR(f);
 	assert.ok(ir.hash, "a flow with warnings still produces a content hash");
-	assert.match(ir.hash!, /^[0-9a-f]{32}$/);
+	assert.match(ir.hash!, /^ir:[0-9a-f]{64}$/);
 });
 
-test("compileTaskflowToIR: usedFallbackHash true when any phase has when", async () => {
-	const withWhen = flow([agent("a", undefined, { final: true, when: "{steps.a.output} == skip" })]);
-	const ir = await compileTaskflowToIR(withWhen);
-	assert.equal(ir.usedFallbackHash, true, "a `when` guard forces the fallback hash in the stub");
-});
-
-test("compileTaskflowToIR: usedFallbackHash true even without when (stub)", async () => {
-	// In the stub, usedFallbackHash is always true (the genuine overstory
-	// compiler is not yet wired). This test pins that contract so the day it
-	// flips to false we know the vendoring landed.
+test("compileTaskflowToIR: usedFallbackHash false for well-formed flows (S0 genuine compiler)", async () => {
 	const plain = flow([agent("a", undefined, { final: true })]);
 	const ir = await compileTaskflowToIR(plain);
-	assert.equal(ir.usedFallbackHash, true);
+	assert.equal(ir.usedFallbackHash, false);
+
+	// `when` no longer forces fallback — cond is normalized into the IR hash.
+	const withWhen = flow([agent("a", undefined, { final: true, when: "true" })]);
+	const ir2 = await compileTaskflowToIR(withWhen);
+	assert.equal(ir2.usedFallbackHash, false);
+});
+
+test("compileTaskflowToIR: equivalent when spellings share hash (cond normalization)", async () => {
+	const a = flow([agent("g", undefined, { final: true, when: "{steps.x.output} == ok", type: "gate" as const })]);
+	// need a prior phase for ref
+	const f1 = flow([
+		agent("x"),
+		{ id: "g", type: "gate", task: "check", when: "{steps.x.output} == ok", dependsOn: ["x"], final: true } as Phase,
+	]);
+	const f2 = flow([
+		agent("x"),
+		{ id: "g", type: "gate", task: "check", when: "(({steps.x.output}==ok))", dependsOn: ["x"], final: true } as Phase,
+	]);
+	assert.equal((await compileTaskflowToIR(f1)).hash, (await compileTaskflowToIR(f2)).hash);
+	void a;
 });
 
 // ---------------------------------------------------------------------------
@@ -127,6 +169,21 @@ test("compileTaskflowToIR: inject synthesized from {steps.X} refs", async () => 
 	assert.deepEqual(byId.get("scout")!.inject, []);
 });
 
+test("compileTaskflowToIR: reduce.from contributes declared reads and edges", async () => {
+	const f = flow([
+		agent("a"),
+		agent("b"),
+		{ id: "r", type: "reduce", from: ["a", "b"], task: "summarize", final: true } as Phase,
+	]);
+	const ir = await compileTaskflowToIR(f);
+	const r = ir.ir!.nodes.find((n) => n.id === "r")!;
+	assert.deepEqual(r.inject, ["a", "b"]);
+	assert.deepEqual(ir.meta.declaredDeps.r, { reads: ["a", "b"], writes: ["r"] });
+	const c = compileTaskflowToFlowIR(f);
+	assert.ok(c.canonical.edges?.some((e) => e.from === "a" && e.to === "r"));
+	assert.ok(c.canonical.edges?.some((e) => e.from === "b" && e.to === "r"));
+});
+
 test("compileTaskflowToIR: declaredDeps mirror inject/emits", async () => {
 	const f = flow([
 		agent("scout"),
@@ -137,13 +194,25 @@ test("compileTaskflowToIR: declaredDeps mirror inject/emits", async () => {
 	assert.deepEqual(ir.meta.declaredDeps.audit, { reads: ["scout"], writes: ["audit"] });
 });
 
+test("compileTaskflowToFlowIR: emits edges + condRef for when", () => {
+	const f = flow([
+		agent("x"),
+		{ id: "g", type: "gate", task: "j", when: "  true  ", dependsOn: ["x"], final: true } as Phase,
+	]);
+	const c = compileTaskflowToFlowIR(f);
+	assert.ok(c.canonical.edges && c.canonical.edges.length >= 1);
+	const g = c.canonical.nodes.find((n) => n.id === "g")!;
+	assert.equal(g.condRef, "true");
+	assert.equal(g.when, "  true  ");
+	assert.equal(c.usedFallbackHash, false);
+});
+
 test("compileTaskflowToIR: two genuinely identical definitions match", async () => {
 	const mk = () => flow([agent("a"), agent("b", ["a"], { final: true })]);
 	assert.equal((await compileTaskflowToIR(mk())).hash, (await compileTaskflowToIR(mk())).hash);
 });
 
 test("compileTaskflowToIR: two structurally-different flows sharing a name do NOT collide", async () => {
-	// The regression that motivated flowDefHash folding into the cache key.
 	const a = flow([agent("scan", undefined, { final: true })], { name: "audit" });
 	const b = flow(
 		[agent("scan", undefined, { final: true }), agent("report", ["scan"], { final: false })],
@@ -152,25 +221,18 @@ test("compileTaskflowToIR: two structurally-different flows sharing a name do NO
 	assert.notEqual((await compileTaskflowToIR(a)).hash, (await compileTaskflowToIR(b)).hash);
 });
 
-// ---------------------------------------------------------------------------
-// /tf ir formatting (the formatFlowIR helper output shape)
-// ---------------------------------------------------------------------------
-
-test("formatFlowIR output: stable hash + inject/emits + declared deps", async () => {
-	// We can't easily import the non-exported formatFlowIR helper from index.ts
-	// (it's not exported), but the tool action surfaces it. Instead we assert
-	// the IR surface carries everything the formatter needs. This is a
-	// contract canary: if the TaskflowIR shape changes, this test fails fast.
+test("formatFlowIR surface: stable hash + inject/emits + declared deps", async () => {
 	const f = flow([
 		agent("scout"),
 		{ id: "audit", type: "agent", task: "audit {steps.scout.output}", dependsOn: ["scout"], final: true } as Phase,
 	]);
 	const ir = await compileTaskflowToIR(f);
-	assert.ok(ir.hash && /^[0-9a-f]{32}$/.test(ir.hash));
+	assert.ok(ir.hash && /^ir:[0-9a-f]{64}$/.test(ir.hash));
 	assert.ok(ir.ir && ir.ir.nodes.length === 2);
 	assert.ok(ir.meta.declaredDeps.audit);
 	assert.equal(ir.meta.sourceFlowName, "test-flow");
 	assert.equal(Array.isArray(ir.warnings), true);
 	assert.equal(Array.isArray(ir.errors), true);
 	assert.equal(typeof ir.usedFallbackHash, "boolean");
+	assert.equal(ir.usedFallbackHash, false);
 });

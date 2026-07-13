@@ -1,9 +1,9 @@
 ---
 title: Commands
-description: Pi slash commands and Codex MCP tools.
+description: Pi slash commands and MCP tools (Codex, Claude, OpenCode, Grok).
 ---
 
-taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
+taskflow exposes the same operations two ways. On **Pi**, you type slash commands like `/tf run` and `/tf:review-changes`. On **Codex** (and Claude Code, OpenCode, Grok), the same operations are MCP tools the model calls — `taskflow_run`, `taskflow_list`, and so on.
 
 This page is a grouped reference for both. Every command has a one-line purpose and, where useful, a concrete example. If you just want to skim, jump to the [example session](#an-example-session) at the end.
 
@@ -42,16 +42,19 @@ The `/tf` command is the user-facing surface on Pi. Its subcommands fall into fo
 | `/tf provenance <runId>` | Show the observed read-set provenance for a run. |
 | `/tf why-stale <runId> [phaseId]` | Explain why a cached run is stale — which fingerprint input changed. |
 | `/tf recompute <runId> <phaseId> [--apply]` | Minimally recompute a stale phase. Default is a safe dry-run; `--apply` spends tokens. |
+| `/tf trace <runId> [--json]` | Show the append-only event log (subagent I/O + runtime decisions). |
+| `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | Offline what-if re-judge of thresholds/budget from a recorded trace (**zero tokens**). |
 
 ### Lifecycle
 
 | Command | Description |
 |---|---|
 | `/tf save` | Save the most recent inline flow definition under a name (makes `/tf:<name>` available immediately). |
+| `/tf search` | Search the reusable-flow library by purpose/tags. |
 | `/tf init` | Configure model roles — map the built-in agent roles to your models. |
 
 <Callout type="tip">
-  `peek`, `provenance`, `why-stale`, and `recompute` are the debugging toolkit. Use them when a run did something unexpected and you need to see *why* without re-running it.
+  `peek`, `provenance`, `why-stale`, and `recompute` explain *what would re-run*. `trace` + `replay` explain *what was decided* and counterfactual knobs — see [Deterministic Replay](/en/docs/compiler-runtime/deterministic-replay).
 </Callout>
 
 ## The `taskflow` tool (Pi)
@@ -62,16 +65,18 @@ On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action
 |---|---|
 | `run` | Run an inline or saved flow. |
 | `save` | Persist a flow definition. |
+| `search` | Search the reusable-flow library by purpose/tags. |
 | `resume` | Resume a run by `runId`. |
 | `list` | List saved flows. |
 | `agents` | List the built-in agents. |
 | `verify` | Static check. |
 | `compile` | Mermaid diagram + verification report. |
 | `ir` / `provenance` / `why-stale` / `recompute` | Incremental recompute toolkit. |
+| `trace` / `replay` | Event log inspection + offline decision what-if (zero tokens). |
 | `cache-clear` | Clear the cross-run memoization cache. |
 | `init` | Configure model roles. |
 
-## Codex / Claude / OpenCode MCP tools
+## Codex / Claude / OpenCode / Grok MCP tools
 
 On MCP hosts, taskflow exposes these tools (the model calls them; you usually don't type them):
 
@@ -81,11 +86,17 @@ On MCP hosts, taskflow exposes these tools (the model calls them; you usually do
 | `taskflow_list` | List saved flows discoverable in this directory. |
 | `taskflow_show` | Print a saved flow's definition. |
 | `taskflow_verify` | Statically verify a flow (no execution). |
-| `taskflow_compile` | Render a flow as a DAG diagram (SVG image) plus a status line. |
+| `taskflow_compile` | Render a DAG as SVG plus a standalone text outline and verification status; oversized graphs fall back to text only. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). |
+| `taskflow_trace` | Read-only timeline of the run's append-only event log. |
+| `taskflow_replay` | Offline what-if re-judge of thresholds/budget from a recorded trace (zero tokens). |
+| `taskflow_why_stale` | Explain observed/declared dependency staleness. |
+| `taskflow_recompute` | Report the stale frontier (**dry-run only** over MCP). |
+| `taskflow_save` | Save a flow to the library with purpose/tags. |
+| `taskflow_search` | Search the reusable-flow library. |
 
 <Callout type="info">
-  On MCP hosts there is no `/tf` slash command — you describe the work in natural language and the model calls `taskflow_run`. Use `taskflow_peek` with the `runId` that `taskflow_run` returns when you need to inspect intermediate output.
+  On MCP hosts there is no `/tf` slash command — you describe the work in natural language and the model calls `taskflow_run`. Use `taskflow_peek` / `taskflow_trace` / `taskflow_replay` with the `runId` from `taskflow_run` for post-hoc inspection and offline what-if.
 </Callout>
 
 ## An example session

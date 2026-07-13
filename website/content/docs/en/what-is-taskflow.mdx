@@ -116,7 +116,7 @@ If you have used a build system like Make, Bazel, or Vite, this split is already
 
 ### The plan is data
 
-A taskflow definition is JSON (or YAML, or MDX frontmatter). It declares **phases** — discrete task nodes (`agent`, `map`, `gate`, `reduce`, `loop`, `tournament`, `approval`, `flow`, `script`) — wired into a DAG by `dependsOn` edges, plus control flow like `when` guards, `join`, `retry`, and `budget`.
+A taskflow definition is JSON. It declares **12 phase kinds** — `agent`, `parallel`, `map`, `gate`, `reduce`, `approval`, `flow`, `loop`, `tournament`, `script`, `race`, and `expand` — wired into a DAG by `dependsOn`, plus control flow such as `when`, `join`, `retry`, and `budget`. The TypeScript DSL compiles to this same JSON contract.
 
 Because it is data, you can diff it in code review, version it, and generate it from another model.
 
@@ -196,7 +196,7 @@ Use taskflow when:
     How phases become a graph, and why order in the array does not matter.
   </Card>
   <Card title="Phase Types" href="/en/docs/concepts/phases">
-    The ten building blocks of a taskflow.
+    The twelve building blocks of a taskflow.
   </Card>
   <Card title="Syntax Reference" href="/en/docs/syntax/flow-definition">
     Full reference for flow definitions and phase fields.

@@ -1,26 +1,30 @@
 ---
 title: 参考
-description: 简写和命令速查。
+description: 命令与简写调用形式的快速查询入口。
 ---
 
-参考页是*查阅材料*。它们不是教程——当你已经知道自己要什么、只差确切形状时才来看它们。关于其中任何东西的*为什么*，见[核心概念](/zh-cn/docs/concepts)；关于逐字段的详尽细节，见[语法参考](/zh-cn/docs/syntax)。
+参考页用于查找精确调用方式。当你已经知道自己要做什么，只差命令或结构时再来这里。
 
-这里有两页：
-
-- **[简写](/zh-cn/docs/reference/shorthand)** —— `task`、`tasks` 和 `chain` 快捷方式，以及每一个展开成的确切完整 flow JSON。
-- **[命令](/zh-cn/docs/reference/commands)** —— 每一条 Pi `/tf` 命令和每一个 Codex / Claude / OpenCode 的 MCP 工具，按用途分组，并附一个完整示例会话。
+- **[命令](/zh-cn/docs/reference/commands)** —— 按生命周期与检查任务组织的 Pi `/tf` 命令，以及 Codex / Claude Code / OpenCode / Grok MCP 工具。
+- **[简写](/zh-cn/docs/reference/shorthand)** —— `task`、`tasks` 与 `chain`，以及它们各自展开成的完整 flow。
 
 <Callout type="info">
-  在 Pi 上，保存的 flow 会自动变成斜杠命令快捷方式：`/tf:review-changes` 等同于 `/tf run review-changes`。在 MCP 宿主上，你通过 `taskflow_run` 按名称运行保存的 flow。
+  TypeScript 编写、FlowIR、replay 与 recompute 等编译器 / 运行时操作已集中到 [taskflow 0.2 新能力](/zh-cn/docs/compiler-runtime)。精确 DSL 字段仍在[语法参考](/zh-cn/docs/syntax)。
 </Callout>
 
-## 页面
+## 查询页面
 
 <Cards>
-  <Card title="简写" href="/zh-cn/docs/reference/shorthand">
-    `task`、`tasks`、`chain` —— 快速委托的快捷方式。
-  </Card>
   <Card title="命令" href="/zh-cn/docs/reference/commands">
-    Pi `/tf` 命令和 Codex / Claude / OpenCode 的 MCP 工具。
+    运行、保存、检查、trace、replay、解释 stale 与增量重算。
+  </Card>
+  <Card title="简写" href="/zh-cn/docs/reference/shorthand">
+    单任务、并行任务与顺序链快捷形式。
+  </Card>
+  <Card title="语法参考" href="/zh-cn/docs/syntax">
+    完整字段与阶段类型定义。
+  </Card>
+  <Card title="0.2 新能力" href="/zh-cn/docs/compiler-runtime">
+    TypeScript DSL、FlowIR、replay、后台运行与增量重算。
   </Card>
 </Cards>

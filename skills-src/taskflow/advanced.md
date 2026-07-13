@@ -6,17 +6,35 @@ runtime-generated work (`flow{def}` / `ctx_spawn`), isolated working
 directories, or surgical re-execution after the world changes
 (`ir` / `provenance` / `why-stale` / `recompute`).
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode -->
+<!-- host:codex,claude,opencode,grok -->
 # Taskflow Advanced — dynamic sub-flows & workspace isolation
 
-Load this when a flow needs: runtime-generated work (`flow{def}`) or isolated
-working directories (`cwd: temp/dedicated/worktree`).
-<!-- /host:codex,claude,opencode -->
+Load this when a flow needs: runtime-generated work (`flow{def}` / `expand`) or
+isolated working directories (`cwd: temp/dedicated/worktree`).
+<!-- /host:codex,claude,opencode,grok -->
+
+---
+
+## `flow{def}` vs `expand` (when to use which)
+
+| Need | Prefer |
+|------|--------|
+| Saved reusable flow by name | `flow` + `use` |
+| Planner JSON as isolated nested sub-flow (classic) | `flow` + `def` **or** `expand` + `expandMode: "nested"` |
+| Fragment phases must appear on the **parent** run as `<expandId>-<childId>` | `expand` + `expandMode: "graft"` |
+| First of several static approaches (latency) | `race` (not tournament) |
+
+`expand` is a first-class phase type (Horizon B). Dynamic validation / nesting /
+breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
+(imperative path only until step handlers exist).
 
 ---
 
 <!-- host:pi -->
 ## Shared Context Tree (blackboard + supervision) — opt-in
+
+> **0.2.0 host scope:** context-tool injection is implemented by `pi-taskflow`.
+> Codex, Claude, OpenCode, and Grok runners do not expose `ctx_*` tools yet.
 
 By default subagents are fully isolated: they share nothing and only return a
 final output string. Opt a phase in with `shareContext: true` (or
@@ -248,7 +266,89 @@ changed. Instead of re-running all 12 phases:
 
 The other 8 phases (dependency summary, license scan, …) are served from the
 stored run at $0.
+<!-- /host:pi -->
 
+---
+
+## Trace & offline replay (`trace` / `replay`) — vs resume / recompute
+
+Three **different** reuse tools; do not conflate them:
+
+| Tool | Spends tokens? | Mutates the run? | Answers |
+|------|----------------|------------------|---------|
+| **`resume`** | Only unfinished / cache-miss phases | Continues the same run | "Pick up where we stopped" |
+| **`why-stale` → `recompute`** | Dry-run free; `--apply` / `dryRun:false` spends | Optional write of recompute result | "World/input changed — which phases re-run?" |
+| **`trace` → `replay`** | **Never** | Never | "If the gate threshold / budget had been different, would we have blocked?" |
+
+### Trace (read the evidence)
+
+Every instrumented run may write an append-only **event log**
+(`runs/<flow>/<runId>.trace.jsonl`): phase lifecycle, each subagent
+input/output, and runtime **decisions** (gate verdict/score, when-guard,
+cache-hit, budget-hit, tournament-winner, unreplayable).
+
+<!-- host:pi -->
+```
+taskflow { action: "trace", runId: "<id>" }
+taskflow { action: "trace", runId: "<id>", json: true }   // full machine record
+/tf trace <runId> [--json]
+```
+<!-- /host:pi -->
+<!-- host:codex,claude,opencode,grok -->
+```
+taskflow_trace { runId: "<id>" }
+taskflow_trace { runId: "<id>", json: true }
+```
+
+MCP trace responses are bounded. JSON mode returns an envelope with
+`total`/`returned`/`truncated`; use `limit` (default 200, max 1000) to select the
+newest events without flooding the host context.
+<!-- /host:codex,claude,opencode,grok -->
+
+If there is no log (pre-trace run, or no sink injected), the tool reports that
+clearly — it never invents events.
+
+### Offline replay (what-if, zero tokens)
+
+`replay` **re-folds** the recorded log under alternate **decision knobs** without
+calling any model:
+
+- `thresholds` — map of `phaseId → new score threshold` (gate-score events)
+- `budgetMaxUSD` / `budgetMaxTokens` — would later phases have been skipped?
+- `models` / `args` — currently report `needs-live-rerun` (quality cannot be
+  re-judged offline without re-execution)
+
+Outcomes per phase: `reused`, `would-block`, `verdict-flipped`,
+`would-exceed-budget`, `threshold-changed`, `needs-live-rerun`, `failed`.
+
+<!-- host:pi -->
+```
+taskflow { action: "replay", runId: "<id>", thresholds: { review: 0.9 } }
+taskflow { action: "replay", runId: "<id>", budgetMaxUSD: 0.05, json: true }
+/tf replay <runId> --threshold review=0.9 --budget-usd 0.05 [--json]
+```
+<!-- /host:pi -->
+<!-- host:codex,claude,opencode,grok -->
+```
+taskflow_replay { runId: "<id>", thresholds: { review: 0.9 } }
+taskflow_replay { runId: "<id>", budgetMaxUSD: 0.05, json: true }
+```
+<!-- /host:codex,claude,opencode,grok -->
+
+**Import-graph guarantee:** `replayRun` never imports the process-spawning
+runtime or event kernel — offline replay cannot accidentally spend tokens.
+
+### When to use which
+
+| Situation | Use |
+|-----------|-----|
+| Rate-limit mid-run; inputs unchanged | `resume` |
+| Repo file changed; re-pay only affected phases | `why-stale` → `recompute` |
+| "Would a stricter gate have blocked last night's run?" | `trace` → `replay` with new `thresholds` |
+| "Would a $0.10 cap have stopped the fan-out?" | `replay` with `budgetMaxUSD` |
+| Need fresh model judgment under a new model id | `replay` will say `needs-live-rerun` → live `recompute`/`run` |
+
+<!-- host:pi -->
 ---
 
 ## `init` — model roles setup

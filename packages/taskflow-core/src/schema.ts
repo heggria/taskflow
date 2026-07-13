@@ -10,14 +10,31 @@ import { StringEnum } from "./typebox-helpers.ts";
 import { contractShapeErrors } from "./contract.ts";
 import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
+import { Errors as SchemaErrors } from "typebox/value";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
 // ---------------------------------------------------------------------------
 
-const PHASE_TYPES = ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script"] as const;
-type PhaseType = (typeof PHASE_TYPES)[number];
+/** Closed set of native phase kinds — single source of truth for DSL + FlowIR. */
+export const PHASE_TYPES = [
+	"agent",
+	"parallel",
+	"map",
+	"gate",
+	"reduce",
+	"approval",
+	"flow",
+	"loop",
+	"tournament",
+	"script",
+	/** First completed branch wins (Horizon B). */
+	"race",
+	/** Dynamic sub-DAG: nested sub-flow or graft-promote into parent (Horizon B). */
+	"expand",
+] as const;
+export type PhaseType = (typeof PHASE_TYPES)[number];
 
 /** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
 export const LOOP_DEFAULT_MAX_ITERATIONS = 10;
@@ -45,12 +62,15 @@ export type TournamentMode = (typeof TOURNAMENT_MODES)[number];
 
 const OUTPUT_FORMATS = ["text", "json"] as const;
 const JOIN_MODES = ["all", "any"] as const;
+/** Cross-host thinking levels and compatibility aliases accepted by authored flows. */
+export const THINKING_LEVELS = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 const CACHE_SCOPES = ["run-only", "cross-run", "off"] as const;
 export type CacheScope = (typeof CACHE_SCOPES)[number];
 /** Allowed fingerprint entry prefixes. `glob!:` = content-hash variant of `glob:`. */
 const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
 /** Phase types that must NOT be cached across runs (a fresh result is required each run). */
-const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script"] as const;
+const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script", "race", "expand"] as const;
 /** `cwd` is a literal path / workspace keyword, not an interpolated field. */
 const CWD_PLACEHOLDER_RE = /\{[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\}/;
 
@@ -107,12 +127,12 @@ const CacheSchema = Type.Object(
 /** Run-wide cost / token ceiling. Exceeding it halts the run (remaining phases skipped). */
 const BudgetSchema = Type.Object(
 	{
-		maxUSD: Type.Optional(Type.Number({ description: "Halt the run once accumulated cost exceeds this many USD" })),
+		maxUSD: Type.Optional(Type.Number({ minimum: 0, description: "Halt the run once accumulated cost exceeds this many USD" })),
 		maxTokens: Type.Optional(
-			Type.Number({ description: "Halt the run once accumulated input+output tokens exceed this" }),
+			Type.Number({ minimum: 0, description: "Halt the run once accumulated input+output tokens exceed this" }),
 		),
 	},
-	{ additionalProperties: false },
+	{ additionalProperties: false, minProperties: 1 },
 );
 
 const PhaseSchema = Type.Object(
@@ -128,22 +148,43 @@ const PhaseSchema = Type.Object(
 		),
 		as: Type.Optional(Type.String({ description: "[map] Loop variable name (default: item)", default: "item" })),
 
-		// parallel static branches
-		branches: Type.Optional(Type.Array(ParallelTaskSchema, { description: "[parallel] Static task branches" })),
+		// parallel / race static branches
+		branches: Type.Optional(
+			Type.Array(ParallelTaskSchema, {
+				description: "[parallel|race|tournament] Static task branches",
+			}),
+		),
+		/**
+		 * [race] When true (default), abort in-flight loser branches after the first branch
+		 * **succeeds** (best-effort `AbortSignal`). Race semantics are first-**success**
+		 * (failed settles do not win). Set `false` to let losers run to natural completion.
+		 */
+		cancelLosers: Type.Optional(Type.Boolean({ default: true })),
 
 		// reduce
 		from: Type.Optional(
 			Type.Array(Type.String(), { description: "[reduce] Phase ids whose outputs are aggregated" }),
 		),
 
-		// sub-workflow (flow)
+		// sub-workflow (flow) + expand fragment
 		use: Type.Optional(Type.String({ description: "[flow] Name of a saved taskflow to run as this phase" })),
+		/** [expand] Fragment source — string interpolation or inline Taskflow / phases (same as flow.def). */
+		// reuses `def` below for expand as well
 		def: Type.Optional(
 			Type.Unknown({
 				description:
-					"[flow] Inline sub-flow definition, resolved at runtime. Mutually exclusive with 'use'. A string is interpolated (e.g. '{steps.plan.json}') then JSON-parsed; an object is used directly. The result must be a Taskflow ({name,phases}) or a bare phases array / {phases:[...]} (auto-wrapped). Validated + verified before execution; on any failure the phase fails-open (defError) without aborting the run.",
+					"[flow|expand] Inline sub-flow / fragment definition, resolved at runtime. Mutually exclusive with 'use' on flow. A string is interpolated (e.g. '{steps.plan.json}') then JSON-parsed; an object is used directly. The result must be a Taskflow ({name,phases}) or a bare phases array / {phases:[...]} (auto-wrapped). Validated + verified before execution; on any failure the phase fails-open (defError) without aborting the run.",
 			}),
 		),
+		/** [expand] nested (default) = isolated sub-flow; graft = run fragment then promote phase states onto the parent under prefixed ids. */
+		expandMode: Type.Optional(
+			StringEnum(["nested", "graft"] as const, {
+				description: "[expand] nested (default) | graft (promote child phase states onto parent)",
+				default: "nested",
+			}),
+		),
+		/** [expand] Max nodes accepted from a dynamic fragment (default 50, hard 100). */
+		maxNodes: Type.Optional(Type.Number({ default: 50 })),
 		with: Type.Optional(
 			Type.Record(Type.String(), Type.Unknown(), {
 				description: "[flow] Args passed to the sub-flow (string values support interpolation)",
@@ -244,7 +285,11 @@ const PhaseSchema = Type.Object(
 			}),
 		),
 		model: Type.Optional(Type.String({ description: "Model override for this phase" })),
-		thinking: Type.Optional(Type.String({ description: "Thinking level override for this phase" })),
+		thinking: Type.Optional(
+			StringEnum(THINKING_LEVELS, {
+				description: "Thinking level override for this phase. Unknown values are rejected instead of silently inheriting the host default.",
+			}),
+		),
 		tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict tools for this phase's agent" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for this phase's subagent. A literal path, or a reserved keyword: 'temp' (ephemeral dir, removed after the phase), 'dedicated' (persistent dir under the run state, kept), or 'worktree' (a git worktree on a throwaway branch, removed after the phase)." })),
 		final: Type.Optional(Type.Boolean({ description: "Mark this phase's output as the workflow result" })),
@@ -531,6 +576,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	}
 	const flow = def as Partial<Taskflow>;
 	const strict = opts.strict ?? flow.strictInterpolation === true;
+	for (const issue of SchemaErrors(TaskflowSchema, def)) {
+		const pathLabel = issue.instancePath || "/";
+		const extras = issue.params && "additionalProperties" in issue.params
+			? (issue.params as { additionalProperties?: unknown }).additionalProperties
+			: undefined;
+		if (Array.isArray(extras) && extras.length > 0) {
+			for (const key of extras) errors.push(`${pathLabel}: unknown field '${String(key)}'`);
+		} else {
+			errors.push(`${pathLabel}: ${issue.message}`);
+		}
+	}
 
 	if (!flow.name || typeof flow.name !== "string") errors.push("Missing or invalid 'name'");
 	if (!Array.isArray(flow.phases) || flow.phases.length === 0) {
@@ -650,6 +706,14 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (v !== undefined && typeof v !== "string") {
 				errors.push(`Phase '${p.id}': '${key}' must be a string, got ${typeof v}`);
 			}
+		}
+		if (
+			typeof p.thinking === "string" &&
+			!THINKING_LEVELS.includes(p.thinking as (typeof THINKING_LEVELS)[number])
+		) {
+			errors.push(
+				`Phase '${p.id}': 'thinking' must be one of ${THINKING_LEVELS.join(", ")}; got '${p.thinking}'`,
+			);
 		}
 		if (typeof p.cwd === "string" && CWD_PLACEHOLDER_RE.test(p.cwd)) {
 			errors.push(
@@ -785,6 +849,27 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (type === "parallel") {
 			if (!p.branches || p.branches.length === 0)
 				errors.push(`Phase '${p.id}' (parallel) requires non-empty 'branches'`);
+		}
+			if (type === "race") {
+				if (!p.branches || p.branches.length === 0)
+					errors.push(`Phase '${p.id}' (race) requires non-empty 'branches'`);
+				else if (p.branches.length < 2)
+					errors.push(`Phase '${p.id}' (race): needs at least 2 branches`);
+				if ((p as { cancelLosers?: unknown }).cancelLosers !== undefined && typeof (p as { cancelLosers?: unknown }).cancelLosers !== "boolean") {
+					errors.push(`Phase '${p.id}' (race): cancelLosers must be a boolean`);
+				}
+			}
+		if (type === "expand") {
+			if ((p as { def?: unknown }).def === undefined)
+				errors.push(`Phase '${p.id}' (expand) requires 'def' (fragment Taskflow or {steps.X.json})`);
+			const em = (p as { expandMode?: string }).expandMode;
+			if (em !== undefined && em !== "nested" && em !== "graft") {
+				errors.push(`Phase '${p.id}' (expand): expandMode must be 'nested' or 'graft'`);
+			}
+			const maxN = (p as { maxNodes?: number }).maxNodes;
+			if (maxN !== undefined && (typeof maxN !== "number" || maxN < 1 || maxN > MAX_DYNAMIC_PHASES)) {
+				errors.push(`Phase '${p.id}' (expand): maxNodes must be 1..${MAX_DYNAMIC_PHASES}`);
+			}
 		}
 		if (type === "reduce") {
 			if (!p.from || p.from.length === 0) errors.push(`Phase '${p.id}' (reduce) requires 'from'`);

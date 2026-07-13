@@ -24,7 +24,7 @@
 | ID | 问题 | 解决方式 |
 |---|---|---|
 | A3 | `why`/`reuseHint` 生成机制未定义——是模板还是 LLM？与零 token 承诺矛盾 | §5.3：定义 Tier 1 始终模板化（零 token），Tier 2 LLM 增强留 Phase 3；给出完整模板代码 |
-| A5 | 无 `taskflow_save` / `taskflow_search` MCP 工具——codex/claude/opencode 无法保存或搜索 | §5.4：新增两个 MCP 工具，含完整 input schema；pi 适配器扩展 `purpose`/`tags`/`notes` 透传 |
+| A5 | 无 `taskflow_save` / `taskflow_search` MCP 工具——codex/claude/opencode/grok 无法保存或搜索 | §5.4：新增两个 MCP 工具，含完整 input schema；pi 适配器扩展 `purpose`/`tags`/`notes` 透传 |
 | A6 | reuseCount 两半都未定义：无检测机制 + 无并发合约 | §七 Phase 1：新增 `reusedFromSearch` 标记，递增在 tool handler 层 + `withLock` 保护，sub-flow 不计 |
 | A7 | embedding 输入文本构造完全未定义——直接影响语义检索质量 | §3.4：给出完整算法（5 段拼接）+ 512 字符预算 + 截断优先级 |
 | C3 | 降级矩阵遗漏 malformed-vector 场景（维度错误/NaN/Infinity） | §4.1 + §4.3：新增 `validateEmbedding()` 接口，写入前必校验，失败 → `null` + warn |

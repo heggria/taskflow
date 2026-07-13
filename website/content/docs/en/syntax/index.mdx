@@ -16,7 +16,7 @@ The pages layer on top of each other. Read them in this order the first time:
     **[Flow Definition](/en/docs/syntax/flow-definition)** — the top-level container: `name`, `args`, `concurrency`, `budget`, `agentScope`, `incremental`, and the `phases` array.
   </Step>
   <Step>
-    **[Phase Types](/en/docs/syntax/phase-types)** — every field on every one of the ten phase types, plus the per-type requirement matrix.
+    **[Phase Types](/en/docs/syntax/phase-types)** — every field on every one of the twelve phase types, plus the per-type requirement matrix.
   </Step>
   <Step>
     **[Control Flow](/en/docs/syntax/control-flow)** — `when` guards, `join`, `retry`, `timeout`, and self-healing gates.
@@ -25,7 +25,7 @@ The pages layer on top of each other. Read them in this order the first time:
     **[Caching](/en/docs/syntax/caching)** — within-run resume and cross-run memoization, fingerprints, and TTLs.
   </Step>
   <Step>
-    **[Budget](/en/docs/syntax/budget)** — run-wide cost and token caps, and what happens when a ceiling is hit.
+    **[Budget](/en/docs/syntax/budget)** — run-wide observed-usage cost and token stop-losses, including in-flight overshoot.
   </Step>
 </Steps>
 
@@ -49,6 +49,6 @@ The pages layer on top of each other. Read them in this order the first time:
     Within-run and cross-run memoization.
   </Card>
   <Card title="Budget" href="/en/docs/syntax/budget">
-    Cost and token caps.
+    Observed-usage cost and token stop-losses.
   </Card>
 </Cards>
