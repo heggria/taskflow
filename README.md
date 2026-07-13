@@ -365,6 +365,7 @@ The test suite covers orchestration semantics, persistence and file-lock races, 
 | [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, and Grok setup |
 | [Reference](https://heggria.github.io/taskflow/en/docs/reference/) | Commands, shorthand, and exact tool surfaces |
 | [Showcase](https://heggria.github.io/taskflow/en/docs/showcase/) | Real flows and case studies |
+| [0.2.0 Frontier Assessment](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | Independent, evidence-based technical assessment (Chinese) |
 
 Also see [`examples/`](./examples), the [changelog](./CHANGELOG.md), and the [release guide](./RELEASE.md).
 
