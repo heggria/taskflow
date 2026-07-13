@@ -108,6 +108,31 @@ test("trace: a single-agent run emits phase-start, subagent-call, phase-end", as
 	assert.equal(end.status, "done");
 });
 
+test("trace: subagent completion/reap metadata is observable", async () => {
+	const def: Taskflow = {
+		name: "completion-metadata",
+		phases: [{ id: "p", type: "agent", agent: "a", task: "finish", final: true }],
+	};
+	const { sink, events } = captureSink();
+	const runner: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => ({
+		agent,
+		task,
+		exitCode: 0,
+		output: "done",
+		stderr: "",
+		usage: emptyUsage(),
+		stopReason: "end",
+		completionSource: "terminal-reap",
+		reapedAfterTerminal: true,
+		terminalGraceMs: 1500,
+	});
+	await executeTaskflow(mkState(def), baseDeps(runner, sink));
+	const output = events.find((event) => event.kind === "subagent-call")?.output;
+	assert.equal(output?.completionSource, "terminal-reap");
+	assert.equal(output?.reapedAfterTerminal, true);
+	assert.equal(output?.terminalGraceMs, 1500);
+});
+
 // ─── P1-3: map multi-emit — one subagent-call per item ───────────────────────
 
 test("trace: a map phase emits a subagent-call event for every item", async () => {

@@ -23,7 +23,8 @@
  *   - taskflow_peek    : inspect a stored run's intermediate phase output
  *   - taskflow_trace   : read a run's append-only event trace
  *   - taskflow_replay  : re-evaluate a recorded trace under alternate knobs (zero tokens)
- *   - taskflow_why_stale / taskflow_recompute / taskflow_save / taskflow_search
+ *   - taskflow_why_stale / taskflow_recompute / taskflow_reconcile_workspace
+ *   - taskflow_save / taskflow_search
  */
 
 import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
@@ -49,6 +50,9 @@ import {
 	desugar,
 	isShorthand,
 	validateTaskflow,
+	resolveArgs,
+	cwdBridgeModeFromEnv,
+	directoryIdentity,
 	readSubagentSettings,
 	readMeta,
 	saveFlowWithMeta,
@@ -66,6 +70,9 @@ import {
 	upgradeTraceEvent,
 	type ReplayReport,
 	type ReplayOverrides,
+	reconcileResolveOnlyWorkspace,
+	WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
+	workspaceReconcileAllowedFromEnv,
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import {
@@ -96,7 +103,7 @@ function readServerVersion(): string {
 	} catch {
 		// Keep the handshake available even in unusual embedded/bundled layouts.
 	}
-	return "0.2.0";
+	return "0.2.1";
 }
 
 /** An MCP tool definition as returned by tools/list. */
@@ -538,6 +545,25 @@ const TOOLS: McpTool[] = [
 		},
 	},
 	{
+		name: "taskflow_reconcile_workspace",
+		title: "Acknowledge and reconcile the invocation workspace",
+		description:
+			"Explicitly accept the current external filesystem state after a resolve-only writer failed with an unknown outcome. This does not restore files or prove correctness: inspect or repair the workspace first. The host operator must also launch Taskflow with TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit. Reconciliation takes an exclusive whole-root lease, durably clears dirty-unknown intents, and advances the workspace generation.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				acknowledgement: {
+					type: "string",
+					enum: [WORKSPACE_RECONCILE_ACKNOWLEDGEMENT],
+					description: `Must exactly equal: ${WORKSPACE_RECONCILE_ACKNOWLEDGEMENT}`,
+				},
+				reason: { type: "string", description: "Short audit reason describing what was inspected or repaired." },
+			},
+			required: ["acknowledgement"],
+		},
+	},
+	{
 		name: "taskflow_save",
 		title: "Save a reusable taskflow",
 		description:
@@ -634,6 +660,7 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): 
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd,
+		invocationRootSnapshot: directoryIdentity(cwd),
 	};
 }
 
@@ -667,8 +694,14 @@ export function makeToolHandlers(
 					? args.name.trim()
 					: undefined;
 			const def = resolveFlow(cwd, args);
-			const v = validateTaskflow(def);
-			if (!v.ok) return textContent(`Flow is invalid:\n- ${v.errors.join("\n- ")}`, true);
+			const structural = validateTaskflow(def);
+			if (!structural.ok) return textContent(`Flow is invalid:\n- ${structural.errors.join("\n- ")}`, true);
+			const providedArgs = args.args && typeof args.args === "object" && !Array.isArray(args.args)
+				? args.args as Record<string, unknown>
+				: {};
+			const resolvedArgs = resolveArgs(def, providedArgs);
+			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
+			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
 			const usageAccounting = runner.usageAccounting;
 			if (def.budget && usageAccounting === "unavailable") {
 				return textContent(
@@ -695,8 +728,9 @@ export function makeToolHandlers(
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting,
+				cwdBridgeMode: cwdBridgeModeFromEnv(),
 			};
-			const state = mkRunState(def, (args.args as Record<string, unknown>) ?? {}, cwd);
+			const state = mkRunState(def, resolvedArgs, cwd);
 			// Deterministic-replay trace (best-effort, fail-open).
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
@@ -804,6 +838,31 @@ export function makeToolHandlers(
 			const deps: RuntimeDeps = { cwd, agents, runTask: runner.runTask, signal: context?.signal };
 			const { report } = await recomputeTaskflow(run, deps, [phaseId], { dryRun: true });
 			return textContent(formatRecomputeMcp(report));
+		},
+
+		taskflow_reconcile_workspace: async (args, context) => {
+			try {
+				const result = await reconcileResolveOnlyWorkspace({
+					invocationRoot: cwd,
+					signal: context?.signal,
+					allowReconcile: workspaceReconcileAllowedFromEnv(),
+				}, {
+					acknowledgement: String(args.acknowledgement ?? ""),
+					reason: typeof args.reason === "string" ? args.reason : undefined,
+					signal: context?.signal,
+				});
+				const changed = result.reconciledIntentIds.length;
+				return textContent(
+					changed === 0
+						? `Workspace is already clean at generation ${result.generation}; no dirty intent was changed.`
+						: `Workspace reconciled: ${changed} dirty intent(s) accepted; generation ${result.previousGeneration} → ${result.generation}.`,
+				);
+			} catch (error) {
+				return textContent(
+					`Workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+					true,
+				);
+			}
 		},
 
 		taskflow_list: async () => {

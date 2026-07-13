@@ -182,6 +182,28 @@ test("script run: omitted input still closes stdin so EOF-waiting commands finis
 	assert.equal(res.finalOutput, "eof");
 });
 
+test("script security: host workspace authority is stripped from child env", async () => {
+	const previousBridge = process.env.TASKFLOW_CWD_BRIDGE_MODE;
+	const previousReconcile = process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
+	process.env.TASKFLOW_CWD_BRIDGE_MODE = "resolve-only";
+	process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = "explicit";
+	try {
+		const printAuthority = "process.stdout.write(JSON.stringify({bridge:process.env.TASKFLOW_CWD_BRIDGE_MODE??null,reconcile:process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE??null}))";
+		const def: Taskflow = {
+			name: "script-env-authority",
+			phases: [{ id: "check", type: "script", run: [process.execPath, "-e", printAuthority], final: true }],
+		};
+		const res = await executeTaskflow(mkState(def), baseDeps());
+		assert.equal(res.ok, true);
+		assert.deepEqual(JSON.parse(res.finalOutput), { bridge: null, reconcile: null });
+	} finally {
+		if (previousBridge === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
+		else process.env.TASKFLOW_CWD_BRIDGE_MODE = previousBridge;
+		if (previousReconcile === undefined) delete process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
+		else process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = previousReconcile;
+	}
+});
+
 test("script run: array element interpolation resolves upstream refs", async () => {
 	const def: Taskflow = {
 		name: "s",

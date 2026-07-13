@@ -335,3 +335,104 @@ test("parent admission recursively inspects saved sub-flow", () => {
 	};
 	assert.equal(canUseEventKernel(parent, () => child), false);
 });
+
+test("event kernel validates resolved saved-flow arguments before spawning", async () => {
+	let calls = 0;
+	const parent: Taskflow = {
+		name: "typed-parent",
+		phases: [{ id: "child", type: "flow", use: "typed-child", final: true }],
+	};
+	const child: Taskflow = {
+		name: "typed-child",
+		args: { required: { type: "string", required: true } },
+		phases: [{ id: "work", type: "agent", agent: "a", task: "{args.required}", final: true }],
+	};
+	const res = await executeTaskflow(mk(parent), {
+		cwd: process.cwd(),
+		agents: AGENTS,
+		runTask: async (...args) => {
+			calls++;
+			return paidRunner(0.01)!(...args);
+		},
+		persist: () => {},
+		eventKernel: true,
+		loadFlow: (name) => name === child.name ? child : undefined,
+	});
+	assert.equal(res.ok, false);
+	assert.equal(calls, 0);
+	assert.match(res.state.phases.child.error ?? "", /Missing required argument 'required'/);
+});
+
+test("dynamic authority cannot expand through a saved script flow on either runtime", async () => {
+	for (const eventKernel of [false, true]) {
+		const parent: Taskflow = {
+			name: `dynamic-wrapper-${eventKernel}`,
+			phases: [{ id: "child", type: "flow", use: "saved-script", final: true }],
+		};
+		const child: Taskflow = {
+			name: "saved-script",
+			phases: [{ id: "script", type: "script", run: "printf DYNAMIC_SCRIPT_RAN", final: true }],
+		};
+		const res = await executeTaskflow(mk(parent, `dynamic-${eventKernel}`), {
+			cwd: process.cwd(),
+			agents: AGENTS,
+			runTask: paidRunner(0.01),
+			persist: () => {},
+			eventKernel,
+			_dynamic: true,
+			loadFlow: (name) => name === child.name ? child : undefined,
+		});
+		assert.equal(res.ok, false, `eventKernel=${eventKernel}`);
+		assert.doesNotMatch(res.finalOutput, /DYNAMIC_SCRIPT_RAN/);
+		const diagnostic = [res.finalOutput, ...Object.values(res.state.phases).map((phase) => phase.error ?? "")].join("\n");
+		assert.match(diagnostic, /script.*not allowed|dynamic nested flow.*invalid/i);
+	}
+});
+
+test("flow.with preserves exact typed placeholders on both runtimes", async () => {
+	for (const eventKernel of [false, true]) {
+		let calls = 0;
+		const parent: Taskflow = {
+			name: `typed-with-parent-${eventKernel}`,
+			args: { count: { type: "number", required: true }, enabled: { type: "boolean", required: true } },
+			phases: [
+				{
+					id: "child",
+					type: "flow",
+					use: "typed-with-child",
+					with: { count: "{args.count}", enabled: "{args.enabled}" },
+					final: true,
+				},
+			],
+		};
+		const child: Taskflow = {
+			name: "typed-with-child",
+			args: { count: { type: "number", required: true }, enabled: { type: "boolean", required: true } },
+			phases: [{ id: "work", type: "agent", agent: "a", task: "count={args.count}; enabled={args.enabled}", final: true }],
+		};
+		const runState = mk(parent, `typed-with-${eventKernel}`);
+		runState.args = { count: 3, enabled: true };
+		const res = await executeTaskflow(runState, {
+			cwd: process.cwd(),
+			agents: AGENTS,
+			runTask: async (_cwd, _agents, agent, task) => {
+				calls++;
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: task,
+					stderr: "",
+					usage: emptyUsage(),
+					stopReason: "end",
+				};
+			},
+			persist: () => {},
+			eventKernel,
+			loadFlow: (name) => name === child.name ? child : undefined,
+		});
+		assert.equal(res.ok, true, `eventKernel=${eventKernel}: ${res.finalOutput}`);
+		assert.equal(calls, 1);
+		assert.equal(res.finalOutput, "count=3; enabled=true");
+	}
+});

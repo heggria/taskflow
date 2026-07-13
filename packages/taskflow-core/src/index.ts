@@ -24,6 +24,8 @@ export * from "./usage.ts";
 export * from "./rates.ts";
 export * from "./stale.ts";
 export * from "./workspace.ts";
+export * from "./cwd-bridge.ts";
+export * from "./resources/index.ts";
 export * from "./context-store.ts";
 export * from "./compile.ts";
 // NOTE: detached-runner.ts is intentionally NOT re-exported — it is a spawn-only

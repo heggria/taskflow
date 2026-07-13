@@ -2,7 +2,7 @@
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "grok-taskflow@0.2.0", "grok-taskflow-mcp"],
+      "args": ["-y", "-p", "grok-taskflow@0.2.1", "grok-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }

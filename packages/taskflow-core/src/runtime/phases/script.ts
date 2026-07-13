@@ -7,6 +7,8 @@ import type { Phase } from "../../schema.ts";
 import type { PhaseState } from "../../store.ts";
 import { emptyUsage } from "../../usage.ts";
 import { killProcessTree } from "../../runner-core.ts";
+import { CWD_BRIDGE_MODE_ENV } from "../../cwd-bridge.ts";
+import { WORKSPACE_RECONCILE_MODE_ENV } from "../../resources/execution.ts";
 
 const MAX_STDOUT = 1_048_576; // 1 MB cap
 const SIGKILL_GRACE_MS = 5_000;
@@ -36,9 +38,15 @@ export async function runScriptCommand(opts: {
 	const { interpRunText, arrayForm, cwd, signal, stdinInput, timeoutMs } = opts;
 
 	return new Promise((resolve, reject) => {
+		const childEnv = { ...process.env };
+		// Script phases execute flow-authored commands, so they are not a trusted
+		// host principal. Host-only workspace controls must never be delegated even
+		// when the script later launches another Taskflow process.
+		delete childEnv[CWD_BRIDGE_MODE_ENV];
+		delete childEnv[WORKSPACE_RECONCILE_MODE_ENV];
 		const spawnOptions = {
 			cwd,
-			env: process.env,
+			env: childEnv,
 			detached: process.platform !== "win32",
 		};
 		const child = arrayForm

@@ -88,6 +88,7 @@ export interface StepDeps {
 		def: Taskflow;
 		args: Record<string, unknown>;
 		stack: string[];
+		dynamic?: boolean;
 	}) => Promise<NestedFlowResult>;
 }
 
@@ -247,6 +248,7 @@ async function runOneAgent(
 	for (let attempt = 0; attempt < 4; attempt++) {
 		if (ctx.deps.signal?.aborted) break;
 		let timedOut = false;
+		let terminalCommitted = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
 		let onParentAbort: (() => void) | undefined;
@@ -263,6 +265,14 @@ async function runOneAgent(
 			}
 		}
 		try {
+			const onTerminalCommit = () => {
+				if (timedOut) return;
+				terminalCommitted = true;
+				if (timer) {
+					clearTimeout(timer);
+					timer = undefined;
+				}
+			};
 			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,
@@ -274,12 +284,14 @@ async function runOneAgent(
 					tools: phase.tools,
 					cwd: ctx.deps.cwd,
 					signal: callSignal,
+					onTerminalCommit,
 				},
 				ctx.deps.globalThinking,
 			);
 			if (phaseTimeoutMs) {
 				const timeoutFallback = new Promise<RunResult>((resolve) => {
 					timer = setTimeout(() => {
+						if (terminalCommitted) return;
 						timedOut = true;
 						timeoutController?.abort();
 						forceReturnTimer = setTimeout(() => resolve({
@@ -292,6 +304,7 @@ async function runOneAgent(
 							stopReason: "error",
 							errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
 							phaseTimeout: true,
+							completionSource: "phase-timeout",
 						}), PHASE_TIMEOUT_ABORT_GRACE_MS);
 					}, phaseTimeoutMs);
 				});
@@ -311,6 +324,7 @@ async function runOneAgent(
 				stopReason: "error",
 				errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
 				phaseTimeout: true,
+				completionSource: "phase-timeout",
 			};
 		}
 		attempts.push(r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage());
@@ -350,6 +364,9 @@ async function runOneAgent(
 			model: r.model,
 			usage,
 			stopReason: r.stopReason,
+			completionSource: r.completionSource,
+			reapedAfterTerminal: r.reapedAfterTerminal,
+			terminalGraceMs: r.terminalGraceMs,
 		},
 	});
 	return { result: r, event };

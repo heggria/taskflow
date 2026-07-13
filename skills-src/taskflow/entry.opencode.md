@@ -22,6 +22,7 @@ the OpenCode form (`taskflow_verify`). Each phase's subagent runs as an isolated
 | `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
 | `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
 | `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
+| `taskflow_reconcile_workspace` | After inspection/repair, accept a failed resolve-only workspace. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; never restores files. |
 | `taskflow_save` | Save a reusable flow and optional library metadata. |
 | `taskflow_search` | Search and rank reusable flows before authoring another one. |
 

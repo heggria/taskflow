@@ -17,7 +17,7 @@ import * as path from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import { DEFAULT_TASKFLOW_SETTINGS, normalizeTaskflowSettings, type TaskflowSettings } from "taskflow-core";
+import { normalizeTaskflowSettings, type TaskflowSettings } from "taskflow-core";
 import { writeFileAtomic } from "taskflow-core";
 
 // ---------------------------------------------------------------------------
@@ -336,6 +336,8 @@ export function formatTaskflowSettingsReport(settings: TaskflowSettings): string
 		"Taskflow preferences:",
 		`  Built-in agents: ${settings.builtInAgents ? "enabled" : "disabled"}`,
 		`  Sync built-ins to project .pi/agents: ${settings.syncBuiltinAgentsToProject ? "enabled" : "disabled"}`,
+		`  Pi child resources: ${settings.piChild.resourceProfile}`,
+		`  Pi terminal grace: ${settings.piChild.terminalGraceMs}ms`,
 	].join("\n");
 }
 
@@ -483,7 +485,7 @@ async function configureTaskflowPreferences(
 	if (builtInPick === undefined || builtInPick === "Back to action menu") return { kind: "cancelled" };
 
 	const chosen: TaskflowSettings = {
-		...DEFAULT_TASKFLOW_SETTINGS,
+		...current,
 		builtInAgents: builtInPick.startsWith("Enable"),
 	};
 

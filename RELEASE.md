@@ -80,8 +80,8 @@ the matching annotated tag:
 ```sh
 git switch main
 git pull --ff-only origin main
-git tag -a v0.2.0 -m "Release v0.2.0"
-git push origin v0.2.0
+git tag -a v0.2.1 -m "Release v0.2.1"
+git push origin v0.2.1
 ```
 
 `.github/workflows/publish.yml` then performs the complete release transaction:
@@ -139,6 +139,6 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build (published MCP package)
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```

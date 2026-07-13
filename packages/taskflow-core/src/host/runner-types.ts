@@ -56,6 +56,20 @@ export interface RunResult {
 	/** Set when the subagent was aborted by the phase's own `timeout` cap (not a
 	 *  user abort, not an idle stall). Deterministic — never retried. */
 	phaseTimeout?: boolean;
+	/** Observable completion boundary for process-backed hosts. */
+	completionSource?:
+		| "process-exit"
+		| "terminal-reap"
+		| "idle-timeout"
+		| "phase-timeout"
+		| "abort"
+		| "protocol-error"
+		| "external-signal";
+	/** True when a host accepted a validated terminal event and then reaped a
+	 * child process tree that did not exit during the terminal grace window. */
+	reapedAfterTerminal?: boolean;
+	/** Grace window used by the host's terminal completion policy. */
+	terminalGraceMs?: number;
 }
 
 /** A streaming progress tick from a running subagent. */
@@ -89,6 +103,10 @@ export interface RunOptions {
 	 */
 	ctxDir?: string;
 	nodeId?: string;
+	/** @internal Host-to-runtime linearization hook. Process runners call this
+	 * synchronously when a terminal candidate is irreversibly committed, before
+	 * sending reap signals. Flow data cannot provide this callback. */
+	onTerminalCommit?: () => void;
 }
 
 /**

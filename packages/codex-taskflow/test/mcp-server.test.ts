@@ -48,7 +48,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow");
-	assert.equal(res.result.serverInfo.version, "0.2.0");
+	assert.equal(res.result.serverInfo.version, "0.2.1");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
@@ -56,7 +56,7 @@ test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -217,13 +217,21 @@ test("mcp: tools/call enforces advertised argument schemas before dispatch", asy
 		assert.equal(res.error.code, -32602);
 		assert.match(res.error.message, /Invalid taskflow_search arguments/);
 	}
+	const [reconcile] = await rpcRoundtrip([{
+		jsonrpc: "2.0",
+		id: 64,
+		method: "tools/call",
+		params: { name: "taskflow_reconcile_workspace", arguments: { acknowledgement: "yes" } },
+	}]);
+	assert.equal(reconcile.error.code, -32602);
+	assert.match(reconcile.error.message, /Invalid taskflow_reconcile_workspace arguments/);
 });
 
 test("mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_why_stale"],
 	);
 });
 

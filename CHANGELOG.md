@@ -2,7 +2,100 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.2.0] — Unreleased
+## [0.2.1] — Unreleased
+
+### Added
+
+- **Typed invocation arguments.** Flows may declare `string`, `relative-path`,
+  `number`, `boolean`, and `enum` args. Defaults and invocation values are
+  validated, and typed `required: true` is enforced at invocation boundaries.
+  Legacy untyped `required` declarations remain advisory for compatibility.
+- **Experimental, default-disabled dynamic-cwd compatibility bridge for #70.** An author-written phase
+  may use an exact `cwd: "{args.package}"` when `package` is declared as a typed
+  `relative-path`. Values are portable relative paths, resolved from the
+  invocation root, must name an existing directory, and are checked after
+  `realpath` so `..` and symlink escapes fail closed at bind time. Concatenation,
+  `{steps.*}`, undeclared/legacy args, absolute paths, and generated sub-flows
+  remain rejected. Canonical FlowIR records a logical read-write,
+  existing-directory `cwdUse`, never the machine path.
+- **Partial Workspace Capability control-plane scaffold.** Host-neutral authority,
+  path-resolution, lease, journal, mutation-permit, sandbox-policy, and exact
+  conformance-baseline contracts are available for the future native backend.
+  This does not ship a native `WorkspaceExecutionBackend` or race-free
+  `FileBroker`; 0.2.1 execution remains explicitly `resolve-only`.
+
+### Changed
+
+- The cwd bridge is **disabled by default** until a sandbox backend passes the
+  Workspace Capability RFC's host conformance gates. A host operator can opt
+  into the explicitly weaker resolver-only mode with
+  `TASKFLOW_CWD_BRIDGE_MODE=resolve-only`; every affected phase reports that
+  the directory is not a filesystem sandbox.
+- Argument-selected cwd phases reject `retry.max > 0`. A failed resolve-only
+  writer may already have mutated files, so Taskflow records `dirty-unknown`
+  and requires explicit workspace reconciliation instead of replaying side
+  effects automatically.
+- Pi (`action: "reconcile-workspace"`, `/tf reconcile-workspace --ack`) and all
+  MCP hosts (`taskflow_reconcile_workspace`) expose that deliberate recovery
+  operation. It takes an exclusive whole-root lease, writes a durable reconcile
+  record, and advances generation; it never restores or silently approves files.
+  Model-callable recovery also requires the host-only
+  `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit` switch, which is stripped from
+  subagent environments. The Pi slash command is a direct user control-plane
+  action and does not require the switch.
+- Cwd-bridge flows disable output-only cache/resume reuse across their reachable
+  nested flow tree. This prevents a cache hit from skipping workspace mutations
+  before workspace-state restoration exists.
+- Saved-flow definitions are snapshotted once per top-level execution, and
+  bridge runs persist the invocation root's canonical path/device/inode identity.
+  Resume fails closed if the root is rebound or a child gains cwd authority.
+- A bridge-selected sub-flow inherits a non-expanding canonical cwd boundary:
+  nested literal cwd and context pre-reads may narrow it but cannot escape it
+  lexically or through symlinks; allocating a workspace provider is rejected.
+- Relative literal phase cwd values and phase context files are now anchored to
+  the Taskflow invocation cwd rather than the parent Node process cwd.
+- MCP execution now applies declared defaults and invocation validation before
+  creating `RunState`, matching Pi, detached, and direct Core execution.
+- OpenCode now forwards phase → agent → global `thinking` through the native
+  provider-specific `--variant` argument, normalizing `off → none` and
+  `ultra → max`. Other levels remain best-effort because each provider/model
+  exposes a different variant set.
+- Runtime-generated sub-flows now reject every `cwd` and `context` file
+  pre-read. Without a sandbox/FileBroker, lexical path checks cannot safely
+  contain symlinks or dynamically produced file paths.
+
+### Fixed
+
+- **Pi post-terminal hangs (#73).** Pi children now default to
+  `--no-extensions`, with Host-only `isolated` / `allowlist` / `inherit`
+  resource profiles. A validated final assistant answer plus `agent_settled`
+  enters a bounded terminal-candidate grace period; `agent_end` remains clean-
+  exit evidence for older Pi versions but is never sufficient for forced reap.
+  Later lifecycle activity revokes the candidate, while a leaked handle is
+  reaped as a successful `terminal-reap`. Pi now uses the shared strict-NDJSON,
+  process-group, abort/idle and SIGTERM→SIGKILL supervisor. Completion metadata
+  is recorded in traces, and phase-timeout races are linearized consistently in
+  imperative and event-kernel execution.
+
+### Security
+
+- Native sandbox policy construction is fail-closed behind a checked-in exact
+  Host/OS/binary evidence cell. Evidence uses a strict versioned schema with
+  complete named boolean checks, one no-follow file snapshot for hashing and
+  parsing, an owner decision, and a process-local approval token. The factory
+  also binds the independently observed live target and the canonical digest of
+  the complete backend capabilities. The 0.2.1 native allowlist is empty.
+- Resolve-only writers use cross-process leases, durable intents, one-shot
+  mutation permits, and explicit dirty-state reconciliation. A cancelled
+  non-cooperative writer's late success is recorded `dirty-unknown`, root
+  replacement is rechecked after asynchronous resolution, and subsequent
+  writers remain blocked until deliberate reconciliation.
+- Persistent mutex and lease cleanup records now carry durable terminal release
+  evidence. A cleanup fault cannot reverse a completed callback, let a live
+  worker steal another worker's lock, or leave a same-PID worker/session blocked
+  solely because the originating JavaScript isolate disappeared.
+
+## [0.2.0] — 2026-07-13
 
 ### Added
 - **README and launch-visual refresh:** English and Simplified Chinese landing pages now share one concise, conversion-focused structure built around the 0.2 compiler/runtime story, with validated JSON and TypeScript DSL examples, five-host installation paths, runtime guarantees, and package topology. The hero and social-preview assets now visualize the Author → Verify → Compile → Run → Reuse pipeline and have matching localized artwork.

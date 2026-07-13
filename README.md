@@ -243,6 +243,37 @@ Within-run resume is content-addressed. Cross-run caching is opt-in and can fing
 
 Budgets, concurrency caps, retries, timeouts, nesting limits, dynamic-graph breadth caps, path containment, non-idempotent phase classification, and fail-closed approval behavior are runtime semantics—not suggestions in a prompt.
 
+### 0.2.1: safe dynamic cwd and Pi terminal reaping
+
+An invocation argument declared as `type: "relative-path"` may select a phase
+working directory with the exact form `cwd: "{args.package}"`. The bridge is
+default-off, requires host `resolve-only` authorization, and confines the
+canonical directory to the invocation root. Absolute paths, concatenation, and
+`{steps.*}` remain rejected; this compatibility bridge is not an OS sandbox.
+
+Pi child agents no longer inherit ambient extensions by default. Trusted host
+settings can use an explicit extension allowlist or opt back into legacy
+inheritance. If a Pi child produces a validated final answer and terminal event
+but an extension keeps the process alive, Taskflow waits a bounded grace window,
+reaps the process group, and records `completionSource: "terminal-reap"` instead
+of reporting a false timeout.
+
+```json
+{
+  "taskflow": {
+    "piChild": {
+      "resourceProfile": "isolated",
+      "extensions": [],
+      "terminalGraceMs": 1500
+    }
+  }
+}
+```
+
+`allowlist` accepts explicit trusted extension files; `inherit` restores ambient
+Pi extension discovery as a compatibility mode. Flows cannot widen this host
+authority.
+
 [Read the core concepts →](https://heggria.github.io/taskflow/en/docs/concepts/)
 
 ## Install on your host
@@ -281,7 +312,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.0 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.1 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -290,7 +321,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.

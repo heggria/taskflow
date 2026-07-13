@@ -26,6 +26,62 @@ import {
 import type { LiveUpdate } from "../src/host/runner-types.ts";
 import type { AgentConfig } from "../src/agents.ts";
 
+interface TerminalAcc extends SubagentAccumulator {
+	terminalSeen?: boolean;
+}
+
+function terminalAcc(): TerminalAcc {
+	return { ...makeAcc(), terminalSeen: false };
+}
+
+const terminalFold = (acc: TerminalAcc, line: string): LiveUpdate | null => {
+	const event = JSON.parse(line) as { type?: string; text?: string; error?: string };
+	if (event.type === "final" && event.text) {
+		acc.finalText = event.text;
+		acc.stopReason = "end";
+		return { text: event.text, usage: { ...acc.usage } };
+	}
+	if (event.type === "terminal") acc.terminalSeen = true;
+	if (event.type === "fatal") acc.fatalError = event.error ?? "fatal";
+	return null;
+};
+
+function terminalRun(
+	script: string,
+	opts: {
+		idleTimeoutMs?: number;
+		signal?: AbortSignal;
+		terminalGraceMs?: number;
+		terminationGraceMs?: number;
+		onTerminalCommit?: () => void;
+	} = {},
+) {
+	const acc = terminalAcc();
+	return runSubagentProcess({
+		agent: "test", task: "terminal", model: undefined,
+		bin: "node", args: ["-e", script], cwd: process.cwd(),
+		idleTimeoutMs: opts.idleTimeoutMs,
+		terminationGraceMs: opts.terminationGraceMs,
+		signal: opts.signal,
+		acc,
+		foldLine: terminalFold,
+		completionPolicy: {
+			terminalGraceMs: opts.terminalGraceMs ?? 50,
+			classifyEvent(a, event) {
+				const type = (event as { type?: string }).type;
+				if (a.fatalError || type === "fatal") return "fatal";
+				if (type === "terminal") return "terminal-candidate";
+				if (type === "activity" || type === "final") return "activity";
+				return "ignore";
+			},
+			canCommitTerminal: (a) => Boolean(a.terminalSeen && a.finalText.trim() && !a.fatalError),
+		},
+		onTerminalCommit: opts.onTerminalCommit,
+		requireTerminalEvent: true,
+		terminalEventLabel: "terminal",
+	});
+}
+
 /** A minimal accumulator + foldLine: finalText = the last stdout line, one turn
  *  per line. Just enough to drive runSubagentProcess without a host parser. */
 function makeAcc(): SubagentAccumulator {
@@ -62,6 +118,145 @@ test("runSubagentProcess: a clean JSON-emitting run classifies as end", async ()
 	assert.match(r.output, /answer/);
 });
 
+test("runSubagentProcess completion: terminal output with a leaky handle is reaped as success", async () => {
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>{},1000);
+	`);
+	assert.equal(r.exitCode, 0);
+	assert.equal(r.output, "DONE");
+	assert.equal(r.completionSource, "terminal-reap");
+	assert.equal(r.reapedAfterTerminal, true);
+	assert.equal(r.terminalGraceMs, 50);
+});
+
+test("runSubagentProcess completion: normal exit inside grace remains process-exit", async () => {
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+	`);
+	assert.equal(r.exitCode, 0);
+	assert.equal(r.completionSource, "process-exit");
+	assert.equal(r.reapedAfterTerminal, undefined);
+});
+
+test("runSubagentProcess completion: terminal without final output cannot commit", async () => {
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>{},1000);
+	`, { idleTimeoutMs: 80 });
+	assert.equal(isFailed(r), true);
+	assert.equal(r.completionSource, "idle-timeout");
+	assert.equal(r.reapedAfterTerminal, undefined);
+});
+
+test("runSubagentProcess completion: fatal output wins over terminal", async () => {
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"not final"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"fatal",error:"provider failed"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+	`);
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.stopReason, "error");
+	assert.match(r.errorMessage ?? "", /provider failed/);
+});
+
+test("runSubagentProcess completion: later activity revokes a terminal candidate", async () => {
+	const started = Date.now();
+	const r = await terminalRun(`
+		const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
+		emit({type:"final",text:"FIRST"}); emit({type:"terminal"});
+		setTimeout(()=>emit({type:"activity"}),20);
+		setTimeout(()=>{ emit({type:"final",text:"SECOND"}); emit({type:"terminal"}); },70);
+		setInterval(()=>{},1000);
+	`, { terminalGraceMs: 50 });
+	assert.equal(r.output, "SECOND");
+	assert.equal(r.completionSource, "terminal-reap");
+	assert.ok(Date.now() - started >= 100, "stale candidate timer must not commit the first answer");
+});
+
+test("runSubagentProcess completion: abort during grace wins", async () => {
+	const ac = new AbortController();
+	const pending = terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>{},1000);
+	`, { terminalGraceMs: 200, signal: ac.signal });
+	setTimeout(() => ac.abort(), 30);
+	const r = await pending;
+	assert.equal(r.stopReason, "aborted");
+	assert.equal(r.completionSource, "abort");
+});
+
+test("runSubagentProcess completion: abort after terminal commit cannot undo success", async () => {
+	const ac = new AbortController();
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>{},1000);
+	`, { terminalGraceMs: 20, signal: ac.signal, onTerminalCommit: () => ac.abort() });
+	assert.equal(r.exitCode, 0);
+	assert.equal(r.stopReason, "end");
+	assert.equal(r.completionSource, "terminal-reap");
+});
+
+test("runSubagentProcess completion: partial JSON after terminal fails closed", async () => {
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n"+'{"type":"activity"');
+		setInterval(()=>{},1000);
+	`);
+	assert.equal(r.exitCode, 1);
+	assert.equal(r.completionSource, "protocol-error");
+	assert.match(r.errorMessage ?? "", /malformed|truncated/i);
+});
+
+test("runSubagentProcess completion: continuous stderr cannot extend terminal grace", async () => {
+	const started = Date.now();
+	const r = await terminalRun(`
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>process.stderr.write("still open\\n"),5);
+	`, { terminalGraceMs: 40 });
+	assert.equal(r.completionSource, "terminal-reap");
+	assert.ok(Date.now() - started < 500, "stderr must not turn terminal grace into an unbounded idle wait");
+});
+
+test("runSubagentProcess completion: SIGTERM refusal escalates to SIGKILL and remains terminal success", async () => {
+	const started = Date.now();
+	const r = await terminalRun(`
+		process.on("SIGTERM",()=>{});
+		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+		process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		setInterval(()=>{},1000);
+	`, { terminalGraceMs: 20, terminationGraceMs: 60 });
+	assert.equal(r.exitCode, 0);
+	assert.equal(r.completionSource, "terminal-reap");
+	if (process.platform !== "win32") {
+		assert.ok(Date.now() - started >= 60, "the child must survive SIGTERM until the forced kill");
+	}
+});
+
+test("runSubagentProcess completion: terminal reap kills a descendant that holds inherited stdio", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-terminal-tree-"));
+	const marker = path.join(dir, "descendant-survived.txt");
+	try {
+		const r = await terminalRun(`
+			const {spawn}=require("node:child_process");
+			spawn(process.execPath,["-e",${JSON.stringify(`setTimeout(()=>require("node:fs").writeFileSync(${JSON.stringify(marker)},"survived"),500); setInterval(()=>{},1000);`)}],{stdio:"inherit"});
+			process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
+			process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+			setInterval(()=>{},1000);
+		`, { terminalGraceMs: 25, terminationGraceMs: 50 });
+		assert.equal(r.completionSource, "terminal-reap");
+		await new Promise((resolve) => setTimeout(resolve, 650));
+		assert.equal(fs.existsSync(marker), false, "the inherited process tree must be gone before phase completion");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("runSubagentProcess: a non-zero exit classifies as error + placeholder", async () => {
 	const r = await run(`process.exit(1);`);
 	assert.equal(r.exitCode, 1);
@@ -90,6 +285,19 @@ test("runSubagentProcess: AbortSignal — an aborted run classifies as aborted (
 	assert.equal(r.stopReason, "aborted", "abort must classify as 'aborted', not idle/error");
 	assert.equal(r.idleTimeout, undefined, "idle must NOT fire on an aborted run");
 	assert.match(r.errorMessage ?? "", /abort/i);
+});
+
+test("runSubagentProcess: abort owns a partial tail produced before shutdown", async () => {
+	const ac = new AbortController();
+	const pending = run(`process.stdout.write('{"type":"partial"'); setInterval(()=>{},1000);`, {
+		idleTimeoutMs: 60_000,
+		signal: ac.signal,
+	});
+	setTimeout(() => ac.abort(), 30);
+	const r = await pending;
+	assert.equal(r.stopReason, "aborted");
+	assert.equal(r.completionSource, "abort");
+	assert.doesNotMatch(r.errorMessage ?? "", /malformed|truncated/i);
 });
 
 test("runSubagentProcess: abort terminates the child process tree", async () => {

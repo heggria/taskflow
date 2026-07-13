@@ -81,9 +81,10 @@ test("regression: the detached context file carries a runnerModule (runner injec
 	// runnerModule into the context file, which the child dynamically imports.
 	// Accept either the shorthand (`runnerModule,`) or key (`runnerModule:`) form.
 	assert.ok(/\brunnerModule\b[,:]/.test(SRC), "detached context must carry runnerModule");
-	assert.match(SRC, /runnerExport:\s*"piSubagentRunner"/, "detached context must name the pi runner export");
+	assert.match(SRC, /runnerFactoryExport:\s*"createPiSubagentRunner"/, "detached context must name the host-authorized Pi runner factory");
+	assert.match(SRC, /runnerConfig:\s*readSubagentSettings\(\)\.taskflow\.piChild/, "detached context must carry the normalized Pi child profile snapshot");
 });
 
-test("regression: piSubagentRunner is imported into index.ts (the injected runner)", () => {
-	assert.match(SRC, /import\s*\{[^}]*\bpiSubagentRunner\b[^}]*\}\s*from\s*"\.\/runner\.ts"/, "index.ts must import piSubagentRunner from ./runner.ts");
+test("regression: createPiSubagentRunner is imported into index.ts (the injected runner factory)", () => {
+	assert.match(SRC, /import\s*\{[^}]*\bcreatePiSubagentRunner\b[^}]*\}\s*from\s*"\.\/runner\.ts"/, "index.ts must import createPiSubagentRunner from ./runner.ts");
 });
