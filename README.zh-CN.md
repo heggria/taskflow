@@ -1,874 +1,359 @@
 <div align="center">
 
-<img src="./assets/hero.zh-CN.png" alt="taskflow — 面向编码智能体子代理的声明式、可验证的任务节点图：有状态、可恢复、上下文隔离" width="900">
+<img src="./assets/hero.zh-CN.png" alt="taskflow：跨五个编程智能体宿主编译、验证并运行多智能体 DAG" width="100%">
 
-<p>
-  <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=4B4ACF&label=npm" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/pi-taskflow"><img src="https://img.shields.io/npm/dm/pi-taskflow?style=flat-square&color=5A5D63&label=downloads" alt="npm downloads"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-0E8A66?style=flat-square" alt="MIT license"></a>
-  <a href="https://github.com/heggria/taskflow/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/tests-1500+-4B4ACF?style=flat-square" alt="1500+ tests"></a>
-  <a href="#whats-inside"><img src="https://img.shields.io/badge/dogfooded-%E2%9C%93-0E8A66?style=flat-square" alt="dogfooded"></a>
-  <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
-</p>
+<br />
 
-<p align="center"><em>发布线 <code>0.2.0</code> — monorepo 包与插件 pin 为 <code>0.2.0</code>；npm 在 <code>v0.2.0</code> tag 发布任务完成后更新。上方徽章在发版前仍可能显示 registry 上的旧版本。</em></p>
+[![npm](https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=7775FF&label=npm)](https://www.npmjs.com/package/pi-taskflow)
+[![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
+[![Hosts](https://img.shields.io/badge/hosts-5-7775FF?style=flat-square)](#安装到你的宿主)
+[![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#为真实工作而生)
 
-<p align="center">
-  <a href="./README.md">English</a> ·
-  <b>简体中文</b> ·
-  <a href="./docs/i18n/README.hi.md">हिन्दी</a> ·
-  <a href="./docs/i18n/README.es.md">Español</a> ·
-  <a href="./docs/i18n/README.ar.md">العربية</a> ·
-  <a href="./docs/i18n/README.bn.md">বাংলা</a> ·
-  <a href="./docs/i18n/README.pt.md">Português</a> ·
-  <a href="./docs/i18n/README.ru.md">Русский</a>
-</p>
+[English](./README.md) · **简体中文**
 
-<p align="center">
-  <a href="https://heggria.github.io/taskflow/zh-cn"><img src="https://img.shields.io/badge/📖_阅读文档-heggria.github.io%2Ftaskflow-4B4ACF?style=for-the-badge&labelColor=2D2F5A" alt="阅读文档 — heggria.github.io/taskflow"></a>
-</p>
-
-<p><strong>面向编码智能体子代理（subagent）的声明式、可验证的「任务图」。</strong><br/>
-不是你要去「写脚本」的 workflow——而是你去「声明」的一张 DAG。并发分发（fan out）· 门控（gate）· 恢复（resume）· 保存为命令——中间结果始终远离你的上下文窗口（context window）。<br/>
-可运行于 <a href="https://pi.dev">Pi</a> 编码智能体、<a href="https://github.com/openai/codex">OpenAI Codex</a>、<a href="https://claude.com/product/claude-code">Claude Code</a> 、<a href="https://opencode.ai">OpenCode</a> 与 <a href="https://docs.x.ai/build/overview">Grok Build</a>。</p>
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2 新能力](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
-
-```bash
-# Pi
-pi install npm:pi-taskflow
-
-# Codex
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-
-# Claude Code
-claude plugin marketplace add heggria/taskflow
-claude plugin install claude-taskflow@taskflow
-
-# OpenCode — 向 opencode.json 添加 MCP server（见 OpenCode 指南）
-opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
-
-# Grok Build（已发布 MCP 包）
-# 先在 ~/.grok/sandbox.toml 分别定义 taskflow-workspace/taskflow-readonly，
-# 并分别继承 workspace/read-only，然后：
-export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
-export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
-```
 
 ---
 
-**`workflow` 是在「流动」，而 `taskflow` 是一张「图」。** 其他编排框架让模型去「写脚本」——命令式的代码逐步流动，而那张图藏在控制流里。`taskflow` 恰恰相反：你把工作**声明**为一张由离散、具名的**任务（task）节点**、通过 `dependsOn` 边连接而成的图——而运行时会在花掉一个 token 之前，*先验证这张图。*
+# 构建那些在运行前就能看清楚的多智能体系统。
 
-你已经熟悉内置子代理（subagent）工具的 `task` / `tasks` / `chain` 了。`taskflow` 使用**完全相同的简写语法**——所以你现有的委托立刻就能变成**可追踪、可恢复、可按名保存**的流程（在 Pi 上，已保存的流程会变成一条 `/tf:<name>` 命令；在 Codex、Claude Code、OpenCode、Grok Build 上，用 `taskflow_run` 按名运行）。当你超越简写语法时，完整的 DSL 为你提供真正的 DAG：针对数十个项目的动态并发分发、条件路由、质量门控、人工审批、重试，以及硬性费用上限。
+**taskflow 把智能体计划变成可编译的任务图**：只声明一次，在模型花费前验证，通过隔离子智能体执行，跨会话续跑，零 token 重放，并从最小陈旧前沿开始重算。
 
-而且自始至终，**只有最终阶段（final phase）才会进入你的对话。** 每一个中间转录都留在运行时中，永远不会进入你的上下文窗口。
+它运行在你已经使用的编程智能体上：
 
-## 为什么叫 “taskflow” 而不是 “workflow”？
+**Pi · Codex · Claude Code · OpenCode · Grok Build**
 
-名字就是立论。在工程语境里，**task（任务）**是一个*离散、被声明出来的工作单元*——是任务图的节点（构建系统、调度器、编译器都把这种 `task` 连成 DAG）。而 **work（工作）**息息相反，是*流动的、无界的*——那种连续的、命令式的「干活」过程。
+```text
+JSON 或 .tf.ts
+      │
+      ▼
+  验证 ──► Taskflow JSON ──► FlowIR + 内容哈希
+                                      │
+                                      ▼
+                              隔离 DAG 运行时
+                                      │
+                         ┌────────────┼────────────┐
+                         ▼            ▼            ▼
+                        续跑          重放          重算
+```
 
-这个区别，恰恰就是 Pi 生态里的设计分水岭：
+> 宿主收到的是最终结果。中间转录留在运行时里，除非你明确要求查看。
 
-<div align="center">
-<img src="./assets/task-vs-work.zh-CN.png" alt="work 是一段流动的命令式脚本，它的图藏在控制流里、运行前无法验证；taskflow 是一张由离散任务节点构成的声明式图，在花掉任何 token 之前就被静态验证" width="900">
-</div>
+## 为什么是 taskflow？
 
-- 一个 **`workflow`**（那种动态的、code-mode 的形态）是模型在写一段**「流动」的命令式脚本**：`await agent(...)`、一个 `if`、一个 `for`、又一个 `await`。很有表达力——它是图灵完备的——但那张图只在*代码跑起来的时候*才存在。你看不到它、diff 不了它，也无法在付费之前证明它会终止。
-- 一个 **`taskflow`** 把计划**从代码中移出、放进一张由 `task` 节点构成的声明式图里。** 因为这张图是*数据*，运行时就能做到命令式脚本从结构上做不到的事：在任何子代理被启动之前就**静态验证它**（无环、无死端、不超预算、无悬空引用）、**渲染它**（实时进度*本身就是*那张 DAG）、**逐阶段恢复它**，以及把它**保存为一条命令**。
+内置 subagent 工具非常适合单轮委派。但一旦工作开始分支、重试、跨会话，或需要质量门控，计划本身就成了基础设施。
 
-> **我们有意为之的取舍：**我们放弃了任意代码的极致表达力，换来了命令式脚本永远无法拥有的东西——一张**可验证、可观测、可重放、且能安全交给 LLM 生成**的图。当一个任务需要十二个步骤、带分支并发分发和一道审查门控时，你要的是一张能*检查*的图——而不是一段你只能*祈祷*它跑对的脚本。
-
-## 为什么需要这个
-
-这就是你在使用原生子代理时遇到的瓶颈：你用文字描述一个多步骤计划，模型每次都要重新推导，中间转录物塞满你的上下文，一旦某次模型调用失败你就得从头开始。没有复用，没有恢复，没有结构——也没有任何办法在烧掉 token 之前*检查*这个计划。
-
-`taskflow` 把计划**从提示词中移出，放入一张由任务节点构成的声明式图里。** 运行时（runtime）拥有 DAG、循环、重试和中间状态的所有权。你声明一次流水线，就能按名字运行上百次。因为这个计划是数据——不是文字，也不是代码——所以它可以被**验证、可视化、重放**。
-
-<div align="center">
-<img src="./assets/context-isolation.zh-CN.png" alt="使用原生子代理时每个转录物都涌入你的上下文；使用 taskflow 时转录物留在运行时，只有最终结果返回" width="900">
-</div>
-
-> 十二个步骤、分支并发分发、一道审查门控、一个费用上限——这就是一张图，你想要*看到并检查*它，而不是每次运行都重新提示一遍。
-
-| | 子代理（内置） | **taskflow** |
+| | 即席 agent / 脚本 | **taskflow** |
 |---|---|---|
-| **谁在驱动** | 模型，逐轮驱动 | 运行时，依据定义驱动 |
-| **拓扑结构** | 链式 / 平面并行 | **带分层并发 + 路由的 DAG** |
-| **中间结果** | 在你的上下文窗口中 | **在运行时中——不在你的上下文里** |
-| **规模** | 少量任务 | **动态 `map` 并发分发，覆盖数十个项目** |
-| **可复用** | 每次重新描述 | **按名保存（Pi 上为 `/tf:<name>`；Codex、Claude Code、OpenCode、Grok Build 上用 `taskflow_run` 按名运行）** |
-| **可恢复** | ✗ | **✓ 跨会话（cross-session）——已缓存的阶段自动跳过** |
-| **质量门控** | ✗ | **`gate` 阶段，在 `VERDICT: BLOCK` 时停止** |
-| **条件路由** | ✗ | **`when` 守卫 + `join: any` 或连接（OR-join）** |
-| **容错** | ✗ | **逐阶段 `retry` + 瞬态错误自动重试** |
-| **人机协作** | ✗ | **`approval` 阶段（批准 / 拒绝 / 编辑）** |
-| **成本控制** | ✗ | **全运行 `budget`（USD / 代币上限）** |
-| **组合** | ✗ | **`flow` 阶段运行已保存*或运行时生成*的子流程** |
-| **循环迭代** | ✗ | **`loop` 阶段——重复直到条件满足、收敛或达到上限** |
-| **竞争选择** | ✗ | **`tournament` 阶段——N 个变体 + 评判者** |
-| **实时进度** | 运行时不可见 | **实时 DAG 渲染，附带耗时和成本** |
-| **易用性** | 每次内联 JSON | **简写语法（`task`/`tasks`/`chain`）*或* DSL** |
+| **计划** | 每次从 prose 重推，或藏在脚本里 | **显式、可版本化的 DAG** |
+| **执行前** | 边花钱边发现错误 | **零模型调用验证结构** |
+| **中间输出** | 涌入宿主上下文 | **隔离在运行时里** |
+| **失败后** | 从头开始或手工恢复状态 | **从持久化阶段状态续跑** |
+| **输入变化** | 大范围重跑 | **解释过期原因，只重跑受影响前沿** |
+| **可移植性** | 绑定单一智能体 | **同一份 JSON 合同跨五个宿主** |
 
-它没有取代子代理工具。它给你的子代理赋予了一张**图**、一份记忆和一个名字。
+这是一项有意的取舍：少一点任意编排代码，换来更多的**可验证性、可观测性、恢复能力与复用**。
 
-## 声明式图 vs 命令式脚本
+## 60 秒开始
 
-精神上最接近 `taskflow` 的，是那种**动态 / code-mode 的 workflow**——模型写一段 JavaScript 编排脚本。它强大、且确实很有表达力。但它位于某个根本轴的*另一极*：**表达力 vs 可验证性。**
-
-| | 动态 `workflow`（code-mode） | **`taskflow`**（声明式图） |
-|---|---|---|
-| **计划是什么** | 模型书写并运行的命令式 JS | **运行时执行的声明式 JSON 数据** |
-| **那张图** | 隐式——藏在 `if`/`for`/`await` 控制流里 | **显式——`phases[]` + `dependsOn` 边，一等对象** |
-| **运行前验证** | ✗ 图灵完备；无法证明会终止 | **✓ 静态检查：无环、无死端、不超预算、无悬空引用** |
-| **看到它** | ✗ 图只在代码跑起来时存在 | **✓ 实时进度渲染*本身就是* DAG** |
-| **恢复** | 粗粒度（调用缓存去重） | **✓ 逐阶段输入哈希恢复，跨会话** |
-| **能否安全交给 LLM 生成** | 有风险——它是可执行代码 | **✓ 它只是数据——无 JavaScript `eval`、无任意执行** |
-| **表达力上限** | **更高**——任意控制流 | 受 DSL 限制（但 `map`/`when`/`loop`/`gate` 覆盖了大多数任务） |
-
-我们有意选了**可验证**的那一边。你放弃的表达力是真实的；但你换回的——一张能检查、能看、能重放、能安全交给模型书写的计划——才是把一次性提示变成持久编排的关键。
-
-## 与其他 Pi 扩展的对比
-
-> 本节为 **Pi 专属** ——它将 `pi-taskflow` 与 Pi 生态中的其他包对比。如果你在 Codex、Claude Code、OpenCode 或 Grok Build 上，可直接跳到[阶段类型](#阶段类型)；引擎与 DSL 完全相同。
-
-Pi 生态现在有 **20 多个委托、工作流和编排扩展**——每个在各自领域都很出色。以下是一份诚实的定位图（已对照每个包截至 2026 年 6 月的最新 npm 发布版核实）。完整的对比——每个包的优缺点——请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。更广泛的非 Pi 生态对比（LangGraph、Temporal、CrewAI、Mastra……）请参见 [`COMPETITORS.md`](./docs/internal/COMPETITORS.md)。
-
-| 扩展 | 模型 | 自定义 DSL | DAG | 动态并发分发 | 跨会话恢复 | 质量门控 | 人工审批 | 保存为命令 | 零运行时依赖 |
-|---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **taskflow** | **声明式多阶段 taskflow** | **✓** | **✓** | **✓ `map`** | **✓ phase-hash** | **✓** | **✓** | **✓ `/tf:<name>`** | **✕（1 + peer 依赖）** |
-| [`@pi-agents/orchid`](https://www.npmjs.com/package/@pi-agents/orchid) | 固定 9 阶段流水线 + Ralph 循环 | 固定 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✕ (2) |
-| [`pi-crew`](https://www.npmjs.com/package/pi-crew) | 角色团队 + git worktree + 异步 | 部分 | ✓ | ✓ | ✓ | ✓ | ✓ | – | ✕ (7) |
-| [`ultimate-pi`](https://www.npmjs.com/package/ultimate-pi) | 受管制的 plan→execute→review 框架 | YAML 合约 | ✓（规划时） | ✕ | ✓ | ✓（3 级） | ✓ | ✓ | ✕ (16) |
-| [`@zhushanwen/pi-workflow`](https://www.npmjs.com/package/@zhushanwen/pi-workflow) | JS 脚本（`agent`/`parallel`/`pipeline`） | 是（JS） | ✕（线性） | ✓ | ✓ | ✕ | ✕ | ✓（调用缓存） | ✓ |
-| [`@fiale-plus/pi-rogue-orchestration`](https://www.npmjs.com/package/@fiale-plus/pi-rogue-orchestration) | 定时器循环 + 目标解析 | ✕ | ✕ | ✕ | ✓ | ✓（目标检查） | ✕ | ✕ | ✓ |
-| [`pi-subagents`](https://www.npmjs.com/package/pi-subagents) | 单/并行/链式委托 | ✕ | ✕ | 静态 | – | ✕ | clarify | 命名工作流 | ✕ (3) |
-| [`@gotgenes/pi-subagents`](https://www.npmjs.com/package/@gotgenes/pi-subagents) | Claude-Code 风格子代理 + worktree | ✕ | ✕ | ✕ | ✓（按 id） | ✕ | 逐代理 | ✕ | ✕ (1) |
-| [`pi-pipeline`](https://www.npmjs.com/package/pi-pipeline) | 固定 SPEC→PLAN→TASKS→VERIFY | ✕ | 固定 | ✕ | 会话内规划 | ✓ | clarify | ✕ | ✕ (2) |
-| [`pi-agent-flow`](https://www.npmjs.com/package/pi-agent-flow) | 一次性并行专业 `fork` | 是 | ✕ | ✕ | – | ✕ | ✕ | – | ✕ (2) |
-
-*（20 多个扩展的代表性切片——完整列表及 `@0xkobold/pi-orchestration`、`@melihmucuk/pi-crew`、`@mediadatafusion/pi-workflow-suite`、`gentle-pi`、`@dreki-gg/pi-subagent` 等请参见 [`PI-ECOSYSTEM.md`](./docs/internal/PI-ECOSYSTEM.md)。）*
-
-**如何选择：**
-
-- **`@pi-agents/orchid`** 是生态中功能最完整的编排器（DAG + worktree + Ralph 循环 + 代理邮箱）——但其 DSL 是*固定*的 9 阶段流水线，携带运行时依赖 + jiti，且处于 beta 阶段。当你想**定义自己的图结构**并避免宿主 SDK 耦合时，选 `taskflow`。
-- **`pi-crew` / `ultimate-pi`** 更重——worktree 隔离、持久的异步团队、多层治理。如果你想要轻量、声明式且不绑定宿主 SDK，那就选本项目。
-- **`@zhushanwen/pi-workflow`** 精神上最为接近，也是零依赖，但它站在上述分水岭的**命令式**那一边：你要以模型书写并运行的 **JavaScript 脚本**来编写工作流。`taskflow` 的**声明式 JSON DAG** 是可验证的那一边——可静态检查、可可视化、可安全交给 LLM 生成，且恢复粒度精细到阶段级别而非调用缓存去重。
-- **`@fiale-plus/pi-rogue-orchestration`** 拥有真正的**循环至完成**（目标驱动的迭代）。`taskflow` 现在也自带 `loop` 阶段（v0.0.13+）加上竞争选择的 `tournament`——而且与 rogue-orchestration 不同，`taskflow` 拥有带门控、可组合子流程和跨会话恢复的完整 DAG。若只需极少结构的“一直做直到目标达成”，rogue-orchestration 更轻；若需结构化、分支式的流水线，`taskflow` 覆盖同样的能力且更多。
-- **`pi-subagents` / `@gotgenes/pi-subagents`** 是即席"用 reviewer 审查这个 diff"委托和后台作业的成熟选择。`taskflow` 则适用于当这些委托需要变成*可重复、可恢复的流水线*时。
-- **`pi-pipeline` / `pi-agent-flow`** 提供的是*固定观点、固定结构*的流程。`taskflow` 提供的是*一张空白画布*：你（或模型）声明适合任务的图结构。
-
-> 诚实的一句话总结：**`pi-taskflow` 提供一张*声明式、可验证、可恢复*的任务节点 DAG——保存为 `/tf:<name>` 命令，并从设计上隔离上下文。** 引擎避免绑定宿主 SDK；`typebox` 是 peer dependency，TypeScript DSL 自带编译器，交付包依赖 taskflow 内部包。
-
-## 30 秒快速开始
-
-### 在 Pi 上
-
-**1. 安装**——一条命令：
+在 [Pi](https://pi.dev) 上安装 taskflow：
 
 ```bash
 pi install npm:pi-taskflow
 ```
 
-> **可选：** 运行 `/tf init` 一次，将 18 个内置代理的模型角色（model role）
->（`fast`、`strong`、`thinker`……）映射到你已启用的模型——交互式选择器。
-> 跳过此步骤则代理使用 Pi 的默认模型。参见[模型角色](#模型角色)。
+然后自然地提出需求：
 
-**2. 运行**——直接在 Pi 会话中告诉模型：
+> 用 taskflow 并行审计 `src/api`，最后只返回一份按优先级排列的报告。
 
-> *运行一个链式任务：先探索认证流程，然后总结发现。*
+路由 skill 使用你已经熟悉的 `task` / `tasks` / `chain` 形式：
 
-模型会自动调用 `taskflow` 工具。你会看到实时进度、每步耗时、代币成本和已保存的运行记录——**与内置工具同样省力，现在可追踪且可恢复。**
-
-**3. 保存**——说一句 *"save it"*，你就永远拥有了 `/tf:<name>`。
-
-就这么简单。你可以在咖啡凉下来之前运行第一个工作流——无需编写任何阶段定义。
-
-<a id="run-it-on-your-agent"></a>
-### 在 Codex 上
-
-taskflow 以 Codex **插件（plugin）** 的形式发布——安装一次，`taskflow_*` MCP 工具与一个路由 skill 便会自动生效，无需手动 `mcp add`，也无需改配置：
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
+```json
+{
+  "chain": [
+    { "agent": "scout", "task": "Map the public API under src/api." },
+    {
+      "agent": "security-reviewer",
+      "task": "Audit this surface for missing auth and unsafe input boundaries:\n{previous.output}"
+    },
+    {
+      "agent": "reviewer",
+      "task": "Turn these findings into one prioritized report:\n{previous.output}"
+    }
+  ]
+}
 ```
 
-插件通过 `npx`（`codex-taskflow`）声明其 MCP server，按需拉起，全局无需再装任何东西。随后只要让 Codex 执行多阶段或扇出任务，它就会调用这些工具。参见 [Codex 指南](./docs/codex-mcp.md)。
+这样就已经得到一次隔离、可追踪的运行。当任务需要真正的拓扑结构时，声明整张图：
 
-### 在 Claude Code 上
-
-taskflow 同样以 Claude Code **插件** 的形式发布——安装一次，`taskflow_*` MCP 工具与路由 skill 便自动生效：
-
-```bash
-claude plugin marketplace add heggria/taskflow
-claude plugin install claude-taskflow@taskflow
+```json
+{
+  "name": "audit-api",
+  "args": { "dir": { "default": "src/api" } },
+  "concurrency": 4,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "scout",
+      "task": "List source files under {args.dir}. Output ONLY a JSON array of {\"path\":\"...\"} objects.",
+      "output": "json"
+    },
+    {
+      "id": "audit-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "file",
+      "agent": "security-reviewer",
+      "task": "Audit {file.path}. Cite evidence and assign severity.",
+      "dependsOn": ["discover"]
+    },
+    {
+      "id": "report",
+      "type": "reduce",
+      "from": ["audit-each"],
+      "agent": "reviewer",
+      "task": "Synthesize one prioritized report:\n{steps.audit-each.output}",
+      "dependsOn": ["audit-each"],
+      "final": true
+    }
+  ]
+}
 ```
 
-插件通过 `npx`（`claude-taskflow`）声明其 MCP server；每个阶段的子代理以隔离的 `claude -p` 会话运行。安全模式隔离契约要求 **Claude Code 2.1.169+**。参见 [Claude Code 指南](./docs/claude-mcp.md)。
+保存为 `.pi/taskflows/audit-api.json`，然后运行：
 
-### 在 OpenCode 上
-
-OpenCode 通过同一个 MCP server 接入。注册一次即可——用 CLI，或在 `opencode.json` 里加一条 `mcp`：
-
-```bash
-opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+```text
+/tf:audit-api dir=src/api
 ```
 
-服务器通过 `npx`（`opencode-taskflow`）拉起，每个阶段的子代理以隔离的 `opencode run` 会话运行；OpenCode 还会自动发现随包的路由 skill（`**/SKILL.md`）。参见 [OpenCode 指南](./docs/opencode-mcp.md)。
+在 Codex、Claude Code、OpenCode 和 Grok Build 上，通过 `taskflow_run` 按名称运行同一份保存定义。
 
-### 在 Grok Build 上
+[查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
-正式发布路径是 MCP 包：
+## 看见整张图运行
 
-```toml
-# ~/.grok/sandbox.toml
-[profiles.taskflow-workspace]
-extends = "workspace"
+下面是真实的 Pi 运行输出，不是模拟的 dashboard：
 
-[profiles.taskflow-readonly]
-extends = "read-only"
-```
-
-```bash
-export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
-export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
-```
-
-monorepo checkout 另带 plugin scaffold：
-
-```bash
-pnpm --filter grok-taskflow build
-grok plugin install ./packages/grok-taskflow/plugin --trust
-grok plugin enable taskflow
-grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
-```
-
-公共 Grok plugin marketplace/source 尚未发布；不要代入占位 source。每个阶段的子代理以隔离的 `grok -p --output-format streaming-json` 会话运行。可写或未声明 tools 的阶段必须使用上述自定义 profile，因为 Grok 内置 profile 在内核强制失败时可能 fail open。Grok 0.2.93 不上报 usage，因此带 `budget` 的流程会 fail closed；需要硬性费用上限时请使用 Pi、Codex、Claude Code 或 OpenCode。参见 [Grok Build 指南](./docs/grok-mcp.md)。
-
-### 简写语法（与内置工具相同的格式）
-
-```jsonc
-// 单一任务——一个代理，一个任务
-{ "task": "Summarize the architecture of src/", "agent": "explorer" }
-
-// 并行——同时触发多个任务，输出合并
-{ "tasks": [
-  { "task": "Audit auth in src/api",             "agent": "analyst" },
-  { "task": "Audit input validation in src/api", "agent": "analyst" }
-] }
-
-// 链式——顺序执行；每个步骤可以看到前一个步骤的输出
-{ "chain": [
-  { "task": "List the public API of src/lib", "agent": "scout" },
-  { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
-] }
-```
-
-`agent` 是可选的（默认使用第一个发现的代理）。添加 `name` 来标记运行并解锁将其保存为命令的功能。
-
-## 看看它如何运行
-
-这不是模拟图。**这是真实运行的 stdout（Pi TUI）**——`self-improve` 流程会编写并验证自己的测试套件，被质量门控在中途捕获：
-
-```
+```text
 ⊗ taskflow self-improve  6/7 · blocked · $0.095
     ✓ discover            agent   deepseek-v4-flash  10t ↑38k ↓6.7k $0.011
   ┌ ✓ write-runner-tests  agent   claude-sonnet-4-6  10t ↑13 ↓6.6k $0.020
   ├ ✓ write-store-tests   agent   claude-sonnet-4-6  10t ↑11 ↓10k $0.018
   ├ ✓ write-agents-tests  agent   claude-sonnet-4-6  10t ↑28 ↓13k $0.030
   └ ✓ fix-stability       agent   claude-sonnet-4-6  10t ↑13 ↓3.9k $0.012
-    ✓ verify              gate    BLOCK 3 type errors in test files  deepseek-v4-flash
+    ✓ verify              gate    BLOCK 3 type errors in test files
     ⊘ report              reduce  skipped · Gate blocked  ↳ fix-stability
 ```
 
-**布局本身就是 DAG。** 没有仪表盘，没有需要 grep 的日志——你看一眼进度条就了解了整个流水线：
+布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
 
-- **头部（header）**——`⊗` = 被阻塞（门控将其停止）；`6/7` 个阶段已处理；累计成本 `$0.095`。
-- **状态图标**——`✓` 完成 · `◐` 运行中 · `✗` 失败 · `⊘` 已跳过 · `○` 等待中。
-- **轨道线 `┌ ├ └`**——同一 DAG 层中的阶段，并发运行。四个 `write-*`/`fix-stability` 任务从 `discover` 并发分发出去。空白侧边线 = 单阶段层。
-- **`↳`**——跨层长距离依赖。`report` 依赖于相邻的 `verify` *以及*两层级之前的 `fix-stability`，因此只标注了这条跳过边。
-- **门控（gate）**——`verify` 发出了 `VERDICT: BLOCK`，因此运行时跳过了 `report`，以 `blocked` 状态结束运行，并将原因内联展示。
-- **详情**——每阶段：模型、代币数量（`↑` 输入 `↓` 输出）、成本、耗时。并发分发阶段还显示子任务进度（`3/15 2✗ 8▸`）。
+## 0.2 是编译器转身
 
-## 走向声明式
+0.2 之前，taskflow 负责执行声明式图。现在，这张图还拥有编译期前端、规范化中间表示、append-only 决策 trace、离线重放，以及增量重算。
 
-简写语法是你的入口。DSL 才是 `taskflow` 的真正价值所在——动态并发分发、结构化路由和质量门控。
+### 用 JSON 或 TypeScript 编写
 
-### 并发分发与归约
+JSON 仍是可移植的运行时合同。面对更大的 flow，`taskflow-dsl` 提供编译期 TypeScript 编写层：
 
-```jsonc
-{
-  "name": "summarize-files",
-  "description": "Discover files, summarize each, produce one report",
-  "args": { "dir": { "default": "." } },
-  "concurrency": 8,
-  "phases": [
-    { "id": "discover", "type": "agent", "agent": "scout",
-      "task": "List source files under {args.dir} (non-recursive).\nOutput ONLY a JSON array [{\"file\":\"\"}]. No prose.",
-      "output": "json" },
-    { "id": "summarize", "type": "map",
-      "over": "{steps.discover.json}", "as": "item", "agent": "scout",
-      "task": "Read {item.file} and give a one-sentence summary.",
-      "dependsOn": ["discover"] },
-    { "id": "report", "type": "reduce", "from": ["summarize"], "agent": "writer",
-      "task": "Combine into a short overview:\n{steps.summarize.output}",
-      "dependsOn": ["summarize"], "final": true }
-  ]
-}
+```ts
+import { agent, flow, json, map, reduce } from "taskflow-dsl";
+
+export default flow("audit", (ctx) => {
+  ctx.budget({ maxUSD: 2 });
+
+  const files = agent("List files under {args.dir}", {
+    agent: "scout",
+    output: json<{ path: string }[]>(),
+  });
+
+  const audits = map(files, (file) =>
+    agent(`Audit ${file.path}`, { agent: "security-reviewer" }),
+  );
+
+  return reduce(
+    [audits],
+    (parts) => agent(`Write one report:\n${parts.audits.output}`),
+    { final: true },
+  );
+});
 ```
 
-1. **`discover`** 列出每个文件并输出一个 JSON 数组。
-2. **`summarize`** 是一个 `map`——它为每个文件并发分发一个子代理，最多 8 个并发，`{item.file}` 绑定到每个文件路径。
-3. **`report`** 是一个 `reduce`——它将所有摘要合并为一个干净的概述。
-
-中间的摘要永远不会进入你的上下文。运行时拥有它们；你获得报告。**保存一次 → 永久可用 `/tf:summarize-files dir=src`。**
-
-### 路由、门控、重试、审批与费用上限
-
-```jsonc
-{
-  "name": "triage-and-fix",
-  "budget": { "maxUSD": 1.5 },
-  "phases": [
-    { "id": "triage", "type": "agent", "agent": "analyst", "output": "json",
-      "task": "Classify the bug. Output ONLY {\"severity\":\"high\"} or {\"severity\":\"low\"}." },
-    { "id": "deep",  "when": "{steps.triage.json.severity} == high", "dependsOn": ["triage"],
-      "agent": "executor-code", "task": "Root-cause and patch it.",
-      "retry": { "max": 2, "backoffMs": 500 } },
-    { "id": "quick", "when": "{steps.triage.json.severity} == low",  "dependsOn": ["triage"],
-      "agent": "executor-fast", "task": "Apply the quick fix." },
-    { "id": "approve", "type": "approval", "join": "any", "dependsOn": ["deep", "quick"],
-      "task": "Review the fix before it ships." },
-    { "id": "ship", "type": "agent", "dependsOn": ["approve"],
-      "task": "Open a PR with the change.", "final": true }
-  ]
-}
+```bash
+pnpm add -D taskflow-dsl
+taskflow-dsl check audit.tf.ts
+taskflow-dsl build audit.tf.ts --emit both
+# → audit.taskflow.json + audit.flowir.json
 ```
 
-- **`when`** 根据分诊 JSON 的结果路由到 `deep` *或* `quick`——另一个分支被跳过。
-- **`join: "any"`** 让 `approve` 在任意一个分支运行完成时立即触发（或连接 OR-join）。
-- **`retry`** 以回退策略重试不稳定的补丁；**`budget`** 在成本过高时停止整个运行。
-- **`approval`** 暂停等待人工操作（批准 / 拒绝 / 编辑），然后才进入最终的 `ship`。
+`.tf.ts` **只存在于编译期**。宿主执行生成的 Taskflow JSON，绝不会解释执行 TypeScript。
 
-无需脚本。无需 `eval`。运行时执行的是纯粹的数据——可以安全地直接运行 LLM 生成的定义。
+### 编译成一份可以推理的合同
 
-## 阶段类型
+FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 provenance 与过期分析变得可检查，而运行时在其上提供内容寻址缓存与确定性工具：
 
-| 类型 | 功能 | 必填字段 |
-|------|--------------|-----------------|
-| `agent` | 一个子代理运行单个任务 | `task` |
-| `parallel` | 并发运行 `branches[]` | `branches`（`{task, agent?}` 数组） |
-| `map` | **并发分发**到一个数组——每个项目一个子代理，`{item}` 绑定 | `over`、`task` |
-| `gate` | 质量/审查步骤，可以**暂停流程** | `task` |
-| `reduce` | 将 `from[]` 阶段的输出聚合为一个 | `from`、`task` |
-| `approval` | **人机协作**暂停——批准 / 拒绝 / 编辑 | — |
-| `flow` | 将一个**已保存的子流程**作为阶段运行（组合） | `use` \| `def` |
-| `loop` | **迭代一个任务直到完成**——重复运行主体直到条件满足、收敛或达到上限 | `task`、`until` |
-| `tournament` | **N 个变体竞争**，评判者选择最佳（或聚合） | `task` \| `branches` |
-| `script` | 运行一条 **shell 命令**——无 LLM、零代币——捕获 stdout 作为输出 | `run` |
-| `race` | **最先成功**的分支胜出（可选 `cancelLosers` 中止失败者） | `branches`（≥2） |
-| `expand` | 运行动态片段（`nested` 隔离或 `graft` 提升） | `def`（+ `expandMode?`） |
+| 操作 | 它回答什么 | 模型调用 |
+|---|---|---:|
+| `verify` / `compile` | 这张图在结构上可以安全运行吗？ | **0** |
+| `ir` | 规范化图和内容哈希是什么？ | **0** |
+| `resume` | 还有哪些未完成工作？ | 仅未完成阶段 |
+| `trace` | 实际发生了哪些调用和运行时决策？ | 查看时 **0** |
+| `replay` | 如果阈值或预算不同，结果会怎样？ | **0** |
+| `why-stale` | 什么变了，哪些节点依赖它？ | **0** |
+| `recompute` | 最小可观测受影响前沿是什么？ | 仅受影响阶段 |
 
-### 通用阶段字段
+[探索编译器与运行时 →](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/)
 
-每个阶段需要唯一的 `id` 和 `type`（默认为 `agent`）。除各类型特有字段外：
+## 一套运行时，12 种阶段
 
-| 字段 | 含义 |
-|---|---|
-| `agent` | 要运行的代理（默认为第一个发现的代理） |
-| `dependsOn` | 本阶段等待的阶段 id——构建 DAG |
-| `join` | `"all"`（默认）等待所有依赖；`"any"` 为或连接 |
-| `when` | 条件守卫——表达式为真时才执行，否则跳过 |
-| `retry` | `{ max, backoffMs?, factor? }`——重试失败的子代理 |
-| `output` | `"text"`（默认）或 `"json"`（暴露 `{steps.ID.json}`） |
-| `model` / `thinking` / `tools` | 子代理的逐阶段覆盖设置 |
-| `cwd` | 子代理的工作目录。字面路径，或一个用于**工作区隔离**的保留关键字——`"temp"`（临时目录，结束后删除）、`"dedicated"`（运行状态下的持久目录，保留）、`"worktree"`（临时分支上的 git worktree，结束后删除）。开放失败；在 LLM 生成的子流程中被拒绝。 |
-| `context` | 预读并注入到任务前的文件路径（或 `{steps.X}` 引用） |
-| `contextLimit` | `context` 中每个文件读取的最大字符数（默认 8000） |
-| `concurrency` | `map` / `parallel` 的并发分发上限（覆盖流程默认值） |
-| `final` | 标记为结果承载阶段（否则最后一个阶段胜出） |
-| `optional` | 此处失败**不会**中止运行 |
-| `use` / `with` | （`flow`）已保存的子流程名称及其参数 |
-| `shareContext` | 让此阶段的子代理加入**共享上下文树**（见下文）；在流程级设 `contextSharing: true` 可对所有阶段启用 |
-| `cache` | `{ scope, ttl?, fingerprint? }`——跨运行记忆化（见下文） |
-| `onBlock` | `"halt"`（默认）或 `"retry"`——门控 BLOCK 时的行为 |
-| `eval` | 在 LLM 门控之前运行的零代币机器可检查断言 |
-
-流程级键：`name`、`description`、`args`、`concurrency`（默认 8）、`agentScope`、`contextSharing`、`strictInterpolation` 和 `budget: { maxUSD?, maxTokens? }`。
-
-### 共享上下文树（黑板 + 监督）
-
-默认情况下子代理完全隔离——它们不共享任何内容，只返回最终字符串。为某个阶段设 `shareContext: true`（或在流程级设 `contextSharing: true`）即可给其子代理四个由每次运行独立、基于文件的黑板支撑的额外工具：
-
-| 工具 | 方向 | 用途 |
-|------|------|------|
-| `ctx_write(key, value)` | 水平 | 发布一个发现，让兄弟/后代复用（不再重复读同样的文件） |
-| `ctx_read(key?)` | 水平 | 读取本节点可见的发现：自身 + 祖先 + **已完成**的其他节点 |
-| `ctx_report(summary, structured?)` | 垂直 ↑ | 向父节点上报结果 |
-| `ctx_spawn(assignments[])` | 垂直 ↓ | 运行时委派子任务；每个 assignment 是扁平的 `{task}` **或** `{subflow}`（一个带依赖的 DAG，运行时校验并嵌套运行）。子任务的上报会折叠回本阶段输出 |
-
-前两个是**水平黑板**（兄弟节点复用昂贵的上下文）；后两个是**垂直监督树**（一个节点委派工作、其子任务向上汇报）。一切均为可选开启、fail-open、深度上限 5 层、大小受限（每值 256KB、每节点 256 键、每次 spawn 最多 16 个任务），并随运行清理——不开启的流程行为与之前完全一致。
-
-```jsonc
-{ "id": "survey", "type": "agent", "agent": "scout", "shareContext": true,
-  "task": "Map the API surface. ctx_write key 'endpoints' so the auditors don't re-scan." },
-{ "id": "audit", "type": "map", "over": "{steps.survey.json}", "shareContext": true,
-  "dependsOn": ["survey"], "agent": "analyst",
-  "task": "ctx_read 'endpoints' for shared context, then audit {item} for missing auth." }
-```
-
-### 控制流与可靠性
-
-- **`when`**——除非表达式为真，否则跳过阶段。支持 `{refs}`、`== != < > <= >=`、`&& || !`、括号以及带引号的字符串/数字。配合合并阶段的 `join: "any"` 实现真正的 if/else 路由。解析错误**开放失败（fail open）**。
-- **`join: "any"`**——或连接：阶段在*一个*依赖完成后立即运行（默认 `"all"` 等待所有依赖）。
-- **`retry`**——`{ "max": 2, "backoffMs": 500, "factor": 2 }` 以固定或指数回退策略重试失败的子代理；使用量累加，尝试次数以 `↻N` 形式在 TUI 中显示。瞬态提供商错误（速率限制 / 5xx / 超时）**即使没有显式策略也会自动重试**；硬错误不会。
-- **`approval`**——暂停等待人工操作（批准 / 拒绝 / 编辑）。拒绝会中止流程；编辑会将输入内容作为阶段输出注入下游步骤。**非交互式/后台（detached）运行会自动拒绝**（approval 是安全边界，绝不静默绕过）。
-- **`flow`**——`{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }` 将保存的流程作为阶段运行（循环递归会被检测并拒绝）。
-
-### 循环至完成（`loop`）
-
-有些工作天生就是迭代式的——修改草稿直到评审满意、重试并改进直到测试通过、收敛到最终答案。一个 `loop` 阶段会反复运行一个任务体，直到停止条件成立：
-
-```jsonc
-{
-  "id": "refine",
-  "type": "loop",
-  "task": "Improve this draft (iteration {loop.iteration}). Previous attempt:\n{loop.lastOutput}\n\nReturn JSON {\"draft\":\"…\",\"done\":true|false}.",
-  "until": "{steps.refine.json.done} == true",   // 迭代自身的输出在这里暴露
-  "output": "json",
-  "maxIterations": 6,        // 默认 10，硬上限 100——循环一定会终止
-  "convergence": true        // 默认：如果某次迭代的输出与前一次完全一致则提前停止
-}
-```
-
-- **主体局部变量**——任务可以读取 `{loop.iteration}`（从 1 开始）、`{loop.lastOutput}`（前一次迭代的输出）和 `{loop.maxIterations}`，以基于自身之前的输出继续构建；这三个变量对 `until` 条件同样可用。
-- **`until`**——每次迭代后评估，迭代输出以 `{steps.<thisId>.output}` / `.json` 暴露。运算符与 `when` 相同。一旦表达式为真，循环立即停止。
-- **总是会终止。** 四种独立停止方式：`until` 为真、**收敛**（不动点——输出与前一次迭代完全一致）、**`maxIterations`**（硬上限 100）、或**迭代失败**（阶段失败，部分输出保留）。格式错误的 `until` 会**停止**循环而非永远旋转（故障安全），并在阶段上显示警告。
-- TUI 中显示 `↻N` 及停止原因（`done` / `converged` / `max` / `failed`）；使用量跨迭代累加。与 `gate`/`approval` 一样，`loop` **被排除在 `cross-run` 缓存之外**（每次运行必须从头迭代）。
-
-### 锦标赛（`tournament`）
-
-对于开放式工作，最佳结果往往来自生成多个候选并由评判者挑选最强的一个——best-of-N 带评判者，一个声明式阶段搞定：
-
-```jsonc
-{
-  "id": "headline",
-  "type": "tournament",
-  "task": "Write a punchy headline for this launch post.",
-  "variants": 4,                    // 生成 4 个相同任务的竞争者（默认 3，最多 20）
-  "judge": "Pick the headline with the strongest hook and clearest promise.",
-  "judgeAgent": "reviewer",          // 可选；默认使用阶段指定的 agent
-  "mode": "best"                     // "best"（默认）| "aggregate"
-}
-```
-
-- **竞争者**——要么 `variants: N` 生成同一 `task` 的 N 份拷贝（多样性来自模型的不确定性），要么使用不同的 `branches: [{task, agent?}, …]` 当你想让*不同方法*相互竞争时。
-- **评判者**——并发分发完成后，一个评判代理看到所有变体（编号排列）及你的 `judge` 评分标准，通过 `WINNER: <n>` 行或 `{"winner": n}` 选择胜者。无法解读的判定**开放失败**为变体 1；评判失败也会回退——工作成果不会丢失。
-- **`mode`**——`best` **逐字返回**胜出的变体；`aggregate` 返回评判者**综合**各部分精华的答案。
-- **短路：**如果只有一个竞争者存活，它直接获胜无需评判调用；如果全部失败，阶段失败。TUI 显示 `⚑ N→#k`；使用量累加变体 + 评判者。与 `gate` 一样，**被排除在 `cross-run` 缓存之外**。
-- **`budget`**——整个运行的 `{maxUSD, maxTokens}` 上限；一旦超过，等待中的阶段跳过，正在运行的并发分发停止派发新任务，运行以 `blocked` 状态结束。
-- **空闲看门狗（idle watchdog）**——子代理静默 5 分钟会被视为卡死并被终止（SIGTERM → SIGKILL），因此一个挂起的子进程永远无法冻结整个流程。
-
-### Shell 步骤（`script`）
-
-不是每一步都需要模型。一个 `script` 阶段直接运行一条 **shell 命令**——零代币、无子代理——并将其 stdout 作为阶段输出。用它把 LLM 工作与真实工具粘合起来：跑构建/测试/格式化、`git`、`curl` 一个 webhook，或把上游阶段的输出管道给一个脚本。
-
-```jsonc
-{
-  "id": "build",
-  "type": "script",
-  "run": "pnpm run build",              // 字符串 → 在 shell 中运行
-  "timeout": 120000                     // 可选毫秒上限（1000–300000，默认 60000）
-},
-{
-  "id": "score",
-  "type": "script",
-  "run": ["python", "score.py"],        // 数组 → 直接 exec，无 shell（免注入）
-  "input": "{steps.analyze.output}",    // 可选 —— 管道到 stdin（支持插值）
-  "dependsOn": ["analyze"]
-}
-```
-
-- **`run`**——命令。**字符串**通过 shell 运行（`sh -c` / `cmd`）；**数组**直接 spawn（execvp 风格，无 shell）。含插值占位符的字符串 `run` 会在**校验时被拒绝**（shell 注入防护）——动态值请用数组形式或 `input` 传入。
-- **`input`**——可选，管道到命令的 stdin（支持插值）；省略则关闭 stdin。
-- **`timeout`**——可选毫秒上限（1000–300000，默认 60000）；超时后子进程先收到 `SIGTERM`，宽限期后 `SIGKILL`，阶段失败。
-- 非零退出会使阶段**失败**（捕获 stderr）；stdout 上限 1 MB。`script` 阶段花费**零代币**，不支持 `retry` 或 `output: "json"`，且**被排除在 `cross-run` 缓存之外**（shell 步骤可能有副作用）。`compile` 图中渲染为 `⚡ script`。
-
-### 跨运行记忆化（`cache`）
-
-每个阶段本身已经是内容寻址的：在单次运行的**恢复**中，已解析输入未变的阶段会被跳过。`cache` 将这个复用扩展到**独立的运行之间**——如果任何之前的运行计算过相同输入哈希的阶段，其结果被复用，花费**$0.00**。
-
-```jsonc
-{
-  "id": "analyze-auth",
-  "task": "Summarize how the auth module works.",
-  "context": ["src/auth/**/*.ts"],
-  "cache": {
-    "scope": "cross-run",                 // "run-only"（默认）| "cross-run" | "off"
-    "ttl": "6h",                          // 可选最长寿命，命中超过此时间视为未命中
-    "fingerprint": ["git:HEAD", "glob:src/auth/**/*.ts"]  // 将世界状态折叠到键中
-  }
-}
-```
-
-- **`scope`**——`"run-only"`（默认）即历史行为（仅运行内恢复）。`"cross-run"` 将阶段选择加入持久化存储。`"off"` 完全禁用复用（甚至运行内），用于调试。
-- **新鲜度是关键。** 缓存键已包含提示词、`over` 项目和任何 `context` 文件（预读到任务中）。`fingerprint` 将*隐式*输入折叠到键中，使得"世界变了"成为缓存未命中：`git:HEAD`、`glob:<pat>`（大小+修改时间）、`glob!:<pat>`（内容哈希）、`file:<path>`、`env:<NAME>`。`ttl`（`30m`/`6h`/`7d`）是时间安全网。
-- **诚实的限制：**一个子代理读取了未在 `context`/`fingerprint` 中声明的文件，仍可能返回过时的 `cross-run` 命中。这就是为什么默认值是 `run-only`，以及为什么 `gate`/`approval` 阶段**禁止**使用 `cross-run`（它们必须在每次运行中产生新鲜的结果）。只对输出是声明输入函数的那类阶段选择加入。
-- 缓存位于 `.pi/taskflows/cache/`（被 gitignore 忽略）。使用 `action: "cache-clear"` 清除。完整理由参见 [`docs/rfc-cross-run-memoization.md`](./docs/internal/rfc-cross-run-memoization.md)。
-
-### 门控阶段（质量控制）
-
-一个 `gate` 阶段运行一个代理来审查上游输出，并可以**阻止工作流的其余部分。** 通过以下方式结束门控任务，让运行时能够读取判决：
-
-- 末尾行 `VERDICT: PASS` 或 `VERDICT: BLOCK`（也接受 `OK`、`FAIL`、`STOP`、`REJECT`、`HALT`——按最后一次出现为准），或
-- JSON 格式如 `{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block", "reason": "..."}`。
-
-**BLOCK** 时，下游阶段被跳过，运行以 `blocked` 状态结束，原因内联展示。**模糊的输出开放失败（视为 PASS）**——门控永远不会意外中止你的流程。
-
-```
-Review the audit below. If any endpoint is missing auth, end with
-"VERDICT: BLOCK" and a one-line reason; otherwise end with "VERDICT: PASS".
-
-{steps.audit.output}
-```
-
-## 插值与表达式
-
-| 占位符 | 解析为 |
-|---|---|
-| `{args.X}` | 调用参数 |
-| `{steps.ID.output}` | 之前阶段的文本输出 |
-| `{steps.ID.json}` | 之前输出解析为 JSON（或 `{steps.ID.json.field}`） |
-| `{item}` / `{item.field}` | `map` 阶段中的当前项目 |
-| `{previous.output}` | 紧邻的上游阶段的输出 |
-| `{loop.iteration}` / `{loop.lastOutput}` / `{loop.maxIterations}` | `loop` 阶段主体中的当前迭代号、上一次迭代输出、最大迭代数 |
-
-条件语法（用于 `when`）：`== != < > <= >=`、`&& || !`、括号、带引号的字符串/数字，以及任何 `{...}` 引用——例如：`"when": "{steps.triage.json.route} == deep && {args.force} != true"`。
-
-> 引用未在 `dependsOn` 中声明的 `{steps.X}` 是**硬性验证错误**——运行时在第一个代理运行之前就能捕获这个最常见的流水线 bug。
-
-## 命令
-
-保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute`（仅 dry-run）/ `save` / `search`。
-
-| 命令 | 功能 |
-|---|---|
-| `/tf list` | 列出所有已保存的流程 |
-| `/tf run <name> [args]` | 运行已保存的流程（例如 `/tf run summarize-files dir=src`） |
-| `/tf show <name>` | 打印流程的定义 |
-| `/tf compile <name> [lr\|td]` | **将流程渲染为 Mermaid 图 + 验证报告** —— 0 token、无 LLM；可粘贴到 README/issue/PR |
-| `/tf ir <name>` | 编译为 **FlowIR** + 内容哈希（`ir:<64-hex>`）—— 0 token |
-| `/tf runs` | 浏览近期运行历史（交互式 TUI——有运行活跃时**实时自动刷新**） |
-| `/tf resume <runId>` | 继续一个暂停/失败的运行——已缓存的阶段自动跳过 |
-| `/tf peek <runId> [phaseId]` | 查看某阶段的中间输出（调试逃生舱） |
-| `/tf provenance <runId>` | 显示已完成运行的观测读集 |
-| `/tf trace <runId> [--json]` | 显示运行的**确定性重放事件轨迹**（各 subagent 调用 + 运行时决策） |
-| `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | **离线 what-if**：按新阈值/预算重判已录制轨迹（零 token） |
-| `/tf why-stale <runId> [phaseId]` | 解释陈旧前沿（观测 ∪ 声明依赖） |
-| `/tf recompute <runId> <phaseId> [--apply]` | 默认 dry-run；`--apply` 时对陈旧前沿做最小重算 |
-| `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
-| `/tf:<name> [args]` | 快捷方式——一键运行流程 |
-
-工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`trace`、`replay`、`why-stale`、`recompute`、`cache-clear`、`search`。在 Codex、Claude Code、OpenCode、Grok Build 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_save` / `taskflow_search`。
-
-## 后台（detached）执行
-
-传入 `detach: true` 即可在一个脱离的子进程中运行 taskflow——工具立即返回 `runId`，即使宿主会话退出，流程仍继续运行：
-
-```jsonc
-{
-  "action": "run",
-  "name": "nightly-audit",
-  "detach": true
-}
-```
-
-- 子进程读取序列化的上下文，调用编排引擎，并将终态持久化到存储。
-- 通过 `/tf runs`（有运行活跃时**实时自动刷新**）或 `action: "resume"` 轮询状态。
-- 通过 signal-0 探测检测过期 PID；空闲看门狗终止卡死的子进程。
-- **后台模式下 approval 阶段自动拒绝**——人工门控绝不被静默绕过。
-- 后台运行完成或失败后，`resume` 照常工作。
-
-## 跨会话恢复
-
-taskflow 运行与你的会话无关。每个已完成的阶段都写入磁盘，因此失败（或你中止）的运行可以通过 `/tf resume <runId>` 后续继续——**已缓存的阶段自动跳过**，只有剩余的工作会消耗代币。
-
-<div align="center">
-<img src="./assets/resume.zh-CN.png" alt="一个运行在会话 1 中途失败；在会话 2 中 /tf resume 跳过已缓存的阶段，只重新运行失败的阶段及其后续内容" width="900">
-</div>
-
-恢复以每个阶段的输入哈希为键——如果上游输出发生了变化，依赖的阶段会重新运行；如果没有变化，则复用结果。没有其他 Pi 扩展能做到跨会话的这一点。
-
-## 存储
-
-```
-.pi/taskflows/<name>.json          # 项目级定义（提交以共享）
-~/.pi/agent/taskflows/<name>.json  # 用户级定义
-.pi/taskflows/runs/<flowName>/<runId>.json  # 运行状态以供恢复（gitignore 此项）
-```
-
-> 提交 `.pi/taskflows/`，你的整个团队共享流水线——无需配置同步，无需新手指南。运行状态通过原子写入写入，并由零依赖的文件锁保护，因此并发运行永远不会损坏索引。
-
-代理发现范围（通过流程定义中的 `agentScope`）：
-
-| 值 | 发现代理的来源 |
-|---|---|
-| `"user"`（默认） | `~/.pi/agent/agents/*.md` |
-| `"project"` | `.pi/agents/*.md`（向上遍历目录树） |
-| `"both"` | 用户 + 项目；名称冲突时项目覆盖 |
-
-## 代理
-
-Taskflow 自带 **18 个内置代理**——每个代理是一个 `.md` 文件，包含调优的系统提示词、推理级别和工具集。安装后你可以在任何阶段或简写语法中通过 `name` 引用它们。无需任何设置。
-
-### 内置代理列表
-
-| 代理 | 角色 | 推理级别 | 默认角色 |
-|---|---|---|---:|---|
-| `executor` | 执行规划的代码变更 | high | `{{fast}}` |
-| `executor-fast` | 简单修复（≤2 文件，≤50 行） | off | `{{fast}}` |
-| `executor-code` | 复杂多文件实现 | high | `{{strong}}` |
-| `executor-ui` | 前端 / 样式 / 视觉变更 | high | `{{vision}}` |
-| `scout` | 快速代码库侦查与文件映射 | off | `{{fast}}` |
-| `planner` | 实现计划创建 | high | `{{strong}}` |
-| `analyst` | 需求分析，歧义检测 | high | `{{thinker}}` |
-| `critic` | 推理过程中的内联自我质疑 | xhigh | `{{thinker}}` |
-| `reviewer` | 通用代码 / 架构审查 | high | `{{strong}}` |
-| `risk-reviewer` | 后端 / 基础设施 / 数据库 / API 风险 | high | `{{reasoner}}` |
-| `security-reviewer` | 安全漏洞，认证/加密 | xhigh | `{{reasoner}}` |
-| `plan-arbiter` | 计划质量门控（复杂任务） | high | `{{arbiter}}` |
-| `final-arbiter` | 评判者意见冲突时的裁决者 | xhigh | `{{arbiter}}` |
-| `test-engineer` | 设计并实现测试 | high | `{{fast}}` |
-| `doc-writer` | 文档撰写 | off | `{{fast}}` |
-| `recover` | 压缩后的会话恢复 | low | `{{fast}}` |
-| `verifier` | 运行测试，验证结果 | off | `{{fast}}` |
-| `visual-explorer` | Figma 设计元数据分析 | high | `{{vision}}` |
-
-代理是分层的：**内置 → 用户（`~/.pi/agent/agents/`）→ 项目（`.pi/agents/`）**。同名用户或项目代理覆盖内置代理——因此你可以自定义任何代理而无需修改包本身。
-
-### 模型角色
-
-每个内置代理的 `model` 字段使用**角色占位符**（例如 `{{fast}}`）而不是硬编码的提供商字符串。这样将*意图*与*实现*解耦——你只需将角色映射到模型一次，所有代理就会自适应。
-
-| 角色 | 意图 | 典型模型 |
+| 家族 | 阶段 | 用途 |
 |---|---|---|
-| `{{fast}}` | 便宜快捷——高容量、低风险 | DeepSeek V4 Flash |
-| `{{strong}}` | 平衡——规划、审查、中等复杂度 | MiMo v2.5 Pro |
-| `{{thinker}}` | 深度分析——需求、批判 | DeepSeek V4 Pro |
-| `{{arbiter}}` | 最终判断——裁决、计划质量门控 | Qwen 3.7 Max |
-| `{{vision}}` | 多模态——UI 工作、设计解读 | MiniMax M3 |
-| `{{reasoner}}` | 谨慎推理——安全、风险 | GLM 5.1 |
+| **工作** | `agent` · `parallel` · `map` · `reduce` · `script` | 单任务、静态并发、动态 fan-out、聚合、零 token shell 步骤 |
+| **控制** | `gate` · `approval` · `flow` · `loop` | 质量决策、人工检查点、组合、迭代改进 |
+| **选择** | `tournament` · `race` | best-of-N 质量或 first-success 延迟 |
+| **动态图** | `expand` | 校验并执行运行时产出的片段，可嵌套或提升 |
 
-不配置时，代理回退使用 Pi 的默认模型。要将角色映射到真实模型，运行交互式设置：
+在这些阶段类型之上，DSL 提供依赖、条件、重试、超时、输出合同、预算、工作区隔离和明确的最终输出选择。每种类型只接受对它安全且有意义的字段；对新鲜度敏感的阶段不会进入跨运行缓存。
+
+[阅读阶段参考 →](https://heggria.github.io/taskflow/zh-cn/docs/syntax/phase-types)
+
+## 运行时保证，而不是 prompt 约定
+
+### 花费前先验证
+
+环路、悬空依赖、无效引用、不可能的 join、不安全的动态片段与配置风险，会在昂贵工作开始前被拒绝或明确暴露。
+
+### 中间工作不进入宿主上下文
+
+负责 agent 工作的阶段运行在隔离的 subagent 进程中；控制阶段和 script 阶段留在运行时内部。上游输出由运行时在内部接入下游输入。除非明确使用 `peek` 或 `trace`，否则只有 `finalOutput` 返回宿主。
+
+### 穿越会话与失败
+
+阶段状态以原子方式持久化。续跑会跳过未变化的已完成工作；Pi 的 detached 运行可以活过发起会话；idle watchdog 会终止卡死的 subagent。
+
+### 诚实地复用工作
+
+运行内续跑基于内容寻址。跨运行缓存需显式开启，并可把 Git commit、文件、glob、环境变量和 TTL 纳入指纹。改变一个已声明输入，只有其依赖项会变为陈旧。
+
+### 限制爆炸半径
+
+预算、并发上限、重试、超时、嵌套深度、动态图宽度、路径包含检查、非幂等阶段分类，以及审批 fail-closed 都是运行时语义，不是写在 prompt 里的建议。
+
+[阅读核心概念 →](https://heggria.github.io/taskflow/zh-cn/docs/concepts/)
+
+## 安装到你的宿主
+
+所有包都要求 **Node.js ≥ 22.19.0**。
+
+### Pi
 
 ```bash
-/tf init
+pi install npm:pi-taskflow
 ```
 
-`/tf init` 从一个**行动菜单**开始。首次用户会看到一个 2 选项快捷方式（"使用推荐默认值" / "配置每个角色"）。回访用户会看到完整的 5 选项菜单：
+Pi 提供最完整的本地体验：`taskflow` 工具、`/tf` 命令、实时 DAG 渲染、交互审批、后台运行与模型角色配置。
 
-```
-? What do you want to do with model roles?
-  ❯ Use recommended defaults
-    Configure each role
-    Edit one role
-    Show current roles
-    Cancel
-```
+[Pi 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/pi)
 
-选择器显示模型**显示名称**，附带能力标记和当前/推荐标记：
+### OpenAI Codex
 
-```
-? Model for 'vision' — Multimodal (executor-ui, visual-explorer)
-  Current: openrouter/anthropic/claude-sonnet-4-6
-  Recommended: minimax/MiniMax-M3
-  ───────────────
-  ❯ MiniMax M3 (minimax/MiniMax-M3) · image ✓ · reasoning ✓ · (recommended)
-    Claude Sonnet 4.6 (openrouter/anthropic/...) · image ✓ · reasoning ✓ · (current)
-    GPT-5 (openrouter/openai/gpt-5) · image ✓
-    DeepSeek V4 Flash (openrouter/deepseek/v4-flash)
-    ───────────────
-    Custom (type your own)
-    Keep current
-    Back to action menu
+```bash
+codex plugin marketplace add heggria/taskflow
+codex plugin add taskflow@taskflow
 ```
 
-保存之前，一个**预览屏幕**会显示你的变更差异：
+[Codex 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/codex)
 
-```
-? Review changes:
-  fast       openrouter/deepseek/deepseek-v4-flash   (unchanged)
-  strong     openrouter/xiaomi/mimo-v2.5-pro         (unchanged)
-  thinker    openrouter/qwen/qwen3.7-max             (changed ← was: openrouter/deepseek/v4-pro)
-  arbiter    openrouter/qwen/qwen3.7-max             (unchanged)
-  vision     minimax/MiniMax-M3                      (unchanged)
-  reasoner   z-ai/glm-5.1                            (unchanged)
-  ───────────────
-  ❯ Save these changes
-    Edit a role
-    Cancel
+### Claude Code
+
+```bash
+claude plugin marketplace add heggria/taskflow
+claude plugin install claude-taskflow@taskflow
 ```
 
-你的选择会被写入 `~/.pi/agent/settings.json`：
+[Claude Code 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/claude-code)
 
-```json
-{
-  "modelRoles": {
-    "fast":     "openrouter/deepseek/deepseek-v4-flash",
-    "strong":   "openrouter/xiaomi/mimo-v2.5-pro",
-    "thinker":  "openrouter/deepseek/deepseek-v4-pro",
-    "arbiter":  "openrouter/qwen/qwen3.7-max",
-    "vision":   "minimax/MiniMax-M3",
-    "reasoner": "z-ai/glm-5.1"
-  }
-}
+### OpenCode
+
+```bash
+opencode mcp add taskflow -- \
+  npx -y -p opencode-taskflow@0.2.0 opencode-taskflow-mcp
 ```
 
-随时手动编辑这些值，或重新运行 `/tf init`。
+[OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
 
-若需自定义特定代理的模型或 thinking 而不修改 `modelRoles`，可在 `~/.pi/agent/agents/<name>.md` 创建代理文件，在 YAML frontmatter 中覆盖。
+### Grok Build
 
-### 工具路径（`action="init"`）
-
-模型也可以通过 `taskflow` 工具配置角色：
-
-| 模式 | 行为 |
-|---|---|
-| `mode: "show"`（默认） | 只读报告当前 `modelRoles`。从不覆盖。 |
-| `mode: "apply-defaults"` + `force: true` | 将 `RECOMMENDED_DEFAULTS` 写入 `settings.json`，保留旧键。 |
-| `mode: "interactive"` | 启动完整的行动菜单 + 选择器流程（需要 UI 会话）。 |
-
-
-
-### 自定义代理
-
-将 `.md` 文件放入 `~/.pi/agent/agents/`（用户级）或 `.pi/agents/`（项目级，可提交）来添加你自己的代理：
-
-```markdown
----
-name: my-linter
-
-description: Run ESLint and report violations
-
-tools: read, bash
-
-model: "{{fast}}"
-
-thinking: off
----
-
-You are a linting agent. Run `npx eslint --format json` on the
-provided files. Report violations grouped by file. No fixes.
+```bash
+grok mcp add taskflow -- \
+  npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
 ```
 
-然后在任何阶段中引用它：`{ "agent": "my-linter", "task": "Lint src/" }`。
+Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
 
-## 示例
+[Grok Build 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/grok-build)
 
-[`examples/`](./examples) 中已准备好可直接阅读的定义：
-
-| 文件 | 演示内容 |
-|---|---|
-| [`summarize-files.json`](./examples/summarize-files.json) | discover → `map` 并发分发 → `reduce` |
-| [`conditional-research.json`](./examples/conditional-research.json) | `when` 路由 + `join: any` + `gate` + `budget` |
-| [`guarded-refactor.json`](./examples/guarded-refactor.json) | `approval`（人机协作）+ `retry` + `gate` |
-| [`dynamic-plan-execute.json`](./examples/dynamic-plan-execute.json) | `flow{def}` 运行时子流程——planner 生成计划，`flow` 执行 |
-| [`iterative-replan.json`](./examples/iterative-replan.json) | `loop` + `flow{def}` 迭代式重规划——每轮依据上轮结果 |
-
-将其中一份复制到 `.pi/taskflows/<name>.json`（或 `~/.pi/agent/taskflows/`），它就会注册为 `/tf:<name>`——或者直接让模型指向它。
-
-<a id="whats-inside"></a>
-
-## 内部构成
+## 为真实工作而生
 
 <div align="center">
 
-**Node.js ≥ 22.19.0** · **1500+ 测试 / 100 个测试文件** · **12 种阶段类型** · **共享上下文树** · **跨会话恢复** · **跨运行记忆化** · **逐项 map 缓存** · **增量重算** · **FlowIR 编译缝** · **后台执行** · **MCP 编译：SVG + 文本** · **Pi 编译：Mermaid**
+**9 个包** · **5 个宿主** · **12 种阶段** · **18 个内置 agent** · **1,500+ 测试** · **MIT**
 
 </div>
 
-- **准确的依赖边界。** MCP 协议实现不依赖 MCP SDK，使用 Node 内置模块；`taskflow-core` 没有直接 `dependencies`，但 peer 依赖 `typebox`；`taskflow-dsl` 依赖 TypeScript；宿主交付包依赖内部 core/runner/MCP 包。所有包要求 Node.js ≥ 22.19.0。
-- **1500+ 个测试分布在 100 个测试文件中**，覆盖并发、持久化、安全、恢复/缓存、全部 12 种阶段、FlowIR/replay、TypeScript DSL 与各宿主 argv/MCP 契约。
-- **经过强化的设计。** 路径穿越防御（词法 + `realpath`）、runId 验证、HTML/错误净化、原子写入、通过 `rename` 实现的过期锁窃取，以及杀死卡死子代理的空闲看门狗。
-- **自产自用（dogfooded）。** 每个新功能必须在发布前通过项目自身的 `self-improve` taskflow 的考验。
-
-## 🍽️ 我们吃自己的狗粮
-
-`taskflow` 中的每个功能都是**通过 `taskflow` 自身**发布的。
-
-我们的 `self-improve` 流程是一个 10 阶段 DAG——它审计代码库、修补缺陷、验证正确性、进行质量门控并展示报告——全部以声明式完成。我们在发布前运行它（作为用户作用域的 `/tf:self-improve` 流程）。Pi 生态中没有其他代理编排器用自身来构建自己。
-
-| 活动 | 规模 | 阶段数 | 结果 |
-|----------|-------|--------|---------|
-| [v0.0.8 dogfood](./docs/internal/dogfooding-v0.0.8-report.md) | 全代码库审计 → 分类 → 修复 → 验证 | 10 阶段，234 个测试 | 13 个修复，全部通过 |
-| [v0.0.6 自审计](./docs/internal/self-audit-report.md) | 盘点 → 映射审计 → 门控 → 审批 → 映射修复 → 归约 | 9 阶段 | 修复 11 个关键缺陷 |
-| [跨运行缓存 dogfood](./docs/internal/rfc-cross-run-memoization.md) | 真实运行时 + 磁盘存储 | 专用测试框架 | 在对抗性指纹下验证缓存正确性 |
-| [对抗性交叉审查](./docs/internal/brainstorm-adversarial-review-report.md) | 多代理对抗性审查 | `tournament` + `gate` | 修复 P0 缓存键问题并发布 |
-| [Init 重设计审查](./docs/internal/issue-necessity-review-report.md) | 必要性审计 → 并行检查 → 判决 | 7 阶段 | 完整重设计方案已验证 |
-| [第 2 轮对抗性审计](./docs/internal/dogfooding-report.md) | 逐阶段 DAG 执行——12 个发现覆盖 runner/runtime/interpolate/verify | 14 阶段 | 已修复 10 项，0 退化 |
-| [第 3 轮对抗性审计](./docs/internal/dogfooding-report.md) | 集成层 + 跨模块——10 个发现覆盖 index/agents/cache/render/runs-view | 9 阶段 | 已修复 10 项，0 退化 |
-| [v0.0.23 共享上下文树](./docs/internal/dogfooding-report.md) | 端到端验证：组织树派生、经 loop+gate 的 5 路审计 | 6 次 e2e 运行 | 修复派生-排空 bug，新增 50 个测试 |
-
-> **元点评：** 我们使用了 `taskflow` 的 `map` 并发分发、`gate` 判决、`approval` 人机协作、`tournament` best-of-N、`loop` 循环至完成和 `cross-run` 缓存——来构建 `taskflow`。
-
-## 状态与边界
-
-**v0.2.0**（本 monorepo 发布线——`v0.2.0` tag 发布后 npm 才更新）——新增 `taskflow-dsl` TypeScript 前端、Grok Build 交付包、含 `race`/`expand` 的 **12** 种阶段、FlowIR 内容哈希、事件内核 trace/fold、离线 replay。**v0.1.7** 修复：文件 loader 报告失败原因 + 解析位置；pi-taskflow 升级提示一次性；gate fail-closed（issue #54）。**v0.1.6** 新增库 Phase 1、`defineFile`、JSONC。**v0.1.5** 新增 Claude Code / OpenCode 宿主、`taskflow-mcp-core` 拆分。基线：**九个包的多宿主 monorepo**——`taskflow-core`、`taskflow-mcp-core`、`taskflow-hosts`、`taskflow-dsl`，加上 `pi-taskflow`、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`、`grok-taskflow`。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
-
-已知边界（已追踪、有限定——不会在流程中途出现意外）：
-
-- **共享上下文需显式开启。** 除非阶段设置 `shareContext`（或流程设置 `contextSharing`），子代理不共享任何内容。黑板为每次运行独立、基于文件、大小受限，并随运行清理。派生嵌套上限为 `MAX_DYNAMIC_NESTING`（5）。
-- **工作区隔离是 fail-open 的。** `cwd: "worktree"` 要求基底 cwd 是一个 git 工作树；否则降级为 `temp` 目录（带警告）。保留关键字仅在作者编写的流程中生效。
-- **无 `output: "file"`。** 输出只能是文本/JSON——通过代理的 `write` 工具调用写入文件。
-- **`map` 基于一个字符串 `over` 展开出 JSON 数组。** `over` 字段是一个字符串，它要么插值解析为 JSON 数组（例如 `{steps.ID.json}`），要么本身就是一个 JSON 数组字符串。先用一个单代理 `output: "json"` 阶段包装纯文本列表，或对固定列表传入 `JSON.stringify([...])`。（直接写字面量数组会被拒绝——请从某个阶段产出它并引用之。）
-- **DAG 必须是无环的。** 循环会在验证时被拒绝。
-- **跨运行缓存不包含 `gate`、`approval`、`loop`、`tournament`、`script`、`race` 和 `expand`。** 这些阶段每次运行必须产生新结果。
-- **审批在后台模式下自动拒绝。** 这是一项安全不变量——审批门控绝不会被静默绕过。
-
-## 开发
-
-`taskflow` 是一个 pnpm-workspace monorepo，包含九个发布包（八个 host/core + `taskflow-dsl`）：
-
-| 包 | 角色 |
-|----|------|
-| [`taskflow-core`](./packages/taskflow-core) | 宿主无关的编排引擎（零宿主 SDK 依赖；仅 `typebox`）——运行时、DSL、缓存、验证 |
-| [`taskflow-mcp-core`](./packages/taskflow-mcp-core) | 宿主无关的 MCP 服务器（stdio JSON-RPC + `taskflow_*` 工具 + DAG 渲染）；依赖 core |
-| [`taskflow-hosts`](./packages/taskflow-hosts) | 共享宿主 runner 集合（codex / claude / opencode / grok 的 `SubagentRunner` + argv 构建器 + 事件流解析器）；依赖 core |
-| [`taskflow-dsl`](./packages/taskflow-dsl) | TypeScript DSL CLI——将 `.tf.ts` 擦除为 Taskflow JSON / FlowIR；依赖 core |
-| [`pi-taskflow`](./packages/pi-taskflow) | Pi 扩展适配器——`taskflow` 工具 + `/tf` 命令（即 `pi install npm:pi-taskflow` 安装的内容） |
-| [`codex-taskflow`](./packages/codex-taskflow) | Codex 子代理运行器 + MCP bin，及 [Codex 插件](./packages/codex-taskflow/plugin)（[指南](./docs/codex-mcp.md)） |
-| [`claude-taskflow`](./packages/claude-taskflow) | Claude Code 子代理运行器 + MCP bin，及 [Claude Code 插件](./packages/claude-taskflow/plugin)（[指南](./docs/claude-mcp.md)） |
-| [`opencode-taskflow`](./packages/opencode-taskflow) | OpenCode 子代理运行器 + MCP bin，及 [OpenCode 配置脚手架](./packages/opencode-taskflow/plugin)（[指南](./docs/opencode-mcp.md)） |
-| [`grok-taskflow`](./packages/grok-taskflow) | Grok Build 子代理运行器 + MCP bin，及 [Grok 插件](./packages/grok-taskflow/plugin)（[指南](./docs/grok-mcp.md)） |
-
-```bash
-pnpm install
-pnpm run typecheck     # 跨所有包做 tsc --noEmit（无需构建）
-pnpm test              # 单元测试——无网络，无进程派生
-pnpm run test:hosts    # 仅 taskflow-hosts 测试（另有 test:pi、test:codex、test:claude、test:opencode）
-pnpm run build         # 为全部九个包生成 dist/*.js + .d.ts
-pnpm run test:e2e-codex      # codex executor 端到端（需 `codex` + 模型访问权限）
-pnpm run test:e2e-codex-mcp  # codex MCP 服务器端到端
-pnpm run test:e2e-claude-mcp # claude MCP 服务器端到端（无需实时 claude）
-pnpm run test:e2e-opencode-mcp # opencode MCP 服务器端到端（无需实时 opencode）
+```text
+                              taskflow-core
+                 ┌──────────────┼───────────────┐
+                 │              │               │
+           taskflow-dsl   pi-taskflow   taskflow-mcp-core ─┐
+                                       taskflow-hosts ─────┼─ codex-taskflow
+                                                          ├─ claude-taskflow
+                                                          ├─ opencode-taskflow
+                                                          └─ grok-taskflow
 ```
 
-Pi 的端到端套件会派生真实 `pi` 子代理，直接运行（使用 `.mts` 扩展名，单元测试 glob 会跳过），例如：
+`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。四个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
 
-```bash
-node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
-```
+测试套件覆盖编排语义、持久化与文件锁竞态、缓存新鲜度、路径穿越、动态图加固、取消、预算、全部 12 种阶段、FlowIR/replay/recompute、TypeScript DSL 擦除、宿主 argv 合同、MCP server，以及打包后的 consumer imports。
 
-引擎代码位于 `packages/taskflow-core/src/`，Pi 适配器位于 `packages/pi-taskflow/src/`，测试位于各包的 `test/`，可运行示例位于 `examples/`。发布包内含编译后的 `dist/`；开发时通过 `development` 导出条件直接解析 TypeScript 源码——typecheck 与 test 都无需构建步骤。
+## 文档
+
+| 从这里开始 | 当你需要 |
+|---|---|
+| [快速开始](https://heggria.github.io/taskflow/zh-cn/docs/getting-started) | 第一次成功运行 |
+| [核心概念](https://heggria.github.io/taskflow/zh-cn/docs/concepts/) | DAG、隔离、验证、续跑、共享上下文 |
+| [语法](https://heggria.github.io/taskflow/zh-cn/docs/syntax/) | 阶段字段、控制流、预算、缓存、scorer |
+| [编译器与运行时](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/) | TypeScript DSL、FlowIR、重放、重算、后台运行 |
+| [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok 配置 |
+| [参考](https://heggria.github.io/taskflow/zh-cn/docs/reference/) | 命令、简写与精确工具接口 |
+| [Showcase](https://heggria.github.io/taskflow/zh-cn/docs/showcase/) | 真实 flow 与案例研究 |
+
+另见 [`examples/`](./examples)、[变更日志](./CHANGELOG.md)和[发版指南](./RELEASE.md)。
 
 ## 贡献
 
-欢迎贡献——这是一个年轻、快速发展的项目。在 [GitHub](https://github.com/heggria/taskflow) 上提交 issue 或 PR。适合初学者的贡献内容包括：新的示例流程、阶段类型创意和 TUI 打磨。
+```bash
+pnpm install
+pnpm run typecheck
+pnpm test
+pnpm run build
+pnpm run test:pack
+```
+
+欢迎贡献。请先阅读 [`CONTRIBUTING.md`](./CONTRIBUTING.md) 了解工作流，以及 [`AGENTS.md`](./AGENTS.md) 了解架构与编码规范。
 
 ## 许可
 
-MIT
+[MIT](./LICENSE) © [heggria](https://github.com/heggria)
+
+<div align="center">
+
+**只声明一次。花费前验证。只重算变化部分。**
+
+[阅读文档](https://heggria.github.io/taskflow/zh-cn/docs) · [运行示例](./examples) · [查看版本](https://github.com/heggria/taskflow/releases)
+
+</div>

@@ -1,165 +1,117 @@
-<svg width="1280" height="660" viewBox="0 0 1280 660" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow — declare one JSON graph, it is statically verified for zero tokens, runs isolated in the runtime, and only the final result returns to your context. 10 phase types, zero deps, runs on Pi, Codex, Claude Code, and OpenCode.">
+<svg width="1280" height="560" viewBox="0 0 1280 560" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="taskflow 0.2 — author in JSON or TypeScript, verify before model spend, compile to FlowIR, run isolated, then resume, replay, or recompute the stale frontier across Pi, Codex, Claude Code, OpenCode, and Grok Build.">
   <defs>
-    <filter id="card" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="2" stdDeviation="5" flood-color="#1B1D29" flood-opacity="0.05"/>
+    <linearGradient id="bg" x1="80" y1="20" x2="1200" y2="560" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10131D"/>
+      <stop offset="0.52" stop-color="#111422"/>
+      <stop offset="1" stop-color="#0C1718"/>
+    </linearGradient>
+    <linearGradient id="brand" x1="472" y1="112" x2="795" y2="182" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A8A7FF"/>
+      <stop offset="0.55" stop-color="#7472FF"/>
+      <stop offset="1" stop-color="#45D4A7"/>
+    </linearGradient>
+    <linearGradient id="flow" x1="113" y1="371" x2="1168" y2="371" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7775FF"/>
+      <stop offset="0.72" stop-color="#8B89FF"/>
+      <stop offset="1" stop-color="#34C99A"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-30%" width="140%" height="170%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000000" flood-opacity="0.3"/>
     </filter>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#FFFFFF" stroke-opacity="0.035"/>
+    </pattern>
   </defs>
 
-  <!-- background -->
-  <rect width="1280" height="660" rx="28" fill="#F7F6F3"/>
-  <rect x="0.5" y="0.5" width="1279" height="659" rx="27.5" stroke="#E5E3DD"/>
+  <rect width="1280" height="560" rx="30" fill="url(#bg)"/>
+  <rect x="0.75" y="0.75" width="1278.5" height="558.5" rx="29.25" stroke="#FFFFFF" stroke-opacity="0.11" stroke-width="1.5"/>
+  <rect width="1280" height="560" rx="30" fill="url(#grid)"/>
+  <circle cx="1075" cy="62" r="210" fill="#35C99A" fill-opacity="0.045"/>
+  <circle cx="203" cy="505" r="240" fill="#7775FF" fill-opacity="0.06"/>
 
-  <!-- ============ HERO HEADER (badge · mark · wordmark · subtitle) ============ -->
-  <rect x="417" y="34" width="446" height="32" rx="16" fill="#FFFFFF" stroke="#E5E3DD"/>
-  <circle cx="442" cy="50" r="4" fill="#0E8A66"/>
-  <text x="458" y="54.5" font-family="'SF Mono',Menlo,monospace" font-size="13" letter-spacing="1" fill="#75787E">Pi · Codex · Claude · OpenCode · zero deps</text>
-
-  <!-- logo mark: tiny DAG, optically centered with the wordmark as one group -->
-  <g transform="translate(436,85) scale(1.3)">
-    <path d="M8 22 C20 22, 22 8, 34 8 M8 22 C20 22, 22 36, 34 36 M34 8 C46 8, 48 22, 58 22 M34 36 C46 36, 48 22, 58 22" stroke="#4B4ACF" stroke-width="3" fill="none" stroke-linecap="round"/>
-    <circle cx="8" cy="22" r="6" fill="#4B4ACF"/>
-    <circle cx="34" cy="8" r="5" fill="#8B8AE3"/>
-    <circle cx="34" cy="36" r="5" fill="#8B8AE3"/>
-    <circle cx="58" cy="22" r="6" fill="#0E8A66"/>
-  </g>
-  <text x="540" y="142" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="80" font-weight="700" letter-spacing="-2.5" fill="#17181C">task<tspan fill="#4B4ACF">flow</tspan></text>
-
-  <text x="640" y="182" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="20" font-weight="500" fill="#3C3F45">Declarative DAG orchestration for coding-agent subagents.</text>
-
-  <!-- ============ STEP LABELS (aligned to card left edges, one baseline) ============ -->
-  <g font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1.6">
-    <text x="64" y="224" fill="#4B4ACF" font-weight="700">01</text><text x="88" y="224" fill="#75787E">DECLARE</text>
-    <text x="346" y="224" fill="#4B4ACF" font-weight="700">02</text><text x="370" y="224" fill="#75787E">VERIFY · FREE</text>
-    <text x="576" y="224" fill="#4B4ACF" font-weight="700">03</text><text x="600" y="224" fill="#75787E">RUN · ISOLATED</text>
-    <text x="1006" y="224" fill="#0E8A66" font-weight="700">04</text><text x="1030" y="224" fill="#75787E">RETURN</text>
+  <g transform="translate(54 38)">
+    <rect width="1172" height="34" rx="17" fill="#FFFFFF" fill-opacity="0.045" stroke="#FFFFFF" stroke-opacity="0.1"/>
+    <circle cx="21" cy="17" r="4" fill="#35C99A"/>
+    <text x="37" y="21.5" font-family="SFMono-Regular,Consolas,Liberation Mono,monospace" font-size="11.5" letter-spacing="1.6" fill="#A9ADBA">TASKFLOW 0.2</text>
+    <text x="1138" y="21.5" text-anchor="end" font-family="SFMono-Regular,Consolas,Liberation Mono,monospace" font-size="11.5" letter-spacing="1.25" fill="#858A99">PI  ·  CODEX  ·  CLAUDE  ·  OPENCODE  ·  GROK</text>
   </g>
 
-  <!-- ============ ZONE 1 · DECLARE (64..296) ============ -->
-  <g filter="url(#card)">
-    <rect x="64" y="240" width="232" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
+  <g transform="translate(392 103)">
+    <path d="M8 28C25 28 28 8 46 8M8 28C25 28 28 48 46 48M46 8C64 8 67 28 84 28M46 48C64 48 67 28 84 28" stroke="url(#brand)" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="8" cy="28" r="8" fill="#7775FF"/>
+    <circle cx="46" cy="8" r="7" fill="#AAA9FF"/>
+    <circle cx="46" cy="48" r="7" fill="#AAA9FF"/>
+    <circle cx="84" cy="28" r="8" fill="#35C99A"/>
   </g>
-  <circle cx="86" cy="260" r="4" fill="#E8E6E1"/><circle cx="100" cy="260" r="4" fill="#E8E6E1"/><circle cx="114" cy="260" r="4" fill="#E8E6E1"/>
-  <text x="276" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">flow.json</text>
-  <line x1="64" y1="280" x2="296" y2="280" stroke="#EFEEE9"/>
-  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" fill="#3C3F45">
-    <text x="84" y="310"><tspan fill="#75787E">"phases"</tspan>: [</text>
-    <text x="98" y="332">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"scan"</tspan> },</text>
-    <text x="98" y="354">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"audit"</tspan>,</text>
-    <text x="112" y="376"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"map"</tspan> },</text>
-    <text x="98" y="398">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"fix"</tspan>,</text>
-    <text x="112" y="420"><tspan fill="#4B4ACF">"when"</tspan>: <tspan fill="#B07E1E">"high"</tspan> },</text>
-    <text x="98" y="442">{ <tspan fill="#4B4ACF">"id"</tspan>: <tspan fill="#B07E1E">"gate"</tspan>,</text>
-    <text x="112" y="464"><tspan fill="#4B4ACF">"type"</tspan>: <tspan fill="#B07E1E">"gate"</tspan> }</text>
-    <text x="84" y="486">]</text>
-  </g>
-  <text x="180" y="516" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">One file. The whole graph.</text>
+  <text x="506" y="156" font-family="Inter,Helvetica Neue,Arial,sans-serif" font-size="70" font-weight="760" letter-spacing="-3" fill="#F7F8FB">task<tspan fill="url(#brand)">flow</tspan></text>
+  <rect x="799" y="108" width="59" height="27" rx="13.5" fill="#7775FF" fill-opacity="0.16" stroke="#8F8DFF" stroke-opacity="0.45"/>
+  <text x="828.5" y="126" text-anchor="middle" font-family="SFMono-Regular,Consolas,monospace" font-size="11" font-weight="700" fill="#B9B8FF">0.2</text>
 
-  <!-- arrow 1→2 -->
-  <path d="M304 388 H332" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M340 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
+  <text x="640" y="199" text-anchor="middle" font-family="Inter,Helvetica Neue,Arial,sans-serif" font-size="22" font-weight="600" fill="#F3F4F8">The compiler &amp; runtime for multi-agent work.</text>
+  <text x="640" y="228" text-anchor="middle" font-family="Inter,Helvetica Neue,Arial,sans-serif" font-size="14" fill="#9DA2B0">Declare the graph once. Verify before spend. Resume, replay, and recompute precisely.</text>
 
-  <!-- ============ ZONE 2 · VERIFY (346..526) ============ -->
-  <g filter="url(#card)">
-    <rect x="346" y="240" width="180" height="296" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/>
+  <path d="M232 371H1048" stroke="url(#flow)" stroke-width="2.5" stroke-opacity="0.62"/>
+  <g fill="#7775FF">
+    <path d="M269 371l-8-5v10z"/><path d="M484 371l-8-5v10z"/><path d="M699 371l-8-5v10z"/>
   </g>
-  <circle cx="368" cy="260" r="4" fill="#E8E6E1"/><circle cx="382" cy="260" r="4" fill="#E8E6E1"/><circle cx="396" cy="260" r="4" fill="#E8E6E1"/>
-  <text x="506" y="264" text-anchor="end" font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#A6A9AE">tf verify</text>
-  <line x1="346" y1="280" x2="526" y2="280" stroke="#EFEEE9"/>
-  <circle cx="436" cy="348" r="26" fill="#EEEEFB"/>
-  <path d="M424 348 l8 8 l16 -17" stroke="#4B4ACF" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-  <text x="436" y="402" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="15" font-weight="600" fill="#17181C">Statically verified</text>
-  <g font-family="'SF Mono',Menlo,monospace" font-size="10.5" fill="#75787E" text-anchor="middle">
-    <text x="436" y="424">no cycles · no dead ends</text>
-    <text x="436" y="442">budgets · agents exist</text>
-  </g>
-  <rect x="361" y="462" width="150" height="28" rx="14" fill="#EEEEFB"/>
-  <text x="436" y="480" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="11" font-weight="700" fill="#4B4ACF">0 tokens spent</text>
+  <path d="M914 371l-8-5v10z" fill="#35C99A"/>
 
-  <!-- arrow 2→3 -->
-  <path d="M534 388 H562" stroke="#C9CBD1" stroke-width="2.5" stroke-linecap="round"/>
-  <path d="M570 388 l-10 -5.5 v11 z" fill="#C9CBD1"/>
-
-  <!-- ============ ZONE 3 · RUN (576..956, dashed = isolation boundary) ============ -->
-  <rect x="576" y="240" width="380" height="296" rx="14" fill="#FBFAF8" stroke="#C9C8EF" stroke-dasharray="6 5"/>
-  <path d="M590 240.5 h352 a13.5 13.5 0 0 1 13.5 13.5 v26 h-379 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#EEEEFB"/>
-  <circle cx="598" cy="260" r="4" fill="#4B4ACF"/>
-  <text x="612" y="264.5" font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1" fill="#4B4ACF">RUNTIME · ISOLATED CONTEXT</text>
-
-  <!-- DAG edges -->
-  <g stroke="#B9B8EC" stroke-width="2.2" fill="none" stroke-linecap="round">
-    <path d="M674 398 C698 398, 702 332, 722 332"/>
-    <path d="M674 398 H722"/>
-    <path d="M674 398 C698 398, 702 464, 722 464"/>
-    <path d="M820 332 C838 332, 842 398, 858 398"/>
-    <path d="M820 398 H858"/>
-    <path d="M820 464 C838 464, 842 398, 858 398"/>
-  </g>
-  <g fill="#8B8AE3">
-    <path d="M722 332 l-8 -4.5 v9 z"/><path d="M722 398 l-8 -4.5 v9 z"/><path d="M722 464 l-8 -4.5 v9 z"/>
-  </g>
-  <path d="M858 398 l-8 -4.5 v9 z" fill="#B07E1E"/>
-
-  <!-- DAG nodes -->
-  <g filter="url(#card)"><rect x="596" y="374" width="78" height="48" rx="11" fill="#FFFFFF" stroke="#DBDAF4"/></g>
-  <text x="635" y="395" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">scan</text>
-  <text x="635" y="411" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="9" fill="#8E9199">agent</text>
-
-  <g filter="url(#card)">
-    <rect x="722" y="310" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
-    <rect x="722" y="376" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
-    <rect x="722" y="442" width="98" height="44" rx="10" fill="#FFFFFF" stroke="#DBDAF4"/>
-  </g>
-  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="700" fill="#17181C" text-anchor="middle">
-    <text x="771" y="329">audit·a</text>
-    <text x="771" y="395">audit·b</text>
-    <text x="771" y="461">audit·n</text>
-  </g>
-  <g font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#8B8AE3" text-anchor="middle">
-    <text x="771" y="344">map</text>
-    <text x="771" y="410">map</text>
-    <text x="771" y="476">map</text>
+  <g filter="url(#shadow)">
+    <rect x="72" y="282" width="175" height="178" rx="17" fill="#171B28" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <rect x="287" y="282" width="175" height="178" rx="17" fill="#171B28" stroke="#8E8CFF" stroke-opacity="0.34"/>
+    <rect x="502" y="282" width="175" height="178" rx="17" fill="#171B28" stroke="#8E8CFF" stroke-opacity="0.34"/>
+    <rect x="717" y="282" width="175" height="178" rx="17" fill="#171B28" stroke="#8E8CFF" stroke-opacity="0.34"/>
+    <rect x="932" y="282" width="276" height="178" rx="17" fill="#13201F" stroke="#35C99A" stroke-opacity="0.42"/>
   </g>
 
-  <g filter="url(#card)"><rect x="858" y="372" width="68" height="52" rx="11" fill="#FAF3E2" stroke="#E6D3A4"/></g>
-  <text x="892" y="394" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="12.5" font-weight="700" fill="#17181C">gate</text>
-  <text x="892" y="410" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="8.5" fill="#A87A18">PASS?</text>
+  <g font-family="SFMono-Regular,Consolas,Liberation Mono,monospace">
+    <text x="92" y="307" font-size="10" font-weight="700" letter-spacing="1.4" fill="#858A99">01  AUTHOR</text>
+    <text x="307" y="307" font-size="10" font-weight="700" letter-spacing="1.4" fill="#A5A4FF">02  VERIFY</text>
+    <text x="522" y="307" font-size="10" font-weight="700" letter-spacing="1.4" fill="#A5A4FF">03  COMPILE</text>
+    <text x="737" y="307" font-size="10" font-weight="700" letter-spacing="1.4" fill="#A5A4FF">04  RUN</text>
+    <text x="952" y="307" font-size="10" font-weight="700" letter-spacing="1.4" fill="#52D7AF">05  REUSE</text>
 
-  <text x="766" y="516" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">Every transcript stays in here — never in your window.</text>
+    <rect x="92" y="330" width="62" height="24" rx="12" fill="#7775FF" fill-opacity="0.14"/>
+    <rect x="160" y="330" width="63" height="24" rx="12" fill="#7775FF" fill-opacity="0.14"/>
+    <text x="123" y="346" text-anchor="middle" font-size="10.5" fill="#C3C2FF">JSON</text>
+    <text x="191.5" y="346" text-anchor="middle" font-size="10.5" fill="#C3C2FF">.tf.ts</text>
+    <text x="92" y="385" font-size="12.5" fill="#F1F2F6">graph = data</text>
+    <text x="92" y="409" font-size="10.5" fill="#8F94A3">version · diff · share</text>
 
-  <!-- arrow 3→4: only the result crosses -->
-  <path d="M960 388 H992" stroke="#0E8A66" stroke-width="3" stroke-linecap="round"/>
-  <path d="M1000 388 l-11 -6 v12 z" fill="#0E8A66"/>
-  <text x="978" y="372" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" fill="#0E8A66">result</text>
+    <circle cx="333" cy="349" r="18" fill="#7775FF" fill-opacity="0.14"/>
+    <path d="M324 349l6 6 12-14" stroke="#A7A6FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="358" y="346" font-size="11" fill="#EDEDF8">cycles      0</text>
+    <text x="358" y="365" font-size="11" fill="#EDEDF8">dead ends   0</text>
+    <text x="307" y="402" font-size="11" font-weight="700" fill="#A7A6FF">0 model calls</text>
+    <text x="307" y="425" font-size="10.5" fill="#8F94A3">fail before spend</text>
 
-  <!-- ============ ZONE 4 · RETURN (1006..1216) ============ -->
-  <g filter="url(#card)">
-    <rect x="1006" y="240" width="210" height="296" rx="14" fill="#FFFFFF" stroke="#BFE0D2"/>
+    <text x="522" y="347" font-size="12" fill="#F1F2F6">Taskflow JSON</text>
+    <text x="522" y="372" font-size="10.5" fill="#8F94A3">↓ canonicalize</text>
+    <text x="522" y="397" font-size="12" font-weight="700" fill="#A7A6FF">FlowIR</text>
+    <text x="522" y="421" font-size="10.5" fill="#8F94A3">ir:7ec3…d291</text>
+
+    <circle cx="758" cy="363" r="7" fill="#7775FF"/>
+    <circle cx="805" cy="337" r="6" fill="#A5A4FF"/>
+    <circle cx="805" cy="389" r="6" fill="#A5A4FF"/>
+    <circle cx="852" cy="363" r="7" fill="#35C99A"/>
+    <path d="M765 363C783 363 785 337 799 337M765 363C783 363 785 389 799 389M811 337C829 337 831 363 845 363M811 389C829 389 831 363 845 363" stroke="#8F8DFF" stroke-width="2"/>
+    <text x="737" y="421" font-size="10.5" fill="#8F94A3">isolated transcripts</text>
+
+    <rect x="952" y="329" width="72" height="25" rx="12.5" fill="#35C99A" fill-opacity="0.13"/>
+    <rect x="1031" y="329" width="72" height="25" rx="12.5" fill="#35C99A" fill-opacity="0.13"/>
+    <rect x="1110" y="329" width="78" height="25" rx="12.5" fill="#35C99A" fill-opacity="0.13"/>
+    <text x="988" y="346" text-anchor="middle" font-size="9.5" fill="#71E0BD">RESUME</text>
+    <text x="1067" y="346" text-anchor="middle" font-size="9.5" fill="#71E0BD">REPLAY</text>
+    <text x="1149" y="346" text-anchor="middle" font-size="9.5" fill="#71E0BD">RECOMPUTE</text>
+    <text x="952" y="387" font-size="12" fill="#F1F7F5">changed input</text>
+    <text x="1169" y="387" text-anchor="end" font-size="12" font-weight="700" fill="#52D7AF">1 file</text>
+    <text x="952" y="410" font-size="12" fill="#F1F7F5">stale frontier</text>
+    <text x="1169" y="410" text-anchor="end" font-size="12" font-weight="700" fill="#52D7AF">2 nodes</text>
+    <text x="952" y="433" font-size="10.5" fill="#8EA8A0">unchanged work stays reused</text>
   </g>
-  <path d="M1019.5 240.5 h183 a13.5 13.5 0 0 1 13.5 13.5 v26 h-210 v-26 a13.5 13.5 0 0 1 13.5 -13.5 z" fill="#E7F4EF"/>
-  <circle cx="1028" cy="260" r="4" fill="#0E8A66"/>
-  <text x="1042" y="264.5" font-family="'SF Mono',Menlo,monospace" font-size="11" letter-spacing="1" fill="#0A6E52">YOUR CONTEXT</text>
 
-  <g filter="url(#card)"><rect x="1026" y="336" width="170" height="72" rx="12" fill="#FFFFFF" stroke="#0E8A66" stroke-width="1.5"/></g>
-  <circle cx="1052" cy="372" r="5" fill="#0E8A66"/>
-  <text x="1066" y="368" font-family="'SF Mono',Menlo,monospace" font-size="15" font-weight="700" fill="#17181C">report</text>
-  <text x="1066" y="388" font-family="'SF Mono',Menlo,monospace" font-size="9.5" fill="#0E8A66">final · returned</text>
-
-  <text x="1111" y="452" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="13" font-weight="500" fill="#3C3F45">Just the answer.</text>
-  <text x="1111" y="472" text-anchor="middle" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" fill="#8E9199">No transcripts. No noise.</text>
-
-  <!-- ============ PHASE TYPES ============ -->
-  <text x="640" y="572" text-anchor="middle" font-family="'SF Mono',Menlo,monospace" font-size="10" letter-spacing="2" fill="#A6A9AE">10 PHASE TYPES</text>
-  <g font-family="'SF Mono',Menlo,monospace" font-size="11.5" font-weight="600" text-anchor="middle">
-    <rect x="142" y="588" width="74" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="179" y="606" fill="#5A5D63">agent</text>
-    <rect x="226" y="588" width="84" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="268" y="606" fill="#5A5D63">parallel</text>
-    <rect x="320" y="588" width="60" height="28" rx="14" fill="#EEEEFB" stroke="#D9D8F5"/><text x="350" y="606" fill="#4B4ACF">map</text>
-    <rect x="390" y="588" width="62" height="28" rx="14" fill="#FAF3E2" stroke="#E6D3A4"/><text x="421" y="606" fill="#A87A18">gate</text>
-    <rect x="462" y="588" width="76" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="500" y="606" fill="#5A5D63">reduce</text>
-    <rect x="548" y="588" width="92" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="594" y="606" fill="#5A5D63">approval</text>
-    <rect x="650" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="680" y="606" fill="#5A5D63">flow</text>
-    <rect x="720" y="588" width="60" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="750" y="606" fill="#5A5D63">loop</text>
-    <rect x="790" y="588" width="74" height="28" rx="14" fill="#FFFFFF" stroke="#E5E3DD"/><text x="827" y="606" fill="#5A5D63">script</text>
-    <rect x="874" y="588" width="104" height="28" rx="14" fill="#E7F4EF" stroke="#BFE0D2"/><text x="926" y="606" fill="#0A6E52">tournament</text>
-    <rect x="988" y="588" width="150" height="28" rx="14" fill="#F1F0EC" stroke="#E5E3DD"/><text x="1063" y="606" fill="#8E9199">+ when·retry·budget</text>
+  <g transform="translate(72 492)">
+    <rect width="1136" height="34" rx="17" fill="#FFFFFF" fill-opacity="0.045" stroke="#FFFFFF" stroke-opacity="0.09"/>
+    <text x="568" y="22" text-anchor="middle" font-family="SFMono-Regular,Consolas,Liberation Mono,monospace" font-size="11" letter-spacing="0.75" fill="#A7ABB8">VERIFY BEFORE SPEND   ·   KEEP TRANSCRIPTS ISOLATED   ·   RETURN ONLY THE RESULT</text>
   </g>
 </svg>
