@@ -223,6 +223,8 @@ For static (non-conditional) concurrency, a `parallel` phase runs fixed
   "dependsOn": ["deep","quick"], "agent": "writer", "task": "...", "final": true }
 ```
 
+> **⚠️ Breaking change (0.2.0 dogfood fix):** a `reduce` phase's `{previous.output}` now aggregates **all** completed `from[]` sources (in from-array order), not just the last completed dependency. If your reduce task referenced `{previous.output}` expecting only the last dep, it now receives every `from[]` output. Use explicit `{steps.ID.output}` refs to address individual sources. For large aggregations, set `reduceStrategy: "tree"` + `batchSize` to run batched intermediate reducer rounds (forces the imperative runtime).
+
 > `when` should reference **upstream** (`dependsOn`) phases — a ref to a phase
 > that hasn't completed resolves empty and the guard is treated as false. Note
 > the `expect` enum on the router: it converts "the router said `Deep` with a
@@ -567,7 +569,7 @@ watching.
 - `{steps.ID.output}` — a prior phase's text output
 - `{steps.ID.json}` / `{steps.ID.json.field}` — prior output parsed as JSON
 - `{item}` / `{item.field}` — current item inside a `map` phase
-- `{previous.output}` — the immediately-upstream phase output
+- `{previous.output}` — the immediately-upstream phase output. For `reduce` phases, this resolves to **all completed `from[]` outputs** in from-array order: one completed input → its raw output; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`. `join: "any"` includes only completed branches (skipped/failed are omitted). Explicit `{steps.ID.output}` refs are unaffected.
 - `{loop.iteration}` / `{loop.lastOutput}` / `{loop.maxIterations}` — inside a `loop` body: the 1-based round, the prior iteration's output, and the cap
 - `{reflexion}` — inside a `loop` body with `reflexion: true`: the structured failure summary of the prior iteration (sentinel on iteration 1)
 

@@ -36,7 +36,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 });
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, asArray, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -1321,7 +1321,13 @@ async function executePhaseInner(
 ): Promise<PhaseState> {
 	const type = phase.type ?? "agent";
 	const concurrency = phase.concurrency ?? state.def.concurrency ?? 8;
-	const previousOutput = lastCompletedOutput(state, phase);
+	// BREAKING (dogfood issue 1): a reduce phase's {previous.output} aggregates
+	// ALL completed `from[]` outputs in from-array order (one → raw, many →
+	// `### <id>\n\n<output>` joined by `\n\n---\n\n`). Other phase types keep the
+	// historical "last completed dependency" behavior. The aggregated from-ids
+	// are recorded as observed reads (below) so staleness tracks them.
+	const reduceAgg = type === "reduce" ? aggregateReduceFrom(state, phase) : undefined;
+	const previousOutput = reduceAgg ? reduceAgg.value : lastCompletedOutput(state, phase);
 	const run = deps.runTask ?? noRunnerInjected;
 	// Effective working directory for THIS phase's execution. When an isolated
 	// workspace was allocated (worktree isolation), `_cwdOverride` is its dir and
@@ -1357,6 +1363,13 @@ async function executePhaseInner(
 	const onRead = (ref: string): void => {
 		readRefs.push(ref);
 	};
+	// Record the reduce-aggregated from-ids as observed reads: the phase consumed
+	// these upstream outputs (folded into {previous.output}) even when the task
+	// references {previous.output} once (a single placeholder read would otherwise
+	// record only "previous.output", not the real upstream ids).
+	if (reduceAgg) {
+		for (const id of reduceAgg.ids) readRefs.push(`steps.${id}.output`);
+	}
 	const ctx = buildInterpolationContext(state, previousOutput, undefined, onRead);
 
 	// M3 observed-readSet: when conditions are part of the phase's real
@@ -1434,6 +1447,12 @@ async function executePhaseInner(
 		executionCwd: phase.cwd !== undefined || deps._cacheCwdIdentity !== undefined ? effCwd : undefined,
 	};
 
+	// Effective idle watchdog (ms): phase overrides flow; host default (300000)
+	// applies when neither sets it. `0` disables the watchdog (validation already
+	// required a finite wall `timeout` in that case). Threaded into RunOptions so
+	// every host runner that delegates to runSubagentProcess honors it.
+	const effIdleTimeoutMs = resolveIdleTimeoutMs(phase, state.def);
+
 	const baseRun = (
 		agentName: string,
 		task: string,
@@ -1451,6 +1470,7 @@ async function executePhaseInner(
 			onLive,
 			ctxDir: ctxDir,
 			nodeId: ctxDir ? ctxNodeId : undefined,
+			idleTimeoutMs: effIdleTimeoutMs,
 			onTerminalCommit,
 		};
 		const invoke = () => run(
@@ -1862,6 +1882,120 @@ async function executePhaseInner(
 	// Single-agent phases: agent, gate, and reduce all run one subagent on an
 	// interpolated task. gate additionally parses a verdict; reduce simply pulls
 	// its inputs from `from` phases (already exposed via interpolation).
+	//
+	// Tree reduce (`reduceStrategy: "tree"`) is handled FIRST: it runs batched
+	// intermediate reducer calls over the aggregated `from[]` inputs, reusing
+	// `runOne` so retry/timeout/budget/idleTimeout behavior is identical to a
+	// one-shot call. It forces the imperative runtime (the event kernel falls
+	// back via kernelUnsupportedReason). The corrected `{previous.output}`
+	// aggregation (all completed `from[]` sources) applies to EVERY round.
+	if (type === "reduce" && (phase as { reduceStrategy?: string }).reduceStrategy === "tree") {
+		const stratBs = (phase as { batchSize?: number }).batchSize;
+		const batchSize = typeof stratBs === "number" && Number.isFinite(stratBs) && stratBs >= 2 ? Math.floor(stratBs) : 2;
+		// Collect the completed `from[]` outputs in from-array order (the same
+		// selection `aggregateReduceFrom` uses for one-shot). Skipped/failed
+		// branches under join:any are omitted (only completed inputs are reduced).
+		const fromIds = asArray<string>(phase.from);
+		const inputs: Array<{ id: string; output: string }> = [];
+		for (const id of fromIds) {
+			const ps = state.phases[id];
+			if (ps?.status === "done" && ps.output !== undefined) {
+				inputs.push({ id, output: ps.output });
+			}
+		}
+		// 0–1 completed inputs: tree reduction is a no-op — fall through to the
+		// one-shot path (which handles the degenerate case correctly).
+		if (inputs.length >= 2) {
+			const agentName = resolveAgent(phase.agent, deps, state);
+			// Seed the round with the INDIVIDUAL `from[]` outputs (one per source). Each
+			// round batches `batchSize` items; a batch of one is passed raw, many are
+			// joined with the SAME `### <label>\n\n<output>` ... `\n\n---\n\n` shape
+			// as one-shot `{previous.output}`. Rounds run while > 1 item remains; the
+			// final single output is the phase result.
+			const formatBatch = (items: Array<{ label: string; output: string }>): string =>
+				items.length === 1
+					? items[0].output
+					: items.map((it) => `### ${it.label}\n\n${it.output}`).join("\n\n---\n\n");
+			let round: string[] = inputs.map((it) => it.output);;
+			const callPrompts: string[] = [];
+			const usages: UsageStats[] = [];
+			let failed: RunResult | undefined;
+			let timedOut = false;
+			let refWarning: string | undefined;
+			while (round.length > 1) {
+				if (deps.signal?.aborted || overBudget(state).over) break;
+				// Partition the current round into batches of `batchSize`.
+				const batches: string[][] = [];
+				for (let i = 0; i < round.length; i += batchSize) {
+					batches.push(round.slice(i, i + batchSize));
+				}
+				const next: string[] = [];
+				for (let bi = 0; bi < batches.length; bi++) {
+					if (deps.signal?.aborted || overBudget(state).over) break;
+					const batch = batches[bi];
+					const batchValue = formatBatch(batch.map((o, i) => ({ label: `[${bi * batchSize + i + 1}]`, output: o })));
+					// Each intermediate reducer call sees the batch as `{previous.output}`
+					// (interpolation resolves it), using the SAME agent/model/options/
+					// timeout/idleTimeout as the phase (runOne reuses baseRun).
+					const batchCtx = buildInterpolationContext(state, batchValue, undefined, onRead);
+					const interp = interpolate(phase.task ?? "", batchCtx);
+					if (!refWarning) refWarning = warnUnresolvedRefs(phase.id, interp.missing);
+					const fullTask = appendGateFormatSuffix(preRead + interp.text, phase);
+					callPrompts.push(fullTask);
+					const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
+					usages.push(r.usage ?? emptyUsage());
+					if (isFailed(r)) {
+						failed = r;
+						timedOut = !!r.phaseTimeout;
+						break;
+					}
+					next.push(r.output ?? "");
+				}
+				if (failed) break;
+				round = next;
+			}
+			if (failed) {
+				const inputHash = cacheKeys(cc, [phase.id, "tree-reduce-failed", ...callPrompts]).key;
+				const ps: PhaseState = {
+					id: phase.id,
+					status: timedOut ? "failed" : "failed",
+					output: failed.output ?? "",
+					error: failed.errorMessage ?? failed.stderr,
+					usage: aggregateUsage(usages),
+					attempts: failed.attempts,
+					inputHash,
+					endedAt: Date.now(),
+					...(timedOut ? { timedOut: true as const } : {}),
+				};
+				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+				attachPromptStats(ps, callPrompts);
+				attachReduceInputStats(ps, state, phase);
+				recordCache(cc, ps);
+				return ps;
+			}
+			// One output remains (or the loop broke on abort/budget with a partial
+			// round). When aborted/budgeted mid-reduction, the last partial round is
+			// joined so the phase still produces a best-effort output.
+			const finalOutput = round.length === 1 ? round[0] : formatBatch(round.map((o, i) => ({ label: `[${i + 1}]`, output: o })));
+			const inputHash = cacheKeys(cc, [phase.id, "tree-reduce", ...callPrompts]).key;
+			const ps: PhaseState = {
+				id: phase.id,
+				status: "done",
+				output: finalOutput,
+				usage: aggregateUsage(usages),
+				inputHash,
+				endedAt: Date.now(),
+			};
+			if (parseJson) ps.json = safeParse(finalOutput);
+			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+			if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
+			attachPromptStats(ps, callPrompts);
+			attachReduceInputStats(ps, state, phase);
+			recordCache(cc, ps);
+			return ps;
+		}
+		// inputs.length < 2 → fall through to one-shot (below).
+	}
 	if (type === "agent" || type === "gate" || type === "reduce") {
 		// Eval gate: zero-token machine checks before the LLM gate.
 		if (type === "gate" && Array.isArray(phase.eval) && phase.eval.length > 0) {
@@ -2149,6 +2283,10 @@ async function executePhaseInner(
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
+		// Prompt-size diagnostics for the single agent call (durable).
+		attachPromptStats(ps, [fullTask]);
+		// reduce: record aggregate input stats.
+		if (type === "reduce") attachReduceInputStats(ps, state, phase);
 		if (type === "gate" && ps.status === "done") {
 			ps.gate = parseGateVerdict(r.output);
 			// Trace: gate decision (fail-open). Replay re-adjudicates thresholds.
@@ -3126,6 +3264,129 @@ function lastCompletedOutput(state: RunState, phase: Phase): string | undefined 
 		const ps = state.phases[deps[i]];
 		if (ps?.status === "done") return ps.output;
 	}
+	return undefined;
+}
+
+/** A conservative prompt-size warning threshold in estimated tokens. Crossed
+ *  → the phase records a `warnings` entry so an author notices they may be
+ *  approaching a model's context limit. Approximate (ceil(chars/4)), not a
+ *  real tokenizer count. Chosen conservatively well below typical 128K context
+ *  windows so the warning fires with ample headroom. */
+export const PROMPT_SIZE_WARN_TOKENS = 32_000;
+
+/** Compute durable prompt-size diagnostics for a resolved prompt string:
+ *  exact UTF-8 byte count, character count, and a documented approximate token
+ *  estimate (ceil(chars/4)). Never throws. */
+export function promptSizeStats(text: string): { bytes: number; chars: number; estTokens: number } {
+	const chars = text.length;
+	const bytes = Buffer.byteLength(text, "utf8");
+	const estTokens = Math.ceil(chars / 4);
+	return { bytes, chars, estTokens };
+}
+
+/** Attach durable prompt-size diagnostics to a PhaseState. `prompts` is the list
+ *  of resolved prompt strings actually sent to a subagent (one entry per call —
+ *  one for an agent phase, multiple for a tree reduce). Each becomes a
+ *  `{bytes, chars, estTokens}` record on `ps.promptStats.calls`. When any call
+ *  crosses {@link PROMPT_SIZE_WARN_TOKENS}, a `warnings` entry is appended so an
+ *  author notices they may be approaching a model's context limit (the estimate
+ *  is conservative: ceil(chars/4), not a real tokenizer count). Never throws. */
+function attachPromptStats(ps: PhaseState, prompts: string[]): void {
+	try {
+		const calls = prompts.map((t) => promptSizeStats(t));
+		const existing = ps.promptStats;
+		ps.promptStats = existing
+			? { ...existing, calls: [...existing.calls, ...calls] }
+			: { calls };
+		for (const c of calls) {
+			if (c.estTokens >= PROMPT_SIZE_WARN_TOKENS) {
+				ps.warnings = [...(ps.warnings ?? []), `Prompt size ≈${c.estTokens} tokens (${c.chars} chars, ${c.bytes} bytes) exceeds the conservative ${PROMPT_SIZE_WARN_TOKENS}-token warning threshold — the prompt may be approaching a model's context limit.`];
+			}
+		}
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
+}
+
+/** Attach aggregate input stats for a reduce phase: count + total bytes/chars/
+ *  estTokens over the completed `from[]` inputs being reduced. Stored on
+ *  `ps.promptStats.reduceInputs` so post-hoc inspection can account for input
+ *  size across reduce rounds. Never throws. */
+function attachReduceInputStats(ps: PhaseState, state: RunState, phase: Phase): void {
+	try {
+		const s = reduceInputStats(state, phase);
+		const existing = ps.promptStats;
+		ps.promptStats = existing
+			? { ...existing, reduceInputs: s }
+			: { calls: [], reduceInputs: s };
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
+}
+
+/** Format a single reduce-from input as a labeled section. */
+function formatReduceInput(id: string, output: string): string {
+	return `### ${id}\n\n${output}`;
+}
+
+/** Aggregate completed `from[]` outputs for a reduce phase's {previous.output}.
+ *
+ *  BREAKING correction (dogfood issue 1): a reduce phase's {previous.output}
+ *  resolves to ALL completed `from[]` outputs in from-array order — not just
+ *  the last completed dependency. One completed input → its raw output.
+ *  Multiple → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`.
+ *  `join:"any"` includes only completed branches (skipped/failed are omitted).
+ *
+ *  Returns `{ value, ids }` where `ids` are the from-ids actually aggregated
+ *  (so the runtime can record them as observed reads). `value` is undefined
+ *  when no `from[]` phase completed (e.g. all skipped under join:any). */
+function aggregateReduceFrom(
+	state: RunState,
+	phase: Phase,
+): { value: string | undefined; ids: string[] } {
+	const fromIds = asArray<string>(phase.from);
+	const completed: Array<{ id: string; output: string }> = [];
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			completed.push({ id, output: ps.output });
+		}
+	}
+	if (completed.length === 0) return { value: undefined, ids: [] };
+	if (completed.length === 1) return { value: completed[0].output, ids: [completed[0].id] };
+	const value = completed.map((c) => formatReduceInput(c.id, c.output)).join("\n\n---\n\n");
+	return { value, ids: completed.map((c) => c.id) };
+}
+
+/** Aggregate stats over the completed `from[]` inputs for reduce diagnostics. */
+function reduceInputStats(state: RunState, phase: Phase): { count: number; totalBytes: number; totalChars: number; totalEstTokens: number } {
+	const fromIds = asArray<string>(phase.from);
+	let count = 0;
+	let totalBytes = 0;
+	let totalChars = 0;
+	let totalEstTokens = 0;
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			count++;
+			const s = promptSizeStats(ps.output);
+			totalBytes += s.bytes;
+			totalChars += s.chars;
+			totalEstTokens += s.estTokens;
+		}
+	}
+	return { count, totalBytes, totalChars, totalEstTokens };
+}
+
+/** Resolve the effective idle-watchdog ms for a phase: phase overrides flow;
+ *  returns `undefined` when neither sets it (host default 300000 applies).
+ *  `0` is passed through (disables the watchdog — validation already ensured a
+ *  finite wall `timeout` exists in that case). */
+export function resolveIdleTimeoutMs(phase: Phase, def: Taskflow): number | undefined {
+	const p = (phase as { idleTimeout?: unknown }).idleTimeout;
+	if (typeof p === "number" && Number.isFinite(p)) return p;
+	const f = def.idleTimeout;
+	if (typeof f === "number" && Number.isFinite(f)) return f;
 	return undefined;
 }
 

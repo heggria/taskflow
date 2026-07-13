@@ -213,6 +213,9 @@ export interface FlowIR {
 	budget?: FlowIRBudget;
 	/** Default max concurrent subagents. */
 	concurrency?: number;
+	/** Flow-level idle watchdog (ms) — included in the canonical hash (cache
+	 *  identity via definition hash). Mirrors the DSL `Taskflow.idleTimeout`. */
+	idleTimeout?: number;
 	/** Optional flow-level metadata (compiler-populated). */
 	meta?: FlowIRMeta;
 }

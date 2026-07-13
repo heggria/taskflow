@@ -365,6 +365,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				gate: result.gate,
 				approval: result.approval,
 				warnings: result.warnings,
+				// Prompt-size diagnostics (parity with imperative PhaseState.promptStats).
+				...(result.promptStats ? { promptStats: result.promptStats } : {}),
 				// Match the imperative audit marker: an idempotent:false phase
 				// records that its side effect may have fired, unless its guard skipped
 				// all execution.

@@ -77,6 +77,9 @@ const SIDECAR_PHASE_FIELDS = [
 	"cancelLosers",
 	"expandMode",
 	"maxNodes",
+	"idleTimeout",
+	"reduceStrategy",
+	"batchSize",
 ] as const;
 
 const NODE_FIELD_KEYS = new Set<string>(["task", "dependsOn", "join", "when", "timeout"]);
@@ -234,6 +237,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 		args: def.args as Record<string, unknown> | undefined,
 		budget: def.budget,
 		concurrency: def.concurrency,
+		idleTimeout: typeof def.idleTimeout === "number" ? def.idleTimeout : undefined,
 		meta: {
 			source: "taskflow-core",
 			irVersion: 1,

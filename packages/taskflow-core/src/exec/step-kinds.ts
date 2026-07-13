@@ -13,6 +13,7 @@ import {
 	MAX_DYNAMIC_NESTING,
 	TOURNAMENT_DEFAULT_VARIANTS,
 	TOURNAMENT_HARD_MAX_VARIANTS,
+	asArray,
 	validateTaskflow,
 } from "../schema.ts";
 import { parseGateVerdict, parseTournamentWinner } from "../deterministic.ts";
@@ -34,6 +35,8 @@ type BodyResult = {
 	usage: UsageStats;
 	gate?: { verdict: "pass" | "block"; reason?: string };
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
+	warnings?: string[];
+	promptStats?: StepResult["promptStats"];
 };
 
 function baseEvent(
@@ -106,6 +109,7 @@ async function runAgentCall(
 					tools: phase.tools,
 					cwd: ctx.deps.cwd,
 					signal: callSignal,
+					idleTimeoutMs: resolveIdleMs(phase, ctx.state.def),
 					onTerminalCommit,
 				},
 				ctx.deps.globalThinking,
@@ -196,10 +200,106 @@ function interpCtx(ctx: StepContext, extra?: Partial<InterpolationContext>): Int
 	return { args: ctx.args, steps: ctx.steps, ...extra };
 }
 
+/** Resolve the effective idle-watchdog ms for a phase on the kernel path:
+ *  phase overrides flow; `undefined` when neither sets it (host default 300000
+ *  applies). Mirrors `resolveIdleTimeoutMs` in runtime.ts — duplicated here
+ *  because the kernel deliberately does not import runtime.ts (strangler cycle). */
+export function resolveIdleMs(phase: Phase, def: Taskflow): number | undefined {
+	const p = (phase as { idleTimeout?: unknown }).idleTimeout;
+	if (typeof p === "number" && Number.isFinite(p)) return p;
+	const f = def.idleTimeout;
+	if (typeof f === "number" && Number.isFinite(f)) return f;
+	return undefined;
+}
+
+/** Conservative prompt-size warning threshold in estimated tokens (mirrors the
+ *  imperative runtime's PROMPT_SIZE_WARN_TOKENS). Crossed → a `warnings` entry. */
+const KERNEL_PROMPT_SIZE_WARN_TOKENS = 32_000;
+
+/** Compute prompt-size diagnostics for a resolved prompt (mirrors the imperative
+ *  `promptSizeStats`: exact UTF-8 bytes, char count, ceil(chars/4) estTokens). */
+function promptStatsFor(text: string): { bytes: number; chars: number; estTokens: number } {
+	const chars = text.length;
+	const bytes = Buffer.byteLength(text, "utf8");
+	const estTokens = Math.ceil(chars / 4);
+	return { bytes, chars, estTokens };
+}
+
+/** Build the promptStats StepResult field for one or more resolved prompts,
+ *  appending a warning when any crosses the conservative threshold. */
+export function buildPromptStats(prompts: string[]): {
+	promptStats: NonNullable<StepResult["promptStats"]>;
+	warnings: string[];
+} {
+	const calls = prompts.map(promptStatsFor);
+	const warnings: string[] = [];
+	for (const c of calls) {
+		if (c.estTokens >= KERNEL_PROMPT_SIZE_WARN_TOKENS) {
+			warnings.push(`Prompt size ≈${c.estTokens} tokens (${c.chars} chars, ${c.bytes} bytes) exceeds the conservative ${KERNEL_PROMPT_SIZE_WARN_TOKENS}-token warning threshold — the prompt may be approaching a model's context limit.`);
+		}
+	}
+	return { promptStats: { calls }, warnings };
+}
+
+/** Aggregate stats over the completed `from[]` inputs for reduce diagnostics
+ *  (kernel mirror of the imperative `reduceInputStats`). */
+function reduceInputStatsKernel(state: StepContext["state"], phase: Phase): { count: number; totalBytes: number; totalChars: number; totalEstTokens: number } {
+	const fromIds = asArray<string>(phase.from);
+	let count = 0;
+	let totalBytes = 0;
+	let totalChars = 0;
+	let totalEstTokens = 0;
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			count++;
+			const s = promptStatsFor(ps.output);
+			totalBytes += s.bytes;
+			totalChars += s.chars;
+			totalEstTokens += s.estTokens;
+		}
+	}
+	return { count, totalBytes, totalChars, totalEstTokens };
+}
+
+/** Aggregate completed `from[]` outputs for a reduce phase's {previous.output}
+ *  on the kernel path. Mirrors `aggregateReduceFrom` in runtime.ts — duplicated
+ *  here because the kernel does not import runtime.ts. BREAKING (dogfood 1):
+ *  one completed input → raw output; many → `### <id>\n\n<output>` joined by
+ *  `\n\n---\n\n`; join:any includes only completed branches. Returns the ids
+ *  aggregated (for observed reads) alongside the value. */
+function aggregateReduceFromKernel(
+	state: StepContext["state"],
+	phase: Phase,
+): { value: string | undefined; ids: string[] } {
+	const fromIds = asArray<string>(phase.from);
+	const completed: Array<{ id: string; output: string }> = [];
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			completed.push({ id, output: ps.output });
+		}
+	}
+	if (completed.length === 0) return { value: undefined, ids: [] };
+	if (completed.length === 1) return { value: completed[0].output, ids: [completed[0].id] };
+	const value = completed.map((c) => `### ${c.id}\n\n${c.output}`).join("\n\n---\n\n");
+	return { value, ids: completed.map((c) => c.id) };
+}
+
 /** reduce / agent-style single call. */
 export async function executeReduceBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
-	const task = interpolate(phase.task ?? "", interpCtx(ctx)).text;
+	// BREAKING (dogfood 1): a reduce phase's {previous.output} aggregates ALL
+	// completed `from[]` outputs in from-array order (one → raw, many → joined).
+	// The kernel path mirrors the imperative `aggregateReduceFrom` semantics.
+	const reduceAgg = aggregateReduceFromKernel(ctx.state, phase);
+	const task = interpolate(
+		phase.task ?? "",
+		interpCtx(ctx, reduceAgg.value !== undefined ? { previousOutput: reduceAgg.value } : {}),
+	).text;
 	const agentName = phase.agent ?? "executor";
+	const { promptStats, warnings } = buildPromptStats([task]);
+	const reduceInputs = reduceInputStatsKernel(ctx.state, phase);
+	const psWithInputs = { ...promptStats, reduceInputs };
 	try {
 		const { result: r, event } = await runAgentCall(ctx, phase, agentName, task, phase.id);
 		const failed = isFailedResult(r);
@@ -209,6 +309,8 @@ export async function executeReduceBody(phase: Phase, ctx: StepContext): Promise
 			status: r.phaseTimeout ? "timedOut" : failed ? "failed" : "done",
 			error: failed ? r.errorMessage ?? r.stderr : undefined,
 			usage: r.usage ?? emptyUsage(),
+			promptStats: psWithInputs,
+			warnings: warnings.length ? warnings : undefined,
 		};
 	} catch (e) {
 		return {
@@ -216,6 +318,8 @@ export async function executeReduceBody(phase: Phase, ctx: StepContext): Promise
 			status: "failed",
 			error: e instanceof Error ? e.message : String(e),
 			usage: emptyUsage(),
+			promptStats: psWithInputs,
+			warnings: warnings.length ? warnings : undefined,
 		};
 	}
 }

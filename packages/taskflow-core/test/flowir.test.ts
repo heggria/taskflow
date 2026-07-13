@@ -116,6 +116,38 @@ test("compileTaskflowToIR: hash changes for non-agent runtime payload fields", a
 			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 5, final: true } as Phase]),
 			flow([{ id: "e", type: "expand", def: { phases: [{ id: "a", task: "x" }] }, maxNodes: 6, final: true } as Phase]),
 		],
+		[
+			"phase idleTimeout",
+			flow([{ id: "p", type: "agent", agent: "a", task: "x", idleTimeout: 5000, final: true } as Phase]),
+			flow([{ id: "p", type: "agent", agent: "a", task: "x", idleTimeout: 9000, final: true } as Phase]),
+		],
+		[
+			"flow idleTimeout",
+			flow([{ id: "p", type: "agent", agent: "a", task: "x", final: true } as Phase], { idleTimeout: 10000 }),
+			flow([{ id: "p", type: "agent", agent: "a", task: "x", final: true } as Phase], { idleTimeout: 20000 }),
+		],
+		[
+			"reduce reduceStrategy",
+			flow([
+				{ id: "s", type: "agent", agent: "a", task: "seed" } as Phase,
+				{ id: "r", type: "reduce", from: ["s"], agent: "a", task: "x", reduceStrategy: "one-shot", dependsOn: ["s"], final: true } as Phase,
+			]),
+			flow([
+				{ id: "s", type: "agent", agent: "a", task: "seed" } as Phase,
+				{ id: "r", type: "reduce", from: ["s"], agent: "a", task: "x", reduceStrategy: "tree", batchSize: 2, dependsOn: ["s"], final: true } as Phase,
+			]),
+		],
+		[
+			"reduce batchSize",
+			flow([
+				{ id: "s", type: "agent", agent: "a", task: "seed" } as Phase,
+				{ id: "r", type: "reduce", from: ["s"], agent: "a", task: "x", reduceStrategy: "tree", batchSize: 2, dependsOn: ["s"], final: true } as Phase,
+			]),
+			flow([
+				{ id: "s", type: "agent", agent: "a", task: "seed" } as Phase,
+				{ id: "r", type: "reduce", from: ["s"], agent: "a", task: "x", reduceStrategy: "tree", batchSize: 4, dependsOn: ["s"], final: true } as Phase,
+			]),
+		],
 	];
 
 	for (const [label, a, b] of cases) {

@@ -173,6 +173,7 @@ export function canonicalizeFlowIR(ir: FlowIR): string {
 	if (ir.args !== undefined) obj.args = ir.args;
 	if (ir.budget !== undefined) obj.budget = ir.budget;
 	if (ir.concurrency !== undefined) obj.concurrency = ir.concurrency;
+	if (ir.idleTimeout !== undefined) obj.idleTimeout = ir.idleTimeout;
 	if (ir.meta !== undefined) obj.meta = ir.meta;
 
 	return canonicalSerialize(obj);

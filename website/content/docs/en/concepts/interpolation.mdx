@@ -127,10 +127,19 @@ Parses the prior phase's output and returns the result. If the parsed value is a
 
 Resolves to the output of the **last completed dependency**, scanning `dependsOn ∪ from` in reverse order and returning the first phase whose status is `done`.
 
+> **⚠️ Breaking (0.2.0 dogfood fix) — `reduce` phases aggregate all `from[]` sources.**
+> For a `reduce` phase, `{previous.output}` resolves to **all completed `from[]` outputs**
+> in from-array order — not just the last completed dependency. One completed input →
+> its raw output; multiple → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`.
+> `join: "any"` includes only completed branches. Explicit `{steps.ID.output}` refs are
+> unaffected. If your reduce task used `{previous.output}` expecting only the last dep,
+> switch to explicit `{steps.ID.output}` refs.
+
 | Situation | Result |
 |---|---|
 | Single dependency, done | That dependency's output |
-| Multiple deps, several done | The **last** one in declaration order |
+| Multiple deps, several done (non-reduce) | The **last** one in declaration order |
+| `reduce` phase, multiple `from[]` done | **All** `from[]` outputs aggregated (in from-order) |
 | `join: "any"` with one dep done | That dep's output |
 | No deps declared, or none done | `undefined` → missing warning |
 

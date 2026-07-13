@@ -160,6 +160,17 @@ export interface PhaseState {
 	/** Truncated previews of interpolated strings used to execute this phase,
 	 *  useful when diagnosing why a model saw a literal placeholder. */
 	interpolation?: Array<{ source: string; text: string; missing?: string[] }>;
+	/** Prompt-size diagnostics for this phase's subagent call(s). Durable
+	 *  (persisted) so post-hoc inspection can surface oversized prompts and
+	 *  account for input size in reduce rounds. `calls` has one entry per
+	 *  resolved subagent prompt (one for an agent phase; multiple for a tree
+	 *  reduce). `reduceInputs` carries aggregate stats over the inputs being
+	 *  reduced (reduce phases only). The token estimate is a conservative
+	 *  `ceil(chars/4)` approximation, NOT a real tokenizer count. */
+	promptStats?: {
+		calls: Array<{ bytes: number; chars: number; estTokens: number }>;
+		reduceInputs?: { count: number; totalBytes: number; totalChars: number; totalEstTokens: number };
+	};
 }
 
 export interface RunState {

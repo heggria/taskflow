@@ -162,6 +162,28 @@ const PhaseSchema = Type.Object(
 		from: Type.Optional(
 			Type.Array(Type.String(), { description: "[reduce] Phase ids whose outputs are aggregated" }),
 		),
+		/**
+		 * [reduce] How the aggregated `from[]` inputs are reduced. `'one-shot'`
+		 * (default) feeds all inputs to a single reducer call as `{previous.output}`.
+		 * `'tree'` batches the inputs (see `batchSize`) and runs intermediate
+		 * reducer calls over each batch, then reduces the round outputs until one
+		 * remains — useful when the aggregated input would exceed a single prompt.
+		 * Tree reduction uses the SAME agent/model/options/timeout/idleTimeout as
+		 * the phase and forces the imperative runtime (the event kernel falls back).
+		 * The corrected `{previous.output}` aggregation (all `from[]` sources) always
+		 * applies regardless of strategy.
+		 */
+		reduceStrategy: Type.Optional(
+			StringEnum(["one-shot", "tree"] as const, {
+				description: "[reduce] 'one-shot' (default) = single reducer call; 'tree' = batched intermediate rounds (see batchSize). Forces imperative runtime.",
+				default: "one-shot",
+			}),
+		),
+		/** [reduce] With `reduceStrategy:'tree'`, the max number of aggregated inputs
+		 *  fed to each intermediate reducer call (>= 2). Ignored for one-shot. */
+		batchSize: Type.Optional(
+			Type.Integer({ minimum: 2, description: "[reduce] Batch size for reduceStrategy:'tree' (integer >= 2). Ignored for one-shot." }),
+		),
 
 		// sub-workflow (flow) + expand fragment
 		use: Type.Optional(Type.String({ description: "[flow] Name of a saved taskflow to run as this phase" })),
@@ -205,6 +227,19 @@ const PhaseSchema = Type.Object(
 			Type.Number({
 				description:
 					"Max execution time in milliseconds. For script phases: caps the shell command (default 60000, max 300000). For agent-running phases (agent/gate/reduce/map/parallel/loop/tournament): caps EACH subagent call — on expiry the subagent is aborted and the phase fails with a 'timedOut' marker (never retried). Not supported for approval/flow phases. Must be >= 1000.",
+			}),
+		),
+		/**
+		 * Idle watchdog override (ms) for agent-running phases. A positive value (>= 1000)
+		 * replaces the host default (300000ms): if a subagent produces no output for this
+		 * long it is killed as stalled. `0` DISABLES the watchdog — but then a finite
+		 * wall `timeout` (>= 1000) is REQUIRED on this phase so it can never hang forever.
+		 * Overrides the flow-level `idleTimeout`. Absent → flow-level or host default.
+		 */
+		idleTimeout: Type.Optional(
+			Type.Number({
+				description:
+					"[agent-running] Idle watchdog in ms (>= 1000, or 0 to disable). 0 requires a finite wall 'timeout' >= 1000. Overrides the flow-level idleTimeout.",
 			}),
 		),
 
@@ -443,6 +478,19 @@ export const TaskflowSchema = Type.Object(
 			Type.Boolean({
 				description:
 					"Default every phase to cross-run caching (scope:'cross-run') so re-running this flow reuses unchanged phases across runs/sessions. Equivalent to setting cache:{scope:'cross-run'} on every phase; per-phase cache settings and the cross-run-blocked types (gate/approval/loop/tournament) still take precedence. Default false (run-only — each run starts fresh unless a phase opts in). A run-time `incremental` argument overrides this.",
+			}),
+		),
+		/**
+		 * Flow-level idle watchdog (ms) for all agent-running phases that don't set
+		 * their own `idleTimeout`. Positive (>= 1000) overrides the host default
+		 * (300000ms); `0` disables the watchdog for those phases — but then every
+		 * agent-running phase MUST declare a finite wall `timeout` (>= 1000) so the
+		 * flow can never hang forever. A per-phase `idleTimeout` overrides this.
+		 */
+		idleTimeout: Type.Optional(
+			Type.Number({
+				description:
+					"Flow-level idle watchdog in ms (>= 1000, or 0 to disable). Per-phase idleTimeout overrides. 0 requires every agent-running phase to declare a finite wall 'timeout' >= 1000.",
 			}),
 		),
 		phases: Type.Array(PhaseSchema, { minItems: 1, description: "Ordered phase definitions (DAG via dependsOn)" }),
@@ -745,6 +793,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 	}
 
+	// Flow-level idleTimeout: positive must be >= 1000; 0 is allowed (disables the
+	// watchdog) but every agent-running phase must then declare a finite wall
+	// `timeout` so the run can never hang forever (critical invariant #5).
+	if (flow.idleTimeout !== undefined) {
+		if (typeof flow.idleTimeout !== "number" || !Number.isFinite(flow.idleTimeout) || flow.idleTimeout < 0) {
+			errors.push(`Flow 'idleTimeout' must be a non-negative finite number (ms), got ${typeof flow.idleTimeout === "number" ? flow.idleTimeout : typeof flow.idleTimeout}`);
+		} else if (flow.idleTimeout > 0 && flow.idleTimeout < 1000) {
+			errors.push(`Flow 'idleTimeout' must be 0 (disable) or >= 1000 ms, got ${flow.idleTimeout}`);
+		}
+	}
+
 	// Hardening for runtime-generated (untrusted) sub-flows: bound breadth and
 	// contain filesystem access. These do NOT apply to authored/saved flows.
 	if (opts.dynamic) {
@@ -1041,6 +1100,19 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (type === "reduce") {
 			if (!p.from || p.from.length === 0) errors.push(`Phase '${p.id}' (reduce) requires 'from'`);
 			if (!p.task) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
+			// reduceStrategy / batchSize (reduce-only).
+			const strat = (p as { reduceStrategy?: unknown }).reduceStrategy;
+			if (strat !== undefined && strat !== "tree" && strat !== "one-shot") {
+				errors.push(`Phase '${p.id}' (reduce): reduceStrategy must be 'tree' or 'one-shot', got '${String(strat)}'`);
+			}
+			const bs = (p as { batchSize?: unknown }).batchSize;
+			if (bs !== undefined) {
+				if (typeof bs !== "number" || !Number.isFinite(bs) || bs < 2 || !Number.isInteger(bs)) {
+					errors.push(`Phase '${p.id}' (reduce): batchSize must be an integer >= 2`);
+				} else if (strat !== "tree") {
+					warnings.push(`Phase '${p.id}' (reduce): batchSize is only used with reduceStrategy 'tree' — ignored for one-shot`);
+				}
+			}
 		}
 		if (type === "flow") {
 			const hasUse = typeof p.use === "string" && p.use.length > 0;
@@ -1102,6 +1174,32 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				else if (typeof p.timeout !== "number" || !Number.isFinite(p.timeout) || p.timeout < 1000)
 					errors.push(`Phase '${p.id}' (${type}): 'timeout' must be a number >= 1000 ms`);
 			}
+		}
+		// idleTimeout validation (agent-running phases that can use the watchdog).
+		// The host default (300000ms) applies when neither phase nor flow sets it.
+		const AGENT_RUNNING_FOR_IDLE = new Set(["agent", "gate", "reduce", "map", "parallel", "loop", "tournament"]);
+		if (AGENT_RUNNING_FOR_IDLE.has(type)) {
+			const phaseIdle = (p as { idleTimeout?: unknown }).idleTimeout;
+			if (phaseIdle !== undefined) {
+				if (typeof phaseIdle !== "number" || !Number.isFinite(phaseIdle) || phaseIdle < 0) {
+					errors.push(`Phase '${p.id}': 'idleTimeout' must be a non-negative finite number (ms), got ${typeof phaseIdle === "number" ? phaseIdle : typeof phaseIdle}`);
+				} else if (phaseIdle > 0 && phaseIdle < 1000) {
+					errors.push(`Phase '${p.id}': 'idleTimeout' must be 0 (disable) or >= 1000 ms, got ${phaseIdle}`);
+				}
+			}
+			// Effective idle watchdog = phase (wins) → flow → host default (undefined).
+			const effectiveIdle = (typeof phaseIdle === "number" ? phaseIdle : flow.idleTimeout) as number | undefined;
+			if (effectiveIdle === 0) {
+				// Disabling the watchdog requires a finite wall timeout so the phase can
+				// never hang forever (critical invariant #5: never hang forever).
+				if (typeof p.timeout !== "number" || !Number.isFinite(p.timeout) || p.timeout < 1000) {
+					errors.push(
+						`Phase '${p.id}': idleTimeout:0 disables the watchdog — a finite wall 'timeout' (>= 1000 ms) is required so this phase cannot hang forever. Add a 'timeout' or use a positive 'idleTimeout'.`,
+					);
+				}
+			}
+		} else if ((p as { idleTimeout?: unknown }).idleTimeout !== undefined) {
+			warnings.push(`Phase '${p.id}' (${type}): 'idleTimeout' only applies to agent-running phases (agent/gate/reduce/map/parallel/loop/tournament) — ignored here`);
 		}
 		if (p.retry) {
 			if (typeof p.retry.max !== "number" || p.retry.max < 0) {
