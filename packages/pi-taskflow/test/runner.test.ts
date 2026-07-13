@@ -12,12 +12,20 @@ import {
 	mapWithConcurrencyLimit,
 	newAccumulator,
 	runAgentTask,
+	createPiSubagentRunner,
+	ctxExtensionPath,
 	type RunResult,
 	sanitizeErrorMessage,
 	TRANSPORT_ERROR_PLACEHOLDER,
 } from "../src/runner.ts";
 import type { AgentConfig } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+
+test("ctxExtensionPath resolves the executing source entry", () => {
+	const resolved = ctxExtensionPath();
+	assert.ok(resolved);
+	assert.equal(fs.realpathSync(resolved), fs.realpathSync(new URL("../src/index.ts", import.meta.url)));
+});
 
 // ── isFailed ────────────────────────────────────────────────────────
 
@@ -483,7 +491,7 @@ test("runAgentTask: stderr is capped at 64KB", async () => {
 	// Write 100KB of garbage to stderr, then exit 0.
 	fs.writeFileSync(
 		fakePi,
-		`process.stderr.write("A".repeat(100_000));\nprocess.exit(0);\n`,
+		`process.stderr.write("A".repeat(100_000), () => process.exit(0));\n`,
 	);
 	const shim = path.join(dir, "shim.sh");
 	fs.writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${fakePi}"\n`);
@@ -518,58 +526,6 @@ test("foldEventLine: message cap prevents unbounded growth", () => {
 	assert.equal(acc.usage.turns, 600, "usage must accumulate even after cap");
 });
 
-// ── fix-3: child process cleanup on parent exit ────────────────────
-
-test("fix-3: activeChildren tracks spawned PIDs and killAll cleans them", async () => {
-	// We cannot easily test the SIGTERM handler in-process (it would kill the
-	// test runner), but we can verify the module-level cleanup function works
-	// by spawning a child and verifying it gets killed.
-	//
-	// Strategy: create a script that spawns a long-lived child, sends SIGTERM
-	// to itself (which triggers killAll), and we verify the grandchild dies.
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-cleanup-"));
-	const grandchild = path.join(dir, "grandchild.mjs");
-	// Grandchild writes its PID and waits.
-	fs.writeFileSync(
-		grandchild,
-		`import fs from 'node:fs';
-fs.writeFileSync('${dir}/gc.pid', String(process.pid));
-setTimeout(() => {}, 60000);
-`,
-	);
-	const parent = path.join(dir, "parent.mjs");
-	// Parent spawns grandchild, waits for PID file, then sends SIGTERM to self.
-	fs.writeFileSync(
-		parent,
-		`import { spawn } from 'node:child_process';
-import fs from 'node:fs';
-const gc = spawn('${process.execPath}', ['${grandchild}'], { stdio: 'ignore' });
-// Wait for grandchild to write PID
-const start = Date.now();
-while (!fs.existsSync('${dir}/gc.pid') && Date.now() - start < 5000) {
-  const fd = fs.openSync('/dev/null', 'r');
-  fs.closeSync(fd);
-}
-process.kill(process.pid, 'SIGTERM');
-`,
-	);
-	const { spawn } = await import("node:child_process");
-	const proc = spawn(process.execPath, [parent], { stdio: "ignore" });
-	await new Promise<void>((res) => proc.on("close", () => res()));
-	// After parent exits (via SIGTERM), the exit handler killAll should have
-	// killed the grandchild. Check if the grandchild PID is no longer running.
-	try {
-		const gcPid = parseInt(fs.readFileSync(path.join(dir, "gc.pid"), "utf-8"), 10);
-		let alive = true;
-		try { process.kill(gcPid, 0); } catch { alive = false; }
-		// The grandchild may or may not be dead depending on timing, but the
-		// key invariant is that killAll was registered and the mechanism works.
-		// If the grandchild is still alive, kill it for cleanup.
-		if (alive) process.kill(gcPid, "SIGKILL");
-	} catch { /* gc.pid may not exist if grandchild didn't start */ }
-	fs.rmSync(dir, { recursive: true, force: true });
-});
-
 // ── fix-7: stderr truncation marker appears exactly once ───────────
 
 test("fix-7: stderr truncation marker appears exactly once even with many chunks", async () => {
@@ -579,8 +535,12 @@ test("fix-7: stderr truncation marker appears exactly once even with many chunks
 	// marker should appear exactly once.
 	fs.writeFileSync(
 		fakePi,
-		`for (let i = 0; i < 20; i++) { process.stderr.write('A'.repeat(10_000)); }
-process.exit(0);
+		`let i = 0;
+const write = () => {
+  if (i++ === 20) return process.stderr.end();
+  process.stderr.write('A'.repeat(10_000), write);
+};
+write();
 `,
 	);
 	const shim = path.join(dir, "shim.sh");
@@ -630,6 +590,8 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 			`  tools: (() => { const j = argv.indexOf("--tools"); return j >= 0 ? argv[j + 1] : null; })(),\n` +
 			`  ctxDir: process.env.PI_TASKFLOW_CTX_DIR ?? null,\n` +
 			`  nodeId: process.env.PI_TASKFLOW_NODE_ID ?? null,\n` +
+			`  cwdBridgeMode: process.env.TASKFLOW_CWD_BRIDGE_MODE ?? null,\n` +
+			`  reconcileMode: process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE ?? null,\n` +
 			`  prompt,\n` +
 			`}));\n` +
 			`process.exit(0);\n`,
@@ -640,8 +602,12 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 
 	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
 	const prevExt = process.env.PI_TASKFLOW_EXT_PATH;
+	const prevBridge = process.env.TASKFLOW_CWD_BRIDGE_MODE;
+	const prevReconcile = process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
 	process.env.PI_TASKFLOW_PI_BIN = shim;
 	process.env.PI_TASKFLOW_EXT_PATH = fakePi; // a real file so --extension is added
+	process.env.TASKFLOW_CWD_BRIDGE_MODE = "resolve-only";
+	process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = "explicit";
 	try {
 		const agents: AgentConfig[] = [
 			{ name: "t", description: "t", systemPrompt: "AGENT-OWN-PROMPT", source: "user", filePath: "" },
@@ -652,6 +618,8 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 		const on = JSON.parse(fs.readFileSync(capture, "utf-8"));
 		assert.equal(on.ctxDir, dir, "PI_TASKFLOW_CTX_DIR injected");
 		assert.equal(on.nodeId, "node-1", "PI_TASKFLOW_NODE_ID injected");
+		assert.equal(on.cwdBridgeMode, null, "host cwd bridge authority is not inherited by the child");
+		assert.equal(on.reconcileMode, null, "host reconciliation authority is not inherited by the child");
 		assert.equal(on.hasExtension, true, "--extension flag added");
 		assert.match(on.prompt, /AGENT-OWN-PROMPT/, "agent's own prompt preserved");
 		assert.match(on.prompt, /Shared Context Tree/, "guidance appended");
@@ -684,6 +652,230 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
 		if (prevExt === undefined) delete process.env.PI_TASKFLOW_EXT_PATH;
 		else process.env.PI_TASKFLOW_EXT_PATH = prevExt;
+		if (prevBridge === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
+		else process.env.TASKFLOW_CWD_BRIDGE_MODE = prevBridge;
+		if (prevReconcile === undefined) delete process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
+		else process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = prevReconcile;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi child resource profiles: isolated default, allowlist, and host-only inherit build safe argv", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-profile-"));
+	const capture = path.join(dir, "argv.json");
+	const extension = path.join(dir, "trusted-extension.ts");
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(extension, "export default function trusted() {}\n");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`import fs from "node:fs";\n` +
+			`fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify(process.argv.slice(2)));\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end"});\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	const agents: AgentConfig[] = [
+		{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+	];
+	try {
+		const isolated = await runAgentTask(dir, agents, "t", "default", {});
+		assert.equal(isolated.exitCode, 0);
+		let argv = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+		assert.ok(argv.includes("--no-extensions"), "isolated is the default profile");
+		assert.equal(argv.at(-1), "Task: default", "the prompt remains the final positional argument");
+
+		const allowlisted = await createPiSubagentRunner({
+			resourceProfile: "allowlist",
+			extensions: [extension, extension],
+			terminalGraceMs: 25,
+		}).runTask(dir, agents, "t", "allow", {});
+		assert.equal(allowlisted.exitCode, 0);
+		argv = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+		assert.ok(argv.includes("--no-extensions"));
+		const extensionValues = argv.flatMap((entry, index) => entry === "--extension" ? [argv[index + 1]] : []);
+		assert.deepEqual(extensionValues, [fs.realpathSync(extension)], "allowlist is canonicalized and deduplicated");
+
+		const inherited = await createPiSubagentRunner({
+			resourceProfile: "inherit",
+			extensions: [],
+			terminalGraceMs: 25,
+		}).runTask(dir, agents, "t", "inherit", {});
+		assert.equal(inherited.exitCode, 0);
+		argv = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+		assert.equal(argv.includes("--no-extensions"), false, "only trusted host configuration can select inherit");
+
+		const invalid = await createPiSubagentRunner({
+			resourceProfile: "allowlist",
+			extensions: ["relative-extension.ts"],
+			terminalGraceMs: 25,
+		}).runTask(dir, agents, "t", "invalid", {});
+		assert.equal(isFailed(invalid), true);
+		assert.match(invalid.errorMessage ?? "", /absolute path/i);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: final + agent_end + agent_settled with a leaky handle is reaped successfully", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-terminal-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"PHASE_ONE_DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end"}); emit({type:"agent_settled"});\n` +
+			`setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 30,
+		}).runTask(dir, agents, "t", "leak", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "PHASE_ONE_DONE");
+		assert.equal(result.completionSource, "terminal-reap");
+		assert.equal(result.reapedAfterTerminal, true);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: legacy agent_end without willRetry is accepted on clean exit but never used to reap", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-agent-end-only-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end"});\n` +
+			`if(process.env.TASKFLOW_TEST_AGENT_END_LEAK==="1") setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	const prevLeak = process.env.TASKFLOW_TEST_AGENT_END_LEAK;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 10,
+		}).runTask(dir, agents, "t", "clean", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "DONE");
+		assert.equal(result.completionSource, "process-exit");
+		assert.equal(result.reapedAfterTerminal, undefined);
+		process.env.TASKFLOW_TEST_AGENT_END_LEAK = "1";
+		const leaky = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 10,
+		}).runTask(dir, agents, "t", "leaky", { idleTimeoutMs: 80 });
+		assert.equal(isFailed(leaky), true);
+		assert.equal(leaky.completionSource, "idle-timeout");
+		assert.equal(leaky.reapedAfterTerminal, undefined);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		if (prevLeak === undefined) delete process.env.TASKFLOW_TEST_AGENT_END_LEAK;
+		else process.env.TASKFLOW_TEST_AGENT_END_LEAK = prevLeak;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: agent_end with willRetry false is a revocable terminal candidate", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-agent-end-final-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end",willRetry:false});\n` +
+			`setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 30,
+		}).runTask(dir, agents, "t", "final", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "DONE");
+		assert.equal(result.completionSource, "terminal-reap");
+		assert.equal(result.reapedAfterTerminal, true);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: retrying agent_end waits for the later settled answer", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-terminal-retry-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"FIRST"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end",willRetry:true});\n` +
+			`setTimeout(()=>{\n` +
+			`  emit({type:"auto_retry_start",attempt:1,maxAttempts:1,delayMs:0,errorMessage:"retry"});\n` +
+			`  emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`  emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"SECOND"}],stopReason:"stop"}});\n` +
+			`  emit({type:"agent_end",willRetry:false}); emit({type:"agent_settled"});\n` +
+			`},20);\n` +
+			`setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 50,
+		}).runTask(dir, agents, "t", "retry", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "SECOND");
+		assert.equal(result.completionSource, "terminal-reap");
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });

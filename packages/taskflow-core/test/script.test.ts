@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
+import { runScriptCommand } from "../src/runtime/phases/script.ts";
 import { type Taskflow, validateTaskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { emptyUsage } from "../src/usage.ts";
@@ -182,6 +183,28 @@ test("script run: omitted input still closes stdin so EOF-waiting commands finis
 	assert.equal(res.finalOutput, "eof");
 });
 
+test("script security: host workspace authority is stripped from child env", async () => {
+	const previousBridge = process.env.TASKFLOW_CWD_BRIDGE_MODE;
+	const previousReconcile = process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
+	process.env.TASKFLOW_CWD_BRIDGE_MODE = "resolve-only";
+	process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = "explicit";
+	try {
+		const printAuthority = "process.stdout.write(JSON.stringify({bridge:process.env.TASKFLOW_CWD_BRIDGE_MODE??null,reconcile:process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE??null}))";
+		const def: Taskflow = {
+			name: "script-env-authority",
+			phases: [{ id: "check", type: "script", run: [process.execPath, "-e", printAuthority], final: true }],
+		};
+		const res = await executeTaskflow(mkState(def), baseDeps());
+		assert.equal(res.ok, true);
+		assert.deepEqual(JSON.parse(res.finalOutput), { bridge: null, reconcile: null });
+	} finally {
+		if (previousBridge === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
+		else process.env.TASKFLOW_CWD_BRIDGE_MODE = previousBridge;
+		if (previousReconcile === undefined) delete process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE;
+		else process.env.TASKFLOW_WORKSPACE_RECONCILE_MODE = previousReconcile;
+	}
+});
+
 test("script run: array element interpolation resolves upstream refs", async () => {
 	const def: Taskflow = {
 		name: "s",
@@ -278,6 +301,35 @@ test("script robustness: stdout is capped at 1 MB with a truncation marker", asy
 	assert.equal(res.ok, true);
 	assert.ok(res.finalOutput.length <= 1_048_576 + 64, `output length ${res.finalOutput.length} exceeds cap`);
 	assert.match(res.finalOutput, /\[stdout truncated at 1 MB\]/);
+});
+
+test("script robustness: UTF-8 split across pipe chunks is lossless", async () => {
+	const script = `
+		const value=Buffer.from("你😀");
+		process.stdout.write(value.subarray(0,1));
+		setTimeout(()=>process.stdout.write(value.subarray(1,4)),10);
+		setTimeout(()=>process.stdout.write(value.subarray(4)),20);
+	`;
+	const result = await runScriptCommand({
+		interpRunText: [process.execPath, "-e", script],
+		arrayForm: true,
+		cwd: process.cwd(),
+		timeoutMs: 1_000,
+	});
+	assert.equal(result.code, 0);
+	assert.equal(result.stdout, "你😀");
+	assert.equal(result.stdoutOversize, false);
+});
+
+test("script robustness: exact byte cap is not mislabeled as truncated", async () => {
+	const result = await runScriptCommand({
+		interpRunText: [process.execPath, "-e", `process.stdout.write("x".repeat(1048576))`],
+		arrayForm: true,
+		cwd: process.cwd(),
+		timeoutMs: 2_000,
+	});
+	assert.equal(Buffer.byteLength(result.stdout), 1_048_576);
+	assert.equal(result.stdoutOversize, false);
 });
 
 test("script robustness: a runaway process is killed at the timeout", async () => {

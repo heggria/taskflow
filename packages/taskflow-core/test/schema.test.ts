@@ -106,20 +106,49 @@ test("validateTaskflow: new phase types and fields", () => {
 	);
 });
 
-test("validateTaskflow: cwd must be a literal path or workspace keyword (no interpolation)", () => {
-	const withArgs = validateTaskflow({
+test("validateTaskflow: cwd bridge accepts only one whole typed relative-path arg", () => {
+	const legacyArg = validateTaskflow({
 		name: "x",
+		args: { repo_dir: { required: true } },
 		phases: [{ id: "p", type: "agent", task: "t", cwd: "{args.repo_dir}" }],
 	});
-	assert.equal(withArgs.ok, false);
-	assert.match(withArgs.errors.join("\n"), /cwd.*does not support interpolation placeholders/i);
+	assert.equal(legacyArg.ok, false);
+	assert.match(legacyArg.errors.join("\n"), /must be declared with type 'relative-path'/i);
+
+	const withArgs = validateTaskflow({
+		name: "x",
+		args: { repo_dir: { type: "relative-path", required: true } },
+		phases: [{ id: "p", type: "agent", task: "t", cwd: "{args.repo_dir}" }],
+	});
+	assert.equal(withArgs.ok, true, withArgs.errors.join("; "));
+
+	const withRetry = validateTaskflow({
+		name: "x",
+		args: { repo_dir: { type: "relative-path", required: true } },
+		phases: [{
+			id: "p",
+			type: "agent",
+			task: "t",
+			cwd: "{args.repo_dir}",
+			retry: { max: 1 },
+		}],
+	});
+	assert.equal(withRetry.ok, false);
+	assert.match(withRetry.errors.join("\n"), /cannot use retry\.max > 0.*reconciled/i);
 
 	const withSteps = validateTaskflow({
 		name: "x",
 		phases: [{ id: "p", type: "agent", task: "t", cwd: "{steps.plan.output}" }],
 	});
 	assert.equal(withSteps.ok, false);
-	assert.match(withSteps.errors.join("\n"), /cwd.*does not support interpolation placeholders/i);
+	assert.match(withSteps.errors.join("\n"), /must be exactly one whole.*\{args\.X\}/i);
+
+	const concatenated = validateTaskflow({
+		name: "x",
+		args: { repo_dir: { type: "relative-path" } },
+		phases: [{ id: "p", type: "agent", task: "t", cwd: "root/{args.repo_dir}" }],
+	});
+	assert.equal(concatenated.ok, false);
 
 	assert.equal(
 		validateTaskflow({ name: "x", phases: [{ id: "p", type: "agent", task: "t", cwd: "./repo" }] }).ok,
@@ -144,6 +173,14 @@ test("validateTaskflow: does not throw on malformed phases (null / non-object)",
 	assert.equal(validateTaskflow({ name: "x", phases: [null] }).ok, false);
 	assert.doesNotThrow(() => validateTaskflow({ name: "x", phases: [{ id: "a", task: "t" }, 42] }));
 	assert.equal(validateTaskflow({ name: "x", phases: [42] }).ok, false);
+});
+
+test("validateTaskflow: malformed score values report errors without throwing", () => {
+	for (const score of [null, [], 1, "x", true, {}]) {
+		const def = { name: "bad-score", phases: [{ id: "check", type: "gate", score }] };
+		assert.doesNotThrow(() => validateTaskflow(def));
+		assert.equal(validateTaskflow(def).ok, false);
+	}
 });
 
 test("validateTaskflow: detects cycles", () => {

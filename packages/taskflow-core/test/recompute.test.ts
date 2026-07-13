@@ -535,3 +535,27 @@ test("recompute: dry-run decision trace explains the worst-case frontier", async
 	assert.match(byId.audit.reason, /may re-run|stale frontier/);
 	assert.equal(record.length, 3, "dry-run did not execute anything beyond the initial run");
 });
+
+test("recompute: resolves defaults and rejects missing required typed args", async () => {
+	const withDefault: Taskflow = {
+		name: "recompute-default",
+		args: { target: { type: "string", default: "api" } },
+		phases: [{ id: "work", type: "agent", agent: "a", task: "{args.target}", final: true }],
+	};
+	const defaultState = mkState(withDefault);
+	defaultState.phases.work = { id: "work", status: "done", output: "old" };
+	const dry = await recomputeTaskflow(defaultState, baseDeps(mockRunner(() => "new", [])), ["work"], { dryRun: true });
+	assert.equal(dry.state.args.target, "api");
+
+	const required: Taskflow = {
+		...withDefault,
+		name: "recompute-required",
+		args: { target: { type: "string", required: true } },
+	};
+	const missingState = mkState(required);
+	missingState.phases.work = { id: "work", status: "done", output: "old" };
+	await assert.rejects(
+		recomputeTaskflow(missingState, baseDeps(mockRunner(() => "new", [])), ["work"], { dryRun: true }),
+		/Missing required argument 'target'/,
+	);
+});

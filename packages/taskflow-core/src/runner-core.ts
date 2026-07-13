@@ -13,6 +13,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
@@ -134,15 +135,20 @@ export interface EventAccumulator {
 	messages: CoreMessage[];
 	usage: UsageStats;
 	model?: string;
+	/** Last non-empty assistant text, mirrored for the shared process supervisor. */
+	finalText: string;
 	stopReason?: string;
 	errorMessage?: string;
 	lastActivity: string;
+	/** Shared-supervisor aliases populated from Pi's message lifecycle. */
+	fatalError?: string;
+	terminalSeen?: boolean;
 	/** Set when message cap was hit — output gets a truncation notice. */
 	truncated?: boolean;
 }
 
 export function newAccumulator(model?: string): EventAccumulator {
-	return { messages: [], usage: emptyUsage(), model, lastActivity: "" };
+	return { messages: [], usage: emptyUsage(), model, finalText: "", lastActivity: "" };
 }
 
 /**
@@ -183,7 +189,12 @@ export function foldEventLine(acc: EventAccumulator, line: string): LiveUpdate |
 	}
 	if (!acc.model && (msg as any).model) acc.model = (msg as any).model;
 	if ((msg as any).stopReason) acc.stopReason = (msg as any).stopReason;
-	if ((msg as any).errorMessage) acc.errorMessage = (msg as any).errorMessage;
+	if ((msg as any).errorMessage) {
+		acc.errorMessage = (msg as any).errorMessage;
+		acc.fatalError = (msg as any).errorMessage;
+	}
+	const finalText = getFinalOutput([msg]);
+	if (finalText.trim()) acc.finalText = finalText;
 	const activity = describeActivity(msg);
 	if (activity) acc.lastActivity = activity;
 	return { text: acc.lastActivity, usage: { ...acc.usage }, model: acc.model };
@@ -278,6 +289,19 @@ export function num(v: unknown): number {
  *  children, so all host runners register here. */
 const activeChildren = new Set<number>();
 
+/** Register a detached process group with the host-wide supervisor. Script
+ * phases and agent runners share this registry so external host termination
+ * cannot leave either kind of child mutating the workspace. */
+export function registerProcessTree(pid: number): void {
+	activeChildren.add(pid);
+}
+
+/** Remove a process group after its stdio has closed and all descendants have
+ * been synchronously reaped. */
+export function unregisterProcessTree(pid: number): void {
+	activeChildren.delete(pid);
+}
+
 /** Signal the whole process tree rooted at a spawned subagent. POSIX children
  * are process-group leaders (`detached:true` at spawn), so a negative pid
  * reaches every descendant in the group. Windows has no equivalent signal;
@@ -285,15 +309,16 @@ const activeChildren = new Set<number>();
 export function killProcessTree(pid: number, signal: NodeJS.Signals, direct?: ChildProcess): void {
 	if (process.platform === "win32") {
 		try {
-			const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+			// Wait for taskkill: returning while /T is still enumerating descendants
+			// violates the phase boundary and is especially racy after root exit.
+			const killed = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
 				shell: false,
 				stdio: "ignore",
 				windowsHide: true,
 			});
-			killer.once("error", () => {
+			if (killed.error || killed.status !== 0) {
 				try { direct?.kill(); } catch { /* already dead */ }
-			});
-			killer.unref();
+			}
 		} catch {
 			try { direct?.kill(); } catch { /* already dead */ }
 		}
@@ -331,6 +356,34 @@ const killAllChildren = () => {
 };
 process.on("exit", killAllChildren);
 
+// Installing a signal listener disables Node's default signal termination.
+// Reap every registered process group synchronously, then restore the default
+// disposition and re-deliver the same signal so callers still observe a real
+// signal exit (rather than an arbitrary numeric process.exit code).
+const EXTERNAL_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+const SIGNAL_EXIT_CODES: Readonly<Record<(typeof EXTERNAL_SIGNALS)[number], number>> = {
+	SIGTERM: 143,
+	SIGINT: 130,
+	SIGHUP: 129,
+};
+let handlingExternalSignal = false;
+for (const signal of EXTERNAL_SIGNALS) {
+	process.on(signal, () => {
+		if (handlingExternalSignal) return;
+		handlingExternalSignal = true;
+		killAllChildren();
+		// Existing listeners have already been snapshotted for this EventEmitter
+		// dispatch. Removing them here only ensures the re-delivered signal takes
+		// the OS default path instead of recursively entering user handlers.
+		process.removeAllListeners(signal);
+		try {
+			process.kill(process.pid, signal);
+		} catch {
+			process.exit(SIGNAL_EXIT_CODES[signal]);
+		}
+	});
+}
+
 /** Same idle window every host runner uses: a child silent this long is wedged. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 
@@ -358,6 +411,19 @@ export interface SubagentAccumulator {
 	fatalError?: string;
 	/** Set by hosts whose protocol has an authoritative terminal event. */
 	terminalSeen?: boolean;
+	/** Optional host-native terminal reason, used by completion policies. */
+	stopReason?: string;
+}
+
+export type CompletionEventClassification = "ignore" | "activity" | "terminal-candidate" | "fatal";
+
+/** Optional host protocol layered over ordinary process exit. A terminal event
+ * is only a candidate: the shared supervisor waits a grace period, revokes the
+ * candidate on later activity, and commits only after canCommitTerminal passes. */
+export interface CompletionPolicy<TAcc extends SubagentAccumulator> {
+	terminalGraceMs: number;
+	classifyEvent(acc: TAcc, event: unknown): CompletionEventClassification;
+	canCommitTerminal(acc: TAcc): boolean;
 }
 
 /** Standard "unknown agent" RunResult — identical across every host runner. */
@@ -392,11 +458,17 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	cwd: string;
 	/** Execution knobs (forwarded from the phase's RunOptions). */
 	idleTimeoutMs?: number;
+	/** @internal SIGTERM-to-SIGKILL grace. Defaults to 5s; injectable for
+	 * deterministic supervisor tests. */
+	terminationGraceMs?: number;
 	signal?: AbortSignal;
 	onLive?: (live: LiveUpdate) => void;
 	/** Per-host event folding: the host's accumulator + its line parser. */
 	acc: TAcc;
 	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
+	completionPolicy?: CompletionPolicy<TAcc>;
+	/** Synchronous notification at the terminal-reap linearization point. */
+	onTerminalCommit?: () => void;
 	/** Fail closed when the CLI exits zero before its authoritative terminal event. */
 	requireTerminalEvent?: boolean;
 	terminalEventLabel?: string;
@@ -425,7 +497,20 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 	let idleTimedOut = false;
 	let killedBySignal: string | undefined;
 	let protocolError: string | undefined;
+	let policyFatal: string | undefined;
+	let terminalCommitted = false;
+	let reapedAfterTerminal = false;
+	let completionNotified = false;
+	let killReason: "terminal-reap" | "abort" | "idle-timeout" | "protocol-error" | "fatal-error" | undefined;
 	const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+	const terminationGraceMs = opts.terminationGraceMs ?? 5000;
+	const completionPolicy = opts.completionPolicy;
+	if (completionPolicy && (!Number.isFinite(completionPolicy.terminalGraceMs) || completionPolicy.terminalGraceMs < 0)) {
+		throw new Error("terminalGraceMs must be a non-negative finite number");
+	}
+	if (!Number.isFinite(terminationGraceMs) || terminationGraceMs < 0) {
+		throw new Error("terminationGraceMs must be a non-negative finite number");
+	}
 
 	// Structured run-log header, opt-in via PI_TASKFLOW_RUN_LOG. Written to the
 	// HOST process's stderr (the MCP stdio log channel; pi's subagent diagnostic
@@ -454,17 +539,26 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			detached: process.platform !== "win32",
 			windowsHide: true,
 		});
-		if (proc.pid) activeChildren.add(proc.pid);
+		if (proc.pid) registerProcessTree(proc.pid);
 
 		let buffer = "";
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 		let idleTimer: NodeJS.Timeout | undefined;
+		let terminalTimer: NodeJS.Timeout | undefined;
 		let forceTimer: NodeJS.Timeout | undefined;
+		let candidateEpoch = 0;
+		let terminalCandidate = false;
 		let settled = false;
 		let removeAbortListener = () => {};
 		const clearTimers = () => {
 			if (idleTimer) {
 				clearTimeout(idleTimer);
 				idleTimer = undefined;
+			}
+			if (terminalTimer) {
+				clearTimeout(terminalTimer);
+				terminalTimer = undefined;
 			}
 			if (forceTimer) {
 				clearTimeout(forceTimer);
@@ -477,13 +571,36 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				try { proc.kill(signal); } catch { /* spawn failed / already dead */ }
 			}
 		};
-		const hardKill = () => {
-			idleTimedOut = true;
-			signalTree("SIGTERM");
-			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
+		const setKillReason = (reason: NonNullable<typeof killReason>): boolean => {
+			if (killReason) return killReason === reason;
+			killReason = reason;
+			return true;
+		};
+		const scheduleForceKill = () => {
+			if (settled) return;
+			if (forceTimer) clearTimeout(forceTimer);
+			forceTimer = setTimeout(() => {
+				if (!settled) signalTree("SIGKILL");
+			}, terminationGraceMs);
 			forceTimer.unref();
 		};
+		const clearTerminalCandidate = () => {
+			terminalCandidate = false;
+			candidateEpoch++;
+			if (terminalTimer) {
+				clearTimeout(terminalTimer);
+				terminalTimer = undefined;
+			}
+		};
+		const hardKill = () => {
+			if (settled || terminalCommitted || !setKillReason("idle-timeout")) return;
+			idleTimedOut = true;
+			clearTerminalCandidate();
+			signalTree("SIGTERM");
+			scheduleForceKill();
+		};
 		const armIdle = () => {
+			if (terminalCandidate || terminalCommitted || settled) return;
 			if (idleTimer) clearTimeout(idleTimer);
 			if (idleMs <= 0) return;
 			idleTimer = setTimeout(hardKill, idleMs);
@@ -493,18 +610,90 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 
 		const failProtocol = (message: string) => {
 			if (protocolError) return;
+			// An earlier abort/idle/fatal stop can itself truncate the last record.
+			// First-writer wins; only a terminal reap remains revocable by a bad tail.
+			if (killReason && killReason !== "terminal-reap" && killReason !== "protocol-error") return;
 			protocolError = message;
+			if (!killReason && !setKillReason("protocol-error")) return;
+			clearTerminalCandidate();
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = undefined;
+			}
 			signalTree("SIGTERM");
-			forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
-			forceTimer.unref();
+			scheduleForceKill();
+		};
+		const notifyCompletionCommit = () => {
+			if (completionNotified) return;
+			completionNotified = true;
+			try { opts.onTerminalCommit?.(); } catch { /* internal observer is fail-open */ }
+		};
+		const canCommitTerminal = (): boolean => {
+			if (!completionPolicy) return false;
+			try { return completionPolicy.canCommitTerminal(acc); }
+			catch (error) {
+				failProtocol(`Completion policy failed: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+		};
+		const commitTerminal = (epoch: number) => {
+			// A cleared timer may already be queued. The epoch is the CAS token that
+			// prevents it from committing a revoked candidate.
+			if (
+				settled || terminalCommitted || !terminalCandidate || epoch !== candidateEpoch ||
+				wasAborted || protocolError || policyFatal || killReason
+			) return;
+			if (buffer.trim()) {
+				failProtocol("Subagent emitted malformed or truncated JSON after its terminal event");
+				return;
+			}
+			if (!canCommitTerminal()) {
+				clearTerminalCandidate();
+				armIdle();
+				return;
+			}
+			terminalCommitted = true;
+			terminalCandidate = false;
+			setKillReason("terminal-reap");
+			reapedAfterTerminal = true;
+			notifyCompletionCommit();
+			const diagnostic =
+				`[taskflow] Child produced terminal output but did not exit after ${completionPolicy?.terminalGraceMs ?? 0}ms; ` +
+				"reaped process tree and accepted the completed result.";
+			result.stderr += `${result.stderr && !result.stderr.endsWith("\n") ? "\n" : ""}${diagnostic}\n`;
+			signalTree("SIGTERM");
+			scheduleForceKill();
+		};
+		const beginTerminalCandidate = () => {
+			if (!completionPolicy || terminalCommitted || settled || killReason) return;
+			if (!canCommitTerminal()) {
+				clearTerminalCandidate();
+				armIdle();
+				return;
+			}
+			terminalCandidate = true;
+			const epoch = ++candidateEpoch;
+			if (idleTimer) {
+				clearTimeout(idleTimer);
+				idleTimer = undefined;
+			}
+			if (terminalTimer) clearTimeout(terminalTimer);
+			terminalTimer = setTimeout(() => {
+				terminalTimer = undefined;
+				// Let already-readable stdout callbacks run before the linearization
+				// point so lifecycle activity cannot lose to a same-tick timer.
+				setImmediate(() => commitTerminal(epoch));
+			}, completionPolicy.terminalGraceMs);
+			terminalTimer.unref();
 		};
 		const processLine = (line: string) => {
 			if (!line.trim() || protocolError) return;
 			// Every supported host advertises a JSON/NDJSON stream. Treat malformed
 			// records as a protocol failure: silently dropping them can turn a
 			// truncated provider error into a successful phase with empty output.
+			let event: unknown;
 			try {
-				JSON.parse(line);
+				event = JSON.parse(line);
 			} catch {
 				failProtocol("Subagent emitted malformed or truncated JSON output");
 				return;
@@ -521,11 +710,48 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			if (live && opts.onLive) {
 				try { opts.onLive(live); } catch { /* user callback must not sink run */ }
 			}
+			if (!completionPolicy || terminalCommitted) {
+				armIdle();
+				return;
+			}
+			let classification: CompletionEventClassification;
+			try {
+				classification = completionPolicy.classifyEvent(acc, event);
+			} catch (error) {
+				failProtocol(`Completion policy failed: ${error instanceof Error ? error.message : String(error)}`);
+				return;
+			}
+			switch (classification) {
+				case "terminal-candidate":
+					beginTerminalCandidate();
+					break;
+				case "fatal":
+					if (setKillReason("fatal-error")) {
+						policyFatal = acc.fatalError ?? "Subagent emitted a fatal terminal event";
+						if (idleTimer) {
+							clearTimeout(idleTimer);
+							idleTimer = undefined;
+						}
+						signalTree("SIGTERM");
+						scheduleForceKill();
+					}
+					clearTerminalCandidate();
+					break;
+				case "activity":
+					clearTerminalCandidate();
+					armIdle();
+					break;
+				case "ignore":
+					break;
+			}
 		};
 
-		proc.stdout.on("data", (data) => {
-			armIdle();
-			buffer += data.toString();
+		proc.stdout.on("data", (data: Buffer) => {
+			// StringDecoder preserves multi-byte UTF-8 characters split across
+			// arbitrary pipe chunks. Candidate revocation is event-semantic below:
+			// metadata/heartbeat records classified as `ignore` must not disable both
+			// terminal grace and the ordinary idle watchdog.
+			buffer += stdoutDecoder.write(data);
 			if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES && !buffer.includes("\n")) {
 				// Drop the retained bytes before terminating so the bound remains true
 				// even while a non-cooperative child takes time to die.
@@ -542,18 +768,27 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				}
 				processLine(line);
 			}
+			if (!completionPolicy) armIdle();
 		});
 
-		const STDERR_MAX_LEN = 64 * 1024;
+		const STDERR_MAX_BYTES = 64 * 1024;
+		let stderrBytes = 0;
 		let stderrCapped = false;
-		proc.stderr.on("data", (data) => {
+		proc.stderr.on("data", (data: Buffer) => {
 			// Diagnostics are real child activity too. A CLI that is actively
 			// reporting provider retries on stderr must not be killed as idle.
-			armIdle();
+			// stderr is activity while running, but after a terminal candidate it
+			// neither revokes nor prolongs the bounded grace window.
+			if (!terminalCandidate && !terminalCommitted) armIdle();
 			if (!stderrCapped) {
-				result.stderr += data.toString();
-				if (result.stderr.length >= STDERR_MAX_LEN) {
-					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
+				const remaining = STDERR_MAX_BYTES - stderrBytes;
+				const retained = data.subarray(0, Math.max(0, remaining));
+				if (retained.length > 0) {
+					result.stderr += stderrDecoder.write(retained);
+					stderrBytes += retained.length;
+				}
+				if (data.length > retained.length) {
+					result.stderr += "\n[...stderr truncated at 64KB]";
 					stderrCapped = true;
 				}
 			}
@@ -569,6 +804,14 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 
 		const finish = (code: number, signal?: NodeJS.Signals | null) => {
 			if (settled) return;
+			// Flush decoders and classify the final unterminated record before
+			// settling. Any force-kill timer created by a malformed tail is cleared
+			// below, so no signal can fire after this Promise resolves.
+			buffer += stdoutDecoder.end();
+			if (!stderrCapped) result.stderr += stderrDecoder.end();
+			if (buffer.trim() && killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error") {
+				processLine(buffer);
+			}
 			settled = true;
 			// The direct CLI may intentionally or accidentally leave background
 			// descendants behind. A phase boundary is also a process-tree boundary:
@@ -576,11 +819,22 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			// Otherwise detached grandchildren can keep mutating the workspace after
 			// the phase has been persisted as complete.
 			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
-			if (proc.pid) activeChildren.delete(proc.pid);
+			if (proc.pid) unregisterProcessTree(proc.pid);
 			clearTimers();
 			removeAbortListener();
-			if (buffer.trim()) processLine(buffer);
 			if (signal) killedBySignal = signal;
+			let terminalValid = !completionPolicy;
+			if (completionPolicy) {
+				try { terminalValid = completionPolicy.canCommitTerminal(acc); }
+				catch (error) {
+					protocolError ??= `Completion policy failed: ${error instanceof Error ? error.message : String(error)}`;
+				}
+			}
+			if (
+				code === 0 && !signal && !protocolError && !policyFatal && !acc.fatalError &&
+				!wasAborted && !idleTimedOut &&
+				terminalValid
+			) notifyCompletionCommit();
 			resolve(code);
 		};
 		proc.on("close", (code, signal) => {
@@ -594,6 +848,10 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 
 		if (opts.signal) {
 			const kill = () => {
+				// Terminal commit is the completion linearization point. A later outer
+				// timeout/user abort cannot retroactively change a completed task.
+				if (terminalCommitted || settled) return;
+				if (!setKillReason("abort")) return;
 				wasAborted = true;
 				// Disarm the idle watchdog first: otherwise, if the idle timer fires
 				// between this SIGTERM and the close event, `idleTimedOut` would be
@@ -601,8 +859,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				// abort) would misreport a user abort as an idle stall.
 				clearTimers();
 				signalTree("SIGTERM");
-				forceTimer = setTimeout(() => signalTree("SIGKILL"), 5000);
-				forceTimer.unref();
+				scheduleForceKill();
 			};
 			if (opts.signal.aborted) kill();
 			else {
@@ -624,12 +881,24 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		result.exitCode = result.exitCode || 1;
 		result.stopReason = "error";
 		result.errorMessage = protocolError;
-	} else if (acc.fatalError) {
+	} else if (wasAborted) {
+		result.stopReason = "aborted";
+		result.errorMessage = "Subagent was aborted";
+	} else if (idleTimedOut) {
+		result.stopReason = "error";
+		result.idleTimeout = true;
+		result.errorMessage = `Subagent stalled: no output for ${Math.round(idleMs / 1000)}s (idle timeout) — killed`;
+	} else if (acc.fatalError || policyFatal) {
 		result.exitCode = result.exitCode || 1;
 		result.stopReason = "error";
-		result.errorMessage = acc.fatalError;
+		result.errorMessage = acc.fatalError ?? policyFatal;
+	} else if (terminalCommitted) {
+		// A signal caused by our own terminal reap is a successful controlled
+		// shutdown, regardless of the OS exit code/signal encoding.
+		result.exitCode = 0;
+		result.stopReason = "end";
 	} else {
-		result.stopReason = exitCode === 0 ? "end" : "error";
+		result.stopReason = acc.stopReason ?? (exitCode === 0 ? "end" : "error");
 	}
 	if (!isFailed(result) && opts.requireTerminalEvent && !acc.terminalSeen) {
 		result.exitCode = 1;
@@ -637,18 +906,28 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		result.errorMessage = `Subagent stream ended before ${opts.terminalEventLabel ?? "the terminal event"}`;
 	}
 
-	if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted && !protocolError) {
+	if (
+		exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted && !protocolError &&
+		!terminalCommitted && killReason !== "fatal-error"
+	) {
 		result.exitCode = 1;
 		result.stopReason = "error";
 		result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
 	}
-	if (idleTimedOut) {
-		result.stopReason = "error";
-		result.idleTimeout = true;
-		result.errorMessage = `Subagent stalled: no output for ${Math.round(idleMs / 1000)}s (idle timeout) — killed`;
-	} else if (wasAborted) {
-		result.stopReason = "aborted";
-		result.errorMessage = "Subagent was aborted";
+	result.completionSource = protocolError
+		? "protocol-error"
+		: idleTimedOut
+			? "idle-timeout"
+			: wasAborted
+				? "abort"
+				: terminalCommitted
+					? "terminal-reap"
+					: killedBySignal && killReason !== "fatal-error"
+						? "external-signal"
+						: "process-exit";
+	if (terminalCommitted) {
+		result.reapedAfterTerminal = reapedAfterTerminal;
+		result.terminalGraceMs = completionPolicy?.terminalGraceMs;
 	}
 	// A zero exit with no answer is not evidence of successful agent work. It is
 	// the characteristic outcome of a truncated/unknown host stream whose lines

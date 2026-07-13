@@ -10,14 +10,14 @@
   "plugins": [
     {
       "name": "taskflow",
-      "description": "Multi-phase subagent orchestration for Codex: 12 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (codex-taskflow).",
+      "description": "Multi-phase subagent orchestration for Codex: 13 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (codex-taskflow).",
       "source": "./packages/codex-taskflow/plugin",
       "category": "developer-tools",
       "homepage": "https://github.com/heggria/taskflow"
     },
     {
       "name": "claude-taskflow",
-      "description": "Multi-phase subagent orchestration for Claude Code: 12 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (claude-taskflow).",
+      "description": "Multi-phase subagent orchestration for Claude Code: 13 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (claude-taskflow).",
       "source": "./packages/claude-taskflow/plugin",
       "category": "developer-tools",
       "homepage": "https://github.com/heggria/taskflow"

@@ -7,7 +7,7 @@
  */
 
 import type { RunState } from "../store.ts";
-import { dependenciesOf, resolveArgs, topoLayers, type Budget, type Phase, type Taskflow } from "../schema.ts";
+import { dependenciesOf, resolveArgs, topoLayers, type Budget, type Phase, type Taskflow, validateTaskflow } from "../schema.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
 import { overBudget as overBudgetCheck } from "../deterministic.ts";
@@ -49,6 +49,7 @@ export interface EventKernelDeps {
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
 	_stack?: string[];
+	_dynamic?: boolean;
 }
 
 export interface EventKernelResult {
@@ -193,7 +194,20 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		def: Taskflow;
 		args: Record<string, unknown>;
 		stack: string[];
+		dynamic?: boolean;
 	}): Promise<NestedFlowResult> => {
+		const nestedArgs = resolveArgs(opts.def, opts.args);
+		const dynamic = deps._dynamic === true || opts.dynamic === true;
+		const validation = validateTaskflow(opts.def, { args: nestedArgs, cwd: deps.cwd, dynamic });
+		if (!validation.ok) {
+			return {
+				finalOutput: `Nested flow invocation is invalid: ${validation.errors.join("; ")}`,
+				ok: false,
+				usage: emptyUsage(),
+				events: [],
+				blocked: false,
+			};
+		}
 		if (deps.usageAccounting === "unavailable" && (opts.def.budget || def.budget)) {
 			return {
 				finalOutput: `Usage accounting is unavailable; refusing budgeted nested flow '${opts.def.name}'`,
@@ -231,7 +245,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 			runId: `${state.runId}-n-${effectiveDef.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40)}`,
 			flowName: effectiveDef.name,
 			def: effectiveDef,
-			args: opts.args,
+			args: nestedArgs,
 			status: "running",
 			phases: {},
 			createdAt: Date.now(),
@@ -240,6 +254,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		};
 		const child = await runEventKernel(childState, {
 			...deps,
+			_dynamic: dynamic ? true : undefined,
 			// A trace file belongs to exactly one runId. Nested flow events are
 			// intentionally isolated; the parent flow phase is marked unreplayable
 			// by the imperative path rather than polluting the parent's event log.

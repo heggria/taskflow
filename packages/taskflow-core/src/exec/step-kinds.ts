@@ -18,7 +18,7 @@ import {
 import { parseGateVerdict, parseTournamentWinner } from "../deterministic.ts";
 import { verifyTaskflow } from "../verify.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
-import { evaluateCondition, interpolate, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
+import { evaluateCondition, interpolate, interpolateValue, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
 import { clampSubFlowBudget, kernelAttemptsOverBudget } from "./kernel-policy.ts";
 import { abortableDelay, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
 import type { Event } from "./events.ts";
@@ -70,6 +70,7 @@ async function runAgentCall(
 	for (let attempt = 0; attempt < 4; attempt++) {
 		if (ctx.deps.signal?.aborted) break;
 		let timedOut = false;
+		let terminalCommitted = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let forceReturnTimer: ReturnType<typeof setTimeout> | undefined;
 		let onParentAbort: (() => void) | undefined;
@@ -86,17 +87,33 @@ async function runAgentCall(
 			}
 		}
 		try {
+			const onTerminalCommit = () => {
+				if (timedOut) return;
+				terminalCommitted = true;
+				if (timer) {
+					clearTimeout(timer);
+					timer = undefined;
+				}
+			};
 			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,
 				agentName,
 				task,
-				{ model: phase.model, thinking: phase.thinking, tools: phase.tools, cwd: ctx.deps.cwd, signal: callSignal },
+				{
+					model: phase.model,
+					thinking: phase.thinking,
+					tools: phase.tools,
+					cwd: ctx.deps.cwd,
+					signal: callSignal,
+					onTerminalCommit,
+				},
 				ctx.deps.globalThinking,
 			);
 			if (phaseTimeoutMs) {
 				const timeoutFallback = new Promise<RunResult>((resolve) => {
 					timer = setTimeout(() => {
+						if (terminalCommitted) return;
 						timedOut = true;
 						timeoutController?.abort();
 						forceReturnTimer = setTimeout(() => resolve({
@@ -109,6 +126,7 @@ async function runAgentCall(
 							stopReason: "error",
 							errorMessage: `Phase runner did not stop within ${PHASE_TIMEOUT_ABORT_GRACE_MS}ms after abort`,
 							phaseTimeout: true,
+							completionSource: "phase-timeout",
 						}), PHASE_TIMEOUT_ABORT_GRACE_MS);
 					}, phaseTimeoutMs);
 				});
@@ -128,6 +146,7 @@ async function runAgentCall(
 				stopReason: "error",
 				errorMessage: `Phase timed out after ${phaseTimeoutMs}ms (subagent aborted)`,
 				phaseTimeout: true,
+				completionSource: "phase-timeout",
 			};
 		}
 		usages.push(r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage());
@@ -165,6 +184,9 @@ async function runAgentCall(
 			model: r.model,
 			usage,
 			stopReason: r.stopReason,
+			completionSource: r.completionSource,
+			reapedAfterTerminal: r.reapedAfterTerminal,
+			terminalGraceMs: r.terminalGraceMs,
 		},
 	});
 	return { result: r, event };
@@ -624,7 +646,7 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 	const withMap = phase.with;
 	if (withMap && typeof withMap === "object") {
 		for (const [k, v] of Object.entries(withMap)) {
-			provided[k] = typeof v === "string" ? interpolate(v, interpCtx(ctx)).text : v;
+			provided[k] = interpolateValue(v, interpCtx(ctx));
 		}
 	}
 
@@ -635,6 +657,7 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		def: subDef,
 		args: provided,
 		stack: nextStack,
+		dynamic: hasDef,
 	});
 
 	return {

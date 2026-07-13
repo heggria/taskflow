@@ -179,6 +179,29 @@ mutation without touching the main tree:
   at validation.
 - A literal path passes through unchanged.
 
+### Argument-selected cwd (0.2.1 compatibility bridge)
+
+An author-written flow may set `cwd: "{args.package}"` only when `package` is
+declared as `{ "type": "relative-path" }`. The placeholder must occupy the
+whole field. The value is resolved below the invocation cwd, must be an existing
+directory, and cannot escape through `..`, absolute paths, or symlinks at bind time.
+
+The bridge is fail-closed and disabled unless the host operator explicitly sets
+`TASKFLOW_CWD_BRIDGE_MODE=resolve-only`. That mode performs a time-of-check path
+validation but has no no-follow filesystem handle and is not an OS filesystem sandbox; each phase emits a warning stating the lower
+guarantee. Cwd-bridge flow trees do not reuse output-only cache/resume entries,
+because 0.2.1 cannot restore filesystem mutations on a cache hit. Generated
+sub-flows cannot use the bridge. Saved-flow definitions are frozen for one
+top-level execution, the invocation root identity is persisted for resume, and
+a selected sub-flow inherits a non-expanding canonical boundary: nested literal
+cwd and context files may narrow it but cannot escape it or allocate a workspace
+provider.
+
+Do not combine this bridge with `retry.max > 0`; validation rejects that
+combination. After a failed writer, the filesystem outcome is unknown and an
+operator must explicitly reconcile the invocation workspace before another
+write can start.
+
 **Pattern — competing experiments in worktrees:** run two `parallel` branches,
 each `cwd: "worktree"`, each attempting a different refactor strategy and
 reporting its test results; a downstream gate/judge picks which diff to apply

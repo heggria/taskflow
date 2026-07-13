@@ -4,24 +4,27 @@
  * subagent extension's runSingleAgent.
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import {
-	emptyUsage,
-	isFailed,
 	newAccumulator,
 	foldEventLine,
-	sanitizeErrorMessage,
-	TRANSPORT_ERROR_PLACEHOLDER,
-	getFinalOutput,
+	runSubagentProcess,
+	unknownAgentResult,
+	normalizePiChildSettings,
+	DEFAULT_PI_CHILD_SETTINGS,
 	type AgentConfig,
+	type CompletionPolicy,
+	type EventAccumulator,
+	type PiChildSettings,
 	type RunOptions,
 	type RunResult,
 	type SubagentRunner,
+	CWD_BRIDGE_MODE_ENV,
+	WORKSPACE_RECONCILE_MODE_ENV,
 } from "taskflow-core";
 
 // Re-export the host-neutral execution contract + pure helpers so every existing
@@ -42,28 +45,10 @@ export {
 } from "taskflow-core";
 export type { LiveUpdate, RunOptions, RunResult, SubagentRunner, EventAccumulator } from "taskflow-core";
 
-const activeChildren = new Set<number>();
-const killAll = () => {
-	for (const pid of activeChildren) {
-		try { process.kill(pid, "SIGKILL"); } catch { /* already dead */ }
-	}
-};
-process.on("exit", killAll);
-process.on("SIGTERM", () => { killAll(); process.exit(143); });
-
 // `RunResult`, `LiveUpdate`, and `RunOptions` are defined in the host-neutral
 // contract (./host/runner-types.ts) and re-exported above. Their JSDoc and the
 // pi-specific notes (PI_TASKFLOW_CTX_DIR / --extension for ctx_* tools) live
 // with the pi implementation below.
-
-/**
- * Default idle-watchdog window. A subagent that emits nothing on stdout for this
- * long is treated as wedged and killed so a single stalled child cannot hang the
- * entire taskflow forever (the only previous escape was a manual user abort).
- * 5 minutes is generous enough for slow reasoning/long tool calls while still
- * bounding a true hang.
- */
-const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 /** The Shared Context Tree tool names a subagent may call when sharing is on. */
 export const CTX_TOOL_NAMES = ["ctx_read", "ctx_write", "ctx_report", "ctx_spawn"] as const;
@@ -135,13 +120,151 @@ export function ctxExtensionPath(): string | undefined {
 	const override = process.env.PI_TASKFLOW_EXT_PATH;
 	if (override) return override;
 	try {
-		const here = path.dirname(new URL(import.meta.url).pathname);
-		const entry = path.join(here, "index.ts");
-		if (fs.existsSync(entry)) return entry;
+		const modulePath = fileURLToPath(import.meta.url);
+		const here = path.dirname(modulePath);
+		// Development executes src/runner.ts; published consumers execute
+		// dist/runner.js. Prefer the matching sibling while retaining both names
+		// for custom loaders that rewrite extensions.
+		const candidates = [
+			path.join(here, `index${path.extname(modulePath)}`),
+			path.join(here, "index.js"),
+			path.join(here, "index.ts"),
+		];
+		for (const entry of new Set(candidates)) {
+			if (fs.existsSync(entry)) return entry;
+		}
 	} catch {
 		/* fall through */
 	}
 	return undefined;
+}
+
+interface PiEventAccumulator extends EventAccumulator {
+	generation: number;
+	finalGeneration?: number;
+	terminalGeneration?: number;
+}
+
+function newPiAccumulator(model?: string): PiEventAccumulator {
+	return { ...newAccumulator(model), generation: 0 };
+}
+
+function eventType(event: unknown): string {
+	return typeof event === "object" && event !== null && typeof (event as { type?: unknown }).type === "string"
+		? (event as { type: string }).type
+		: "";
+}
+
+function eventWillRetry(event: unknown): boolean | undefined {
+	if (typeof event !== "object" || event === null) return undefined;
+	const value = (event as { willRetry?: unknown }).willRetry;
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function resetPiFinal(acc: PiEventAccumulator): void {
+	acc.finalText = "";
+	acc.finalGeneration = undefined;
+	acc.terminalGeneration = undefined;
+	acc.terminalSeen = false;
+	acc.stopReason = undefined;
+}
+
+function foldPiEventLine(acc: PiEventAccumulator, line: string) {
+	const event = JSON.parse(line) as Record<string, unknown>;
+	const type = eventType(event);
+	if (type === "agent_start" || type === "turn_start") {
+		acc.generation++;
+		resetPiFinal(acc);
+	} else if (
+		type === "message_start" || type === "message_update" ||
+		type.startsWith("tool_execution_") || type.startsWith("tool_")
+	) {
+		resetPiFinal(acc);
+	}
+
+	const live = foldEventLine(acc, line);
+	if (type === "message_end") {
+		const message = event.message as Record<string, unknown> | undefined;
+		if (message?.role === "assistant") {
+			const reason = typeof message.stopReason === "string" ? message.stopReason : undefined;
+			if (reason === "error" || reason === "aborted") {
+				acc.fatalError =
+					typeof message.errorMessage === "string" && message.errorMessage
+						? message.errorMessage
+						: `Pi assistant stopped with ${reason}`;
+				acc.finalGeneration = undefined;
+			} else if (reason !== "toolUse" && acc.finalText.trim()) {
+				acc.finalGeneration = acc.generation;
+			}
+		}
+	} else if (type === "error") {
+		acc.fatalError =
+			typeof event.message === "string" && event.message
+				? event.message
+				: "Pi emitted an error event";
+	} else if (type === "agent_end") {
+		// Modern Pi declares whether another lifecycle will follow. `willRetry:false`
+		// is authoritative enough to begin the revocable grace period; a missing
+		// field remains clean-exit evidence only for older versions.
+		acc.terminalSeen = true;
+		if (eventWillRetry(event) === false) acc.terminalGeneration = acc.generation;
+	} else if (type === "agent_settled") {
+		acc.terminalSeen = true;
+		acc.terminalGeneration = acc.generation;
+	}
+	return live;
+}
+
+function piCompletionPolicy(terminalGraceMs: number): CompletionPolicy<PiEventAccumulator> {
+	return {
+		terminalGraceMs,
+		classifyEvent(acc, event) {
+			const type = eventType(event);
+			if (acc.fatalError || type === "error") return "fatal";
+			if (type === "agent_settled") return "terminal-candidate";
+			if (type === "agent_end") return eventWillRetry(event) === false ? "terminal-candidate" : "activity";
+			if (
+				type === "agent_start" || type === "turn_start" ||
+				type.startsWith("message_") || type.startsWith("tool_execution_") || type.startsWith("tool_")
+			) return "activity";
+			return "ignore";
+		},
+		canCommitTerminal(acc) {
+			return Boolean(
+				acc.terminalSeen && acc.finalText.trim() && acc.finalGeneration !== undefined &&
+				acc.finalGeneration === acc.terminalGeneration && !acc.fatalError &&
+				acc.stopReason !== "error" && acc.stopReason !== "aborted" && acc.stopReason !== "toolUse",
+			);
+		},
+	};
+}
+
+function canonicalAllowlistedExtensions(settings: PiChildSettings): string[] {
+	if (settings.resourceProfile !== "allowlist") return [];
+	const canonical: string[] = [];
+	const seen = new Set<string>();
+	for (const configured of settings.extensions) {
+		if (!configured.trim() || /[\0-\x1f\x7f]/.test(configured)) {
+			throw new Error("taskflow.piChild.extensions entries must be non-empty paths without control characters");
+		}
+		if (!path.isAbsolute(configured)) {
+			throw new Error(`taskflow.piChild extension must be an absolute path: ${configured}`);
+		}
+		let resolved: string;
+		try {
+			resolved = fs.realpathSync(configured);
+		} catch {
+			throw new Error(`taskflow.piChild extension does not exist: ${configured}`);
+		}
+		if (!fs.statSync(resolved).isFile()) {
+			throw new Error(`taskflow.piChild extension is not a file: ${configured}`);
+		}
+		if (!seen.has(resolved)) {
+			seen.add(resolved);
+			canonical.push(resolved);
+		}
+	}
+	return canonical;
 }
 
 /**
@@ -155,19 +278,19 @@ export async function runAgentTask(
 	task: string,
 	opts: RunOptions,
 	globalThinking?: string,
+	piChildRaw: PiChildSettings = DEFAULT_PI_CHILD_SETTINGS,
 ): Promise<RunResult> {
 	const agent = agents.find((a) => a.name === agentName);
-	if (!agent) {
-		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
+	if (!agent) return unknownAgentResult(agentName, task, agents);
+	const piChild = normalizePiChildSettings(piChildRaw);
+	let configuredExtensions: string[];
+	try {
+		configuredExtensions = canonicalAllowlistedExtensions(piChild);
+	} catch (error) {
 		return {
-			agent: agentName,
-			task,
-			exitCode: 1,
-			output: "",
-			stderr: `Unknown agent: "${agentName}". Available: ${available}.`,
-			usage: emptyUsage(),
-			errorMessage: `Unknown agent: ${agentName}`,
-			stopReason: "error",
+			...unknownAgentResult(agentName, task, agents),
+			stderr: error instanceof Error ? error.message : String(error),
+			errorMessage: error instanceof Error ? error.message : String(error),
 		};
 	}
 
@@ -184,6 +307,7 @@ export async function runAgentTask(
 	}
 
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
+	if (piChild.resourceProfile !== "inherit") args.push("--no-extensions");
 	if (model) args.push("--model", model);
 	if (thinking) args.push("--thinking", thinking);
 	if (tools && tools.length > 0) args.push("--tools", tools.join(","));
@@ -191,16 +315,7 @@ export async function runAgentTask(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
-	const acc = newAccumulator(model);
-	const result: RunResult = {
-		agent: agentName,
-		task,
-		exitCode: 0,
-		output: "",
-		stderr: "",
-		usage: emptyUsage(),
-		model,
-	};
+	const acc = newPiAccumulator(model);
 
 	try {
 		const ctxEnabled = Boolean(opts.ctxDir && opts.nodeId);
@@ -222,169 +337,50 @@ export async function runAgentTask(
 			await writePromptToTempFile(tmpPromptPath, appendedPrompt);
 			args.push("--append-system-prompt", tmpPromptPath);
 		}
-		args.push(`Task: ${task}`);
-
 		// Shared Context Tree opt-in: load THIS extension into the subagent so it
 		// can register the ctx_* tools, and pass the blackboard dir + node id via
 		// env. `--extension` is the explicit, self-documenting fallback that does
 		// not rely on the subagent auto-discovering user/project extensions in
 		// `-p` mode. The env vars drive the dual-identity branch in index.ts.
 		const ctxEnv: Record<string, string> = {};
+		const extensionPaths = [...configuredExtensions];
 		if (opts.ctxDir && opts.nodeId) {
 			const selfPath = ctxExtensionPath();
-			if (selfPath) args.push("--extension", selfPath);
+			if (selfPath) extensionPaths.push(selfPath);
 			ctxEnv.PI_TASKFLOW_CTX_DIR = opts.ctxDir;
 			ctxEnv.PI_TASKFLOW_NODE_ID = opts.nodeId;
 		}
-
-		let wasAborted = false;
-		let idleTimedOut = false;
-		let killedBySignal: string | undefined;
-		const exitCode = await new Promise<number>((resolve) => {
-			const invocation = getPiInvocation(args);
-			const proc = spawn(invocation.command, invocation.args, {
-				cwd: opts.cwd ?? defaultCwd,
-				shell: false,
-				stdio: ["ignore", "pipe", "pipe"],
-				env: { ...process.env, ...ctxEnv },
-			});
-			if (proc.pid) activeChildren.add(proc.pid);
-			let buffer = "";
-
-			// Idle watchdog: a subagent that goes silent on stdout for too long is
-			// treated as wedged and killed, so one stalled child cannot hang the
-			// whole taskflow forever. The timer is reset on every stdout chunk and
-			// torn down on close/error.
-			const idleMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
-			let idleTimer: ReturnType<typeof setTimeout> | undefined;
-			let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
-			const clearTimers = () => {
-				if (idleTimer) clearTimeout(idleTimer);
-				if (forceKillTimer) clearTimeout(forceKillTimer);
-			};
-			const hardKill = () => {
-				proc.kill("SIGTERM");
-				forceKillTimer = setTimeout(() => proc.kill("SIGKILL"), 5000);
-				forceKillTimer.unref();
-			};
-			const armIdle = () => {
-				if (idleTimer) clearTimeout(idleTimer);
-				if (idleMs <= 0) return; // disabled
-				idleTimer = setTimeout(() => {
-					idleTimedOut = true;
-					hardKill();
-				}, idleMs);
-				idleTimer.unref();
-			};
-			armIdle();
-
-			const processLine = (line: string) => {
-				const live = foldEventLine(acc, line);
-				if (live && opts.onLive) opts.onLive(live);
-			};
-
-			proc.stdout.on("data", (data) => {
-				armIdle(); // progress observed — reset the idle watchdog
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
-			});
-			// Cap prevents OOM from verbose tool output (e.g., npm install). 64 KB is
-			// generous for error diagnosis while preventing memory exhaustion.
-			const STDERR_MAX_LEN = 64 * 1024;
-			let stderrCapped = false;
-			proc.stderr.on("data", (data) => {
-				if (!stderrCapped) {
-					result.stderr += data.toString();
-					if (result.stderr.length >= STDERR_MAX_LEN) {
-						result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
-						stderrCapped = true;
-					}
-				}
-			});
-			proc.on("close", (code, signal) => {
-				if (proc.pid) activeChildren.delete(proc.pid);
-				clearTimers();
-				if (buffer.trim()) processLine(buffer);
-				if (code === null && signal) killedBySignal = signal;
-				resolve(code ?? 0);
-			});
-			proc.on("error", (err) => {
-				clearTimers();
-				if (!result.stderr) result.stderr = err.message;
-				if (!result.errorMessage) result.errorMessage = err.message;
-				resolve(1);
-			});
-
-			if (opts.signal) {
-				const kill = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					// Force-kill fallback. proc.kill("SIGKILL") is idempotent if
-					// the process already exited, and `proc.killed` is set true
-					// synchronously by the SIGTERM above — so the previous
-					// `if (!proc.killed)` guard would skip SIGKILL entirely,
-					// hanging forever on a child that ignores SIGTERM.
-					// .unref() keeps the timer from holding the event loop open
-					// after the process is gone.
-					const forceKill = setTimeout(() => proc.kill("SIGKILL"), 5000);
-					forceKill.unref();
-				};
-				if (opts.signal.aborted) kill();
-				else opts.signal.addEventListener("abort", kill, { once: true });
-			}
+		for (const extensionPath of [...new Set(extensionPaths)]) args.push("--extension", extensionPath);
+		// Pi treats the prompt as a positional argument; all flags must precede it.
+		args.push(`Task: ${task}`);
+		const invocation = getPiInvocation(args);
+		const childEnv = { ...process.env, ...ctxEnv };
+		// A child agent is not a host principal. Never let it inherit the
+		// operator's resolve-only bridge opt-in and mint equivalent authority.
+		delete childEnv[CWD_BRIDGE_MODE_ENV];
+		delete childEnv[WORKSPACE_RECONCILE_MODE_ENV];
+		const result = await runSubagentProcess({
+			agent: agentName,
+			task,
+			model,
+			bin: invocation.command,
+			args: invocation.args,
+			env: childEnv,
+			cwd: opts.cwd ?? defaultCwd,
+			idleTimeoutMs: opts.idleTimeoutMs,
+			signal: opts.signal,
+			onLive: opts.onLive,
+			acc,
+			foldLine: foldPiEventLine,
+			completionPolicy: piCompletionPolicy(piChild.terminalGraceMs),
+			onTerminalCommit: opts.onTerminalCommit,
+			requireTerminalEvent: true,
+			terminalEventLabel: "Pi agent_end/agent_settled",
 		});
-
-		result.exitCode = exitCode;
-		result.usage = acc.usage;
-		result.model = acc.model;
-		result.stopReason = acc.stopReason;
-		result.errorMessage = acc.errorMessage;
-		result.output = getFinalOutput(acc.messages);
 		// M-6: surface truncation when the message cap was hit so downstream
 		// phases and the user know output was cut short.
 		if (acc.truncated) {
 			result.output += "\n\n[...output truncated after 500 messages]";
-		}
-		// Signal kill detection: process exited 0 but was killed by a signal
-		// (e.g. OOM killer, cgroup limit). Treat as failure so the runtime's
-		// retry/fail handling doesn't silently accept a truncated result.
-		if (exitCode === 0 && killedBySignal && !idleTimedOut && !wasAborted) {
-			result.exitCode = 1;
-			result.stopReason = "error";
-			result.errorMessage = `Subagent killed by signal ${killedBySignal}`;
-		}
-		if (idleTimedOut) {
-			// Distinct, actionable signal: the child was killed for being idle, not
-			// a user abort. stopReason "error" keeps it in the failed bucket so the
-			// runtime's retry/fail handling treats it as a real failure.
-			result.stopReason = "error";
-			result.idleTimeout = true;
-			result.errorMessage = `Subagent stalled: no output for ${Math.round((opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS) / 1000)}s (idle timeout) — killed`;
-		} else if (wasAborted) {
-			result.stopReason = "aborted";
-			result.errorMessage = "Subagent was aborted";
-		}
-		// On failure, build a short, structured errorMessage + a placeholder
-		// output. We deliberately do NOT copy the raw errorMessage into
-		// `output`: upstream providers (e.g. a Cloudflare challenge page) can
-		// surface huge HTML/JSON in errorMessage, and that garbage would
-		// otherwise flow into downstream phase interpolations.
-		// Sanitization must run whenever the run failed, even if some output
-		// was already emitted (e.g. crash mid-stream with a partial result):
-		// an unsanitized errorMessage would still leak into PhaseState and
-		// downstream interpolation contexts. (F-013)
-		if (isFailed(result)) {
-			if (!result.output) {
-				result.output = TRANSPORT_ERROR_PLACEHOLDER;
-				if (!result.errorMessage) {
-					result.errorMessage = result.stderr || `Subagent exited with code ${result.exitCode} (stopReason: ${result.stopReason ?? "unknown"})`;
-				}
-			}
-			if (result.errorMessage) {
-				result.errorMessage = sanitizeErrorMessage(result.errorMessage);
-			}
 		}
 		return result;
 	} finally {
@@ -414,6 +410,20 @@ export async function runAgentTask(
 export const piSubagentRunner: SubagentRunner<AgentConfig> = {
 	runTask: runAgentTask,
 };
+
+/** Create a host-authorized Pi runner. The normalized configuration is copied
+ * into the closure so nested/dynamic flows can only inherit the same authority. */
+export function createPiSubagentRunner(raw: unknown = DEFAULT_PI_CHILD_SETTINGS): SubagentRunner<AgentConfig> {
+	const normalized = normalizePiChildSettings(raw);
+	const snapshot: PiChildSettings = {
+		...normalized,
+		extensions: [...normalized.extensions],
+	};
+	return {
+		runTask: (cwd, agents, agentName, task, opts, globalThinking) =>
+			runAgentTask(cwd, agents, agentName, task, opts, globalThinking, snapshot),
+	};
+}
 
 /**
  * Absolute filesystem path of THIS module — what the host serializes into the

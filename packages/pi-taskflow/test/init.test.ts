@@ -873,7 +873,39 @@ test("runInteractiveInit: 'Configure taskflow preferences' → disable built-ins
 
 	// Verify the settings were actually written to disk
 	const saved = readSettings();
-	assert.deepEqual(saved.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30, library: { enabled: true, scope: "both" } });
+	assert.deepEqual(saved.taskflow, {
+		builtInAgents: false,
+		syncBuiltinAgentsToProject: false,
+		maxKeptRuns: 100,
+		maxRunAgeDays: 30,
+		library: { enabled: true, scope: "both" },
+		piChild: { resourceProfile: "isolated", extensions: [], terminalGraceMs: 1500 },
+	});
+});
+
+test("runInteractiveInit: editing preferences preserves Pi child authority settings", async () => {
+	const ui = createMockUI([
+		"Configure taskflow preferences",
+		"Disable built-in agents",
+		"Save these preferences",
+	]);
+	const piChild = {
+		resourceProfile: "allowlist" as const,
+		extensions: ["/trusted/custom-extension.ts"],
+		terminalGraceMs: 2200,
+	};
+	const result = await runInteractiveInit({
+		hasUI: true,
+		signal: new AbortController().signal,
+		ui,
+		modelRegistry: undefined as never,
+		modelList: sampleModels,
+		currentRoles: {},
+		currentTaskflowSettings: { ...DEFAULT_TASKFLOW_SETTINGS, piChild },
+	});
+	assert.equal(result.kind, "preferences-saved");
+	assert.deepEqual(result.settings.piChild, piChild);
+	assert.deepEqual((readSettings().taskflow as { piChild: unknown }).piChild, piChild);
 });
 
 test("runInteractiveInit: 'Configure taskflow preferences' → enable + sync → preferences-saved", async () => {

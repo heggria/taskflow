@@ -46,6 +46,30 @@ test("compileTaskflowToIR: hash is IR content-addressed (ir:<64-hex>), not flowD
 	assert.equal(ir.hash, hashFlowIR(c.canonical));
 });
 
+test("compileTaskflowToFlowIR: cwd bridge lowers to logical RW existing-directory use", async () => {
+	const def = flow(
+		[agent("work", undefined, { cwd: "{args.package}", final: true })],
+		{ args: { package: { type: "relative-path", required: true } } },
+	);
+	const compiled = compileTaskflowToFlowIR(def);
+	const payload = compiled.canonical.nodes[0]?.payload as Record<string, unknown>;
+	assert.deepEqual(payload.cwdUse, {
+		kind: "invocation-relative-arg",
+		arg: "package",
+		access: "read-write",
+		intent: "existing-directory",
+	});
+	assert.equal("cwd" in payload, false, "canonical payload never contains the authored placeholder");
+	const sidecar = (compiled.meta.sidecar as { phases: Record<string, Record<string, unknown>> }).phases.work;
+	assert.equal(sidecar.cwd, "{args.package}", "lossless sidecar preserves the authored form");
+
+	const renamed = flow(
+		[agent("work", undefined, { cwd: "{args.component}", final: true })],
+		{ args: { component: { type: "relative-path", required: true } } },
+	);
+	assert.notEqual((await compileTaskflowToIR(def)).hash, (await compileTaskflowToIR(renamed)).hash);
+});
+
 test("compileTaskflowToIR: single-field mutation changes the hash", async () => {
 	const base = flow([agent("a", undefined, { final: true })]);
 	const h0 = await compileTaskflowToIR(base);

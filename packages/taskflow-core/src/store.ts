@@ -22,6 +22,7 @@ import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import { parseStrict } from "./interpolate.ts";
 import type { Taskflow } from "./schema.ts";
+import type { DirectoryIdentity } from "./cwd-bridge.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
@@ -171,6 +172,12 @@ export interface RunState {
 	createdAt: number;
 	updatedAt: number;
 	cwd: string;
+	/** Root identity captured by a host when it creates the run. This closes the
+	 * detached launch window, but does not itself grant/taint cwd-bridge use. */
+	invocationRootSnapshot?: DirectoryIdentity;
+	/** Immutable root binding set only after this run actually activates the cwd
+	 * bridge. Its presence is the persisted authority/taint marker. */
+	cwdRootBinding?: DirectoryIdentity;
 	/** OS PID of a detached runner process (set only for background runs). */
 	pid?: number;
 	/** True for runs spawned via `detach: true` (background execution). */

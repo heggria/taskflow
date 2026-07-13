@@ -11,6 +11,22 @@ import { parseFrontmatter } from "./frontmatter.ts";
 
 export type AgentScope = "user" | "project" | "both";
 
+export type PiChildResourceProfile = "isolated" | "allowlist" | "inherit";
+
+/** Trusted host configuration for Pi children. This is deliberately not part
+ * of the flow DSL or RunOptions: a flow may consume authority, never mint it. */
+export interface PiChildSettings {
+	resourceProfile: PiChildResourceProfile;
+	extensions: string[];
+	terminalGraceMs: number;
+}
+
+export const DEFAULT_PI_CHILD_SETTINGS: PiChildSettings = {
+	resourceProfile: "isolated",
+	extensions: [],
+	terminalGraceMs: 1500,
+};
+
 export interface TaskflowSettings {
 	/** Whether taskflow's package-local built-in agents are available to flows. */
 	builtInAgents: boolean;
@@ -24,6 +40,8 @@ export interface TaskflowSettings {
 	library: LibrarySettings;
 	/** Optional embedding backend for semantic search (Phase 2). Undefined = structural/keyword fallback. */
 	embedder?: EmbedderConfig;
+	/** Host-only Pi child isolation/completion policy. */
+	piChild: PiChildSettings;
 }
 
 import { DEFAULT_KEPT_RUNS, DEFAULT_RUN_AGE_DAYS, writeFileAtomic } from "./store.ts";
@@ -35,11 +53,36 @@ export const DEFAULT_TASKFLOW_SETTINGS: TaskflowSettings = {
 	maxKeptRuns: DEFAULT_KEPT_RUNS,
 	maxRunAgeDays: DEFAULT_RUN_AGE_DAYS,
 	library: { ...DEFAULT_LIBRARY_SETTINGS },
+	piChild: { ...DEFAULT_PI_CHILD_SETTINGS, extensions: [] },
 };
+
+export function normalizePiChildSettings(raw: unknown): PiChildSettings {
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		return { ...DEFAULT_PI_CHILD_SETTINGS, extensions: [] };
+	}
+	const rec = raw as Record<string, unknown>;
+	const resourceProfile: PiChildResourceProfile =
+		rec.resourceProfile === "allowlist" || rec.resourceProfile === "inherit" || rec.resourceProfile === "isolated"
+			? rec.resourceProfile
+			: DEFAULT_PI_CHILD_SETTINGS.resourceProfile;
+	const extensions = Array.isArray(rec.extensions)
+		? rec.extensions.filter((entry): entry is string => typeof entry === "string")
+		: [];
+	const terminalGraceMs =
+		typeof rec.terminalGraceMs === "number" && Number.isInteger(rec.terminalGraceMs) &&
+		rec.terminalGraceMs >= 0 && rec.terminalGraceMs <= 60_000
+			? rec.terminalGraceMs
+			: DEFAULT_PI_CHILD_SETTINGS.terminalGraceMs;
+	return { resourceProfile, extensions, terminalGraceMs };
+}
 
 export function normalizeTaskflowSettings(raw: unknown): TaskflowSettings {
 	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-		const base: TaskflowSettings = { ...DEFAULT_TASKFLOW_SETTINGS, library: { ...DEFAULT_LIBRARY_SETTINGS } };
+		const base: TaskflowSettings = {
+			...DEFAULT_TASKFLOW_SETTINGS,
+			library: { ...DEFAULT_LIBRARY_SETTINGS },
+			piChild: { ...DEFAULT_PI_CHILD_SETTINGS, extensions: [] },
+		};
 		return base;
 	}
 	const rec = raw as Record<string, unknown>;
@@ -62,6 +105,7 @@ export function normalizeTaskflowSettings(raw: unknown): TaskflowSettings {
 				? rec.maxRunAgeDays
 				: DEFAULT_TASKFLOW_SETTINGS.maxRunAgeDays,
 		library: normalizeLibrarySettings(rec.library),
+		piChild: normalizePiChildSettings(rec.piChild),
 	};
 	if (embedder) base.embedder = embedder;
 	return base;

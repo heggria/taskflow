@@ -27,7 +27,7 @@ import {
 import { Type } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "taskflow-core";
 import { renderRunResult, summarizeRun } from "./render.ts";
-import { piSubagentRunner, runnerModulePath } from "./runner.ts";
+import { createPiSubagentRunner, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
 import {
@@ -87,6 +87,13 @@ import {
 	writeReport,
 } from "taskflow-core";
 import { MAX_DYNAMIC_NESTING } from "taskflow-core";
+import {
+	cwdBridgeModeFromEnv,
+	directoryIdentity,
+	reconcileResolveOnlyWorkspace,
+	WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
+	workspaceReconcileAllowedFromEnv,
+} from "taskflow-core";
 
 interface TaskflowDetails {
 	state?: RunState;
@@ -117,8 +124,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "cache-clear", "search"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, or clear the cross-run memoization cache",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, or clear the cross-run memoization cache",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -170,6 +177,8 @@ const TaskflowParams = Type.Object({
 	budgetMaxTokens: Type.Optional(Type.Number({ description: "For action=replay: alternate max token budget." })),
 	thresholds: Type.Optional(Type.Record(Type.String(), Type.Number(), { description: "For action=replay: map of phaseId → new score threshold." })),
 	models: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "For action=replay: map of phaseId → model (marks needs-live-rerun)." })),
+	acknowledgement: Type.Optional(Type.String({ description: `For action=reconcile-workspace, must exactly equal: ${WORKSPACE_RECONCILE_ACKNOWLEDGEMENT}` })),
+	reason: Type.Optional(Type.String({ description: "For action=reconcile-workspace: short audit reason describing what was inspected or repaired." })),
 	scope: Type.Optional(
 		StringEnum(["user", "project"] as const, { description: "Where to save (action=save)", default: "project" }),
 	),
@@ -384,6 +393,7 @@ function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string)
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd,
+		invocationRootSnapshot: directoryIdentity(cwd),
 	};
 }
 
@@ -528,6 +538,7 @@ async function runFlow(
 
 		const result = await executeTaskflow(state, {
 			cwd: ctx.cwd,
+			cwdBridgeMode: cwdBridgeModeFromEnv(),
 			agents,
 			globalThinking: settings.globalThinking,
 			signal,
@@ -540,7 +551,7 @@ async function runFlow(
 			// runTask is a no-op stub, so every host MUST inject its own — omitting
 			// this (as the pre-refactor code could, when the default was runAgentTask
 			// in the same package) now silently breaks all phase execution.
-			runTask: piSubagentRunner.runTask,
+			runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
 			requestApproval,
 			loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
 			// Cross-run cache is opt-in. By default a real run is `run-only` (fresh
@@ -690,6 +701,27 @@ export default function (pi: ExtensionAPI) {
 
 		async execute(_id, params, signal, onUpdate, ctx) {
 			const action = params.action ?? "run";
+
+			if (action === "reconcile-workspace") {
+				try {
+					const result = await reconcileResolveOnlyWorkspace({
+						invocationRoot: ctx.cwd,
+						signal,
+						allowReconcile: workspaceReconcileAllowedFromEnv(),
+					}, {
+						acknowledgement: params.acknowledgement ?? "",
+						reason: params.reason,
+						signal,
+					});
+					const changed = result.reconciledIntentIds.length;
+					const text = changed === 0
+						? `Workspace is already clean at generation ${result.generation}; no dirty intent was changed.`
+						: `Workspace reconciled: ${changed} dirty intent(s) accepted; generation ${result.previousGeneration} → ${result.generation}.`;
+					return { content: [{ type: "text", text }], details: { action } satisfies TaskflowDetails };
+				} catch (error) {
+					return errorResult(action, `Workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
 
 			// init — configure model roles
 			if (action === "init") {
@@ -1098,10 +1130,11 @@ export default function (pi: ExtensionAPI) {
 				const { agents } = discoverAgents(ctx.cwd, prev.def.agentScope ?? "user", settings.modelRoles, settings.taskflow);
 				const deps: RuntimeDeps = {
 					cwd: ctx.cwd,
+					cwdBridgeMode: cwdBridgeModeFromEnv(),
 					agents,
 					globalThinking: settings.globalThinking,
 					signal,
-					runTask: piSubagentRunner.runTask,
+					runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
 					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
@@ -1245,11 +1278,13 @@ export default function (pi: ExtensionAPI) {
 				saveRun(state);
 
 				// Serialize context for the detached runner script.
-				const { writeFileSync } = await import("node:fs");
+				const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
 				const { spawn } = await import("node:child_process");
 				const os = await import("node:os");
 				const path = await import("node:path");
-				const tmpFile = path.join(os.tmpdir(), `taskflow-detach-${state.runId}.json`);
+				const tmpDir = mkdtempSync(path.join(os.tmpdir(), "taskflow-detach-"));
+				chmodSync(tmpDir, 0o700);
+				const tmpFile = path.join(tmpDir, "context.json");
 				// The runner module path is SELF-REPORTED by runner.ts (import.meta.url):
 				// src/runner.ts in dev, dist/runner.js in the compiled package. Do NOT
 				// switch this to resolving the relative "./runner" specifier with a .ts
@@ -1265,8 +1300,9 @@ export default function (pi: ExtensionAPI) {
 					args,
 					cwd: ctx.cwd,
 					runnerModule,
-					runnerExport: "piSubagentRunner",
-				}));
+					runnerFactoryExport: "createPiSubagentRunner",
+					runnerConfig: readSubagentSettings().taskflow.piChild,
+				}), { encoding: "utf-8", flag: "wx", mode: 0o600 });
 
 				// detached-runner lives in taskflow-core (spawn-only entry). Resolve it
 				// from the installed package so it works under workspaces and when
@@ -1312,6 +1348,7 @@ export default function (pi: ExtensionAPI) {
 				};
 				child.on("exit", markFailedOnEarlyExit);
 				child.on("error", (err) => {
+					try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 					try {
 						const cur = loadRun(ctx.cwd, state.runId);
 						if (cur && cur.status === "running") {
@@ -1398,9 +1435,9 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- The /tf user command ----
 	pi.registerCommand("tf", {
-		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | init",
+		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1416,6 +1453,37 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				ctx.ui.notify(flows.map((f) => `${f.name} (${f.scope}) — ${f.def.description ?? ""}`).join("\n"), "info");
+				return;
+			}
+
+			if (sub === "reconcile-workspace") {
+				const tokens = rest.filter(Boolean);
+				if (!tokens.includes("--ack")) {
+					ctx.ui.notify(
+						"Usage: /tf reconcile-workspace --ack [reason]\nInspect or repair the current workspace first; this accepts its current state and does not restore files.",
+						"warning",
+					);
+					return;
+				}
+				const reason = tokens.filter((token) => token !== "--ack").join(" ") || undefined;
+				try {
+					const result = await reconcileResolveOnlyWorkspace({
+						invocationRoot: ctx.cwd,
+						// Slash commands are direct user control-plane actions, not model tool calls.
+						allowReconcile: true,
+					}, {
+						acknowledgement: WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
+						reason,
+					});
+					ctx.ui.notify(
+						result.reconciledIntentIds.length === 0
+							? `Workspace is already clean at generation ${result.generation}.`
+							: `Workspace reconciled: ${result.reconciledIntentIds.length} dirty intent(s); generation ${result.previousGeneration} → ${result.generation}.`,
+						"info",
+					);
+				} catch (error) {
+					ctx.ui.notify(`Workspace reconciliation failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+				}
 				return;
 			}
 
@@ -1612,9 +1680,10 @@ export default function (pi: ExtensionAPI) {
 				const { agents } = discoverAgents(ctx.cwd, prev.def.agentScope ?? "user", settings.modelRoles, settings.taskflow);
 				const deps: RuntimeDeps = {
 					cwd: ctx.cwd,
+					cwdBridgeMode: cwdBridgeModeFromEnv(),
 					agents,
 					globalThinking: settings.globalThinking,
-					runTask: piSubagentRunner.runTask,
+					runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
 					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
 					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
@@ -1936,7 +2005,127 @@ function finalResult(action: string, result: RuntimeResult): ToolResult {
 }
 
 /** Parse a CLI-ish arg string into an args object. Accepts JSON or key=value pairs. */
-function parseArgsString(input: string, def: Taskflow): Record<string, unknown> {
+function parseFiniteDecimal(value: string): number | undefined {
+	let index = 0;
+	if (value[index] === "+" || value[index] === "-") index++;
+	let digits = 0;
+	while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) {
+		index++;
+		digits++;
+	}
+	if (value[index] === ".") {
+		index++;
+		while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) {
+			index++;
+			digits++;
+		}
+	}
+	if (digits === 0) return undefined;
+	if (value[index] === "e" || value[index] === "E") {
+		index++;
+		if (value[index] === "+" || value[index] === "-") index++;
+		const exponentStart = index;
+		while (index < value.length && value.charCodeAt(index) >= 48 && value.charCodeAt(index) <= 57) index++;
+		if (index === exponentStart) return undefined;
+	}
+	if (index !== value.length) return undefined;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isArgWhitespace(code: number): boolean {
+	return code === 32 || (code >= 9 && code <= 13);
+}
+
+function isArgKeyChar(code: number): boolean {
+	return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || code === 95 || (code >= 97 && code <= 122);
+}
+
+function unescapeQuotedArg(value: string): string {
+	let output = "";
+	for (let index = 0; index < value.length; index++) {
+		if (value[index] === "\\" && value[index + 1] === '"') {
+			output += '"';
+			index++;
+		} else {
+			output += value[index];
+		}
+	}
+	return output;
+}
+
+/** Linear scanner for the deliberately small `key=value` command syntax. */
+function parseArgPairs(input: string): Array<[string, string]> {
+	const pairs: Array<[string, string]> = [];
+	let index = 0;
+	while (index < input.length) {
+		while (index < input.length && isArgWhitespace(input.charCodeAt(index))) index++;
+		const keyStart = index;
+		while (index < input.length && isArgKeyChar(input.charCodeAt(index))) index++;
+		if (index === keyStart || input[index] !== "=") {
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			continue;
+		}
+		const key = input.slice(keyStart, index++);
+		if (index >= input.length) continue;
+		if (input[index] !== '"') {
+			const valueStart = index;
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			if (index > valueStart) pairs.push([key, input.slice(valueStart, index)]);
+			continue;
+		}
+
+		const quotedStart = index++;
+		const valueStart = index;
+		let closedAt = -1;
+		while (index < input.length) {
+			if (input[index] === "\\" && index + 1 < input.length) {
+				index += 2;
+				continue;
+			}
+			if (input[index] === '"') {
+				closedAt = index++;
+				break;
+			}
+			index++;
+		}
+		if (closedAt >= 0) {
+			pairs.push([key, unescapeQuotedArg(input.slice(valueStart, closedAt))]);
+			// A quoted value is one token. Ignore any adjacent suffix instead of
+			// accidentally treating a substring of it as another declared argument.
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+		} else {
+			// Preserve the legacy fallback for an unterminated quote: the entire
+			// non-whitespace token remains a string and boundary validation decides.
+			index = quotedStart;
+			while (index < input.length && !isArgWhitespace(input.charCodeAt(index))) index++;
+			pairs.push([key, input.slice(quotedStart, index)]);
+		}
+	}
+	return pairs;
+}
+
+function coerceDeclaredArg(def: Taskflow, key: string, value: string): unknown {
+	const spec = def.args?.[key] as { type?: string; values?: Array<string | number> } | undefined;
+	if (spec?.type === "number") {
+		const parsed = parseFiniteDecimal(value);
+		if (parsed !== undefined) return parsed;
+	}
+	if (spec?.type === "boolean") {
+		if (value === "true") return true;
+		if (value === "false") return false;
+	}
+	if (spec?.type === "enum" && spec.values?.some((candidate) => typeof candidate === "number")) {
+		if (spec.values.some((candidate) => typeof candidate === "string" && candidate === value)) return value;
+		const parsed = parseFiniteDecimal(value);
+		if (parsed !== undefined && spec.values.some((candidate) => typeof candidate === "number" && Object.is(candidate, parsed))) {
+			return parsed;
+		}
+	}
+	return value;
+}
+
+export function parseArgsString(input: string, def: Taskflow): Record<string, unknown> {
 	const trimmed = (input ?? "").trim();
 	if (!trimmed) return {};
 	if (trimmed.startsWith("{")) {
@@ -1948,19 +2137,15 @@ function parseArgsString(input: string, def: Taskflow): Record<string, unknown> 
 	}
 	// key=value pairs
 	const out: Record<string, unknown> = {};
-	const pairs = trimmed.match(/(\w+)=("(?:[^"\\]|\\.)*"|\S+)/g);
-	if (pairs) {
-		for (const p of pairs) {
-			const idx = p.indexOf("=");
-			const k = p.slice(0, idx);
-			let v: string = p.slice(idx + 1);
-			if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1).replace(/\\"/g, '"');
-			out[k] = v;
+	const pairs = parseArgPairs(trimmed);
+	if (pairs.length > 0) {
+		for (const [key, value] of pairs) {
+			out[key] = coerceDeclaredArg(def, key, value);
 		}
 		return out;
 	}
 	// single positional → first declared arg
 	const firstArg = Object.keys(def.args ?? {})[0];
-	if (firstArg) return { [firstArg]: trimmed };
+	if (firstArg) return { [firstArg]: coerceDeclaredArg(def, firstArg, trimmed) };
 	return {};
 }

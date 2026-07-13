@@ -14,6 +14,7 @@
  */
 
 import { collectRefs, PHASE_TYPES, type Phase, type PhaseType, type Taskflow } from "../schema.ts";
+import { cwdArgName } from "../cwd-bridge.ts";
 import { normalizeCond } from "./cond.ts";
 import type {
 	FlowIR as CanonicalFlowIR,
@@ -94,6 +95,18 @@ function sidecarForPhase(phase: Phase): Record<string, unknown> {
 function payloadForPhase(phase: Phase): Record<string, unknown> | undefined {
 	const sidecar = sidecarForPhase(phase);
 	for (const key of NODE_FIELD_KEYS) delete sidecar[key];
+	const argName = cwdArgName(phase.cwd);
+	if (argName !== undefined) {
+		// Canonical IR records logical resource semantics only. The authored raw
+		// placeholder remains in meta.sidecar for lossless decompilation.
+		delete sidecar.cwd;
+		sidecar.cwdUse = {
+			kind: "invocation-relative-arg",
+			arg: argName,
+			access: "read-write",
+			intent: "existing-directory",
+		};
+	}
 	return Object.keys(sidecar).length > 0 ? sidecar : undefined;
 }
 

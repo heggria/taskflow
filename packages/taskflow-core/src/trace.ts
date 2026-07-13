@@ -84,6 +84,9 @@ export interface TraceEvent {
 		model?: string; // actual model that answered
 		usage?: UsageStats;
 		stopReason?: string;
+		completionSource?: import("./host/runner-types.ts").RunResult["completionSource"];
+		reapedAfterTerminal?: boolean;
+		terminalGraceMs?: number;
 	};
 	/** The runtime's own decision — what a replay re-adjudicates. */
 	decision?: TraceDecision;

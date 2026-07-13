@@ -11,7 +11,7 @@ import { contractShapeErrors } from "./contract.ts";
 import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
 import { Errors as SchemaErrors } from "typebox/value";
-import { WORKSPACE_KEYWORDS } from "./workspace.ts";
+import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
@@ -71,9 +71,6 @@ export type CacheScope = (typeof CACHE_SCOPES)[number];
 const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] as const;
 /** Phase types that must NOT be cached across runs (a fresh result is required each run). */
 const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script", "race", "expand"] as const;
-/** `cwd` is a literal path / workspace keyword, not an interpolated field. */
-const CWD_PLACEHOLDER_RE = /\{[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\}/;
-
 const ParallelTaskSchema = Type.Object(
 	{
 		task: Type.String({ description: "Task for this parallel branch (supports interpolation)" }),
@@ -291,7 +288,7 @@ const PhaseSchema = Type.Object(
 			}),
 		),
 		tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict tools for this phase's agent" })),
-		cwd: Type.Optional(Type.String({ description: "Working directory for this phase's subagent. A literal path, or a reserved keyword: 'temp' (ephemeral dir, removed after the phase), 'dedicated' (persistent dir under the run state, kept), or 'worktree' (a git worktree on a throwaway branch, removed after the phase)." })),
+		cwd: Type.Optional(Type.String({ description: "Working directory for this phase. Accepts a literal path; a reserved keyword ('temp', 'dedicated', 'worktree'); or the exact whole placeholder {args.X} when X is declared type:'relative-path'. The 0.2.1 argument bridge requires an explicit host resolve-only opt-in." })),
 		final: Type.Optional(Type.Boolean({ description: "Mark this phase's output as the workflow result" })),
 		optional: Type.Optional(
 			Type.Boolean({ description: "If true, a failure does not abort the run", default: false }),
@@ -346,14 +343,77 @@ const PhaseSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-const ArgSpecSchema = Type.Object(
+const LegacyArgSpecSchema = Type.Object(
 	{
+		type: Type.Optional(Type.Never()),
 		default: Type.Optional(Type.Unknown()),
 		description: Type.Optional(Type.String()),
 		required: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );
+
+const StringArgSpecSchema = Type.Object(
+	{
+		type: Type.Literal("string"),
+		default: Type.Optional(Type.String()),
+		description: Type.Optional(Type.String()),
+		required: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
+
+const RelativePathArgSpecSchema = Type.Object(
+	{
+		type: Type.Literal("relative-path"),
+		default: Type.Optional(Type.String()),
+		description: Type.Optional(Type.String()),
+		required: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
+
+const NumberArgSpecSchema = Type.Object(
+	{
+		type: Type.Literal("number"),
+		default: Type.Optional(Type.Number()),
+		minimum: Type.Optional(Type.Number()),
+		maximum: Type.Optional(Type.Number()),
+		description: Type.Optional(Type.String()),
+		required: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
+
+const BooleanArgSpecSchema = Type.Object(
+	{
+		type: Type.Literal("boolean"),
+		default: Type.Optional(Type.Boolean()),
+		description: Type.Optional(Type.String()),
+		required: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
+
+const EnumArgSpecSchema = Type.Object(
+	{
+		type: Type.Literal("enum"),
+		values: Type.Array(Type.Union([Type.String(), Type.Number()]), { minItems: 1 }),
+		default: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+		description: Type.Optional(Type.String()),
+		required: Type.Optional(Type.Boolean()),
+	},
+	{ additionalProperties: false },
+);
+
+const ArgSpecSchema = Type.Union([
+	LegacyArgSpecSchema,
+	StringArgSpecSchema,
+	RelativePathArgSpecSchema,
+	NumberArgSpecSchema,
+	BooleanArgSpecSchema,
+	EnumArgSpecSchema,
+]);
 
 export const TaskflowSchema = Type.Object(
 	{
@@ -563,8 +623,65 @@ export interface ValidationOptions {
 	strict?: boolean;
 	/** When true, this flow is a runtime-generated (`flow { def }`) sub-flow whose
 	 *  content is LLM-authored / untrusted. Enables hardening checks: breadth caps
-	 *  (phase count, map items, concurrency) and cwd containment under `cwd`. */
+	 *  (phase count, map items, concurrency) and denial of cwd/context/script
+	 *  resource capabilities until a FileBroker/sandbox exists. */
 	dynamic?: boolean;
+}
+
+type ArgSpecRecord = Record<string, unknown> & {
+	type?: "string" | "relative-path" | "number" | "boolean" | "enum";
+	default?: unknown;
+	required?: boolean;
+	minimum?: number;
+	maximum?: number;
+	values?: Array<string | number>;
+};
+
+function typedArgValueErrors(name: string, spec: ArgSpecRecord, value: unknown, source: "default" | "invocation"): string[] {
+	const prefix = `Argument '${name}' ${source}`;
+	if (spec.type === "relative-path") {
+		const r = normalizeRelativePath(value);
+		return r.ok ? [] : [`${prefix} ${r.message}`];
+	}
+	if (spec.type === "string") {
+		if (typeof value !== "string") return [`${prefix} must be a string, got ${value === null ? "null" : typeof value}`];
+		return [];
+	}
+	if (spec.type === "number") {
+		if (typeof value !== "number" || !Number.isFinite(value)) return [`${prefix} must be a finite number`];
+		if (spec.minimum !== undefined && value < spec.minimum) return [`${prefix} must be >= ${spec.minimum}`];
+		if (spec.maximum !== undefined && value > spec.maximum) return [`${prefix} must be <= ${spec.maximum}`];
+		return [];
+	}
+	if (spec.type === "boolean") {
+		return typeof value === "boolean" ? [] : [`${prefix} must be a boolean, got ${value === null ? "null" : typeof value}`];
+	}
+	if (spec.type === "enum") {
+		const values = Array.isArray(spec.values) ? spec.values : [];
+		return values.some((v) => Object.is(v, value)) ? [] : [`${prefix} must be one of ${JSON.stringify(values)}`];
+	}
+	return [];
+}
+
+/** Validate resolved invocation values independently of full flow structure.
+ * Runtime calls this at the Core boundary so direct, resume, and detached
+ * execution cannot bypass adapter-level typed-arg checks. */
+export function validateInvocationArgs(def: Pick<Taskflow, "args">, args: Record<string, unknown>): string[] {
+	const errors: string[] = [];
+	const specs = (def.args ?? {}) as Record<string, unknown>;
+	for (const [name, spec] of Object.entries(specs)) {
+		// Full structural validation owns malformed specs. Keep this boundary
+		// total so validateTaskflow() reports SchemaErrors instead of throwing
+		// while it performs the optional invocation-value pass.
+		if (typeof spec !== "object" || spec === null || Array.isArray(spec)) continue;
+		const typedSpec = spec as ArgSpecRecord;
+		if (!(name in args)) {
+			if (typedSpec.type !== undefined && typedSpec.required === true && typedSpec.default === undefined) errors.push(`Missing required argument '${name}'`);
+			continue;
+		}
+		if (typedSpec.type !== undefined) errors.push(...typedArgValueErrors(name, typedSpec, args[name], "invocation"));
+	}
+	return errors;
 }
 
 export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): ValidationResult {
@@ -594,6 +711,40 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		return { ok: false, errors, warnings };
 	}
 
+	// Typed invocation args are the trust boundary for resource selectors. Legacy
+	// specs remain valid for every flow version, but can never feed a cwd bridge.
+	// `version` is informational metadata, not a schema-version selector.
+	const argSpecs = (
+		typeof flow.args === "object" && flow.args !== null && !Array.isArray(flow.args)
+			? flow.args
+			: {}
+	) as Record<string, ArgSpecRecord>;
+	for (const [name, spec] of Object.entries(argSpecs)) {
+		if (!spec || typeof spec !== "object" || Array.isArray(spec)) continue;
+		if (spec.type === "number" && spec.minimum !== undefined && spec.maximum !== undefined && spec.minimum > spec.maximum) {
+			errors.push(`Argument '${name}': minimum must be <= maximum`);
+		}
+		if (spec.type === "enum" && Array.isArray(spec.values) && new Set(spec.values.map((v) => `${typeof v}:${String(v)}`)).size !== spec.values.length) {
+			errors.push(`Argument '${name}': enum values must be unique`);
+		}
+		if (spec.default !== undefined && spec.type !== undefined) {
+			errors.push(...typedArgValueErrors(name, spec, spec.default, "default"));
+		}
+	}
+	if (opts.args !== undefined) {
+		errors.push(...validateInvocationArgs(flow as Taskflow, opts.args));
+		for (const [name, spec] of Object.entries(argSpecs)) {
+			if (!spec || typeof spec !== "object" || Array.isArray(spec)) continue;
+			if (spec.type === undefined && spec.required === true && spec.default === undefined && !(name in opts.args)) {
+				warnings.push(`Legacy untyped argument '${name}' is marked required but remains advisory; add an explicit type to enforce it`);
+			}
+		}
+		for (const name of Object.keys(opts.args)) {
+			if (name in argSpecs) continue;
+			if (strict) warnings.push(`Invocation argument '${name}' is undeclared`);
+		}
+	}
+
 	// Hardening for runtime-generated (untrusted) sub-flows: bound breadth and
 	// contain filesystem access. These do NOT apply to authored/saved flows.
 	if (opts.dynamic) {
@@ -603,9 +754,11 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (typeof flow.concurrency === "number" && flow.concurrency > MAX_DYNAMIC_CONCURRENCY) {
 			errors.push(`Dynamic sub-flow concurrency too high (${flow.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
 		}
-		const root = opts.cwd ? path.resolve(opts.cwd) : undefined;
 		for (const p of flow.phases) {
 			if (!p || typeof p !== "object") continue;
+			if (Array.isArray(p.context) && p.context.length > 0) {
+				errors.push(`Dynamic sub-flow phase '${p.id}': context file pre-reads are not allowed in generated flows`);
+			}
 			// A generated phase may not execute shell commands. `script` runs an
 			// arbitrary command — a strictly larger capability than the reserved
 			// cwd keywords blocked below — so an LLM-authored plan (flow{def} /
@@ -639,19 +792,11 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (typeof p.concurrency === "number" && p.concurrency > MAX_DYNAMIC_CONCURRENCY) {
 				errors.push(`Dynamic sub-flow phase '${p.id}': concurrency too high (${p.concurrency}, max ${MAX_DYNAMIC_CONCURRENCY})`);
 			}
-			// cwd containment: a generated phase may not escape the run's cwd, and
-			// may not request a reserved workspace keyword (temp/dedicated/worktree)
-			// — LLM-authored sub-flows must not allocate isolated dirs or git
-			// worktrees that mutate the repo. Only author-written flows may.
+			// W1a/FileBroker is not available yet, so a generated phase may not
+			// choose any cwd. Lexical containment is insufficient because symlinks
+			// and time-of-check/time-of-use races can cross the invocation boundary.
 			if (typeof p.cwd === "string") {
-				if (WORKSPACE_KEYWORDS.includes(p.cwd as (typeof WORKSPACE_KEYWORDS)[number])) {
-					errors.push(`Dynamic sub-flow phase '${p.id}': cwd '${p.cwd}' is a reserved workspace keyword not allowed in generated flows`);
-				} else if (root) {
-					const resolved = path.resolve(root, p.cwd);
-					if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-						errors.push(`Dynamic sub-flow phase '${p.id}': cwd '${p.cwd}' escapes the run directory`);
-					}
-				}
+				errors.push(`Dynamic sub-flow phase '${p.id}': cwd selection is not allowed in generated flows`);
 			}
 		}
 	}
@@ -715,10 +860,30 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				`Phase '${p.id}': 'thinking' must be one of ${THINKING_LEVELS.join(", ")}; got '${p.thinking}'`,
 			);
 		}
-		if (typeof p.cwd === "string" && CWD_PLACEHOLDER_RE.test(p.cwd)) {
-			errors.push(
-				`Phase '${p.id}': 'cwd' does not support interpolation placeholders (${p.cwd}). Use a literal path, or a reserved workspace keyword ('temp', 'dedicated', 'worktree').`,
-			);
+		if (typeof p.cwd === "string" && hasCwdPlaceholder(p.cwd)) {
+			const argName = cwdArgName(p.cwd);
+			if (!argName) {
+				errors.push(
+					`Phase '${p.id}': dynamic 'cwd' must be exactly one whole {args.X} placeholder; concatenation, multiple placeholders, and {steps.*} are forbidden.`,
+				);
+			} else {
+				const spec = argSpecs[argName];
+				if (!spec) {
+					errors.push(`Phase '${p.id}': cwd references undeclared argument '${argName}'`);
+				} else if (spec.type !== "relative-path") {
+					errors.push(`Phase '${p.id}': cwd argument '${argName}' must be declared with type 'relative-path'`);
+				}
+				if (p.cache?.scope === "cross-run") {
+					errors.push(
+						`Phase '${p.id}': cwd selected by an argument cannot use cache.scope 'cross-run' until workspace state restoration is available.`,
+					);
+				}
+				if (p.retry && typeof p.retry.max === "number" && p.retry.max > 0) {
+					errors.push(
+						`Phase '${p.id}': cwd selected by an argument cannot use retry.max > 0 because a failed resolve-only write has an unknown filesystem outcome and must be reconciled before another attempt.`,
+					);
+				}
+			}
 		}
 		// dependsOn / from entries are string phase-id refs that flow into the graph
 		// helpers and nodeId(); a non-string entry would crash the renderer.
@@ -791,7 +956,9 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 					);
 				}
 				// Judge agent naming convention (mirrors the phase-agent check below).
-				const judgeAgent = (scoreVal as { judge?: { agent?: unknown } }).judge?.agent;
+				const judgeAgent = scoreVal !== null && typeof scoreVal === "object"
+					? (scoreVal as { judge?: { agent?: unknown } }).judge?.agent
+					: undefined;
 				if (typeof judgeAgent === "string" && judgeAgent.includes("_")) {
 					errors.push(`Phase '${p.id}': score.judge.agent '${judgeAgent}' uses underscores — use hyphens`);
 				}
@@ -1165,6 +1332,7 @@ export function collectRefs(phase: Phase): { steps: string[]; args: string[] } {
 	scan(phase.over);
 	scan(phase.when);
 	scan(phase.until);
+	scan(phase.cwd);
 	// Script phases: the array form of `run` supports {steps.X}/{args.X}
 	// interpolation (the string form does NOT — it's a raw shell command,
 	// validation rejects placeholders in it), and `input` (stdin) does too.

@@ -6,7 +6,10 @@
 import type { Phase } from "../../schema.ts";
 import type { PhaseState } from "../../store.ts";
 import { emptyUsage } from "../../usage.ts";
-import { killProcessTree } from "../../runner-core.ts";
+import { StringDecoder } from "node:string_decoder";
+import { killProcessTree, registerProcessTree, unregisterProcessTree } from "../../runner-core.ts";
+import { CWD_BRIDGE_MODE_ENV } from "../../cwd-bridge.ts";
+import { WORKSPACE_RECONCILE_MODE_ENV } from "../../resources/execution.ts";
 
 const MAX_STDOUT = 1_048_576; // 1 MB cap
 const SIGKILL_GRACE_MS = 5_000;
@@ -36,9 +39,15 @@ export async function runScriptCommand(opts: {
 	const { interpRunText, arrayForm, cwd, signal, stdinInput, timeoutMs } = opts;
 
 	return new Promise((resolve, reject) => {
+		const childEnv = { ...process.env };
+		// Script phases execute flow-authored commands, so they are not a trusted
+		// host principal. Host-only workspace controls must never be delegated even
+		// when the script later launches another Taskflow process.
+		delete childEnv[CWD_BRIDGE_MODE_ENV];
+		delete childEnv[WORKSPACE_RECONCILE_MODE_ENV];
 		const spawnOptions = {
 			cwd,
-			env: process.env,
+			env: childEnv,
 			detached: process.platform !== "win32",
 		};
 		const child = arrayForm
@@ -50,21 +59,32 @@ export async function runScriptCommand(opts: {
 					...spawnOptions,
 					shell: true,
 				});
+		if (child.pid) registerProcessTree(child.pid);
 
 		let stdout = "";
 		let stderr = "";
+		let stdoutBytes = 0;
+		let stderrBytes = 0;
 		let stdoutOversize = false;
 		let timedOut = false;
+		let settled = false;
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 		child.stdout?.on("data", (d: Buffer) => {
-			if (stdout.length < MAX_STDOUT) {
-				const need = MAX_STDOUT - stdout.length;
-				stdout += d.toString().slice(0, need);
-				if (stdout.length >= MAX_STDOUT) stdoutOversize = true;
+			const remaining = MAX_STDOUT - stdoutBytes;
+			const retained = d.subarray(0, Math.max(0, remaining));
+			if (retained.length > 0) {
+				stdout += stdoutDecoder.write(retained);
+				stdoutBytes += retained.length;
 			}
+			if (d.length > retained.length) stdoutOversize = true;
 		});
 		child.stderr?.on("data", (d: Buffer) => {
-			if (stderr.length < 500) {
-				stderr += d.toString().slice(0, 500 - stderr.length);
+			const remaining = 500 - stderrBytes;
+			const retained = d.subarray(0, Math.max(0, remaining));
+			if (retained.length > 0) {
+				stderr += stderrDecoder.write(retained);
+				stderrBytes += retained.length;
 			}
 		});
 
@@ -83,19 +103,30 @@ export async function runScriptCommand(opts: {
 		if (signal?.aborted) onAbort();
 
 		child.on("error", (err) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
 			clearTimeout(sigkillTimer);
 			signal?.removeEventListener("abort", onAbort);
+			if (child.pid) unregisterProcessTree(child.pid);
 			reject(err);
 		});
 		child.once("exit", () => {
 			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
 		});
 		child.on("close", (code) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
 			clearTimeout(sigkillTimer);
 			signal?.removeEventListener("abort", onAbort);
 			if (child.pid) killProcessTree(child.pid, "SIGKILL", child);
+			if (child.pid) unregisterProcessTree(child.pid);
+			// If truncation cut through a multi-byte character, discard the decoder's
+			// incomplete suffix instead of manufacturing U+FFFD. Otherwise flush an
+			// actually malformed child stream normally.
+			if (!stdoutOversize) stdout += stdoutDecoder.end();
+			if (stderrBytes < 500) stderr += stderrDecoder.end();
 			resolve({ stdout, stderr, code, stdoutOversize, timedOut });
 		});
 

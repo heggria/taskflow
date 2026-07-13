@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { sha512Integrity, verifyRegistryIdentity } from "../../../scripts/verify-published-package.mjs";
 
-const pkg = { name: "taskflow-hosts", version: "0.2.0" };
+const pkg = { name: "taskflow-hosts", version: "0.2.1" };
 const localIntegrity = sha512Integrity(Buffer.from("official tarball"));
 const digest = Buffer.from(localIntegrity.slice("sha512-".length), "base64").toString("hex");
 
@@ -13,7 +13,7 @@ function fixtures() {
 		localIntegrity,
 		trustedOwners: ["heggria", "muyun"],
 		expectedRepository: "https://github.com/heggria/taskflow",
-		expectedRef: "refs/tags/v0.2.0",
+		expectedRef: "refs/tags/v0.2.1",
 		expectedSha: "deadbeef",
 		metadata: {
 			name: pkg.name,
@@ -34,7 +34,7 @@ function fixtures() {
 						workflow: {
 							repository: "https://github.com/heggria/taskflow",
 							path: ".github/workflows/publish.yml",
-							ref: "refs/tags/v0.2.0",
+							ref: "refs/tags/v0.2.1",
 						},
 					},
 					resolvedDependencies: [{ digest: { gitCommit: "deadbeef" } }],
@@ -117,6 +117,15 @@ test("publish workflow verifies every package after registry mutation", () => {
 	]) {
 		assert.match(workflow, new RegExp(`verify_one ${pkg}`));
 	}
+});
+
+test("publish workflow smokes, publishes, and verifies one deterministic tarball set", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+	assert.match(workflow, /Create deterministic release tarballs[\s\S]*pack-release-packages\.mjs \.release-tarballs/);
+	assert.match(workflow, /smoke-packed-packages\.mjs \.release-tarballs/);
+	assert.match(workflow, /npm publish "\$tarball" --provenance --access public/);
+	assert.match(workflow, /verify-published-package\.mjs "packages\/\$pkg" "\$tarball"/);
+	assert.doesNotMatch(workflow, /pnpm publish --filter/);
 });
 
 test("every repository workflow pins third-party actions to verified full SHAs", () => {

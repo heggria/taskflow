@@ -27,7 +27,7 @@ Official Grok docs used for this integration:
 ## Install (recommended): register the published MCP server
 
 ```sh
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 A public Grok plugin marketplace/source is not published yet. Do not substitute
@@ -169,7 +169,7 @@ grok mcp add taskflow -- grok-taskflow-mcp
 Or with npx (no global install):
 
 ```sh
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 Verify:
@@ -198,6 +198,7 @@ subagent a flow spawns is itself a `grok -p` process — no pi process needed.
 | `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
 | `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
 | `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
+| `taskflow_reconcile_workspace` | After inspecting or repairing a failed resolve-only invocation workspace, explicitly accept its current state and advance its generation. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; does not restore files. |
 
 Grok namespaces MCP tools as `taskflow__taskflow_*` in some UIs; discover with
 `search_tool` then call via `use_tool`.

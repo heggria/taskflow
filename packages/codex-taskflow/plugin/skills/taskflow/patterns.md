@@ -31,9 +31,9 @@ cheap to add and each one has prevented a real failure class:
 - [ ] **`strictInterpolation: true` on any flow you save.** Saved flows run
       later with args you're not watching; unresolved placeholders must be
       errors, not empty strings.
-- [ ] **Discovery phases are cheap and sandboxed.** `agent: "scout"`,
-      `tools: ["read","grep","ls"]`, low thinking. Don't pay executor prices
-      for `ls`.
+- [ ] **Discovery phases are cheap and tool-restricted.** `agent: "scout"`,
+      `tools: ["read","grep","ls"]`, low thinking. Filesystem isolation still
+      depends on enforcement by the selected host; don't pay executor prices for `ls`.
 - [ ] **The reviewer is not the producer.** A gate reviewing phase X uses a
       different agent (ideally a different model) than X. Self-review passes
       ~everything.

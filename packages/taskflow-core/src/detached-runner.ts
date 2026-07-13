@@ -9,9 +9,11 @@
  * This file is NOT imported by index.ts — it is spawned via `child_process.spawn`.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { executeTaskflow } from "./runtime.ts";
+import { cwdBridgeModeFromEnv } from "./cwd-bridge.ts";
 import { getFlow, loadRun, saveRun, DEFAULT_KEPT_RUNS, DEFAULT_RUN_AGE_DAYS } from "./store.ts";
 
 interface DetachContext {
@@ -27,6 +29,10 @@ interface DetachContext {
 	/** Named export on runnerModule exposing a `SubagentRunner.runTask`
 	 *  (defaults to "piSubagentRunner"). */
 	runnerExport?: string;
+	/** Preferred host-only factory path. The opaque config is normalized by the
+	 * host adapter; core never interprets or expands its authority. */
+	runnerFactoryExport?: string;
+	runnerConfig?: unknown;
 }
 
 const contextPath = process.argv[2];
@@ -35,13 +41,25 @@ if (!contextPath) {
 	process.exit(1);
 }
 
-let ctx: DetachContext;
+let ctx: DetachContext | undefined;
 try {
 	ctx = JSON.parse(readFileSync(contextPath, "utf-8")) as DetachContext;
 } catch (e) {
 	console.error(`[detached-runner] Failed to read context: ${e instanceof Error ? e.message : String(e)}`);
-	process.exit(1);
+} finally {
+	// Context can contain host-authorized extension paths. Consume it once even
+	// when reading/parsing fails, so a corrupt detached launch cannot leave a
+	// private authorization snapshot behind indefinitely.
+	try { unlinkSync(contextPath); } catch { /* best-effort one-shot file cleanup */ }
+	const parent = dirname(contextPath);
+	// Remove only an empty Taskflow temp directory. Recursive deletion here would
+	// make this public spawn entry capable of deleting unrelated argv-selected
+	// files merely because their parent happened to share the expected prefix.
+	if (basename(parent).startsWith("taskflow-detach-")) {
+		try { rmdirSync(parent); } catch { /* not empty / already gone */ }
+	}
 }
+if (!ctx) process.exit(1);
 
 const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
 
@@ -67,8 +85,11 @@ try {
 	if (ctx.runnerModule) {
 		try {
 			const runnerMod = await import(ctx.runnerModule);
-			const exportName = ctx.runnerExport ?? "piSubagentRunner";
-			const runner = runnerMod[exportName];
+			const exportName = ctx.runnerFactoryExport ?? ctx.runnerExport ?? "piSubagentRunner";
+			const exported = runnerMod[exportName];
+			const runner = ctx.runnerFactoryExport && typeof exported === "function"
+				? exported(ctx.runnerConfig)
+				: exported;
 			if (runner && typeof runner.runTask === "function") {
 				runTask = runner.runTask;
 			} else {
@@ -93,7 +114,7 @@ try {
 			id: "__detach__",
 			status: "failed",
 			endedAt: Date.now(),
-			error: `Runner module failed to load: '${ctx.runnerModule}' (export '${ctx.runnerExport ?? "piSubagentRunner"}'). See detached-runner stderr for the import error.`,
+			error: `Runner module failed to load: '${ctx.runnerModule}' (export '${ctx.runnerFactoryExport ?? ctx.runnerExport ?? "piSubagentRunner"}'). See detached-runner stderr for the import error.`,
 		};
 		saveRun(state, cleanupConfig);
 		process.exit(1);
@@ -101,6 +122,7 @@ try {
 
 	const result = await executeTaskflow(state, {
 		cwd: ctx.cwd,
+		cwdBridgeMode: cwdBridgeModeFromEnv(),
 		agents,
 		globalThinking: settings.globalThinking,
 		persist: (s) => saveRun(s, cleanupConfig),

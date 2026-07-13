@@ -243,6 +243,35 @@ FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 pro
 
 预算、并发上限、重试、超时、嵌套深度、动态图宽度、路径包含检查、非幂等阶段分类，以及审批 fail-closed 都是运行时语义，不是写在 prompt 里的建议。
 
+### 0.2.1：安全动态 cwd 与 Pi 终态回收
+
+声明为 `type: "relative-path"` 的调用参数，可以通过严格完整的
+`cwd: "{args.package}"` 选择 phase 工作目录。该桥默认关闭，需要 Host 显式
+授权 `resolve-only`，并把 canonical 目录限制在 invocation root 内。绝对路径、
+字符串拼接和 `{steps.*}` 仍会被拒绝；这个兼容桥不是 OS sandbox。
+同一次 invocation 内的 resolve-only 写阶段会在获取持久 lease 前串行化，避免
+fan-out 自己等待自己超时，同时仍以跨进程 lease 保护其他 Taskflow 进程。
+
+Pi 子 agent 默认不再继承 ambient extensions。可信 Host 可以配置明确的扩展
+白名单，或显式恢复旧版继承行为。如果 Pi 子进程已经产出经过验证的最终答案和
+终态事件，却因扩展遗留 handle 而不退出，Taskflow 会等待有限 grace 窗口、回收
+整个进程组，并记录 `completionSource: "terminal-reap"`，而不是误报 timeout。
+
+```json
+{
+  "taskflow": {
+    "piChild": {
+      "resourceProfile": "isolated",
+      "extensions": [],
+      "terminalGraceMs": 1500
+    }
+  }
+}
+```
+
+`allowlist` 接受显式可信扩展文件；`inherit` 仅作为兼容模式恢复 Pi ambient
+extension discovery。Flow 无权扩大这项 Host 权限。
+
 [阅读核心概念 →](https://heggria.github.io/taskflow/zh-cn/docs/concepts/)
 
 ## 安装到你的宿主
@@ -281,7 +310,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.0 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.1 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -290,7 +319,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。

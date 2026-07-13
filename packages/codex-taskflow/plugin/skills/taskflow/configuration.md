@@ -45,7 +45,7 @@ Top-level keys of the taskflow definition object.
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
-| `version` | number | `1` | Informational metadata in 0.2.0; it does not select runtime semantics or migrate a flow. |
+| `version` | number | `1` | Informational metadata in 0.2.x; it does not select runtime semantics or migrate a flow. |
 
 ---
 
@@ -157,21 +157,81 @@ Declare arguments on the flow, then reference them with `{args.X}`.
 
 ```jsonc
 "args": {
-  "dir":   { "default": "src", "description": "Directory to scan" },
-  "depth": { "default": 2 },
-  "token": { "required": true, "description": "API token" }
+  "dir":     { "type": "relative-path", "default": "src", "description": "Directory to scan" },
+  "depth":   { "type": "number", "default": 2, "minimum": 1 },
+  "format":  { "type": "enum", "values": ["text", "json"], "default": "text" },
+  "token":   { "type": "string", "required": true, "description": "API token" }
 }
 ```
 
 | Field | Notes |
 |-------|-------|
+| `type` | Optional: `string`, `relative-path`, `number`, `boolean`, or `enum`. Legacy untyped args keep interpolation compatibility but cannot select resources. Flow `version` is informational and does not change this rule. |
 | `default` | Used when the caller omits the arg. |
 | `description` | Documentation only. |
-| `required` | ⚠️ Declared but **not enforced** at runtime — treat as documentation for now. |
+| `required` | Enforced for typed args when no invocation value or default exists; advisory on legacy untyped declarations. |
+| `minimum` / `maximum` / `values` | Type-specific constraints, validated for defaults and invocation values. |
 
 **Resolution:** for each declared arg, the provided value wins, else its
 `default`. Any extra provided keys are also passed through (so undeclared args
 still reach `{args.X}`).
+
+### Typed relative cwd bridge (0.2.1)
+
+An author-written reusable flow can select one existing directory below its
+invocation root without accepting arbitrary cwd interpolation:
+
+```jsonc
+{
+  "args": { "package": { "type": "relative-path", "required": true } },
+  "phases": [
+    { "id": "review", "type": "agent", "cwd": "{args.package}", "task": "Review this package." }
+  ]
+}
+```
+
+The whole `cwd` must be exactly one `{args.X}` reference. Absolute paths,
+concatenation, `{steps.*}`, dot segments, missing directories, files, and
+symlink escapes are rejected during binding. Runtime-generated sub-flows cannot use this
+bridge. Because 0.2.1 does not yet ship a cross-host filesystem sandbox, it is
+disabled by default. A host operator—not flow JSON—may explicitly accept the
+lower resolver-only guarantee by launching the host with:
+
+```bash
+TASKFLOW_CWD_BRIDGE_MODE=resolve-only
+```
+
+Resolver-only performs a time-of-check canonical-path validation and constrains
+cwd selection, but it has no no-follow handle and does **not** stop a command or agent
+tool from deliberately accessing other filesystem paths. The runtime marks this
+in phase warnings and disables cache/resume reuse for the affected flow tree.
+Saved-flow definitions are snapshotted once per execution; resume verifies the
+persisted canonical root identity. A bridge-selected child flow receives a
+non-expanding boundary, so nested literal cwd/context paths may narrow but never
+escape it, including through symlinks.
+
+All resolve-only writers admitted by one invocation are serialized before
+durable lease acquisition. This keeps parallel/map/race/tournament fan-out from
+contending with itself while preserving cross-process exclusion. It deliberately
+trades same-workspace write parallelism for a provable phase boundary until a
+native broker/snapshot backend exists.
+
+Argument-selected cwd phases cannot set `retry.max > 0`. A failed resolve-only
+writer may already have changed files, so Taskflow records the scope as
+`dirty-unknown` and requires an explicit workspace reconciliation before any
+new write instead of replaying side effects automatically.
+
+Inspect or repair the current tree first. Then MCP hosts can call
+`taskflow_reconcile_workspace` with acknowledgement exactly
+`I acknowledge the current workspace state`; Pi can use
+`action: "reconcile-workspace"` with the same acknowledgement or
+`/tf reconcile-workspace --ack [reason]`. Model-callable MCP/Pi reconciliation
+is disabled unless the host operator separately launches Taskflow with
+`TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; this host-only authority is
+stripped from subagent environments and cannot be enabled by flow arguments.
+The direct Pi slash command is already a user control-plane action and does not
+require that environment variable. Reconciliation accepts the current state and
+advances its generation; it does not restore files or certify them as correct.
 
 **Passing args:**
 
@@ -500,9 +560,9 @@ Design docs: `docs/rfc-0.2.0-s4-mvp.md`, `docs/rfc-0.2.0-dsl-phases-horizon.md`.
 These keys validate but the runtime does **not** fully act on them yet — don't
 rely on them for behavior:
 
-- `arg.required` — documents intent for tooling, but missing required args are
-  not rejected at run time in 0.2.0. Use strict interpolation and verify/run
-  argument validation at your integration boundary when absence must block.
+- Typed `arg.required` is enforced before execution. On legacy untyped arg
+  declarations it remains advisory for backward compatibility; add an explicit
+  `type` when absence must block.
 - `flow.version` — informational only; it does not select runtime semantics.
 - **Event kernel** (`eventKernel` / `PI_TASKFLOW_EVENT_KERNEL=1`) — opt-in; does
   **not** run `race`/`expand`; score gates, `retry`, `expect`, reflexion,

@@ -6,6 +6,7 @@ import { test, beforeEach, afterEach } from "node:test";
 import {
 	DEFAULT_TASKFLOW_SETTINGS,
 	discoverAgents,
+	normalizePiChildSettings,
 	normalizeTaskflowSettings,
 	readSubagentSettings,
 	shouldLoadBuiltinAgents,
@@ -101,8 +102,31 @@ test("normalizeTaskflowSettings: accepts only boolean preference values", () => 
 		maxKeptRuns: DEFAULT_TASKFLOW_SETTINGS.maxKeptRuns,
 		maxRunAgeDays: DEFAULT_TASKFLOW_SETTINGS.maxRunAgeDays,
 		library: { enabled: true, scope: "both" },
+		piChild: { resourceProfile: "isolated", extensions: [], terminalGraceMs: 1500 },
 	});
 	assert.deepEqual(normalizeTaskflowSettings({ builtInAgents: "false", syncBuiltinAgentsToProject: "true" }), DEFAULT_TASKFLOW_SETTINGS);
+});
+
+test("normalizePiChildSettings: profiles are host-only, bounded, and copied", () => {
+	assert.deepEqual(normalizePiChildSettings(undefined), {
+		resourceProfile: "isolated",
+		extensions: [],
+		terminalGraceMs: 1500,
+	});
+	assert.deepEqual(normalizePiChildSettings({
+		resourceProfile: "allowlist",
+		extensions: ["/trusted/a.ts", 1, "/trusted/b.ts"],
+		terminalGraceMs: 2500,
+	}), {
+		resourceProfile: "allowlist",
+		extensions: ["/trusted/a.ts", "/trusted/b.ts"],
+		terminalGraceMs: 2500,
+	});
+	assert.deepEqual(normalizePiChildSettings({ resourceProfile: "flow-controlled", terminalGraceMs: -1 }), {
+		resourceProfile: "isolated",
+		extensions: [],
+		terminalGraceMs: 1500,
+	});
 });
 
 test("shouldLoadBuiltinAgents: follows taskflow builtInAgents setting", () => {
@@ -482,7 +506,14 @@ test("readSubagentSettings: parses taskflow preferences from settings.json", () 
 	);
 
 	const settings = readSubagentSettings();
-	assert.deepEqual(settings.taskflow, { builtInAgents: false, syncBuiltinAgentsToProject: false, maxKeptRuns: 100, maxRunAgeDays: 30, library: { enabled: true, scope: "both" } });
+	assert.deepEqual(settings.taskflow, {
+		builtInAgents: false,
+		syncBuiltinAgentsToProject: false,
+		maxKeptRuns: 100,
+		maxRunAgeDays: 30,
+		library: { enabled: true, scope: "both" },
+		piChild: { resourceProfile: "isolated", extensions: [], terminalGraceMs: 1500 },
+	});
 });
 
 test("readSubagentSettings: malformed taskflow preferences fall back to defaults", () => {

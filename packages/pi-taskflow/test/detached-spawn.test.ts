@@ -83,6 +83,25 @@ test("detached-runner: the resolved module loads (spawn → exits, does not ENOE
 	});
 });
 
+test("detached-runner: malformed context still removes its private authorization directory", async () => {
+	const resolved = fileURLToPath(new URL("../../taskflow-core/src/detached-runner.ts", import.meta.url));
+	const privateDir = mkdtempSync(join(tmpdir(), "taskflow-detach-malformed-"));
+	const contextPath = join(privateDir, "context.json");
+	writeFileSync(contextPath, "{truncated");
+	try {
+		await new Promise<void>((resolve) => {
+			const child = spawn(process.execPath, ["--conditions=development", "--experimental-strip-types", resolved, contextPath], {
+				stdio: ["ignore", "ignore", "ignore"],
+			});
+			child.once("close", () => resolve());
+			child.once("error", () => resolve());
+		});
+		assert.equal(existsSync(privateDir), false, "malformed host-authorized context must be consumed and removed");
+	} finally {
+		rmSync(privateDir, { recursive: true, force: true });
+	}
+});
+
 // ---------------------------------------------------------------------------
 // Bug 2: a child that dies early must not leave the run stuck at "running".
 //
