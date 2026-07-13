@@ -9,7 +9,7 @@
  * This file is NOT imported by index.ts — it is spawned via `child_process.spawn`.
  */
 
-import { readFileSync, rmSync, unlinkSync } from "node:fs";
+import { readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { executeTaskflow } from "./runtime.ts";
@@ -41,21 +41,25 @@ if (!contextPath) {
 	process.exit(1);
 }
 
-let ctx: DetachContext;
+let ctx: DetachContext | undefined;
 try {
 	ctx = JSON.parse(readFileSync(contextPath, "utf-8")) as DetachContext;
 } catch (e) {
 	console.error(`[detached-runner] Failed to read context: ${e instanceof Error ? e.message : String(e)}`);
-	process.exit(1);
-}
-// Context can contain host-authorized extension paths. Consume it once and
-// remove it before loading any runner code. New hosts place it in a private
-// taskflow-detach-* directory; retain compatibility with arbitrary old paths.
-try {
-	unlinkSync(contextPath);
+} finally {
+	// Context can contain host-authorized extension paths. Consume it once even
+	// when reading/parsing fails, so a corrupt detached launch cannot leave a
+	// private authorization snapshot behind indefinitely.
+	try { unlinkSync(contextPath); } catch { /* best-effort one-shot file cleanup */ }
 	const parent = dirname(contextPath);
-	if (basename(parent).startsWith("taskflow-detach-")) rmSync(parent, { recursive: true, force: true });
-} catch { /* best-effort cleanup; execution does not depend on unlink */ }
+	// Remove only an empty Taskflow temp directory. Recursive deletion here would
+	// make this public spawn entry capable of deleting unrelated argv-selected
+	// files merely because their parent happened to share the expected prefix.
+	if (basename(parent).startsWith("taskflow-detach-")) {
+		try { rmdirSync(parent); } catch { /* not empty / already gone */ }
+	}
+}
+if (!ctx) process.exit(1);
 
 const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
 

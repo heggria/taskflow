@@ -250,6 +250,9 @@ working directory with the exact form `cwd: "{args.package}"`. The bridge is
 default-off, requires host `resolve-only` authorization, and confines the
 canonical directory to the invocation root. Absolute paths, concatenation, and
 `{steps.*}` remain rejected; this compatibility bridge is not an OS sandbox.
+Resolve-only writer phases within one invocation are serialized before durable
+lease acquisition, so fan-out cannot self-timeout while separate processes
+remain protected by cross-process leases.
 
 Pi child agents no longer inherit ambient extensions by default. Trusted host
 settings can use an explicit extension allowlist or opt back into legacy

@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { packDeterministicPackage } from "./pack-release-packages.mjs";
 
 const SLSA_V1 = "https://slsa.dev/provenance/v1";
 const GITHUB_ACTIONS_BUILD = "https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1";
@@ -75,15 +76,12 @@ export function verifyRegistryIdentity({
 	return errors;
 }
 
-function packIntegrity(packageDir) {
+function packIntegrity(packageDir, suppliedTarball) {
+	if (suppliedTarball) return sha512Integrity(readFileSync(suppliedTarball));
 	const destination = mkdtempSync(join(tmpdir(), "taskflow-pack-verify-"));
 	try {
-		const output = execFileSync("pnpm", ["--dir", packageDir, "pack", "--pack-destination", destination, "--json"], {
-			encoding: "utf8",
-		});
-		const packed = JSON.parse(output);
-		if (!packed?.filename) throw new Error(`pnpm pack did not report a filename for ${packageDir}`);
-		return sha512Integrity(readFileSync(packed.filename));
+		const packed = packDeterministicPackage(packageDir, destination);
+		return packed.integrity;
 	} finally {
 		rmSync(destination, { recursive: true, force: true });
 	}
@@ -103,10 +101,11 @@ async function fetchProvenanceStatement(url) {
 async function main() {
 	const packageDir = resolve(process.argv[2] ?? "");
 	if (!process.argv[2]) throw new Error("usage: verify-published-package.mjs <package-dir>");
+	const tarball = process.argv[3] ? resolve(process.argv[3]) : undefined;
 	const pkg = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 	const spec = `${pkg.name}@${pkg.version}`;
 	const metadata = JSON.parse(execFileSync("npm", ["view", spec, "--json"], { encoding: "utf8" }));
-	const localIntegrity = packIntegrity(packageDir);
+	const localIntegrity = packIntegrity(packageDir, tarball);
 	const provenanceStatement = await fetchProvenanceStatement(metadata?.dist?.attestations?.url);
 	const trustedOwners = (process.env.NPM_TRUSTED_OWNERS ?? "heggria,muyun")
 		.split(",")

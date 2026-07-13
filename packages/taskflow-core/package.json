@@ -32,6 +32,7 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./resources/*": null,
     "./*": {
       "development": "./src/*.ts",
       "types": "./dist/*.d.ts",
@@ -49,6 +50,7 @@
     "access": "public",
     "exports": {
       ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./resources/*": null,
       "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
     }
   },

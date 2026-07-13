@@ -341,7 +341,7 @@ export default async function HomePage({
 		"@context": "https://schema.org",
 		"@type": "SoftwareApplication",
 		name: "taskflow",
-		softwareVersion: "0.2.0",
+		softwareVersion: "0.2.1",
 		description: t.hero.sub,
 		applicationCategory: "DeveloperApplication",
 		operatingSystem: "Any",

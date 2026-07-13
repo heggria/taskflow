@@ -118,10 +118,58 @@ test("cross-session overlapping writers contend on the persistent lease", async 
 		});
 		assert.equal(blocked.exitCode, 1);
 		assert.match(blocked.errorMessage ?? "", /Lease timeout/);
+		assert.equal(blocked.workspaceMutationStarted, false, "lease admission failure never created a mutation intent");
 		releaseFirst();
 		assert.equal((await firstRun).exitCode, 0);
 	} finally {
 		releaseFirst?.();
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(control, { recursive: true, force: true });
+	}
+});
+
+test("one session serializes concurrent workspace writers before lease admission", async () => {
+	const { root, control } = fixture();
+	try {
+		const session = await createResolveOnlyWorkspaceSession({
+			invocationRoot: root,
+			controlDirectory: control,
+			leaseTimeoutMs: 40,
+		});
+		const bound = await session.bindPhase({
+			invocationRoot: root,
+			runId: "run-fanout",
+			phaseId: "parallel-work",
+			argName: "package",
+			argDefinitions: { package: { type: "relative-path", required: true } },
+			argValues: { package: "packages/api" },
+		});
+		let active = 0;
+		let maxActive = 0;
+		const call = (unitId: string, delayMs: number) => bound.runAgent({
+			agents,
+			agentName: "a",
+			task: unitId,
+			unitId,
+			opts: { cwd: bound.absolutePath },
+			invoke: async () => {
+				active++;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, delayMs));
+				active--;
+				return result();
+			},
+		});
+		const [first, second] = await Promise.all([call("branch-1", 120), call("branch-2", 1)]);
+		assert.equal(first.exitCode, 0);
+		assert.equal(second.exitCode, 0, "second branch must queue, not hit the 40ms durable lease timeout");
+		assert.equal(maxActive, 1, "resolve-only writers are intentionally serialized without a native broker");
+		const journal = new WriteIntentJournal({ directory: control, journalEpoch: 1 });
+		assert.deepEqual((await journal.listIntents()).map((intent) => intent.status), [
+			"committed-generation",
+			"committed-generation",
+		]);
+	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 		fs.rmSync(control, { recursive: true, force: true });
 	}

@@ -53,6 +53,7 @@ export function canonicalJson(value: unknown): string {
 
 	return encode(value);
 }
+
 export function sha256Canonical(value: unknown): string {
 	return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
 }

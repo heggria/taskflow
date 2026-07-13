@@ -13,6 +13,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
@@ -288,6 +289,19 @@ export function num(v: unknown): number {
  *  children, so all host runners register here. */
 const activeChildren = new Set<number>();
 
+/** Register a detached process group with the host-wide supervisor. Script
+ * phases and agent runners share this registry so external host termination
+ * cannot leave either kind of child mutating the workspace. */
+export function registerProcessTree(pid: number): void {
+	activeChildren.add(pid);
+}
+
+/** Remove a process group after its stdio has closed and all descendants have
+ * been synchronously reaped. */
+export function unregisterProcessTree(pid: number): void {
+	activeChildren.delete(pid);
+}
+
 /** Signal the whole process tree rooted at a spawned subagent. POSIX children
  * are process-group leaders (`detached:true` at spawn), so a negative pid
  * reaches every descendant in the group. Windows has no equivalent signal;
@@ -341,6 +355,34 @@ const killAllChildren = () => {
 	}
 };
 process.on("exit", killAllChildren);
+
+// Installing a signal listener disables Node's default signal termination.
+// Reap every registered process group synchronously, then restore the default
+// disposition and re-deliver the same signal so callers still observe a real
+// signal exit (rather than an arbitrary numeric process.exit code).
+const EXTERNAL_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+const SIGNAL_EXIT_CODES: Readonly<Record<(typeof EXTERNAL_SIGNALS)[number], number>> = {
+	SIGTERM: 143,
+	SIGINT: 130,
+	SIGHUP: 129,
+};
+let handlingExternalSignal = false;
+for (const signal of EXTERNAL_SIGNALS) {
+	process.on(signal, () => {
+		if (handlingExternalSignal) return;
+		handlingExternalSignal = true;
+		killAllChildren();
+		// Existing listeners have already been snapshotted for this EventEmitter
+		// dispatch. Removing them here only ensures the re-delivered signal takes
+		// the OS default path instead of recursively entering user handlers.
+		process.removeAllListeners(signal);
+		try {
+			process.kill(process.pid, signal);
+		} catch {
+			process.exit(SIGNAL_EXIT_CODES[signal]);
+		}
+	});
+}
 
 /** Same idle window every host runner uses: a child silent this long is wedged. */
 export const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -497,9 +539,11 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			detached: process.platform !== "win32",
 			windowsHide: true,
 		});
-		if (proc.pid) activeChildren.add(proc.pid);
+		if (proc.pid) registerProcessTree(proc.pid);
 
 		let buffer = "";
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 		let idleTimer: NodeJS.Timeout | undefined;
 		let terminalTimer: NodeJS.Timeout | undefined;
 		let forceTimer: NodeJS.Timeout | undefined;
@@ -533,8 +577,11 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			return true;
 		};
 		const scheduleForceKill = () => {
+			if (settled) return;
 			if (forceTimer) clearTimeout(forceTimer);
-			forceTimer = setTimeout(() => signalTree("SIGKILL"), terminationGraceMs);
+			forceTimer = setTimeout(() => {
+				if (!settled) signalTree("SIGKILL");
+			}, terminationGraceMs);
 			forceTimer.unref();
 		};
 		const clearTerminalCandidate = () => {
@@ -699,11 +746,12 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			}
 		};
 
-		proc.stdout.on("data", (data) => {
-			// Any post-terminal bytes revoke the candidate immediately, before a
-			// partial NDJSON record can wait in the buffer and race the grace timer.
-			if (completionPolicy && terminalCandidate && !terminalCommitted) clearTerminalCandidate();
-			buffer += data.toString();
+		proc.stdout.on("data", (data: Buffer) => {
+			// StringDecoder preserves multi-byte UTF-8 characters split across
+			// arbitrary pipe chunks. Candidate revocation is event-semantic below:
+			// metadata/heartbeat records classified as `ignore` must not disable both
+			// terminal grace and the ordinary idle watchdog.
+			buffer += stdoutDecoder.write(data);
 			if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES && !buffer.includes("\n")) {
 				// Drop the retained bytes before terminating so the bound remains true
 				// even while a non-cooperative child takes time to die.
@@ -721,21 +769,26 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 				processLine(line);
 			}
 			if (!completionPolicy) armIdle();
-			else if (!terminalCandidate && !terminalCommitted && buffer.length > 0) armIdle();
 		});
 
-		const STDERR_MAX_LEN = 64 * 1024;
+		const STDERR_MAX_BYTES = 64 * 1024;
+		let stderrBytes = 0;
 		let stderrCapped = false;
-		proc.stderr.on("data", (data) => {
+		proc.stderr.on("data", (data: Buffer) => {
 			// Diagnostics are real child activity too. A CLI that is actively
 			// reporting provider retries on stderr must not be killed as idle.
 			// stderr is activity while running, but after a terminal candidate it
 			// neither revokes nor prolongs the bounded grace window.
 			if (!terminalCandidate && !terminalCommitted) armIdle();
 			if (!stderrCapped) {
-				result.stderr += data.toString();
-				if (result.stderr.length >= STDERR_MAX_LEN) {
-					result.stderr = result.stderr.slice(0, STDERR_MAX_LEN) + "\n[...stderr truncated at 64KB]";
+				const remaining = STDERR_MAX_BYTES - stderrBytes;
+				const retained = data.subarray(0, Math.max(0, remaining));
+				if (retained.length > 0) {
+					result.stderr += stderrDecoder.write(retained);
+					stderrBytes += retained.length;
+				}
+				if (data.length > retained.length) {
+					result.stderr += "\n[...stderr truncated at 64KB]";
 					stderrCapped = true;
 				}
 			}
@@ -751,6 +804,14 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 
 		const finish = (code: number, signal?: NodeJS.Signals | null) => {
 			if (settled) return;
+			// Flush decoders and classify the final unterminated record before
+			// settling. Any force-kill timer created by a malformed tail is cleared
+			// below, so no signal can fire after this Promise resolves.
+			buffer += stdoutDecoder.end();
+			if (!stderrCapped) result.stderr += stderrDecoder.end();
+			if (buffer.trim() && killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error") {
+				processLine(buffer);
+			}
 			settled = true;
 			// The direct CLI may intentionally or accidentally leave background
 			// descendants behind. A phase boundary is also a process-tree boundary:
@@ -758,12 +819,9 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			// Otherwise detached grandchildren can keep mutating the workspace after
 			// the phase has been persisted as complete.
 			if (proc.pid) killProcessTree(proc.pid, "SIGKILL", proc);
-			if (proc.pid) activeChildren.delete(proc.pid);
+			if (proc.pid) unregisterProcessTree(proc.pid);
 			clearTimers();
 			removeAbortListener();
-			if (buffer.trim() && killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error") {
-				processLine(buffer);
-			}
 			if (signal) killedBySignal = signal;
 			let terminalValid = !completionPolicy;
 			if (completionPolicy) {

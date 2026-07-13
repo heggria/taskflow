@@ -66,11 +66,17 @@ jobs:
       - name: Build all packages (emit dist)
         run: pnpm run build
 
-      # This is a release gate, not a post-publish check: it packs the current
-      # tag checkout, installs all nine local tarballs into a clean consumer,
-      # and exercises their exports and bins before the first npm mutation.
+      # pnpm rewrites workspace:* correctly but does not guarantee dependency-key
+      # ordering in the generated manifest. Build one canonical, repeat-verified
+      # tarball set; every later gate and registry mutation consumes these bytes.
+      - name: Create deterministic release tarballs
+        run: node scripts/pack-release-packages.mjs .release-tarballs
+
+      # This is a release gate, not a post-publish check: it installs the exact
+      # immutable tarballs that will be published into a clean consumer and
+      # exercises their exports and bins before the first npm mutation.
       - name: Verify packed consumer install
-        run: node scripts/smoke-packed-packages.mjs
+        run: node scripts/smoke-packed-packages.mjs .release-tarballs
 
       - name: Verify tag matches workspace versions
         run: |
@@ -78,6 +84,15 @@ jobs:
           EXPECT="v$(node -p "require('./package.json').version")"
           if [ "$EXPECT" != "$TAG" ]; then
             echo "::error::Tag $TAG does not match root version $EXPECT"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          if grep -Fqx "## [$VERSION] — Unreleased" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md still marks $VERSION as Unreleased"
+            exit 1
+          fi
+          if ! grep -Eq "^## \[$VERSION\] — [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no dated release heading for $VERSION"
             exit 1
           fi
           for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
@@ -132,21 +147,32 @@ jobs:
         # Order matters: taskflow-core first (the adapters depend on it).
         # Idempotent but fail-closed: an existing version is skipped only after
         # its trusted npm owner, GitHub/SLSA provenance, source commit, and exact
-        # locally-packed tarball integrity have all been verified. A squatter
+        # canonical tarball integrity have all been verified. A squatter
         # pre-publishing name@version must never be mistaken for our release.
         run: |
           set -euo pipefail
+          tarball_for() {
+            node -e '
+              const fs = require("fs");
+              const path = require("path");
+              const manifest = JSON.parse(fs.readFileSync(".release-tarballs/manifest.json", "utf8"));
+              const entry = manifest.entries.find((item) => item.name === process.argv[1]);
+              if (!entry) throw new Error("release tarball missing for " + process.argv[1]);
+              process.stdout.write(path.resolve(".release-tarballs", entry.filename));
+            ' "$1"
+          }
           publish_one() {
             local pkg="$1"
-            local name version
+            local name version tarball
             name="$(node -p "require('./packages/$pkg/package.json').name")"
             version="$(node -p "require('./packages/$pkg/package.json').version")"
+            tarball="$(tarball_for "$name")"
             if pnpm view "$name@$version" version >/dev/null 2>&1; then
-              node scripts/verify-published-package.mjs "packages/$pkg"
+              node scripts/verify-published-package.mjs "packages/$pkg" "$tarball"
               echo "::notice::$name@$version already published and verified — skipping"
             else
               echo "Publishing $name@$version"
-              pnpm publish --filter "$pkg" --provenance --access public --no-git-checks
+              npm publish "$tarball" --provenance --access public
             fi
           }
           publish_one taskflow-core
@@ -165,9 +191,11 @@ jobs:
           # bounded npm propagation delay.
           verify_one() {
             local pkg="$1"
-            local attempt
+            local attempt name tarball
+            name="$(node -p "require('./packages/$pkg/package.json').name")"
+            tarball="$(tarball_for "$name")"
             for attempt in 1 2 3 4 5 6; do
-              if node scripts/verify-published-package.mjs "packages/$pkg"; then
+              if node scripts/verify-published-package.mjs "packages/$pkg" "$tarball"; then
                 return 0
               fi
               if [ "$attempt" -lt 6 ]; then sleep $((attempt * 5)); fi

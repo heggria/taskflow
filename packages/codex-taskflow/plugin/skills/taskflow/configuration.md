@@ -210,6 +210,12 @@ persisted canonical root identity. A bridge-selected child flow receives a
 non-expanding boundary, so nested literal cwd/context paths may narrow but never
 escape it, including through symlinks.
 
+All resolve-only writers admitted by one invocation are serialized before
+durable lease acquisition. This keeps parallel/map/race/tournament fan-out from
+contending with itself while preserving cross-process exclusion. It deliberately
+trades same-workspace write parallelism for a provable phase boundary until a
+native broker/snapshot backend exists.
+
 Argument-selected cwd phases cannot set `retry.max > 0`. A failed resolve-only
 writer may already have changed files, so Taskflow records the scope as
 `dirty-unknown` and requires an explicit workspace reconciliation before any

@@ -1642,7 +1642,7 @@ async function executePhaseInner(
 				// workspace snapshots/restoration exist, so preserve the first failure
 				// instead of replacing it with a later TFWS_RESOURCE_DIRTY refusal.
 				const requestedRetry = (retry?.max ?? 0) > 0 || isTransientError(last);
-				if (requestedRetry) {
+				if (requestedRetry && last.workspaceMutationStarted) {
 					last = {
 						...last,
 						errorMessage: `${last.errorMessage ?? last.stderr ?? "workspace execution failed"}\nTFWS_RETRY_UNSAFE: retry suppressed because the prior read-write attempt may have mutated the workspace; reconcile before a new attempt`,

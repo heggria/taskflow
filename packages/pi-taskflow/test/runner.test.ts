@@ -13,12 +13,19 @@ import {
 	newAccumulator,
 	runAgentTask,
 	createPiSubagentRunner,
+	ctxExtensionPath,
 	type RunResult,
 	sanitizeErrorMessage,
 	TRANSPORT_ERROR_PLACEHOLDER,
 } from "../src/runner.ts";
 import type { AgentConfig } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+
+test("ctxExtensionPath resolves the executing source entry", () => {
+	const resolved = ctxExtensionPath();
+	assert.ok(resolved);
+	assert.equal(fs.realpathSync(resolved), fs.realpathSync(new URL("../src/index.ts", import.meta.url)));
+});
 
 // ── isFailed ────────────────────────────────────────────────────────
 
@@ -484,7 +491,7 @@ test("runAgentTask: stderr is capped at 64KB", async () => {
 	// Write 100KB of garbage to stderr, then exit 0.
 	fs.writeFileSync(
 		fakePi,
-		`process.stderr.write("A".repeat(100_000));\nprocess.exit(0);\n`,
+		`process.stderr.write("A".repeat(100_000), () => process.exit(0));\n`,
 	);
 	const shim = path.join(dir, "shim.sh");
 	fs.writeFileSync(shim, `#!/bin/sh\nexec "${process.execPath}" "${fakePi}"\n`);
@@ -528,8 +535,12 @@ test("fix-7: stderr truncation marker appears exactly once even with many chunks
 	// marker should appear exactly once.
 	fs.writeFileSync(
 		fakePi,
-		`for (let i = 0; i < 20; i++) { process.stderr.write('A'.repeat(10_000)); }
-process.exit(0);
+		`let i = 0;
+const write = () => {
+  if (i++ === 20) return process.stderr.end();
+  process.stderr.write('A'.repeat(10_000), write);
+};
+write();
 `,
 	);
 	const shim = path.join(dir, "shim.sh");
@@ -747,7 +758,7 @@ test("Pi completion: final + agent_end + agent_settled with a leaky handle is re
 	}
 });
 
-test("Pi completion: agent_end alone is accepted on clean exit but never used to reap", async () => {
+test("Pi completion: legacy agent_end without willRetry is accepted on clean exit but never used to reap", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-agent-end-only-"));
 	const fakePi = path.join(dir, "fake-pi.mjs");
 	fs.writeFileSync(
@@ -794,7 +805,42 @@ test("Pi completion: agent_end alone is accepted on clean exit but never used to
 	}
 });
 
-test("Pi completion: post-agent_end activity revokes the early terminal candidate", async () => {
+test("Pi completion: agent_end with willRetry false is a revocable terminal candidate", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-agent-end-final-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end",willRetry:false});\n` +
+			`setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 30,
+		}).runTask(dir, agents, "t", "final", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "DONE");
+		assert.equal(result.completionSource, "terminal-reap");
+		assert.equal(result.reapedAfterTerminal, true);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: retrying agent_end waits for the later settled answer", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-terminal-retry-"));
 	const fakePi = path.join(dir, "fake-pi.mjs");
 	fs.writeFileSync(

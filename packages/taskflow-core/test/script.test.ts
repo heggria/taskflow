@@ -6,6 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
+import { runScriptCommand } from "../src/runtime/phases/script.ts";
 import { type Taskflow, validateTaskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { emptyUsage } from "../src/usage.ts";
@@ -300,6 +301,35 @@ test("script robustness: stdout is capped at 1 MB with a truncation marker", asy
 	assert.equal(res.ok, true);
 	assert.ok(res.finalOutput.length <= 1_048_576 + 64, `output length ${res.finalOutput.length} exceeds cap`);
 	assert.match(res.finalOutput, /\[stdout truncated at 1 MB\]/);
+});
+
+test("script robustness: UTF-8 split across pipe chunks is lossless", async () => {
+	const script = `
+		const value=Buffer.from("你😀");
+		process.stdout.write(value.subarray(0,1));
+		setTimeout(()=>process.stdout.write(value.subarray(1,4)),10);
+		setTimeout(()=>process.stdout.write(value.subarray(4)),20);
+	`;
+	const result = await runScriptCommand({
+		interpRunText: [process.execPath, "-e", script],
+		arrayForm: true,
+		cwd: process.cwd(),
+		timeoutMs: 1_000,
+	});
+	assert.equal(result.code, 0);
+	assert.equal(result.stdout, "你😀");
+	assert.equal(result.stdoutOversize, false);
+});
+
+test("script robustness: exact byte cap is not mislabeled as truncated", async () => {
+	const result = await runScriptCommand({
+		interpRunText: [process.execPath, "-e", `process.stdout.write("x".repeat(1048576))`],
+		arrayForm: true,
+		cwd: process.cwd(),
+		timeoutMs: 2_000,
+	});
+	assert.equal(Buffer.byteLength(result.stdout), 1_048_576);
+	assert.equal(result.stdoutOversize, false);
 });
 
 test("script robustness: a runaway process is killed at the timeout", async () => {

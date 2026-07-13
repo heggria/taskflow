@@ -61,15 +61,16 @@ this release's CHANGELOG section, verify:
 > type-strip `.ts` under `node_modules`, so packages ship `dist/*.js` and
 > `.d.ts`. Every package also has `prepublishOnly` and
 > `publishConfig.access: public`, but release safety does not rely on lifecycle
-> hooks alone: CI and the tag workflow pack the current checkout with pnpm,
-> install those exact tarballs into a clean npm consumer, reject leaked
+> hooks alone: CI and the tag workflow stage pnpm's publish-ready content,
+> canonicalize its manifest, prove repeat-pack byte stability, install those
+> exact tarballs into a clean npm consumer, reject leaked
 > `workspace:*` ranges, and exercise public exports and bins.
 
 > **Note on internal dependencies.** Workspace package manifests use
 > `workspace:*` locally so `pnpm install --frozen-lockfile` never depends on a
-> not-yet-published release. `pnpm publish` converts those workspace ranges in
-> the packed tarballs. Always publish `taskflow-core` first and bump all nine in
-> lockstep.
+> not-yet-published release. The deterministic release packer converts those
+> workspace ranges before `npm publish` receives the immutable tarball. Always
+> publish `taskflow-core` first and bump all nine in lockstep.
 
 ## Publish from a tag (the only supported release path)
 
@@ -88,8 +89,8 @@ git push origin v0.2.1
 
 1. proves the tag resolves to the event commit and that commit belongs to
    `origin/main`;
-2. runs typecheck, unit tests, build, and the packed-consumer gate against the
-   tag checkout;
+2. runs typecheck, unit tests and build, creates repeat-verified deterministic
+   tarballs, then runs the packed-consumer gate against those exact bytes;
 3. checks the root, all nine package versions, plugin manifests, and pinned MCP
    package versions against the tag;
 4. publishes core first, then shared packages and delivery adapters, all with

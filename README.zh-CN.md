@@ -249,6 +249,8 @@ FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 pro
 `cwd: "{args.package}"` 选择 phase 工作目录。该桥默认关闭，需要 Host 显式
 授权 `resolve-only`，并把 canonical 目录限制在 invocation root 内。绝对路径、
 字符串拼接和 `{steps.*}` 仍会被拒绝；这个兼容桥不是 OS sandbox。
+同一次 invocation 内的 resolve-only 写阶段会在获取持久 lease 前串行化，避免
+fan-out 自己等待自己超时，同时仍以跨进程 lease 保护其他 Taskflow 进程。
 
 Pi 子 agent 默认不再继承 ambient extensions。可信 Host 可以配置明确的扩展
 白名单，或显式恢复旧版继承行为。如果 Pi 子进程已经产出经过验证的最终答案和

@@ -9,6 +9,7 @@
  * processes (no mocks), with a trivial foldLine that just echoes stdout.
  */
 
+import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -174,6 +175,33 @@ test("runSubagentProcess completion: later activity revokes a terminal candidate
 	assert.equal(r.output, "SECOND");
 	assert.equal(r.completionSource, "terminal-reap");
 	assert.ok(Date.now() - started >= 100, "stale candidate timer must not commit the first answer");
+});
+
+test("runSubagentProcess completion: ignored metadata preserves a terminal candidate", async () => {
+	const started = Date.now();
+	const r = await terminalRun(`
+		const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
+		emit({type:"final",text:"DONE"}); emit({type:"terminal"});
+		setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
+		setInterval(()=>{},1000);
+	`, { idleTimeoutMs: 80, terminalGraceMs: 50 });
+	assert.equal(r.output, "DONE");
+	assert.equal(r.completionSource, "terminal-reap");
+	assert.ok(Date.now() - started < 250, "ignored metadata must not disable terminal grace and idle supervision");
+});
+
+test("runSubagentProcess: UTF-8 split across stdout chunks is lossless", async () => {
+	const r = await terminalRun(`
+		const final=Buffer.from(JSON.stringify({type:"final",text:"你😀"})+"\\n");
+		const first=final.indexOf(Buffer.from("你"))+1;
+		process.stdout.write(final.subarray(0,first));
+		setTimeout(()=>{
+			process.stdout.write(final.subarray(first));
+			process.stdout.write(JSON.stringify({type:"terminal"})+"\\n");
+		},20);
+	`, { terminalGraceMs: 100 });
+	assert.equal(r.output, "你😀");
+	assert.doesNotMatch(r.output, /�/);
 });
 
 test("runSubagentProcess completion: abort during grace wins", async () => {
@@ -391,6 +419,68 @@ test("runSubagentProcess: malformed or truncated stdout fails closed", async () 
 	assert.match(r.errorMessage ?? "", /malformed|truncated/i);
 });
 
+test("runSubagentProcess: malformed close tail cannot signal after settlement", { skip: process.platform === "win32" }, async () => {
+	const originalKill = process.kill.bind(process);
+	const calls: Array<[number, NodeJS.Signals | number | undefined]> = [];
+	try {
+		process.kill = ((pid: number, signal?: NodeJS.Signals | number) => {
+			calls.push([pid, signal]);
+			return true;
+		}) as typeof process.kill;
+		const r = await runSubagentProcess({
+			agent: "test", task: "tail", model: undefined,
+			bin: "node", args: ["-e", `process.stdout.write('{"type":"broken"');`], cwd: process.cwd(),
+			terminationGraceMs: 10,
+			acc: makeAcc(), foldLine,
+		});
+		assert.equal(r.completionSource, "protocol-error");
+		const countAtReturn = calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		assert.equal(calls.length, countAtReturn, "no delayed SIGKILL may survive the settled Promise");
+	} finally {
+		process.kill = originalKill;
+	}
+});
+
+test("host TERM/INT/HUP reaps agent and script process groups", { skip: process.platform === "win32" }, async () => {
+	const fixture = fileURLToPath(new URL("./fixtures/process-supervisor-host.mjs", import.meta.url));
+	for (const mode of ["agent", "script"] as const) {
+		for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), `taskflow-host-signal-${mode}-`));
+			const marker = path.join(dir, "descendant-survived.txt");
+			const ready = path.join(dir, "ready.txt");
+			const host = spawn(process.execPath, [
+				"--conditions=development",
+				"--experimental-strip-types",
+				fixture,
+				mode,
+				marker,
+				ready,
+			], { stdio: ["ignore", "pipe", "pipe"] });
+			try {
+				let diagnostics = "";
+				host.stderr.on("data", (chunk: Buffer) => { diagnostics += chunk.toString(); });
+				const deadline = Date.now() + 10_000;
+				while (!fs.existsSync(ready) && Date.now() < deadline) {
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				assert.equal(fs.existsSync(ready), true, `fixture did not become ready: ${diagnostics}`);
+				host.kill(signal);
+				const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+					host.once("close", (code, actualSignal) => resolve({ code, signal: actualSignal }));
+				});
+				assert.equal(exit.code, null);
+				assert.equal(exit.signal, signal, `host must retain native ${signal} exit semantics`);
+				await new Promise((resolve) => setTimeout(resolve, 650));
+				assert.equal(fs.existsSync(marker), false, `${mode} descendant survived host ${signal}`);
+			} finally {
+				if (host.exitCode === null && host.signalCode === null) host.kill("SIGKILL");
+				fs.rmSync(dir, { recursive: true, force: true });
+			}
+		}
+	}
+});
+
 test("runSubagentProcess: zero exit without a final answer is a transport failure", async () => {
 	const r = await runSubagentProcess({
 		agent: "test", task: "t", model: undefined,
@@ -426,8 +516,8 @@ test("runSubagentProcess: unterminated stdout retention is bounded", async () =>
 test("runSubagentProcess: stderr activity resets the idle watchdog", async () => {
 	const r = await run(`
 		let n=0;
-		const t=setInterval(()=>{ process.stderr.write("working\\n"); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({done:true})+"\\n"); } }, 60);
-	`, { idleTimeoutMs: 100 });
+		const t=setInterval(()=>{ process.stderr.write("working\\n"); if(++n===4){ clearInterval(t); process.stdout.write(JSON.stringify({done:true})+"\\n"); } }, 80);
+	`, { idleTimeoutMs: 300 });
 	assert.equal(r.exitCode, 0);
 	assert.equal(r.idleTimeout, undefined);
 });
@@ -445,10 +535,17 @@ test("runSubagentProcess: a throwing onLive callback is swallowed (fail-open)", 
 
 test("runSubagentProcess: stderr is capped at ~64KB", async () => {
 	// child writes 100KB to stderr then exits 1
-	const r = await run(`process.stderr.write("x".repeat(100*1024)); process.exit(1);`);
+	const r = await run(`process.stderr.write("x".repeat(100*1024), () => process.exit(1));`);
 	assert.equal(r.exitCode, 1);
 	assert.ok(r.stderr.length <= 64 * 1024 + 64, `stderr not capped: ${r.stderr.length}`);
 	assert.match(r.stderr, /\[...stderr truncated at 64KB\]/);
+});
+
+test("runSubagentProcess: exact stderr byte cap is not mislabeled as truncated", async () => {
+	const r = await run(`process.stderr.write("x".repeat(64*1024)); process.stdout.write('{"ok":true}\\n');`);
+	assert.equal(r.exitCode, 0);
+	assert.equal(Buffer.byteLength(r.stderr), 64 * 1024);
+	assert.doesNotMatch(r.stderr, /stderr truncated/);
 });
 
 test("runSubagentProcess: fatalError in the accumulator wins as error", async () => {

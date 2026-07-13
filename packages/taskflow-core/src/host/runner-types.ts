@@ -70,6 +70,11 @@ export interface RunResult {
 	reapedAfterTerminal?: boolean;
 	/** Grace window used by the host's terminal completion policy. */
 	terminalGraceMs?: number;
+	/** @internal Set by the resolve-only workspace coordinator only after a
+	 * durable mutation intent has been prepared. Runtime retry diagnostics use
+	 * this to distinguish a possibly-mutating failure from lease/admission
+	 * failures that never entered the workspace. */
+	workspaceMutationStarted?: boolean;
 }
 
 /** A streaming progress tick from a running subagent. */

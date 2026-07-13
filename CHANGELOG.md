@@ -2,7 +2,7 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.2.1] — Unreleased
+## [0.2.1] — 2026-07-13
 
 ### Added
 
@@ -18,9 +18,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   `{steps.*}`, undeclared/legacy args, absolute paths, and generated sub-flows
   remain rejected. Canonical FlowIR records a logical read-write,
   existing-directory `cwdUse`, never the machine path.
-- **Partial Workspace Capability control-plane scaffold.** Host-neutral authority,
-  path-resolution, lease, journal, mutation-permit, sandbox-policy, and exact
-  conformance-baseline contracts are available for the future native backend.
+- **Partial Workspace Capability control-plane scaffold.** Internal host-neutral
+  authority, path-resolution, lease, journal, mutation-permit, sandbox-policy,
+  and exact conformance-baseline contracts support the future native backend
+  without becoming public root-package API in this patch release.
   This does not ship a native `WorkspaceExecutionBackend` or race-free
   `FileBroker`; 0.2.1 execution remains explicitly `resolve-only`.
 
@@ -68,14 +69,32 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - **Pi post-terminal hangs (#73).** Pi children now default to
   `--no-extensions`, with Host-only `isolated` / `allowlist` / `inherit`
-  resource profiles. A validated final assistant answer plus `agent_settled`
-  enters a bounded terminal-candidate grace period; `agent_end` remains clean-
-  exit evidence for older Pi versions but is never sufficient for forced reap.
+  resource profiles. A validated final assistant answer plus `agent_settled`, or
+  `agent_end` with `willRetry: false`, enters a bounded and revocable terminal-
+  candidate grace period. Legacy `agent_end` events without retry metadata remain
+  clean-exit evidence only and are never sufficient for forced reap.
   Later lifecycle activity revokes the candidate, while a leaked handle is
   reaped as a successful `terminal-reap`. Pi now uses the shared strict-NDJSON,
   process-group, abort/idle and SIGTERM→SIGKILL supervisor. Completion metadata
   is recorded in traces, and phase-timeout races are linearized consistently in
   imperative and event-kernel execution.
+- **Terminal/process supervision closure.** Ignored Pi metadata no longer
+  cancels terminal grace, stdout/stderr decoding preserves UTF-8 across pipe
+  chunk boundaries, malformed close tails cannot schedule signals after a run
+  settles, and TERM/INT/HUP synchronously reap both agent and script process
+  groups before preserving native Host signal exit semantics.
+- **Published Shared Context Tree path.** The Pi adapter now resolves the
+  executing sibling entry (`src/index.ts` in development, `dist/index.js` in a
+  packed install), so default extension isolation does not remove `ctx_*` tools.
+- **Reproducible release tarballs.** Release packaging canonicalizes pnpm's
+  publish-ready dependency maps without reordering semantic conditional exports,
+  proves repeat-pack SHA512 stability, and reuses one immutable tarball set for
+  consumer smoke, npm publish, provenance and registry verification.
+- **Resolve-only fan-out coordination.** Potential writers in one invocation
+  are safely serialized before durable lease acquisition; parallel/map/race/
+  tournament work no longer self-times out while cross-process writers remain
+  protected by persistent leases. Retry warnings are emitted only after a
+  durable mutation intent actually existed.
 
 ### Security
 

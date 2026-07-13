@@ -120,9 +120,19 @@ export function ctxExtensionPath(): string | undefined {
 	const override = process.env.PI_TASKFLOW_EXT_PATH;
 	if (override) return override;
 	try {
-		const here = path.dirname(new URL(import.meta.url).pathname);
-		const entry = path.join(here, "index.ts");
-		if (fs.existsSync(entry)) return entry;
+		const modulePath = fileURLToPath(import.meta.url);
+		const here = path.dirname(modulePath);
+		// Development executes src/runner.ts; published consumers execute
+		// dist/runner.js. Prefer the matching sibling while retaining both names
+		// for custom loaders that rewrite extensions.
+		const candidates = [
+			path.join(here, `index${path.extname(modulePath)}`),
+			path.join(here, "index.js"),
+			path.join(here, "index.ts"),
+		];
+		for (const entry of new Set(candidates)) {
+			if (fs.existsSync(entry)) return entry;
+		}
 	} catch {
 		/* fall through */
 	}
@@ -143,6 +153,12 @@ function eventType(event: unknown): string {
 	return typeof event === "object" && event !== null && typeof (event as { type?: unknown }).type === "string"
 		? (event as { type: string }).type
 		: "";
+}
+
+function eventWillRetry(event: unknown): boolean | undefined {
+	if (typeof event !== "object" || event === null) return undefined;
+	const value = (event as { willRetry?: unknown }).willRetry;
+	return typeof value === "boolean" ? value : undefined;
 }
 
 function resetPiFinal(acc: PiEventAccumulator): void {
@@ -187,10 +203,11 @@ function foldPiEventLine(acc: PiEventAccumulator, line: string) {
 				? event.message
 				: "Pi emitted an error event";
 	} else if (type === "agent_end") {
-		// Older Pi versions stop at agent_end. Preserve that event as sufficient
-		// evidence for a normal process exit, but do not reap on it: newer Pi may
-		// still run retry/compaction/session settlement work after agent_end.
+		// Modern Pi declares whether another lifecycle will follow. `willRetry:false`
+		// is authoritative enough to begin the revocable grace period; a missing
+		// field remains clean-exit evidence only for older versions.
 		acc.terminalSeen = true;
+		if (eventWillRetry(event) === false) acc.terminalGeneration = acc.generation;
 	} else if (type === "agent_settled") {
 		acc.terminalSeen = true;
 		acc.terminalGeneration = acc.generation;
@@ -205,7 +222,7 @@ function piCompletionPolicy(terminalGraceMs: number): CompletionPolicy<PiEventAc
 			const type = eventType(event);
 			if (acc.fatalError || type === "error") return "fatal";
 			if (type === "agent_settled") return "terminal-candidate";
-			if (type === "agent_end") return "activity";
+			if (type === "agent_end") return eventWillRetry(event) === false ? "terminal-candidate" : "activity";
 			if (
 				type === "agent_start" || type === "turn_start" ||
 				type.startsWith("message_") || type.startsWith("tool_execution_") || type.startsWith("tool_")

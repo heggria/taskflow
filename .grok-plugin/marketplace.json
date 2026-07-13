@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "taskflow",
-      "description": "Multi-phase subagent orchestration for Grok Build: 12 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (grok-taskflow).",
+      "description": "Multi-phase subagent orchestration for Grok Build: 13 taskflow_* MCP tools (run/list/show/verify/compile/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. compile returns SVG + text outline. The server runs via npx (grok-taskflow).",
       "source": {
         "type": "local",
         "path": "./packages/grok-taskflow/plugin"

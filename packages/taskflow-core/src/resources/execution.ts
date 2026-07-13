@@ -247,7 +247,18 @@ function agentFailure(agentName: string, task: string, error: unknown): RunResul
 		usage: emptyUsage(),
 		stopReason: "error",
 		errorMessage: message,
+		workspaceMutationStarted: error instanceof ResolveOnlyExecutionError ? error.mutationStarted : false,
 	};
+}
+
+class ResolveOnlyExecutionError extends Error {
+	readonly mutationStarted: boolean;
+
+	constructor(error: unknown, mutationStarted: boolean) {
+		super(error instanceof Error ? error.message : String(error), { cause: error });
+		this.name = "ResolveOnlyExecutionError";
+		this.mutationStarted = mutationStarted;
+	}
 }
 
 function agentSucceeded(result: RunResult): boolean {
@@ -274,6 +285,12 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 	readonly #rootIdentity: DirectoryIdentity;
 	readonly #pendingLeaseReleases = new Set<LeaseHandle>();
 	readonly #allowReconcile: boolean;
+	// A single resolve-only session can fan out many tasks over the same granted
+	// root. They are all potential writers and cannot safely overlap without a
+	// native broker/snapshot backend. Serialize them before lease acquisition so
+	// ordinary parallel/map/tournament phases do not self-deadlock on the 10s
+	// cross-process lease timeout. External sessions still contend durably.
+	#mutationTail: Promise<void> = Promise.resolve();
 
 	constructor(options: ResolveOnlyWorkspaceSessionOptions) {
 		this.invocationRoot = fs.realpathSync(options.invocationRoot);
@@ -437,6 +454,29 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 		invoke: () => Promise<T>,
 		succeeded: (result: T) => boolean,
 	): Promise<T> {
+		const previous = this.#mutationTail.catch(() => undefined);
+		let releaseTurn!: () => void;
+		const turn = new Promise<void>((resolve) => { releaseTurn = resolve; });
+		this.#mutationTail = previous.then(() => turn);
+		const signals = [this.#signal, callSignal].filter((candidate): candidate is AbortSignal => candidate !== undefined);
+		const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+		try {
+			await this.#waitForMutationTurn(previous, signal);
+			return await this.#executeMutationNow(input, boundPath, unitId, target, signal, invoke, succeeded);
+		} finally {
+			releaseTurn();
+		}
+	}
+
+	async #executeMutationNow<T>(
+		input: BindResolveOnlyPhaseInput,
+		boundPath: string,
+		unitId: string,
+		target: "agent" | "script",
+		signal: AbortSignal | undefined,
+		invoke: () => Promise<T>,
+		succeeded: (result: T) => boolean,
+	): Promise<T> {
 		await this.#drainPendingLeaseReleases();
 		const owner: ExecutionOwner = {
 			runId: input.runId,
@@ -447,8 +487,6 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 		};
 		let lease: LeaseHandle | undefined;
 		let mutation: PreparedMutation | undefined;
-		const signals = [this.#signal, callSignal].filter((signal): signal is AbortSignal => signal !== undefined);
-		const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 		try {
 			this.#assertRootIdentity();
 			if (signal?.aborted) throw new Error("ABORT_ERR: workspace execution was cancelled before lease acquisition");
@@ -549,9 +587,28 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 			);
 		} catch (error) {
 			if (mutation) await this.#markUnknownIfPending(mutation, `execution preparation failed: ${error instanceof Error ? error.message : String(error)}`);
-			throw error;
+			if (error instanceof ResolveOnlyExecutionError) throw error;
+			throw new ResolveOnlyExecutionError(error, mutation !== undefined);
 		} finally {
 			if (lease) await this.#releaseLeaseBestEffort(lease);
+		}
+	}
+
+	async #waitForMutationTurn(previous: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+		if (!signal) {
+			await previous;
+			return;
+		}
+		if (signal.aborted) throw new ResolveOnlyExecutionError("ABORT_ERR: workspace execution was cancelled while queued", false);
+		let onAbort!: () => void;
+		const aborted = new Promise<never>((_resolve, reject) => {
+			onAbort = () => reject(new ResolveOnlyExecutionError("ABORT_ERR: workspace execution was cancelled while queued", false));
+			signal.addEventListener("abort", onAbort, { once: true });
+		});
+		try {
+			await Promise.race([previous, aborted]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
 		}
 	}
 
@@ -640,7 +697,7 @@ class ResolveOnlyPhaseBindingImpl implements ResolveOnlyPhaseBinding {
 
 	async runAgent(call: ResolveOnlyAgentCall): Promise<RunResult> {
 		try {
-			return await this.#session.executeMutation(
+			const result = await this.#session.executeMutation(
 				this.#input,
 				this.absolutePath,
 				call.unitId ?? this.phaseId,
@@ -649,6 +706,7 @@ class ResolveOnlyPhaseBindingImpl implements ResolveOnlyPhaseBinding {
 				call.invoke,
 				agentSucceeded,
 			);
+			return { ...result, workspaceMutationStarted: true };
 		} catch (error) {
 			return agentFailure(call.agentName, call.task, error);
 		}
