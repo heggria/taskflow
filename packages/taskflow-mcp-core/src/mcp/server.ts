@@ -76,7 +76,7 @@ import {
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import { getBuildInfo, type BuildInfo } from "taskflow-core";
-import { forkRunForResume, validateResumeOverrides, type ResumeOverrides } from "taskflow-core";
+import { forkRunForResume, validateResumeOverrides, validateResumeRun, type ResumeOverrides } from "taskflow-core";
 import {
 	runsDir,
 	traceFilePath,
@@ -844,6 +844,8 @@ export function makeToolHandlers(
 			const prevR = loadRunDiagnosed(cwd, runId);
 			if (!prevR.ok) return textContent(describeLoadFailure(prevR, `Run "${runId}"`), true);
 			const prev = prevR.value;
+			const resumable = validateResumeRun(prev);
+			if (!resumable.ok) return textContent(resumable.errors.join("; "), true);
 			const hasOverrideField =
 				args.task !== undefined || args.model !== undefined ||
 				args.timeout !== undefined || args.idleTimeout !== undefined;
@@ -873,6 +875,7 @@ export function makeToolHandlers(
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting: runner.usageAccounting,
+				cwdBridgeMode: cwdBridgeModeFromEnv(),
 				trace: new FileTraceSink(traceFilePath(runsDir(cwd), child.flowName, child.runId)),
 			};
 			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };

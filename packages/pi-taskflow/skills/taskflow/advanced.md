@@ -345,7 +345,8 @@ runtime or event kernel — offline replay cannot accidentally spend tokens.
 
 ## Resume overrides (re-run one phase with a patch)
 
-`action: "resume"` now **forks a new run** — the original run file is never
+`action: "resume"` accepts a `failed` or `paused` run and **forks a new
+run** — the original run file is never
 modified or overwritten (the child carries `parentRunId` pointing at it).
 Completed unaffected phases are reused (within-run cache hits); the target
 phase + its transitive downstream re-run.

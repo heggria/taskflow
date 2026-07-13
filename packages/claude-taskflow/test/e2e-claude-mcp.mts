@@ -57,7 +57,7 @@ console.log("▶ launching claude-taskflow MCP server (as Claude Code would) …
 send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } });
 const init = await waitFor(1, "initialize");
 assert.equal(init.result.protocolVersion, "2025-06-18");
-assert.equal(init.result.serverInfo.name, "taskflow");
+assert.equal(init.result.serverInfo.name, "taskflow-claude");
 console.log("✓ initialize:", JSON.stringify(init.result.serverInfo));
 
 send({ jsonrpc: "2.0", method: "notifications/initialized" });

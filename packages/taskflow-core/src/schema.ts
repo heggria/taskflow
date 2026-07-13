@@ -18,6 +18,10 @@ import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 // Phase types
 // ---------------------------------------------------------------------------
 
+/** Hard cap on subagent calls made by one tree-reduce phase. This bounds
+ * author mistakes even when no run budget was declared. */
+export const TREE_REDUCE_HARD_MAX_CALLS = 256;
+
 /** Closed set of native phase kinds — single source of truth for DSL + FlowIR. */
 export const PHASE_TYPES = [
 	"agent",
@@ -886,6 +890,13 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (typeof p.cwd === "string") {
 				errors.push(`Dynamic sub-flow phase '${p.id}': cwd selection is not allowed in generated flows`);
 			}
+			if (Array.isArray(p.branches)) {
+				p.branches.forEach((branch, i) => {
+					if (branch && typeof branch === "object" && typeof (branch as { cwd?: unknown }).cwd === "string") {
+						errors.push(`Dynamic sub-flow phase '${p.id}': branches[${i}].cwd selection is not allowed in generated flows`);
+					}
+				});
+			}
 		}
 	}
 
@@ -1004,6 +1015,8 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 							errors.push(`Phase '${p.id}': branches[${i}].cwd does not support interpolation placeholders (${bcwd}). Use a literal path.`);
 						} else if (WORKSPACE_KEYWORDS.includes(bcwd as (typeof WORKSPACE_KEYWORDS)[number])) {
 							errors.push(`Phase '${p.id}': branches[${i}].cwd '${bcwd}' is a reserved workspace keyword not supported per-branch (the workspace lifecycle is per-phase). Use the phase-level 'cwd' for workspace isolation.`);
+						} else if (typeof p.cwd === "string" && (WORKSPACE_KEYWORDS.includes(p.cwd as (typeof WORKSPACE_KEYWORDS)[number]) || hasCwdPlaceholder(p.cwd))) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd cannot override phase cwd '${p.cwd}' because that phase uses a managed workspace/cwd binding. Put the literal cwd on the phase or remove the branch override.`);
 						}
 					}
 				}
@@ -1156,6 +1169,19 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 					errors.push(`Phase '${p.id}' (reduce): batchSize must be an integer >= 2`);
 				} else if (strat !== "tree") {
 					warnings.push(`Phase '${p.id}' (reduce): batchSize is only used with reduceStrategy 'tree' — ignored for one-shot`);
+				}
+			}
+			if (strat === "tree") {
+				const batchSize = typeof bs === "number" && Number.isInteger(bs) && bs >= 2 ? bs : 2;
+				let remaining = asArray<string>(p.from).length;
+				let maxCalls = 0;
+				while (remaining > 1 && maxCalls <= TREE_REDUCE_HARD_MAX_CALLS) {
+					const callsThisRound = Math.ceil(remaining / batchSize);
+					maxCalls += callsThisRound;
+					remaining = callsThisRound;
+				}
+				if (maxCalls > TREE_REDUCE_HARD_MAX_CALLS) {
+					errors.push(`Phase '${p.id}' (reduce): tree strategy exceeds hard cap ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls; increase batchSize or split the reduction`);
 				}
 			}
 		}

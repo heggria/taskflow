@@ -285,3 +285,58 @@ test("finalPhase() still resolves the designated final phase for the header fall
 	const def: Taskflow = { name: "x", phases: [{ id: "a", type: "agent", task: "x" }, { id: "b", type: "agent", task: "y", final: true }] };
 	assert.equal(finalPhase(def.phases).id, "b");
 });
+
+// ---------------------------------------------------------------------------
+// Empty-string output still attributes (0.2.0 dogfood issue 6 regression)
+// ---------------------------------------------------------------------------
+
+test("resolveFinalOutput: done final phase with output:\"\" still has outputSourcePhaseId", () => {
+	const def: Taskflow = {
+		name: "n",
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "do", final: true },
+		],
+	};
+	const state: RunState = { ...mkState(def), phases: {
+		a: { id: "a", status: "done", output: "" },
+	} };
+	const r = resolveFinalOutput(def.phases, state, { gate: false, gateReason: "", gateOutput: "", gatePhaseId: undefined, budget: false, budgetReason: "" });
+	assert.equal(r.finalOutput, "");
+	assert.equal(r.outputSourcePhaseId, "a", "empty-string output must still attribute to its phase");
+});
+
+test("resolveFinalOutput: no phase output (undefined) vs empty string are distinct", () => {
+	// A skipped/failed final phase with undefined output must NOT fabricate attribution.
+	const def: Taskflow = { name: "n", phases: [{ id: "a", type: "agent", agent: "a", task: "x", final: true }] };
+	const state: RunState = { ...mkState(def), phases: {
+		a: { id: "a", status: "skipped", error: "upstream" },
+	} };
+	const r = resolveFinalOutput(def.phases, state, { gate: false, gateReason: "", gateOutput: "", gatePhaseId: undefined, budget: false, budgetReason: "" });
+	assert.equal(r.finalOutput, "(no output)");
+	assert.equal(r.outputSourcePhaseId, undefined);
+	// A done phase with NO output field (i.e. script that wrote nothing) = undefined.
+	const state2: RunState = { ...mkState(def), phases: {
+		a: { id: "a", status: "done" },
+	} };
+	const r2 = resolveFinalOutput(def.phases, state2, { gate: false, gateReason: "", gateOutput: "", gatePhaseId: undefined, budget: false, budgetReason: "" });
+	assert.equal(r2.finalOutput, "(no output)");
+	assert.equal(r2.outputSourcePhaseId, undefined, "PhaseState without output field must not attribute");
+});
+
+test("e2e: empty-string output from done final phase attributes source correctly", async () => {
+	// Some phases legitimately return empty output (script: "true", agent that
+	// logs nothing). The output source must still point at that phase.
+	const def: Taskflow = {
+		name: "empty-out",
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "first" },
+			{ id: "b", type: "agent", agent: "a", task: "final", final: true, dependsOn: ["a"] },
+		],
+	};
+	// Mock runner returns empty string for the final phase (no fail, succeeds).
+	const res = await executeTaskflow(mkState(def), deps(mockRunner((t) => t === "first" ? "OUT-A" : "")));
+	assert.equal(res.ok, true);
+	// The empty-string finalOutput is valid (not-fallback-to-no-output).
+	assert.equal(res.finalOutput, "");
+	assert.equal(res.outputSourcePhaseId, "b", "empty-string output must still attribute to final phase b");
+});

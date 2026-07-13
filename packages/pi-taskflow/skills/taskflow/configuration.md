@@ -89,7 +89,7 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `cancelLosers` | race | `true` | Abort in-flight losers after first **success** (best-effort AbortSignal). |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. `{previous.output}` resolves to **all completed `from[]` outputs** in from-array order (one → raw; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`). |
 | `reduceStrategy` | reduce | `one-shot` | `one-shot` = a single reducer call over all aggregated inputs. `tree` = batched intermediate reducer rounds (see `batchSize`); useful when aggregated input would exceed one prompt. `tree` forces the imperative runtime (event kernel falls back). |
-| `batchSize` | reduce | — | With `reduceStrategy: "tree"`, max inputs per intermediate reducer call (integer ≥ 2). Ignored for one-shot. |
+| `batchSize` | reduce | — | With `reduceStrategy: "tree"`, max inputs per intermediate reducer call (integer ≥ 2). Ignored for one-shot. A phase may start at most 256 tree-reducer calls; increase `batchSize` or split the reduction if validation would exceed the cap. |
 | `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
 | `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |
 | `maxNodes` | expand | `50` | Cap fragment phase count (1..100). |

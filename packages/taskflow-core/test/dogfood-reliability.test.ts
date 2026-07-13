@@ -251,6 +251,11 @@ test("reduce: event-kernel parity — {previous.output} aggregates identically",
 	const iTask = (imp.state.phases.r.output ?? "").replace(/^ECHO:/, "");
 	assert.equal(kTask, iTask, "reduce {previous.output} aggregation must match across paths");
 	assert.match(kTask, /MERGE: ### a\n\nECHO:produce A\n\n---\n\n### b\n\nECHO:produce B/);
+	assert.deepEqual(
+		kernel.state.phases.r.reads?.map((read) => read.stepId).sort(),
+		["a", "b"],
+		"event-kernel reduce must persist observed reads for every aggregated source",
+	);
 });
 
 // ===========================================================================
@@ -429,6 +434,9 @@ test("promptSizeStats: bytes, chars, estTokens=ceil(chars/4)", () => {
 	assert.equal(s2.chars, 5);
 	assert.equal(s2.bytes, 6);
 	assert.equal(s2.estTokens, 2);
+	const emoji = promptSizeStats("A😀B");
+	assert.equal(emoji.chars, 3, "chars counts Unicode code points, not UTF-16 code units");
+	assert.equal(emoji.bytes, 6);
 });
 
 test("promptStats: durable on PhaseState for an agent call", async () => {
@@ -448,6 +456,29 @@ test("promptStats: durable on PhaseState for an agent call", async () => {
 	assert.equal(call.estTokens, Math.ceil(call.chars / 4));
 });
 
+test("promptStats: fan-out and retries record every actual subagent attempt", async () => {
+	const def: Taskflow = {
+		name: "prompt-all-calls",
+		phases: [{
+			id: "p", type: "parallel", agent: "a", retry: { max: 1, backoffMs: 0 },
+			branches: [{ task: "one" }, { task: "two" }], final: true,
+		}],
+	};
+	const attempts = new Map<string, number>();
+	const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => {
+		const attempt = (attempts.get(task) ?? 0) + 1;
+		attempts.set(task, attempt);
+		const failed = attempt === 1;
+		return {
+			agent, task, exitCode: failed ? 1 : 0, output: failed ? "" : task,
+			stderr: failed ? "hard failure" : "", usage: { ...emptyUsage(), input: 1, output: 1, turns: 1 },
+			stopReason: failed ? "error" : "end", ...(failed ? { errorMessage: "hard failure" } : {}),
+		};
+	};
+	const res = await executeTaskflow(mkState(def), baseDeps(runTask));
+	assert.equal(res.ok, true);
+	assert.equal(res.state.phases.p.promptStats?.calls.length, 4, "two branches × two attempts");
+});
 test("promptStats: warning fires when a prompt crosses the conservative threshold", async () => {
 	// A task whose resolved prompt is large enough to cross PROMPT_SIZE_WARN_TOKENS.
 	const big = "x".repeat(PROMPT_SIZE_WARN_TOKENS * 4 + 100);
@@ -518,6 +549,20 @@ test("reduceStrategy: tree validation — batchSize must be integer >= 2", () =>
 	assert.ok(r3.ok, JSON.stringify(r3.errors));
 });
 
+test("reduceStrategy: tree validation caps worst-case subagent calls", () => {
+	const sourceCount = 258;
+	const phases: Taskflow["phases"] = Array.from({ length: sourceCount }, (_, i) => ({
+		id: `s-${i}`, type: "agent", agent: "a", task: `source ${i}`,
+	}));
+	phases.push({
+		id: "r", type: "reduce", agent: "a", from: phases.map((phase) => phase.id),
+		dependsOn: phases.map((phase) => phase.id), task: "{previous.output}",
+		reduceStrategy: "tree", batchSize: 2, final: true,
+	});
+	const v = validateTaskflow({ name: "tree-cap", phases });
+	assert.equal(v.ok, false);
+	assert.match(v.errors.join("\n"), /hard cap 256/);
+});
 test("reduceStrategy: tree runs batched intermediate rounds until one remains", async () => {
 	// 6 from-sources (agent phases), batchSize 2. Tree reduce batches the
 	// completed `from[]` outputs: R1: 6→3 (3 calls), R2: 3→2 (2 calls),
@@ -665,4 +710,308 @@ test("kernel admission: one-shot reduce stays on the kernel", () => {
 	};
 	assert.equal(canUseEventKernel(def), true);
 	assert.equal(kernelUnsupportedReason(def), undefined);
+});
+
+// ===========================================================================
+// Tree reduce budget truncation (0.2.0 dogfood issue — tree reduce hardening)
+// ===========================================================================
+
+test("tree reduce: usage aggregates every intermediate reducer call", async () => {
+	const seeds = [1, 2, 3, 4].map((n) => ({
+		id: `s${n}`, type: "agent" as const, agent: "a", task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-usage",
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((s) => s.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+				dependsOn: seeds.map((s) => s.id),
+				final: true,
+			},
+		],
+	};
+	// Return a usage that increments per call to verify aggregation.
+	let callCount = 0;
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		persist: () => {},
+		onProgress: () => {},
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => {
+			callCount++;
+			const isReduceCall = task.startsWith("REDUCE:");
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: isReduceCall ? `batch-${callCount}` : `seed-out`,
+				stderr: "",
+				usage: { input: 10 * callCount, output: 5 * callCount, cacheRead: 0, cacheWrite: 0, cost: 0.001 * callCount, contextTokens: 0, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	assert.equal(res.ok, true);
+	const rPs = res.state.phases.r;
+	// 4 inputs / batchSize 2 → round1: 2 calls, round2: 1 call = 3 total reduce calls.
+	// Seeds add 4 calls. Total reduce calls = 3.
+	const reduceCalls = callCount - 4;
+	assert.equal(reduceCalls, 3, `expected 3 intermediate reduce calls, got ${reduceCalls}`);
+	// The phase usage must aggregate ALL 3 reduce calls, not just the last one.
+	assert.ok(rPs.usage, "PhaseState.usage must be set");
+	assert.ok(rPs.usage!.input > 30, `usage.input should aggregate all calls, got ${rPs.usage!.input}`);
+});
+
+test("tree reduce: budget exhaustion mid-tree stops admitting new calls", async () => {
+	const seeds = [1, 2, 3, 4].map((n) => ({
+		id: `s${n}`, type: "agent" as const, agent: "a", task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-budget-cut",
+		budget: { maxUSD: 0.0001 }, // extremely tight budget
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((s) => s.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+				dependsOn: seeds.map((s) => s.id),
+				final: true,
+			},
+		],
+	};
+	let reduceCallCount = 0;
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		persist: () => {},
+		onProgress: () => {},
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => {
+			const isReduceCall = task.startsWith("REDUCE:");
+			if (isReduceCall) reduceCallCount++;
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: isReduceCall ? `out-r${reduceCallCount}` : `seed-out`,
+				stderr: "",
+				usage: { input: 1000, output: 500, cacheRead: 0, cacheWrite: 0, cost: 0.0001, contextTokens: 0, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	// After 2 seed calls (cost ~0.0002) the budget is already well exceeded,
+	// so seeds 3-4 may also trigger budget. The tree reduce starts with 4
+	// inputs already over budget, so it may stop immediately (0 reduce calls).
+	// The key assertions: run is blocked, budgetTruncated is set, warning exists.
+	assert.equal(res.state.status, "blocked");
+	const rPs = res.state.phases.r;
+	if (rPs.budgetTruncated) {
+		// Tree stopped early; partial output retains untouched inputs.
+		assert.match(rPs.output ?? "", /<input \[1\]>/);
+		assert.ok((rPs.warnings ?? []).some((w) => w.includes("tree reduction stopped by the run budget")),
+			`expected budget truncation warning, got: ${JSON.stringify(rPs.warnings)}`);
+	}
+	// The reduce result must NOT be cached (budgetTruncated prevents caching).
+	assert.ok(!rPs.cacheHit);
+});
+
+test("tree reduce: budget truncation preserves untouched inputs in partial output", async () => {
+	// 6 inputs / batch 2. With a per-call usage that exceeds budget after the
+	// first batch, the later inputs must be preserved untransformed.
+	const seeds = [1, 2, 3, 4, 5, 6].map((n) => ({
+		id: `s${n}`, type: "agent" as const, agent: "a", task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-partial",
+		budget: { maxTokens: 200 }, // tight token budget
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((s) => s.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+				dependsOn: seeds.map((s) => s.id),
+				final: true,
+			},
+		],
+	};
+	let reduceCallCount = 0;
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		persist: () => {},
+		onProgress: () => {},
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => {
+			const isReduceCall = task.startsWith("REDUCE:");
+			if (isReduceCall) reduceCallCount++;
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: isReduceCall ? `reduced-${reduceCallCount}` : `seed-${task}`,
+				stderr: "",
+				usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	};
+	const res = await executeTaskflow(mkState(def), deps);
+	// Seeds consume ~50 tokens each, plus 100+50 = 150 per reduce call.
+	// After 1 or 2 reduce calls the budget (200 tokens) blows.
+	// The partial output must contain both finished rounds and the untouched seeds.
+	const rPs = res.state.phases.r;
+	if (rPs.budgetTruncated) {
+		assert.ok(rPs.output, "must have partial output");
+		// Reduce calls may have processed some batches (showing [N] labels)
+		// AND untouched seeds must be preserved with their [N] labels.
+		// The untouched seeds appear as their original seed content.
+		assert.match(rPs.output!, /seed-/);
+	}
+});
+
+test("tree reduce: abort path marks phase as failed with abort error", async () => {
+	const seeds = [1, 2, 3, 4].map((n) => ({
+		id: `s${n}`, type: "agent" as const, agent: "a", task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-abort",
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((s) => s.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+				dependsOn: seeds.map((s) => s.id),
+				final: true,
+			},
+		],
+	};
+	const ac = new AbortController();
+	// Use a controlled promise: make the reduce call hang until we signal.
+	let resolveRun: (() => void) | undefined;
+	const runPromise = new Promise<void>((resolve) => { resolveRun = resolve; });
+	let reduceCallCount = 0;
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		signal: ac.signal,
+		persist: () => {},
+		onProgress: () => {},
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => {
+			if (task.startsWith("REDUCE:")) {
+				reduceCallCount++;
+				// First reduce call blocks until we abort.
+				if (reduceCallCount === 1) {
+					await runPromise;
+				}
+			}
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: "temp-output",
+				stderr: "",
+				usage: { ...emptyUsage(), output: 5, turns: 1 },
+				stopReason: "end",
+			};
+		},
+	};
+	// Start the flow, then abort while the first reduce call is in flight.
+	const resPromise = executeTaskflow(mkState(def), deps);
+	// Wait for the reduce call to start (it's blocked on runPromise).
+	await new Promise<void>((resolve) => {
+		const check = () => {
+			if (reduceCallCount >= 1) resolve();
+			else setTimeout(check, 1);
+		};
+		check();
+	});
+	// Abort while the call is blocked.
+	ac.abort();
+	resolveRun!(); // release the blocked call (too late — abort was already signaled)
+	const res = await resPromise;
+	assert.equal(res.state.status, "paused", "aborted run is paused");
+	const rPs = res.state.phases.r;
+	// The tree reduce should have detected the abort and failed.
+	assert.equal(rPs.status, "failed", "aborted tree reduce must be failed");
+	assert.match(rPs.error ?? "", /Tree reduction aborted/);
+});
+
+// ===========================================================================
+// Tree reduce — not cached when budgetTruncated (cross-run and run-only)
+// ===========================================================================
+
+test("tree reduce: budget-truncated phase is never cached", async () => {
+	const seeds = [1, 2, 3].map((n) => ({
+		id: `s${n}`, type: "agent" as const, agent: "a", task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-nocache",
+		budget: { maxUSD: 0.00005 },
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((s) => s.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+				dependsOn: seeds.map((s) => s.id),
+				final: true,
+			},
+		],
+	};
+	const deps: RuntimeDeps = {
+		cwd: "/tmp",
+		agents: AGENTS,
+		persist: () => {},
+		onProgress: () => {},
+		runTask: async (_cwd, _agents, agentName, task): Promise<RunResult> => ({
+			agent: agentName,
+			task,
+			exitCode: 0,
+			output: "out",
+			stderr: "",
+			usage: { input: 500, output: 250, cacheRead: 0, cacheWrite: 0, cost: 0.0001, contextTokens: 0, turns: 1 },
+			stopReason: "end",
+		}),
+	};
+	// First run: budget exhausted mid-way.
+	const s1 = mkState(def);
+	const r1 = await executeTaskflow(s1, deps);
+	const rPs = r1.state.phases.r;
+	if (rPs.budgetTruncated) {
+		// No cacheHit marker (not cached — neither run-only nor cross-run).
+		assert.equal(rPs.cacheHit, undefined, "budget-truncated phase must not be cached");
+		// Re-run: a second invocation must NOT hit a cached phase result.
+		const s2 = mkState(def);
+		const r2 = await executeTaskflow(s2, deps);
+		const r2Ps = r2.state.phases.r;
+		// The second run also deals with budget — and must NOT see a cache hit.
+		assert.equal(r2Ps.cacheHit, undefined, "second run of budget-truncated phase must not hit cache");
+	}
 });

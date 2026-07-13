@@ -134,6 +134,15 @@ test("extractIndexEntry: omits identity fields when absent (no undefined keys)",
 	assert.equal("parentRunId" in entry, false);
 });
 
+test("stamp-build-info script is valid plain JavaScript", async () => {
+	const { spawnSync } = await import("node:child_process");
+	const path = await import("node:path");
+	const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace("/packages/taskflow-core/test", ""));
+	const script = path.join(repoRoot, "scripts", "stamp-build-info.mjs");
+	const r = spawnSync(process.execPath, ["--check", script], { encoding: "utf8" });
+	assert.equal(r.status, 0, r.stderr || "stamp-build-info.mjs must parse in plain Node");
+});
+
 test("stamp-build-info script: --check exits 0 when git is available (build output)", async () => {
 	// Verifies the build stamp script can produce a non-'unknown' commit (0.2.0
 	// dogfood issue 4) so the published dist carries real build identity. The
@@ -145,7 +154,7 @@ test("stamp-build-info script: --check exits 0 when git is available (build outp
 	const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace("/packages/taskflow-core/test", ""));
 	const r = spawnSync(
 		process.execPath,
-		["--experimental-strip-types", path.join(repoRoot, "scripts", "stamp-build-info.mjs"), "--check"],
+		[path.join(repoRoot, "scripts", "stamp-build-info.mjs"), "--check"],
 		{ cwd: path.join(repoRoot, "packages", "taskflow-core"), encoding: "utf8" },
 	);
 	if (r.status !== 0) {

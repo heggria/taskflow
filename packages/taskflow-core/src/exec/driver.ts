@@ -336,7 +336,9 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 
 			const startedAt = Date.now();
 			state.phases[phase.id] = { id: phase.id, status: "running", startedAt };
-			const ctx: StepContext = { state, deps: stepDeps, steps, args };
+			const readRefs: string[] = [];
+			const promptCalls: string[] = [];
+			const ctx: StepContext = { state, deps: stepDeps, steps, args, readRefs, promptCalls };
 			const result = await stepPhase(phase, ctx);
 			if (!result) {
 				state.phases[phase.id] = {
@@ -362,6 +364,12 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 						: "done";
 			const phaseJson = phase.output === "json" ? safeParse(result.output ?? "") : undefined;
 
+			const observedReads = Array.from(new Set(
+				readRefs
+					.map((ref) => /^steps\.([A-Za-z0-9_-]+)\b/.exec(ref)?.[1])
+					.filter((id): id is string => typeof id === "string"),
+			)).map((stepId) => ({ stepId, version: state.phases[stepId]?.inputHash }));
+
 			state.phases[phase.id] = {
 				id: phase.id,
 				status: st,
@@ -375,6 +383,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				gate: result.gate,
 				approval: result.approval,
 				warnings: result.warnings,
+				...(observedReads.length ? { reads: observedReads } : {}),
 				// Prompt-size diagnostics (parity with imperative PhaseState.promptStats).
 				...(result.promptStats ? { promptStats: result.promptStats } : {}),
 				// Match the imperative audit marker: an idempotent:false phase

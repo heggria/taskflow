@@ -28,15 +28,25 @@ if (!existsSync(destDir)) {
 }
 
 let commit = "";
+let commitTimeMs;
 try {
 	commit = execSync("git rev-parse HEAD", { cwd: coreRoot, encoding: "utf8" }).trim();
+	const seconds = Number(execSync("git show -s --format=%ct HEAD", { cwd: coreRoot, encoding: "utf8" }).trim());
+	if (Number.isFinite(seconds) && seconds >= 0) commitTimeMs = seconds * 1000;
 } catch {
 	// git unavailable — fall back to env, then "unknown".
 	commit = process.env.PI_TASKFLOW_BUILD_COMMIT?.trim() || "unknown";
 }
 if (!commit) commit = "unknown";
 
-const stamp = { gitCommit: commit, buildTime: Date.now() };
+// SOURCE_DATE_EPOCH keeps exported/CI builds reproducible; otherwise a real git
+// build uses the immutable commit timestamp. Unknown source builds omit time
+// rather than injecting Date.now() and making identical tarballs differ.
+const sourceEpoch = Number(process.env.SOURCE_DATE_EPOCH);
+const buildTime = Number.isFinite(sourceEpoch) && sourceEpoch >= 0
+	? sourceEpoch * 1000
+	: commitTimeMs;
+const stamp = { gitCommit: commit, ...(buildTime !== undefined ? { buildTime } : {}) };
 mkdirSync(destDir, { recursive: true });
 writeFileSync(dest, `${JSON.stringify(stamp, null, 2)}\n`);
 console.log(`[stamp-build-info] stamped ${dest} (commit ${commit.slice(0, 12)}${commit.length > 12 ? "…" : ""})`);

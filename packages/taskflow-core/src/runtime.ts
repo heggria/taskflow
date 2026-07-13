@@ -36,7 +36,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 });
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, TREE_REDUCE_HARD_MAX_CALLS, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -924,6 +924,7 @@ async function runSpawnedChildren(
 	state: RunState,
 	run: RunTaskFn,
 	ledger: SpawnBudgetLedger = { usage: emptyUsage() },
+	promptCalls?: string[],
 ): Promise<SpawnedResult> {
 	const capped = assignments.slice(0, MAX_DYNAMIC_MAP_ITEMS);
 	const lines: string[] = [];
@@ -959,6 +960,7 @@ async function runSpawnedChildren(
 				setNodeStatus(ctxDir, childNodeId, sub.failed ? "failed" : "done");
 			} else {
 					const task = a.task ?? "";
+					promptCalls?.push(task);
 					const runOptions = {
 						model: phase.model,
 						thinking: phase.thinking,
@@ -1004,7 +1006,7 @@ async function runSpawnedChildren(
 				// A child may itself have queued spawns — recurse (depth-capped by the tool).
 				const grand = drainPendingSpawns(ctxDir, childNodeId);
 				if (grand.length > 0 && !deps.signal?.aborted && !spawnedOverBudget(state, ledger.usage)) {
-					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger);
+					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger, promptCalls);
 					if (rec.reports) out += rec.reports;
 					usages.push(rec.usage);
 					errors.push(...rec.errors);
@@ -1049,6 +1051,8 @@ interface PhaseExecOpts {
 	/** Resource context before this phase narrowed/allocated its own cwd. Gate
 	 * retries must re-run upstream phases in this parent context. */
 	upstreamDeps?: RuntimeDeps;
+	/** Internal exact prompt list, populated once per actual subagent attempt. */
+	promptCalls?: string[];
 }
 
 async function executePhase(
@@ -1073,8 +1077,10 @@ async function executePhase(
 	if (deps.trace) emitUnreplayableMarker(deps, state, phase);
 	let result: PhaseState;
 	let threw = false;
+	const promptCalls: string[] = [];
+	const trackedOpts: PhaseExecOpts = { ...opts, promptCalls };
 	try {
-		result = await executePhaseImpl(phase, state, deps, prior, emitProgress, _retryDepth, opts);
+		result = await executePhaseImpl(phase, state, deps, prior, emitProgress, _retryDepth, trackedOpts);
 	} catch (e) {
 		threw = true;
 		// Trace: phase-end on failure (fail-open) before re-throwing.
@@ -1086,6 +1092,9 @@ async function executePhase(
 		throw e;
 	}
 	if (threw) return result; // unreachable; satisfies TS
+	if (promptCalls.length > 0 && !result.cacheHit) {
+		setPromptStats(result, promptCalls);
+	}
 	// S1: cache-hit decision (within-run or cross-run) for fold/replay.
 	if (result.cacheHit) {
 		traceDecision(deps, state, phase.id, {
@@ -1480,7 +1489,39 @@ async function executePhaseInner(
 		callCwd?: string,
 		onTerminalCommit?: () => void,
 	) => {
-		const invocationCwd = callCwd ?? effCwd;
+		const invocationCwd = callCwd ? path.resolve(deps.cwd, callCwd) : effCwd;
+		// A per-branch cwd cannot replace a phase-level workspace/cwd-bridge
+		// binding: that would bypass the binding's containment/dirty-state
+		// lifecycle. Validation rejects this shape; keep a runtime fail-closed
+		// guard for direct callers or legacy persisted definitions.
+		if (callCwd && (deps._workspaceBinding || isWorkspaceKeyword(phase.cwd))) {
+			return Promise.resolve({
+				agent: agentName,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "TF_CWD_BRANCH_BINDING_CONFLICT: per-branch cwd cannot override a phase workspace binding",
+				usage: emptyUsage(),
+				stopReason: "error",
+				errorMessage: "TF_CWD_BRANCH_BINDING_CONFLICT: per-branch cwd cannot override a phase workspace binding",
+			});
+		}
+		if (callCwd && deps._cwdBoundary) {
+			const selected = directoryIdentity(invocationCwd);
+			if (!selected || !isPathWithin(deps._cwdBoundary, selected.canonicalPath)) {
+				return Promise.resolve({
+					agent: agentName,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "TF_CWD_BOUNDARY_ESCAPE: per-branch cwd must select an existing directory inside the inherited cwd boundary",
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: "TF_CWD_BOUNDARY_ESCAPE: per-branch cwd must select an existing directory inside the inherited cwd boundary",
+				});
+			}
+		}
+		opts?.promptCalls?.push(task);
 		const runOptions = {
 			model: phase.model,
 			thinking: phase.thinking,
@@ -1544,6 +1585,10 @@ async function executePhaseInner(
 		 *  to the phase effective cwd when absent. Workspace keywords are rejected
 		 *  by validation for branches, so this is always a literal path or undefined. */
 		callCwd?: string,
+		/** Usage already spent by earlier calls inside this same multi-call phase
+		 * (tree reduce). Included in live budget accounting, but not returned as
+		 * this call's own usage. */
+		usageBefore?: UsageStats,
 	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
@@ -1662,7 +1707,7 @@ async function executePhaseInner(
 			// B6: aggregate and surface cumulative usage before the retry decision,
 			// so the TUI / budget guard see the in-flight spend on every attempt.
 			const liveRetry = state.phases[phase.id];
-			if (liveRetry) liveRetry.usage = aggregateUsage(usages);
+			if (liveRetry) liveRetry.usage = aggregateUsage(usageBefore ? [usageBefore, ...usages] : usages);
 			// Persist every attempt, not only the final aggregate. This is required
 			// for honest replay/cost accounting when a transient or explicit retry
 			// succeeds after earlier spend.
@@ -1884,7 +1929,7 @@ async function executePhaseInner(
 					// post-run drain below only covers single-agent phases).
 					const spawned = drainPendingSpawns(ctxDir, itemNid);
 					if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-							const child = await runSpawnedChildren(spawned, ctxDir, itemNid, phase, deps, state, run);
+							const child = await runSpawnedChildren(spawned, ctxDir, itemNid, phase, deps, state, run, { usage: emptyUsage() }, opts?.promptCalls);
 							if (child.reports) r.output = `${r.output ?? ""}${child.reports}`;
 							if (child.failed && deps._workspaceBinding) {
 								r.exitCode = r.exitCode === 0 ? 1 : r.exitCode;
@@ -1940,24 +1985,68 @@ async function executePhaseInner(
 				items.length === 1
 					? items[0].output
 					: items.map((it) => `### ${it.label}\n\n${it.output}`).join("\n\n---\n\n");
-			let round: string[] = inputs.map((it) => it.output);;
+			let round: Array<{ label: string; output: string }> = inputs.map((it) => ({ label: it.id, output: it.output }));
+			let roundNumber = 1;
 			const callPrompts: string[] = [];
 			const usages: UsageStats[] = [];
 			let failed: RunResult | undefined;
 			let timedOut = false;
+			let truncatedByBudget = false;
+			let aborted = false;
 			let refWarning: string | undefined;
 			while (round.length > 1) {
-				if (deps.signal?.aborted || overBudget(state).over) break;
+				if (callPrompts.length >= TREE_REDUCE_HARD_MAX_CALLS) {
+					failed = {
+						agent: agentName,
+						task: phase.task ?? "",
+						exitCode: 1,
+						output: "",
+						stderr: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
+						usage: emptyUsage(),
+						stopReason: "error",
+						errorMessage: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
+					};
+					break;
+				}
+				if (deps.signal?.aborted) {
+					aborted = true;
+					break;
+				}
+				if (overBudget(state).over) {
+					truncatedByBudget = true;
+					break;
+				}
 				// Partition the current round into batches of `batchSize`.
-				const batches: string[][] = [];
+				const batches: Array<Array<{ label: string; output: string }>> = [];
 				for (let i = 0; i < round.length; i += batchSize) {
 					batches.push(round.slice(i, i + batchSize));
 				}
-				const next: string[] = [];
+				const next: Array<{ label: string; output: string }> = [];
+				let consumedInputs = 0;
 				for (let bi = 0; bi < batches.length; bi++) {
-					if (deps.signal?.aborted || overBudget(state).over) break;
+					if (callPrompts.length >= TREE_REDUCE_HARD_MAX_CALLS) {
+						failed = {
+							agent: agentName,
+							task: phase.task ?? "",
+							exitCode: 1,
+							output: "",
+							stderr: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
+							usage: emptyUsage(),
+							stopReason: "error",
+							errorMessage: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
+						};
+						break;
+					}
+					if (deps.signal?.aborted) {
+						aborted = true;
+						break;
+					}
+					if (overBudget(state).over) {
+						truncatedByBudget = true;
+						break;
+					}
 					const batch = batches[bi];
-					const batchValue = formatBatch(batch.map((o, i) => ({ label: `[${bi * batchSize + i + 1}]`, output: o })));
+					const batchValue = formatBatch(batch);
 					// Each intermediate reducer call sees the batch as `{previous.output}`
 					// (interpolation resolves it), using the SAME agent/model/options/
 					// timeout/idleTimeout as the phase (runOne reuses baseRun).
@@ -1966,23 +2055,39 @@ async function executePhaseInner(
 					if (!refWarning) refWarning = warnUnresolvedRefs(phase.id, interp.missing);
 					const fullTask = appendGateFormatSuffix(preRead + interp.text, phase);
 					callPrompts.push(fullTask);
-					const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
+					const usageBefore = usages.length ? aggregateUsage(usages) : undefined;
+					const r = await runOne(
+						agentName,
+						fullTask,
+						liveSink(state, phase.id, emitProgress),
+						nodeIdFor(),
+						contractCheck,
+						undefined,
+						undefined,
+						usageBefore,
+					);
 					usages.push(r.usage ?? emptyUsage());
 					if (isFailed(r)) {
 						failed = r;
 						timedOut = !!r.phaseTimeout;
 						break;
 					}
-					next.push(r.output ?? "");
+					next.push({ label: `round-${roundNumber}-batch-${bi + 1}`, output: r.output ?? "" });
+					consumedInputs += batch.length;
 				}
-				if (failed) break;
+				if (truncatedByBudget) {
+					// Preserve both finished batch reductions and every untouched input.
+					round = [...next, ...round.slice(consumedInputs)];
+				}
+				if (failed || aborted || truncatedByBudget) break;
 				round = next;
+				roundNumber++;
 			}
 			if (failed) {
 				const inputHash = cacheKeys(cc, [phase.id, "tree-reduce-failed", ...callPrompts]).key;
 				const ps: PhaseState = {
 					id: phase.id,
-					status: timedOut ? "failed" : "failed",
+					status: "failed",
 					output: failed.output ?? "",
 					error: failed.errorMessage ?? failed.stderr,
 					usage: aggregateUsage(usages),
@@ -1997,10 +2102,25 @@ async function executePhaseInner(
 				recordCache(cc, ps);
 				return ps;
 			}
-			// One output remains (or the loop broke on abort/budget with a partial
-			// round). When aborted/budgeted mid-reduction, the last partial round is
-			// joined so the phase still produces a best-effort output.
-			const finalOutput = round.length === 1 ? round[0] : formatBatch(round.map((o, i) => ({ label: `[${i + 1}]`, output: o })));
+			if (aborted) {
+				const inputHash = cacheKeys(cc, [phase.id, "tree-reduce-aborted", ...callPrompts]).key;
+				const ps: PhaseState = {
+					id: phase.id,
+					status: "failed",
+					error: "Tree reduction aborted before all inputs were reduced",
+					usage: aggregateUsage(usages),
+					inputHash,
+					endedAt: Date.now(),
+				};
+				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+				attachPromptStats(ps, callPrompts);
+				attachReduceInputStats(ps, state, phase);
+				return ps;
+			}
+			// One output remains, or budget admission stopped the tree with a
+			// partial round. Budget truncation is explicitly marked/warned and is
+			// never cached; the scheduler classifies the run as blocked.
+			const finalOutput = round.length === 1 ? round[0].output : formatBatch(round);
 			const inputHash = cacheKeys(cc, [phase.id, "tree-reduce", ...callPrompts]).key;
 			const ps: PhaseState = {
 				id: phase.id,
@@ -2009,13 +2129,17 @@ async function executePhaseInner(
 				usage: aggregateUsage(usages),
 				inputHash,
 				endedAt: Date.now(),
+				...(truncatedByBudget ? { budgetTruncated: true as const } : {}),
 			};
 			if (parseJson) ps.json = safeParse(finalOutput);
 			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 			if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
+			if (truncatedByBudget) {
+				ps.warnings = [...(ps.warnings ?? []), "tree reduction stopped by the run budget; output is partial"];
+			}
 			attachPromptStats(ps, callPrompts);
 			attachReduceInputStats(ps, state, phase);
-			recordCache(cc, ps);
+			if (!truncatedByBudget) recordCache(cc, ps);
 			return ps;
 		}
 		// inputs.length < 2 → fall through to one-shot (below).
@@ -2327,7 +2451,7 @@ async function executePhaseInner(
 				registerNode(ctxDir, nid, phase.id, undefined, ps.status === "failed" ? "failed" : "done");
 				const spawned = drainPendingSpawns(ctxDir, nid);
 				if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-					const child = await runSpawnedChildren(spawned, ctxDir, nid, phase, deps, state, run);
+					const child = await runSpawnedChildren(spawned, ctxDir, nid, phase, deps, state, run, { usage: emptyUsage() }, opts?.promptCalls);
 					if (child.reports) ps.output = `${ps.output ?? ""}${child.reports}`;
 					if (child.failed && deps._workspaceBinding) {
 						ps.status = "failed";
@@ -3303,10 +3427,31 @@ export const PROMPT_SIZE_WARN_TOKENS = 32_000;
  *  exact UTF-8 byte count, character count, and a documented approximate token
  *  estimate (ceil(chars/4)). Never throws. */
 export function promptSizeStats(text: string): { bytes: number; chars: number; estTokens: number } {
-	const chars = text.length;
+	let chars = 0;
+	for (const _char of text) chars++; // Unicode code points, not UTF-16 code units
 	const bytes = Buffer.byteLength(text, "utf8");
 	const estTokens = Math.ceil(chars / 4);
 	return { bytes, chars, estTokens };
+}
+
+/** Replace a phase's call diagnostics with the exact prompts captured by the
+ * shared runner boundary. This covers single calls, retries, fan-out items,
+ * loop/tournament/judge calls, and tree-reduce rounds without per-branch drift. */
+function setPromptStats(ps: PhaseState, prompts: string[]): void {
+	try {
+		const calls = prompts.map((text) => promptSizeStats(text));
+		const reduceInputs = ps.promptStats?.reduceInputs;
+		ps.promptStats = { calls, ...(reduceInputs ? { reduceInputs } : {}) };
+		ps.warnings = (ps.warnings ?? []).filter((warning) => !warning.startsWith("Prompt size ≈"));
+		for (const call of calls) {
+			if (call.estTokens >= PROMPT_SIZE_WARN_TOKENS) {
+				ps.warnings.push(`Prompt size ≈${call.estTokens} tokens (${call.chars} chars, ${call.bytes} bytes) exceeds the conservative ${PROMPT_SIZE_WARN_TOKENS}-token warning threshold — the prompt may be approaching a model's context limit.`);
+			}
+		}
+		if (ps.warnings.length === 0) delete ps.warnings;
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
 }
 
 /** Attach durable prompt-size diagnostics to a PhaseState. `prompts` is the list

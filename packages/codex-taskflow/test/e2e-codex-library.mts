@@ -76,7 +76,7 @@ console.log("▶ launching taskflow MCP server in isolated cwd (as codex would) 
 // --- MCP handshake ---
 send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {} } });
 const init = await waitFor(1, "initialize");
-assert.equal(init.result.serverInfo.name, "taskflow");
+assert.equal(init.result.serverInfo.name, "taskflow-codex");
 send({ jsonrpc: "2.0", method: "notifications/initialized" });
 
 // --- tools/list must now expose the 2 NEW library tools ---

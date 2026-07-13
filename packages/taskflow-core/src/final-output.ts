@@ -79,10 +79,10 @@ export function resolveFinalOutput(
 		sourceId = finalState?.output ? finalState.id : undefined;
 	} else {
 		finalOutput = finalState?.output ?? "(no output)";
-		// Attribute only to a DONE phase that actually has output — never the
-		// designated skipped/failed final phase (it may carry an error string as
-		// output, but that is not a real phase result to attribute).
-		sourceId = finalState && finalState.status === "done" && finalState.output ? finalState.id : undefined;
+		// Attribute to a completed phase whenever its output field supplied the
+		// result, including the valid empty-string output. `undefined` means no
+		// phase output existed at all.
+		sourceId = finalState && finalState.status === "done" && finalState.output !== undefined ? finalState.id : undefined;
 	}
 	return { finalOutput, outputSourcePhaseId: sourceId };
 }

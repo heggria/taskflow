@@ -661,7 +661,7 @@ use the default. Use cheap agents (`scout`) for discovery and strong agents
 <!-- /host:codex,claude,opencode,grok -->
 
 <!-- host:pi -->
-## Actions (all 16)
+## Actions (all 18)
 
 | action | what it does |
 |--------|--------------|
@@ -678,6 +678,8 @@ use the default. Use cheap agents (`scout`) for discovery and strong agents
 | `replay` | **Offline what-if** on a recorded trace: re-evaluate under alternate gate thresholds, budget caps, or model routes **without calling the model** (zero tokens). Reports per-phase `reused` / `would-block` / `verdict-flipped` / `would-exceed-budget` / `needs-live-rerun`. `runId` required; optional `thresholds`, `budgetMaxUSD`, `budgetMaxTokens`, `models`; `--json` for the full `ReplayReport`. |
 | `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
 | `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
+| `reconcile-workspace` | Explicitly reconcile a dirty resolve-only cwd workspace after acknowledging the risk. |
+| `version` | Report package version, build commit, run-state schema version, and host identity. Zero tokens. |
 | `cache-clear` | Clear the cross-run memoization store. |
 | `search` | Search the reusable-flow **library** by purpose/tags (structural + CJK-aware keyword scoring). Find a flow to reuse before authoring a new one. |
 | `init` | Model-roles configuration. `mode: "show"` is read-only; `apply-defaults` requires `force: true`; `interactive` needs a UI session. |
@@ -706,8 +708,11 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 <!-- /host:pi -->
 
 <!-- host:pi -->
-- **Resume is cache-aware.** `action: "resume"` re-runs only what didn't finish;
-  a phase that was mid-flight is re-executed cleanly.
+- **Resume forks immutable history.** `action: "resume"` accepts only a
+  `failed` or `paused` run, creates a new child `runId` with `parentRunId`,
+  reuses completed unaffected phases, and never overwrites the parent. Optional
+  `phaseId` + `resumeTask`/`resumeModel`/`resumeTimeout`/`resumeIdleTimeout`
+  overrides patch the failed/in-flight phase on the child only.
 - **Resume vs. re-run vs. recompute.** Resume when inputs are unchanged and you
   want to continue the tail (fixed a gate, raised the budget). Re-run from
   scratch when the task text changed. **Recompute** when the *world* changed
@@ -729,6 +734,7 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 - `/tf peek <runId> [phaseId] [--json] [--item <n>] [--limit <chars>]`
 - `/tf provenance <runId>` · `/tf trace <runId> [--json]` · `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]`
 - `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
+- `/tf reconcile-workspace --ack` · `/tf version`
 - `/tf init` — interactive model-roles setup
 - `/tf:<name> [args]` — shortcut for each saved flow
 <!-- /host:pi -->

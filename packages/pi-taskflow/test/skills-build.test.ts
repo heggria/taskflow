@@ -56,12 +56,12 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 	] as const) {
 		assert.ok(!/<!--\s*\/?host:/.test(text), `${name} SKILL.md must not contain host markers`);
 	}
-	// pi teaches its 15 actions; the MCP hosts must not (they're unreachable via MCP).
-	assert.match(piSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(cxSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(clSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(ocSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(gkSkill, /Actions \(all 16\)/);
+	// Pi teaches its 18 actions; the MCP hosts must not (they're unreachable via MCP).
+	assert.match(piSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(cxSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(clSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(ocSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(gkSkill, /Actions \(all 18\)/);
 	assert.doesNotMatch(cxSkill, /action: "recompute"/);
 	// The MCP hosts teach the MCP tools; pi must not.
 	assert.match(cxSkill, /taskflow_verify/);

@@ -19,6 +19,7 @@
 
 import { validateTaskflow, dependenciesOf, type Phase, type Taskflow } from "./schema.ts";
 import { newRunId, type PhaseState, type RunState } from "./store.ts";
+import { getBuildInfo } from "./build-info.ts";
 
 /** Overrides for re-running exactly one phase on resume. `phaseId` is required;
  *  at least one of the other fields must be supplied. All values are applied to
@@ -31,11 +32,21 @@ export interface ResumeOverrides {
 	idleTimeout?: number;
 }
 
+/** Runs are resumable only when execution stopped non-terminally. Completed and
+ * blocked runs are immutable terminal history; use a fresh run or recompute. */
+export function validateResumeRun(prev: RunState): { ok: boolean; errors: string[] } {
+	if (prev.status === "failed" || prev.status === "paused") return { ok: true, errors: [] };
+	return {
+		ok: false,
+		errors: [`Run '${prev.runId}' has status '${prev.status}' and is not resumable (expected failed or paused)`],
+	};
+}
+
 /** Validate resume overrides against a prior run. Returns structured errors.
  *  Checks: phaseId exists, at least one override field is present, and field
  *  values pass the normal Taskflow validator after applying the overrides. */
 export function validateResumeOverrides(prev: RunState, ov: ResumeOverrides): { ok: boolean; errors: string[] } {
-	const errors: string[] = [];
+	const errors = [...validateResumeRun(prev).errors];
 	if (!ov.phaseId || typeof ov.phaseId !== "string") {
 		errors.push("resume overrides require a 'phaseId'");
 		return { ok: false, errors };
@@ -44,6 +55,10 @@ export function validateResumeOverrides(prev: RunState, ov: ResumeOverrides): { 
 	if (!phase) {
 		errors.push(`resume overrides target phase '${ov.phaseId}' not found in run '${prev.runId}' (flow '${prev.flowName}')`);
 		return { ok: false, errors };
+	}
+	const priorPhase = prev.phases[ov.phaseId];
+	if (priorPhase?.status === "done") {
+		errors.push(`resume overrides target phase '${ov.phaseId}' is already done; override the failed/in-flight phase or start a fresh run`);
 	}
 	// At least one override field must be supplied (besides phaseId).
 	const hasAny = ov.task !== undefined || ov.model !== undefined || ov.timeout !== undefined || ov.idleTimeout !== undefined;
@@ -136,25 +151,30 @@ export function forkRunForResume(
 	for (const [id, ps] of Object.entries(prev.phases)) {
 		if (clearSet.has(id)) continue; // re-run
 		// Copy only completed (done) phases — failed/paused/running/skipped are
-		// re-run by the runtime. This preserves within-run resume cache hits for
-		// unaffected completed work and never carries a stale failure forward.
-		if (ps.status === "done") phases[id] = ps;
+		// re-run by the runtime. Deep-clone so the child cannot mutate nested
+		// usage/gate/read metadata retained by the immutable parent object.
+		if (ps.status === "done") phases[id] = structuredClone(ps);
 	}
+	const build = getBuildInfo();
 	return {
 		runId: newRunId(prev.flowName),
 		flowName: prev.flowName,
 		def: childDef,
-		args: prev.args,
+		args: structuredClone(prev.args),
 		status: "running",
 		phases,
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd: opts.cwd ?? prev.cwd,
 		parentRunId: prev.runId,
-		// Carry forward identity metadata so the child reports the same host/build.
+		// Preserve workspace provenance/authority so a resume cannot silently
+		// escape or downgrade the parent's cwd boundary.
+		...(prev.invocationRootSnapshot !== undefined ? { invocationRootSnapshot: structuredClone(prev.invocationRootSnapshot) } : {}),
+		...(prev.cwdRootBinding !== undefined ? { cwdRootBinding: structuredClone(prev.cwdRootBinding) } : {}),
+		// The child is executed by the CURRENT build while retaining the host.
 		...(prev.host !== undefined ? { host: prev.host } : {}),
-		...(prev.packageVersion !== undefined ? { packageVersion: prev.packageVersion } : {}),
-		...(prev.gitCommit !== undefined ? { gitCommit: prev.gitCommit } : {}),
-		...(prev.schemaVersion !== undefined ? { schemaVersion: prev.schemaVersion } : {}),
+		packageVersion: build.packageVersion,
+		gitCommit: build.gitCommit,
+		schemaVersion: build.schemaVersion,
 	};
 }

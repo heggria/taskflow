@@ -81,7 +81,7 @@ async function smokeWildcardExports(packageName, excludedImports = new Set()) {
 	return count;
 }
 
-function smokeMcpBin(binName) {
+function smokeMcpBin(binName, expectedServerName) {
 	const executable = join(consumerDir, "node_modules", ".bin", binName);
 	const request = `${JSON.stringify({
 		jsonrpc: "2.0",
@@ -104,7 +104,7 @@ function smokeMcpBin(binName) {
 	assert.ok(responseLine, `${binName} returned no initialize response`);
 	const response = JSON.parse(responseLine);
 	assert.equal(response.id, 1, `${binName} returned an unexpected response id`);
-	assert.equal(response.result?.serverInfo?.name, "taskflow", `${binName} returned invalid server metadata`);
+	assert.equal(response.result?.serverInfo?.name, expectedServerName, `${binName} returned invalid server metadata`);
 }
 
 try {
@@ -276,8 +276,13 @@ try {
 			`opencode-taskflow tarball is missing ${required}`,
 		);
 	}
-	for (const binName of ["codex-taskflow-mcp", "claude-taskflow-mcp", "opencode-taskflow-mcp", "grok-taskflow-mcp"]) {
-		smokeMcpBin(binName);
+	for (const [binName, serverName] of [
+		["codex-taskflow-mcp", "taskflow-codex"],
+		["claude-taskflow-mcp", "taskflow-claude"],
+		["opencode-taskflow-mcp", "taskflow-opencode"],
+		["grok-taskflow-mcp", "taskflow-grok"],
+	]) {
+		smokeMcpBin(binName, serverName);
 	}
 
 	process.stdout.write(

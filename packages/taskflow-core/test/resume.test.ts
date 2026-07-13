@@ -13,6 +13,7 @@ import {
 	forkRunForResume,
 	applyResumeOverrides,
 	validateResumeOverrides,
+	validateResumeRun,
 	transitiveDownstream,
 	type ResumeOverrides,
 } from "../src/resume.ts";
@@ -165,6 +166,26 @@ test("applyResumeOverrides: patches task/model/timeout on the child def only", (
 	assert.equal(CHAIN.phases[1]!.model, undefined);
 });
 
+test("validateResumeRun: only failed or paused runs are resumable", () => {
+	const failed = parentDoneABFailedC();
+	assert.equal(validateResumeRun(failed).ok, true);
+	const paused = structuredClone(failed);
+	paused.status = "paused";
+	assert.equal(validateResumeRun(paused).ok, true);
+	const completed = structuredClone(failed);
+	completed.status = "completed";
+	assert.equal(validateResumeRun(completed).ok, false);
+	const blocked = structuredClone(failed);
+	blocked.status = "blocked";
+	assert.equal(validateResumeRun(blocked).ok, false);
+});
+
+test("validateResumeOverrides: an already-done target is rejected", () => {
+	const prev = parentDoneABFailedC();
+	const v = validateResumeOverrides(prev, { phaseId: "a", task: "redo-a" });
+	assert.equal(v.ok, false);
+	assert.match(v.errors.join("\n"), /already done/);
+});
 test("validateResumeOverrides: requires phaseId", () => {
 	const prev = parentDoneABFailedC();
 	const v = validateResumeOverrides(prev, { phaseId: "" } as ResumeOverrides);
@@ -291,4 +312,122 @@ test("persisted: parent run file is not modified after a resume fork", async () 
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+// ---------------------------------------------------------------------------
+// Deep clone — copied PhaseState/args are independent from parent
+// ---------------------------------------------------------------------------
+
+test("forkRunForResume: copied PhaseState is a deep clone (mutation-safe)", () => {
+	const prev = parentDoneABFailedC();
+	prev.phases.a = { id: "a", status: "done", output: "OUT-A", usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.1, contextTokens: 0, turns: 1 } };
+	const child = forkRunForResume(prev);
+	// Mutate the child's phase state
+	child.phases.a.output = "MUTATED";
+	(child.phases.a.usage!).input = 999;
+	// Parent must be unchanged
+	assert.equal(prev.phases.a.output, "OUT-A");
+	assert.equal(prev.phases.a.usage!.input, 10);
+});
+
+test("forkRunForResume: args are deep-cloned — mutating child args does not affect parent", () => {
+	const prev = parentDoneABFailedC();
+	prev.args = { key: { nested: "value" }, list: [1, 2, 3] };
+	const child = forkRunForResume(prev);
+	// Mutate child args deeply.
+	(child.args as any).key.nested = "mutated";
+	(child.args as any).list.push(4);
+	// Parent unchanged.
+	assert.deepEqual(prev.args, { key: { nested: "value" }, list: [1, 2, 3] });
+});
+
+// ---------------------------------------------------------------------------
+// invocationRootSnapshot + cwdRootBinding preservation
+// ---------------------------------------------------------------------------
+
+test("forkRunForResume: invocationRootSnapshot is preserved when present", () => {
+	const prev = parentDoneABFailedC();
+	prev.invocationRootSnapshot = { canonicalPath: "/root", device: "1", inode: "42" };
+	const child = forkRunForResume(prev);
+	assert.deepEqual(child.invocationRootSnapshot, prev.invocationRootSnapshot);
+	// Mutating child must not affect parent (deep clone).
+	child.invocationRootSnapshot!.canonicalPath = "/mutated";
+	assert.equal(prev.invocationRootSnapshot!.canonicalPath, "/root");
+});
+
+test("forkRunForResume: cwdRootBinding is preserved when present", () => {
+	const prev = parentDoneABFailedC();
+	prev.cwdRootBinding = { canonicalPath: "/bound", device: "2", inode: "99" };
+	const child = forkRunForResume(prev);
+	assert.deepEqual(child.cwdRootBinding, prev.cwdRootBinding);
+	// Mutating child must not affect parent.
+	child.cwdRootBinding!.canonicalPath = "/mutated";
+	assert.equal(prev.cwdRootBinding!.canonicalPath, "/bound");
+});
+
+test("forkRunForResume: invocationRootSnapshot undefined when absent on parent", () => {
+	const prev = parentDoneABFailedC();
+	// prev has no invocationRootSnapshot or cwdRootBinding
+	const child = forkRunForResume(prev);
+	assert.equal(child.invocationRootSnapshot, undefined);
+	assert.equal(child.cwdRootBinding, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// Build metadata — child stamps CURRENT build, not stale parent
+// ---------------------------------------------------------------------------
+
+test("forkRunForResume: child stamps current build metadata, not stale parent", () => {
+	const prev = parentDoneABFailedC();
+	// Simulate an older build on the parent. Use a schemaVersion that differs
+	// from CURRENT_RUN_STATE_SCHEMA_VERSION (which is 1).
+	prev.packageVersion = "0.1.0";
+	prev.gitCommit = "old-abc123";
+	prev.schemaVersion = 0; // below the current version
+	// The child must get the CURRENT build info (not the parent's stale values).
+	const child = forkRunForResume(prev);
+	// We cannot assert exact values (they depend on dist metadata), but we can
+	// assert they are NOT the parent's stale values.
+	assert.notEqual(child.packageVersion, prev.packageVersion, "child must get current packageVersion");
+	assert.notEqual(child.gitCommit, prev.gitCommit, "child must get current gitCommit");
+	assert.notEqual(child.schemaVersion, prev.schemaVersion, "child must get current schemaVersion");
+	// And the parent must be untouched.
+	assert.equal(prev.packageVersion, "0.1.0");
+	assert.equal(prev.gitCommit, "old-abc123");
+	assert.equal(prev.schemaVersion, 0);
+});
+
+test("forkRunForResume: build metadata values are non-empty strings/numbers", () => {
+	const prev = parentDoneABFailedC();
+	const child = forkRunForResume(prev);
+	assert.equal(typeof child.packageVersion, "string");
+	assert.ok(child.packageVersion!.length > 0);
+	assert.equal(typeof child.gitCommit, "string");
+	assert.equal(typeof child.schemaVersion, "number");
+});
+
+test("forkRunForResume: host is preserved from parent (not stamped over)", () => {
+	const prev = parentDoneABFailedC();
+	prev.host = "codex";
+	const child = forkRunForResume(prev);
+	// Host is preserved (not overwritten by build info).
+	assert.equal(child.host, "codex");
+	// But packageVersion IS overwritten.
+	assert.notEqual(child.packageVersion, prev.packageVersion);
+});
+
+test("forkRunForResume: parent untouched after fork (full immutability check)", () => {
+	const prev = parentDoneABFailedC();
+	const prevJson = JSON.stringify(prev);
+	// Perform multiple fork operations.
+	const child1 = forkRunForResume(prev);
+	const child2 = forkRunForResume(prev, {
+		overrides: { phaseId: "b", task: "retry-b" },
+	});
+	// Parent must be byte-identical.
+	assert.equal(JSON.stringify(prev), prevJson);
+	// Children must differ.
+	assert.notEqual(child1.runId, child2.runId);
+	assert.equal(child1.parentRunId, prev.runId);
+	assert.equal(child2.parentRunId, prev.runId);
 });

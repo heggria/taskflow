@@ -189,7 +189,8 @@ runtime or event kernel — offline replay cannot accidentally spend tokens.
 
 ## Resume overrides (re-run one phase with a patch)
 
-`taskflow_resume` **forks a new run** — the original run file is never
+`taskflow_resume` accepts a `failed` or `paused` run and **forks a new
+run** — the original run file is never
 modified (the child carries `parentRunId`). To re-run exactly one phase with a
 patched task/model/timeout/idleTimeout, pass override fields alongside
 `phaseId`:

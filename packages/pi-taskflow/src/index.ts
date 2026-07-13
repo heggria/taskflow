@@ -24,7 +24,7 @@ import {
 	formatFlowResult,
 	runInteractiveInit,
 } from "./init.ts";
-import { Type } from "typebox";
+import { Type, type TObject } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "taskflow-core";
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { createPiSubagentRunner, runnerModulePath } from "./runner.ts";
@@ -48,7 +48,7 @@ import {
 	type RuntimeResult,
 } from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
-import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
+import { resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
 	getFlow,
 	getFlowDiagnosed,
@@ -91,6 +91,7 @@ import {
 	getBuildInfo,
 	forkRunForResume,
 	validateResumeOverrides,
+	validateResumeRun,
 	type ResumeOverrides,
 	cwdBridgeModeFromEnv,
 	directoryIdentity,
@@ -139,7 +140,7 @@ const ShorthandStep = Type.Object(
 	{ additionalProperties: false },
 );
 
-const TaskflowParams = Type.Object({
+const TaskflowParamsSchema = Type.Object({
 	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
 		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, clear the cross-run memoization cache, or report the taskflow build/host identity (version)",
 		default: "run",
@@ -243,6 +244,10 @@ const TaskflowParams = Type.Object({
 		}),
 	),
 });
+
+/** Portable public view of the Pi tool schema. Keep the precise inferred schema
+ * private so declaration emit never exposes TypeBox implementation internals. */
+export const TaskflowParams: TObject = TaskflowParamsSchema;
 
 function formatFlowIR(ir: TaskflowIR): string {
 	const lines: string[] = [];
@@ -723,7 +728,7 @@ export default function (pi: ExtensionAPI) {
 			"Use action=compile to generate a Mermaid diagram + verification report from a saved or inline flow — 0 tokens.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
 		].join(" "),
-		parameters: TaskflowParams,
+		parameters: TaskflowParamsSchema,
 		promptSnippet: "Declare a verifiable graph of subagent tasks (single, parallel, chain, or full DAG) — tracked, resumable, context-isolated. The runtime validates the graph before running. Replaces the subagent tool.",
 		promptGuidelines: [
 			"BEFORE FIRST USE: invoke skill_load('taskflow') to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nUse taskflow for ALL delegation — single tasks, parallel, chain, or full DAG orchestration. It fully replaces the subagent tool: every delegation is tracked with a runId, resumable across sessions, context-isolated (only final output returns), and saveable as /tf:<name>. Do NOT call the subagent tool directly; use taskflow shorthand (task/tasks/chain) for simple cases instead.",
@@ -1082,6 +1087,8 @@ export default function (pi: ExtensionAPI) {
 				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
 				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
 				const prev = prevR.value;
+				const resumable = validateResumeRun(prev);
+				if (!resumable.ok) return errorResult(action, resumable.errors.join("; "));
 				// Build overrides if any override field is supplied (requires phaseId).
 				const hasOverrideField =
 					params.resumeTask !== undefined ||
@@ -2085,17 +2092,14 @@ function formatCacheReport(state: RunState, _totalUsage: UsageStats): string {
 }
 
 function finalResult(action: string, result: RuntimeResult): ToolResult {
-	const fp = finalPhase(result.state.def.phases);
-	// Label the output with the ACTUAL source phase (0.2.0 dogfood issue 6):
-	// the phase whose output supplied finalOutput — never the designated
-	// skipped/failed final phase. Fall back to the designated final-phase id
-	// only when attribution is unavailable (no phase output, e.g. a crash).
-	const sourceId = result.outputSourcePhaseId ?? fp.id;
+	// Label only when the core identified the phase whose output is actually
+	// present. Never fall back to the designated final phase for `(no output)`.
+	const sourceLabel = result.outputSourcePhaseId ? `--- ${result.outputSourcePhaseId} ---\n` : "";
 	const header = result.ok
 		? `Taskflow '${result.state.flowName}' completed (${summarizeRun(result.state)}). Run id: ${result.state.runId}`
 		: `Taskflow '${result.state.flowName}' ${result.state.status} (${summarizeRun(result.state)}). Run id: ${result.state.runId} — resume with action=resume.`;
 	return {
-		content: [{ type: "text", text: `${header}\n\n--- ${sourceId} ---\n${result.finalOutput}` }],
+		content: [{ type: "text", text: `${header}\n\n${sourceLabel}${result.finalOutput}` }],
 		details: { action, state: result.state, finalOutput: result.finalOutput, outputSourcePhaseId: result.outputSourcePhaseId, cacheReport: formatCacheReport(result.state, result.totalUsage) },
 		isError: !result.ok,
 	};

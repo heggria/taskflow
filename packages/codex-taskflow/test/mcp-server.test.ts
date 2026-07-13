@@ -14,7 +14,7 @@ import { PassThrough } from "node:stream";
 import { serveStdio } from "taskflow-mcp-core/jsonrpc";
 import { makeMcpHandlers, makeToolHandlers } from "../src/mcp/server.ts";
 import { persistTerminalRun } from "taskflow-mcp-core/server";
-import type { RunState } from "taskflow-core";
+import type { RunResult, RunState, SubagentRunner, Taskflow } from "taskflow-core";
 
 /** Send a list of JSON-RPC messages through the server, collect responses. */
 async function rpcRoundtrip(messages: object[]): Promise<any[]> {
@@ -536,4 +536,94 @@ test("skill: every complete flow example in the bundled skill files passes taskf
 		}
 	}
 	assert.ok(checked >= 5, `expected at least 5 complete flow examples across the skill files, found ${checked}`);
+});
+
+// ===========================================================================
+// MCP resume integration (immutable fork + override + actual source label)
+// ===========================================================================
+
+test("mcp: taskflow_resume forks failed history, applies override, and preserves parent bytes", async () => {
+	const fs = await import("node:fs");
+	const os = await import("node:os");
+	const path = await import("node:path");
+	const {
+		executeTaskflow,
+		newRunId,
+		runsDir,
+		saveRun,
+	} = await import("taskflow-core");
+	const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-"));
+	try {
+		const def: Taskflow = {
+			name: "resume-me",
+			phases: [
+				{ id: "a", type: "agent", agent: "executor", task: "stable" },
+				{ id: "b", type: "agent", agent: "executor", task: "fail-me", dependsOn: ["a"], final: true },
+			],
+		};
+		const parent: RunState = {
+			runId: newRunId(def.name), flowName: def.name, def, args: {}, status: "running",
+			phases: {}, createdAt: Date.now(), updatedAt: Date.now(), cwd, host: "codex",
+		};
+		const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 2, turns: 1 };
+		const parentRunner = async (_cwd: string, _agents: unknown[], agent: string, task: string): Promise<RunResult> => ({
+			agent, task, exitCode: task === "fail-me" ? 1 : 0,
+			output: task === "fail-me" ? "" : `parent:${task}`, stderr: task === "fail-me" ? "boom" : "",
+			usage, stopReason: task === "fail-me" ? "error" : "end",
+			...(task === "fail-me" ? { errorMessage: "boom" } : {}),
+		});
+		const parentResult = await executeTaskflow(parent, {
+			cwd, agents: [],
+			runTask: parentRunner,
+		});
+		assert.equal(parentResult.ok, false);
+		assert.equal(parent.status, "failed");
+		saveRun(parent);
+		const parentFile = path.join(runsDir(cwd), def.name, `${parent.runId}.json`);
+		const parentBefore = fs.readFileSync(parentFile, "utf8");
+
+		const childTasks: string[] = [];
+		const childRunner: SubagentRunner = {
+			usageAccounting: "tokens-only",
+			runTask: async (_cwd, _agents, agent, task) => {
+				childTasks.push(task);
+				return { agent, task, exitCode: 0, output: `child:${task}`, stderr: "", usage, stopReason: "end" };
+			},
+		};
+		const tools = makeCoreToolHandlers(cwd, childRunner, { host: "codex" });
+		const raw = await tools.taskflow_resume({ runId: parent.runId, phaseId: "b", task: "fixed" });
+		const response = raw as { content: Array<{ type: string; text: string }>; isError?: boolean };
+		assert.equal(response.isError, false);
+		assert.deepEqual(childTasks, ["fixed"], "done phase a is reused; only overridden b re-runs");
+		assert.equal(fs.readFileSync(parentFile, "utf8"), parentBefore, "parent JSON stays byte-identical");
+		assert.match(response.content[0]!.text, /--- b ---/);
+		assert.match(response.content[0]!.text, /forked from/);
+
+		const children = fs.readdirSync(path.dirname(parentFile))
+			.filter((file) => file.endsWith(".json") && file !== path.basename(parentFile))
+			.map((file) => JSON.parse(fs.readFileSync(path.join(path.dirname(parentFile), file), "utf8")) as RunState)
+			.filter((run) => run.parentRunId === parent.runId);
+		assert.equal(children.length, 1);
+		const child = children[0]!;
+		assert.notEqual(child.runId, parent.runId);
+		assert.equal(child.parentRunId, parent.runId);
+		assert.equal(child.host, "codex");
+		assert.equal(child.def.phases.find((phase) => phase.id === "b")?.task, "fixed");
+		assert.equal(parent.def.phases.find((phase) => phase.id === "b")?.task, "fail-me");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp: taskflow_reconcile_workspace remains in tool roster", () => {
+	// Verify the tool is present in makeToolHandlers (handler function).
+	const tools = makeToolHandlers(process.cwd());
+	assert.equal(typeof tools.taskflow_reconcile_workspace, "function");
+
+	// Verify it's in tools/list (MCP tool roster).
+	const handlers = makeMcpHandlers(process.cwd());
+	const list = (handlers["tools/list"] as (params: unknown) => unknown)({}) as { tools: Array<{ name: string }> };
+	assert.ok(list.tools.some((t) => t.name === "taskflow_reconcile_workspace"),
+		"reconcile_workspace must be in the tools/list roster");
 });

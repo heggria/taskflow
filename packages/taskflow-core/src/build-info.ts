@@ -116,10 +116,11 @@ export function buildTime(): number | undefined {
 /** The full build-info record. Host adapters stamp RunState + report this to
  *  `action=version` / `taskflow_version`. */
 export function getBuildInfo(): BuildInfo {
+	const stampedBuildTime = buildTime();
 	return {
 		packageVersion: packageVersion(),
 		gitCommit: gitCommit(),
 		schemaVersion: CURRENT_RUN_STATE_SCHEMA_VERSION,
-		...(buildTime() !== undefined ? { buildTime: buildTime() } : {}),
+		...(stampedBuildTime !== undefined ? { buildTime: stampedBuildTime } : {}),
 	};
 }

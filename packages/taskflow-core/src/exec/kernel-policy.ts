@@ -98,6 +98,9 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if (typeof cwd === "string") {
 			return `phase '${id}': workspace cwd '${cwd}' requires the imperative runtime`;
 		}
+		if (Array.isArray(p.branches) && p.branches.some((branch) => typeof branch.cwd === "string")) {
+			return `phase '${id}': per-branch cwd requires the imperative runtime`;
+		}
 		if ((p.type ?? "agent") === "script" && p.input !== undefined) {
 			return `phase '${id}': script stdin input requires the imperative runtime`;
 		}

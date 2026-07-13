@@ -197,7 +197,7 @@ async function runAgentCall(
 }
 
 function interpCtx(ctx: StepContext, extra?: Partial<InterpolationContext>): InterpolationContext {
-	return { args: ctx.args, steps: ctx.steps, ...extra };
+	return { args: ctx.args, steps: ctx.steps, onRead: (ref) => ctx.readRefs?.push(ref), ...extra };
 }
 
 /** Resolve the effective idle-watchdog ms for a phase on the kernel path:
@@ -219,7 +219,8 @@ const KERNEL_PROMPT_SIZE_WARN_TOKENS = 32_000;
 /** Compute prompt-size diagnostics for a resolved prompt (mirrors the imperative
  *  `promptSizeStats`: exact UTF-8 bytes, char count, ceil(chars/4) estTokens). */
 function promptStatsFor(text: string): { bytes: number; chars: number; estTokens: number } {
-	const chars = text.length;
+	let chars = 0;
+	for (const _char of text) chars++; // Unicode code points, not UTF-16 code units
 	const bytes = Buffer.byteLength(text, "utf8");
 	const estTokens = Math.ceil(chars / 4);
 	return { bytes, chars, estTokens };
@@ -292,6 +293,7 @@ export async function executeReduceBody(phase: Phase, ctx: StepContext): Promise
 	// completed `from[]` outputs in from-array order (one → raw, many → joined).
 	// The kernel path mirrors the imperative `aggregateReduceFrom` semantics.
 	const reduceAgg = aggregateReduceFromKernel(ctx.state, phase);
+	for (const id of reduceAgg.ids) ctx.readRefs?.push(`steps.${id}.output`);
 	const task = interpolate(
 		phase.task ?? "",
 		interpCtx(ctx, reduceAgg.value !== undefined ? { previousOutput: reduceAgg.value } : {}),
