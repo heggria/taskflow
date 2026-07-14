@@ -1831,7 +1831,7 @@ async function executePhaseInner(
 		} finally {
 			if (livePhase) {
 				if (parentUsage) livePhase.usage = parentUsage;
-				else delete livePhase.usage;
+					else livePhase.usage = undefined;
 			}
 		}
 	};
