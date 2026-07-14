@@ -12,10 +12,15 @@ import { scorerShapeErrors } from "./scorers.ts";
 import { Type, type Static } from "typebox";
 import { Errors as SchemaErrors } from "typebox/value";
 import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
+import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
 // ---------------------------------------------------------------------------
+
+/** Hard cap on subagent calls made by one tree-reduce phase. This bounds
+ * author mistakes even when no run budget was declared. */
+export const TREE_REDUCE_HARD_MAX_CALLS = 256;
 
 /** Closed set of native phase kinds — single source of truth for DSL + FlowIR. */
 export const PHASE_TYPES = [
@@ -35,6 +40,19 @@ export const PHASE_TYPES = [
 	"expand",
 ] as const;
 export type PhaseType = (typeof PHASE_TYPES)[number];
+
+/** Phase kinds that execute one or more subagents and therefore require an
+ * effective idle watchdog (or a finite wall timeout when the watchdog is off). */
+export const AGENT_RUNNING_PHASE_TYPES = [
+	"agent",
+	"gate",
+	"reduce",
+	"map",
+	"parallel",
+	"loop",
+	"tournament",
+	"race",
+] as const satisfies readonly PhaseType[];
 
 /** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
 export const LOOP_DEFAULT_MAX_ITERATIONS = 10;
@@ -75,6 +93,12 @@ const ParallelTaskSchema = Type.Object(
 	{
 		task: Type.String({ description: "Task for this parallel branch (supports interpolation)" }),
 		agent: Type.Optional(Type.String({ description: "Override the phase agent for this branch" })),
+		cwd: Type.Optional(
+			Type.String({
+				description:
+					"Working directory for this parallel branch's subagent (a literal path). Overrides the phase-level cwd for this branch only. Reserved workspace keywords ('temp'/'dedicated'/'worktree') are NOT supported per-branch (the workspace lifecycle is per-phase) — use the phase-level cwd for those.",
+			}),
+	),
 	},
 	{ additionalProperties: false },
 );
@@ -162,6 +186,28 @@ const PhaseSchema = Type.Object(
 		from: Type.Optional(
 			Type.Array(Type.String(), { description: "[reduce] Phase ids whose outputs are aggregated" }),
 		),
+		/**
+		 * [reduce] How the aggregated `from[]` inputs are reduced. `'one-shot'`
+		 * (default) feeds all inputs to a single reducer call as `{previous.output}`.
+		 * `'tree'` batches the inputs (see `batchSize`) and runs intermediate
+		 * reducer calls over each batch, then reduces the round outputs until one
+		 * remains — useful when the aggregated input would exceed a single prompt.
+		 * Tree reduction uses the SAME agent/model/options/timeout/idleTimeout as
+		 * the phase and forces the imperative runtime (the event kernel falls back).
+		 * The corrected `{previous.output}` aggregation (all `from[]` sources) always
+		 * applies regardless of strategy.
+		 */
+		reduceStrategy: Type.Optional(
+			StringEnum(["one-shot", "tree"] as const, {
+				description: "[reduce] 'one-shot' (default) = single reducer call; 'tree' = batched intermediate rounds (see batchSize). Forces imperative runtime.",
+				default: "one-shot",
+			}),
+		),
+		/** [reduce] With `reduceStrategy:'tree'`, the max number of aggregated inputs
+		 *  fed to each intermediate reducer call (>= 2). Ignored for one-shot. */
+		batchSize: Type.Optional(
+			Type.Integer({ minimum: 2, description: "[reduce] Batch size for reduceStrategy:'tree' (integer >= 2). Ignored for one-shot." }),
+		),
 
 		// sub-workflow (flow) + expand fragment
 		use: Type.Optional(Type.String({ description: "[flow] Name of a saved taskflow to run as this phase" })),
@@ -205,6 +251,19 @@ const PhaseSchema = Type.Object(
 			Type.Number({
 				description:
 					"Max execution time in milliseconds. For script phases: caps the shell command (default 60000, max 300000). For agent-running phases (agent/gate/reduce/map/parallel/loop/tournament): caps EACH subagent call — on expiry the subagent is aborted and the phase fails with a 'timedOut' marker (never retried). Not supported for approval/flow phases. Must be >= 1000.",
+			}),
+		),
+		/**
+		 * Idle watchdog override (ms) for agent-running phases. A positive value (>= 1000)
+		 * replaces the host default (300000ms): if a subagent produces no output for this
+		 * long it is killed as stalled. `0` DISABLES the watchdog — but then a finite
+		 * wall `timeout` (>= 1000) is REQUIRED on this phase so it can never hang forever.
+		 * Overrides the flow-level `idleTimeout`. Absent → flow-level or host default.
+		 */
+		idleTimeout: Type.Optional(
+			Type.Number({
+				description:
+					"[agent-running] Idle watchdog in ms (>= 1000, or 0 to disable). 0 requires a finite wall 'timeout' >= 1000. Overrides the flow-level idleTimeout.",
 			}),
 		),
 
@@ -445,6 +504,19 @@ export const TaskflowSchema = Type.Object(
 					"Default every phase to cross-run caching (scope:'cross-run') so re-running this flow reuses unchanged phases across runs/sessions. Equivalent to setting cache:{scope:'cross-run'} on every phase; per-phase cache settings and the cross-run-blocked types (gate/approval/loop/tournament) still take precedence. Default false (run-only — each run starts fresh unless a phase opts in). A run-time `incremental` argument overrides this.",
 			}),
 		),
+		/**
+		 * Flow-level idle watchdog (ms) for all agent-running phases that don't set
+		 * their own `idleTimeout`. Positive (>= 1000) overrides the host default
+		 * (300000ms); `0` disables the watchdog for those phases — but then every
+		 * agent-running phase MUST declare a finite wall `timeout` (>= 1000) so the
+		 * flow can never hang forever. A per-phase `idleTimeout` overrides this.
+		 */
+		idleTimeout: Type.Optional(
+			Type.Number({
+				description:
+					"Flow-level idle watchdog in ms (>= 1000, or 0 to disable). Per-phase idleTimeout overrides. 0 requires every agent-running phase to declare a finite wall 'timeout' >= 1000.",
+			}),
+		),
 		phases: Type.Array(PhaseSchema, { minItems: 1, description: "Ordered phase definitions (DAG via dependsOn)" }),
 	},
 	{ additionalProperties: false },
@@ -481,6 +553,10 @@ export interface ShorthandStep {
 	context?: string[];
 	/** Max characters per context file (pass-through to Phase.contextLimit). */
 	contextLimit?: number;
+	/** Working directory for this step's subagent (pass-through to Phase.cwd).
+	 *  A literal path or a reserved workspace keyword ('temp'/'dedicated'/
+	 *  'worktree'). A top-level `cwd` is the default; a step cwd overrides it. */
+	cwd?: string;
 }
 
 /** True when `def` is a shorthand spec (no `phases`, but a task/tasks/chain field). */
@@ -510,6 +586,7 @@ function readStep(s: unknown): ShorthandStep {
 		const ctx = readContextList(o.context);
 		if (ctx) step.context = ctx;
 		if (typeof o.contextLimit === "number") step.contextLimit = o.contextLimit;
+		if (typeof o.cwd === "string") step.cwd = o.cwd;
 		return step;
 	}
 	return { task: "" };
@@ -531,6 +608,13 @@ export function desugar(def: unknown): Taskflow {
 	if (d.args && typeof d.args === "object") meta.args = d.args as Taskflow["args"];
 	if (d.budget) meta.budget = d.budget;
 	if (typeof d.strictInterpolation === "boolean") meta.strictInterpolation = d.strictInterpolation;
+	/** Top-level shorthand cwd (literal path or workspace keyword). Becomes the
+	 *  default for every step; a per-step cwd overrides it. For single/chain it
+	 *  lands on each Phase.cwd (full workspace lifecycle). For parallel it lands
+	 *  on the phase cwd (shared), with per-branch cwds overriding per-branch.
+	 *  Note: `cwd` is a Phase field, NOT a Taskflow field, so it is distributed
+	 *  to each phase below rather than placed on the Taskflow object. */
+	const topCwd = typeof d.cwd === "string" && d.cwd.trim() ? d.cwd : undefined;
 	const nameOf = (fallback: string) => (typeof d.name === "string" && d.name.trim() ? d.name.trim() : fallback);
 
 	// chain → sequential agent phases
@@ -548,6 +632,8 @@ export function desugar(def: unknown): Taskflow {
 			if (s.agent) phase.agent = s.agent;
 			if (s.context) phase.context = s.context;
 			if (s.contextLimit !== undefined) phase.contextLimit = s.contextLimit;
+			const stepCwd = s.cwd ?? topCwd;
+			if (stepCwd) phase.cwd = stepCwd;
 			if (i > 0) phase.dependsOn = [`step${i}`];
 			if (i === steps.length - 1) phase.final = true;
 			return phase;
@@ -560,8 +646,15 @@ export function desugar(def: unknown): Taskflow {
 	// per branch): spec-level context plus the union of step-level contexts.
 	if (Array.isArray(d.tasks) && d.tasks.length > 0) {
 		const steps = d.tasks.map(readStep);
-		const branches: ParallelTask[] = steps.map((s) => (s.agent ? { task: s.task, agent: s.agent } : { task: s.task }));
+		const branches: ParallelTask[] = steps.map((s) => {
+			const b: ParallelTask = { task: s.task };
+			if (s.agent) b.agent = s.agent;
+			// Per-branch literal cwd (workspace keywords are rejected by validation).
+			if (s.cwd) b.cwd = s.cwd;
+			return b;
+		});
 		const phase: Phase = { id: "parallel", type: "parallel", branches, final: true };
+		if (topCwd) phase.cwd = topCwd;
 		const shared = [...(readContextList(d.context) ?? []), ...steps.flatMap((s) => s.context ?? [])];
 		if (shared.length) phase.context = Array.from(new Set(shared));
 		const limits = [
@@ -579,6 +672,7 @@ export function desugar(def: unknown): Taskflow {
 		const ctx = readContextList(d.context);
 		if (ctx) phase.context = ctx;
 		if (typeof d.contextLimit === "number") phase.contextLimit = d.contextLimit;
+		if (topCwd) phase.cwd = topCwd;
 		return { name: nameOf("task"), ...meta, phases: [phase] };
 	}
 
@@ -745,6 +839,17 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 	}
 
+	// Flow-level idleTimeout: positive must be >= 1000; 0 is allowed (disables the
+	// watchdog) but every agent-running phase must then declare a finite wall
+	// `timeout` so the run can never hang forever (critical invariant #5).
+	if (flow.idleTimeout !== undefined) {
+		if (typeof flow.idleTimeout !== "number" || !Number.isFinite(flow.idleTimeout) || flow.idleTimeout < 0) {
+			errors.push(`Flow 'idleTimeout' must be a non-negative finite number (ms), got ${typeof flow.idleTimeout === "number" ? flow.idleTimeout : typeof flow.idleTimeout}`);
+		} else if (flow.idleTimeout > 0 && flow.idleTimeout < 1000) {
+			errors.push(`Flow 'idleTimeout' must be 0 (disable) or >= 1000 ms, got ${flow.idleTimeout}`);
+		}
+	}
+
 	// Hardening for runtime-generated (untrusted) sub-flows: bound breadth and
 	// contain filesystem access. These do NOT apply to authored/saved flows.
 	if (opts.dynamic) {
@@ -797,6 +902,13 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			// and time-of-check/time-of-use races can cross the invocation boundary.
 			if (typeof p.cwd === "string") {
 				errors.push(`Dynamic sub-flow phase '${p.id}': cwd selection is not allowed in generated flows`);
+			}
+			if (Array.isArray(p.branches)) {
+				p.branches.forEach((branch, i) => {
+					if (branch && typeof branch === "object" && typeof (branch as { cwd?: unknown }).cwd === "string") {
+						errors.push(`Dynamic sub-flow phase '${p.id}': branches[${i}].cwd selection is not allowed in generated flows`);
+					}
+				});
 			}
 		}
 	}
@@ -898,11 +1010,32 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		// Branch entries become competitors at runtime (b.task is interpolated); a
 		// non-object / non-string-task entry would crash the runtime, so reject it.
 		if (Array.isArray(p.branches)) {
+			const branchPhaseType = (p.type ?? "agent") as PhaseType;
 			p.branches.forEach((b, i) => {
 				if (!b || typeof b !== "object" || Array.isArray(b))
 					errors.push(`Phase '${p.id}': branches[${i}] must be an object with a 'task', got ${b === null ? "null" : typeof b}`);
 				else if (typeof (b as { task?: unknown }).task !== "string")
 					errors.push(`Phase '${p.id}': branches[${i}].task must be a string`);
+				else {
+					// Per-branch cwd: a literal path is honored per-branch; a reserved
+					// workspace keyword ('temp'/'dedicated'/'worktree') is NOT supported
+					// per-branch (the workspace lifecycle is per-phase — a branch cannot
+					// safely allocate/teardown its own workspace). Reject that shape
+					// precisely rather than silently using the wrong cwd. Use the
+					// phase-level `cwd` for workspace isolation.
+					const bcwd = (b as { cwd?: unknown }).cwd;
+					if (typeof bcwd === "string") {
+						if (branchPhaseType !== "parallel") {
+							errors.push(`Phase '${p.id}' (${branchPhaseType}): branches[${i}].cwd is only supported for parallel phases`);
+						} else if (hasCwdPlaceholder(bcwd)) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd does not support interpolation placeholders (${bcwd}). Use a literal path.`);
+						} else if (WORKSPACE_KEYWORDS.includes(bcwd as (typeof WORKSPACE_KEYWORDS)[number])) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd '${bcwd}' is a reserved workspace keyword not supported per-branch (the workspace lifecycle is per-phase). Use the phase-level 'cwd' for workspace isolation.`);
+						} else if (typeof p.cwd === "string" && (WORKSPACE_KEYWORDS.includes(p.cwd as (typeof WORKSPACE_KEYWORDS)[number]) || hasCwdPlaceholder(p.cwd))) {
+							errors.push(`Phase '${p.id}': branches[${i}].cwd cannot override phase cwd '${p.cwd}' because that phase uses a managed workspace/cwd binding. Put the literal cwd on the phase or remove the branch override.`);
+						}
+					}
+				}
 			});
 		}
 		// tools entries are matched against a Set by the adapters (t => set.has(t));
@@ -1041,6 +1174,32 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (type === "reduce") {
 			if (!p.from || p.from.length === 0) errors.push(`Phase '${p.id}' (reduce) requires 'from'`);
 			if (!p.task) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
+			// reduceStrategy / batchSize (reduce-only).
+			const strat = (p as { reduceStrategy?: unknown }).reduceStrategy;
+			if (strat !== undefined && strat !== "tree" && strat !== "one-shot") {
+				errors.push(`Phase '${p.id}' (reduce): reduceStrategy must be 'tree' or 'one-shot', got '${String(strat)}'`);
+			}
+			const bs = (p as { batchSize?: unknown }).batchSize;
+			if (bs !== undefined) {
+				if (typeof bs !== "number" || !Number.isFinite(bs) || bs < 2 || !Number.isInteger(bs)) {
+					errors.push(`Phase '${p.id}' (reduce): batchSize must be an integer >= 2`);
+				} else if (strat !== "tree") {
+					warnings.push(`Phase '${p.id}' (reduce): batchSize is only used with reduceStrategy 'tree' — ignored for one-shot`);
+				}
+			}
+			if (strat === "tree") {
+				const batchSize = typeof bs === "number" && Number.isInteger(bs) && bs >= 2 ? bs : 2;
+				let remaining = asArray<string>(p.from).length;
+				let maxCalls = 0;
+				while (remaining > 1 && maxCalls <= TREE_REDUCE_HARD_MAX_CALLS) {
+					const callsThisRound = Math.ceil(remaining / batchSize);
+					maxCalls += callsThisRound;
+					remaining = callsThisRound;
+				}
+				if (maxCalls > TREE_REDUCE_HARD_MAX_CALLS) {
+					errors.push(`Phase '${p.id}' (reduce): tree strategy exceeds hard cap ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls; increase batchSize or split the reduction`);
+				}
+			}
 		}
 		if (type === "flow") {
 			const hasUse = typeof p.use === "string" && p.use.length > 0;
@@ -1102,6 +1261,32 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				else if (typeof p.timeout !== "number" || !Number.isFinite(p.timeout) || p.timeout < 1000)
 					errors.push(`Phase '${p.id}' (${type}): 'timeout' must be a number >= 1000 ms`);
 			}
+		}
+		// idleTimeout validation (agent-running phases that can use the watchdog).
+		// The host default (300000ms) applies when neither phase nor flow sets it.
+		const AGENT_RUNNING_FOR_IDLE = new Set<PhaseType>(AGENT_RUNNING_PHASE_TYPES);
+		if (AGENT_RUNNING_FOR_IDLE.has(type)) {
+			const phaseIdle = (p as { idleTimeout?: unknown }).idleTimeout;
+			if (phaseIdle !== undefined) {
+				if (typeof phaseIdle !== "number" || !Number.isFinite(phaseIdle) || phaseIdle < 0) {
+					errors.push(`Phase '${p.id}': 'idleTimeout' must be a non-negative finite number (ms), got ${typeof phaseIdle === "number" ? phaseIdle : typeof phaseIdle}`);
+				} else if (phaseIdle > 0 && phaseIdle < 1000) {
+					errors.push(`Phase '${p.id}': 'idleTimeout' must be 0 (disable) or >= 1000 ms, got ${phaseIdle}`);
+				}
+			}
+			// Effective idle watchdog = phase (wins) → flow → host default (undefined).
+			const effectiveIdle = (typeof phaseIdle === "number" ? phaseIdle : flow.idleTimeout) as number | undefined;
+			if (effectiveIdle === 0) {
+				// Disabling the watchdog requires a finite wall timeout so the phase can
+				// never hang forever (critical invariant #5: never hang forever).
+				if (typeof p.timeout !== "number" || !Number.isFinite(p.timeout) || p.timeout < 1000) {
+					errors.push(
+						`Phase '${p.id}': idleTimeout:0 disables the watchdog — a finite wall 'timeout' (>= 1000 ms) is required so this phase cannot hang forever. Add a 'timeout' or use a positive 'idleTimeout'.`,
+					);
+				}
+			}
+		} else if ((p as { idleTimeout?: unknown }).idleTimeout !== undefined) {
+			warnings.push(`Phase '${p.id}' (${type}): 'idleTimeout' only applies to agent-running phases (${AGENT_RUNNING_PHASE_TYPES.join("/")}) — ignored here`);
 		}
 		if (p.retry) {
 			if (typeof p.retry.max !== "number" || p.retry.max < 0) {

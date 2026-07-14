@@ -161,6 +161,111 @@ test("context-tree: ctx_spawn intents are picked up and child reports folded int
 	}
 });
 
+test("context-tree: flat ctx_spawn children inherit phase idle and wall-timeout policy", async () => {
+	const cwd = await tmpCwd();
+	try {
+		const seen = new Map<string, RunOptions>();
+		const runTask: RuntimeDeps["runTask"] = async (_c, _a, agentName, task, options) => {
+			seen.set(task, options);
+			if (task === "PARENT") {
+				queueSpawn(options.ctxDir!, options.nodeId!, [{ task: "CHILD", agent: "scout" }]);
+				return ok(agentName, task, "parent");
+			}
+			return ok(agentName, task, "child");
+		};
+		const def: Taskflow = {
+			name: "spawn-policy",
+			phases: [{
+				id: "root",
+				type: "agent",
+				agent: "a",
+				task: "PARENT",
+				shareContext: true,
+				idleTimeout: 1500,
+				timeout: 1000,
+				final: true,
+			}],
+		};
+		const result = await executeTaskflow(mkState(def, cwd), { cwd, agents: AGENTS, runTask, persist: () => {} });
+		assert.equal(result.ok, true);
+		const child = seen.get("CHILD");
+		assert.ok(child, "spawned child ran");
+		assert.equal(child.idleTimeoutMs, 1500, "spawned child inherits the phase idle watchdog");
+		assert.ok(child.signal, "spawned child receives the phase timeout signal");
+		assert.equal(child.ctxDir, seen.get("PARENT")?.ctxDir);
+		assert.notEqual(child.nodeId, seen.get("PARENT")?.nodeId);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("context-tree: tree reduce drains per-batch ctx_spawn and folds child usage", async () => {
+	const cwd = await tmpCwd();
+	try {
+		const calls: string[] = [];
+		let queued = false;
+		let ctxDir: string | undefined;
+		const runTask: RuntimeDeps["runTask"] = async (_c, _a, agentName, task, options) => {
+			calls.push(task);
+			if (task.startsWith("REDUCE")) {
+				ctxDir = options.ctxDir;
+				assert.match(options.nodeId ?? "", /^r-tree-round-\d+-batch-\d+$/);
+				if (!queued) {
+					queued = true;
+					queueSpawn(options.ctxDir!, options.nodeId!, [{ task: "TREE CHILD", agent: "scout" }]);
+				}
+				return {
+					...ok(agentName, task, `reduced:${task}`),
+					usage: { ...emptyUsage(), output: 5, turns: 1 },
+				};
+			}
+			if (task === "TREE CHILD") {
+				return {
+					...ok(agentName, task, "tree child output"),
+					usage: { ...emptyUsage(), output: 7, turns: 1 },
+				};
+			}
+			return { ...ok(agentName, task, `seed:${task}`), usage: emptyUsage() };
+		};
+		const seeds = ["a", "b", "c", "d"].map((id) => ({
+			id,
+			type: "agent" as const,
+			agent: "a",
+			task: `seed-${id}`,
+		}));
+		const def: Taskflow = {
+			name: "tree-spawn",
+			phases: [
+				...seeds,
+				{
+					id: "r",
+					type: "reduce",
+					agent: "a",
+					from: seeds.map((seed) => seed.id),
+					dependsOn: seeds.map((seed) => seed.id),
+					reduceStrategy: "tree",
+					batchSize: 2,
+					task: "REDUCE {previous.output}",
+					shareContext: true,
+					final: true,
+				},
+			],
+		};
+		const result = await executeTaskflow(mkState(def, cwd), { cwd, agents: AGENTS, runTask, persist: () => {} });
+		assert.equal(result.ok, true);
+		assert.ok(calls.includes("TREE CHILD"), "spawned child executes");
+		assert.match(result.finalOutput, /ctx_spawn: 1 child report/);
+		assert.match(result.finalOutput, /tree child output/);
+		assert.equal(result.state.phases.r.attempts, 3, "tree attempts count reducer calls only");
+		assert.equal(result.state.phases.r.usage?.output, 22, "three reducers plus one child are accounted");
+		assert.equal(result.state.phases.r.promptStats?.calls.length, 4, "prompt stats retain each actual reducer/child call once");
+		assert.ok(ctxDir);
+		assert.deepEqual(fs.readdirSync(path.join(ctxDir!, "pending")), [], "spawn intent is drained");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("context-tree: recursive spawn (child spawns grandchild) is folded in", async () => {
 	const cwd = await tmpCwd();
 	try {

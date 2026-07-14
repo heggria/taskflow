@@ -81,6 +81,9 @@ const SIDECAR_PHASE_FIELDS = [
 	"cancelLosers",
 	"expandMode",
 	"maxNodes",
+	"idleTimeout",
+	"reduceStrategy",
+	"batchSize",
 ] as const;
 
 /** Build the per-phase sidecar record (verbatim copy of non-IR fields). */
@@ -170,6 +173,7 @@ export function translateTaskflow(def: Taskflow): {
 		args: def.args,
 		budget: def.budget,
 		concurrency: def.concurrency,
+		idleTimeout: typeof def.idleTimeout === "number" ? def.idleTimeout : undefined,
 	};
 
 	const meta: TaskflowIRMeta = {

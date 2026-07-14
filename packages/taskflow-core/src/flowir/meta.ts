@@ -72,6 +72,9 @@ export interface FlowIR {
 	args?: Taskflow["args"];
 	budget?: Budget;
 	concurrency?: number;
+	/** Flow-level idle watchdog (ms) — included in the canonical hash so changing
+	 *  it invalidates cross-run cache (cache identity via definition hash). */
+	idleTimeout?: number;
 }
 
 // ---------------------------------------------------------------------------

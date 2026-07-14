@@ -24,7 +24,7 @@ import {
 	formatFlowResult,
 	runInteractiveInit,
 } from "./init.ts";
-import { Type } from "typebox";
+import { Type, type TObject } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "taskflow-core";
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { createPiSubagentRunner, runnerModulePath } from "./runner.ts";
@@ -48,7 +48,7 @@ import {
 	type RuntimeResult,
 } from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
-import { finalPhase, resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
+import { resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
 import {
 	getFlow,
 	getFlowDiagnosed,
@@ -86,8 +86,12 @@ import {
 	writeFinding,
 	writeReport,
 } from "taskflow-core";
-import { MAX_DYNAMIC_NESTING } from "taskflow-core";
 import {
+	MAX_DYNAMIC_NESTING,
+	getBuildInfo,
+	forkRunForResume,
+	validateResumeRequest,
+	type ResumeOverrides,
 	cwdBridgeModeFromEnv,
 	directoryIdentity,
 	reconcileResolveOnlyWorkspace,
@@ -98,9 +102,15 @@ import {
 interface TaskflowDetails {
 	state?: RunState;
 	finalOutput?: string;
+	/** Id of the phase whose output supplied `finalOutput` (0.2.0 dogfood
+	 *  issue 6). `undefined` when no phase output is available. This is the
+	 *  ACTUAL source — never the designated skipped/failed final phase. */
+	outputSourcePhaseId?: string;
 	action: string;
 	message?: string;
 	cacheReport?: string;
+	/** When this result is a resume fork (issue 5): the parent runId. */
+	parentRunId?: string;
 }
 
 /** pi reads `isError` at runtime to mark tool failures; it is not in the public type. */
@@ -119,13 +129,19 @@ const ShorthandStep = Type.Object(
 		contextLimit: Type.Optional(
 			Type.Number({ description: "Max characters to read per context file (default 8000)." }),
 		),
+		cwd: Type.Optional(
+			Type.String({
+				description:
+					"Working directory for this step's subagent (a literal path or a reserved workspace keyword: 'temp'/'dedicated'/'worktree'). A top-level `cwd` is the default; a step cwd overrides it. For parallel `tasks`, per-branch workspace keywords are not supported — use a literal path per branch or the top-level `cwd`.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
 
-const TaskflowParams = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, or clear the cross-run memoization cache",
+const TaskflowParamsSchema = Type.Object({
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, clear the cross-run memoization cache, or report the taskflow build/host identity (version)",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -157,6 +173,12 @@ const TaskflowParams = Type.Object({
 	contextLimit: Type.Optional(
 		Type.Number({ description: "Shorthand single mode: max characters to read per context file (default 8000)." }),
 	),
+	cwd: Type.Optional(
+		Type.String({
+			description:
+				"Shorthand top-level cwd (a literal path or a reserved workspace keyword: 'temp'/'dedicated'/'worktree'). Becomes the default working directory for every step; a per-step `cwd` overrides it. For `tasks`, this is the shared phase cwd (workspace keywords supported); per-branch cwds must be literal paths.",
+		}),
+	),
 	tasks: Type.Optional(
 		Type.Array(ShorthandStep, {
 			description: "Shorthand parallel mode: run these tasks concurrently and merge results (like subagent parallel)",
@@ -170,7 +192,11 @@ const TaskflowParams = Type.Object({
 	),
 	args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Invocation arguments for the flow" })),
 	runId: Type.Optional(Type.String({ description: "Run id to resume (for action=resume), inspect (provenance/trace/replay/why-stale), or recompute" })),
-	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale, or the phase to re-run for action=recompute" })),
+	phaseId: Type.Optional(Type.String({ description: "Phase id — the assumed-changed seed for action=why-stale, the phase to re-run for action=recompute, or the target phase for action=resume with overrides" })),
+	resumeTask: Type.Optional(Type.String({ description: "action=resume: override the target phase's task (requires phaseId). Applied to a forked child run only — the parent run is never modified." })),
+	resumeModel: Type.Optional(Type.String({ description: "action=resume: override the target phase's model (requires phaseId)." })),
+	resumeTimeout: Type.Optional(Type.Number({ description: "action=resume: override the target phase's timeout in ms (>= 1000, requires phaseId)." })),
+	resumeIdleTimeout: Type.Optional(Type.Number({ description: "action=resume: override the target phase's idleTimeout in ms (>= 1000 or 0 to disable, requires phaseId)." })),
 	json: Type.Optional(Type.Boolean({ description: "For action=trace/replay: return machine-readable JSON instead of a human-readable report." })),
 	dryRun: Type.Optional(Type.Boolean({ description: "For action=recompute: compute the stale frontier without re-executing anything (no tokens spent). Defaults to true (safe); set false to actually re-run the seed + stale frontier and persist the updated run" })),
 	budgetMaxUSD: Type.Optional(Type.Number({ description: "For action=replay: alternate max USD budget (would-exceed-budget checks)." })),
@@ -217,6 +243,10 @@ const TaskflowParams = Type.Object({
 		}),
 	),
 });
+
+/** Portable public view of the Pi tool schema. Keep the precise inferred schema
+ * private so declaration emit never exposes TypeBox implementation internals. */
+export const TaskflowParams: TObject = TaskflowParamsSchema;
 
 function formatFlowIR(ir: TaskflowIR): string {
 	const lines: string[] = [];
@@ -383,6 +413,7 @@ function parseToolReplayOverrides(params: {
 }
 
 function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): RunState {
+	const info = getBuildInfo();
 	return {
 		runId: newRunId(def.name),
 		flowName: def.name,
@@ -394,6 +425,11 @@ function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string)
 		updatedAt: Date.now(),
 		cwd,
 		invocationRootSnapshot: directoryIdentity(cwd),
+		// Dogfood build identity: stamp every new run for diagnostics/audit.
+		host: "pi",
+		packageVersion: info.packageVersion,
+		gitCommit: info.gitCommit,
+		schemaVersion: info.schemaVersion,
 	};
 }
 
@@ -684,14 +720,15 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"IMPORTANT: Before using this tool for the first time in a session, invoke skill_load('taskflow') to read the full documentation (DSL syntax, examples, best practices). This tool description is a reference, not a tutorial.",
 			"Shorthand (same API as subagent): pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` for parallel, or `chain:[{task,agent?}]` for sequential (use {previous.output}).",
-			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. Phases (agent, parallel, map, gate, reduce, approval, flow, loop, tournament) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
+			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. All 12 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, race, expand) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
 			"Every delegation is tracked (runId), resumable across sessions, and saveable as /tf:<name> via action=save.",
 			"Use action=agents to list the 18 built-in agents (executor, scout, planner, analyst, critic, reviewer, risk-reviewer, security-reviewer, plan-arbiter, final-arbiter, test-engineer, doc-writer, executor-code, executor-fast, executor-ui, recover, verifier, visual-explorer). Do NOT invent agent names.",
-			"Phase types: agent, parallel (static branches), map (dynamic fan-out over array), gate (VERDICT: PASS/BLOCK), reduce (aggregate from N), approval (human-in-the-loop), flow (run saved sub-flow), loop (iterate until condition/convergence/cap), tournament (N variants, judge picks best/aggregate).",
+			"Use action=resume to fork a failed/paused run without mutating its history; optional phase overrides re-run that phase and its downstream. Use action=version to report package, host, commit, and run-state schema identity.",
+			"Phase types: agent, parallel (static branches), map (dynamic fan-out over array), gate (VERDICT: PASS/BLOCK), reduce (aggregate from N), approval (human-in-the-loop), flow (run saved sub-flow), loop (iterate until condition/convergence/cap), tournament (N variants, judge picks best/aggregate), script (zero-token shell command), race (first completed branch wins), expand (dynamic fragment).",
 			"Use action=compile to generate a Mermaid diagram + verification report from a saved or inline flow — 0 tokens.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
 		].join(" "),
-		parameters: TaskflowParams,
+		parameters: TaskflowParamsSchema,
 		promptSnippet: "Declare a verifiable graph of subagent tasks (single, parallel, chain, or full DAG) — tracked, resumable, context-isolated. The runtime validates the graph before running. Replaces the subagent tool.",
 		promptGuidelines: [
 			"BEFORE FIRST USE: invoke skill_load('taskflow') to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nUse taskflow for ALL delegation — single tasks, parallel, chain, or full DAG orchestration. It fully replaces the subagent tool: every delegation is tracked with a runId, resumable across sessions, context-isolated (only final output returns), and saveable as /tf:<name>. Do NOT call the subagent tool directly; use taskflow shorthand (task/tasks/chain) for simple cases instead.",
@@ -1024,15 +1061,66 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			// resume
+			// version — report build/host identity (0.2.0 dogfood issue 4).
+			if (action === "version") {
+				const info = getBuildInfo();
+				const lines = [
+					`taskflow ${info.packageVersion} · host pi`,
+					`git commit: ${info.gitCommit}`,
+					`run-state schema: v${info.schemaVersion}`,
+				];
+				if (info.buildTime !== undefined) lines.push(`built: ${new Date(info.buildTime).toISOString()}`);
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
+			// resume — forks a NEW run (immutable history, 0.2.0 dogfood issue 5).
+			// The parent run file is never mutated or overwritten; the child carries
+			// `parentRunId` pointing at it. Optional overrides re-run exactly one
+			// phase with a patched task/model/timeout/idleTimeout (applied to the
+			// child's def only).
 			if (action === "resume") {
 				if (!params.runId)
 					return errorResult(action, "action=resume requires 'runId'");
 				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
 				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
 				const prev = prevR.value;
-				const result = await runFlow(prev.def, prev.args, ctx, signal, onUpdate as any, prev);
-				return finalResult(action, result);
+				// Build overrides if any override field is supplied (requires phaseId).
+				const hasOverrideField =
+					params.resumeTask !== undefined ||
+					params.resumeModel !== undefined ||
+					params.resumeTimeout !== undefined ||
+					params.resumeIdleTimeout !== undefined;
+				let overrides: ResumeOverrides | undefined;
+				if (hasOverrideField) {
+					if (!params.phaseId)
+						return errorResult(action, "action=resume with overrides requires 'phaseId' (the target phase to re-run)");
+					overrides = {
+						phaseId: String(params.phaseId),
+						...(params.resumeTask !== undefined ? { task: String(params.resumeTask) } : {}),
+						...(params.resumeModel !== undefined ? { model: String(params.resumeModel) } : {}),
+						...(params.resumeTimeout !== undefined ? { timeout: Number(params.resumeTimeout) } : {}),
+						...(params.resumeIdleTimeout !== undefined ? { idleTimeout: Number(params.resumeIdleTimeout) } : {}),
+					};
+				}
+				const resumable = validateResumeRequest(prev, overrides);
+				if (!resumable.ok) {
+					const prefix = overrides ? "Invalid resume overrides:\n- " : "";
+					return errorResult(action, `${prefix}${resumable.errors.join(overrides ? "\n- " : "; ")}`);
+				}
+				const child = forkRunForResume(prev, { overrides, cwd: ctx.cwd, host: "pi" });
+				const result = await runFlow(child.def, child.args, ctx, signal, onUpdate as any, child);
+				const header = `Resumed taskflow '${result.state.flowName}' as run ${result.state.runId}` +
+					(child.parentRunId ? ` (forked from ${child.parentRunId})` : "") +
+					`. ${result.ok ? "completed" : result.state.status}.`;
+				const sourceLabel = result.outputSourcePhaseId ? `--- ${result.outputSourcePhaseId} ---\n` : "";
+				return {
+					content: [{ type: "text", text: `${header}\n\n${sourceLabel}${result.finalOutput}` }],
+					details: { action, state: result.state, finalOutput: result.finalOutput, outputSourcePhaseId: result.outputSourcePhaseId, parentRunId: child.parentRunId } satisfies TaskflowDetails,
+					isError: !result.ok,
+				};
 			}
 
 			if (action === "provenance") {
@@ -1177,11 +1265,11 @@ export default function (pi: ExtensionAPI) {
 			const shorthandSpec: unknown =
 				resolvedDefine ??
 				(params.chain
-					? { chain: params.chain, name: params.name }
+					? { chain: params.chain, name: params.name, cwd: params.cwd }
 					: params.tasks
-						? { tasks: params.tasks, name: params.name }
+						? { tasks: params.tasks, name: params.name, cwd: params.cwd }
 						: params.task
-							? { task: params.task, agent: params.agent, name: params.name, context: params.context, contextLimit: params.contextLimit }
+							? { task: params.task, agent: params.agent, name: params.name, context: params.context, contextLimit: params.contextLimit, cwd: params.cwd }
 							: undefined);
 
 			if (shorthandSpec !== undefined) {
@@ -1437,7 +1525,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1801,6 +1889,18 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			if (sub === "version") {
+				const info = getBuildInfo();
+				const lines = [
+					`taskflow ${info.packageVersion} · host pi`,
+					`git commit: ${info.gitCommit}`,
+					`run-state schema: v${info.schemaVersion}`,
+				];
+				if (info.buildTime !== undefined) lines.push(`built: ${new Date(info.buildTime).toISOString()}`);
+				ctx.ui.notify(lines.join("\n"), "info");
+				return;
+			}
+
 			if (sub === "init") {
 				let settings: Record<string, unknown>;
 				try {
@@ -1993,13 +2093,15 @@ function formatCacheReport(state: RunState, _totalUsage: UsageStats): string {
 }
 
 function finalResult(action: string, result: RuntimeResult): ToolResult {
-	const fp = finalPhase(result.state.def.phases);
+	// Label only when the core identified the phase whose output is actually
+	// present. Never fall back to the designated final phase for `(no output)`.
+	const sourceLabel = result.outputSourcePhaseId ? `--- ${result.outputSourcePhaseId} ---\n` : "";
 	const header = result.ok
 		? `Taskflow '${result.state.flowName}' completed (${summarizeRun(result.state)}). Run id: ${result.state.runId}`
 		: `Taskflow '${result.state.flowName}' ${result.state.status} (${summarizeRun(result.state)}). Run id: ${result.state.runId} — resume with action=resume.`;
 	return {
-		content: [{ type: "text", text: `${header}\n\n--- ${fp.id} ---\n${result.finalOutput}` }],
-		details: { action, state: result.state, finalOutput: result.finalOutput, cacheReport: formatCacheReport(result.state, result.totalUsage) },
+		content: [{ type: "text", text: `${header}\n\n${sourceLabel}${result.finalOutput}` }],
+		details: { action, state: result.state, finalOutput: result.finalOutput, outputSourcePhaseId: result.outputSourcePhaseId, cacheReport: formatCacheReport(result.state, result.totalUsage) },
 		isError: !result.ok,
 	};
 }

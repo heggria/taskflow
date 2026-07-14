@@ -40,6 +40,7 @@ Top-level keys of the taskflow definition object.
 | `name` | string | — | **Required.** Saved as `/tf:<name>`. |
 | `description` | string | — | Surfaced in `/tf list` and the slash-command. |
 | `concurrency` | number | `8` | Default fan-out / same-layer parallelism cap. See §4. |
+| `idleTimeout` | number | host default (`300000`) | Flow-level idle watchdog in ms (≥ 1000, or `0` to disable) for all agent-running phases that don't set their own. `0` disables the watchdog but then **every** agent-running phase MUST declare a finite wall `timeout` (≥ 1000) so the flow can never hang. A per-phase `idleTimeout` overrides this. |
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
@@ -84,13 +85,16 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `as` | map | `item` | Loop variable bound per item. |
 | `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
 | `cancelLosers` | race | `true` | Abort in-flight losers after first **success** (best-effort AbortSignal). |
-| `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. |
+| `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. `{previous.output}` resolves to **all completed `from[]` outputs** in from-array order (one → raw; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`). |
+| `reduceStrategy` | reduce | `one-shot` | `one-shot` = a single reducer call over all aggregated inputs. `tree` = batched intermediate reducer rounds (see `batchSize`); useful when aggregated input would exceed one prompt. `tree` forces the imperative runtime (event kernel falls back). |
+| `batchSize` | reduce | — | With `reduceStrategy: "tree"`, max inputs per intermediate reducer call (integer ≥ 2). Ignored for one-shot. A phase may start at most 256 tree-reducer calls; increase `batchSize` or split the reduction if validation would exceed the cap. |
 | `def` | expand, flow | — | **Required for expand.** Fragment Taskflow / phases array / `{steps.X.json}`. |
 | `expandMode` | expand | `nested` | `nested` = isolated sub-flow; `graft` = promote children as `<expandId>-<childId>`. |
 | `maxNodes` | expand | `50` | Cap fragment phase count (1..100). |
 | `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
 | `input` | script | — | Text piped to the command's stdin; supports interpolation. |
-| `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. |
+| `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. For agent-running phases: caps EACH subagent call (≥ 1000 ms); expiry aborts + fails with `timedOut` (never retried). Not supported for approval/flow. |
+| `idleTimeout` | agent, gate, reduce, map, parallel, loop, tournament | host default (`300000`) | Idle watchdog in ms (≥ 1000, or `0` to disable). If a subagent produces no output for this long it is killed as stalled. `0` disables the watchdog but then a finite wall `timeout` (≥ 1000) is **required** on that phase so it can never hang. Per-phase overrides the flow-level `idleTimeout`; absent → flow-level or host default. |
 | `dependsOn` | all | `[]` | DAG edges. `from` also implies a dependency. |
 | `output` | all | `text` | `json` parses output so `{steps.id.json}` / map `over` work. |
 | `model` | all | agent/global | Per-phase model override. See §5. |
@@ -191,7 +195,7 @@ invocation root without accepting arbitrary cwd interpolation:
 The whole `cwd` must be exactly one `{args.X}` reference. Absolute paths,
 concatenation, `{steps.*}`, dot segments, missing directories, files, and
 symlink escapes are rejected during binding. Runtime-generated sub-flows cannot use this
-bridge. Because 0.2.1 does not yet ship a cross-host filesystem sandbox, it is
+bridge. Because the current 0.2.x runtime does not yet ship a cross-host filesystem sandbox, it is
 disabled by default. A host operator—not flow JSON—may explicitly accept the
 lower resolver-only guarantee by launching the host with:
 

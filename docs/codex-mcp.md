@@ -31,7 +31,7 @@ globally, and the plugin version binds the exact code that runs. Verify:
 
 ```sh
 codex plugin list   # → taskflow@taskflow  installed, enabled
-codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.1 codex-taskflow-mcp)
+codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.2 codex-taskflow-mcp)
 ```
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
@@ -65,7 +65,7 @@ To stop large flows from being cut off, the plugin's `.mcp.json` ships a
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.2.1", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.2.2", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }

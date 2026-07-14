@@ -42,6 +42,9 @@ export * from "./compile.ts";
 // barrel would run that entry on every `import` of taskflow-core. The pi adapter
 // spawns it directly by file path.
 export * from "./store.ts";
+export * from "./final-output.ts";
+export * from "./build-info.ts";
+export * from "./resume.ts";
 export * from "./agents.ts";
 export * from "./library/types.ts";
 export * from "./library/meta.ts";

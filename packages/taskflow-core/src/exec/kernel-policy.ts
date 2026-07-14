@@ -65,6 +65,13 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if (p.reflexion === true) {
 			return `phase '${id}': reflexion loops require the imperative runtime`;
 		}
+		// Tree reduction (`reduceStrategy: "tree"`) runs batched intermediate reducer
+		// calls with full retry/timeout/budget/prompt-stats wiring. Rather than
+		// duplicate that complex multi-round logic on the kernel path, force the
+		// imperative runtime (which owns it). One-shot reduce stays on the kernel.
+		if ((p.type ?? "agent") === "reduce" && (p as { reduceStrategy?: string }).reduceStrategy === "tree") {
+			return `phase '${id}': reduceStrategy 'tree' requires the imperative runtime`;
+		}
 		// Explicit multi-attempt retry / expect contracts: kernel lacks full policy yet.
 		if (p.retry && typeof p.retry === "object" && (p.retry.max ?? 0) > 0) {
 			return `phase '${id}': retry requires the imperative runtime`;
@@ -90,6 +97,9 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		const cwd = p.cwd;
 		if (typeof cwd === "string") {
 			return `phase '${id}': workspace cwd '${cwd}' requires the imperative runtime`;
+		}
+		if (Array.isArray(p.branches) && p.branches.some((branch) => typeof branch.cwd === "string")) {
+			return `phase '${id}': per-branch cwd requires the imperative runtime`;
 		}
 		if ((p.type ?? "agent") === "script" && p.input !== undefined) {
 			return `phase '${id}': script stdin input requires the imperative runtime`;

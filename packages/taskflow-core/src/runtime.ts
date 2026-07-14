@@ -36,7 +36,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 });
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, dependenciesOf, finalPhase, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -48,6 +48,7 @@ export { parseGateVerdict };
 import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
+import { resolveFinalOutput } from "./final-output.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 import { compileTaskflowToIR, phaseFingerprint } from "./flowir/index.ts";
 import { computeStaleFrontier, declaredReadMapOfDef, readMapOf } from "./stale.ts";
@@ -160,6 +161,13 @@ export interface RuntimeResult {
 	finalOutput: string;
 	ok: boolean;
 	totalUsage: UsageStats;
+	/** The id of the PhaseState whose output supplied `finalOutput`. For the
+	 *  normal case this is the (fallback) final phase that actually completed.
+	 *  For gate/budget prefixes, it is retained when underlying partial output
+	 *  is included (the blocking gate/approval phase, or the fallback final
+	 *  phase for a budget halt); `undefined` when no phase output is available
+	 *  (no phase completed). Never the designated skipped/failed final phase. */
+	outputSourcePhaseId?: string;
 	/** Incremental-reuse summary: how many phases were reused from cache vs.
 	 *  freshly executed this run, and the cost the reused work would otherwise
 	 *  have incurred (known only for within-run resume; cross-run hits zero
@@ -167,6 +175,16 @@ export interface RuntimeResult {
 	 *  additive — callers that ignore it are unaffected. */
 	reuse?: ReuseSummary;
 }
+
+// Re-export the shared final-output helper + types so callers importing from
+// the runtime barrel get them from one place. The event kernel
+// (`exec/driver.ts`) imports these directly from `./final-output.ts` to avoid
+// a static runtime↔driver import cycle.
+export {
+	resolveFinalOutput,
+	type FinalOutputBlockedCtx,
+	type FinalOutputResolution,
+} from "./final-output.ts";
 
 /** A run's incremental-reuse accounting (see RuntimeResult.reuse). */
 export interface ReuseSummary {
@@ -713,6 +731,13 @@ interface SpawnBudgetLedger {
 	usage: UsageStats;
 }
 
+type SpawnChildRunner = (
+	agentName: string,
+	task: string,
+	childNodeId: string,
+	usageBefore: UsageStats | undefined,
+) => Promise<RunResult>;
+
 function spawnedOverBudget(state: RunState, local: UsageStats): boolean {
 	const budget = state.def.budget;
 	if (!budget) return false;
@@ -749,6 +774,14 @@ function resolveEffCwd(deps: RuntimeDeps, phase: Phase): string {
 	// Node resolves a relative spawn cwd against the Taskflow process cwd. That
 	// is not necessarily the invocation root, so anchor legacy literals here.
 	return path.resolve(deps.cwd, phase.cwd);
+}
+
+/** Resolve a literal per-branch cwd once for BOTH cache identity and execution.
+ * Existing directories are realpath-canonicalized so aliases/symlinks cannot
+ * collide with a different invocation root under the same raw cwd string. */
+function resolveBranchCwd(deps: RuntimeDeps, cwd: string): string {
+	const resolved = path.resolve(deps.cwd, cwd);
+	return directoryIdentity(resolved)?.canonicalPath ?? resolved;
 }
 
 function flowTreeUsesCwdBridge(
@@ -904,16 +937,13 @@ async function runSpawnedChildren(
 	phase: Phase,
 	deps: RuntimeDeps,
 	state: RunState,
-	run: RunTaskFn,
+	runChild: SpawnChildRunner,
 	ledger: SpawnBudgetLedger = { usage: emptyUsage() },
 ): Promise<SpawnedResult> {
 	const capped = assignments.slice(0, MAX_DYNAMIC_MAP_ITEMS);
 	const lines: string[] = [];
 	const usages: UsageStats[] = [];
 	const errors: string[] = [];
-	// Effective cwd for flat spawned tasks: honour a workspace override and never
-	// pass a reserved keyword through to the runner.
-	const spawnCwd = resolveEffCwd(deps, phase);
 	let idx = 0;
 	for (const a of capped) {
 		if (deps.signal?.aborted || spawnedOverBudget(state, ledger.usage)) break;
@@ -940,38 +970,12 @@ async function runSpawnedChildren(
 				if (sub.failed) errors.push(sub.error ?? `spawned subflow ${childNodeId} failed`);
 				setNodeStatus(ctxDir, childNodeId, sub.failed ? "failed" : "done");
 			} else {
-					const task = a.task ?? "";
-					const runOptions = {
-						model: phase.model,
-						thinking: phase.thinking,
-						tools: phase.tools,
-						cwd: spawnCwd,
-						signal: deps.signal,
-						ctxDir,
-						nodeId: childNodeId,
-					};
-					const invoke = () => run(
-						spawnCwd,
-						deps.agents,
-						agentName,
-						task,
-						runOptions,
-						deps.globalThinking,
-					);
-					// ctx_spawn is part of the phase's execution tree, not bookkeeping.
-					// Inherit the exact cwd capability and give every descendant a unique
-					// unit owner so no child can bypass lease/WAL/permit coordination.
-					const r = deps._workspaceBinding
-						? await deps._workspaceBinding.runAgent({
-							agents: deps.agents,
-							agentName,
-							task,
-							opts: runOptions,
-							globalThinking: deps.globalThinking,
-							unitId: childNodeId,
-							invoke,
-						})
-						: await invoke();
+				const task = a.task ?? "";
+				// Flat ctx_spawn children use the SAME runOne policy as their parent:
+				// phase timeout, idle watchdog, retries, budget accounting, tracing,
+				// prompt diagnostics, cwd capability, and workspace binding.
+				const usageBefore = ledger.usage;
+				const r = await runChild(agentName, task, childNodeId, usageBefore);
 				out = r.output ?? "";
 				if (isFailed(r)) {
 					const detail = sanitizeErrorMessage(r.errorMessage ?? r.stderr ?? "spawned child failed");
@@ -986,7 +990,7 @@ async function runSpawnedChildren(
 				// A child may itself have queued spawns — recurse (depth-capped by the tool).
 				const grand = drainPendingSpawns(ctxDir, childNodeId);
 				if (grand.length > 0 && !deps.signal?.aborted && !spawnedOverBudget(state, ledger.usage)) {
-					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger);
+					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, runChild, ledger);
 					if (rec.reports) out += rec.reports;
 					usages.push(rec.usage);
 					errors.push(...rec.errors);
@@ -1031,6 +1035,8 @@ interface PhaseExecOpts {
 	/** Resource context before this phase narrowed/allocated its own cwd. Gate
 	 * retries must re-run upstream phases in this parent context. */
 	upstreamDeps?: RuntimeDeps;
+	/** Internal exact prompt list, populated once per actual subagent attempt. */
+	promptCalls?: string[];
 }
 
 async function executePhase(
@@ -1055,8 +1061,10 @@ async function executePhase(
 	if (deps.trace) emitUnreplayableMarker(deps, state, phase);
 	let result: PhaseState;
 	let threw = false;
+	const promptCalls: string[] = [];
+	const trackedOpts: PhaseExecOpts = { ...opts, promptCalls };
 	try {
-		result = await executePhaseImpl(phase, state, deps, prior, emitProgress, _retryDepth, opts);
+		result = await executePhaseImpl(phase, state, deps, prior, emitProgress, _retryDepth, trackedOpts);
 	} catch (e) {
 		threw = true;
 		// Trace: phase-end on failure (fail-open) before re-throwing.
@@ -1068,6 +1076,9 @@ async function executePhase(
 		throw e;
 	}
 	if (threw) return result; // unreachable; satisfies TS
+	if (promptCalls.length > 0 && !result.cacheHit) {
+		setPromptStats(result, promptCalls);
+	}
 	// S1: cache-hit decision (within-run or cross-run) for fold/replay.
 	if (result.cacheHit) {
 		traceDecision(deps, state, phase.id, {
@@ -1321,7 +1332,13 @@ async function executePhaseInner(
 ): Promise<PhaseState> {
 	const type = phase.type ?? "agent";
 	const concurrency = phase.concurrency ?? state.def.concurrency ?? 8;
-	const previousOutput = lastCompletedOutput(state, phase);
+	// BREAKING (dogfood issue 1): a reduce phase's {previous.output} aggregates
+	// ALL completed `from[]` outputs in from-array order (one → raw, many →
+	// `### <id>\n\n<output>` joined by `\n\n---\n\n`). Other phase types keep the
+	// historical "last completed dependency" behavior. The aggregated from-ids
+	// are recorded as observed reads (below) so staleness tracks them.
+	const reduceAgg = type === "reduce" ? aggregateReduceFrom(state, phase) : undefined;
+	const previousOutput = reduceAgg ? reduceAgg.value : lastCompletedOutput(state, phase);
 	const run = deps.runTask ?? noRunnerInjected;
 	// Effective working directory for THIS phase's execution. When an isolated
 	// workspace was allocated (worktree isolation), `_cwdOverride` is its dir and
@@ -1357,6 +1374,13 @@ async function executePhaseInner(
 	const onRead = (ref: string): void => {
 		readRefs.push(ref);
 	};
+	// Record the reduce-aggregated from-ids as observed reads: the phase consumed
+	// these upstream outputs (folded into {previous.output}) even when the task
+	// references {previous.output} once (a single placeholder read would otherwise
+	// record only "previous.output", not the real upstream ids).
+	if (reduceAgg) {
+		for (const id of reduceAgg.ids) readRefs.push(`steps.${id}.output`);
+	}
 	const ctx = buildInterpolationContext(state, previousOutput, undefined, onRead);
 
 	// M3 observed-readSet: when conditions are part of the phase's real
@@ -1431,8 +1455,14 @@ async function executePhaseInner(
 		agentScope: state.def.agentScope,
 		contextSharing: state.def.contextSharing === true,
 		agentDefinitions: agentDefinitionsIdentity(deps.agents),
-		executionCwd: phase.cwd !== undefined || deps._cacheCwdIdentity !== undefined ? effCwd : undefined,
+		executionCwd: directoryIdentity(effCwd)?.canonicalPath ?? path.resolve(effCwd),
 	};
+
+	// Effective idle watchdog (ms): phase overrides flow; host default (300000)
+	// applies when neither sets it. `0` disables the watchdog (validation already
+	// required a finite wall `timeout` in that case). Threaded into RunOptions so
+	// every host runner that delegates to runSubagentProcess honors it.
+	const effIdleTimeoutMs = resolveIdleTimeoutMs(phase, state.def);
 
 	const baseRun = (
 		agentName: string,
@@ -1440,21 +1470,56 @@ async function executePhaseInner(
 		onLive?: (l: LiveUpdate) => void,
 		ctxNodeId?: string,
 		signal?: AbortSignal,
+		callCwd?: string,
 		onTerminalCommit?: () => void,
 	) => {
+		const invocationCwd = callCwd ? path.resolve(deps.cwd, callCwd) : effCwd;
+		// A per-branch cwd cannot replace a phase-level workspace/cwd-bridge
+		// binding: that would bypass the binding's containment/dirty-state
+		// lifecycle. Validation rejects this shape; keep a runtime fail-closed
+		// guard for direct callers or legacy persisted definitions.
+		if (callCwd && (deps._workspaceBinding || isWorkspaceKeyword(phase.cwd))) {
+			return Promise.resolve({
+				agent: agentName,
+				task,
+				exitCode: 1,
+				output: "",
+				stderr: "TF_CWD_BRANCH_BINDING_CONFLICT: per-branch cwd cannot override a phase workspace binding",
+				usage: emptyUsage(),
+				stopReason: "error",
+				errorMessage: "TF_CWD_BRANCH_BINDING_CONFLICT: per-branch cwd cannot override a phase workspace binding",
+			});
+		}
+		if (callCwd && deps._cwdBoundary) {
+			const selected = directoryIdentity(invocationCwd);
+			if (!selected || !isPathWithin(deps._cwdBoundary, selected.canonicalPath)) {
+				return Promise.resolve({
+					agent: agentName,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "TF_CWD_BOUNDARY_ESCAPE: per-branch cwd must select an existing directory inside the inherited cwd boundary",
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: "TF_CWD_BOUNDARY_ESCAPE: per-branch cwd must select an existing directory inside the inherited cwd boundary",
+				});
+			}
+		}
+		opts?.promptCalls?.push(task);
 		const runOptions = {
 			model: phase.model,
 			thinking: phase.thinking,
 			tools: phase.tools,
-			cwd: effCwd,
+			cwd: invocationCwd,
 			signal: signal ?? deps.signal,
 			onLive,
 			ctxDir: ctxDir,
 			nodeId: ctxDir ? ctxNodeId : undefined,
+			idleTimeoutMs: effIdleTimeoutMs,
 			onTerminalCommit,
 		};
 		const invoke = () => run(
-			effCwd,
+			invocationCwd,
 			deps.agents,
 			agentName,
 			task,
@@ -1500,6 +1565,17 @@ async function executePhaseInner(
 		check?: (r: RunResult) => string[],
 		/** Extra abort (e.g. race branch cancelLosers) — chained with run + phase timeout. */
 		extraSignal?: AbortSignal,
+		/** Per-call cwd override (e.g. a parallel branch's literal cwd). Falls back
+		 *  to the phase effective cwd when absent. Workspace keywords are rejected
+		 *  by validation for branches, so this is always a literal path or undefined. */
+		callCwd?: string,
+		/** Usage already spent by earlier calls inside this same multi-call phase
+		 * (tree reduce). Included in live budget accounting, but not returned as
+		 * this call's own usage. */
+		usageBefore?: UsageStats,
+		/** Optional hard admission guard invoked immediately before EVERY actual
+		 * runner attempt. Return an error message to deny that attempt. */
+		beforeAttempt?: () => string | undefined,
 	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
@@ -1508,6 +1584,20 @@ async function executePhaseInner(
 		let last: RunResult | undefined;
 		for (let attempt = 0; attempt < maxAttempts; attempt++) {
 			if (deps.signal?.aborted || extraSignal?.aborted) break;
+			const admissionError = beforeAttempt?.();
+			if (admissionError) {
+				last = {
+					agent: agentName,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: admissionError,
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: admissionError,
+				};
+				break;
+			}
 			// AbortController chains: run signal + optional extra (race cancel) + phase timeout.
 			// Deterministic: a timed-out call is never retried (would double-spend).
 			let timedOut = false;
@@ -1544,7 +1634,7 @@ async function executePhaseInner(
 						timer = undefined;
 					}
 				};
-				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal, onTerminalCommit);
+				const invocation = baseRun(agentName, task, onLive, ctxNodeId, callSignal, callCwd, onTerminalCommit);
 				if (phaseTimeoutMs && timeoutController) {
 					const timeoutFallback = new Promise<RunResult>((resolve) => {
 						timer = setTimeout(() => {
@@ -1618,7 +1708,7 @@ async function executePhaseInner(
 			// B6: aggregate and surface cumulative usage before the retry decision,
 			// so the TUI / budget guard see the in-flight spend on every attempt.
 			const liveRetry = state.phases[phase.id];
-			if (liveRetry) liveRetry.usage = aggregateUsage(usages);
+			if (liveRetry) liveRetry.usage = aggregateUsage(usageBefore ? [usageBefore, ...usages] : usages);
 			// Persist every attempt, not only the final aggregate. This is required
 			// for honest replay/cost accounting when a transient or explicit retry
 			// succeeds after earlier spend.
@@ -1712,9 +1802,38 @@ async function executePhaseInner(
 				attempts: 0,
 			};
 		}
-		if (usages.length > 1) last.usage = aggregateUsage(usages);
+		if (usages.length > 0) last.usage = aggregateUsage(usages);
 		last.attempts = usages.length;
 		return last;
+	};
+
+	const runSpawnedChild: SpawnChildRunner = async (agentName, task, childNodeId, spawnedUsageBefore) => {
+		// runOne updates the live phase usage so retry/budget admission sees current
+		// spend. A spawned child is folded into the parent result later, so restore
+		// the parent's pre-child usage after the call to avoid replacing/doubling it.
+		const livePhase = state.phases[phase.id];
+		const parentUsage = livePhase?.usage ? { ...livePhase.usage } : undefined;
+		const totalUsageBefore = aggregateUsage([
+			parentUsage ?? emptyUsage(),
+			spawnedUsageBefore ?? emptyUsage(),
+		]);
+		try {
+			return await runOne(
+				agentName,
+				task,
+				undefined,
+				childNodeId,
+				undefined,
+				undefined,
+				undefined,
+				totalUsageBefore,
+			);
+		} finally {
+			if (livePhase) {
+				if (parentUsage) livePhase.usage = parentUsage;
+					else livePhase.usage = undefined;
+			}
+		}
 	};
 
 	const parseJson = phase.output === "json";
@@ -1737,7 +1856,7 @@ async function executePhaseInner(
 	// recorded so a later run with that item unchanged hits per-item. When
 	// `perItem` is undefined (parallel, or non-cacheable maps) the path is inert.
 	const runFanout = async (
-		items: Array<{ agent: string; task: string }>,
+		items: Array<{ agent: string; task: string; cwd?: string }>,
 		perItem?: { keyOf: (idx: number) => CacheKeys | null; cc: PhaseCacheCtx },
 	): Promise<RunResult[]> => {
 		let done = 0;
@@ -1809,11 +1928,15 @@ async function executePhaseInner(
 				if (l.text) latestText = l.text;
 				if (l.model) latestModel = l.model;
 				refresh();
-			}, ctxDir ? nodeIdFor(String(idx)) : undefined);
+			}, ctxDir ? nodeIdFor(String(idx)) : undefined, undefined, undefined, it.cwd);
 			running--;
 			done++;
 			if (isFailed(r)) failed++;
 			liveUsages[idx] = r.usage;
+			// Publish the just-finished sibling's spend before considering any
+			// ctx_spawn intents. Budgeted fan-out allows one atomic call to cross the
+			// ceiling, but must not admit descendants after that overshoot.
+			refresh();
 			// Per-item cross-run cache record (map only): persist a successful fresh
 			// item so a later run with this item unchanged hits per-item instead of
 			// re-running. Failed and budget-skipped items are never cached (a stale
@@ -1840,13 +1963,22 @@ async function executePhaseInner(
 					// post-run drain below only covers single-agent phases).
 					const spawned = drainPendingSpawns(ctxDir, itemNid);
 					if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-							const child = await runSpawnedChildren(spawned, ctxDir, itemNid, phase, deps, state, run);
-							if (child.reports) r.output = `${r.output ?? ""}${child.reports}`;
-							if (child.failed && deps._workspaceBinding) {
-								r.exitCode = r.exitCode === 0 ? 1 : r.exitCode;
-								r.stopReason = "error";
-								r.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
-							}
+						const child = await runSpawnedChildren(
+							spawned,
+							ctxDir,
+							itemNid,
+							phase,
+							deps,
+							state,
+							runSpawnedChild,
+							{ usage: emptyUsage() },
+						);
+						if (child.reports) r.output = `${r.output ?? ""}${child.reports}`;
+						if (child.failed && deps._workspaceBinding) {
+							r.exitCode = r.exitCode === 0 ? 1 : r.exitCode;
+							r.stopReason = "error";
+							r.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
+						}
 						if (child.usage) {
 							r.usage = aggregateUsage([r.usage ?? emptyUsage(), child.usage]);
 							liveUsages[idx] = r.usage;
@@ -1862,6 +1994,110 @@ async function executePhaseInner(
 	// Single-agent phases: agent, gate, and reduce all run one subagent on an
 	// interpolated task. gate additionally parses a verdict; reduce simply pulls
 	// its inputs from `from` phases (already exposed via interpolation).
+	//
+	// Tree reduce (`reduceStrategy: "tree"`) is handled FIRST: it runs batched
+	// intermediate reducer calls over the aggregated `from[]` inputs, reusing
+	// `runOne` so retry/timeout/budget/idleTimeout behavior is identical to a
+	// one-shot call. It forces the imperative runtime (the event kernel falls
+	// back via kernelUnsupportedReason). The corrected `{previous.output}`
+	// aggregation (all completed `from[]` sources) applies to EVERY round.
+	if (type === "reduce" && (phase as { reduceStrategy?: string }).reduceStrategy === "tree") {
+		const stratBs = (phase as { batchSize?: number }).batchSize;
+		const batchSize = typeof stratBs === "number" && Number.isFinite(stratBs) && stratBs >= 2 ? Math.floor(stratBs) : 2;
+		const {
+			collectTreeReduceInputs,
+			executeTreeReduction,
+			treeReduceCacheParts,
+		} = await import("./runtime/phases/reduce.ts");
+		const inputs = collectTreeReduceInputs(state, phase);
+		// 0–1 completed inputs: tree reduction is a no-op — fall through to the
+		// one-shot path (which handles the degenerate case correctly).
+		if (inputs.length >= 2) {
+			const agentName = resolveAgent(phase.agent, deps, state);
+			const cacheKey = cacheKeys(cc, treeReduceCacheParts(state, phase, inputs, batchSize));
+			const cached = cachedPhase(cc, cacheKey);
+			if (cached) return cached;
+
+			const execution = await executeTreeReduction({
+				phase,
+				inputs,
+				batchSize,
+				agentName,
+				inputHash: cacheKey.key,
+				isAborted: () => deps.signal?.aborted === true,
+				isOverBudget: () => overBudget(state).over,
+				resolveTask: (batchValue) => {
+					const batchCtx = buildInterpolationContext(state, batchValue, undefined, onRead);
+					const interp = interpolate(phase.task ?? "", batchCtx);
+					return {
+						task: appendGateFormatSuffix(preRead + interp.text, phase),
+						warning: warnUnresolvedRefs(phase.id, interp.missing),
+					};
+				},
+				runOne: async (task, usageBefore, beforeAttempt, callId) => {
+					const batchNodeId = nodeIdFor(`tree-${callId}`);
+					if (ctxDir) {
+						try { registerNode(ctxDir, batchNodeId, phase.id, undefined, "running"); } catch { /* fail-open */ }
+					}
+					const result = await runOne(
+						agentName,
+						task,
+						liveSink(state, phase.id, emitProgress),
+						batchNodeId,
+						contractCheck,
+						undefined,
+						undefined,
+						usageBefore,
+						beforeAttempt,
+					);
+					if (ctxDir) {
+						try {
+							const spawned = drainPendingSpawns(ctxDir, batchNodeId);
+							if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
+								const child = await runSpawnedChildren(
+									spawned,
+									ctxDir,
+									batchNodeId,
+									phase,
+									deps,
+									state,
+									runSpawnedChild,
+									{ usage: emptyUsage() },
+								);
+								if (child.reports) result.output = `${result.output ?? ""}${child.reports}`;
+								if (child.failed && deps._workspaceBinding) {
+									result.exitCode = result.exitCode === 0 ? 1 : result.exitCode;
+									result.stopReason = "error";
+									result.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
+								}
+								result.usage = aggregateUsage([result.usage ?? emptyUsage(), child.usage]);
+							}
+							setNodeStatus(ctxDir, batchNodeId, isFailed(result) ? "failed" : "done");
+						} catch { /* fail-open */ }
+					}
+					const livePhase = state.phases[phase.id];
+					if (livePhase) {
+						livePhase.usage = aggregateUsage([
+							usageBefore ?? emptyUsage(),
+							result.usage ?? emptyUsage(),
+						]);
+					}
+					return result;
+				},
+			});
+			const ps = execution.phaseState;
+			if (parseJson && ps.status === "done") ps.json = safeParse(ps.output ?? "");
+			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
+			if (execution.refWarning) ps.warnings = [...(ps.warnings ?? []), execution.refWarning];
+			if (ps.budgetTruncated) {
+				ps.warnings = [...(ps.warnings ?? []), "tree reduction stopped by the run budget; output is partial"];
+			}
+			attachReduceInputStats(ps, state, phase);
+			if (execution.cacheable) recordCache(cc, ps);
+			return ps;
+		}
+		// inputs.length < 2 → fall through to one-shot (below).
+	}
 	if (type === "agent" || type === "gate" || type === "reduce") {
 		// Eval gate: zero-token machine checks before the LLM gate.
 		if (type === "gate" && Array.isArray(phase.eval) && phase.eval.length > 0) {
@@ -2149,6 +2385,10 @@ async function executePhaseInner(
 		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
+		// Prompt-size diagnostics for the single agent call (durable).
+		attachPromptStats(ps, [fullTask]);
+		// reduce: record aggregate input stats.
+		if (type === "reduce") attachReduceInputStats(ps, state, phase);
 		if (type === "gate" && ps.status === "done") {
 			ps.gate = parseGateVerdict(r.output);
 			// Trace: gate decision (fail-open). Replay re-adjudicates thresholds.
@@ -2165,7 +2405,16 @@ async function executePhaseInner(
 				registerNode(ctxDir, nid, phase.id, undefined, ps.status === "failed" ? "failed" : "done");
 				const spawned = drainPendingSpawns(ctxDir, nid);
 				if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-					const child = await runSpawnedChildren(spawned, ctxDir, nid, phase, deps, state, run);
+					const child = await runSpawnedChildren(
+						spawned,
+						ctxDir,
+						nid,
+						phase,
+						deps,
+						state,
+						runSpawnedChild,
+						{ usage: emptyUsage() },
+					);
 					if (child.reports) ps.output = `${ps.output ?? ""}${child.reports}`;
 					if (child.failed && deps._workspaceBinding) {
 						ps.status = "failed";
@@ -2293,6 +2542,7 @@ async function executePhaseInner(
 			return {
 				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
 				task: preRead + r.text,
+				cwd: typeof b.cwd === "string" ? resolveBranchCwd(deps, b.cwd) : undefined,
 			};
 		});
 		const ck = cacheKeys(cc, [phase.id, phase.model ?? "", JSON.stringify(branches)]);
@@ -3126,6 +3376,150 @@ function lastCompletedOutput(state: RunState, phase: Phase): string | undefined 
 		const ps = state.phases[deps[i]];
 		if (ps?.status === "done") return ps.output;
 	}
+	return undefined;
+}
+
+/** A conservative prompt-size warning threshold in estimated tokens. Crossed
+ *  → the phase records a `warnings` entry so an author notices they may be
+ *  approaching a model's context limit. Approximate (ceil(chars/4)), not a
+ *  real tokenizer count. Chosen conservatively well below typical 128K context
+ *  windows so the warning fires with ample headroom. */
+export const PROMPT_SIZE_WARN_TOKENS = 32_000;
+
+/** Compute durable prompt-size diagnostics for a resolved prompt string:
+ *  exact UTF-8 byte count, character count, and a documented approximate token
+ *  estimate (ceil(chars/4)). Never throws. */
+export function promptSizeStats(text: string): { bytes: number; chars: number; estTokens: number } {
+	let chars = 0;
+	for (const _char of text) chars++; // Unicode code points, not UTF-16 code units
+	const bytes = Buffer.byteLength(text, "utf8");
+	const estTokens = Math.ceil(chars / 4);
+	return { bytes, chars, estTokens };
+}
+
+/** Replace a phase's call diagnostics with the exact prompts captured by the
+ * shared runner boundary. This covers single calls, retries, fan-out items,
+ * loop/tournament/judge calls, and tree-reduce rounds without per-branch drift. */
+function setPromptStats(ps: PhaseState, prompts: string[]): void {
+	try {
+		const calls = prompts.map((text) => promptSizeStats(text));
+		const reduceInputs = ps.promptStats?.reduceInputs;
+		ps.promptStats = { calls, ...(reduceInputs ? { reduceInputs } : {}) };
+		ps.warnings = (ps.warnings ?? []).filter((warning) => !warning.startsWith("Prompt size ≈"));
+		for (const call of calls) {
+			if (call.estTokens >= PROMPT_SIZE_WARN_TOKENS) {
+				ps.warnings.push(`Prompt size ≈${call.estTokens} tokens (${call.chars} chars, ${call.bytes} bytes) exceeds the conservative ${PROMPT_SIZE_WARN_TOKENS}-token warning threshold — the prompt may be approaching a model's context limit.`);
+			}
+		}
+		if (ps.warnings.length === 0) delete ps.warnings;
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
+}
+
+/** Attach durable prompt-size diagnostics to a PhaseState. `prompts` is the list
+ *  of resolved prompt strings actually sent to a subagent (one entry per call —
+ *  one for an agent phase, multiple for a tree reduce). Each becomes a
+ *  `{bytes, chars, estTokens}` record on `ps.promptStats.calls`. When any call
+ *  crosses {@link PROMPT_SIZE_WARN_TOKENS}, a `warnings` entry is appended so an
+ *  author notices they may be approaching a model's context limit (the estimate
+ *  is conservative: ceil(chars/4), not a real tokenizer count). Never throws. */
+function attachPromptStats(ps: PhaseState, prompts: string[]): void {
+	try {
+		const calls = prompts.map((t) => promptSizeStats(t));
+		const existing = ps.promptStats;
+		ps.promptStats = existing
+			? { ...existing, calls: [...existing.calls, ...calls] }
+			: { calls };
+		for (const c of calls) {
+			if (c.estTokens >= PROMPT_SIZE_WARN_TOKENS) {
+				ps.warnings = [...(ps.warnings ?? []), `Prompt size ≈${c.estTokens} tokens (${c.chars} chars, ${c.bytes} bytes) exceeds the conservative ${PROMPT_SIZE_WARN_TOKENS}-token warning threshold — the prompt may be approaching a model's context limit.`];
+			}
+		}
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
+}
+
+/** Attach aggregate input stats for a reduce phase: count + total bytes/chars/
+ *  estTokens over the completed `from[]` inputs being reduced. Stored on
+ *  `ps.promptStats.reduceInputs` so post-hoc inspection can account for input
+ *  size across reduce rounds. Never throws. */
+function attachReduceInputStats(ps: PhaseState, state: RunState, phase: Phase): void {
+	try {
+		const s = reduceInputStats(state, phase);
+		const existing = ps.promptStats;
+		ps.promptStats = existing
+			? { ...existing, reduceInputs: s }
+			: { calls: [], reduceInputs: s };
+	} catch {
+		/* diagnostics must never sink the phase */
+	}
+}
+
+/** Format a single reduce-from input as a labeled section. */
+function formatReduceInput(id: string, output: string): string {
+	return `### ${id}\n\n${output}`;
+}
+
+/** Aggregate completed `from[]` outputs for a reduce phase's {previous.output}.
+ *
+ *  BREAKING correction (dogfood issue 1): a reduce phase's {previous.output}
+ *  resolves to ALL completed `from[]` outputs in from-array order — not just
+ *  the last completed dependency. One completed input → its raw output.
+ *  Multiple → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`.
+ *  `join:"any"` includes only completed branches (skipped/failed are omitted).
+ *
+ *  Returns `{ value, ids }` where `ids` are the from-ids actually aggregated
+ *  (so the runtime can record them as observed reads). `value` is undefined
+ *  when no `from[]` phase completed (e.g. all skipped under join:any). */
+function aggregateReduceFrom(
+	state: RunState,
+	phase: Phase,
+): { value: string | undefined; ids: string[] } {
+	const fromIds = asArray<string>(phase.from);
+	const completed: Array<{ id: string; output: string }> = [];
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			completed.push({ id, output: ps.output });
+		}
+	}
+	if (completed.length === 0) return { value: undefined, ids: [] };
+	if (completed.length === 1) return { value: completed[0].output, ids: [completed[0].id] };
+	const value = completed.map((c) => formatReduceInput(c.id, c.output)).join("\n\n---\n\n");
+	return { value, ids: completed.map((c) => c.id) };
+}
+
+/** Aggregate stats over the completed `from[]` inputs for reduce diagnostics. */
+function reduceInputStats(state: RunState, phase: Phase): { count: number; totalBytes: number; totalChars: number; totalEstTokens: number } {
+	const fromIds = asArray<string>(phase.from);
+	let count = 0;
+	let totalBytes = 0;
+	let totalChars = 0;
+	let totalEstTokens = 0;
+	for (const id of fromIds) {
+		const ps = state.phases[id];
+		if (ps?.status === "done" && ps.output !== undefined) {
+			count++;
+			const s = promptSizeStats(ps.output);
+			totalBytes += s.bytes;
+			totalChars += s.chars;
+			totalEstTokens += s.estTokens;
+		}
+	}
+	return { count, totalBytes, totalChars, totalEstTokens };
+}
+
+/** Resolve the effective idle-watchdog ms for a phase: phase overrides flow;
+ *  returns `undefined` when neither sets it (host default 300000 applies).
+ *  `0` is passed through (disables the watchdog — validation already ensured a
+ *  finite wall `timeout` exists in that case). */
+export function resolveIdleTimeoutMs(phase: Phase, def: Taskflow): number | undefined {
+	const p = (phase as { idleTimeout?: unknown }).idleTimeout;
+	if (typeof p === "number" && Number.isFinite(p)) return p;
+	const f = def.idleTimeout;
+	if (typeof f === "number" && Number.isFinite(f)) return f;
 	return undefined;
 }
 
@@ -3989,6 +4383,8 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	let gateBlocked = false;
 	let gateReason = "";
 	let gateOutput = "";
+	/** Id of the blocking gate/approval phase (source of `gateOutput`). */
+	let gatePhaseId: string | undefined;
 	// `budgetBlocked` gates the skipping of remaining phases once the cap is hit
 	// and also drives the terminal "blocked" status — a maxUSD ceiling must never
 	// silently do nothing.
@@ -4099,6 +4495,7 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				gateBlocked = true;
 				gateReason = ps.gate.reason ?? "";
 				gateOutput = ps.output ?? "";
+				gatePhaseId = phase.id;
 			}
 			// A fan-out cut short by the cap is itself a budget skip.
 			if (ps.budgetTruncated) {
@@ -4137,14 +4534,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		}
 	}
 
-	const fp = finalPhase(def.phases);
-	let finalState = state.phases[fp.id];
-	// If the designated final phase produced no output (skipped/blocked), fall
-	// back to the last phase (in definition order) that actually completed.
-	if (!finalState || finalState.status !== "done") {
-		const doneInOrder = def.phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
-		if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
-	}
 	// A failed non-optional phase fails the run; optional failures are tolerated.
 	const anyFailed = Object.entries(state.phases).some(
 		([id, p]) => p.status === "failed" && !byId.get(id)?.optional && !p.optional,
@@ -4159,12 +4548,14 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				: "completed";
 	safeEmit(deps, state);
 
-	let finalOutput = finalState?.output ?? "(no output)";
-	if (gateBlocked) {
-		finalOutput = `Gate blocked the workflow.${gateReason ? `\nReason: ${gateReason}` : ""}${gateOutput ? `\n\n${gateOutput}` : ""}`;
-	} else if (budgetBlocked) {
-		finalOutput = `Budget exceeded — run halted.${budgetReason ? `\nReason: ${budgetReason}` : ""}${finalState?.output ? `\n\n${finalState.output}` : ""}`;
-	}
+	const { finalOutput, outputSourcePhaseId } = resolveFinalOutput(def.phases, state, {
+		gate: gateBlocked,
+		gateReason,
+		gateOutput,
+		gatePhaseId,
+		budget: budgetBlocked,
+		budgetReason,
+	});
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	return {
@@ -4173,5 +4564,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		ok: state.status === "completed",
 		totalUsage,
 		reuse: summarizeReuse(state),
+		outputSourcePhaseId,
 	};
 }

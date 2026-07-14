@@ -211,6 +211,7 @@ test("phasefp: pre-v3 (v2) entry still hits — no miss-storm", async () => {
 		flowDefHash: ir.hash, phaseFp: (await phaseFingerprint(def, "p")) ?? ir.hash,
 		agentDefinitions: agentDefinitionsIdentity(AGENTS),
 		thinking: undefined, tools: undefined, preRead: "",
+		executionCwd: fs.realpathSync(dir),
 	};
 	const ck = cacheKeys(cc, ["p", "a", "", "fixed"]);
 	store.put({ key: ck.v2Key, createdAt: Date.now(), output: "V2-OUTPUT", model: "v2-model", state: undefined, flowName: def.name, phaseId: "p", runId: "old" });

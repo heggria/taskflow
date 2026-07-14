@@ -17,15 +17,15 @@ import { codexSubagentRunner } from "taskflow-hosts";
 
 /** Per-call tool handlers with codex subagent execution bound in. */
 export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, codexSubagentRunner);
+	return coreMakeToolHandlers(cwd, codexSubagentRunner, { host: "codex" });
 }
 
 /** Full MCP method dispatch table (protocol + tools), codex-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, codexSubagentRunner);
+	return coreMakeMcpHandlers(cwd, codexSubagentRunner, { host: "codex" });
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(codexSubagentRunner, cwd);
+	return coreStartMcpServer(codexSubagentRunner, cwd, { host: "codex" });
 }

@@ -106,7 +106,7 @@ The bridge is fail-closed and disabled unless the host operator explicitly sets
 `TASKFLOW_CWD_BRIDGE_MODE=resolve-only`. That mode performs a time-of-check path
 validation but has no no-follow filesystem handle and is not an OS filesystem sandbox; each phase emits a warning stating the lower
 guarantee. Cwd-bridge flow trees do not reuse output-only cache/resume entries,
-because 0.2.1 cannot restore filesystem mutations on a cache hit. Generated
+because the current 0.2.x runtime cannot restore filesystem mutations on a cache hit. Generated
 sub-flows cannot use the bridge. Saved-flow definitions are frozen for one
 top-level execution, the invocation root identity is persisted for resume, and
 a selected sub-flow inherits a non-expanding canonical boundary: nested literal
@@ -131,7 +131,7 @@ Three **different** reuse tools; do not conflate them:
 
 | Tool | Spends tokens? | Mutates the run? | Answers |
 |------|----------------|------------------|---------|
-| **`resume`** | Only unfinished / cache-miss phases | Continues the same run | "Pick up where we stopped" |
+| **`resume`** | Only unfinished / cache-miss phases | **Forks a new run** (parent untouched; child carries `parentRunId`) | "Pick up where we stopped" |
 | **`why-stale` → `recompute`** | Dry-run free; `--apply` / `dryRun:false` spends | Optional write of recompute result | "World/input changed — which phases re-run?" |
 | **`trace` → `replay`** | **Never** | Never | "If the gate threshold / budget had been different, would we have blocked?" |
 
@@ -184,3 +184,34 @@ runtime or event kernel — offline replay cannot accidentally spend tokens.
 | "Would a stricter gate have blocked last night's run?" | `trace` → `replay` with new `thresholds` |
 | "Would a $0.10 cap have stopped the fan-out?" | `replay` with `budgetMaxUSD` |
 | Need fresh model judgment under a new model id | `replay` will say `needs-live-rerun` → live `recompute`/`run` |
+
+---
+
+## Resume overrides (re-run one phase with a patch)
+
+`taskflow_resume` accepts a `failed` or `paused` run and **forks a new
+run** — the original run file is never
+modified (the child carries `parentRunId`). To re-run exactly one phase with a
+patched task/model/timeout/idleTimeout, pass override fields alongside
+`phaseId`:
+
+```
+taskflow_resume { runId: "<id>", phaseId: "audit",
+                  task: "re-audit src/api with the new checklist",
+                  model: "gpt-5" }
+```
+
+The overrides apply to the child's def only; the parent is untouched. Without
+overrides, ordinary resume re-runs the non-done phases.
+
+---
+
+## `taskflow_version` — build/host identity
+
+`taskflow_version` reports the engine package version, the git commit the dist
+was built from, the run-state schema version, and the bound host
+(`codex`/`claude`/`opencode`/`grok`). The git commit is stamped at build time —
+`git` is never run at runtime.
+```
+taskflow_version {}
+```

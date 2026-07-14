@@ -27,4 +27,4 @@ minted by the matcher. Evidence must use the exact `tfws-probe:v1` schema. The
 factory rechecks the independently observed Host/OS/binary tuple and binds the
 complete canonical backend-capabilities digest, backend ID/version, baseline
 policy ID, classification, and support-baseline ID. The current allowlist is
-empty, so no host may advertise a native workspace sandbox in 0.2.1.
+empty, so no host may advertise a native workspace sandbox on the 0.2.x release line.

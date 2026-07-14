@@ -24,6 +24,8 @@ kernel enforcement is unavailable.
 | Tool | What it does |
 |------|--------------|
 | `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG, or shorthand `{task}` / `{tasks}` / `{chain}`). Optional `args`, `incremental`. Returns only the final phase output + a `runId`. |
+| `taskflow_resume` | Fork a failed/paused run into a new immutable child run, optionally overriding one phase's task/model/timeouts. |
+| `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
@@ -52,7 +54,7 @@ mistakes that break flows. Load the companion files **only when needed**:
 | File | Load when you need |
 |------|--------------------|
 | `patterns.md` | **Designing a non-trivial flow.** Proven flow archetypes (audit fan-out, self-healing rework, plan→approve→execute, dynamic replanning, tournament synthesis, incremental audit), anti-patterns, and the production-flow quality checklist. |
-| `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, and workspace isolation (`cwd: temp/dedicated/worktree`). |
+| `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, workspace isolation (`cwd: temp/dedicated/worktree`), immutable resume (`taskflow_resume`), and build/host identity (`taskflow_version`). |
 | `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. **TypeScript DSL CLI** (`taskflow-dsl` / S4). |
 | `library.md` | **Before authoring a non-trivial flow — SEARCH the reusable-flow library.** Save reusable flows with `purpose`+`tags` so future search finds them; reuse + generalize instead of rewriting from scratch. The compounding flywheel. |
 
@@ -122,6 +124,14 @@ proper flow, so you still get progress, persistence, and resume.
   (per-file `contextLimit`, default 8000 chars). In **parallel `tasks` mode**
   all branches SHARE the union of step contexts. In **chain mode** declare
   `context` on individual steps; a top-level `context` is ignored (with a warning).
+- `cwd` (optional, top-level or per-step): working directory for the subagent —
+  same as the full-DSL `Phase.cwd`. A top-level `cwd` is the default for every
+  step; a per-step `cwd` overrides it. For **single** and **chain** it lands on
+  each `Phase.cwd` (full workspace-keyword lifecycle: `temp`/`dedicated`/
+  `worktree`). For **parallel `tasks`**, the top-level `cwd` is the shared phase
+  cwd, and each branch may set its own **literal-path** `cwd` (mixed branch cwds
+  are honored independently). Per-branch workspace keywords are **rejected**
+  (the workspace lifecycle is per-phase — use the top-level `cwd` for isolation).
 - Add `name` to label the run.
 - Precedence if several are given: `chain` > `tasks` > `task`.
 - Pass these as the `define` argument to `taskflow_run`.
@@ -227,6 +237,8 @@ For static (non-conditional) concurrency, a `parallel` phase runs fixed
 { "id": "report", "type": "reduce", "from": ["deep","quick"], "join": "any",
   "dependsOn": ["deep","quick"], "agent": "writer", "task": "...", "final": true }
 ```
+
+> **⚠️ Breaking change (0.2.0 dogfood fix):** a `reduce` phase's `{previous.output}` now aggregates **all** completed `from[]` sources (in from-array order), not just the last completed dependency. If your reduce task referenced `{previous.output}` expecting only the last dep, it now receives every `from[]` output. Use explicit `{steps.ID.output}` refs to address individual sources. For large aggregations, set `reduceStrategy: "tree"` + `batchSize` to run batched intermediate reducer rounds (forces the imperative runtime).
 
 > `when` should reference **upstream** (`dependsOn`) phases — a ref to a phase
 > that hasn't completed resolves empty and the guard is treated as false. Note
@@ -572,7 +584,7 @@ watching.
 - `{steps.ID.output}` — a prior phase's text output
 - `{steps.ID.json}` / `{steps.ID.json.field}` — prior output parsed as JSON
 - `{item}` / `{item.field}` — current item inside a `map` phase
-- `{previous.output}` — the immediately-upstream phase output
+- `{previous.output}` — the immediately-upstream phase output. For `reduce` phases, this resolves to **all completed `from[]` outputs** in from-array order: one completed input → its raw output; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`. `join: "any"` includes only completed branches (skipped/failed are omitted). Explicit `{steps.ID.output}` refs are unaffected.
 - `{loop.iteration}` / `{loop.lastOutput}` / `{loop.maxIterations}` — inside a `loop` body: the 1-based round, the prior iteration's output, and the cap
 - `{reflexion}` — inside a `loop` body with `reflexion: true`: the structured failure summary of the prior iteration (sentinel on iteration 1)
 

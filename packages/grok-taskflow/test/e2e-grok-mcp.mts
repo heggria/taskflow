@@ -45,7 +45,7 @@ try {
 		method: "initialize",
 		params: { protocolVersion: "2025-06-18", capabilities: {} },
 	});
-	assert.equal(init.result.serverInfo.name, "taskflow");
+	assert.equal(init.result.serverInfo.name, "taskflow-grok");
 
 	const list = await rpc(child, { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 	const names = list.result.tools.map((t: any) => t.name);

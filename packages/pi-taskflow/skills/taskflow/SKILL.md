@@ -96,6 +96,14 @@ proper flow, so you still get progress, persistence, and resume.
   (per-file `contextLimit`, default 8000 chars). In **parallel `tasks` mode**
   all branches SHARE the union of step contexts. In **chain mode** declare
   `context` on individual steps; a top-level `context` is ignored (with a warning).
+- `cwd` (optional, top-level or per-step): working directory for the subagent —
+  same as the full-DSL `Phase.cwd`. A top-level `cwd` is the default for every
+  step; a per-step `cwd` overrides it. For **single** and **chain** it lands on
+  each `Phase.cwd` (full workspace-keyword lifecycle: `temp`/`dedicated`/
+  `worktree`). For **parallel `tasks`**, the top-level `cwd` is the shared phase
+  cwd, and each branch may set its own **literal-path** `cwd` (mixed branch cwds
+  are honored independently). Per-branch workspace keywords are **rejected**
+  (the workspace lifecycle is per-phase — use the top-level `cwd` for isolation).
 - Add `name` to label the run.
 - Precedence if several are given: `chain` > `tasks` > `task`.
 - You can pass these as top-level tool params **or** inside `define`.
@@ -202,6 +210,8 @@ For static (non-conditional) concurrency, a `parallel` phase runs fixed
 { "id": "report", "type": "reduce", "from": ["deep","quick"], "join": "any",
   "dependsOn": ["deep","quick"], "agent": "writer", "task": "...", "final": true }
 ```
+
+> **⚠️ Breaking change (0.2.0 dogfood fix):** a `reduce` phase's `{previous.output}` now aggregates **all** completed `from[]` sources (in from-array order), not just the last completed dependency. If your reduce task referenced `{previous.output}` expecting only the last dep, it now receives every `from[]` output. Use explicit `{steps.ID.output}` refs to address individual sources. For large aggregations, set `reduceStrategy: "tree"` + `batchSize` to run batched intermediate reducer rounds (forces the imperative runtime).
 
 > `when` should reference **upstream** (`dependsOn`) phases — a ref to a phase
 > that hasn't completed resolves empty and the guard is treated as false. Note
@@ -545,7 +555,7 @@ watching.
 - `{steps.ID.output}` — a prior phase's text output
 - `{steps.ID.json}` / `{steps.ID.json.field}` — prior output parsed as JSON
 - `{item}` / `{item.field}` — current item inside a `map` phase
-- `{previous.output}` — the immediately-upstream phase output
+- `{previous.output}` — the immediately-upstream phase output. For `reduce` phases, this resolves to **all completed `from[]` outputs** in from-array order: one completed input → its raw output; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`. `join: "any"` includes only completed branches (skipped/failed are omitted). Explicit `{steps.ID.output}` refs are unaffected.
 - `{loop.iteration}` / `{loop.lastOutput}` / `{loop.maxIterations}` — inside a `loop` body: the 1-based round, the prior iteration's output, and the cap
 - `{reflexion}` — inside a `loop` body with `reflexion: true`: the structured failure summary of the prior iteration (sentinel on iteration 1)
 
@@ -615,7 +625,7 @@ Phase ids and agent names use **hyphens** (`audit-each`, `risk-reviewer`).
 An unknown agent name fails the phase with the list of available agents.
 Check with `action: "agents"` instead of guessing.
 
-## Actions (all 16)
+## Actions (all 18)
 
 | action | what it does |
 |--------|--------------|
@@ -632,6 +642,8 @@ Check with `action: "agents"` instead of guessing.
 | `replay` | **Offline what-if** on a recorded trace: re-evaluate under alternate gate thresholds, budget caps, or model routes **without calling the model** (zero tokens). Reports per-phase `reused` / `would-block` / `verdict-flipped` / `would-exceed-budget` / `needs-live-rerun`. `runId` required; optional `thresholds`, `budgetMaxUSD`, `budgetMaxTokens`, `models`; `--json` for the full `ReplayReport`. |
 | `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
 | `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
+| `reconcile-workspace` | Explicitly reconcile a dirty resolve-only cwd workspace after acknowledging the risk. |
+| `version` | Report package version, build commit, run-state schema version, and host identity. Zero tokens. |
 | `cache-clear` | Clear the cross-run memoization store. |
 | `search` | Search the reusable-flow **library** by purpose/tags (structural + CJK-aware keyword scoring). Find a flow to reuse before authoring a new one. |
 | `init` | Model-roles configuration. `mode: "show"` is read-only; `apply-defaults` requires `force: true`; `interactive` needs a UI session. |
@@ -656,8 +668,11 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 (a non-`optional` phase errored) **/** `paused` (aborted).
 `failed` and `paused` are resumable.
 
-- **Resume is cache-aware.** `action: "resume"` re-runs only what didn't finish;
-  a phase that was mid-flight is re-executed cleanly.
+- **Resume forks immutable history.** `action: "resume"` accepts only a
+  `failed` or `paused` run, creates a new child `runId` with `parentRunId`,
+  reuses completed unaffected phases, and never overwrites the parent. Optional
+  `phaseId` + `resumeTask`/`resumeModel`/`resumeTimeout`/`resumeIdleTimeout`
+  overrides patch the failed/in-flight phase on the child only.
 - **Resume vs. re-run vs. recompute.** Resume when inputs are unchanged and you
   want to continue the tail (fixed a gate, raised the budget). Re-run from
   scratch when the task text changed. **Recompute** when the *world* changed
@@ -679,5 +694,6 @@ A run moves through: **running →** `completed` (a `final` phase produced outpu
 - `/tf peek <runId> [phaseId] [--json] [--item <n>] [--limit <chars>]`
 - `/tf provenance <runId>` · `/tf trace <runId> [--json]` · `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]`
 - `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
+- `/tf reconcile-workspace --ack` · `/tf version`
 - `/tf init` — interactive model-roles setup
 - `/tf:<name> [args]` — shortcut for each saved flow

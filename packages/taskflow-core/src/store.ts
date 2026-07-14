@@ -160,6 +160,17 @@ export interface PhaseState {
 	/** Truncated previews of interpolated strings used to execute this phase,
 	 *  useful when diagnosing why a model saw a literal placeholder. */
 	interpolation?: Array<{ source: string; text: string; missing?: string[] }>;
+	/** Prompt-size diagnostics for this phase's subagent call(s). Durable
+	 *  (persisted) so post-hoc inspection can surface oversized prompts and
+	 *  account for input size in reduce rounds. `calls` has one entry per
+	 *  resolved subagent prompt (one for an agent phase; multiple for a tree
+	 *  reduce). `reduceInputs` carries aggregate stats over the inputs being
+	 *  reduced (reduce phases only). The token estimate is a conservative
+	 *  `ceil(chars/4)` approximation, NOT a real tokenizer count. */
+	promptStats?: {
+		calls: Array<{ bytes: number; chars: number; estTokens: number }>;
+		reduceInputs?: { count: number; totalBytes: number; totalChars: number; totalEstTokens: number };
+	};
 }
 
 export interface RunState {
@@ -205,6 +216,22 @@ export interface RunState {
 	 *  `v3:phasefp:<subfp>` so editing phase B invalidates only B + its
 	 *  transitive dependents. Audit/resume only — recompute derives fresh. */
 	phaseFingerprints?: Record<string, string>;
+	// ---- Build/host identity (0.2.0 dogfood issue 4) ----
+	/** Package version of the engine that created/wrote this run (best-effort
+	 *  audit). Absent on pre-0.2.0-metadata runs. */
+	packageVersion?: string;
+	/** Git commit the engine dist was built from (`"unknown"` in source/dev
+	 *  checkouts). Audit only; never used to gate behavior. */
+	gitCommit?: string;
+	/** Which host wrote this run: `"pi"` for the Pi adapter, or the MCP host
+	 *  identity (`"codex"`/`"claude"`/`"opencode"`/`"grok"`) for MCP runs. */
+	host?: string;
+	/** Run-state schema version (see CURRENT_RUN_STATE_SCHEMA_VERSION). Absent
+	 *  on pre-0.2.0-metadata runs (treated as the baseline). */
+	schemaVersion?: number;
+	/** When this run is a resume fork (0.2.0 dogfood issue 5): the runId of the
+	 *  parent run this one forked from. Absent for ordinary runs. */
+	parentRunId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +249,15 @@ export interface RunIndexEntry {
 	updatedAt: number;
 	/** Path relative to runsRoot, e.g. "test-flow/test-roundtrip-001.json". */
 	relPath: string;
+	/** Which host wrote this run (0.2.0 dogfood issue 4): "pi" or the MCP
+	 *  host identity. Absent on pre-0.2.0-metadata runs. */
+	host?: string;
+	/** Package version of the engine that wrote this run (audit). Absent on
+	 *  pre-0.2.0-metadata runs. */
+	packageVersion?: string;
+	/** Parent runId when this run is a resume fork (issue 5). Absent for
+	 *  ordinary runs. */
+	parentRunId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -412,8 +448,9 @@ export function withLock<T>(lockPath: string, fn: () => T): T {
 
 /**
  * Extract a RunIndexEntry from a RunState + computed relative path.
+ * Exported for tests; pure.
  */
-function extractIndexEntry(state: RunState, relPath: string): RunIndexEntry {
+export function extractIndexEntry(state: RunState, relPath: string): RunIndexEntry {
 	return {
 		runId: state.runId,
 		flowName: state.flowName,
@@ -421,6 +458,9 @@ function extractIndexEntry(state: RunState, relPath: string): RunIndexEntry {
 		createdAt: state.createdAt,
 		updatedAt: state.updatedAt,
 		relPath,
+		...(state.host !== undefined ? { host: state.host } : {}),
+		...(state.packageVersion !== undefined ? { packageVersion: state.packageVersion } : {}),
+		...(state.parentRunId !== undefined ? { parentRunId: state.parentRunId } : {}),
 	};
 }
 

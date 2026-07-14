@@ -1044,6 +1044,63 @@ test("ctx_spawn flat siblings stop after the first atomic budget overshoot on ei
 	}
 });
 
+test("budgeted parallel/map drain but do not execute ctx_spawn after sibling overshoot", async () => {
+	for (const kind of ["parallel", "map"] as const) {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `taskflow-fanout-spawn-${kind}-`));
+		try {
+			const calls: string[] = [];
+			let ctxDir: string | undefined;
+			const fanout = kind === "parallel"
+				? {
+					id: "fan",
+					type: "parallel" as const,
+					branches: [{ task: "B1" }, { task: "B2" }],
+					shareContext: true,
+					final: true,
+				}
+				: {
+					id: "fan",
+					type: "map" as const,
+					over: "{steps.items.json}",
+					task: "{item}",
+					dependsOn: ["items"],
+					shareContext: true,
+					final: true,
+				};
+			const def: Taskflow = {
+				name: `fanout-spawn-${kind}`,
+				budget: { maxTokens: 100 },
+				phases: [
+					...(kind === "map" ? [{ id: "items", type: "agent" as const, task: "ITEMS", output: "json" as const }] : []),
+					fanout,
+				],
+			};
+			const result = await executeTaskflow(state(def, cwd), {
+				cwd,
+				agents: [AGENT],
+				persist: () => {},
+				runTask: async (_c, _a, agent, task, options) => {
+					calls.push(task);
+					if (task === "B2") {
+						ctxDir = options.ctxDir;
+						queueSpawn(options.ctxDir!, options.nodeId!, [{ task: "CHILD" }]);
+					}
+					return {
+						...ok(agent, task, task === "ITEMS" ? '["B1","B2"]' : task),
+						usage: { ...emptyUsage(), input: task === "B1" ? 80 : task === "B2" ? 30 : 0, turns: 1 },
+					};
+				},
+			});
+			assert.deepEqual(calls, kind === "map" ? ["ITEMS", "B1", "B2"] : ["B1", "B2"]);
+			assert.equal(result.state.status, "blocked");
+			assert.ok(ctxDir);
+			assert.deepEqual(fs.readdirSync(path.join(ctxDir!, "pending")), [], "over-budget spawn intent is drained");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+});
+
 test("ctx_spawn inline subflow receives only the parent remaining budget", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-spawn-subflow-budget-"));
 	try {

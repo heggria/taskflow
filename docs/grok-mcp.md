@@ -27,7 +27,7 @@ Official Grok docs used for this integration:
 ## Install (recommended): register the published MCP server
 
 ```sh
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 A public Grok plugin marketplace/source is not published yet. Do not substitute
@@ -169,7 +169,7 @@ grok mcp add taskflow -- grok-taskflow-mcp
 Or with npx (no global install):
 
 ```sh
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 Verify:

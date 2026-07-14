@@ -127,10 +127,14 @@ description: 数据如何在 taskflow 的阶段之间流动。
 
 解析为**最后完成的依赖**的输出，按**逆序**扫描 `dependsOn ∪ from`，返回第一个状态为 `done` 的阶段。
 
+> **⚠️ 破坏性变更（0.2.0 dogfood 修复）—— `reduce` 阶段聚合所有 `from[]` 源。**
+> 对于 `reduce` 阶段，`{previous.output}` 解析为**所有已完成的 `from[]` 输出**（按 from 数组顺序），而不仅仅是最后一个完成的依赖。一个完成输入 → 其原始输出；多个 → `### <id>\n\n<output>` 片段以 `\n\n---\n\n` 连接。`join: "any"` 只包含已完成的分支。显式 `{steps.ID.output}` 引用不受影响。如果你的 reduce 任务原本用 `{previous.output}` 只取最后一个依赖，请改用显式 `{steps.ID.output}`。
+
 | 情况 | 结果 |
 |---|---|
 | 单一依赖，已完成 | 该依赖的输出 |
-| 多个依赖，多个已完成 | 声明顺序中的**最后一个** |
+| 多个依赖，多个已完成（非 reduce） | 声明顺序中的**最后一个** |
+| `reduce` 阶段，多个 `from[]` 已完成 | **所有** `from[]` 输出聚合（按 from 顺序） |
 | `join: "any"` 且一个依赖完成 | 该依赖的输出 |
 | 未声明依赖，或都未完成 | `undefined` → missing 警告 |
 

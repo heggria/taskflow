@@ -34,6 +34,8 @@ import {
 	executeLoopBody,
 	executeReduceBody,
 	executeTournamentBody,
+	resolveIdleMs,
+	buildPromptStats,
 } from "./step-kinds.ts";
 import { kernelAttemptsOverBudget } from "./kernel-policy.ts";
 
@@ -97,6 +99,11 @@ export interface StepContext {
 	deps: StepDeps;
 	steps: InterpolationContext["steps"];
 	args: Record<string, unknown>;
+	/** Successful interpolation reads captured during this phase. The driver
+	 * persists them as PhaseState.reads for event-kernel provenance parity. */
+	readRefs?: string[];
+	/** Exact prompt for every actual subagent attempt in this phase. */
+	promptCalls?: string[];
 }
 
 export interface StepResult {
@@ -111,6 +118,13 @@ export interface StepResult {
 	gate?: { verdict: "pass" | "block"; reason?: string };
 	approval?: { decision: "approve" | "reject" | "edit"; note?: string; auto?: boolean };
 	warnings?: string[];
+	/** Prompt-size diagnostics for the kernel path (parity with the imperative
+	 *  PhaseState.promptStats). `calls` has one entry per resolved subagent
+	 *  prompt; `reduceInputs` carries aggregate stats for reduce phases. */
+	promptStats?: {
+		calls: Array<{ bytes: number; chars: number; estTokens: number }>;
+		reduceInputs?: { count: number; totalBytes: number; totalChars: number; totalEstTokens: number };
+	};
 }
 
 type BodyResult = {
@@ -123,6 +137,7 @@ type BodyResult = {
 	gate?: StepResult["gate"];
 	approval?: StepResult["approval"];
 	warnings?: string[];
+	promptStats?: StepResult["promptStats"];
 };
 
 function baseEvent(
@@ -273,6 +288,7 @@ async function runOneAgent(
 					timer = undefined;
 				}
 			};
+			ctx.promptCalls?.push(task);
 			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,
@@ -284,6 +300,7 @@ async function runOneAgent(
 					tools: phase.tools,
 					cwd: ctx.deps.cwd,
 					signal: callSignal,
+					idleTimeoutMs: resolveIdleMs(phase, ctx.state.def),
 					onTerminalCommit,
 				},
 				ctx.deps.globalThinking,
@@ -379,6 +396,7 @@ async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyRes
 	};
 	const task = interpolate(phase.task ?? "", interpCtx).text;
 	const agentName = phase.agent ?? "executor";
+	const { promptStats, warnings } = buildPromptStats([task]);
 
 	try {
 		const { result: r, event } = await runOneAgent(ctx, phase, agentName, task, phase.id);
@@ -392,10 +410,12 @@ async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyRes
 			error: failed ? r.errorMessage ?? r.stderr : undefined,
 			usage,
 			attempts: r.attempts,
+			promptStats,
+			warnings: warnings.length ? warnings : undefined,
 		};
 	} catch (e) {
 		const err = e instanceof Error ? e.message : String(e);
-		return { midEvents: [], status: "failed", error: err, usage: emptyUsage() };
+		return { midEvents: [], status: "failed", error: err, usage: emptyUsage(), promptStats, warnings: warnings.length ? warnings : undefined };
 	}
 }
 
@@ -410,7 +430,7 @@ function resolveMapTask(template: string, phase: Phase, ctx: StepContext, item: 
 }
 
 async function executeMapBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
-	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps };
+	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps, onRead: (ref) => ctx.readRefs?.push(ref) };
 	const overResolved = interpolate(phase.over ?? "", interpCtx).text;
 	const arr = coerceArray(safeParse(overResolved)) ?? coerceArray(overResolved);
 	if (!arr) {
@@ -474,7 +494,7 @@ async function executeParallelBody(phase: Phase, ctx: StepContext): Promise<Body
 		};
 	}
 	const concurrency = typeof phase.concurrency === "number" && phase.concurrency > 0 ? phase.concurrency : 8;
-	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps };
+	const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps, onRead: (ref) => ctx.readRefs?.push(ref) };
 	const tasks = branches.map((b) => ({
 		agent: b.agent ?? phase.agent ?? "executor",
 		task: interpolate(b.task, interpCtx).text,
@@ -536,7 +556,7 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 
 	// when-guard (fail-open evaluateCondition matches imperative runtime)
 	if (phase.when !== undefined) {
-		const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps };
+		const interpCtx: InterpolationContext = { args: ctx.args, steps: ctx.steps, onRead: (ref) => ctx.readRefs?.push(ref) };
 		const whenResult = evaluateCondition(phase.when, interpCtx);
 		events.push(
 			baseEvent(ctx, phase.id, "decision", {
@@ -569,6 +589,17 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 	else if (type === "flow") body = await executeFlowBody(phase, ctx);
 	else body = await executeAgentBody(phase, ctx);
 
+	if ((ctx.promptCalls?.length ?? 0) > 0) {
+		const exact = buildPromptStats(ctx.promptCalls!);
+		body.promptStats = {
+			...exact.promptStats,
+			...(body.promptStats?.reduceInputs ? { reduceInputs: body.promptStats.reduceInputs } : {}),
+		};
+		const nonSizeWarnings = (body.warnings ?? []).filter((warning) => !warning.startsWith("Prompt size ≈"));
+		body.warnings = [...nonSizeWarnings, ...exact.warnings];
+		if (body.warnings.length === 0) body.warnings = undefined;
+	}
+
 	events.push(...body.midEvents);
 	const endStatus =
 		body.gate?.verdict === "block" && body.status === "done"
@@ -590,5 +621,6 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 		gate: body.gate,
 		approval: body.approval,
 		warnings: body.warnings,
+		promptStats: body.promptStats,
 	};
 }

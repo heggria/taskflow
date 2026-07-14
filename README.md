@@ -200,7 +200,7 @@ FlowIR canonicalizes the graph and gives it a content hash. That compiled identi
 |---|---|---:|
 | `verify` / `compile` | Is the graph structurally safe to run? | **0** |
 | `ir` | What is the canonical graph and content hash? | **0** |
-| `resume` | What unfinished work remains? | Only unfinished phases |
+| `resume` | What unfinished work remains? (forks a new run; original untouched) | Only unfinished phases |
 | `trace` | What calls and runtime decisions actually happened? | **0** to inspect |
 | `replay` | What if thresholds or budgets had been different? | **0** |
 | `why-stale` | What changed, and what depends on it? | **0** |
@@ -315,7 +315,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.1 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.2 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -324,7 +324,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.

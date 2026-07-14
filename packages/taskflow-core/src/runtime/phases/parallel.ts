@@ -10,6 +10,9 @@ import type { PhaseState } from "../../store.ts";
 export interface ParallelBranch {
 	agent: string;
 	task: string;
+	/** Per-branch literal cwd (a workspace keyword is rejected by validation).
+	 *  When set, overrides the phase-level effective cwd for this branch only. */
+	cwd?: string;
 }
 
 export interface ParallelFanout {

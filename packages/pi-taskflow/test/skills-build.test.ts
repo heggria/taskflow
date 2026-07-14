@@ -27,6 +27,21 @@ test("skills: generated skill files are in sync with skills-src (build-skills --
 	}
 });
 
+test("release discovery metadata advertises the complete 0.2.2 surface", async () => {
+	const { readFileSync } = await import("node:fs");
+	for (const file of [".claude-plugin/marketplace.json", ".grok-plugin/marketplace.json"]) {
+		const text = readFileSync(path.join(root, file), "utf8");
+		assert.match(text, /15 taskflow_\* MCP tools/);
+		assert.match(text, /run\/resume\/version\/list/);
+	}
+	const piSource = readFileSync(path.join(root, "packages", "pi-taskflow", "src", "index.ts"), "utf8");
+	assert.match(piSource, /Use action=resume/);
+	assert.match(piSource, /Use action=version/);
+	for (const phase of ["agent", "parallel", "map", "gate", "reduce", "approval", "flow", "loop", "tournament", "script", "race", "expand"]) {
+		assert.match(piSource, new RegExp(`Phase types:[^\\n]*\\b${phase}\\b`));
+	}
+});
+
 test("skills: host-conditional filtering removed the other host's content", async () => {
 	const { readFileSync } = await import("node:fs");
 	const piSkill = readFileSync(path.join(root, "packages", "pi-taskflow", "skills", "taskflow", "SKILL.md"), "utf8");
@@ -56,12 +71,12 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 	] as const) {
 		assert.ok(!/<!--\s*\/?host:/.test(text), `${name} SKILL.md must not contain host markers`);
 	}
-	// pi teaches its 15 actions; the MCP hosts must not (they're unreachable via MCP).
-	assert.match(piSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(cxSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(clSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(ocSkill, /Actions \(all 16\)/);
-	assert.doesNotMatch(gkSkill, /Actions \(all 16\)/);
+	// Pi teaches its 18 actions; the MCP hosts must not (they're unreachable via MCP).
+	assert.match(piSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(cxSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(clSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(ocSkill, /Actions \(all 18\)/);
+	assert.doesNotMatch(gkSkill, /Actions \(all 18\)/);
 	assert.doesNotMatch(cxSkill, /action: "recompute"/);
 	// The MCP hosts teach the MCP tools; pi must not.
 	assert.match(cxSkill, /taskflow_verify/);

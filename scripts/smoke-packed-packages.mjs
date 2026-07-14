@@ -62,7 +62,7 @@ function packedManifest(name) {
 
 async function importFromConsumer(specifier) {
 	const entry = pathToFileURL(consumerRequire.resolve(specifier)).href;
-	await import(entry);
+	return import(entry);
 }
 
 async function smokeWildcardExports(packageName, excludedImports = new Set()) {
@@ -81,7 +81,7 @@ async function smokeWildcardExports(packageName, excludedImports = new Set()) {
 	return count;
 }
 
-function smokeMcpBin(binName) {
+function smokeMcpBin(binName, expectedServerName) {
 	const executable = join(consumerDir, "node_modules", ".bin", binName);
 	const request = `${JSON.stringify({
 		jsonrpc: "2.0",
@@ -104,7 +104,7 @@ function smokeMcpBin(binName) {
 	assert.ok(responseLine, `${binName} returned no initialize response`);
 	const response = JSON.parse(responseLine);
 	assert.equal(response.id, 1, `${binName} returned an unexpected response id`);
-	assert.equal(response.result?.serverInfo?.name, "taskflow", `${binName} returned invalid server metadata`);
+	assert.equal(response.result?.serverInfo?.name, expectedServerName, `${binName} returned invalid server metadata`);
 }
 
 try {
@@ -167,6 +167,16 @@ try {
 		assert.equal(installedEntries.length, 1, `${name} was installed more than once or is missing`);
 		assert.match(installedEntries[0][1]?.resolved ?? "", /^file:/, `${name} did not resolve from a locally packed tarball`);
 	}
+	const packedCore = await importFromConsumer("taskflow-core");
+	const buildInfo = packedCore.getBuildInfo();
+	assert.equal(buildInfo.packageVersion, expectedVersion, "packed taskflow-core reported the wrong package version");
+	assert.match(buildInfo.gitCommit, /^[0-9a-f]{40}$/i, "packed taskflow-core must ship a concrete build commit");
+	assert.equal(Number.isInteger(buildInfo.schemaVersion), true, "packed taskflow-core must report an integer schema version");
+	assert.equal(
+		typeof buildInfo.buildTime === "number" && Number.isFinite(buildInfo.buildTime),
+		true,
+		"packed taskflow-core must ship a finite build timestamp",
+	);
 	const piRunnerPath = join(consumerDir, "node_modules", "pi-taskflow", "dist", "runner.js");
 	const piRunner = await import(pathToFileURL(piRunnerPath).href);
 	const contextExtension = piRunner.ctxExtensionPath();
@@ -276,8 +286,13 @@ try {
 			`opencode-taskflow tarball is missing ${required}`,
 		);
 	}
-	for (const binName of ["codex-taskflow-mcp", "claude-taskflow-mcp", "opencode-taskflow-mcp", "grok-taskflow-mcp"]) {
-		smokeMcpBin(binName);
+	for (const [binName, serverName] of [
+		["codex-taskflow-mcp", "taskflow-codex"],
+		["claude-taskflow-mcp", "taskflow-claude"],
+		["opencode-taskflow-mcp", "taskflow-opencode"],
+		["grok-taskflow-mcp", "taskflow-grok"],
+	]) {
+		smokeMcpBin(binName, serverName);
 	}
 
 	process.stdout.write(
