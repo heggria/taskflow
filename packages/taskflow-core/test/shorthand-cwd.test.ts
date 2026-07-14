@@ -6,6 +6,8 @@
  * and runtime honoring of per-branch literal cwds (including mixed values).
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import { desugar, validateTaskflow, type Taskflow } from "../src/schema.ts";
@@ -14,6 +16,7 @@ import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import { emptyUsage } from "../src/usage.ts";
 import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
 import { kernelUnsupportedReason } from "../src/exec/kernel-policy.ts";
+import { CacheStore } from "../src/cache.ts";
 import type { RunState } from "../src/store.ts";
 
 const AGENTS: AgentConfig[] = [{ name: "a", description: "test", systemPrompt: "", source: "user", filePath: "" }];
@@ -126,6 +129,22 @@ test("validate: per-branch interpolated cwd placeholder rejected", () => {
 	const v = validateTaskflow(def);
 	assert.equal(v.ok, false);
 	assert.match(v.errors.join("\n"), /branches\[0\]\.cwd does not support interpolation placeholders/);
+});
+
+test("validate: branches[].cwd is rejected for race and tournament instead of being ignored", () => {
+	for (const type of ["race", "tournament"] as const) {
+		const v = validateTaskflow({
+			name: `${type}-branch-cwd`,
+			phases: [{
+				id: "p",
+				type,
+				branches: [{ task: "a", cwd: "." }, { task: "b" }],
+				final: true,
+			}],
+		});
+		assert.equal(v.ok, false);
+		assert.match(v.errors.join("\n"), /branches\[0\]\.cwd is only supported for parallel phases/);
+	}
 });
 
 test("validate: top-level (phase) workspace keyword cwd is ALLOWED (full workspace lifecycle)", () => {
@@ -250,6 +269,63 @@ test("e2e: classic parallel phase with mixed per-branch cwds works", async () =>
 	assert.ok(rec.cwds.includes("/branch-a"));
 	assert.ok(rec.cwds.includes("/tmp"));
 	assert.ok(rec.cwds.includes("/branch-c"));
+});
+
+test("e2e: relative branch cwd is canonicalized in cross-run cache identity", async () => {
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "tf-branch-cache-"));
+	const rootA = path.join(base, "a");
+	const rootB = path.join(base, "b");
+	const cacheRoot = path.join(base, "cache-root");
+	fs.mkdirSync(rootA, { recursive: true });
+	fs.mkdirSync(rootB, { recursive: true });
+	fs.mkdirSync(cacheRoot, { recursive: true });
+	try {
+		const def: Taskflow = {
+			name: "parallel-cwd-cache",
+			phases: [{
+				id: "p",
+				type: "parallel",
+				branches: [{ task: "where", cwd: "." }],
+				cache: { scope: "cross-run" },
+				final: true,
+			}],
+		};
+		const cacheStore = new CacheStore(cacheRoot);
+		let calls = 0;
+		const runTask: RuntimeDeps["runTask"] = async (cwd, _agents, agentName, task) => {
+			calls++;
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: cwd,
+				stderr: "",
+				usage: emptyUsage(),
+				stopReason: "end",
+			};
+		};
+		const runAt = async (cwd: string, runId: string) => executeTaskflow({
+			runId,
+			flowName: def.name,
+			def,
+			args: {},
+			status: "running",
+			phases: {},
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			cwd,
+		}, { cwd, agents: AGENTS, runTask, cacheStore, persist: () => {} });
+
+		const first = await runAt(rootA, "cwd-a");
+		const second = await runAt(rootB, "cwd-b");
+		assert.equal(first.ok, true);
+		assert.equal(second.ok, true);
+		assert.equal(calls, 2, "different resolved branch directories must not share a cache entry");
+		assert.equal(second.state.phases.p.cacheHit, undefined);
+		assert.match(second.finalOutput, new RegExp(rootB.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
 });
 
 // ---------------------------------------------------------------------------

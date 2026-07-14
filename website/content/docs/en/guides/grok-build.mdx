@@ -12,7 +12,7 @@ This page walks through install, verify, first run, permissions, and long-runnin
 ### Published MCP package (recommended)
 
 ```bash title="Register taskflow MCP"
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 Requires **Node.js ≥ 22.19.0**. The MCP protocol code has no MCP SDK dependency. A public Grok plugin marketplace/source is not published yet; do not substitute an imaginary source string.
@@ -166,7 +166,7 @@ MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fa
 ```bash title="Manual MCP registration"
 pnpm add -g grok-taskflow
 grok mcp add taskflow -- grok-taskflow-mcp
-# or: grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 ## Remove

@@ -12,6 +12,8 @@ the Codex form (`taskflow_verify`).
 | Tool | What it does |
 |------|--------------|
 | `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG, or shorthand `{task}` / `{tasks}` / `{chain}`). Optional `args`, `incremental`. Returns only the final phase output + a `runId`. |
+| `taskflow_resume` | Fork a failed/paused run into a new immutable child run, optionally overriding one phase's task/model/timeouts. |
+| `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |

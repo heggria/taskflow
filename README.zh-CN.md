@@ -200,7 +200,7 @@ FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 pro
 |---|---|---:|
 | `verify` / `compile` | 这张图在结构上可以安全运行吗？ | **0** |
 | `ir` | 规范化图和内容哈希是什么？ | **0** |
-| `resume` | 还有哪些未完成工作？ | 仅未完成阶段 |
+| `resume` | 还有哪些未完成工作？（派生新运行，原运行不变） | 仅未完成阶段 |
 | `trace` | 实际发生了哪些调用和运行时决策？ | 查看时 **0** |
 | `replay` | 如果阈值或预算不同，结果会怎样？ | **0** |
 | `why-stale` | 什么变了，哪些节点依赖它？ | **0** |
@@ -310,7 +310,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.1 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.2 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -319,7 +319,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。

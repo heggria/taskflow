@@ -2,7 +2,7 @@
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.2.1", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.2.2", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }

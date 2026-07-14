@@ -382,6 +382,7 @@ test("per-item: a budget-skipped item is never recorded as a per-item cache entr
 		thinking: undefined,
 		tools: undefined,
 		preRead: "",
+		executionCwd: fs.realpathSync(dir),
 	};
 	// Per-item key folds [phase.id, it.agent, model, it.task] (Arbiter fix).
 	// (phaseFp/flowDefHash are intentionally absent — see ccPerItem above.)

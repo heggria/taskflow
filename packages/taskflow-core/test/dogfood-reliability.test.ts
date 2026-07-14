@@ -12,6 +12,9 @@
  *     tree forces imperative fallback (kernel admission).
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
@@ -24,8 +27,10 @@ import {
 	type RuntimeDeps,
 } from "../src/runtime.ts";
 import { canUseEventKernel, kernelUnsupportedReason } from "../src/exec/driver.ts";
+import { CacheStore } from "../src/cache.ts";
 import { validateTaskflow } from "../src/schema.ts";
 import type { Taskflow } from "../src/schema.ts";
+import { forkRunForResume } from "../src/resume.ts";
 import type { RunState } from "../src/store.ts";
 
 const AGENTS: AgentConfig[] = [
@@ -322,6 +327,34 @@ test("idleTimeout validation: ignored (warned) on non-agent-running phases", () 
 	});
 	assert.ok(r.ok);
 	assert.ok(r.warnings.some((w) => w.includes("idleTimeout") && w.includes("only applies")));
+});
+
+test("idleTimeout validation: race is agent-running and cannot disable idle without wall timeout", () => {
+	const invalid = validateTaskflow({
+		name: "race-idle",
+		idleTimeout: 0,
+		phases: [{
+			id: "r",
+			type: "race",
+			branches: [{ task: "a" }, { task: "b" }],
+			final: true,
+		}],
+	});
+	assert.equal(invalid.ok, false);
+	assert.match(invalid.errors.join("\n"), /idleTimeout:0.*finite wall 'timeout'/);
+
+	const valid = validateTaskflow({
+		name: "race-idle-bounded",
+		idleTimeout: 0,
+		phases: [{
+			id: "r",
+			type: "race",
+			branches: [{ task: "a" }, { task: "b" }],
+			timeout: 1000,
+			final: true,
+		}],
+	});
+	assert.equal(valid.ok, true, valid.errors.join("; "));
 });
 
 test("idleTimeout threading: effective value reaches RunOptions.idleTimeoutMs", async () => {
@@ -1013,5 +1046,243 @@ test("tree reduce: budget-truncated phase is never cached", async () => {
 		const r2Ps = r2.state.phases.r;
 		// The second run also deals with budget — and must NOT see a cache hit.
 		assert.equal(r2Ps.cacheHit, undefined, "second run of budget-truncated phase must not hit cache");
+	}
+});
+
+test("tree reduce: ordinary resume reuses the completed tree without reducer calls", async () => {
+	const seeds = [1, 2, 3, 4].map((n) => ({
+		id: `s${n}`,
+		type: "agent" as const,
+		agent: "a",
+		task: `seed-${n}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-resume-cache",
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((seed) => seed.id),
+				dependsOn: seeds.map((seed) => seed.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				task: "REDUCE: {previous.output}",
+			},
+			{ id: "finish", type: "agent", agent: "a", task: "FINISH", dependsOn: ["r"], final: true },
+		],
+	};
+	let firstReduceCalls = 0;
+	const first = await executeTaskflow(mkState(def), baseDeps(async (_cwd, _agents, agentName, task) => {
+		if (task.startsWith("REDUCE:")) firstReduceCalls++;
+		const fail = task === "FINISH";
+		return {
+			agent: agentName,
+			task,
+			exitCode: fail ? 1 : 0,
+			output: fail ? "" : (task.startsWith("REDUCE:") ? "reduced" : task),
+			stderr: fail ? "finish failed" : "",
+			usage: emptyUsage(),
+			stopReason: fail ? "error" : "end",
+			errorMessage: fail ? "finish failed" : undefined,
+		};
+	}));
+	assert.equal(first.state.status, "failed");
+	assert.ok(firstReduceCalls > 0);
+
+	const child = forkRunForResume(first.state);
+	let resumedReduceCalls = 0;
+	const resumed = await executeTaskflow(child, baseDeps(async (_cwd, _agents, agentName, task) => {
+		if (task.startsWith("REDUCE:")) resumedReduceCalls++;
+		return {
+			agent: agentName,
+			task,
+			exitCode: 0,
+			output: task === "FINISH" ? "done" : "unexpected rerun",
+			stderr: "",
+			usage: emptyUsage(),
+			stopReason: "end",
+		};
+	}));
+	assert.equal(resumed.ok, true, resumed.state.phases.r?.error ?? "");
+	assert.equal(resumedReduceCalls, 0, "completed tree reducer must be a within-run cache hit");
+	assert.equal(resumed.state.phases.r.cacheHit, "run-only");
+});
+
+test("tree reduce: 256-call hard cap counts actual retry attempts", async () => {
+	const seeds = Array.from({ length: 14 }, (_, index) => ({
+		id: `s${index}`,
+		type: "agent" as const,
+		agent: "a",
+		task: `seed-${index}`,
+	}));
+	const def: Taskflow = {
+		name: "tree-actual-attempt-cap",
+		phases: [
+			...seeds,
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				from: seeds.map((seed) => seed.id),
+				dependsOn: seeds.map((seed) => seed.id),
+				reduceStrategy: "tree",
+				batchSize: 2,
+				retry: { max: 20, backoffMs: 0 },
+				task: "REDUCE: {previous.output}",
+				final: true,
+			},
+		],
+	};
+	assert.equal(validateTaskflow(def).ok, true);
+	let reduceAttempts = 0;
+	const result = await executeTaskflow(mkState(def), baseDeps(async (_cwd, _agents, agentName, task) => {
+		if (!task.startsWith("REDUCE:")) {
+			return {
+				agent: agentName,
+				task,
+				exitCode: 0,
+				output: task,
+				stderr: "",
+				usage: emptyUsage(),
+				stopReason: "end",
+			};
+		}
+		reduceAttempts++;
+		const succeedsThisBatch = reduceAttempts <= 252
+			? reduceAttempts % 21 === 0
+			: reduceAttempts === 255;
+		return {
+			agent: agentName,
+			task,
+			exitCode: succeedsThisBatch ? 0 : 1,
+			output: succeedsThisBatch ? "reduced" : "",
+			stderr: succeedsThisBatch ? "" : "429 rate limit",
+			usage: { ...emptyUsage(), output: 1 },
+			stopReason: succeedsThisBatch ? "end" : "error",
+			errorMessage: succeedsThisBatch ? undefined : "429 rate limit",
+		};
+	}));
+	assert.equal(result.state.phases.r.status, "failed");
+	assert.equal(reduceAttempts, 256, "runner calls must never exceed the documented hard cap");
+	assert.equal(result.state.phases.r.attempts, 256);
+	assert.equal(result.state.phases.r.usage?.output, 256, "the final admitted attempt's usage must survive a denied retry");
+	assert.equal(result.state.phases.r.promptStats?.calls.length, 256);
+	assert.match(result.state.phases.r.error ?? "", /256 actual subagent attempts/);
+});
+
+test("tree reduce: cross-run cache hits stable inputs and misses changed inputs", async () => {
+	const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tf-tree-cache-"));
+	try {
+		const makeDef = (firstTask: string): Taskflow => ({
+			name: "tree-cross-run-cache",
+			phases: [
+				{ id: "a", type: "agent", agent: "a", task: firstTask },
+				{ id: "b", type: "agent", agent: "a", task: "seed-b" },
+				{
+					id: "r",
+					type: "reduce",
+					agent: "a",
+					from: ["a", "b"],
+					dependsOn: ["a", "b"],
+					reduceStrategy: "tree",
+					batchSize: 2,
+					task: "REDUCE: {previous.output}",
+					cache: { scope: "cross-run" },
+					final: true,
+				},
+			],
+		});
+		const cacheStore = new CacheStore(cacheRoot);
+		let reduceCalls = 0;
+		const deps: RuntimeDeps = {
+			cwd: "/tmp",
+			agents: AGENTS,
+			cacheStore,
+			persist: () => {},
+			runTask: async (_cwd, _agents, agentName, task) => {
+				if (task.startsWith("REDUCE:")) reduceCalls++;
+				return {
+					agent: agentName,
+					task,
+					exitCode: 0,
+					output: task.startsWith("REDUCE:") ? "reduced" : task,
+					stderr: "",
+					usage: emptyUsage(),
+					stopReason: "end",
+				};
+			},
+		};
+
+		const first = await executeTaskflow(mkState(makeDef("seed-a")), deps);
+		assert.equal(first.ok, true);
+		assert.equal(reduceCalls, 1);
+
+		const second = await executeTaskflow(mkState(makeDef("seed-a")), deps);
+		assert.equal(second.ok, true);
+		assert.equal(reduceCalls, 1, "identical inputs should skip every reducer call");
+		assert.equal(second.state.phases.r.cacheHit, "cross-run");
+
+		const changed = await executeTaskflow(mkState(makeDef("seed-a-changed")), deps);
+		assert.equal(changed.ok, true);
+		assert.equal(reduceCalls, 2, "changed upstream output must invalidate the tree cache");
+		assert.equal(changed.state.phases.r.cacheHit, undefined);
+	} finally {
+		fs.rmSync(cacheRoot, { recursive: true, force: true });
+	}
+});
+
+test("tree reduce: cross-run cache includes explicit transitive step outputs", async () => {
+	const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "tf-tree-transitive-cache-"));
+	try {
+		const def: Taskflow = {
+			name: "tree-transitive-cache",
+			phases: [
+				{ id: "ancestor", type: "agent", agent: "a", task: "ANCESTOR" },
+				{ id: "left", type: "agent", agent: "a", task: "LEFT", dependsOn: ["ancestor"] },
+				{ id: "right", type: "agent", agent: "a", task: "RIGHT" },
+				{
+					id: "r",
+					type: "reduce",
+					agent: "a",
+					from: ["left", "right"],
+					dependsOn: ["left", "right"],
+					reduceStrategy: "tree",
+					batchSize: 2,
+					task: "REDUCE ancestor={steps.ancestor.output} inputs={previous.output}",
+					cache: { scope: "cross-run" },
+					final: true,
+				},
+			],
+		};
+		let ancestor = "v1";
+		let reduceCalls = 0;
+		const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agent, task) => {
+			if (task.startsWith("REDUCE")) reduceCalls++;
+			const output = task === "ANCESTOR"
+				? ancestor
+				: task.startsWith("REDUCE") ? `reduced:${ancestor}` : `stable:${task}`;
+			return { agent, task, exitCode: 0, output, stderr: "", usage: emptyUsage(), stopReason: "end" };
+		};
+		const deps: RuntimeDeps = {
+			cwd: "/tmp",
+			agents: AGENTS,
+			cacheStore: new CacheStore(cacheRoot),
+			runTask,
+			persist: () => {},
+		};
+		await executeTaskflow(mkState(def), deps);
+		assert.equal(reduceCalls, 1);
+		const stable = await executeTaskflow(mkState(def), deps);
+		assert.equal(stable.state.phases.r.cacheHit, "cross-run");
+		assert.equal(reduceCalls, 1);
+		ancestor = "v2";
+		const changed = await executeTaskflow(mkState(def), deps);
+		assert.equal(changed.state.phases.r.cacheHit, undefined);
+		assert.equal(reduceCalls, 2, "changed transitive ancestor output must invalidate the tree cache");
+		assert.equal(changed.finalOutput, "reduced:v2");
+	} finally {
+		fs.rmSync(cacheRoot, { recursive: true, force: true });
 	}
 });

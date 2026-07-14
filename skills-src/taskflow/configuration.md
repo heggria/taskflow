@@ -195,7 +195,7 @@ invocation root without accepting arbitrary cwd interpolation:
 The whole `cwd` must be exactly one `{args.X}` reference. Absolute paths,
 concatenation, `{steps.*}`, dot segments, missing directories, files, and
 symlink escapes are rejected during binding. Runtime-generated sub-flows cannot use this
-bridge. Because 0.2.1 does not yet ship a cross-host filesystem sandbox, it is
+bridge. Because the current 0.2.x runtime does not yet ship a cross-host filesystem sandbox, it is
 disabled by default. A host operator—not flow JSON—may explicitly accept the
 lower resolver-only guarantee by launching the host with:
 

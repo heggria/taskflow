@@ -146,12 +146,15 @@ test("stamp-build-info script is valid plain JavaScript", async () => {
 test("stamp-build-info script: --check exits 0 when git is available (build output)", async () => {
 	// Verifies the build stamp script can produce a non-'unknown' commit (0.2.0
 	// dogfood issue 4) so the published dist carries real build identity. The
-	// script stamps packages/taskflow-core/dist/build-info.json (gitignored), so
-	// running --check against the repo is side-effect-free for the source tree.
+	// check reads packages/taskflow-core/dist/build-info.json without rewriting it.
 	// Tolerated (skipped) when git is unavailable.
 	const { spawnSync } = await import("node:child_process");
+	const { existsSync, statSync } = await import("node:fs");
 	const path = await import("node:path");
 	const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace("/packages/taskflow-core/test", ""));
+	const stampPath = path.join(repoRoot, "packages", "taskflow-core", "dist", "build-info.json");
+	const before = existsSync(stampPath) ? statSync(stampPath, { bigint: true }) : undefined;
+	await new Promise((resolve) => setTimeout(resolve, 5));
 	const r = spawnSync(
 		process.execPath,
 		[path.join(repoRoot, "scripts", "stamp-build-info.mjs"), "--check"],
@@ -163,4 +166,8 @@ test("stamp-build-info script: --check exits 0 when git is available (build outp
 	}
 	assert.equal(r.status, 0);
 	assert.match(r.stdout, /--check OK:/);
+	assert.ok(before, "successful --check requires an existing stamp");
+	const after = statSync(stampPath, { bigint: true });
+	assert.equal(after.mtimeNs, before.mtimeNs, "--check must not rewrite the stamp");
+	assert.equal(after.ctimeNs, before.ctimeNs, "--check must not mutate stamp metadata");
 });

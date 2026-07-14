@@ -11,6 +11,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { serveStdio } from "taskflow-mcp-core/jsonrpc";
 import { makeMcpHandlers, makeToolHandlers } from "../src/mcp/server.ts";
 import { persistTerminalRun } from "taskflow-mcp-core/server";
@@ -48,7 +51,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-codex");
-	assert.equal(res.result.serverInfo.version, "0.2.1");
+	assert.equal(res.result.serverInfo.version, "0.2.2");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
@@ -595,7 +598,6 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		const raw = await tools.taskflow_resume({ runId: parent.runId, phaseId: "b", task: "fixed" });
 		const response = raw as { content: Array<{ type: string; text: string }>; isError?: boolean };
 		assert.equal(response.isError, false);
-		assert.deepEqual(childTasks, ["fixed"], "done phase a is reused; only overridden b re-runs");
 		assert.equal(fs.readFileSync(parentFile, "utf8"), parentBefore, "parent JSON stays byte-identical");
 		assert.match(response.content[0]!.text, /--- b ---/);
 		assert.match(response.content[0]!.text, /forked from/);
@@ -609,8 +611,59 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		assert.notEqual(child.runId, parent.runId);
 		assert.equal(child.parentRunId, parent.runId);
 		assert.equal(child.host, "codex");
+		assert.deepEqual(childTasks, ["fixed"], "done phase a is reused; only overridden b re-runs");
 		assert.equal(child.def.phases.find((phase) => phase.id === "b")?.task, "fixed");
 		assert.equal(parent.def.phases.find((phase) => phase.id === "b")?.task, "fail-me");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp: taskflow_resume can repair an invalid stored definition with an override", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-repair-"));
+	try {
+		const def: Taskflow = {
+			name: "repair-invalid-resume",
+			idleTimeout: 0,
+			phases: [{ id: "a", type: "agent", agent: "executor", task: "work", final: true }],
+		};
+		const parent: RunState = {
+			runId: `repair-${Date.now()}`,
+			flowName: def.name,
+			def,
+			args: {},
+			status: "failed",
+			phases: { a: { id: "a", status: "failed", error: "stalled" } },
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			cwd,
+			host: "codex",
+		};
+		const { saveRun } = await import("taskflow-core");
+		saveRun(parent);
+		const calls: string[] = [];
+		const runner: SubagentRunner = {
+			usageAccounting: "tokens-only",
+			runTask: async (_cwd, _agents, agent, task) => {
+				calls.push(task);
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: "repaired",
+					stderr: "",
+					usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 2, turns: 1 },
+					stopReason: "end",
+				};
+			},
+		};
+		const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
+		const tools = makeCoreToolHandlers(cwd, runner, { host: "codex" });
+		const raw = await tools.taskflow_resume({ runId: parent.runId, phaseId: "a", timeout: 1000 });
+		const response = raw as { content: Array<{ type: string; text: string }>; isError?: boolean };
+		assert.equal(response.isError, false, response.content[0]?.text);
+		assert.deepEqual(calls, ["work"]);
+		assert.match(response.content[0]!.text, /resume complete/);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}

@@ -12,9 +12,10 @@
  * new run that preserves all `done` phases and lets the runtime re-run the
  * non-done (failed/paused/running) ones.
  *
- * The fork/apply helpers are pure + total so they can be unit-tested without
- * touching the runtime or the filesystem. The host adapters (pi / MCP) call
- * `forkRunForResume` and hand the child RunState to `executeTaskflow`.
+ * The fork/apply helpers are pure so they can be unit-tested without touching
+ * the runtime or the filesystem. `forkRunForResume` fails closed when the
+ * stored definition or requested overrides are invalid. The host adapters
+ * (pi / MCP) call it and hand the child RunState to `executeTaskflow`.
  */
 
 import { validateTaskflow, dependenciesOf, type Phase, type Taskflow } from "./schema.ts";
@@ -32,21 +33,30 @@ export interface ResumeOverrides {
 	idleTimeout?: number;
 }
 
+function resumeStatusErrors(prev: RunState): string[] {
+	return prev.status === "failed" || prev.status === "paused"
+		? []
+		: [`Run '${prev.runId}' has status '${prev.status}' and is not resumable (expected failed or paused)`];
+}
+
 /** Runs are resumable only when execution stopped non-terminally. Completed and
  * blocked runs are immutable terminal history; use a fresh run or recompute. */
 export function validateResumeRun(prev: RunState): { ok: boolean; errors: string[] } {
-	if (prev.status === "failed" || prev.status === "paused") return { ok: true, errors: [] };
-	return {
-		ok: false,
-		errors: [`Run '${prev.runId}' has status '${prev.status}' and is not resumable (expected failed or paused)`],
-	};
+	const errors = resumeStatusErrors(prev);
+	const validation = validateTaskflow(prev.def);
+	if (!validation.ok) {
+		errors.push(...validation.errors.map((error) => `stored run definition is invalid: ${error}`));
+	}
+	return { ok: errors.length === 0, errors };
 }
 
 /** Validate resume overrides against a prior run. Returns structured errors.
  *  Checks: phaseId exists, at least one override field is present, and field
  *  values pass the normal Taskflow validator after applying the overrides. */
 export function validateResumeOverrides(prev: RunState, ov: ResumeOverrides): { ok: boolean; errors: string[] } {
-	const errors = [...validateResumeRun(prev).errors];
+	// An override may intentionally repair an old/invalid stored definition, so
+	// validate the patched child below rather than rejecting the parent shape.
+	const errors = resumeStatusErrors(prev);
 	if (!ov.phaseId || typeof ov.phaseId !== "string") {
 		errors.push("resume overrides require a 'phaseId'");
 		return { ok: false, errors };
@@ -55,10 +65,6 @@ export function validateResumeOverrides(prev: RunState, ov: ResumeOverrides): { 
 	if (!phase) {
 		errors.push(`resume overrides target phase '${ov.phaseId}' not found in run '${prev.runId}' (flow '${prev.flowName}')`);
 		return { ok: false, errors };
-	}
-	const priorPhase = prev.phases[ov.phaseId];
-	if (priorPhase?.status === "done") {
-		errors.push(`resume overrides target phase '${ov.phaseId}' is already done; override the failed/in-flight phase or start a fresh run`);
 	}
 	// At least one override field must be supplied (besides phaseId).
 	const hasAny = ov.task !== undefined || ov.model !== undefined || ov.timeout !== undefined || ov.idleTimeout !== undefined;
@@ -83,6 +89,16 @@ export function validateResumeOverrides(prev: RunState, ov: ResumeOverrides): { 
 		errors.push(...v.errors.map((e) => `resume override produced an invalid flow: ${e}`));
 	}
 	return { ok: errors.length === 0, errors };
+}
+
+/** One resume validation contract for every host. Overrides are allowed to
+ * repair an invalid stored definition, so callers must not pre-validate the
+ * unpatched parent before dispatching here. */
+export function validateResumeRequest(
+	prev: RunState,
+	overrides?: ResumeOverrides,
+): { ok: boolean; errors: string[] } {
+	return overrides ? validateResumeOverrides(prev, overrides) : validateResumeRun(prev);
 }
 
 /** Apply resume overrides to a deep-cloned def (the parent def is never
@@ -135,9 +151,13 @@ export function transitiveDownstream(phases: Phase[], target: string): string[] 
  *  `executeTaskflow`). */
 export function forkRunForResume(
 	prev: RunState,
-	opts: { overrides?: ResumeOverrides; cwd?: string } = {},
+	opts: { overrides?: ResumeOverrides; cwd?: string; host?: string } = {},
 ): RunState {
 	const ov = opts.overrides;
+	const validation = validateResumeRequest(prev, ov);
+	if (!validation.ok) {
+		throw new Error(`Cannot resume run '${prev.runId}': ${validation.errors.join("; ")}`);
+	}
 	const childDef: Taskflow = ov ? applyResumeOverrides(prev.def, ov) : structuredClone(prev.def);
 	// Phases to clear (re-run): the target + its transitive downstream (when
 	// overrides are supplied). Without overrides, nothing is force-cleared here —
@@ -171,8 +191,9 @@ export function forkRunForResume(
 		// escape or downgrade the parent's cwd boundary.
 		...(prev.invocationRootSnapshot !== undefined ? { invocationRootSnapshot: structuredClone(prev.invocationRootSnapshot) } : {}),
 		...(prev.cwdRootBinding !== undefined ? { cwdRootBinding: structuredClone(prev.cwdRootBinding) } : {}),
-		// The child is executed by the CURRENT build while retaining the host.
-		...(prev.host !== undefined ? { host: prev.host } : {}),
+		// The child is executed by the CURRENT build and CURRENT host. A caller that
+		// does not supply host preserves the parent for backwards compatibility.
+		...(opts.host !== undefined || prev.host !== undefined ? { host: opts.host ?? prev.host } : {}),
 		packageVersion: build.packageVersion,
 		gitCommit: build.gitCommit,
 		schemaVersion: build.schemaVersion,

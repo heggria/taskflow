@@ -41,6 +41,19 @@ export const PHASE_TYPES = [
 ] as const;
 export type PhaseType = (typeof PHASE_TYPES)[number];
 
+/** Phase kinds that execute one or more subagents and therefore require an
+ * effective idle watchdog (or a finite wall timeout when the watchdog is off). */
+export const AGENT_RUNNING_PHASE_TYPES = [
+	"agent",
+	"gate",
+	"reduce",
+	"map",
+	"parallel",
+	"loop",
+	"tournament",
+	"race",
+] as const satisfies readonly PhaseType[];
+
 /** Loop iteration bounds. Authors may lower the max; the hard cap is a runaway guard. */
 export const LOOP_DEFAULT_MAX_ITERATIONS = 10;
 export const LOOP_HARD_MAX_ITERATIONS = 100;
@@ -83,7 +96,7 @@ const ParallelTaskSchema = Type.Object(
 		cwd: Type.Optional(
 			Type.String({
 				description:
-					"Working directory for this branch's subagent (a literal path). Overrides the phase-level cwd for this branch only. Reserved workspace keywords ('temp'/'dedicated'/'worktree') are NOT supported per-branch (the workspace lifecycle is per-phase) — use the phase-level cwd for those.",
+					"Working directory for this parallel branch's subagent (a literal path). Overrides the phase-level cwd for this branch only. Reserved workspace keywords ('temp'/'dedicated'/'worktree') are NOT supported per-branch (the workspace lifecycle is per-phase) — use the phase-level cwd for those.",
 			}),
 	),
 	},
@@ -997,6 +1010,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		// Branch entries become competitors at runtime (b.task is interpolated); a
 		// non-object / non-string-task entry would crash the runtime, so reject it.
 		if (Array.isArray(p.branches)) {
+			const branchPhaseType = (p.type ?? "agent") as PhaseType;
 			p.branches.forEach((b, i) => {
 				if (!b || typeof b !== "object" || Array.isArray(b))
 					errors.push(`Phase '${p.id}': branches[${i}] must be an object with a 'task', got ${b === null ? "null" : typeof b}`);
@@ -1011,7 +1025,9 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 					// phase-level `cwd` for workspace isolation.
 					const bcwd = (b as { cwd?: unknown }).cwd;
 					if (typeof bcwd === "string") {
-						if (hasCwdPlaceholder(bcwd)) {
+						if (branchPhaseType !== "parallel") {
+							errors.push(`Phase '${p.id}' (${branchPhaseType}): branches[${i}].cwd is only supported for parallel phases`);
+						} else if (hasCwdPlaceholder(bcwd)) {
 							errors.push(`Phase '${p.id}': branches[${i}].cwd does not support interpolation placeholders (${bcwd}). Use a literal path.`);
 						} else if (WORKSPACE_KEYWORDS.includes(bcwd as (typeof WORKSPACE_KEYWORDS)[number])) {
 							errors.push(`Phase '${p.id}': branches[${i}].cwd '${bcwd}' is a reserved workspace keyword not supported per-branch (the workspace lifecycle is per-phase). Use the phase-level 'cwd' for workspace isolation.`);
@@ -1248,7 +1264,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		// idleTimeout validation (agent-running phases that can use the watchdog).
 		// The host default (300000ms) applies when neither phase nor flow sets it.
-		const AGENT_RUNNING_FOR_IDLE = new Set(["agent", "gate", "reduce", "map", "parallel", "loop", "tournament"]);
+		const AGENT_RUNNING_FOR_IDLE = new Set<PhaseType>(AGENT_RUNNING_PHASE_TYPES);
 		if (AGENT_RUNNING_FOR_IDLE.has(type)) {
 			const phaseIdle = (p as { idleTimeout?: unknown }).idleTimeout;
 			if (phaseIdle !== undefined) {
@@ -1270,7 +1286,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				}
 			}
 		} else if ((p as { idleTimeout?: unknown }).idleTimeout !== undefined) {
-			warnings.push(`Phase '${p.id}' (${type}): 'idleTimeout' only applies to agent-running phases (agent/gate/reduce/map/parallel/loop/tournament) — ignored here`);
+			warnings.push(`Phase '${p.id}' (${type}): 'idleTimeout' only applies to agent-running phases (${AGENT_RUNNING_PHASE_TYPES.join("/")}) — ignored here`);
 		}
 		if (p.retry) {
 			if (typeof p.retry.max !== "number" || p.retry.max < 0) {

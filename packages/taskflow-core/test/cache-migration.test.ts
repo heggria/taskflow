@@ -68,6 +68,7 @@ async function ccFor(def: Taskflow, cwd: string, store: CacheStore, phaseId: str
 		flowDefHash: fdh,
 		phaseFp: subfp,
 		agentDefinitions: agentDefinitionsIdentity(AGENTS),
+		executionCwd: fs.realpathSync(cwd),
 	};
 }
 

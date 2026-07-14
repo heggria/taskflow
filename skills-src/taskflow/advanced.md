@@ -198,7 +198,7 @@ The bridge is fail-closed and disabled unless the host operator explicitly sets
 `TASKFLOW_CWD_BRIDGE_MODE=resolve-only`. That mode performs a time-of-check path
 validation but has no no-follow filesystem handle and is not an OS filesystem sandbox; each phase emits a warning stating the lower
 guarantee. Cwd-bridge flow trees do not reuse output-only cache/resume entries,
-because 0.2.1 cannot restore filesystem mutations on a cache hit. Generated
+because the current 0.2.x runtime cannot restore filesystem mutations on a cache hit. Generated
 sub-flows cannot use the bridge. Saved-flow definitions are frozen for one
 top-level execution, the invocation root identity is persisted for resume, and
 a selected sub-flow inherits a non-expanding canonical boundary: nested literal

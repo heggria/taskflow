@@ -36,7 +36,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 });
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
-import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, TREE_REDUCE_HARD_MAX_CALLS, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
+import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
@@ -731,6 +731,13 @@ interface SpawnBudgetLedger {
 	usage: UsageStats;
 }
 
+type SpawnChildRunner = (
+	agentName: string,
+	task: string,
+	childNodeId: string,
+	usageBefore: UsageStats | undefined,
+) => Promise<RunResult>;
+
 function spawnedOverBudget(state: RunState, local: UsageStats): boolean {
 	const budget = state.def.budget;
 	if (!budget) return false;
@@ -767,6 +774,14 @@ function resolveEffCwd(deps: RuntimeDeps, phase: Phase): string {
 	// Node resolves a relative spawn cwd against the Taskflow process cwd. That
 	// is not necessarily the invocation root, so anchor legacy literals here.
 	return path.resolve(deps.cwd, phase.cwd);
+}
+
+/** Resolve a literal per-branch cwd once for BOTH cache identity and execution.
+ * Existing directories are realpath-canonicalized so aliases/symlinks cannot
+ * collide with a different invocation root under the same raw cwd string. */
+function resolveBranchCwd(deps: RuntimeDeps, cwd: string): string {
+	const resolved = path.resolve(deps.cwd, cwd);
+	return directoryIdentity(resolved)?.canonicalPath ?? resolved;
 }
 
 function flowTreeUsesCwdBridge(
@@ -922,17 +937,13 @@ async function runSpawnedChildren(
 	phase: Phase,
 	deps: RuntimeDeps,
 	state: RunState,
-	run: RunTaskFn,
+	runChild: SpawnChildRunner,
 	ledger: SpawnBudgetLedger = { usage: emptyUsage() },
-	promptCalls?: string[],
 ): Promise<SpawnedResult> {
 	const capped = assignments.slice(0, MAX_DYNAMIC_MAP_ITEMS);
 	const lines: string[] = [];
 	const usages: UsageStats[] = [];
 	const errors: string[] = [];
-	// Effective cwd for flat spawned tasks: honour a workspace override and never
-	// pass a reserved keyword through to the runner.
-	const spawnCwd = resolveEffCwd(deps, phase);
 	let idx = 0;
 	for (const a of capped) {
 		if (deps.signal?.aborted || spawnedOverBudget(state, ledger.usage)) break;
@@ -959,39 +970,12 @@ async function runSpawnedChildren(
 				if (sub.failed) errors.push(sub.error ?? `spawned subflow ${childNodeId} failed`);
 				setNodeStatus(ctxDir, childNodeId, sub.failed ? "failed" : "done");
 			} else {
-					const task = a.task ?? "";
-					promptCalls?.push(task);
-					const runOptions = {
-						model: phase.model,
-						thinking: phase.thinking,
-						tools: phase.tools,
-						cwd: spawnCwd,
-						signal: deps.signal,
-						ctxDir,
-						nodeId: childNodeId,
-					};
-					const invoke = () => run(
-						spawnCwd,
-						deps.agents,
-						agentName,
-						task,
-						runOptions,
-						deps.globalThinking,
-					);
-					// ctx_spawn is part of the phase's execution tree, not bookkeeping.
-					// Inherit the exact cwd capability and give every descendant a unique
-					// unit owner so no child can bypass lease/WAL/permit coordination.
-					const r = deps._workspaceBinding
-						? await deps._workspaceBinding.runAgent({
-							agents: deps.agents,
-							agentName,
-							task,
-							opts: runOptions,
-							globalThinking: deps.globalThinking,
-							unitId: childNodeId,
-							invoke,
-						})
-						: await invoke();
+				const task = a.task ?? "";
+				// Flat ctx_spawn children use the SAME runOne policy as their parent:
+				// phase timeout, idle watchdog, retries, budget accounting, tracing,
+				// prompt diagnostics, cwd capability, and workspace binding.
+				const usageBefore = ledger.usage;
+				const r = await runChild(agentName, task, childNodeId, usageBefore);
 				out = r.output ?? "";
 				if (isFailed(r)) {
 					const detail = sanitizeErrorMessage(r.errorMessage ?? r.stderr ?? "spawned child failed");
@@ -1006,7 +990,7 @@ async function runSpawnedChildren(
 				// A child may itself have queued spawns — recurse (depth-capped by the tool).
 				const grand = drainPendingSpawns(ctxDir, childNodeId);
 				if (grand.length > 0 && !deps.signal?.aborted && !spawnedOverBudget(state, ledger.usage)) {
-					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, run, ledger, promptCalls);
+					const rec = await runSpawnedChildren(grand, ctxDir, childNodeId, phase, deps, state, runChild, ledger);
 					if (rec.reports) out += rec.reports;
 					usages.push(rec.usage);
 					errors.push(...rec.errors);
@@ -1471,7 +1455,7 @@ async function executePhaseInner(
 		agentScope: state.def.agentScope,
 		contextSharing: state.def.contextSharing === true,
 		agentDefinitions: agentDefinitionsIdentity(deps.agents),
-		executionCwd: phase.cwd !== undefined || deps._cacheCwdIdentity !== undefined ? effCwd : undefined,
+		executionCwd: directoryIdentity(effCwd)?.canonicalPath ?? path.resolve(effCwd),
 	};
 
 	// Effective idle watchdog (ms): phase overrides flow; host default (300000)
@@ -1589,6 +1573,9 @@ async function executePhaseInner(
 		 * (tree reduce). Included in live budget accounting, but not returned as
 		 * this call's own usage. */
 		usageBefore?: UsageStats,
+		/** Optional hard admission guard invoked immediately before EVERY actual
+		 * runner attempt. Return an error message to deny that attempt. */
+		beforeAttempt?: () => string | undefined,
 	): Promise<RunResult> => {
 		const explicitMax = Math.max(1, 1 + Math.max(0, Math.floor(retry?.max ?? 0)));
 		// Allow enough attempts to cover whichever policy applies on a given attempt.
@@ -1597,6 +1584,20 @@ async function executePhaseInner(
 		let last: RunResult | undefined;
 		for (let attempt = 0; attempt < maxAttempts; attempt++) {
 			if (deps.signal?.aborted || extraSignal?.aborted) break;
+			const admissionError = beforeAttempt?.();
+			if (admissionError) {
+				last = {
+					agent: agentName,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: admissionError,
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: admissionError,
+				};
+				break;
+			}
 			// AbortController chains: run signal + optional extra (race cancel) + phase timeout.
 			// Deterministic: a timed-out call is never retried (would double-spend).
 			let timedOut = false;
@@ -1801,9 +1802,38 @@ async function executePhaseInner(
 				attempts: 0,
 			};
 		}
-		if (usages.length > 1) last.usage = aggregateUsage(usages);
+		if (usages.length > 0) last.usage = aggregateUsage(usages);
 		last.attempts = usages.length;
 		return last;
+	};
+
+	const runSpawnedChild: SpawnChildRunner = async (agentName, task, childNodeId, spawnedUsageBefore) => {
+		// runOne updates the live phase usage so retry/budget admission sees current
+		// spend. A spawned child is folded into the parent result later, so restore
+		// the parent's pre-child usage after the call to avoid replacing/doubling it.
+		const livePhase = state.phases[phase.id];
+		const parentUsage = livePhase?.usage ? { ...livePhase.usage } : undefined;
+		const totalUsageBefore = aggregateUsage([
+			parentUsage ?? emptyUsage(),
+			spawnedUsageBefore ?? emptyUsage(),
+		]);
+		try {
+			return await runOne(
+				agentName,
+				task,
+				undefined,
+				childNodeId,
+				undefined,
+				undefined,
+				undefined,
+				totalUsageBefore,
+			);
+		} finally {
+			if (livePhase) {
+				if (parentUsage) livePhase.usage = parentUsage;
+				else delete livePhase.usage;
+			}
+		}
 	};
 
 	const parseJson = phase.output === "json";
@@ -1903,6 +1933,10 @@ async function executePhaseInner(
 			done++;
 			if (isFailed(r)) failed++;
 			liveUsages[idx] = r.usage;
+			// Publish the just-finished sibling's spend before considering any
+			// ctx_spawn intents. Budgeted fan-out allows one atomic call to cross the
+			// ceiling, but must not admit descendants after that overshoot.
+			refresh();
 			// Per-item cross-run cache record (map only): persist a successful fresh
 			// item so a later run with this item unchanged hits per-item instead of
 			// re-running. Failed and budget-skipped items are never cached (a stale
@@ -1929,13 +1963,22 @@ async function executePhaseInner(
 					// post-run drain below only covers single-agent phases).
 					const spawned = drainPendingSpawns(ctxDir, itemNid);
 					if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-							const child = await runSpawnedChildren(spawned, ctxDir, itemNid, phase, deps, state, run, { usage: emptyUsage() }, opts?.promptCalls);
-							if (child.reports) r.output = `${r.output ?? ""}${child.reports}`;
-							if (child.failed && deps._workspaceBinding) {
-								r.exitCode = r.exitCode === 0 ? 1 : r.exitCode;
-								r.stopReason = "error";
-								r.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
-							}
+						const child = await runSpawnedChildren(
+							spawned,
+							ctxDir,
+							itemNid,
+							phase,
+							deps,
+							state,
+							runSpawnedChild,
+							{ usage: emptyUsage() },
+						);
+						if (child.reports) r.output = `${r.output ?? ""}${child.reports}`;
+						if (child.failed && deps._workspaceBinding) {
+							r.exitCode = r.exitCode === 0 ? 1 : r.exitCode;
+							r.stopReason = "error";
+							r.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
+						}
 						if (child.usage) {
 							r.usage = aggregateUsage([r.usage ?? emptyUsage(), child.usage]);
 							liveUsages[idx] = r.usage;
@@ -1961,185 +2004,96 @@ async function executePhaseInner(
 	if (type === "reduce" && (phase as { reduceStrategy?: string }).reduceStrategy === "tree") {
 		const stratBs = (phase as { batchSize?: number }).batchSize;
 		const batchSize = typeof stratBs === "number" && Number.isFinite(stratBs) && stratBs >= 2 ? Math.floor(stratBs) : 2;
-		// Collect the completed `from[]` outputs in from-array order (the same
-		// selection `aggregateReduceFrom` uses for one-shot). Skipped/failed
-		// branches under join:any are omitted (only completed inputs are reduced).
-		const fromIds = asArray<string>(phase.from);
-		const inputs: Array<{ id: string; output: string }> = [];
-		for (const id of fromIds) {
-			const ps = state.phases[id];
-			if (ps?.status === "done" && ps.output !== undefined) {
-				inputs.push({ id, output: ps.output });
-			}
-		}
+		const {
+			collectTreeReduceInputs,
+			executeTreeReduction,
+			treeReduceCacheParts,
+		} = await import("./runtime/phases/reduce.ts");
+		const inputs = collectTreeReduceInputs(state, phase);
 		// 0–1 completed inputs: tree reduction is a no-op — fall through to the
 		// one-shot path (which handles the degenerate case correctly).
 		if (inputs.length >= 2) {
 			const agentName = resolveAgent(phase.agent, deps, state);
-			// Seed the round with the INDIVIDUAL `from[]` outputs (one per source). Each
-			// round batches `batchSize` items; a batch of one is passed raw, many are
-			// joined with the SAME `### <label>\n\n<output>` ... `\n\n---\n\n` shape
-			// as one-shot `{previous.output}`. Rounds run while > 1 item remains; the
-			// final single output is the phase result.
-			const formatBatch = (items: Array<{ label: string; output: string }>): string =>
-				items.length === 1
-					? items[0].output
-					: items.map((it) => `### ${it.label}\n\n${it.output}`).join("\n\n---\n\n");
-			let round: Array<{ label: string; output: string }> = inputs.map((it) => ({ label: it.id, output: it.output }));
-			let roundNumber = 1;
-			const callPrompts: string[] = [];
-			const usages: UsageStats[] = [];
-			let failed: RunResult | undefined;
-			let timedOut = false;
-			let truncatedByBudget = false;
-			let aborted = false;
-			let refWarning: string | undefined;
-			while (round.length > 1) {
-				if (callPrompts.length >= TREE_REDUCE_HARD_MAX_CALLS) {
-					failed = {
-						agent: agentName,
-						task: phase.task ?? "",
-						exitCode: 1,
-						output: "",
-						stderr: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
-						usage: emptyUsage(),
-						stopReason: "error",
-						errorMessage: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
-					};
-					break;
-				}
-				if (deps.signal?.aborted) {
-					aborted = true;
-					break;
-				}
-				if (overBudget(state).over) {
-					truncatedByBudget = true;
-					break;
-				}
-				// Partition the current round into batches of `batchSize`.
-				const batches: Array<Array<{ label: string; output: string }>> = [];
-				for (let i = 0; i < round.length; i += batchSize) {
-					batches.push(round.slice(i, i + batchSize));
-				}
-				const next: Array<{ label: string; output: string }> = [];
-				let consumedInputs = 0;
-				for (let bi = 0; bi < batches.length; bi++) {
-					if (callPrompts.length >= TREE_REDUCE_HARD_MAX_CALLS) {
-						failed = {
-							agent: agentName,
-							task: phase.task ?? "",
-							exitCode: 1,
-							output: "",
-							stderr: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
-							usage: emptyUsage(),
-							stopReason: "error",
-							errorMessage: `Tree reduction exceeded hard cap of ${TREE_REDUCE_HARD_MAX_CALLS} subagent calls`,
-						};
-						break;
-					}
-					if (deps.signal?.aborted) {
-						aborted = true;
-						break;
-					}
-					if (overBudget(state).over) {
-						truncatedByBudget = true;
-						break;
-					}
-					const batch = batches[bi];
-					const batchValue = formatBatch(batch);
-					// Each intermediate reducer call sees the batch as `{previous.output}`
-					// (interpolation resolves it), using the SAME agent/model/options/
-					// timeout/idleTimeout as the phase (runOne reuses baseRun).
+			const cacheKey = cacheKeys(cc, treeReduceCacheParts(state, phase, inputs, batchSize));
+			const cached = cachedPhase(cc, cacheKey);
+			if (cached) return cached;
+
+			const execution = await executeTreeReduction({
+				phase,
+				inputs,
+				batchSize,
+				agentName,
+				inputHash: cacheKey.key,
+				isAborted: () => deps.signal?.aborted === true,
+				isOverBudget: () => overBudget(state).over,
+				resolveTask: (batchValue) => {
 					const batchCtx = buildInterpolationContext(state, batchValue, undefined, onRead);
 					const interp = interpolate(phase.task ?? "", batchCtx);
-					if (!refWarning) refWarning = warnUnresolvedRefs(phase.id, interp.missing);
-					const fullTask = appendGateFormatSuffix(preRead + interp.text, phase);
-					callPrompts.push(fullTask);
-					const usageBefore = usages.length ? aggregateUsage(usages) : undefined;
-					const r = await runOne(
+					return {
+						task: appendGateFormatSuffix(preRead + interp.text, phase),
+						warning: warnUnresolvedRefs(phase.id, interp.missing),
+					};
+				},
+				runOne: async (task, usageBefore, beforeAttempt, callId) => {
+					const batchNodeId = nodeIdFor(`tree-${callId}`);
+					if (ctxDir) {
+						try { registerNode(ctxDir, batchNodeId, phase.id, undefined, "running"); } catch { /* fail-open */ }
+					}
+					const result = await runOne(
 						agentName,
-						fullTask,
+						task,
 						liveSink(state, phase.id, emitProgress),
-						nodeIdFor(),
+						batchNodeId,
 						contractCheck,
 						undefined,
 						undefined,
 						usageBefore,
+						beforeAttempt,
 					);
-					usages.push(r.usage ?? emptyUsage());
-					if (isFailed(r)) {
-						failed = r;
-						timedOut = !!r.phaseTimeout;
-						break;
+					if (ctxDir) {
+						try {
+							const spawned = drainPendingSpawns(ctxDir, batchNodeId);
+							if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
+								const child = await runSpawnedChildren(
+									spawned,
+									ctxDir,
+									batchNodeId,
+									phase,
+									deps,
+									state,
+									runSpawnedChild,
+									{ usage: emptyUsage() },
+								);
+								if (child.reports) result.output = `${result.output ?? ""}${child.reports}`;
+								if (child.failed && deps._workspaceBinding) {
+									result.exitCode = result.exitCode === 0 ? 1 : result.exitCode;
+									result.stopReason = "error";
+									result.errorMessage = `Workspace ctx_spawn descendant failed: ${child.errors.join("; ")}`;
+								}
+								result.usage = aggregateUsage([result.usage ?? emptyUsage(), child.usage]);
+							}
+							setNodeStatus(ctxDir, batchNodeId, isFailed(result) ? "failed" : "done");
+						} catch { /* fail-open */ }
 					}
-					next.push({ label: `round-${roundNumber}-batch-${bi + 1}`, output: r.output ?? "" });
-					consumedInputs += batch.length;
-				}
-				if (truncatedByBudget) {
-					// Preserve both finished batch reductions and every untouched input.
-					round = [...next, ...round.slice(consumedInputs)];
-				}
-				if (failed || aborted || truncatedByBudget) break;
-				round = next;
-				roundNumber++;
-			}
-			if (failed) {
-				const inputHash = cacheKeys(cc, [phase.id, "tree-reduce-failed", ...callPrompts]).key;
-				const ps: PhaseState = {
-					id: phase.id,
-					status: "failed",
-					output: failed.output ?? "",
-					error: failed.errorMessage ?? failed.stderr,
-					usage: aggregateUsage(usages),
-					attempts: failed.attempts,
-					inputHash,
-					endedAt: Date.now(),
-					...(timedOut ? { timedOut: true as const } : {}),
-				};
-				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-				attachPromptStats(ps, callPrompts);
-				attachReduceInputStats(ps, state, phase);
-				recordCache(cc, ps);
-				return ps;
-			}
-			if (aborted) {
-				const inputHash = cacheKeys(cc, [phase.id, "tree-reduce-aborted", ...callPrompts]).key;
-				const ps: PhaseState = {
-					id: phase.id,
-					status: "failed",
-					error: "Tree reduction aborted before all inputs were reduced",
-					usage: aggregateUsage(usages),
-					inputHash,
-					endedAt: Date.now(),
-				};
-				if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-				attachPromptStats(ps, callPrompts);
-				attachReduceInputStats(ps, state, phase);
-				return ps;
-			}
-			// One output remains, or budget admission stopped the tree with a
-			// partial round. Budget truncation is explicitly marked/warned and is
-			// never cached; the scheduler classifies the run as blocked.
-			const finalOutput = round.length === 1 ? round[0].output : formatBatch(round);
-			const inputHash = cacheKeys(cc, [phase.id, "tree-reduce", ...callPrompts]).key;
-			const ps: PhaseState = {
-				id: phase.id,
-				status: "done",
-				output: finalOutput,
-				usage: aggregateUsage(usages),
-				inputHash,
-				endedAt: Date.now(),
-				...(truncatedByBudget ? { budgetTruncated: true as const } : {}),
-			};
-			if (parseJson) ps.json = safeParse(finalOutput);
+					const livePhase = state.phases[phase.id];
+					if (livePhase) {
+						livePhase.usage = aggregateUsage([
+							usageBefore ?? emptyUsage(),
+							result.usage ?? emptyUsage(),
+						]);
+					}
+					return result;
+				},
+			});
+			const ps = execution.phaseState;
+			if (parseJson && ps.status === "done") ps.json = safeParse(ps.output ?? "");
 			if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
-			if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
-			if (truncatedByBudget) {
+			if (execution.refWarning) ps.warnings = [...(ps.warnings ?? []), execution.refWarning];
+			if (ps.budgetTruncated) {
 				ps.warnings = [...(ps.warnings ?? []), "tree reduction stopped by the run budget; output is partial"];
 			}
-			attachPromptStats(ps, callPrompts);
 			attachReduceInputStats(ps, state, phase);
-			if (!truncatedByBudget) recordCache(cc, ps);
+			if (execution.cacheable) recordCache(cc, ps);
 			return ps;
 		}
 		// inputs.length < 2 → fall through to one-shot (below).
@@ -2451,7 +2405,16 @@ async function executePhaseInner(
 				registerNode(ctxDir, nid, phase.id, undefined, ps.status === "failed" ? "failed" : "done");
 				const spawned = drainPendingSpawns(ctxDir, nid);
 				if (spawned.length > 0 && !deps.signal?.aborted && !overBudget(state).over) {
-					const child = await runSpawnedChildren(spawned, ctxDir, nid, phase, deps, state, run, { usage: emptyUsage() }, opts?.promptCalls);
+					const child = await runSpawnedChildren(
+						spawned,
+						ctxDir,
+						nid,
+						phase,
+						deps,
+						state,
+						runSpawnedChild,
+						{ usage: emptyUsage() },
+					);
 					if (child.reports) ps.output = `${ps.output ?? ""}${child.reports}`;
 					if (child.failed && deps._workspaceBinding) {
 						ps.status = "failed";
@@ -2579,7 +2542,7 @@ async function executePhaseInner(
 			return {
 				agent: resolveAgent(b.agent ?? phase.agent, deps, state),
 				task: preRead + r.text,
-				cwd: typeof b.cwd === "string" ? b.cwd : undefined,
+				cwd: typeof b.cwd === "string" ? resolveBranchCwd(deps, b.cwd) : undefined,
 			};
 		});
 		const ck = cacheKeys(cc, [phase.id, phase.model ?? "", JSON.stringify(branches)]);

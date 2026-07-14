@@ -98,6 +98,7 @@ async function runAgentCall(
 					timer = undefined;
 				}
 			};
+			ctx.promptCalls?.push(task);
 			const invocation = ctx.deps.runTask(
 				ctx.deps.cwd,
 				ctx.deps.agents,

@@ -13,6 +13,7 @@ import {
 	forkRunForResume,
 	applyResumeOverrides,
 	validateResumeOverrides,
+	validateResumeRequest,
 	validateResumeRun,
 	transitiveDownstream,
 	type ResumeOverrides,
@@ -129,6 +130,11 @@ test("forkRunForResume: with overrides, target + downstream are cleared (omitted
 
 test("forkRunForResume: with overrides targeting a, ALL of a/b/c re-run (a is upstream)", () => {
 	const prev = parentDoneABFailedC();
+	prev.phases = {
+		a: { id: "a", status: "failed", error: "boom" },
+		b: { id: "b", status: "done", output: "OUT-B" },
+		c: { id: "c", status: "done", output: "OUT-C" },
+	};
 	const ov: ResumeOverrides = { phaseId: "a", task: "redo-a" };
 	const child = forkRunForResume(prev, { overrides: ov });
 	// a is the target, b + c are downstream → all cleared.
@@ -149,6 +155,13 @@ test("forkRunForResume: carries identity metadata (host) onto the child", () => 
 	const child = forkRunForResume(prev);
 	assert.equal(child.host, "pi");
 	assert.equal(child.parentRunId, "parent-run");
+});
+
+test("forkRunForResume: current host replaces parent host provenance", () => {
+	const prev = parentDoneABFailedC();
+	const child = forkRunForResume(prev, { host: "codex" });
+	assert.equal(child.host, "codex");
+	assert.equal(child.parentRunId, prev.runId);
 });
 
 // ---------------------------------------------------------------------------
@@ -180,11 +193,59 @@ test("validateResumeRun: only failed or paused runs are resumable", () => {
 	assert.equal(validateResumeRun(blocked).ok, false);
 });
 
-test("validateResumeOverrides: an already-done target is rejected", () => {
+test("validateResumeRun: stored definition is revalidated before an ordinary resume", () => {
+	const invalid = parentDoneABFailedC();
+	invalid.def = {
+		name: "invalid-stored-race",
+		idleTimeout: 0,
+		phases: [{
+			id: "r",
+			type: "race",
+			branches: [{ task: "a" }, { task: "b" }],
+			final: true,
+		}],
+	};
+	invalid.phases = {};
+	const validation = validateResumeRun(invalid);
+	assert.equal(validation.ok, false);
+	assert.match(validation.errors.join("\n"), /stored run definition is invalid.*idleTimeout:0/);
+	assert.throws(() => forkRunForResume(invalid), /Cannot resume run.*stored run definition is invalid/);
+});
+
+test("validateResumeOverrides: an override may repair an invalid stored definition", () => {
+	const invalid = parentDoneABFailedC();
+	invalid.def = {
+		name: "repair-stored-timeout",
+		idleTimeout: 0,
+		phases: [{ id: "a", type: "agent", agent: "a", task: "work", final: true }],
+	};
+	invalid.phases = { a: { id: "a", status: "failed", error: "stalled" } };
+	const overrides: ResumeOverrides = { phaseId: "a", timeout: 1000 };
+	const validation = validateResumeOverrides(invalid, overrides);
+	assert.equal(validation.ok, true, validation.errors.join("; "));
+	const child = forkRunForResume(invalid, { overrides });
+	assert.equal(child.def.phases[0].timeout, 1000);
+});
+
+test("validateResumeOverrides: a done upstream target is allowed and clears its downstream", () => {
 	const prev = parentDoneABFailedC();
 	const v = validateResumeOverrides(prev, { phaseId: "a", task: "redo-a" });
-	assert.equal(v.ok, false);
-	assert.match(v.errors.join("\n"), /already done/);
+	assert.equal(v.ok, true, v.errors.join("; "));
+	const child = forkRunForResume(prev, { overrides: { phaseId: "a", task: "redo-a" } });
+	assert.deepEqual(Object.keys(child.phases), [], "target a and downstream b/c all re-run");
+	assert.equal(child.def.phases.find((phase) => phase.id === "a")?.task, "redo-a");
+});
+
+test("validateResumeRequest: override repairs an invalid stored definition without pre-rejecting it", () => {
+	const invalid = parentDoneABFailedC();
+	invalid.def = {
+		name: "repair-shared-contract",
+		idleTimeout: 0,
+		phases: [{ id: "a", type: "agent", agent: "a", task: "work", final: true }],
+	};
+	invalid.phases = { a: { id: "a", status: "failed", error: "stalled" } };
+	const result = validateResumeRequest(invalid, { phaseId: "a", timeout: 1000 });
+	assert.equal(result.ok, true, result.errors.join("; "));
 });
 test("validateResumeOverrides: requires phaseId", () => {
 	const prev = parentDoneABFailedC();
@@ -339,6 +400,65 @@ test("forkRunForResume: args are deep-cloned — mutating child args does not af
 	(child.args as any).list.push(4);
 	// Parent unchanged.
 	assert.deepEqual(prev.args, { key: { nested: "value" }, list: [1, 2, 3] });
+});
+
+test("resume: changing the default invocation cwd invalidates completed phase reuse", async () => {
+	const cwdA = fs.mkdtempSync(path.join(os.tmpdir(), "tf-resume-cwd-a-"));
+	const cwdB = fs.mkdtempSync(path.join(os.tmpdir(), "tf-resume-cwd-b-"));
+	try {
+		const def: Taskflow = {
+			name: "resume-default-cwd",
+			phases: [
+				{ id: "a", type: "agent", agent: "a", task: "A" },
+				{ id: "b", type: "agent", agent: "a", task: "B", dependsOn: ["a"], final: true },
+			],
+		};
+		const firstState = mkState(def);
+		firstState.cwd = cwdA;
+		const first = await executeTaskflow(firstState, {
+			cwd: cwdA,
+			agents: AGENTS,
+			persist: () => {},
+			runTask: async (cwd, _agents, agent, task) => ({
+				agent,
+				task,
+				exitCode: task === "B" ? 1 : 0,
+				output: task === "B" ? "" : `from:${cwd}`,
+				stderr: task === "B" ? "boom" : "",
+				usage: emptyUsage(),
+				stopReason: task === "B" ? "error" : "end",
+				errorMessage: task === "B" ? "boom" : undefined,
+			}),
+		});
+		assert.equal(first.state.status, "failed");
+
+		const child = forkRunForResume(first.state, { cwd: cwdB });
+		const calls: Array<{ cwd: string; task: string }> = [];
+		const resumed = await executeTaskflow(child, {
+			cwd: cwdB,
+			agents: AGENTS,
+			persist: () => {},
+			runTask: async (cwd, _agents, agent, task) => {
+				calls.push({ cwd, task });
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: `from:${cwd}`,
+					stderr: "",
+					usage: emptyUsage(),
+					stopReason: "end",
+				};
+			},
+		});
+		assert.equal(resumed.ok, true);
+		assert.deepEqual(calls.map((call) => call.task), ["A", "B"], "done phase A must not be reused across cwd roots");
+		assert.ok(calls.every((call) => call.cwd === path.resolve(cwdB)));
+		assert.equal(resumed.state.phases.a.cacheHit, undefined);
+	} finally {
+		fs.rmSync(cwdA, { recursive: true, force: true });
+		fs.rmSync(cwdB, { recursive: true, force: true });
+	}
 });
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 {
   "name": "taskflow-core",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Host-neutral engine for declarative, verifiable task-DAG orchestration — the runtime, DSL, cache, and verification shared by pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, and grok-taskflow.",
   "keywords": [
     "taskflow",

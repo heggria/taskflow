@@ -76,7 +76,7 @@ import {
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import { getBuildInfo, type BuildInfo } from "taskflow-core";
-import { forkRunForResume, validateResumeOverrides, validateResumeRun, type ResumeOverrides } from "taskflow-core";
+import { forkRunForResume, validateResumeRequest, type ResumeOverrides } from "taskflow-core";
 import {
 	runsDir,
 	traceFilePath,
@@ -113,7 +113,7 @@ function readServerVersion(): string {
 	} catch {
 		// Keep the handshake available even in unusual embedded/bundled layouts.
 	}
-	return "0.2.1";
+	return getBuildInfo().packageVersion;
 }
 
 /** An MCP tool definition as returned by tools/list. */
@@ -844,8 +844,6 @@ export function makeToolHandlers(
 			const prevR = loadRunDiagnosed(cwd, runId);
 			if (!prevR.ok) return textContent(describeLoadFailure(prevR, `Run "${runId}"`), true);
 			const prev = prevR.value;
-			const resumable = validateResumeRun(prev);
-			if (!resumable.ok) return textContent(resumable.errors.join("; "), true);
 			const hasOverrideField =
 				args.task !== undefined || args.model !== undefined ||
 				args.timeout !== undefined || args.idleTimeout !== undefined;
@@ -860,13 +858,13 @@ export function makeToolHandlers(
 					...(args.timeout !== undefined ? { timeout: Number(args.timeout) } : {}),
 					...(args.idleTimeout !== undefined ? { idleTimeout: Number(args.idleTimeout) } : {}),
 				};
-				const v = validateResumeOverrides(prev, overrides);
-				if (!v.ok) return textContent(`Invalid resume overrides:\n- ${v.errors.join("\n- ")}`, true);
 			}
-			const child = forkRunForResume(prev, { overrides, cwd });
-			// Carry the host identity onto the child (forkRunForResume copies it,
-			// but the parent may predate the metadata fields — re-stamp defensively).
-			if (host && !child.host) child.host = host;
+			const resumable = validateResumeRequest(prev, overrides);
+			if (!resumable.ok) {
+				const prefix = overrides ? "Invalid resume overrides:\n- " : "";
+				return textContent(`${prefix}${resumable.errors.join(overrides ? "\n- " : "; ")}`, true);
+			}
+			const child = forkRunForResume(prev, { overrides, cwd, host });
 			const settings = readSubagentSettings();
 			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
 			const deps: RuntimeDeps = {

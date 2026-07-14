@@ -90,8 +90,7 @@ import {
 	MAX_DYNAMIC_NESTING,
 	getBuildInfo,
 	forkRunForResume,
-	validateResumeOverrides,
-	validateResumeRun,
+	validateResumeRequest,
 	type ResumeOverrides,
 	cwdBridgeModeFromEnv,
 	directoryIdentity,
@@ -721,10 +720,11 @@ export default function (pi: ExtensionAPI) {
 		description: [
 			"IMPORTANT: Before using this tool for the first time in a session, invoke skill_load('taskflow') to read the full documentation (DSL syntax, examples, best practices). This tool description is a reference, not a tutorial.",
 			"Shorthand (same API as subagent): pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` for parallel, or `chain:[{task,agent?}]` for sequential (use {previous.output}).",
-			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. Phases (agent, parallel, map, gate, reduce, approval, flow, loop, tournament) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
+			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. All 12 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, race, expand) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
 			"Every delegation is tracked (runId), resumable across sessions, and saveable as /tf:<name> via action=save.",
 			"Use action=agents to list the 18 built-in agents (executor, scout, planner, analyst, critic, reviewer, risk-reviewer, security-reviewer, plan-arbiter, final-arbiter, test-engineer, doc-writer, executor-code, executor-fast, executor-ui, recover, verifier, visual-explorer). Do NOT invent agent names.",
-			"Phase types: agent, parallel (static branches), map (dynamic fan-out over array), gate (VERDICT: PASS/BLOCK), reduce (aggregate from N), approval (human-in-the-loop), flow (run saved sub-flow), loop (iterate until condition/convergence/cap), tournament (N variants, judge picks best/aggregate).",
+			"Use action=resume to fork a failed/paused run without mutating its history; optional phase overrides re-run that phase and its downstream. Use action=version to report package, host, commit, and run-state schema identity.",
+			"Phase types: agent, parallel (static branches), map (dynamic fan-out over array), gate (VERDICT: PASS/BLOCK), reduce (aggregate from N), approval (human-in-the-loop), flow (run saved sub-flow), loop (iterate until condition/convergence/cap), tournament (N variants, judge picks best/aggregate), script (zero-token shell command), race (first completed branch wins), expand (dynamic fragment).",
 			"Use action=compile to generate a Mermaid diagram + verification report from a saved or inline flow — 0 tokens.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
 		].join(" "),
@@ -1087,8 +1087,6 @@ export default function (pi: ExtensionAPI) {
 				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
 				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
 				const prev = prevR.value;
-				const resumable = validateResumeRun(prev);
-				if (!resumable.ok) return errorResult(action, resumable.errors.join("; "));
 				// Build overrides if any override field is supplied (requires phaseId).
 				const hasOverrideField =
 					params.resumeTask !== undefined ||
@@ -1106,10 +1104,13 @@ export default function (pi: ExtensionAPI) {
 						...(params.resumeTimeout !== undefined ? { timeout: Number(params.resumeTimeout) } : {}),
 						...(params.resumeIdleTimeout !== undefined ? { idleTimeout: Number(params.resumeIdleTimeout) } : {}),
 					};
-					const v = validateResumeOverrides(prev, overrides);
-					if (!v.ok) return errorResult(action, `Invalid resume overrides:\n- ${v.errors.join("\n- ")}`);
 				}
-				const child = forkRunForResume(prev, { overrides, cwd: ctx.cwd });
+				const resumable = validateResumeRequest(prev, overrides);
+				if (!resumable.ok) {
+					const prefix = overrides ? "Invalid resume overrides:\n- " : "";
+					return errorResult(action, `${prefix}${resumable.errors.join(overrides ? "\n- " : "; ")}`);
+				}
+				const child = forkRunForResume(prev, { overrides, cwd: ctx.cwd, host: "pi" });
 				const result = await runFlow(child.def, child.args, ctx, signal, onUpdate as any, child);
 				const header = `Resumed taskflow '${result.state.flowName}' as run ${result.state.runId}` +
 					(child.parentRunId ? ` (forked from ${child.parentRunId})` : "") +

@@ -10,10 +10,10 @@
 // known commit via env.
 //
 // Usage: node scripts/stamp-build-info.mjs [--check]
-//   --check: assert the stamp is non-"unknown" (used by test:pack to verify
-//   the published dist carries a real commit); exits non-zero otherwise.
+//   --check: read (never rewrite) the existing stamp and assert that it carries
+//   the current concrete commit/build time; exits non-zero otherwise.
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,14 +47,31 @@ const buildTime = Number.isFinite(sourceEpoch) && sourceEpoch >= 0
 	? sourceEpoch * 1000
 	: commitTimeMs;
 const stamp = { gitCommit: commit, ...(buildTime !== undefined ? { buildTime } : {}) };
+
+if (process.argv.includes("--check")) {
+	let actual;
+	try {
+		actual = JSON.parse(readFileSync(dest, "utf8"));
+	} catch (error) {
+		console.error(`[stamp-build-info] --check FAILED: cannot read existing stamp: ${error instanceof Error ? error.message : String(error)}`);
+		process.exit(1);
+	}
+	if (!actual || typeof actual !== "object" || !/^[0-9a-f]{40}$/i.test(actual.gitCommit ?? "")) {
+		console.error("[stamp-build-info] --check FAILED: existing stamp must contain a concrete 40-hex gitCommit");
+		process.exit(1);
+	}
+	if (/^[0-9a-f]{40}$/i.test(commit) && actual.gitCommit !== commit) {
+		console.error(`[stamp-build-info] --check FAILED: existing commit ${actual.gitCommit} does not match current commit ${commit}`);
+		process.exit(1);
+	}
+	if (buildTime !== undefined && actual.buildTime !== buildTime) {
+		console.error(`[stamp-build-info] --check FAILED: existing buildTime ${actual.buildTime} does not match expected ${buildTime}`);
+		process.exit(1);
+	}
+	console.log(`[stamp-build-info] --check OK: ${actual.gitCommit}`);
+	process.exit(0);
+}
+
 mkdirSync(destDir, { recursive: true });
 writeFileSync(dest, `${JSON.stringify(stamp, null, 2)}\n`);
 console.log(`[stamp-build-info] stamped ${dest} (commit ${commit.slice(0, 12)}${commit.length > 12 ? "…" : ""})`);
-
-if (process.argv.includes("--check")) {
-	if (commit === "unknown") {
-		console.error("[stamp-build-info] --check FAILED: commit is 'unknown' (git unavailable and PI_TASKFLOW_BUILD_COMMIT unset)");
-		process.exit(1);
-	}
-	console.log(`[stamp-build-info] --check OK: ${commit}`);
-}

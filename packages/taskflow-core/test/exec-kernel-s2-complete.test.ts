@@ -129,6 +129,54 @@ test("kernel: reduce aggregates via agent", async () => {
 	assert.match(res.finalOutput, /part-b/);
 });
 
+test("kernel: reduce prompt diagnostics count every transient retry attempt", async () => {
+	const def: Taskflow = {
+		name: "k-reduce-retry-prompts",
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "part-a" },
+			{
+				id: "r",
+				type: "reduce",
+				agent: "a",
+				task: "merge {previous.output}",
+				dependsOn: ["a"],
+				from: ["a"],
+				final: true,
+			},
+		],
+	};
+	let reduceAttempts = 0;
+	const res = await withKernel(def, async (_cwd, _agents, agent, task): Promise<RunResult> => {
+		if (task.startsWith("merge ")) {
+			reduceAttempts++;
+			if (reduceAttempts === 1) {
+				return {
+					agent,
+					task,
+					exitCode: 1,
+					output: "",
+					stderr: "429 rate limit",
+					usage: emptyUsage(),
+					stopReason: "error",
+					errorMessage: "429 rate limit",
+				};
+			}
+		}
+		return {
+			agent,
+			task,
+			exitCode: 0,
+			output: `OUT:${task}`,
+			stderr: "",
+			usage: emptyUsage(),
+			stopReason: "end",
+		};
+	});
+	assert.equal(res.ok, true);
+	assert.equal(reduceAttempts, 2);
+	assert.equal(res.state.phases.r.promptStats?.calls.length, 2);
+});
+
 test("kernel: gate BLOCK marks run blocked", async () => {
 	const def: Taskflow = {
 		name: "k-gate",
