@@ -9,20 +9,35 @@
  * This file is NOT imported by index.ts — it is spawned via `child_process.spawn`.
  */
 
-import { readFileSync, rmdirSync, unlinkSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { executeTaskflow } from "./runtime.ts";
 import { cwdBridgeModeFromEnv } from "./cwd-bridge.ts";
-import { getFlow, loadRun, saveRun, DEFAULT_KEPT_RUNS, DEFAULT_RUN_AGE_DAYS } from "./store.ts";
+import {
+	bumpReuseInSidecar,
+	getFlow,
+	loadRun,
+	runsDir,
+	saveRun,
+	traceFilePath,
+	DEFAULT_KEPT_RUNS,
+	DEFAULT_RUN_AGE_DAYS,
+} from "./store.ts";
+import {
+	clearDetachedCancelRequest,
+	watchDetachedCancel,
+} from "./detached-control.ts";
+import { FileTraceSink } from "./trace.ts";
+import type { RuntimeDeps } from "./runtime.ts";
+import type { SubagentRunner } from "./host/runner-types.ts";
 
 interface DetachContext {
 	runId: string;
 	defName: string;
 	args: Record<string, unknown>;
 	cwd: string;
-	/** Bare specifier of the host adapter's runner module, e.g.
-	 *  "pi-taskflow/dist/runner.js". The detached process can't import the host
+	/** Resolved URL/path of the host adapter's runner module. The detached process can't import the host
 	 *  adapter statically (core is host-neutral), so the host tells it where to
 	 *  find a `runTask`. Resolved via dynamic import at run time. */
 	runnerModule?: string;
@@ -33,6 +48,34 @@ interface DetachContext {
 	 * host adapter; core never interprets or expands its authority. */
 	runnerFactoryExport?: string;
 	runnerConfig?: unknown;
+	/** Wait for the parent to persist pid/launch metadata before execution. */
+	waitForStart?: boolean;
+	/** Match foreground taskflow_run incremental cache defaults. */
+	incremental?: boolean;
+	/** Saved flow selected through search; bump reuse only after success. */
+	reusedSavedName?: string;
+}
+
+const START_GATE_TIMEOUT_MS = 5_000;
+
+async function waitForStartGate(contextDir: string): Promise<boolean> {
+	const startPath = join(contextDir, "start");
+	const deadline = Date.now() + START_GATE_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (existsSync(startPath)) {
+			try { unlinkSync(startPath); } catch { /* consumed concurrently */ }
+			return true;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 25));
+	}
+	return false;
+}
+
+function cleanupContextDir(contextPath: string): void {
+	const parent = dirname(contextPath);
+	if (basename(parent).startsWith("taskflow-detach-")) {
+		try { rmdirSync(parent); } catch { /* not empty / already gone */ }
+	}
 }
 
 const contextPath = process.argv[2];
@@ -51,17 +94,32 @@ try {
 	// when reading/parsing fails, so a corrupt detached launch cannot leave a
 	// private authorization snapshot behind indefinitely.
 	try { unlinkSync(contextPath); } catch { /* best-effort one-shot file cleanup */ }
-	const parent = dirname(contextPath);
-	// Remove only an empty Taskflow temp directory. Recursive deletion here would
-	// make this public spawn entry capable of deleting unrelated argv-selected
-	// files merely because their parent happened to share the expected prefix.
-	if (basename(parent).startsWith("taskflow-detach-")) {
-		try { rmdirSync(parent); } catch { /* not empty / already gone */ }
-	}
 }
-if (!ctx) process.exit(1);
+if (!ctx) {
+	cleanupContextDir(contextPath);
+	process.exit(1);
+}
 
 const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+
+if (ctx.waitForStart && !(await waitForStartGate(dirname(contextPath)))) {
+	try {
+		const state = loadRun(ctx.cwd, ctx.runId);
+		if (state?.status === "running") {
+			state.status = "failed";
+			state.phases["__detach__"] = {
+				id: "__detach__",
+				status: "failed",
+				endedAt: Date.now(),
+				error: `Detached launch gate was not released within ${START_GATE_TIMEOUT_MS}ms.`,
+			};
+			saveRun(state, cleanupConfig);
+		}
+	} catch { /* best-effort terminalization */ }
+	cleanupContextDir(contextPath);
+	process.exit(1);
+}
+cleanupContextDir(contextPath);
 
 try {
 	const state = loadRun(ctx.cwd, ctx.runId);
@@ -81,7 +139,7 @@ try {
 	// CANNOT spawn pi/codex itself, so without this every phase would fail with
 	// "No subagent runner injected". Resolve the runner via a dynamic import of
 	// the module path the host serialized into the context file.
-	let runTask: import("./host/runner-types.ts").SubagentRunner["runTask"] | undefined;
+	let injectedRunner: SubagentRunner | undefined;
 	if (ctx.runnerModule) {
 		try {
 			const runnerMod = await import(ctx.runnerModule);
@@ -91,7 +149,7 @@ try {
 				? exported(ctx.runnerConfig)
 				: exported;
 			if (runner && typeof runner.runTask === "function") {
-				runTask = runner.runTask;
+				injectedRunner = runner as SubagentRunner;
 			} else {
 				console.error(`[detached-runner] '${exportName}' on '${ctx.runnerModule}' is not a SubagentRunner (missing runTask)`);
 			}
@@ -108,7 +166,7 @@ try {
 	// bug, a missing export). Exiting non-zero here routes the real stderr
 	// message into the host's early-exit crash guard, which persists it on the
 	// run's synthetic __detach__ phase where it is pollable and debuggable.
-	if (ctx.runnerModule && !runTask) {
+	if (ctx.runnerModule && !injectedRunner) {
 		state.status = "failed";
 		state.phases["__detach__"] = {
 			id: "__detach__",
@@ -120,19 +178,42 @@ try {
 		process.exit(1);
 	}
 
-	const result = await executeTaskflow(state, {
+	const abortController = new AbortController();
+	const stopCancelWatch = watchDetachedCancel(ctx.cwd, ctx.runId, abortController);
+	const abortForSignal = () => abortController.abort({ reason: "detached-process-signal" });
+	process.once("SIGTERM", abortForSignal);
+	process.once("SIGINT", abortForSignal);
+	process.once("SIGHUP", abortForSignal);
+	const deps: RuntimeDeps = {
 		cwd: ctx.cwd,
 		cwdBridgeMode: cwdBridgeModeFromEnv(),
 		agents,
 		globalThinking: settings.globalThinking,
 		persist: (s) => saveRun(s, cleanupConfig),
-		runTask,
+		runTask: injectedRunner?.runTask,
+		usageAccounting: injectedRunner?.usageAccounting,
+		signal: abortController.signal,
+		trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), state.flowName, state.runId)),
 		// No requestApproval — approval phases auto-reject in detached/CI mode
 		// (safety: approval gates are never bypassed; the run records the rejection).
 		loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
-	});
-
-	saveRun(result.state, cleanupConfig);
+	};
+	if (ctx.incremental === true) deps.cacheScopeDefault = "cross-run";
+	try {
+		const result = await executeTaskflow(state, deps);
+		result.state.finalOutput = result.finalOutput;
+		result.state.outputSourcePhaseId = result.outputSourcePhaseId;
+		saveRun(result.state, cleanupConfig);
+		if (result.ok && ctx.reusedSavedName) {
+			try { bumpReuseInSidecar(ctx.cwd, ctx.reusedSavedName); } catch { /* best-effort */ }
+		}
+	} finally {
+		stopCancelWatch();
+		clearDetachedCancelRequest(ctx.cwd, ctx.runId);
+		process.removeListener("SIGTERM", abortForSignal);
+		process.removeListener("SIGINT", abortForSignal);
+		process.removeListener("SIGHUP", abortForSignal);
+	}
 } catch (e) {
 	// Top-level catch: persist failure so the host can poll the terminal state.
 	const message = e instanceof Error ? e.message : String(e);
@@ -146,5 +227,6 @@ try {
 	} catch {
 		// Best-effort — if we can't even load the state, there's nothing to persist.
 	}
+	clearDetachedCancelRequest(ctx.cwd, ctx.runId);
 	process.exit(1);
 }

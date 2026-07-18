@@ -16,6 +16,7 @@
  *
  * Tools exposed:
  *   - taskflow_run     : run an inline or saved flow, return the final output
+ *   - taskflow_runs    : list/status/wait/cancel background runs
  *   - taskflow_list    : list saved flows discoverable in this cwd
  *   - taskflow_show    : show a saved flow's definition
  *   - taskflow_verify  : statically verify a flow (no execution)
@@ -29,6 +30,14 @@
 
 import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
+import {
+	cancelMcpBackgroundRun,
+	formatBackgroundRun,
+	launchMcpBackgroundRun,
+	refreshDetachedRun,
+	waitForMcpBackgroundRun,
+	type DetachedRunnerBinding,
+} from "./background.ts";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
@@ -38,6 +47,7 @@ import {
 	executeTaskflow,
 	getFlowDiagnosed,
 	listFlows,
+	listRuns,
 	newRunId,
 	peekRun,
 	saveRun,
@@ -415,7 +425,26 @@ const TOOLS: McpTool[] = [
 				args: { type: "object", description: "Invocation arguments interpolated as {args.X}." },
 				incremental: { type: "boolean", description: "Default every phase to cross-run cache reuse." },
 				reusedFromSearch: { type: "boolean", description: "Set true when this run was chosen because of a prior taskflow_search → bumps the flow's reuseCount (the reuse flywheel). Default false; direct run-by-name does not bump." },
+				mode: { type: "string", enum: ["foreground", "background"], description: "Execution mode. foreground (default) waits for the full DAG; background returns a runId immediately and continues even if the MCP request ends." },
 			},
+		},
+	},
+	{
+		name: "taskflow_runs",
+		title: "Manage background taskflow runs",
+		description:
+			"List recent background runs, inspect one run, wait for completion without losing it when the MCP request ends, or request cancellation. Use after taskflow_run with mode:'background'.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				action: { type: "string", enum: ["list", "status", "wait", "cancel"], description: "Lifecycle action." },
+				runId: { type: "string", description: "Required for status, wait, and cancel." },
+				timeoutMs: { type: "integer", description: "For wait: return after this many ms if still running (default 30000, max 300000)." },
+				limit: { type: "integer", description: "For list: maximum recent background runs (default 10, max 50)." },
+				reason: { type: "string", description: "For cancel: optional audit reason." },
+			},
+			required: ["action"],
 		},
 	},
 	{
@@ -691,6 +720,8 @@ function resolveFlow(cwd: string, params: { name?: string; define?: unknown; def
  *  `"taskflow"` when omitted so existing callers are unaffected. */
 export interface McpHostOptions {
 	host?: string;
+	/** Resolvable host-runner module used by detached/background execution. */
+	detachedRunner?: DetachedRunnerBinding;
 }
 
 /** Stamp a freshly-created RunState with build/host identity (0.2.0 dogfood
@@ -790,6 +821,30 @@ export function makeToolHandlers(
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
 			};
 			const state = mkRunState(def, resolvedArgs, cwd, host);
+			if (args.mode === "background") {
+				if (!opts?.detachedRunner) {
+					return textContent(
+						"Background mode is unavailable because this MCP host did not provide a detached runner binding.",
+						true,
+					);
+				}
+				try {
+					const { pid } = launchMcpBackgroundRun({
+						state,
+						runner: opts.detachedRunner,
+						incremental: args.incremental === true,
+						reusedSavedName: args.reusedFromSearch === true ? reusedSavedName : undefined,
+					});
+					return textContent(
+						`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.`,
+					);
+				} catch (error) {
+					return textContent(
+						`Failed to start background taskflow: ${error instanceof Error ? error.message : String(error)}`,
+						true,
+					);
+				}
+			}
 			// Deterministic-replay trace (best-effort, fail-open).
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
@@ -807,11 +862,16 @@ export function makeToolHandlers(
 			};
 
 			let terminalPersistError: string | undefined;
-			const res = await executeTaskflow(state, deps).finally(() => {
+			let res: Awaited<ReturnType<typeof executeTaskflow>>;
+			try {
+				res = await executeTaskflow(state, deps);
+				state.finalOutput = res.finalOutput;
+				state.outputSourcePhaseId = res.outputSourcePhaseId;
+			} finally {
 				// Terminal persist must survive a throwing runtime ("never lose work") —
 				// and persistence itself must never sink a completed run.
 				terminalPersistError = persistTerminalRun(state, cleanupConfig);
-			});
+			}
 			if (terminalPersistError !== undefined) {
 				return textContent(
 					`Taskflow execution finished, but terminal run persistence failed; no durable run ID can be promised: ${terminalPersistError}`,
@@ -834,6 +894,38 @@ export function makeToolHandlers(
 			const sourceLabel = res.outputSourcePhaseId ? `--- ${res.outputSourcePhaseId} ---\n` : "";
 			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;
 			return textContent(`${header}\n\n${sourceLabel}${res.finalOutput}${usageLine}`, !res.ok);
+		},
+
+		taskflow_runs: async (args, context) => {
+			const action = String(args.action ?? "");
+			if (action === "list") {
+				const limit = Math.max(1, Math.min(50, typeof args.limit === "number" ? Math.floor(args.limit) : 10));
+				const runs = listRuns(cwd, 1_000)
+					.filter((run) => run.detached)
+					.slice(0, limit)
+					.map((run) => refreshDetachedRun(cwd, run.runId) ?? run);
+				if (runs.length === 0) return textContent("No background taskflow runs found from this directory.");
+				return textContent(`Background taskflow runs:\n${runs.map((run) => formatBackgroundRun(run, false)).join("\n")}`);
+			}
+
+			const runId = typeof args.runId === "string" ? args.runId.trim() : "";
+			if (!runId) return textContent(`taskflow_runs action '${action}' requires \`runId\`.`, true);
+			let state = refreshDetachedRun(cwd, runId);
+			if (!state) return textContent(`Run \"${runId}\" was not found.`, true);
+			if (!state.detached) return textContent(`Run \"${runId}\" is not a background run.`, true);
+
+			if (action === "status") return textContent(formatBackgroundRun(state, true));
+			if (action === "wait") {
+				const timeoutMs = Math.max(0, Math.min(300_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : 30_000));
+				state = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal) ?? state;
+				return textContent(formatBackgroundRun(state, true), state.status !== "running" && state.status !== "completed");
+			}
+			if (action === "cancel") {
+				if (state.status !== "running") return textContent(`Run is already ${state.status}.\n${formatBackgroundRun(state, true)}`);
+				cancelMcpBackgroundRun(cwd, runId, typeof args.reason === "string" ? args.reason : undefined);
+				return textContent(`Cancellation requested.\n${formatBackgroundRun(state, false)}`);
+			}
+			return textContent(`Unknown taskflow_runs action: ${action}`, true);
 		},
 
 		taskflow_resume: async (args, context) => {

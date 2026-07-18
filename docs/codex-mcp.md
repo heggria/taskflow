@@ -51,11 +51,14 @@ Unknown values fail closed before the subprocess starts.
 
 ## Long-running flows and the tool-call timeout
 
-`taskflow_run` returns only after the **whole DAG finishes** — intermediate
-phase outputs stay in the runtime, so from Codex's side it's a single tool call
-that can run for many minutes. Codex applies a per-server MCP **tool-call
-timeout**; if the call outlives it, Codex abandons the result client-side even
-though the run keeps executing server-side.
+Foreground `taskflow_run` returns only after the **whole DAG finishes**.
+For a long flow, pass `mode: "background"`: the call returns a durable `runId`
+immediately, and the run continues independently of that MCP request. Use
+`taskflow_runs` with `action: "status"`, `"wait"`, or `"cancel"`; `wait` may
+be called repeatedly with a bounded `timeoutMs` and returns the persisted final
+output when complete.
+
+Codex still applies a per-server MCP **tool-call timeout** to foreground calls.
 
 To stop large flows from being cut off, the plugin's `.mcp.json` ships a
 30-minute default:
@@ -80,8 +83,8 @@ default):
 tool_timeout_sec = 3600
 ```
 
-If a flow is genuinely huge, also consider splitting it into a few smaller
-`taskflow_run` calls so each returns well inside the window.
+Use foreground mode for short flows and background mode for anything that may
+outlive the window.
 
 Each spawned Codex subagent is isolated from the parent Codex customization:
 the runner uses `--ephemeral --ignore-user-config --ignore-rules`, clears
@@ -123,7 +126,8 @@ subagent a flow spawns is itself a `codex exec` process — no pi process needed
 
 | Tool | What it does |
 |------|--------------|
-| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output + a `runId`. |
+| `taskflow_run` | Run a saved or inline flow. Foreground returns the final output; `mode: "background"` returns a durable `runId` immediately. |
+| `taskflow_runs` | List background runs or `status` / `wait` / `cancel` one by `runId`. |
 | `taskflow_list` | List saved flows discoverable from the cwd, now with library metadata (`purpose`, `generality`, `reuseCount`) when available. |
 | `taskflow_show` | Show a saved flow as `{definition, library}` — the `library` object holds the sidecar metadata (`purpose`, `tags`, `generality`, `reuseCount`, `phaseSignature`, …). |
 | `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. Writes the flow JSON plus a sidecar `.meta.json`. |

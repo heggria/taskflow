@@ -2,6 +2,12 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.3] — Unreleased
+
+### Added
+
+- **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries.
+
 ## [0.2.2] — 2026-07-14
 
 ### ⚠️ Breaking — migration required

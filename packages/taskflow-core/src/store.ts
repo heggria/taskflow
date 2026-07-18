@@ -193,6 +193,12 @@ export interface RunState {
 	pid?: number;
 	/** True for runs spawned via `detach: true` (background execution). */
 	detached?: boolean;
+	/** Wall-clock launch time for detached lifecycle/orphan diagnostics. */
+	detachedStartedAt?: number;
+	/** Final output persisted by a detached runner for later wait/status calls. */
+	finalOutput?: string;
+	/** Phase whose output supplied `finalOutput`, when attributable. */
+	outputSourcePhaseId?: string;
 	/** Content fingerprint of the desugared flow definition (overstory hash
 	 *  algorithm). Folded into every phase's cache key so a structural change
 	 *  to the flow always invalidates cross-run cache hits — and an identical
@@ -680,6 +686,9 @@ function cleanupTerminalRuns(
 		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
 		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
 		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }
+		// Remove a detached control marker left by a process killed before it
+		// could consume/clear cancellation itself.
+		try { fs.unlinkSync(path.join(runsRoot, ".control", `${e.runId}.cancel.json`)); } catch { /* ignore */ }
 		// Also remove the per-run isolated-workspace dir tree (cwd:"dedicated").
 		// `dedicated` workspaces are persistent by design; reclaim them once the
 		// run is pruned. The dir name uses the same sanitization as workspace.ts.

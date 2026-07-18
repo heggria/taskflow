@@ -151,13 +151,13 @@ exact hard token/USD ceiling for an in-flight model call.
 
 ## Long-running flows and the tool-call timeout
 
-`taskflow_run` returns only after the **whole DAG finishes** — intermediate
-phase outputs stay in the runtime, so from Grok's side it's a single tool call
-that can run for many minutes. The plugin's `.mcp.json` ships
-`tool_timeout_sec: 1800` (30 minutes). For huge flows, split into a few smaller
-`taskflow_run` calls. MCP does not expose Pi's detached-run mode. If the client
-sends `notifications/cancelled` (including after a tool timeout), the server
-aborts the active DAG and subagent instead of leaving hidden background work.
+Foreground `taskflow_run` returns only after the **whole DAG finishes**. The
+plugin's `.mcp.json` ships `tool_timeout_sec: 1800` (30 minutes). For a long
+flow, pass `mode: "background"`: it returns a durable `runId` immediately and
+continues independently of that MCP request. Use `taskflow_runs` with `action:
+"status"`, `"wait"`, or `"cancel"`; bounded waits can be repeated until the
+persisted final output is ready. Cancelling a foreground MCP request still
+aborts that foreground DAG; background runs are cancelled explicitly by id.
 
 ## Alternative: register the MCP server manually
 
@@ -186,7 +186,8 @@ subagent a flow spawns is itself a `grok -p` process — no pi process needed.
 
 | Tool | What it does |
 |------|--------------|
-| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output + a `runId`. |
+| `taskflow_run` | Run a saved or inline flow. Foreground returns the final output; `mode: "background"` returns a durable `runId` immediately. |
+| `taskflow_runs` | List background runs or `status` / `wait` / `cancel` one by `runId`. |
 | `taskflow_list` | List saved flows discoverable from the cwd, with library metadata when available. |
 | `taskflow_show` | Show a saved flow as `{definition, library}`. |
 | `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. |

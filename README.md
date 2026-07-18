@@ -131,7 +131,7 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 /tf:audit-api dir=src/api
 ```
 
-On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`.
+On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`status` / `wait` / `cancel`).
 
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 

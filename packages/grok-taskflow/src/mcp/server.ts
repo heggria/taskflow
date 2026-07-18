@@ -15,19 +15,27 @@ import {
 import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { grokSubagentRunner } from "taskflow-hosts";
 
+const HOST_OPTIONS = {
+	host: "grok",
+	detachedRunner: {
+		module: import.meta.resolve("taskflow-hosts/grok"),
+		exportName: "grokSubagentRunner",
+	},
+} as const;
+
 /** Per-call tool handlers with grok subagent execution bound in. */
 export function makeToolHandlers(
 	cwd: string,
 ): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, grokSubagentRunner, { host: "grok" });
+	return coreMakeToolHandlers(cwd, grokSubagentRunner, HOST_OPTIONS);
 }
 
 /** Full MCP method dispatch table (protocol + tools), grok-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, grokSubagentRunner, { host: "grok" });
+	return coreMakeMcpHandlers(cwd, grokSubagentRunner, HOST_OPTIONS);
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(grokSubagentRunner, cwd, { host: "grok" });
+	return coreStartMcpServer(grokSubagentRunner, cwd, HOST_OPTIONS);
 }

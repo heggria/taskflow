@@ -23,7 +23,8 @@ kernel enforcement is unavailable.
 
 | Tool | What it does |
 |------|--------------|
-| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG, or shorthand `{task}` / `{tasks}` / `{chain}`). Optional `args`, `incremental`. Returns only the final phase output + a `runId`. |
+| `taskflow_run` | Run a saved or inline flow. Optional `args`, `incremental`; `mode: "background"` returns a durable `runId` immediately. |
+| `taskflow_runs` | List background runs or `status` / `wait` / `cancel` one by `runId`. |
 | `taskflow_resume` | Fork a failed/paused run into a new immutable child run, optionally overriding one phase's task/model/timeouts. |
 | `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
@@ -671,6 +672,11 @@ re-run blind — `taskflow_peek` the run: omit `phaseId` to list phase statuses
 and output sizes, then peek the suspicious phase (`json: true` for parsed
 output, `item: n` for one fan-out section). Output is hard-truncated
 (default 4000 chars, max 32000) so a peek never floods your context.
+
+For a flow that may outlive one MCP tool call, set `mode: "background"` on
+`taskflow_run`. It returns immediately; use `taskflow_runs` with `action:
+"status"`, `"wait"`, or `"cancel"` and the returned `runId`. A bounded `wait`
+can be called repeatedly, and completion returns the persisted final output.
 
 Use `taskflow_trace` to inspect the append-only event log for a finished run,
 then `taskflow_replay` to re-judge it under alternate thresholds/budget **offline

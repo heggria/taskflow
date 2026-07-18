@@ -74,12 +74,11 @@ such as npm tokens, database URLs, and other-provider API keys are not inherited
 
 ## Long-running flows and the tool-call timeout
 
-`taskflow_run` returns only after the **whole DAG finishes** — intermediate
-phase outputs stay in the runtime, so from Claude Code's side it's a single tool
-call that can run for many minutes. If a flow is genuinely huge, consider
-splitting it into a few smaller `taskflow_run` calls so each returns promptly,
-or run it in the background from a plain shell (`claude -p … &`) and inspect the
-run afterward with `taskflow_peek`.
+Foreground `taskflow_run` returns only after the **whole DAG finishes**. For a
+long flow, pass `mode: "background"`: it returns a durable `runId` immediately
+and continues independently of that MCP request. Use `taskflow_runs` with
+`action: "status"`, `"wait"`, or `"cancel"`; `wait` is bounded by `timeoutMs`
+and can be called repeatedly until the persisted final output is ready.
 
 ## Alternative: register the MCP server manually
 
@@ -113,7 +112,8 @@ subagent a flow spawns is itself a `claude -p` process — no pi process needed.
 
 | Tool | What it does |
 |------|--------------|
-| `taskflow_run` | Run a saved flow (`name`) or an inline `define` (full DAG or shorthand `{task}`/`{tasks}`/`{chain}`). Returns only the final phase output + a `runId`. |
+| `taskflow_run` | Run a saved or inline flow. Foreground returns the final output; `mode: "background"` returns a durable `runId` immediately. |
+| `taskflow_runs` | List background runs or `status` / `wait` / `cancel` one by `runId`. |
 | `taskflow_list` | List saved flows discoverable from the cwd, now with library metadata (`purpose`, `generality`, `reuseCount`) when available. |
 | `taskflow_show` | Show a saved flow as `{definition, library}` — the `library` object holds the sidecar metadata (`purpose`, `tags`, `generality`, `reuseCount`, `phaseSignature`, …). |
 | `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. Writes the flow JSON plus a sidecar `.meta.json`. |

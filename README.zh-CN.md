@@ -131,7 +131,7 @@ pi install npm:pi-taskflow
 /tf:audit-api dir=src/api
 ```
 
-在 Codex、Claude Code、OpenCode 和 Grok Build 上，通过 `taskflow_run` 按名称运行同一份保存定义。
+在 Codex、Claude Code、OpenCode 和 Grok Build 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时。
 
 [查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
