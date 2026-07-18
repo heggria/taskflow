@@ -8,6 +8,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`; lists report the total active count and can filter `running` versus `terminal` runs. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries. Starting a sixth concurrent background run emits an explicit resource-contention warning because Taskflow intentionally has no hidden global cross-host scheduler.
 
+### Changed
+
+- **Release maintenance rollup.** The 0.2 frontier assessment is now linked from both READMEs; Pi development peers move to 0.80.7, Fumadocs packages move to their mutually compatible 16.11.5/15.2.0 set, Biome moves to 2.5.4, and every workflow uses the verified `actions/setup-node` v7.0.0 tag commit. These changes absorb the independently opened maintenance PRs into the fully tested 0.2.3 release transaction.
+
 ### Fixed
 
 - **Atomic terminal results.** The runtime now persists `finalOutput` and `outputSourcePhaseId` in the same terminal-state write, so a crash or immediate poll can never observe `completed` without its result.

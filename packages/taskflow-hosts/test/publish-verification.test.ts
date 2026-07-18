@@ -86,7 +86,7 @@ test("publish workflow pins actions and isolates npm provenance from release per
 		2,
 	);
 	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6")));
-	assert.ok(uses.some((use) => use.includes("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6")));
+	assert.ok(uses.some((use) => use.includes("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7")));
 	assert.doesNotMatch(source, /uses:\s+\S+@v\d+/);
 
 	const publish = workflowJob(source, "publish");
@@ -133,7 +133,7 @@ test("every repository workflow pins third-party actions to verified full SHAs",
 	const trustedPins = new Map([
 		["actions/checkout", "9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"],
 		["pnpm/action-setup", "0ebf47130e4866e96fce0953f49152a61190b271"],
-		["actions/setup-node", "48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e"],
+		["actions/setup-node", "820762786026740c76f36085b0efc47a31fe5020"],
 		["actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9"],
 		["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
 		["github/codeql-action/init", "99df26d4f13ea111d4ec1a7dddef6063f76b97e9"],
