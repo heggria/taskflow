@@ -53,8 +53,6 @@ import {
 	newRunId,
 	peekRun,
 	saveRun,
-	DEFAULT_KEPT_RUNS,
-	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
 	describeLoadFailure,
 	compileTaskflow,
@@ -878,7 +876,10 @@ export function makeToolHandlers(
 
 			// Persist run state (throttled + final) so taskflow_peek / resume can read
 			// intermediate phase outputs after the run — same contract as the pi adapter.
-			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+			const cleanupConfig = {
+				maxKeep: settings.taskflow.maxKeptRuns,
+				maxAgeDays: settings.taskflow.maxRunAgeDays,
+			};
 			let lastPersist = 0;
 			deps.persist = (s) => {
 				const now = Date.now();
@@ -1012,7 +1013,10 @@ export function makeToolHandlers(
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
 				trace: new FileTraceSink(traceFilePath(runsDir(cwd), child.flowName, child.runId)),
 			};
-			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+			const cleanupConfig = {
+				maxKeep: settings.taskflow.maxKeptRuns,
+				maxAgeDays: settings.taskflow.maxRunAgeDays,
+			};
 			let lastPersist = 0;
 			deps.persist = (s) => { if (Date.now() - lastPersist >= 1000) { lastPersist = Date.now(); saveRun(s, cleanupConfig); } };
 			let terminalPersistError: string | undefined;

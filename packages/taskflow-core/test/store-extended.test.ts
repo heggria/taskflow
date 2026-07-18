@@ -7,7 +7,7 @@ import { test } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { hashInput, newRunId, writeFileAtomic } from "../src/store.ts";
+import { hashInput, newRunId, validateRunId, writeFileAtomic } from "../src/store.ts";
 
 // ════════════════════════════════════════════════════════════════════
 // HASH INPUT
@@ -71,6 +71,18 @@ test("newRunId: long flow name is truncated", () => {
 	// The prefix should be at most 24 chars
 	const prefix = id.split("-")[0];
 	assert.ok(prefix.length <= 24, `prefix length ${prefix.length} should be <= 24`);
+});
+
+test("newRunId: dot-leading flow names remain valid and loadable", () => {
+	const id = newRunId(".ci");
+	assert.ok(id.startsWith(".ci-"));
+	assert.equal(validateRunId(id), true);
+});
+
+test("validateRunId: rejects traversal and path separators", () => {
+	for (const id of ["../escape", "a..b", "a/b", "a\\b", "", "x".repeat(161)]) {
+		assert.equal(validateRunId(id), false, `expected ${JSON.stringify(id)} to be rejected`);
+	}
 });
 
 // ════════════════════════════════════════════════════════════════════

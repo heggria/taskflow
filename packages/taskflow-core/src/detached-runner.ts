@@ -29,7 +29,9 @@ import {
 	clearDetachedProcessRegistry,
 	DETACHED_CONTROL_CWD_ENV,
 	DETACHED_CONTROL_INSTANCE_ENV,
+	DETACHED_CONTROL_OWNER_PID_ENV,
 	DETACHED_CONTROL_RUN_ID_ENV,
+	DETACHED_CONTROL_SIGNAL_READY_ENV,
 	heartbeatDetachedProcessRegistry,
 	terminateDetachedProcessTrees,
 	watchDetachedCancel,
@@ -148,6 +150,7 @@ try {
 		process.env[DETACHED_CONTROL_CWD_ENV] = ctx.cwd;
 		process.env[DETACHED_CONTROL_RUN_ID_ENV] = ctx.runId;
 		process.env[DETACHED_CONTROL_INSTANCE_ENV] = ctx.detachedInstanceId;
+		process.env[DETACHED_CONTROL_OWNER_PID_ENV] = String(process.pid);
 		heartbeatDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
 		heartbeatTimer = setInterval(() => {
 			try { heartbeatDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId!); } catch { /* best-effort lease */ }
@@ -219,6 +222,7 @@ try {
 	process.once("SIGTERM", abortForSignal);
 	process.once("SIGINT", abortForSignal);
 	process.once("SIGHUP", abortForSignal);
+	process.env[DETACHED_CONTROL_SIGNAL_READY_ENV] = "1";
 	const deps: RuntimeDeps = {
 		cwd: ctx.cwd,
 		cwdBridgeMode: cwdBridgeModeFromEnv(),
@@ -247,6 +251,7 @@ try {
 		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		clearDetachedCancelRequest(ctx.cwd, ctx.runId);
 		if (ctx.detachedInstanceId) clearDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
+		delete process.env[DETACHED_CONTROL_SIGNAL_READY_ENV];
 		process.removeListener("SIGTERM", abortForSignal);
 		process.removeListener("SIGINT", abortForSignal);
 		process.removeListener("SIGHUP", abortForSignal);

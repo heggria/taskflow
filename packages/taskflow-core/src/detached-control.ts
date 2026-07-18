@@ -25,6 +25,8 @@ export const DETACHED_CONTROL_VERSION = CONTROL_VERSION;
 export const DETACHED_CONTROL_CWD_ENV = "TASKFLOW_DETACHED_CONTROL_CWD";
 export const DETACHED_CONTROL_RUN_ID_ENV = "TASKFLOW_DETACHED_CONTROL_RUN_ID";
 export const DETACHED_CONTROL_INSTANCE_ENV = "TASKFLOW_DETACHED_CONTROL_INSTANCE";
+export const DETACHED_CONTROL_OWNER_PID_ENV = "TASKFLOW_DETACHED_CONTROL_OWNER_PID";
+export const DETACHED_CONTROL_SIGNAL_READY_ENV = "TASKFLOW_DETACHED_CONTROL_SIGNAL_READY";
 
 export interface DetachedProcessRegistry {
 	version: number;
@@ -152,8 +154,18 @@ function processRegistryContextFromEnv(): { cwd: string; runId: string; instance
 	const cwd = process.env[DETACHED_CONTROL_CWD_ENV];
 	const runId = process.env[DETACHED_CONTROL_RUN_ID_ENV];
 	const instanceId = process.env[DETACHED_CONTROL_INSTANCE_ENV];
+	// Host CLIs inherit the detached worker's environment. Only the process that
+	// owns this exact PID token may mutate the outer worker's registry; nested
+	// Taskflow instances must not overwrite its heartbeat/owner identity.
+	if (process.env[DETACHED_CONTROL_OWNER_PID_ENV] !== String(process.pid)) return null;
 	if (!cwd || !runId || !instanceId || !validateRunId(runId)) return null;
 	return { cwd, runId, instanceId };
+}
+
+/** True only after this exact detached owner installed its persistence-aware signal bridge. */
+export function isDetachedSignalOwnerReady(): boolean {
+	return process.env[DETACHED_CONTROL_OWNER_PID_ENV] === String(process.pid) &&
+		process.env[DETACHED_CONTROL_SIGNAL_READY_ENV] === "1";
 }
 
 /** Best-effort hook used by runner-core whenever a Host CLI process group starts. */

@@ -10,6 +10,7 @@ import {
 	detachedControlDir,
 	DETACHED_CONTROL_CWD_ENV,
 	DETACHED_CONTROL_INSTANCE_ENV,
+	DETACHED_CONTROL_OWNER_PID_ENV,
 	DETACHED_CONTROL_RUN_ID_ENV,
 	probeProcess,
 	registerDetachedProcessTreeFromEnv,
@@ -75,6 +76,7 @@ test("detached control: registered Host CLI process groups are reaped by instanc
 		cwd: process.env[DETACHED_CONTROL_CWD_ENV],
 		runId: process.env[DETACHED_CONTROL_RUN_ID_ENV],
 		instance: process.env[DETACHED_CONTROL_INSTANCE_ENV],
+		ownerPid: process.env[DETACHED_CONTROL_OWNER_PID_ENV],
 	};
 	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
 		detached: process.platform !== "win32",
@@ -85,6 +87,14 @@ test("detached control: registered Host CLI process groups are reaped by instanc
 		process.env[DETACHED_CONTROL_CWD_ENV] = cwd;
 		process.env[DETACHED_CONTROL_RUN_ID_ENV] = runId;
 		process.env[DETACHED_CONTROL_INSTANCE_ENV] = instanceId;
+		process.env[DETACHED_CONTROL_OWNER_PID_ENV] = String(process.pid + 1);
+		registerDetachedProcessTreeFromEnv(child.pid!);
+		assert.deepEqual(
+			terminateDetachedProcessTrees(cwd, runId, instanceId),
+			[],
+			"an inherited detached context cannot register from a non-owner process",
+		);
+		process.env[DETACHED_CONTROL_OWNER_PID_ENV] = String(process.pid);
 		registerDetachedProcessTreeFromEnv(child.pid!);
 		assert.deepEqual(terminateDetachedProcessTrees(cwd, runId, "wrong-instance"), []);
 		assert.deepEqual(terminateDetachedProcessTrees(cwd, runId, instanceId), [child.pid]);
@@ -103,6 +113,8 @@ test("detached control: registered Host CLI process groups are reaped by instanc
 		else process.env[DETACHED_CONTROL_RUN_ID_ENV] = previousContext.runId;
 		if (previousContext.instance === undefined) delete process.env[DETACHED_CONTROL_INSTANCE_ENV];
 		else process.env[DETACHED_CONTROL_INSTANCE_ENV] = previousContext.instance;
+		if (previousContext.ownerPid === undefined) delete process.env[DETACHED_CONTROL_OWNER_PID_ENV];
+		else process.env[DETACHED_CONTROL_OWNER_PID_ENV] = previousContext.ownerPid;
 		restore();
 		fs.rmSync(root, { recursive: true, force: true });
 	}

@@ -196,7 +196,10 @@ function isStructurallyUsableRun(state: RunState): boolean {
 		state && typeof state === "object" &&
 		typeof state.runId === "string" && typeof state.cwd === "string" &&
 		state.def && Array.isArray(state.def.phases) &&
-		state.phases && typeof state.phases === "object" &&
+		state.def.phases.every((phase) => phase && typeof phase === "object" && typeof phase.id === "string") &&
+		state.phases && typeof state.phases === "object" && !Array.isArray(state.phases) &&
+		Object.values(state.phases).every((phase) =>
+			phase && typeof phase === "object" && typeof phase.status === "string") &&
 		["running", "completed", "failed", "paused", "blocked"].includes(state.status),
 	);
 }
@@ -210,20 +213,33 @@ function refreshDetachedState(cwd: string, state: RunState): RunState | null {
 		const liveness = probeProcess(state.pid);
 		if (state.detachedControlVersion === DETACHED_CONTROL_VERSION && state.detachedInstanceId) {
 			const registry = readDetachedProcessRegistry(state.cwd, state.runId);
+			const registryMatches = Boolean(
+				registry && registry.instanceId === state.detachedInstanceId && registry.ownerPid === state.pid,
+			);
 			const heartbeatFresh = Boolean(
-				registry && registry.instanceId === state.detachedInstanceId &&
-				registry.ownerPid === state.pid && Date.now() - registry.heartbeatAt <= HEARTBEAT_STALE_MS,
+				registryMatches && registry && Date.now() - registry.heartbeatAt <= HEARTBEAT_STALE_MS,
 			);
 			if (liveness !== "dead" && heartbeatFresh) return state;
 			if (
 				liveness !== "dead" && !registry &&
 				Date.now() - (state.detachedStartedAt ?? state.createdAt) <= STARTING_GRACE_MS
 			) return state;
-			// For current-protocol workers the private heartbeat is authoritative.
-			// EPERM from signal 0 must not keep a run phantom-running forever once
-			// the startup grace has elapsed without a registry heartbeat.
-			terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
-			clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+			if (liveness === "alive" && registryMatches) {
+				// A live owner that stopped renewing its authenticated lease is stuck.
+				// Kill the owner before publishing a terminal state; otherwise it could
+				// resume later and mutate the workspace after status reported failure.
+				killProcessTree(state.pid, "SIGKILL");
+				terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
+				clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+			} else if (liveness === "dead") {
+				terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
+				clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+			} else {
+				// A live/EPERM pid without a matching instance lease cannot safely be
+				// signalled or terminalized: it may be an unrelated reused PID. Keep the
+				// state conservative until cancellation succeeds or liveness is proven.
+				return state;
+			}
 		} else if (isProcessAlive(state.pid)) {
 			return state;
 		}
@@ -301,8 +317,11 @@ export function listMcpBackgroundRuns(
 
 function phaseProgress(state: RunState): { done: number; total: number } {
 	const total = state.def.phases.length;
-	const done = Object.values(state.phases).filter((phase) => phase.status !== "running").length;
-	return { done: Math.min(done, total), total };
+	const done = state.def.phases.filter((phase) => {
+		const stored = state.phases[phase.id];
+		return stored !== undefined && stored.status !== "running";
+	}).length;
+	return { done, total };
 }
 
 function statusGlyph(status: RunState["status"]): string {
@@ -326,7 +345,7 @@ export function formatBackgroundRun(state: RunState, includeOutput: boolean): st
 		return cancel ? `${first} · cancellation requested` : first;
 	}
 	const source = state.outputSourcePhaseId ? `--- ${state.outputSourcePhaseId} ---\n` : "";
-	if (state.finalOutput !== undefined) {
+	if (typeof state.finalOutput === "string") {
 		const truncated = state.finalOutput.length > MAX_PRESENTED_OUTPUT_CHARS
 			? `${state.finalOutput.slice(0, MAX_PRESENTED_OUTPUT_CHARS)}\n\n… output truncated; use taskflow_peek for targeted inspection.`
 			: state.finalOutput;

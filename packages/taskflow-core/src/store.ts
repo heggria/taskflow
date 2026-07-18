@@ -371,7 +371,12 @@ function lockPathForRun(runsRoot: string, flowName: string, runId: string): stri
  * Legitimate runIds are produced by newRunId() and contain only [A-Za-z0-9._-].
  */
 export function validateRunId(runId: string): boolean {
-	return typeof runId === "string" && runId.length <= 160 && /^[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/.test(runId) && !runId.includes("..");
+	// A single leading/trailing dot is safe once the id is used as
+	// `${runId}.json`, and `newRunId()` has historically produced leading-dot
+	// ids for valid flow names such as `.ci`. Reject separators and dot-dot
+	// traversal, but retain compatibility with those already-persisted runs.
+	return typeof runId === "string" && runId.length > 0 && runId.length <= 160 &&
+		/^[A-Za-z0-9._-]+$/.test(runId) && !runId.includes("..");
 }
 
 // ---------------------------------------------------------------------------

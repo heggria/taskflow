@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	DETACHED_CONTROL_VERSION,
+	detachedProcessRegistryPath,
 	loadRun,
 	newRunId,
 	probeProcess,
@@ -102,6 +104,27 @@ test("mcp background: run returns immediately and wait returns durable final out
 	}
 });
 
+test("mcp background: dot-leading flow names keep a durable run id", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-background-dot-"));
+	const restoreAgentDir = usePrivateAgentDir(cwd);
+	try {
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner, {
+			host: "test",
+			detachedRunner: { module: fixtureModule(), exportName: "instantRunner" },
+		});
+		const started = await tools.taskflow_run({ define: inlineAgentFlow(".ci"), mode: "background" }) as TextResult;
+		assert.equal(started.isError, false, started.content[0]?.text);
+		const runId = runIdFrom(started);
+		assert.ok(runId.startsWith(".ci-"));
+		const waited = await tools.taskflow_runs({ action: "wait", runId, timeoutMs: 5_000 }) as TextResult;
+		assert.equal(waited.isError, false, waited.content[0]?.text);
+		assert.equal(loadRun(cwd, runId)?.status, "completed");
+	} finally {
+		restoreAgentDir();
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("mcp background: cancel survives request boundaries and pauses the run", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-cancel-"));
 	const restoreAgentDir = usePrivateAgentDir(cwd);
@@ -180,6 +203,50 @@ test("mcp background: malformed historical state cannot turn a successful launch
 	}
 });
 
+test("mcp background: malformed optional output cannot crash status formatting", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-malformed-output-"));
+	const restoreAgentDir = usePrivateAgentDir(cwd);
+	try {
+		const malformed = runningBackgroundState(cwd, "malformed-output");
+		malformed.status = "failed";
+		malformed.finalOutput = null as unknown as string;
+		malformed.phases["__detach__"] = {
+			id: "__detach__",
+			status: "failed",
+			error: "detached launch failed",
+			endedAt: Date.now(),
+		};
+		saveRun(malformed);
+
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner);
+		const status = await tools.taskflow_runs({ action: "status", runId: malformed.runId }) as TextResult;
+		assert.equal(status.isError, false);
+		assert.match(status.content[0]!.text, /0\/1 phases/);
+		assert.match(status.content[0]!.text, /detached launch failed/);
+	} finally {
+		restoreAgentDir();
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp background: malformed phase definitions are rejected without crashing status", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-malformed-phase-"));
+	const restoreAgentDir = usePrivateAgentDir(cwd);
+	try {
+		const malformed = runningBackgroundState(cwd, "malformed-phase");
+		malformed.def.phases = [null as unknown as Taskflow["phases"][number]];
+		saveRun(malformed);
+
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner);
+		const status = await tools.taskflow_runs({ action: "status", runId: malformed.runId }) as TextResult;
+		assert.equal(status.isError, true);
+		assert.match(status.content[0]!.text, /was not found/);
+	} finally {
+		restoreAgentDir();
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("mcp background: legacy detached workers fail closed for cancel", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-legacy-cancel-"));
 	const restoreAgentDir = usePrivateAgentDir(cwd);
@@ -196,7 +263,7 @@ test("mcp background: legacy detached workers fail closed for cancel", async () 
 	}
 });
 
-test("mcp background: current worker without a heartbeat leaves running after startup grace", async () => {
+test("mcp background: dead current-protocol worker without a heartbeat becomes failed", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-missing-heartbeat-"));
 	const restoreAgentDir = usePrivateAgentDir(cwd);
 	try {
@@ -213,6 +280,75 @@ test("mcp background: current worker without a heartbeat leaves running after st
 		assert.match(status.content[0]!.text, /failed/);
 		assert.equal(loadRun(cwd, state.runId)?.status, "failed");
 	} finally {
+		restoreAgentDir();
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp background: a live pid without an authenticated lease is not falsely terminalized", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-unverified-live-"));
+	const restoreAgentDir = usePrivateAgentDir(cwd);
+	const worker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+		detached: true,
+		stdio: "ignore",
+	});
+	assert.ok(worker.pid);
+	try {
+		const state = runningBackgroundState(cwd, "unverified-live");
+		state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+		state.detachedInstanceId = "unverified-live-instance";
+		state.detachedStartedAt = Date.now() - 10_000;
+		state.pid = worker.pid;
+		saveRun(state);
+
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner);
+		const status = await tools.taskflow_runs({ action: "status", runId: state.runId }) as TextResult;
+		assert.match(status.content[0]!.text, /running/);
+		assert.equal(loadRun(cwd, state.runId)?.status, "running");
+		assert.notEqual(probeProcess(worker.pid!), "dead");
+	} finally {
+		try { process.kill(process.platform === "win32" ? worker.pid! : -worker.pid!, "SIGKILL"); } catch { /* already gone */ }
+		restoreAgentDir();
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp background: a stale authenticated lease kills its owner before terminalizing", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-stale-lease-"));
+	const restoreAgentDir = usePrivateAgentDir(cwd);
+	const worker = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+		detached: true,
+		stdio: "ignore",
+	});
+	assert.ok(worker.pid);
+	try {
+		const state = runningBackgroundState(cwd, "stale-lease");
+		state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+		state.detachedInstanceId = "stale-lease-instance";
+		state.detachedStartedAt = Date.now() - 60_000;
+		state.pid = worker.pid;
+		saveRun(state);
+		const registryPath = detachedProcessRegistryPath(cwd, state.runId);
+		fs.mkdirSync(path.dirname(registryPath), { recursive: true, mode: 0o700 });
+		fs.writeFileSync(registryPath, JSON.stringify({
+			version: DETACHED_CONTROL_VERSION,
+			instanceId: state.detachedInstanceId,
+			ownerPid: worker.pid,
+			heartbeatAt: Date.now() - 60_000,
+			pids: [],
+		}));
+
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner);
+		const status = await tools.taskflow_runs({ action: "status", runId: state.runId }) as TextResult;
+		assert.match(status.content[0]!.text, /failed/);
+		assert.equal(loadRun(cwd, state.runId)?.status, "failed");
+		const deadline = Date.now() + 5_000;
+		while (probeProcess(worker.pid!) !== "dead" && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		assert.equal(probeProcess(worker.pid!), "dead", "owner must stop before failure becomes durable");
+	} finally {
+		try { process.kill(process.platform === "win32" ? worker.pid! : -worker.pid!, "SIGKILL"); } catch { /* already gone */ }
 		restoreAgentDir();
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}

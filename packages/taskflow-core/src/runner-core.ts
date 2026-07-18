@@ -18,6 +18,7 @@ import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
 import {
+	isDetachedSignalOwnerReady,
 	registerDetachedProcessTreeFromEnv,
 	unregisterDetachedProcessTreeFromEnv,
 } from "./detached-control.ts";
@@ -381,7 +382,7 @@ for (const signal of EXTERNAL_SIGNALS) {
 		// Detached workers own a higher-level AbortController that persists the
 		// run as paused. Let its later signal listener finish that state transition
 		// instead of immediately restoring the OS default and killing the process.
-		if (process.env.TASKFLOW_DETACHED_RUNNER === "1") {
+		if (process.env.TASKFLOW_DETACHED_RUNNER === "1" && isDetachedSignalOwnerReady()) {
 			handlingExternalSignal = false;
 			return;
 		}
