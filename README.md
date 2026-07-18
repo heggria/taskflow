@@ -131,7 +131,7 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 /tf:audit-api dir=src/api
 ```
 
-On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`.
+On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
 
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 
@@ -315,7 +315,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.2 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.3 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -324,7 +324,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.3 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
@@ -365,6 +365,7 @@ The test suite covers orchestration semantics, persistence and file-lock races, 
 | [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, and Grok setup |
 | [Reference](https://heggria.github.io/taskflow/en/docs/reference/) | Commands, shorthand, and exact tool surfaces |
 | [Showcase](https://heggria.github.io/taskflow/en/docs/showcase/) | Real flows and case studies |
+| [0.2.0 Frontier Assessment](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | Independent, evidence-based technical assessment (Chinese) |
 
 Also see [`examples/`](./examples), the [changelog](./CHANGELOG.md), and the [release guide](./RELEASE.md).
 

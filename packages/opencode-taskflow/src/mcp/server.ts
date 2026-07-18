@@ -13,20 +13,30 @@ import {
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp-core/server";
-import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
+import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { opencodeSubagentRunner } from "taskflow-hosts";
 
+const HOST_OPTIONS = {
+	host: "opencode",
+	detachedRunner: {
+		module: import.meta.resolve("taskflow-hosts/opencode"),
+		exportName: "opencodeSubagentRunner",
+	},
+} as const;
+
 /** Per-call tool handlers with opencode subagent execution bound in. */
-export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, opencodeSubagentRunner, { host: "opencode" });
+export function makeToolHandlers(
+	cwd: string,
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
+	return coreMakeToolHandlers(cwd, opencodeSubagentRunner, HOST_OPTIONS);
 }
 
 /** Full MCP method dispatch table (protocol + tools), opencode-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, opencodeSubagentRunner, { host: "opencode" });
+	return coreMakeMcpHandlers(cwd, opencodeSubagentRunner, HOST_OPTIONS);
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(opencodeSubagentRunner, cwd, { host: "opencode" });
+	return coreStartMcpServer(opencodeSubagentRunner, cwd, HOST_OPTIONS);
 }

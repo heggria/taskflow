@@ -1,6 +1,6 @@
 {
   "name": "opencode-taskflow",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Run taskflow on OpenCode: an OpenCode subagent runner plus an MCP server (and an opencode.json config scaffold) that exposes the taskflow_* tools to OpenCode users.",
   "keywords": [
     "opencode",

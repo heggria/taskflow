@@ -16,6 +16,7 @@
  *
  * Tools exposed:
  *   - taskflow_run     : run an inline or saved flow, return the final output
+ *   - taskflow_runs    : list/status/wait/cancel background runs
  *   - taskflow_list    : list saved flows discoverable in this cwd
  *   - taskflow_show    : show a saved flow's definition
  *   - taskflow_verify  : statically verify a flow (no execution)
@@ -29,6 +30,17 @@
 
 import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
+import {
+	BACKGROUND_RUN_WARNING_THRESHOLD,
+	cancelMcpBackgroundRun,
+	formatBackgroundRun,
+	launchMcpBackgroundRun,
+	listMcpBackgroundRuns,
+	refreshDetachedRun,
+	waitForMcpBackgroundRun,
+	type BackgroundRunFilter,
+	type DetachedRunnerBinding,
+} from "./background.ts";
 import { readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
@@ -41,8 +53,6 @@ import {
 	newRunId,
 	peekRun,
 	saveRun,
-	DEFAULT_KEPT_RUNS,
-	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
 	describeLoadFailure,
 	compileTaskflow,
@@ -71,6 +81,8 @@ import {
 	type ReplayReport,
 	type ReplayOverrides,
 	reconcileResolveOnlyWorkspace,
+	clearDetachedCancelRequest,
+	DETACHED_CONTROL_VERSION,
 	WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
 	workspaceReconcileAllowedFromEnv,
 } from "taskflow-core";
@@ -415,7 +427,27 @@ const TOOLS: McpTool[] = [
 				args: { type: "object", description: "Invocation arguments interpolated as {args.X}." },
 				incremental: { type: "boolean", description: "Default every phase to cross-run cache reuse." },
 				reusedFromSearch: { type: "boolean", description: "Set true when this run was chosen because of a prior taskflow_search → bumps the flow's reuseCount (the reuse flywheel). Default false; direct run-by-name does not bump." },
+				mode: { type: "string", enum: ["foreground", "background"], description: "Execution mode. foreground (default) waits for the full DAG; background returns a runId immediately and continues even if the MCP request ends." },
 			},
+		},
+	},
+	{
+		name: "taskflow_runs",
+		title: "Manage background taskflow runs",
+		description:
+			"List recent background runs, inspect one run, wait for completion without losing it when the MCP request ends, or request cancellation. Use after taskflow_run with mode:'background'.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				action: { type: "string", enum: ["list", "status", "wait", "cancel"], description: "Lifecycle action." },
+				runId: { type: "string", description: "Required for status, wait, and cancel." },
+				timeoutMs: { type: "integer", description: "For wait: return after this many ms if still running (default 30000, max 300000)." },
+				limit: { type: "integer", description: "For list: maximum recent background runs (default 10, max 50)." },
+				status: { type: "string", enum: ["all", "running", "terminal"], description: "For list: show all runs (default), only active runs, or only terminal runs." },
+				reason: { type: "string", description: "For cancel: optional audit reason." },
+			},
+			required: ["action"],
 		},
 	},
 	{
@@ -691,6 +723,8 @@ function resolveFlow(cwd: string, params: { name?: string; define?: unknown; def
  *  `"taskflow"` when omitted so existing callers are unaffected. */
 export interface McpHostOptions {
 	host?: string;
+	/** Resolvable host-runner module used by detached/background execution. */
+	detachedRunner?: DetachedRunnerBinding;
 }
 
 /** Stamp a freshly-created RunState with build/host identity (0.2.0 dogfood
@@ -780,23 +814,72 @@ export function makeToolHandlers(
 			// the same lookup the pi adapter does; without it every phase fails with
 			// "Model metadata for {{fast}} not found".
 			const settings = readSubagentSettings();
-			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const agentScope = def.agentScope ?? "both";
+			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
+				globalThinking: settings.globalThinking,
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting,
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
+				loadFlow: (name: string) => {
+					const loaded = getFlowDiagnosed(cwd, name);
+					return loaded.ok ? loaded.value.def : undefined;
+				},
 			};
 			const state = mkRunState(def, resolvedArgs, cwd, host);
+			if (args.mode === "background") {
+				if (!opts?.detachedRunner) {
+					return textContent(
+						"Background mode is unavailable because this MCP host did not provide a detached runner binding.",
+						true,
+					);
+				}
+				let pid: number;
+				try {
+					({ pid } = launchMcpBackgroundRun({
+						state,
+						runner: opts.detachedRunner,
+						incremental: args.incremental === true,
+						reusedSavedName: args.reusedFromSearch === true ? reusedSavedName : undefined,
+						agents,
+						globalThinking: settings.globalThinking,
+						agentScope,
+						maxKeptRuns: settings.taskflow.maxKeptRuns,
+						maxRunAgeDays: settings.taskflow.maxRunAgeDays,
+					}));
+				} catch (error) {
+					return textContent(
+						`Failed to start background taskflow: ${error instanceof Error ? error.message : String(error)}`,
+						true,
+					);
+				}
+
+				let contentionWarning = "";
+				try {
+					const { activeCount } = listMcpBackgroundRuns(cwd, 0);
+					contentionWarning = activeCount > BACKGROUND_RUN_WARNING_THRESHOLD
+						? `\n\nWarning: ${activeCount} background runs are active in this project. Taskflow does not provide a global cross-host concurrency or budget coordinator; use taskflow_runs list/cancel if this is unintentional.`
+						: "";
+				} catch (error) {
+					contentionWarning = `\n\nWarning: the run started successfully, but background contention could not be inspected: ${error instanceof Error ? error.message : String(error)}`;
+				}
+				return textContent(
+					`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.${contentionWarning}`,
+				);
+			}
 			// Deterministic-replay trace (best-effort, fail-open).
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
 
 			// Persist run state (throttled + final) so taskflow_peek / resume can read
 			// intermediate phase outputs after the run — same contract as the pi adapter.
-			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+			const cleanupConfig = {
+				maxKeep: settings.taskflow.maxKeptRuns,
+				maxAgeDays: settings.taskflow.maxRunAgeDays,
+			};
 			let lastPersist = 0;
 			deps.persist = (s) => {
 				const now = Date.now();
@@ -807,11 +890,16 @@ export function makeToolHandlers(
 			};
 
 			let terminalPersistError: string | undefined;
-			const res = await executeTaskflow(state, deps).finally(() => {
+			let res: Awaited<ReturnType<typeof executeTaskflow>>;
+			try {
+				res = await executeTaskflow(state, deps);
+				state.finalOutput = res.finalOutput;
+				state.outputSourcePhaseId = res.outputSourcePhaseId;
+			} finally {
 				// Terminal persist must survive a throwing runtime ("never lose work") —
 				// and persistence itself must never sink a completed run.
 				terminalPersistError = persistTerminalRun(state, cleanupConfig);
-			});
+			}
 			if (terminalPersistError !== undefined) {
 				return textContent(
 					`Taskflow execution finished, but terminal run persistence failed; no durable run ID can be promised: ${terminalPersistError}`,
@@ -834,6 +922,55 @@ export function makeToolHandlers(
 			const sourceLabel = res.outputSourcePhaseId ? `--- ${res.outputSourcePhaseId} ---\n` : "";
 			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;
 			return textContent(`${header}\n\n${sourceLabel}${res.finalOutput}${usageLine}`, !res.ok);
+		},
+
+		taskflow_runs: async (args, context) => {
+			const action = String(args.action ?? "");
+			if (action === "list") {
+				const limit = Math.max(1, Math.min(50, typeof args.limit === "number" ? Math.floor(args.limit) : 10));
+				const filter: BackgroundRunFilter = args.status === "running" || args.status === "terminal"
+					? args.status
+					: "all";
+				const roster = listMcpBackgroundRuns(cwd, limit, filter);
+				if (roster.runs.length === 0) {
+					const scope = filter === "all" ? "" : `${filter} `;
+					return textContent(`No ${scope}background taskflow runs found from this directory. ${roster.activeCount} active total.`);
+				}
+				const scope = filter === "all" ? "" : ` · ${filter}`;
+				return textContent(
+					`Background taskflow runs — ${roster.activeCount} active · ${roster.totalCount} total${scope}:\n${roster.runs.map((run) => formatBackgroundRun(run, false)).join("\n")}`,
+				);
+			}
+
+			const runId = typeof args.runId === "string" ? args.runId.trim() : "";
+			if (!runId) return textContent(`taskflow_runs action '${action}' requires \`runId\`.`, true);
+			let state = refreshDetachedRun(cwd, runId);
+			if (!state) return textContent(`Run \"${runId}\" was not found.`, true);
+			if (!state.detached) return textContent(`Run \"${runId}\" is not a background run.`, true);
+
+			if (action === "status") return textContent(formatBackgroundRun(state, true));
+			if (action === "wait") {
+				const timeoutMs = Math.max(0, Math.min(300_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : 30_000));
+				state = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal) ?? state;
+				return textContent(formatBackgroundRun(state, true), state.status !== "running" && state.status !== "completed");
+			}
+			if (action === "cancel") {
+				if (state.status !== "running") return textContent(`Run is already ${state.status}.\n${formatBackgroundRun(state, true)}`);
+				if (state.detachedControlVersion !== DETACHED_CONTROL_VERSION) {
+					return textContent(
+						`Run \"${runId}\" was created by a legacy detached worker that does not support durable cross-request cancellation. Wait for it to finish or stop that worker through its original host.`,
+						true,
+					);
+				}
+				cancelMcpBackgroundRun(cwd, runId, typeof args.reason === "string" ? args.reason : undefined);
+				const afterRequest = refreshDetachedRun(cwd, runId);
+				if (afterRequest && afterRequest.status !== "running") {
+					clearDetachedCancelRequest(afterRequest.cwd, afterRequest.runId);
+					return textContent(`Run became ${afterRequest.status} before cancellation was delivered.\n${formatBackgroundRun(afterRequest, true)}`);
+				}
+				return textContent(`Cancellation requested.\n${formatBackgroundRun(state, false)}`);
+			}
+			return textContent(`Unknown taskflow_runs action: ${action}`, true);
 		},
 
 		taskflow_resume: async (args, context) => {
@@ -876,7 +1013,10 @@ export function makeToolHandlers(
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
 				trace: new FileTraceSink(traceFilePath(runsDir(cwd), child.flowName, child.runId)),
 			};
-			const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
+			const cleanupConfig = {
+				maxKeep: settings.taskflow.maxKeptRuns,
+				maxAgeDays: settings.taskflow.maxRunAgeDays,
+			};
 			let lastPersist = 0;
 			deps.persist = (s) => { if (Date.now() - lastPersist >= 1000) { lastPersist = Date.now(); saveRun(s, cleanupConfig); } };
 			let terminalPersistError: string | undefined;

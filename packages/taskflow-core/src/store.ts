@@ -22,7 +22,7 @@ import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import { parseStrict } from "./interpolate.ts";
 import type { Taskflow } from "./schema.ts";
-import type { DirectoryIdentity } from "./cwd-bridge.ts";
+import { directoryIdentity, type DirectoryIdentity } from "./cwd-bridge.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
@@ -193,6 +193,24 @@ export interface RunState {
 	pid?: number;
 	/** True for runs spawned via `detach: true` (background execution). */
 	detached?: boolean;
+	/** Wall-clock launch time for detached lifecycle/orphan diagnostics. */
+	detachedStartedAt?: number;
+	/** Version of the durable detached-control protocol understood by the
+	 * worker. Missing means a legacy detached run that cannot safely accept
+	 * cross-request lifecycle commands. */
+	detachedControlVersion?: number;
+	/** Unforgeable identity for one detached worker instance. Unlike a PID, this
+	 * value cannot be silently reused by an unrelated OS process. */
+	detachedInstanceId?: string;
+	/** Retention policy frozen at detached dispatch so crash/orphan writes do
+	 * not silently fall back to another session's defaults. */
+	detachedRetention?: { maxKeep: number; maxAgeDays: number };
+	/** Durable audit record for the cancellation request that paused this run. */
+	detachedCancel?: { requestedAt: number; reason?: string };
+	/** Final output persisted by a detached runner for later wait/status calls. */
+	finalOutput?: string;
+	/** Phase whose output supplied `finalOutput`, when attributable. */
+	outputSourcePhaseId?: string;
 	/** Content fingerprint of the desugared flow definition (overstory hash
 	 *  algorithm). Folded into every phase's cache key so a structural change
 	 *  to the flow always invalidates cross-run cache hits — and an identical
@@ -244,6 +262,9 @@ export interface RunState {
 export interface RunIndexEntry {
 	runId: string;
 	flowName: string;
+	/** Invocation cwd used to bind user-private detached lifecycle records.
+	 * Absent on historical indexes; callers must retain a safe fallback. */
+	cwd?: string;
 	status: RunState["status"];
 	createdAt: number;
 	updatedAt: number;
@@ -270,6 +291,8 @@ const LOCK_STALE_MS = 30_000;
 const LOCK_POLL_MS = 50;
 /** Default acquisition timeout before throwing. */
 const LOCK_TIMEOUT_MS = 10_000;
+/** Retention is opportunistic: never stall a foreground save behind cleanup. */
+const CLEANUP_LOCK_TIMEOUT_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Cleanup throttle
@@ -277,6 +300,9 @@ const LOCK_TIMEOUT_MS = 10_000;
 
 /** Minimum ms between opportunistic cleanup runs (called inside saveRun). */
 const CLEANUP_INTERVAL_MS = 60_000;
+/** Bound the project-keyed throttle so a long-lived multi-project host cannot
+ * retain one map entry for every directory it has ever visited. */
+const CLEANUP_THROTTLE_MAX_ROOTS = 256;
 /** Retain at most this many terminal runs by default. */
 const DEFAULT_MAX_KEPT_TERMINAL = 100;
 /** Remove terminal runs older than this (days). */
@@ -286,11 +312,24 @@ const DEFAULT_MAX_AGE_DAYS = 30;
 export const DEFAULT_KEPT_RUNS = DEFAULT_MAX_KEPT_TERMINAL;
 export const DEFAULT_RUN_AGE_DAYS = DEFAULT_MAX_AGE_DAYS;
 
-/** Last cleanup timestamp — module-level so it persists across calls. */
-let lastCleanupAt = 0;
+/** Per-runs-root cleanup timestamps. A process-global scalar lets one busy
+ * project suppress retention in every other project served by the same host. */
+const lastCleanupAtByRoot = new Map<string, number>();
 
 /** Shared buffer for Atomics.wait in acquireLock busy-wait (Finding 6). */
 const LOCK_WAIT_BUF = new Int32Array(new SharedArrayBuffer(4));
+
+interface FileLockHandle {
+	device: number;
+	inode: number;
+	token: string;
+}
+
+interface LockOwnerRecord {
+	pid: number;
+	ts: number;
+	token?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers — path construction & sanitisation
@@ -350,34 +389,215 @@ function lockPathForRun(runsRoot: string, flowName: string, runId: string): stri
  * Legitimate runIds are produced by newRunId() and contain only [A-Za-z0-9._-].
  */
 export function validateRunId(runId: string): boolean {
-	return (
-		typeof runId === "string" &&
-		runId.length > 0 &&
-		!runId.includes("/") &&
-		!runId.includes("\\") &&
-		!runId.includes("\0") &&
-		!runId.includes("..")
+	// A single leading/trailing dot is safe once the id is used as
+	// `${runId}.json`, and `newRunId()` has historically produced leading-dot
+	// ids for valid flow names such as `.ci`. Reject separators and dot-dot
+	// traversal, but retain compatibility with those already-persisted runs.
+	return typeof runId === "string" && runId.length > 0 && runId.length <= 160 &&
+		/^[A-Za-z0-9._-]+$/.test(runId) && !runId.includes("..");
+}
+
+/**
+ * Validate an index path before it is joined to the runs root.
+ *
+ * Index files live in a project-controlled directory and may be stale or
+ * manually edited. Only the two layouts Taskflow itself has ever emitted are
+ * accepted: `<flowDir>/<runId>.json` and the legacy `<runId>.json`. Keeping
+ * this check independent from the host OS also makes an index written on one
+ * platform safe to consume on another (generated index paths always use `/`).
+ */
+function isSafeRunIndexRelPath(relPath: string, runId: string): boolean {
+	if (!validateRunId(runId) || relPath.length === 0 || relPath.length > 420) return false;
+	if (path.isAbsolute(relPath) || relPath.includes("\\")) return false;
+
+	const parts = relPath.split("/");
+	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return false;
+	if (parts.length === 1) return parts[0] === `${runId}.json`;
+	if (parts.length !== 2) return false;
+
+	const [flowDir, fileName] = parts;
+	return flowDir!.length <= 255 && safeFlowDirName(flowDir!) === flowDir && fileName === `${runId}.json`;
+}
+
+/** Join an already-validated, platform-neutral index path to the runs root. */
+function runIndexFilePath(runsRoot: string, relPath: string): string {
+	return path.join(runsRoot, ...relPath.split("/"));
+}
+
+/** Canonical, bounded-LRU throttle for opportunistic per-project cleanup. */
+function shouldRunCleanup(runsRoot: string, now: number): boolean {
+	let key: string;
+	try { key = fs.realpathSync(runsRoot); } catch { key = path.resolve(runsRoot); }
+	const previous = lastCleanupAtByRoot.get(key);
+	if (previous !== undefined && now - previous < CLEANUP_INTERVAL_MS) return false;
+
+	// Refresh insertion order for simple LRU eviction.
+	lastCleanupAtByRoot.delete(key);
+	lastCleanupAtByRoot.set(key, now);
+	while (lastCleanupAtByRoot.size > CLEANUP_THROTTLE_MAX_ROOTS) {
+		const oldest = lastCleanupAtByRoot.keys().next().value as string | undefined;
+		if (oldest === undefined) break;
+		lastCleanupAtByRoot.delete(oldest);
+	}
+	return true;
+}
+
+interface PhysicalDirectorySnapshot {
+	realPath: string;
+	device: number;
+	inode: number;
+}
+
+/**
+ * Resolve a physical directory only when it is a non-symlink descendant of
+ * runsRoot. Retention performs destructive operations, so lexical containment
+ * alone is insufficient: a checked-in `runs/<flow>` symlink could otherwise
+ * redirect the run lock and unlink to an arbitrary directory.
+ */
+function physicalDirectoryInsideRunsRoot(
+	runsRoot: string,
+	candidate: string,
+): PhysicalDirectorySnapshot | null {
+	try {
+		const rootReal = fs.realpathSync(runsRoot);
+		const stat = fs.lstatSync(candidate);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+		const realPath = fs.realpathSync(candidate);
+		const rel = path.relative(rootReal, realPath);
+		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+		return { realPath, device: stat.dev, inode: stat.ino };
+	} catch {
+		return null;
+	}
+}
+
+function physicalDirectoryStillMatches(
+	runsRoot: string,
+	candidate: string,
+	snapshot: PhysicalDirectorySnapshot,
+): boolean {
+	const current = physicalDirectoryInsideRunsRoot(runsRoot, candidate);
+	return Boolean(
+		current && current.realPath === snapshot.realPath &&
+		current.device === snapshot.device && current.inode === snapshot.inode,
 	);
+}
+
+/** Remove a Taskflow-owned artifact tree without following a project symlink. */
+function removeArtifactDirectoryInsideRunsRoot(runsRoot: string, target: string): void {
+	const parent = path.dirname(target);
+	const parentSnapshot = physicalDirectoryInsideRunsRoot(runsRoot, parent);
+	if (!parentSnapshot) return;
+	try {
+		const stat = fs.lstatSync(target);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+		const targetSnapshot = physicalDirectoryInsideRunsRoot(runsRoot, target);
+		if (!targetSnapshot || !physicalDirectoryStillMatches(runsRoot, parent, parentSnapshot)) return;
+		if (!physicalDirectoryStillMatches(runsRoot, target, targetSnapshot)) return;
+		fs.rmSync(target, { recursive: true, force: true });
+	} catch { /* missing / concurrently changed */ }
+}
+
+/** Accept a persisted cwd for control-record cleanup only when it resolves to
+ * the same project run store currently being retained. */
+function controlCwdForRunsRoot(runsRoot: string, candidate: unknown): string {
+	const fallback = path.dirname(path.dirname(path.dirname(runsRoot)));
+	if (typeof candidate !== "string" || candidate.length === 0) return fallback;
+	try {
+		if (fs.realpathSync(runsDir(candidate)) === fs.realpathSync(runsRoot)) return candidate;
+	} catch { /* malformed, missing, or from another project */ }
+	return fallback;
 }
 
 // ---------------------------------------------------------------------------
 // File-lock primitives — zero-dependency, using O_CREAT|O_EXCL (atomic)
 // ---------------------------------------------------------------------------
 
+function readLockOwner(lockPath: string): LockOwnerRecord | null {
+	try {
+		const stat = fs.lstatSync(lockPath);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4_096) return null;
+		const raw = fs.readFileSync(lockPath, "utf-8");
+		if (Buffer.byteLength(raw, "utf-8") > 4_096) return null;
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		if (!Number.isSafeInteger(parsed.pid) || typeof parsed.ts !== "number") return null;
+		return {
+			pid: parsed.pid as number,
+			ts: parsed.ts,
+			...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
+		};
+	} catch {
+		return null;
+	}
+}
+
+function sameLockOwner(left: LockOwnerRecord | null, right: LockOwnerRecord): boolean {
+	return Boolean(
+		left && left.pid === right.pid && left.ts === right.ts && left.token === right.token,
+	);
+}
+
+/**
+ * Serialize stale-lock stealers for one observed lock generation. Without this
+ * claim, contender B can replace a dead lock and contender C — acting on its
+ * earlier observation — can then rename B's fresh live lock.
+ */
+function tryStealDeadLock(lockPath: string, observed: fs.Stats, owner: LockOwnerRecord): boolean {
+	if (probeProcess(owner.pid) !== "dead") return false;
+	const generation = crypto.createHash("sha256")
+		.update(`${observed.dev}\0${observed.ino}\0${owner.pid}\0${owner.ts}\0${owner.token ?? ""}`)
+		.digest("hex")
+		.slice(0, 16);
+	const claimPath = `${lockPath}.steal.${generation}`;
+	let claimFd: number;
+	try {
+		claimFd = fs.openSync(claimPath, "wx");
+	} catch {
+		return false;
+	}
+
+	const claimToken = crypto.randomBytes(16).toString("hex");
+	let claimHandle: FileLockHandle | undefined;
+	try {
+		fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, ts: Date.now(), token: claimToken }));
+		const claimStat = fs.fstatSync(claimFd);
+		claimHandle = { device: claimStat.dev, inode: claimStat.ino, token: claimToken };
+		fs.closeSync(claimFd);
+		claimFd = -1;
+
+		const current = fs.lstatSync(lockPath);
+		if (current.dev !== observed.dev || current.ino !== observed.ino) return false;
+		if (!sameLockOwner(readLockOwner(lockPath), owner)) return false;
+
+		const grave = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
+		fs.renameSync(lockPath, grave);
+		try { fs.unlinkSync(grave); } catch { /* best-effort grave cleanup */ }
+		return true;
+	} catch {
+		return false;
+	} finally {
+		if (claimFd >= 0) {
+			try { fs.closeSync(claimFd); } catch { /* ignore */ }
+		}
+		if (claimHandle) releaseLock(claimPath, claimHandle);
+		else {
+			// Initialization did not finish; only this exclusive creator can own it.
+			try { fs.unlinkSync(claimPath); } catch { /* ignore */ }
+		}
+	}
+}
+
 /**
  * Acquire a file lock by atomically creating a lock file.
  *
  * Uses O_CREAT|O_EXCL (`wx` flag) which is atomic on POSIX and NTFS.
- * Stale locks (> LOCK_STALE_MS) are stolen via an atomic rename rather than a
- * naive unlink-then-create: a plain `unlinkSync` + `openSync('wx')` has a
- * TOCTOU window where two processes both unlink the same stale lock and both
- * then create a fresh one, yielding two simultaneous holders (risk-reviewer
- * v0.0.9 audit, L1). `rename` is atomic and removes the *specific* inode the
- * caller observed: only one racing process can win the rename of that exact
- * stale file, so at most one process proceeds to re-create the lock.
+ * Stale locks (> LOCK_STALE_MS) are stolen only after their recorded owner PID
+ * is definitively dead, then moved via an atomic rename. Age alone cannot prove
+ * abandonment: stealing from a slow but live holder creates two simultaneous
+ * critical sections, and the old holder can later unlink the new holder's lock.
  * Throws on timeout.
  */
-function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): void {
+function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): FileLockHandle {
 	const start = Date.now();
 	// Ensure parent directory exists (lock file lives inside the flow subdir).
 	const dir = path.dirname(lockPath);
@@ -386,27 +606,31 @@ function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): voi
 	while (true) {
 		try {
 			const fd = fs.openSync(lockPath, "wx");
-			fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }));
-			fs.closeSync(fd);
-			return; // lock acquired
+			const token = crypto.randomBytes(16).toString("hex");
+			try {
+				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now(), token }));
+				const stat = fs.fstatSync(fd);
+				return { device: stat.dev, inode: stat.ino, token };
+			} catch (error) {
+				// Creation succeeded but initialization did not. Remove only the inode
+				// this process created so a partial lock cannot become unstealable.
+				try {
+					const held = fs.fstatSync(fd);
+					const current = fs.lstatSync(lockPath);
+					if (current.dev === held.dev && current.ino === held.ino) fs.unlinkSync(lockPath);
+				} catch { /* best-effort rollback */ }
+				throw error;
+			} finally {
+				fs.closeSync(fd);
+			}
 		} catch (e: unknown) {
 			if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
 			// Lock file exists — check if stale.
 			try {
-				const stat = fs.statSync(lockPath);
+				const stat = fs.lstatSync(lockPath);
 				if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-					// Stale lock — steal it via atomic rename so only one racing
-					// stealer can win (L1). The "graveyard" name is unique per
-					// process+attempt; the winner unlinks it, losers see ENOENT
-					// on their own rename and simply retry the acquire loop.
-					const grave = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
-					try {
-						fs.renameSync(lockPath, grave);
-						// We won the steal — discard the graveyard copy and retry
-						// the loop, where openSync('wx') will create a fresh lock.
-						try { fs.unlinkSync(grave); } catch { /* ignore */ }
-					} catch { /* lost the steal race (ENOENT) — just retry */ }
-					continue;
+					const owner = readLockOwner(lockPath);
+					if (owner && tryStealDeadLock(lockPath, stat, owner)) continue;
 				}
 			} catch {
 				// ENOENT: another process released it between openSync and statSync — retry.
@@ -423,22 +647,28 @@ function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): voi
 }
 
 /**
- * Release a file lock by deleting the lock file.  Ignores ENOENT (already
- * released by another process or stolen due to staleness).
+ * Release a file lock only when the path still carries this holder's inode and
+ * random ownership token. A dead-owner steal must never let an old finally
+ * block delete the successor's lock.
  */
-function releaseLock(lockPath: string): void {
-	try { fs.unlinkSync(lockPath); } catch { /* ENOENT or other — ignore */ }
+function releaseLock(lockPath: string, handle: FileLockHandle): void {
+	try {
+		const stat = fs.lstatSync(lockPath);
+		if (!stat.isFile() || stat.dev !== handle.device || stat.ino !== handle.inode) return;
+		if (readLockOwner(lockPath)?.token !== handle.token) return;
+		fs.unlinkSync(lockPath);
+	} catch { /* ENOENT, replaced, or corrupt — never unlink another owner's lock */ }
 }
 
 /**
  * Execute `fn` while holding a file lock.  Guarantees release even on throw.
  */
-export function withLock<T>(lockPath: string, fn: () => T): T {
-	acquireLock(lockPath);
+export function withLock<T>(lockPath: string, fn: () => T, timeoutMs: number = LOCK_TIMEOUT_MS): T {
+	const handle = acquireLock(lockPath, timeoutMs);
 	try {
 		return fn();
 	} finally {
-		releaseLock(lockPath);
+		releaseLock(lockPath, handle);
 	}
 }
 
@@ -454,6 +684,7 @@ export function extractIndexEntry(state: RunState, relPath: string): RunIndexEnt
 	return {
 		runId: state.runId,
 		flowName: state.flowName,
+		cwd: state.cwd,
 		status: state.status,
 		createdAt: state.createdAt,
 		updatedAt: state.updatedAt,
@@ -470,9 +701,11 @@ function readIndex(runsRoot: string): RunIndexEntry[] {
 		const raw = fs.readFileSync(indexPath(runsRoot), "utf-8");
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
-		// Validate each entry minimally.
+		// Treat the project-controlled index as untrusted input. In particular,
+		// never let a crafted relPath escape runsRoot during load or retention.
 		return (parsed as RunIndexEntry[]).filter(
-			(e) => e && typeof e.runId === "string" && typeof e.relPath === "string",
+			(e) => e && typeof e.runId === "string" && typeof e.relPath === "string" &&
+				isSafeRunIndexRelPath(e.relPath, e.runId),
 		);
 	} catch {
 		return [];
@@ -537,13 +770,10 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 		} catch { continue; }
 
 		for (const file of files) {
-			try {
-				const raw = fs.readFileSync(path.join(dirPath, file), "utf-8");
-				const state = JSON.parse(raw) as RunState;
-				if (state && typeof state.runId === "string") {
-					entries.set(state.runId, extractIndexEntry(state, `${dirName}/${file}`));
-				}
-			} catch { /* skip corrupt */ }
+			const loaded = tryReadRunFile(runsRoot, path.join(dirPath, file));
+			if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json`) {
+				entries.set(loaded.value.runId, extractIndexEntry(loaded.value, `${dirName}/${file}`));
+			}
 		}
 	}
 
@@ -559,13 +789,11 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 
 	for (const file of flatFiles) {
 		if (entries.has(file.replace(/\.json$/, ""))) continue; // prefer subdir entry
-		try {
-			const raw = fs.readFileSync(path.join(runsRoot, file), "utf-8");
-			const state = JSON.parse(raw) as RunState;
-			if (state && typeof state.runId === "string" && !entries.has(state.runId)) {
-				entries.set(state.runId, extractIndexEntry(state, file));
-			}
-		} catch { /* skip corrupt */ }
+		const loaded = tryReadRunFile(runsRoot, path.join(runsRoot, file));
+		if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json` &&
+			!entries.has(loaded.value.runId)) {
+			entries.set(loaded.value.runId, extractIndexEntry(loaded.value, file));
+		}
 	}
 
 	const scanned = Array.from(entries.values());
@@ -587,112 +815,196 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Remove excess and expired terminal (completed/failed) runs.
+ * Remove excess and expired inactive runs.
  *
  * Called opportunistically at the end of saveRun.  Throttled to at most once
- * per CLEANUP_INTERVAL_MS.  Active runs (running/paused/blocked) are never
- * touched.
+ * per CLEANUP_INTERVAL_MS. Only actually executing (`running`) runs are never
+ * touched. Paused and blocked runs remain resumable/inspectable inside the
+ * configured retention window, but no longer bypass it forever.
  *
  * The index read-modify-write is performed under the index lock so it cannot
  * race a concurrent updateIndexEntry and clobber a freshly-added entry (M1).
  * We re-read the index *inside* the lock (rather than trusting a snapshot read
  * before locking) so the rewrite reflects the latest committed state. File and
- * directory unlinks happen after the lock is released to keep the critical
- * section short; deleting a file that is no longer in the index is harmless.
+ * directory unlinks happen after the index lock is released, but each candidate
+ * is revalidated while holding its own run lock. This prevents cleanup from
+ * unlinking a run that was resumed or otherwise saved after selection.
  */
 function cleanupTerminalRuns(
 	runsRoot: string,
 	maxKeep: number = DEFAULT_MAX_KEPT_TERMINAL,
 	maxAgeDays: number = DEFAULT_MAX_AGE_DAYS,
 ): void {
-	const cleanupStarted = Date.now();
-	const now = cleanupStarted;
-	if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
-	lastCleanupAt = now;
+	const now = Date.now();
+	if (!shouldRunCleanup(runsRoot, now)) return;
 
 	const maxAgeMs = maxAgeDays * 86_400_000;
 	let toRemove: RunIndexEntry[] = [];
 
-	withLock(indexLockPath(runsRoot), () => {
-		const entries = readIndex(runsRoot);
-		const terminal: RunIndexEntry[] = [];
-		const active: RunIndexEntry[] = [];
+	try {
+		withLock(indexLockPath(runsRoot), () => {
+			const entries = readIndex(runsRoot);
+			const terminal: RunIndexEntry[] = [];
+			const active: RunIndexEntry[] = [];
 
-		for (const e of entries) {
-			if (e.status === "completed" || e.status === "failed") {
-				terminal.push(e);
-			} else {
-				active.push(e);
+			for (const e of entries) {
+				if (e.status !== "running") {
+					terminal.push(e);
+				} else {
+					active.push(e);
+				}
 			}
-		}
 
-		// Sort terminal by updatedAt desc (newest first).
-		// Filter out entries with corrupt updatedAt (non-numeric/NaN) BEFORE sorting
-		// to prevent NaN from corrupting sort order. Corrupt entries cannot be
-		// reliably aged, so they are always moved to toRemove.
-		const cleanTerminal: RunIndexEntry[] = [];
-		for (const e of terminal) {
-			if (typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt)) {
-				cleanTerminal.push(e);
-			} else {
-				toRemove.push(e);
+			// Sort terminal by updatedAt desc (newest first).
+			// Filter out entries with corrupt updatedAt (non-numeric/NaN) BEFORE sorting
+			// to prevent NaN from corrupting sort order. Corrupt entries cannot be
+			// reliably aged, so they are always moved to toRemove.
+			const cleanTerminal: RunIndexEntry[] = [];
+			for (const e of terminal) {
+				if (typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt)) {
+					cleanTerminal.push(e);
+				} else {
+					toRemove.push(e);
+				}
 			}
-		}
-		cleanTerminal.sort((a, b) => b.updatedAt - a.updatedAt);
+			cleanTerminal.sort((a, b) => b.updatedAt - a.updatedAt);
 
-		for (let i = 0; i < cleanTerminal.length; i++) {
-			const e = cleanTerminal[i]!;
-			const expiredByAge = now - e.updatedAt > maxAgeMs;
-			const excessByCount = i >= maxKeep;
-			if (expiredByAge || excessByCount) {
-				toRemove.push(e);
+			for (let i = 0; i < cleanTerminal.length; i++) {
+				const e = cleanTerminal[i]!;
+				const expiredByAge = maxAgeDays > 0 && now - e.updatedAt > maxAgeMs;
+				const excessByCount = maxKeep > 0 && i >= maxKeep;
+				if (expiredByAge || excessByCount) {
+					toRemove.push(e);
+				}
 			}
-		}
 
-		if (toRemove.length === 0) return;
+			if (toRemove.length === 0) return;
 
-		// Commit the pruned index while holding the lock so a concurrent
-		// updateIndexEntry cannot interleave and lose entries.
-		const remaining = cleanTerminal.filter((e) => !toRemove.includes(e));
-		writeIndex(runsRoot, [...active, ...remaining]);
-	});
+			// Commit the pruned index while holding the lock so a concurrent
+			// updateIndexEntry cannot interleave and lose entries.
+			const removalSet = new Set(toRemove);
+			const remaining = cleanTerminal.filter((e) => !removalSet.has(e));
+			writeIndex(runsRoot, [...active, ...remaining]);
+		}, CLEANUP_LOCK_TIMEOUT_MS);
+	} catch {
+		// Retention is opportunistic. A busy index must not stall or fail saveRun.
+		return;
+	}
 
 	if (toRemove.length === 0) return;
 
-	console.warn(
-		`[taskflow] Cleaning up ${toRemove.length} old run(s) ` +
-		`(max ${maxKeep} runs, ${maxAgeDays} day age limit). ` +
-		`Configure 'taskflow.maxKeptRuns' / 'taskflow.maxRunAgeDays' in settings.json (0 = keep all).`,
-	);
-
-	// Delete run files + lock files (outside the index lock).
+	// Delete artifacts outside the index lock, but under the exact per-run lock
+	// used by saveRun. Only the entries whose on-disk snapshots still match the
+	// selected index entries are safe to remove.
+	const removed: RunIndexEntry[] = [];
 	for (const e of toRemove) {
-		const filePath = path.join(runsRoot, e.relPath);
-		// Race guard: skip files modified after cleanup started (Finding 2).
-		try { if (fs.statSync(filePath).mtimeMs > cleanupStarted) continue; } catch { continue; }
-		try { fs.unlinkSync(filePath); } catch { /* already gone */ }
-		// Also remove any orphaned lock file.
-		try { fs.unlinkSync(filePath + ".lock"); } catch { /* ignore */ }
-		// Also remove the deterministic-replay trace (sibling .trace.jsonl +
-		// its append lock) so pruned runs don't accumulate trace files.
-		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl")); } catch { /* ignore */ }
-		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl.lock")); } catch { /* ignore */ }
-		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
-		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
-		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }
-		// Also remove the per-run isolated-workspace dir tree (cwd:"dedicated").
-		// `dedicated` workspaces are persistent by design; reclaim them once the
-		// run is pruned. The dir name uses the same sanitization as workspace.ts.
-		try {
-			const wsSeg = e.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
-			fs.rmSync(path.join(runsRoot, "ws", wsSeg), { recursive: true, force: true });
-		} catch { /* ignore */ }
+		if (cleanupRunArtifactsIfSnapshotMatches(runsRoot, e)) removed.push(e);
+	}
+
+	if (removed.length > 0) {
+		console.warn(
+			`[taskflow] Cleaning up ${removed.length} old run(s) ` +
+			`(max ${maxKeep} runs, ${maxAgeDays} day age limit). ` +
+			`Configure 'taskflow.maxKeptRuns' / 'taskflow.maxRunAgeDays' in settings.json (0 = keep all).`,
+		);
 	}
 
 	// Remove empty flow subdirectories.
-	for (const e of toRemove) {
-		const dirPath = path.dirname(path.join(runsRoot, e.relPath));
+	for (const e of removed) {
+		const dirPath = path.dirname(runIndexFilePath(runsRoot, e.relPath));
 		try { fs.rmdirSync(dirPath); } catch { /* ENOTEMPTY or ENOENT — ignore */ }
+	}
+}
+
+/**
+ * Remove one retention candidate if it is still the exact state selected from
+ * the index. Returning false is deliberately fail-open: the run remains on
+ * disk, and a changed valid snapshot is restored to the index.
+ */
+function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexEntry): boolean {
+	if (!isSafeRunIndexRelPath(entry.relPath, entry.runId)) return false;
+	const filePath = runIndexFilePath(runsRoot, entry.relPath);
+	const fileDir = path.dirname(filePath);
+	const directorySnapshot = physicalDirectoryInsideRunsRoot(runsRoot, fileDir);
+	if (!directorySnapshot) return false;
+	const restore = (state: RunState): void => {
+		try { updateIndexEntry(runsRoot, extractIndexEntry(state, entry.relPath)); } catch { /* best effort */ }
+	};
+
+	try {
+		return withLock(`${filePath}.lock`, () => {
+			if (!physicalDirectoryStillMatches(runsRoot, fileDir, directorySnapshot)) return false;
+			// saveRun holds this same run lock until its index upsert commits. If a
+			// save won the race after cleanup pruned the old entry, that fresh entry
+			// is now visible and owns the file even when Date.now() reused the same
+			// millisecond/status values. Never remove a re-indexed candidate.
+			const wasReindexed = withLock(indexLockPath(runsRoot), () =>
+				readIndex(runsRoot).some((current) => current.runId === entry.runId),
+				CLEANUP_LOCK_TIMEOUT_MS,
+			);
+			if (wasReindexed) return false;
+
+			let state: RunState;
+			let fileSnapshot: { device: number; inode: number };
+			try {
+				const stat = fs.lstatSync(filePath);
+				if (!stat.isFile() || stat.isSymbolicLink()) return false;
+				fileSnapshot = { device: stat.dev, inode: stat.ino };
+				const loaded = tryReadRunFile(runsRoot, filePath);
+				if (!loaded.ok) return false;
+				state = loaded.value;
+			} catch {
+				return false;
+			}
+
+			if (state.runId !== entry.runId) return false;
+			if (state.status === "running" || state.status !== entry.status || state.updatedAt !== entry.updatedAt) {
+				restore(state);
+				return false;
+			}
+
+			try {
+				if (!physicalDirectoryStillMatches(runsRoot, fileDir, directorySnapshot)) {
+					restore(state);
+					return false;
+				}
+				const currentFile = fs.lstatSync(filePath);
+				if (!currentFile.isFile() || currentFile.isSymbolicLink() ||
+					currentFile.dev !== fileSnapshot.device || currentFile.ino !== fileSnapshot.inode) {
+					restore(state);
+					return false;
+				}
+				fs.unlinkSync(filePath);
+			} catch {
+				restore(state);
+				return false;
+			}
+
+			// Remove deterministic-replay trace while respecting its append lock.
+			const tracePath = filePath.replace(/\.json$/, ".trace.jsonl");
+			try {
+				withLock(
+					`${tracePath}.lock`,
+					() => { try { fs.unlinkSync(tracePath); } catch { /* missing */ } },
+					CLEANUP_LOCK_TIMEOUT_MS,
+				);
+			} catch { /* best effort */ }
+			// Remove per-run Shared Context Tree and isolated-workspace artifacts.
+			removeArtifactDirectoryInsideRunsRoot(runsRoot, path.join(runsRoot, "ctx", entry.runId));
+			const wsSeg = entry.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
+			removeArtifactDirectoryInsideRunsRoot(runsRoot, path.join(runsRoot, "ws", wsSeg));
+
+			// Remove user-private detached control records left by an interrupted worker.
+			const controlCwd = controlCwdForRunsRoot(runsRoot, state.cwd);
+			const controlDir = detachedControlDir(controlCwd);
+			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.cancel.json`)); } catch { /* ignore */ }
+			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.processes.json`)); } catch { /* ignore */ }
+			try { fs.rmdirSync(controlDir); } catch { /* other runs / missing */ }
+			return true;
+		}, CLEANUP_LOCK_TIMEOUT_MS);
+	} catch {
+		// Retention is opportunistic and must never make saveRun fail.
+		return false;
 	}
 }
 
@@ -962,6 +1274,23 @@ export function runsDir(cwd: string): string {
 	return path.join(projDir, "runs");
 }
 
+/**
+ * User-private control directory for one invocation root.
+ *
+ * Cancellation and process-registry markers must not live below a repository:
+ * a checked-out `.pi` tree can contain symlinks controlled by project content.
+ * Bind the control plane to the canonical directory identity and keep only its
+ * digest in the user agent directory, so sibling worktrees remain isolated.
+ */
+export function detachedControlDir(cwd: string): string {
+	const identity = directoryIdentity(cwd);
+	const source = identity
+		? `${identity.canonicalPath}\0${identity.device}\0${identity.inode}`
+		: path.resolve(cwd);
+	const key = crypto.createHash("sha256").update(source).digest("hex");
+	return path.join(getAgentDir(), "taskflow-control", key);
+}
+
 /** Root dir for the cross-run memoization cache (sibling of `runs`). */
 export function cacheDir(cwd: string): string {
 	const projDir = findProjectFlowsDir(cwd, true)!;
@@ -1044,7 +1373,8 @@ export function loadRunDiagnosed(cwd: string, runId: string): LoadResult<RunStat
 	let corrupt: Extract<LoadResult<RunState>, { ok: false }> | null = null;
 	const probe = (filePath: string): RunState | undefined => {
 		const r = tryReadRunFile(root, filePath);
-		if (r.ok) return r.value;
+		// A filename/index record must never alias a different run's state.
+		if (r.ok) return r.value.runId === runId ? r.value : undefined;
 		if (r.reason === "unparseable" && !corrupt) corrupt = r;
 		return undefined;
 	};
@@ -1149,31 +1479,30 @@ export function listRuns(cwd: string, limit = 20): RunState[] {
 	for (const file of flatFiles) {
 		const runIdFromName = file.replace(/\.json$/, "");
 		if (indexRunIds.has(runIdFromName)) continue;
-		try {
-			const raw = fs.readFileSync(path.join(root, file), "utf-8");
-			const state = JSON.parse(raw) as RunState;
-			if (state && typeof state.runId === "string" && !indexRunIds.has(state.runId)) {
-				entries.push(extractIndexEntry(state, file));
-				indexRunIds.add(state.runId);
-			}
-		} catch { /* skip corrupt */ }
+		const loaded = tryReadRunFile(root, path.join(root, file));
+		if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json` &&
+			!indexRunIds.has(loaded.value.runId)) {
+			entries.push(extractIndexEntry(loaded.value, file));
+			indexRunIds.add(loaded.value.runId);
+		}
 	}
 
-	// Sort by updatedAt desc, slice to limit.
+	// Sort by updatedAt desc. Invalid/unreadable files do not consume the limit:
+	// otherwise one corrupt or replaced high-ranked entry could hide healthy
+	// history that follows it.
 	// Filter out entries with non-numeric/NaN updatedAt BEFORE sorting to
 	// prevent NaN from corrupting V8's sort order (which can displace valid
 	// entries when a limit is applied).
 	const valid = entries.filter((e) => typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt));
 	valid.sort((a, b) => b.updatedAt - a.updatedAt);
-	const sliced = valid.slice(0, limit);
+	const targetLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : valid.length;
 
 	// Read full RunState for each entry.
 	const runs: RunState[] = [];
-	for (const e of sliced) {
-		try {
-			const raw = fs.readFileSync(path.join(root, e.relPath), "utf-8");
-			runs.push(JSON.parse(raw) as RunState);
-		} catch { /* file may have been deleted since index was built — skip */ }
+	for (const e of valid) {
+		if (runs.length >= targetLimit) break;
+		const loaded = tryReadRunFile(root, runIndexFilePath(root, e.relPath));
+		if (loaded.ok && loaded.value.runId === e.runId) runs.push(loaded.value);
 	}
 
 	// F-010: filter out records with non-numeric/NaN updatedAt.
@@ -1190,13 +1519,32 @@ export function hashInput(...parts: string[]): string {
  * Uses signal 0 (no signal sent) — succeeds if the process exists and we have
  * permission to signal it, throws ESRCH if it doesn't exist.
  */
-export function isProcessAlive(pid: number): boolean {
+export type ProcessLiveness = "alive" | "dead" | "unknown";
+
+export function probeProcess(
+	pid: number,
+	signalZero: (pid: number, signal: 0) => unknown = (candidate, signal) => process.kill(candidate, signal),
+): ProcessLiveness {
+	// Node/libuv rejects values outside the signed 32-bit PID range before an
+	// OS probe occurs; those are definitively not live process identifiers.
+	if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return "dead";
 	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
+		signalZero(pid, 0);
+		return "alive";
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error
+			? String((error as { code?: unknown }).code ?? "")
+			: "";
+		if (code === "ESRCH") return "dead";
+		// EPERM proves that a process exists but its identity is not observable.
+		// Unknown platform errors must likewise never terminalize a live run.
+		return "unknown";
 	}
+}
+
+/** Back-compatible boolean probe. Unknown is conservatively treated as alive. */
+export function isProcessAlive(pid: number): boolean {
+	return probeProcess(pid) !== "dead";
 }
 
 /**

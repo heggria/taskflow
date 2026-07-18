@@ -201,8 +201,8 @@ The "Configure taskflow preferences" option in `/tf init` adjusts four settings:
 |---|---|---|
 | `builtInAgents` | `true` | Enable or disable the 18 built-in agents. Disable this if you only want your own agents. |
 | `syncBuiltinAgentsToProject` | `false` | Copy built-in agents into your project's `.pi/agents/` on session start, so native Pi `@agent` syntax can discover them too. |
-| `maxKeptRuns` | `100` | Maximum completed/failed runs to keep. Set to `0` to disable count-based cleanup. |
-| `maxRunAgeDays` | `30` | Maximum age (days) for completed/failed runs. Set to `0` to disable age-based cleanup. |
+| `maxKeptRuns` | `100` | Maximum inactive runs (`completed`, `failed`, `paused`, or `blocked`) to keep. Running work is never pruned. Set to `0` to disable count-based cleanup. |
+| `maxRunAgeDays` | `30` | Maximum age (days) for inactive runs. Running work is never pruned. Set to `0` to disable age-based cleanup. |
 
 <Callout type="info">
   Cleanup runs automatically, throttled to once per minute. It only removes terminal (completed or failed) runs — active runs are never touched.

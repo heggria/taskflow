@@ -12,7 +12,7 @@ This page walks through install, verify, first run, permissions, and long-runnin
 ### Published MCP package (recommended)
 
 ```bash title="Register taskflow MCP"
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.3 grok-taskflow-mcp
 ```
 
 Requires **Node.js ≥ 22.19.0**. The MCP protocol code has no MCP SDK dependency. A public Grok plugin marketplace/source is not published yet; do not substitute an imaginary source string.
@@ -142,7 +142,7 @@ Grok children inherit only platform/proxy/CA plus Grok/xAI/Taskflow-Grok variabl
 
 ## Long-running flows
 
-**`taskflow_run` is synchronous** — the tool call returns only when the whole DAG finishes. The plugin ships `tool_timeout_sec: 1800`; MCP does not expose Pi's detached mode. Split huge graphs. If the client cancels a request, the server aborts the active DAG and subagent instead of leaving hidden background work.
+`taskflow_run` is synchronous by default. For a long graph, set `mode: "background"`; the call returns a durable `runId` immediately. Use `taskflow_runs` to list, inspect, wait for, or cancel it. The 30-minute tool timeout applies only to foreground calls.
 
 ## Approvals in MCP mode
 
@@ -153,6 +153,9 @@ MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fa
 | Tool | Purpose |
 |---|---|
 | `taskflow_run` | Run a saved or inline flow. Returns final output + `runId`. |
+| `taskflow_runs` | List background runs, or `status` / `wait` / `cancel` one by `runId`. |
+| `taskflow_resume` | Fork a failed or paused run into a new immutable child run. |
+| `taskflow_version` | Report package/build/schema/host identity. |
 | `taskflow_list` / `taskflow_show` | Discover and inspect saved flows. |
 | `taskflow_save` / `taskflow_search` | Library write + search. |
 | `taskflow_verify` / `taskflow_compile` | Static check and DAG render (zero tokens). |
@@ -160,13 +163,14 @@ MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fa
 | `taskflow_trace` | Append-only event log timeline (subagent I/O + decisions). |
 | `taskflow_replay` | Offline what-if re-judge of thresholds/budget (zero tokens). |
 | `taskflow_why_stale` / `taskflow_recompute` | Staleness analysis (recompute is dry-run only over MCP). |
+| `taskflow_reconcile_workspace` | Explicitly accept an inspected/repaired resolve-only workspace after a dirty-unknown write. |
 
 ## Alternative: register the MCP server manually
 
 ```bash title="Manual MCP registration"
 pnpm add -g grok-taskflow
 grok mcp add taskflow -- grok-taskflow-mcp
-# or: grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.2 grok-taskflow-mcp
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.3 grok-taskflow-mcp
 ```
 
 ## Remove

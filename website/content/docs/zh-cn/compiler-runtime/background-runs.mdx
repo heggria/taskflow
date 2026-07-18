@@ -5,7 +5,7 @@ description: 启动长时间运行的流程并立即返回提示符。通过 run
 
 普通的 `taskflow` 调用会阻塞你的会话，直到所有阶段完成。一个三阶段的代码审计如果耗时八分钟，你的提示符就冻结八分钟。
 
-后台运行解决了这个问题。在 **Pi 的 `taskflow` 工具**上设置 `detach: true`，工具在一秒内返回一个 `runId`。一个子进程接管工作，在每个阶段完成后持久化进度，并在结束时写入最终状态——或者在崩溃时写入失败状态。你可以随时从磁盘轮询运行状态来获取进度更新，也可以在中途失败后恢复它。Codex、Claude Code、OpenCode 和 Grok Build 的 MCP `taskflow_run` 目前不支持 detach；MCP 取消会中止 DAG，不会转为后台运行。
+后台运行解决了这个问题。Pi 的 `taskflow` 工具使用 `detach: true`；Codex、Claude Code、OpenCode 和 Grok Build 的 MCP `taskflow_run` 使用 `mode: "background"`。两者都会立即返回 `runId`，由子进程接管工作并持久化进度与最终状态。MCP 宿主还可通过 `taskflow_runs` 执行 `list`、`status`、`wait` 和持久化 `cancel`。
 
 本指南详细说明具体的 spawn 机制、如何检查后台运行的状态、审批（approval）阶段会发生什么，以及无头运行的限制。
 
@@ -37,19 +37,19 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
     **宿主在磁盘上创建 `RunState`。** 运行以 `status: "running"`、`detached: true` 开始，流程定义和参数被持久化。这与所有运行使用的原子写入路径相同——分离进程会把它读回来。
   </Step>
   <Step>
-    **上下文序列化到临时文件。** `/tmp/taskflow-detach-<runId>.json` 的 JSON 文件携带 `runId`、`defName`、`args`、`cwd` 以及宿主适配器运行模块的绝对路径（`runnerModule`）。这个文件是子进程的唯一输入。
+    **上下文序列化到临时文件。** 私有 `/tmp/taskflow-detach-*/context.json` 文件携带 `runId`、`defName`、`args`、`cwd`、父调用冻结的配置快照，以及宿主适配器运行模块的绝对路径。这个文件是子进程的唯一输入，读取后即删除。
   </Step>
   <Step>
-    **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true` 和 `stdio: ["ignore", "ignore", "pipe"]`。stdout 被忽略；stderr 被管道回父进程以捕获崩溃诊断信息。子进程立即 `unref()`——它不会保持父进程的事件循环存活。
+    **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true`、`stdio: "ignore"` 并立即 `unref()`。Pi 与 MCP 都完全分离标准输入输出；真实导入或运行错误由 worker 直接持久化到 `__detach__`。
   </Step>
   <Step>
     **父进程返回 runId。** 子进程的 PID 写入 `RunState.pid`，Pi `taskflow` 工具响应同时包含 PID 和 runId。父会话可以继续其他工作。
   </Step>
   <Step>
-    **子进程启动并运行流程。** 分离运行器读取上下文文件，从磁盘重新发现 agent 配置，动态导入宿主适配器的运行模块，然后调用 `executeTaskflow`。每个阶段完成后通过同一个 `saveRun` 路径持久化进度。
+    **子进程启动并运行流程。** 分离运行器读取上下文文件，使用父调用冻结的 agent 与 settings 快照，动态导入宿主适配器的运行模块，然后调用 `executeTaskflow`。每个阶段完成后通过同一个 `saveRun` 路径持久化进度。
   </Step>
   <Step>
-    **写入终态。** 成功时，子进程持久化 `status: "completed"` 和所有阶段输出。失败时，顶层 `catch` 写入 `status: "failed"`。崩溃时，父进程的崩溃保护写入合成的 `__detach__` 阶段和 stderr 信息。
+    **写入终态。** 成功时，子进程在同一次终态写入中持久化 `status: "completed"`、最终输出和来源阶段。失败时，顶层 `catch` 写入 `status: "failed"`；异常退出由父进程或下一次状态轮询补写合成的 `__detach__` 阶段，并回收已登记的 Host CLI 进程组。
   </Step>
 </Steps>
 
@@ -70,7 +70,7 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
 | 状态 | 含义 |
 |---|---|
 | `running` | 分离进程存活并正在执行阶段。 |
-| `completed` | 所有阶段完成。`finalOutput` 在最后一个阶段的输出中。 |
+| `completed` | 所有阶段完成。顶层 `finalOutput` 与 `outputSourcePhaseId` 已随终态原子持久化。 |
 | `failed` | 某个阶段失败（重试已耗尽），或子进程崩溃。 |
 | `paused` | `loop` 阶段达到迭代上限并暂停以供审查。 |
 | `blocked` | `gate` 阶段返回 `VERDICT: BLOCK`。 |
@@ -90,7 +90,7 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
 崩溃保护仅在运行仍为 `"running"` 且 PID 匹配时触发——它永远不会覆盖运行器已持久化的真正终态。这意味着：
 
 - **正常退出（code 0）：** 运行器已持久化自己的状态。崩溃保护不执行操作。
-- **非零退出：** 崩溃保护检查运行状态。如果仍为 `"running"`，则标记为 `"failed"` 并附上捕获的 stderr。
+- **非零退出：** 崩溃保护检查运行状态。如果仍为 `"running"`，则标记为 `"failed"`；worker 优先保留具体诊断，崩溃保护至少记录退出码/信号。
 - **Spawn 错误：** `child.on("error")` 处理器用 spawn 错误信息写入相同的合成阶段。
 
 `__detach__` 阶段可轮询、可调试——你可以在 `/tf runs` 和运行详情视图中看到它，就像任何其他阶段一样。
@@ -155,7 +155,7 @@ done
 
 ## 上下文文件格式
 
-`/tmp/taskflow-detach-<runId>.json` 的临时文件携带：
+私有 `/tmp/taskflow-detach-*/context.json` 临时文件携带：
 
 ```json
 {
@@ -187,7 +187,7 @@ done
 
 1. 从 `process.argv[2]` 读取并解析上下文文件。
 2. 通过 `runId` 加载预保存的 `RunState`。
-3. 使用 `readSubagentSettings()` 和 `discoverAgents()` 重新发现 agent 配置。
+3. 使用父调用写入的 agent、模型角色、global thinking 与保留策略快照。
 4. 动态 `import(runnerModule)` 并提取 `runTask` 函数。
 5. **快速失败**——如果指定了运行模块但无法加载，写入合成的 `__detach__` 阶段并以非零退出码退出，而不是带着"未注入运行器"的存根继续跛行。
 6. 调用 `executeTaskflow()`，带有在每个阶段完成后保存状态的 `persist` 回调。
@@ -203,9 +203,9 @@ done
 |---|---|
 | **审批门控自动拒绝** | 没有交互式审批者可用。安全门控不得被静默绕过。 |
 | **无实时 TUI 流式传输** | 子进程的 stdout 被忽略（`stdio: "ignore"`）。进度仅通过文件轮询可见。 |
-| **宿主无法发送 `AbortSignal`** | 父进程无法在运行中途取消子进程。你可以手动 kill PID。 |
+| **无实时 `AbortSignal` 通道** | MCP 通过私有持久化控制记录执行 `taskflow_runs cancel`，子进程轮询后进入正常暂停/清理路径；Pi 暂无同名管理工具，需要时仍可按记录的 PID 手动终止。 |
 | **`runnerModule` 必须可解析** | 子进程在运行时 `import()` 宿主适配器的运行器。如果模块路径错误，每个阶段都会失败。快速失败保护会提前捕获此问题。 |
-| **临时文件必须在子进程读取前保持存在** | `/tmp/taskflow-detach-<runId>.json` 的上下文文件在启动时同步读取。在子进程启动前删除它会导致立即退出。 |
+| **启动握手有界** | 父进程先持久化 PID/协议元数据，再写入 start gate；子进程若 5 秒内未获放行会失败退出，不会无限等待。 |
 | **无 `requestApproval` 回调** | 宿主无法将审批处理器注入分离进程。这是自动拒绝背后的机制。 |
 
 ## 失败后恢复
@@ -219,7 +219,7 @@ done
 }
 ```
 
-已完成的阶段被跳过（它们的输出已缓存）。只有失败的阶段及其下游依赖项重新执行。恢复本身也可以是分离的——在恢复调用上设置 `detach: true` 再次在后台触发它。
+已完成且不受影响的阶段被复用，失败阶段及其下游重新执行。Pi 调用可再次设置 `detach: true`；MCP 的 `taskflow_resume` 当前前台执行并创建不可变子运行。
 
 ## 跨运行缓存
 
@@ -257,7 +257,7 @@ done
 └─ 用户轮询 /tf runs → 看到 "completed"
 ```
 
-如果子进程在写入终态之前以非零退出码退出，崩溃保护在 `exit` 事件和用户下一次轮询的 `saveRun` 之间触发，将运行标记为 `"failed"` 并附上捕获的 stderr。
+如果子进程在写入终态之前异常退出，父进程的 `exit` 处理器或下一次 `taskflow_runs` 轮询会把它终态化为 `"failed"`；Pi 与 MCP 都保留退出信息和 worker 已写入的诊断。
 
 ## 下一步
 

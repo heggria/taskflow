@@ -13,6 +13,7 @@ import {
 	newRunId,
 	saveFlow,
 	saveRun,
+	withLock,
 	type RunIndexEntry,
 	type RunState,
 } from "../src/store.ts";
@@ -1355,8 +1356,79 @@ test("L1: a stale lock is stolen cleanly by racing acquirers (no leak, single wi
 		const loaded = loadRun(cwd, "L1");
 		assert.ok(loaded, "run should be readable after both saves");
 		assert.ok(!fs.existsSync(lockPath), "lock file must be released, not leaked");
-		const stray = fs.readdirSync(flowDir).filter((f) => f.includes(".stale."));
-		assert.deepEqual(stray, [], "no graveyard (.stale.) files should remain");
+		const stray = fs.readdirSync(flowDir).filter((f) => f.includes(".stale.") || f.includes(".steal."));
+		assert.deepEqual(stray, [], "no stale graveyard or steal-claim files should remain");
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("L1: an old mtime never permits stealing from a live lock owner", async () => {
+	const cwd = makeTmpCwd();
+	try {
+		const lockPath = path.join(cwd, "live-owner.lock");
+		const readyPath = path.join(cwd, "ready");
+		const releasePath = path.join(cwd, "release");
+		const script = `
+			import fs from "node:fs";
+			import { withLock } from ${JSON.stringify(path.resolve("packages/taskflow-core/src/store.ts"))};
+			const [lockPath, readyPath, releasePath] = process.argv.slice(2);
+			withLock(lockPath, () => {
+				fs.writeFileSync(readyPath, "ready");
+				const wait = new Int32Array(new SharedArrayBuffer(4));
+				const deadline = Date.now() + 5_000;
+				while (!fs.existsSync(releasePath) && Date.now() < deadline) Atomics.wait(wait, 0, 0, 20);
+				if (!fs.existsSync(releasePath)) process.exitCode = 4;
+			});
+		`;
+		const scriptPath = path.join(cwd, "live-owner.mjs");
+		fs.writeFileSync(scriptPath, script);
+		const { spawn } = await import("node:child_process");
+		const holder = spawn(
+			process.execPath,
+			["--experimental-strip-types", scriptPath, lockPath, readyPath, releasePath],
+			{ stdio: "ignore" },
+		);
+		const deadline = Date.now() + 2_000;
+		while (!fs.existsSync(readyPath) && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.ok(fs.existsSync(readyPath), "holder should enter the critical section");
+		const old = Date.now() / 1000 - 3_600;
+		fs.utimesSync(lockPath, old, old);
+
+		assert.throws(
+			() => withLock(lockPath, () => assert.fail("live lock must not be stolen"), 200),
+			/Lock timeout/,
+		);
+		fs.writeFileSync(releasePath, "release");
+		const code = await new Promise<number>((resolve) => holder.on("close", (value) => resolve(value ?? 0)));
+		assert.equal(code, 0);
+		assert.ok(!fs.existsSync(lockPath), "the original owner should release its own lock");
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("L1: releasing an old handle never unlinks a replacement lock", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const lockPath = path.join(cwd, "replacement.lock");
+		const displacedPath = path.join(cwd, "displaced.lock");
+		withLock(lockPath, () => {
+			fs.renameSync(lockPath, displacedPath);
+			fs.writeFileSync(
+				lockPath,
+				JSON.stringify({ pid: process.pid, ts: Date.now(), token: "successor" }),
+				{ flag: "wx" },
+			);
+		});
+
+		assert.equal(
+			JSON.parse(fs.readFileSync(lockPath, "utf-8")).token,
+			"successor",
+			"old finally block must leave the successor's inode untouched",
+		);
 	} finally {
 		cleanup(cwd);
 	}

@@ -2,6 +2,26 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.3] — 2026-07-18
+
+### Added
+
+- **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`; lists report the total active count and can filter `running` versus `terminal` runs. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries. Starting a sixth concurrent background run emits an explicit resource-contention warning because Taskflow intentionally has no hidden global cross-host scheduler.
+
+### Changed
+
+- **Release maintenance rollup.** The 0.2 frontier assessment is now linked from both READMEs; Pi development peers move to 0.80.7, Fumadocs packages move to their mutually compatible 16.11.5/15.2.0 set, Biome moves to 2.5.4, and every workflow uses the verified `actions/setup-node` v7.0.0 tag commit. These changes absorb the independently opened maintenance PRs into the fully tested 0.2.3 release transaction.
+
+### Fixed
+
+- **Atomic terminal results.** The runtime now persists `finalOutput` and `outputSourcePhaseId` in the same terminal-state write, so a crash or immediate poll can never observe `completed` without its result.
+- **Detached-run ownership and cleanup.** Cancellation and process-heartbeat records now live in a user-private control directory keyed by canonical invocation root, preventing project symlinks and sibling worktrees from redirecting or cross-cancelling runs. Current workers carry a versioned instance identity; stale authenticated workers are killed before terminalization and their registered Host CLI process groups are reaped, inherited detached-runner environment variables cannot claim an outer run, the spawn-only worker consumes only user-owned private temp contexts, and ambiguous legacy runs fail closed for cancellation.
+- **Foreground/background parity.** MCP and Pi detached launches snapshot the same agent scope, model roles, global thinking, runner profile, incremental settings, and retention policy as the foreground invocation. Pi now uses fully detached stdio and transactionally reaps the worker plus its private launch context when post-spawn setup fails. Launch failures preserve their real cause, and post-spawn roster diagnostics can no longer misreport a successfully started run as a launch failure.
+- **Bounded run history and accurate rosters.** Retention now applies to every inactive state (`completed`, `failed`, `paused`, and `blocked`) while never pruning active runs. Cleanup is throttled independently per project, uses short fail-open lock waits, validates physical directories as well as indexed paths, and rechecks the selected snapshot under the run lock, preventing cross-project starvation, symlink traversal, and resume/delete races. Detached control records are removed only when their persisted cwd belongs to the run store being retained. MCP background lists compute counts from the complete project roster without the former 1000-run cap or per-row reload pattern.
+- **File-lock ownership.** Expired locks are stolen only when their recorded owner process is definitively dead, stale-lock stealers serialize on a generation claim, and release verifies both inode and a random owner token. A slow live writer can no longer overlap a replacement writer or unlink its successor's lock.
+- **Run-id and status compatibility.** Dot-leading flow names now produce persistable run IDs without weakening traversal guards. Background status ignores synthetic launch phases in progress totals and tolerates malformed legacy optional output instead of crashing the MCP request.
+- **Release surface synchronization.** Package/plugin versions, installation pins, built-dist MCP expectations, the 16-tool roster, background-run documentation, and English/Chinese host guides are synchronized for 0.2.3.
+
 ## [0.2.2] — 2026-07-14
 
 ### ⚠️ Breaking — migration required

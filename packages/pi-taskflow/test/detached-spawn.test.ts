@@ -53,34 +53,39 @@ test("detached-runner: the resolved module loads (spawn → exits, does not ENOE
 	// (run not found), but the key assertion is that it does NOT die at import
 	// time with ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING / Cannot find module.
 	const resolved = fileURLToPath(import.meta.resolve(DETACHED_RUNNER_SPECIFIER));
-	const tmpCtx = join(tmpdir(), `issue3-ctx-${process.pid}-${Date.now()}.json`);
+	const privateDir = mkdtempSync(join(tmpdir(), "taskflow-detach-load-"));
+	const tmpCtx = join(privateDir, "context.json");
 	writeFileSync(tmpCtx, JSON.stringify({ runId: "bogus", defName: "nope", args: {}, cwd: tmpdir() }));
 
-	await new Promise<void>((resolve) => {
-		const child = spawn(process.execPath, [resolved, tmpCtx], {
-			stdio: ["ignore", "pipe", "pipe"],
+	try {
+		await new Promise<void>((resolve) => {
+			const child = spawn(process.execPath, [resolved, tmpCtx], {
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let stderr = "";
+			child.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
+			child.on("exit", (code) => {
+				// It is expected to exit non-zero (bogus run). The regression would be a
+				// module-load failure: ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING or
+				// "Cannot find module …detached-runner.js.js".
+				assert.doesNotMatch(
+					stderr,
+					/ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING/,
+					"must not hit the node_modules type-strip guardrail (loads compiled JS)",
+				);
+				assert.doesNotMatch(
+					stderr,
+					/Cannot find module[\s\S]*\.js\.js/,
+					"must not hit the double-suffix ENOENT (issue #3)",
+				);
+				assert.notEqual(code, null, "child must have exited (not hang)");
+				resolve();
+			});
+			child.on("error", () => resolve());
 		});
-		let stderr = "";
-		child.stderr.on("data", (c: Buffer) => { stderr += c.toString(); });
-		child.on("exit", (code) => {
-			// It is expected to exit non-zero (bogus run). The regression would be a
-			// module-load failure: ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING or
-			// "Cannot find module …detached-runner.js.js".
-			assert.doesNotMatch(
-				stderr,
-				/ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING/,
-				"must not hit the node_modules type-strip guardrail (loads compiled JS)",
-			);
-			assert.doesNotMatch(
-				stderr,
-				/Cannot find module[\s\S]*\.js\.js/,
-				"must not hit the double-suffix ENOENT (issue #3)",
-			);
-			assert.notEqual(code, null, "child must have exited (not hang)");
-			resolve();
-		});
-		child.on("error", () => resolve());
-	});
+	} finally {
+		rmSync(privateDir, { recursive: true, force: true });
+	}
 });
 
 test("detached-runner: malformed context still removes its private authorization directory", async () => {
@@ -99,6 +104,25 @@ test("detached-runner: malformed context still removes its private authorization
 		assert.equal(existsSync(privateDir), false, "malformed host-authorized context must be consumed and removed");
 	} finally {
 		rmSync(privateDir, { recursive: true, force: true });
+	}
+});
+
+test("detached-runner: refuses an arbitrary context path without deleting it", async () => {
+	const resolved = fileURLToPath(new URL("../../taskflow-core/src/detached-runner.ts", import.meta.url));
+	const untrustedDir = mkdtempSync(join(tmpdir(), "taskflow-untrusted-context-"));
+	const contextPath = join(untrustedDir, "context.json");
+	writeFileSync(contextPath, JSON.stringify({ runId: "bogus", cwd: tmpdir() }));
+	try {
+		await new Promise<void>((resolve) => {
+			const child = spawn(process.execPath, ["--conditions=development", "--experimental-strip-types", resolved, contextPath], {
+				stdio: ["ignore", "ignore", "ignore"],
+			});
+			child.once("close", () => resolve());
+			child.once("error", () => resolve());
+		});
+		assert.equal(existsSync(contextPath), true, "untrusted command-line paths must never be consumed");
+	} finally {
+		rmSync(untrustedDir, { recursive: true, force: true });
 	}
 });
 
@@ -217,6 +241,7 @@ test("detached: crash guard does NOT clobber a genuine terminal state", () => {
 test("detached-runner: injects the host runner so phases do not hit 'No subagent runner injected'", async () => {
 	const resolved = fileURLToPath(import.meta.resolve(DETACHED_RUNNER_SPECIFIER));
 	const cwd = mkdtempSync(join(tmpdir(), "issue3-runner-"));
+	const contextDir = mkdtempSync(join(tmpdir(), "taskflow-detach-runner-"));
 	try {
 		const def: Taskflow = {
 			name: "runner-inject",
@@ -228,7 +253,7 @@ test("detached-runner: injects the host runner so phases do not hit 'No subagent
 			status: "running", phases: {}, createdAt: Date.now(), updatedAt: Date.now(), cwd,
 		});
 
-		const ctxFile = join(tmpdir(), `issue3-runner-ctx-${process.pid}-${Date.now()}.json`);
+		const ctxFile = join(contextDir, "context.json");
 		// Mirror the host: resolve the runner module from pi-taskflow itself so it
 		// works under both dev (.ts) and prod (.js) conditions.
 		const runnerModule = fileURLToPath(import.meta.resolve("../src/runner.ts"));
@@ -277,5 +302,6 @@ test("detached-runner: injects the host runner so phases do not hit 'No subagent
 		);
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
+		rmSync(contextDir, { recursive: true, force: true });
 	}
 });

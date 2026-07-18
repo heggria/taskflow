@@ -32,9 +32,9 @@ export interface TaskflowSettings {
 	builtInAgents: boolean;
 	/** Whether package-local built-ins are copied into the current project's .pi/agents/. */
 	syncBuiltinAgentsToProject: boolean;
-	/** Maximum completed/failed runs to keep. 0 disables cleanup. */
+	/** Maximum inactive runs to keep. Running runs are never pruned. 0 disables cleanup. */
 	maxKeptRuns: number;
-	/** Maximum age (days) for completed/failed runs. 0 disables age cleanup. */
+	/** Maximum age (days) for inactive runs. Running runs are never pruned. 0 disables age cleanup. */
 	maxRunAgeDays: number;
 	/** Library (reusable-flow asset layer) settings. RFC: docs/rfc-library-reuse.md */
 	library: LibrarySettings;

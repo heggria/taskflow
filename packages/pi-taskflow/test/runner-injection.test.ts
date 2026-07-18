@@ -82,9 +82,39 @@ test("regression: the detached context file carries a runnerModule (runner injec
 	// Accept either the shorthand (`runnerModule,`) or key (`runnerModule:`) form.
 	assert.ok(/\brunnerModule\b[,:]/.test(SRC), "detached context must carry runnerModule");
 	assert.match(SRC, /runnerFactoryExport:\s*"createPiSubagentRunner"/, "detached context must name the host-authorized Pi runner factory");
-	assert.match(SRC, /runnerConfig:\s*readSubagentSettings\(\)\.taskflow\.piChild/, "detached context must carry the normalized Pi child profile snapshot");
+	assert.match(
+		SRC,
+		/runnerConfig:\s*(?:readSubagentSettings\(\)|detachedSettings)\.taskflow\.piChild/,
+		"detached context must carry the normalized Pi child profile snapshot",
+	);
 });
 
 test("regression: createPiSubagentRunner is imported into index.ts (the injected runner factory)", () => {
 	assert.match(SRC, /import\s*\{[^}]*\bcreatePiSubagentRunner\b[^}]*\}\s*from\s*"\.\/runner\.ts"/, "index.ts must import createPiSubagentRunner from ./runner.ts");
+});
+
+test("regression: detached context preserves invocation-level cache and reuse semantics", () => {
+	assert.match(SRC, /incremental:\s*params\.incremental\s*===\s*true/, "detached context must carry the incremental invocation override");
+	assert.match(SRC, /reusedSavedName:\s*[\s\S]{0,240}params\.reusedFromSearch\s*===\s*true/, "detached context must carry the reuse attribution only for an authorized search selection");
+});
+
+test("regression: Pi background runner has no host-owned stdio pipe", () => {
+	assert.match(
+		SRC,
+		/spawn\(process\.execPath,[\s\S]{0,400}detached:\s*true,[\s\S]{0,120}stdio:\s*"ignore"/,
+		"a durable detached runner must not retain a Pi-owned stdout/stderr pipe",
+	);
+});
+
+test("regression: Pi background launch rolls back post-spawn failures", () => {
+	assert.match(
+		SRC,
+		/catch \(error\) \{[\s\S]{0,200}killProcessTree\(spawnedChild\.pid,[\s\S]{0,240}rmSync\(tmpDir/,
+		"post-spawn failures must reap the detached worker and remove its private launch context",
+	);
+	assert.match(
+		SRC,
+		/error: `Failed to launch detached runner:[\s\S]{0,300}saveRun\(state, state\.detachedRetention\)/,
+		"launch rollback must persist the original failure on the durable run",
+	);
 });

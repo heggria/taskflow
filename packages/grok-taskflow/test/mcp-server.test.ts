@@ -45,7 +45,7 @@ test("grok mcp: initialize returns the protocol version + serverInfo", async () 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-grok");
-	assert.equal(res.result.serverInfo.version, "0.2.2");
+	assert.equal(res.result.serverInfo.version, "0.2.3");
 });
 
 test("grok mcp: tools/list exposes the same taskflow tools as other hosts", async () => {
@@ -60,6 +60,7 @@ test("grok mcp: tools/list exposes the same taskflow tools as other hosts", asyn
 			"taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay",
 			"taskflow_resume",
 			"taskflow_run",
+			"taskflow_runs",
 			"taskflow_save",
 			"taskflow_search",
 			"taskflow_show",
@@ -104,6 +105,7 @@ test("grok mcp: makeToolHandlers exposes the tools", () => {
 			"taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay",
 			"taskflow_resume",
 			"taskflow_run",
+			"taskflow_runs",
 			"taskflow_save",
 			"taskflow_search",
 			"taskflow_show",

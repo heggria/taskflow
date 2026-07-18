@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow-monorepo",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Monorepo for taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, and the documentation website.",
   "type": "module",
@@ -36,10 +36,10 @@
     "test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.80.3",
-    "@earendil-works/pi-ai": "^0.80.3",
-    "@earendil-works/pi-coding-agent": "^0.80.3",
-    "@earendil-works/pi-tui": "^0.80.3",
+    "@earendil-works/pi-agent-core": "^0.80.7",
+    "@earendil-works/pi-ai": "^0.80.7",
+    "@earendil-works/pi-coding-agent": "^0.80.7",
+    "@earendil-works/pi-tui": "^0.80.7",
     "@types/node": "^26",
     "typebox": "^1.3.6",
     "typescript": "^7.0.2"

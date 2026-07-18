@@ -12,20 +12,30 @@ import {
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp-core/server";
-import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
+import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { claudeSubagentRunner } from "taskflow-hosts";
 
+const HOST_OPTIONS = {
+	host: "claude",
+	detachedRunner: {
+		module: import.meta.resolve("taskflow-hosts/claude"),
+		exportName: "claudeSubagentRunner",
+	},
+} as const;
+
 /** Per-call tool handlers with claude subagent execution bound in. */
-export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, claudeSubagentRunner, { host: "claude" });
+export function makeToolHandlers(
+	cwd: string,
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
+	return coreMakeToolHandlers(cwd, claudeSubagentRunner, HOST_OPTIONS);
 }
 
 /** Full MCP method dispatch table (protocol + tools), claude-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, claudeSubagentRunner, { host: "claude" });
+	return coreMakeMcpHandlers(cwd, claudeSubagentRunner, HOST_OPTIONS);
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(claudeSubagentRunner, cwd, { host: "claude" });
+	return coreStartMcpServer(claudeSubagentRunner, cwd, HOST_OPTIONS);
 }

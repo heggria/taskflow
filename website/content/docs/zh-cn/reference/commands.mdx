@@ -83,6 +83,9 @@ taskflow 以两种方式暴露相同的操作。在 **Pi** 上，你输入像 `/
 | 工具 | 说明 |
 |---|---|
 | `taskflow_run` | 运行内联或已保存的 flow；返回最终输出和一个 `runId`。 |
+| `taskflow_runs` | 列出后台运行，或按 `runId` 执行 `status` / 有界 `wait` / `cancel`。 |
+| `taskflow_resume` | 把失败或暂停运行 fork 为新的不可变子运行，可覆盖一个阶段。 |
+| `taskflow_version` | 报告包版本、构建 commit、schema 版本、构建时间与 host。 |
 | `taskflow_list` | 列出在此目录下可发现的已保存 flow。 |
 | `taskflow_show` | 打印一个已保存 flow 的定义。 |
 | `taskflow_verify` | 静态验证一个 flow（不执行）。 |

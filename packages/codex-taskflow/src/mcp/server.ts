@@ -12,20 +12,30 @@ import {
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp-core/server";
-import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
+import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { codexSubagentRunner } from "taskflow-hosts";
 
+const HOST_OPTIONS = {
+	host: "codex",
+	detachedRunner: {
+		module: import.meta.resolve("taskflow-hosts/codex"),
+		exportName: "codexSubagentRunner",
+	},
+} as const;
+
 /** Per-call tool handlers with codex subagent execution bound in. */
-export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
-	return coreMakeToolHandlers(cwd, codexSubagentRunner, { host: "codex" });
+export function makeToolHandlers(
+	cwd: string,
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
+	return coreMakeToolHandlers(cwd, codexSubagentRunner, HOST_OPTIONS);
 }
 
 /** Full MCP method dispatch table (protocol + tools), codex-bound. */
 export function makeMcpHandlers(cwd: string): Record<string, RpcHandler> {
-	return coreMakeMcpHandlers(cwd, codexSubagentRunner, { host: "codex" });
+	return coreMakeMcpHandlers(cwd, codexSubagentRunner, HOST_OPTIONS);
 }
 
 /** Start the stdio MCP server. Resolves when the client disconnects. */
 export function startMcpServer(cwd: string = process.cwd()): Promise<void> {
-	return coreStartMcpServer(codexSubagentRunner, cwd, { host: "codex" });
+	return coreStartMcpServer(codexSubagentRunner, cwd, HOST_OPTIONS);
 }

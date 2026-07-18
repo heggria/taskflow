@@ -4,7 +4,8 @@
  * Runs two real model turns with an explicitly allowlisted extension that keeps
  * a referenced interval alive. Each Pi CLI therefore emits its genuine NDJSON
  * lifecycle but cannot exit on its own; Taskflow must validate the terminal
- * candidate, reap it, and proceed to phase two.
+ * candidate, reap it, and proceed to phase two. Set PI_TASKFLOW_E2E_MODEL to
+ * select an authenticated model instead of Pi's current default.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -21,6 +22,7 @@ import { createPiSubagentRunner } from "../src/runner.ts";
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-real-pi-terminal-"));
 const extension = path.join(cwd, "leaky-extension.mjs");
+const e2eModel = process.env.PI_TASKFLOW_E2E_MODEL?.trim();
 fs.writeFileSync(extension, `export default function leakyExtension() { setInterval(() => {}, 1000); }\n`);
 
 try {
@@ -43,7 +45,14 @@ try {
 		cwd,
 	};
 	const agents: AgentConfig[] = [
-		{ name: "executor", description: "live smoke", systemPrompt: "Follow the requested output format exactly.", source: "user", filePath: "" },
+		{
+			name: "executor",
+			description: "live smoke",
+			systemPrompt: "Follow the requested output format exactly.",
+			source: "user",
+			filePath: "",
+			...(e2eModel ? { model: e2eModel } : {}),
+		},
 	];
 	const runner = createPiSubagentRunner({
 		resourceProfile: "allowlist",
@@ -61,7 +70,12 @@ try {
 		},
 	});
 
-	assert.equal(result.ok, true, result.finalOutput);
+	assert.equal(result.ok, true, JSON.stringify({
+		finalOutput: result.finalOutput,
+		status: result.state.status,
+		phases: result.state.phases,
+		calls,
+	}, null, 2));
 	assert.equal(calls.length, 2);
 	assert.match(calls[0].output, /PHASE_ONE_DONE/);
 	assert.match(calls[1].output, /PHASE_TWO_DONE/);

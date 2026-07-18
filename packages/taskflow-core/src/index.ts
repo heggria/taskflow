@@ -25,6 +25,7 @@ export * from "./rates.ts";
 export * from "./stale.ts";
 export * from "./workspace.ts";
 export * from "./cwd-bridge.ts";
+export * from "./detached-control.ts";
 // 0.2.1 exposes only the deliberately supported resolve-only compatibility
 // controls. The broader Workspace Capability scaffold remains internal until
 // its native backend/API contract is complete; publishing it from the root

@@ -24,7 +24,7 @@ test("persistent mutex serializes concurrent contenders without losing updates",
 				const value = Number(fs.readFileSync(counterPath, "utf8"));
 				await new Promise<void>((resolve) => setImmediate(resolve));
 				fs.writeFileSync(counterPath, String(value + 1));
-			});
+			}, { timeoutMs: 30_000 });
 		}));
 		assert.equal(fs.readFileSync(counterPath, "utf8"), "40");
 		assert.deepEqual(fs.readdirSync(`${lockPath}.queue`), []);

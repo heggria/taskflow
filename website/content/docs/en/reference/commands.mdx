@@ -83,6 +83,9 @@ On MCP hosts, taskflow exposes these tools (the model calls them; you usually do
 | Tool | Description |
 |---|---|
 | `taskflow_run` | Run an inline or saved flow; returns the final output and a `runId`. |
+| `taskflow_runs` | List background runs, or `status` / bounded `wait` / `cancel` one by `runId`. |
+| `taskflow_resume` | Fork a failed or paused run into a new immutable child run, with optional one-phase overrides. |
+| `taskflow_version` | Report package version, build commit, schema version, build time, and host. |
 | `taskflow_list` | List saved flows discoverable in this directory. |
 | `taskflow_show` | Print a saved flow's definition. |
 | `taskflow_verify` | Statically verify a flow (no execution). |
