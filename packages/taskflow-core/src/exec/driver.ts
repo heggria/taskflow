@@ -27,6 +27,7 @@ import { foldEvents } from "./fold.ts";
 import { EVENT_SCHEMA_VERSION, type Event } from "./events.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
+import type { TaskflowVerifier } from "../verify.ts";
 import {
 	clampSubFlowBudget,
 	containsInterpolationPlaceholder,
@@ -49,6 +50,9 @@ export interface EventKernelDeps {
 	eventKernel?: boolean;
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
+	/** Caller-supplied zero-token verifiers (see verify.ts). Threaded into the
+	 *  inline-def verification in executeFlowBody; recurses via the ...deps spread. */
+	verifiers?: TaskflowVerifier[];
 	_stack?: string[];
 	_dynamic?: boolean;
 }
@@ -289,6 +293,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		runTask: deps.runTask,
 		signal: deps.signal,
 		globalThinking: deps.globalThinking,
+		verifiers: deps.verifiers,
 		requestApproval: deps.requestApproval,
 		loadFlow: deps.loadFlow,
 		stack: deps._stack ?? [],

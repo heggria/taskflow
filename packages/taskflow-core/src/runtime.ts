@@ -37,7 +37,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
-import { verifyTaskflow } from "./verify.ts";
+import { verifyTaskflow, type TaskflowVerifier } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
 export { parseTournamentWinner } from "./deterministic.ts";
@@ -117,6 +117,13 @@ export interface RuntimeDeps {
 	 * fallback. Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
 	 */
 	eventKernel?: boolean;
+	/** Caller-supplied zero-token verifiers (see verify.ts). Threaded into every
+	 *  `verifyTaskflow` preflight the runtime performs — dynamic subflows (spawn +
+	 *  inline `flow{def}`), the event-kernel path, and the top-level pre-execution
+	 *  gate (which blocks only on error-severity plugin issues, leaving built-in
+	 *  detectors advisory at the top level as before). A host embedding the engine
+	 *  registers the verifiers it trusts here. Undefined ⇒ built-in detectors only. */
+	verifiers?: TaskflowVerifier[];
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 	/** Internal: pre-resolved Shared Context Tree dir for this run (sub-flows inherit the parent's). */
@@ -870,7 +877,7 @@ async function runInlineSubflow(
 		const error = `spawned subflow failed validation: ${v.errors.join("; ")}`;
 		return { output: `(${error})`, usage: emptyUsage(), failed: true, error };
 	}
-	const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency });
+	const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency }, { verifiers: deps.verifiers });
 	if (!ver.ok) {
 		const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 		const error = `spawned subflow failed verification: ${errs.join("; ")}`;
@@ -2814,7 +2821,7 @@ async function executePhaseInner(
 			}
 			// Static verification (dead-ends, unreachable, gate-exhaustion, budget,
 			// concurrency). Only error-severity issues block; warnings are advisory.
-			const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency });
+			const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency }, { verifiers: deps.verifiers });
 			if (!ver.ok) {
 				const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 				return defFailOpen(`inline def failed verification: ${errs.join("; ")}`);
@@ -4225,6 +4232,28 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 					"Use budget.maxTokens or a host with cost accounting.",
 			);
 		}
+		// Top-level structural preflight (zero-token). Built-in detector findings
+		// (any severity) stay advisory at the top level — a flow may still run even
+		// with structural errors, exactly as before this seam existed. We block ONLY
+		// on error-severity issues from caller-supplied verifiers (deps.verifiers):
+		// category "plugin" is the canonical discriminator (a nameless verifier's
+		// fail-closed issue still carries it, whereas `source` would be undefined).
+		// Existing flows are unaffected and a host's trusted verifiers can gate spend
+		// before any agent is spawned. Plugin warnings never block here.
+		if (deps.verifiers?.length) {
+			const preflight = verifyTaskflow(
+				{ name: def.name, phases: def.phases as Phase[], budget: def.budget, concurrency: def.concurrency },
+				{ verifiers: deps.verifiers },
+			);
+			const pluginErrors = preflight.issues.filter(
+				(i) => i.category === "plugin" && i.severity === "error",
+			);
+			if (pluginErrors.length) {
+				throw new Error(
+					`Taskflow '${def.name}' failed verifier preflight: ${pluginErrors.map((i) => i.message).join("; ")}`,
+				);
+			}
+		}
 		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
 		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
 		// Existing phase state requires the imperative cache/inputHash machinery to
@@ -4247,6 +4276,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				persist: deps.persist,
 				onProgress: deps.onProgress,
 				eventKernel: deps.eventKernel,
+				verifiers: deps.verifiers,
 				requestApproval: deps.requestApproval,
 				loadFlow: deps.loadFlow,
 				_stack: deps._stack,

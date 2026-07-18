@@ -20,7 +20,7 @@ import {
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	TOURNAMENT_DEFAULT_VARIANTS,
 } from "./schema.ts";
-import { verifyTaskflow, type VerificationIssue, type VerificationResult } from "./verify.ts";
+import { verifyTaskflow, type TaskflowVerifier, type VerificationIssue, type VerificationResult } from "./verify.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +40,9 @@ export interface CompileOptions {
 	direction?: "TD" | "LR";
 	/** Document title (defaults to the flow name). */
 	title?: string;
+	/** Caller-supplied verifiers forwarded into `verifyTaskflow`; their issues
+	 *  overlay on the Mermaid diagram + report exactly like built-in issues. */
+	verifiers?: TaskflowVerifier[];
 }
 
 // ---------------------------------------------------------------------------
@@ -361,12 +364,15 @@ function buildReport(flow: Taskflow, verification: VerificationResult): string {
  * report. Pure function — zero tokens, no LLM, no I/O.
  */
 export function compileTaskflow(flow: Taskflow, opts: CompileOptions = {}): CompileResult {
-	const verification = verifyTaskflow({
-		name: flow.name ?? "taskflow",
-		phases: flow.phases ?? [],
-		budget: flow.budget,
-		concurrency: flow.concurrency,
-	});
+	const verification = verifyTaskflow(
+		{
+			name: flow.name ?? "taskflow",
+			phases: flow.phases ?? [],
+			budget: flow.budget,
+			concurrency: flow.concurrency,
+		},
+		{ verifiers: opts.verifiers },
+	);
 
 	const mermaid = buildMermaid(flow, verification, opts);
 	const report = buildReport(flow, verification);

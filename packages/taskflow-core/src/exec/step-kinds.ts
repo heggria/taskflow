@@ -686,12 +686,15 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		if (!v.ok) {
 			return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
 		}
-		const ver = verifyTaskflow({
-			name: wrapped.name,
-			phases: wrapped.phases as Phase[],
-			budget: wrapped.budget,
-			concurrency: wrapped.concurrency,
-		});
+		const ver = verifyTaskflow(
+			{
+				name: wrapped.name,
+				phases: wrapped.phases as Phase[],
+				budget: wrapped.budget,
+				concurrency: wrapped.concurrency,
+			},
+			{ verifiers: ctx.deps.verifiers },
+		);
 		if (!ver.ok) {
 			const errs = ver.issues.filter((i) => i.severity === "error");
 			if (errs.length) {

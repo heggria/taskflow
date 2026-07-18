@@ -4,6 +4,9 @@
  * Runs *before* any agent is spawned. Catches dead-end phases, unreachable
  * paths, gate exhaustion, budget overflow, and reference integrity issues
  * purely through graph algorithms on the DAG — no LLM required.
+ *
+ * Caller-supplied `TaskflowVerifier`s may also run, after the built-in
+ * detectors; they are pure by contract (no I/O, no LLM) — see TaskflowVerifier.
  */
 
 import type { Phase } from "./schema.ts";
@@ -22,7 +25,8 @@ export type IssueCategory =
 	| "concurrency"
 	| "ref-integrity"
 	| "guard-contradiction"
-	| "contract";
+	| "contract"
+	| "plugin";
 
 export interface VerificationIssue {
 	/** Affected phase id, if applicable. */
@@ -30,6 +34,10 @@ export interface VerificationIssue {
 	message: string;
 	severity: "error" | "warning";
 	category: IssueCategory;
+	/** Name of the verifier that produced this issue. Undefined for the built-in
+	 *  structural detectors; set to the verifier's `name` on every issue emitted
+	 *  by a caller-supplied verifier (category "plugin"). */
+	source?: string;
 }
 
 export interface VerificationResult {
@@ -43,6 +51,40 @@ export interface VerifiableFlow {
 	phases: Phase[];
 	budget?: { maxUSD?: number; maxTokens?: number };
 	concurrency?: number;
+}
+
+/** A single finding from a caller-supplied verifier. The engine stamps
+ *  `category: "plugin"` and `source: <verifier.name>`; a verifier only supplies
+ *  what it actually knows — where, what, and how bad. */
+export interface VerifierIssue {
+	/** Affected phase id, if applicable. */
+	phaseId?: string;
+	message: string;
+	severity: "error" | "warning";
+}
+
+/** A caller-supplied, zero-token static check plugged into `verifyTaskflow`.
+ *
+ * A verifier runs AFTER the built-in structural detectors, against the SAME
+ * sanitized flow, and its issues merge into the single `VerificationResult`.
+ * A verifier MUST be a pure function — no I/O, no LLM, zero tokens — matching
+ * this module's "no I/O" contract. A throwing or malformed verifier is
+ * fail-closed: normalized into a single `error`/`plugin` issue naming the
+ * verifier, and the remaining verifiers still run. */
+export interface TaskflowVerifier {
+	/** Stable, human-readable name. Attributes every issue the verifier emits
+	 *  (VerificationIssue.source) and appears in the fail-closed error message. */
+	name: string;
+	/** Inspect the sanitized flow and return zero or more findings. Should not
+	 *  throw on well-formed input — if it cannot decide, return no issue. */
+	verify: (flow: VerifiableFlow) => VerifierIssue[];
+}
+
+/** Options for {@link verifyTaskflow}. */
+export interface VerifyOptions {
+	/** Caller-supplied verifiers. Run after the built-in detectors, in array
+	 *  order, against the same sanitized flow; built-in issues always come first. */
+	verifiers?: TaskflowVerifier[];
 }
 
 // ---------------------------------------------------------------------------
@@ -420,9 +462,10 @@ function detectContractRefMismatches(phases: Phase[]): VerificationIssue[] {
  * Run all static verification passes against a parsed taskflow.
  *
  * Returns issues found; `ok === true` means no errors (warnings are ok).
- * This is a pure function — no I/O, no LLM, zero tokens.
+ * The built-in detectors are pure (no I/O, no LLM, zero tokens); caller-supplied
+ * verifiers run after them and are pure by contract (see TaskflowVerifier).
  */
-export function verifyTaskflow(flow: VerifiableFlow): VerificationResult {
+export function verifyTaskflow(flow: VerifiableFlow, options?: VerifyOptions): VerificationResult {
 	// Tolerate malformed phase lists: null/non-object elements (validateTaskflow
 	// reports them) would otherwise crash the graph helpers on `p.id`. Filter to
 	// well-formed phase objects so verification degrades gracefully.
@@ -439,6 +482,44 @@ export function verifyTaskflow(flow: VerifiableFlow): VerificationResult {
 	issues.push(...detectConcurrencyWarnings(safeFlow, succ));
 	issues.push(...detectGuardContradictions(phases));
 	issues.push(...detectContractRefMismatches(phases));
+
+	// Caller-supplied verifiers run last, against the same sanitized safeFlow, in
+	// registration order. Fail-closed: a throwing or malformed verifier (e.g. a
+	// non-array return) is normalized to one error-severity "plugin" issue naming
+	// it, and the remaining verifiers still run. A verifier can never impersonate
+	// a built-in category — its findings are always stamped category "plugin" with
+	// source = its name.
+	const verifiers = options?.verifiers;
+	if (verifiers) {
+		for (const v of verifiers) {
+			try {
+				const out = v.verify(safeFlow);
+				if (!Array.isArray(out)) {
+					throw new Error(`returned a non-array (${typeof out})`);
+				}
+				for (const issue of out) {
+					issues.push({
+						phaseId: issue?.phaseId,
+						message:
+							typeof issue?.message === "string" && issue.message
+								? issue.message
+								: "(verifier emitted an issue with no message)",
+						// Default to "error" (fail-closed) when a verifier omits severity.
+						severity: issue?.severity === "warning" ? "warning" : "error",
+						category: "plugin",
+						source: v.name,
+					});
+				}
+			} catch (e) {
+				issues.push({
+					message: `verifier '${v.name}' failed: ${e instanceof Error ? e.message : String(e)}`,
+					severity: "error",
+					category: "plugin",
+					source: v.name,
+				});
+			}
+		}
+	}
 
 	const ok = !issues.some((i) => i.severity === "error");
 	return { ok, issues };
