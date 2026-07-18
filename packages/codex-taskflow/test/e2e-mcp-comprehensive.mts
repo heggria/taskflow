@@ -79,7 +79,7 @@ send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "
 const init = await waitFor(1, "initialize");
 assert.equal(init.result.protocolVersion, "2025-06-18");
 assert.equal(init.result.serverInfo.name, "taskflow-codex");
-assert.equal(init.result.serverInfo.version, "0.2.2");
+assert.equal(init.result.serverInfo.version, "0.2.3");
 ok(`initialize → ${JSON.stringify(init.result.serverInfo)}`);
 
 // notification must NOT produce a response
@@ -88,7 +88,7 @@ send({ jsonrpc: "2.0", method: "notifications/initialized" });
 send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 const list = await waitFor(2, "tools/list");
 const toolNames = list.result.tools.map((t: any) => t.name).sort();
-assert.deepEqual(toolNames, ["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"]);
+assert.deepEqual(toolNames, ["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"]);
 for (const t of list.result.tools) {
 	assert.equal(t.inputSchema.type, "object", `${t.name} has object schema`);
 	assert.equal(typeof t.description, "string");

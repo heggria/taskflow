@@ -49,11 +49,16 @@ That `runId` is your handle. The `pid` is the OS process id of the detached chil
 
 ### On MCP hosts
 
-Codex, Claude Code, OpenCode, and Grok Build do **not** expose `detach` on
-`taskflow_run`; detached execution is currently Pi-only. MCP runs are
-synchronous. When an MCP client cancels a request, taskflow propagates that
-cancellation to the DAG and active subagent instead of continuing as an
-untracked background run.
+Codex, Claude Code, OpenCode, and Grok Build use `mode: "background"` on
+`taskflow_run`:
+
+```json
+{ "name": "audit", "args": { "dir": "src" }, "mode": "background" }
+```
+
+The call returns a durable `runId` immediately. Use `taskflow_runs` with
+`action: "list"`, `"status"`, `"wait"`, or `"cancel"` to manage it. Foreground
+remains the default when `mode` is omitted.
 
 ## What happens under the hood
 
@@ -68,14 +73,14 @@ untracked background run.
     **Return immediately.** The host persists the initial run state (with `detached: true` and the child's `pid`), then returns the `runId` to the caller. The parent conversation is free.
   </Step>
   <Step>
-    **The child runs the DAG.** The detached runner reads the context file, re-discovers agents, dynamically imports the host's runner module, and calls `executeTaskflow`. Each phase runs exactly as it would inline — subagent calls, caching, retry, persistence.
+    **The child runs the DAG.** The detached runner reads the context file, uses the parent invocation's frozen agent/settings snapshot, dynamically imports the host's runner module, and calls `executeTaskflow`. Each phase runs exactly as it would inline — subagent calls, caching, retry, persistence.
   </Step>
   <Step>
     **Persist terminal state.** When the flow completes (or fails), the child persists the final `RunState` to disk and exits. The parent can poll the store at any time to see the result.
   </Step>
 </Steps>
 
-The child process is genuinely independent. It has its own event loop, its own stderr, and its own lifecycle. Killing the parent does not kill the child — that is by design. The child was spawned with `detached: true` specifically so it survives the parent session.
+The child process is genuinely independent and normally survives its parent session. A private heartbeat and instance-specific process registry let a later status check distinguish a live worker from PID reuse and reap any registered Host CLI process groups if the worker is killed.
 
 ## Polling and monitoring
 
@@ -109,7 +114,9 @@ If a detached run fails (a transient error exhausted its retries, a gate blocked
 /tf resume <runId>
 ```
 
-Resume runs inline by default. If you want the resumed run to also be detached, pass `--detach` again.
+Pi resumes inline by default and may pass `--detach` again. MCP uses
+`taskflow_resume`, which currently runs in the foreground and forks immutable
+history into a new child run.
 
 ## Approval phases in detached mode
 
@@ -151,21 +158,21 @@ The detached runner dynamically imports the host's runner module (e.g., `piSubag
 {
   "id": "__detach__",
   "status": "failed",
-  "error": "Runner module failed to load: 'pi-taskflow/dist/runner.js' (export 'piSubagentRunner'). See detached-runner stderr for the import error."
+  "error": "Runner module failed to load: 'pi-taskflow/dist/runner.js' (export 'piSubagentRunner'): Cannot find module ..."
 }
 ```
 
-This fail-fast behavior prevents the runner from limping on and failing every phase with the generic "No subagent runner injected" error. The real cause (a bad module path, a missing export) is preserved in the `__detach__` phase and in the child's stderr.
+This fail-fast behavior prevents the runner from limping on and failing every phase with the generic "No subagent runner injected" error. The real import/export cause is preserved directly in the `__detach__` phase.
 
 ### Early exit guard
 
-The parent process captures the child's stderr and registers an `exit` handler. If the child exits with a non-zero code before reaching a terminal state, the parent marks the run failed and writes a `__detach__` phase with the captured stderr:
+The parent registers an `exit` handler. If the child exits with a non-zero code before reaching a terminal state, it marks the run failed and writes a `__detach__` phase. Pi also captures bounded child stderr; MCP records the exit code/signal and relies on the worker's own persisted diagnostic when available:
 
 ```json
 {
   "id": "__detach__",
   "status": "failed",
-  "error": "Detached runner exited with code 1: [stderr content]"
+  "error": "Detached runner exited before completing (code 1, signal none)."
 }
 ```
 
@@ -245,7 +252,7 @@ You're in the middle of a conversation, and you realize you need to run a slow f
 
 **No live progress.** The parent conversation does not receive live updates. You poll the run state instead. If you need streaming progress, run the flow inline.
 
-**Independent lifecycle.** The child process survives the parent. If you kill your terminal, the flow keeps running. To stop a detached run, kill the child process by its `pid` (e.g., `kill <pid>`). There is no built-in cancel command.
+**Independent lifecycle.** The child process survives a normal parent exit. On MCP hosts, stop it with `taskflow_runs { action: "cancel", runId }`; cancellation is durable across MCP server restarts. Pi's detached command does not yet expose that management tool, so Pi operators still use the recorded PID when manual termination is required.
 
 **Runner module required.** The child process must be able to dynamically import the host's runner module. If the module path is wrong or the module is missing, the run fails fast with a `__detach__` phase. This is rarely an issue in practice — the host serializes the correct path automatically.
 
@@ -280,9 +287,7 @@ When a detached run fails, the run state tells you why. Check the `__detach__` p
 /tf peek <runId> __detach__
 ```
 
-If the `__detach__` phase exists, it contains the crash reason — a runner module import error, a spawn failure, or the child's stderr. If the `__detach__` phase does not exist, the failure was a normal flow failure (a gate blocked, a phase exhausted its retries, a budget exceeded). Check the other phases to find the root cause.
-
-You can also inspect the child's stderr directly if you have access to the parent's logs. The parent captures stderr and includes it in the `__detach__` phase on early exit.
+If the `__detach__` phase exists, it contains the crash reason — a runner module import error, a spawn failure, or early-exit metadata (plus bounded stderr on Pi). If it does not exist, the failure was a normal flow failure. Check the other phases to find the root cause.
 
 ## Next
 

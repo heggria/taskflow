@@ -45,7 +45,7 @@ test("opencode mcp: initialize returns the protocol version + serverInfo", async
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-opencode");
-	assert.equal(res.result.serverInfo.version, "0.2.2");
+	assert.equal(res.result.serverInfo.version, "0.2.3");
 });
 
 test("opencode mcp: tools/list exposes the taskflow tools", async () => {

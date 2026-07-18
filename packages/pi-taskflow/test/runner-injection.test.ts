@@ -82,9 +82,18 @@ test("regression: the detached context file carries a runnerModule (runner injec
 	// Accept either the shorthand (`runnerModule,`) or key (`runnerModule:`) form.
 	assert.ok(/\brunnerModule\b[,:]/.test(SRC), "detached context must carry runnerModule");
 	assert.match(SRC, /runnerFactoryExport:\s*"createPiSubagentRunner"/, "detached context must name the host-authorized Pi runner factory");
-	assert.match(SRC, /runnerConfig:\s*readSubagentSettings\(\)\.taskflow\.piChild/, "detached context must carry the normalized Pi child profile snapshot");
+	assert.match(
+		SRC,
+		/runnerConfig:\s*(?:readSubagentSettings\(\)|detachedSettings)\.taskflow\.piChild/,
+		"detached context must carry the normalized Pi child profile snapshot",
+	);
 });
 
 test("regression: createPiSubagentRunner is imported into index.ts (the injected runner factory)", () => {
 	assert.match(SRC, /import\s*\{[^}]*\bcreatePiSubagentRunner\b[^}]*\}\s*from\s*"\.\/runner\.ts"/, "index.ts must import createPiSubagentRunner from ./runner.ts");
+});
+
+test("regression: detached context preserves invocation-level cache and reuse semantics", () => {
+	assert.match(SRC, /incremental:\s*params\.incremental\s*===\s*true/, "detached context must carry the incremental invocation override");
+	assert.match(SRC, /reusedSavedName:\s*[\s\S]{0,240}params\.reusedFromSearch\s*===\s*true/, "detached context must carry the reuse attribution only for an authorized search selection");
 });

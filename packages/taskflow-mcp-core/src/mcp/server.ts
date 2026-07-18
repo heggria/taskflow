@@ -83,6 +83,8 @@ import {
 	type ReplayReport,
 	type ReplayOverrides,
 	reconcileResolveOnlyWorkspace,
+	clearDetachedCancelRequest,
+	DETACHED_CONTROL_VERSION,
 	WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
 	workspaceReconcileAllowedFromEnv,
 } from "taskflow-core";
@@ -814,14 +816,20 @@ export function makeToolHandlers(
 			// the same lookup the pi adapter does; without it every phase fails with
 			// "Model metadata for {{fast}} not found".
 			const settings = readSubagentSettings();
-			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const agentScope = def.agentScope ?? "both";
+			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
+				globalThinking: settings.globalThinking,
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting,
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
+				loadFlow: (name: string) => {
+					const loaded = getFlowDiagnosed(cwd, name);
+					return loaded.ok ? loaded.value.def : undefined;
+				},
 			};
 			const state = mkRunState(def, resolvedArgs, cwd, host);
 			if (args.mode === "background") {
@@ -831,26 +839,38 @@ export function makeToolHandlers(
 						true,
 					);
 				}
+				let pid: number;
 				try {
-					const { pid } = launchMcpBackgroundRun({
+					({ pid } = launchMcpBackgroundRun({
 						state,
 						runner: opts.detachedRunner,
 						incremental: args.incremental === true,
 						reusedSavedName: args.reusedFromSearch === true ? reusedSavedName : undefined,
-					});
-					const { activeCount } = listMcpBackgroundRuns(cwd, 0);
-					const contentionWarning = activeCount > BACKGROUND_RUN_WARNING_THRESHOLD
-						? `\n\nWarning: ${activeCount} background runs are active in this project. Taskflow does not provide a global cross-host concurrency or budget coordinator; use taskflow_runs list/cancel if this is unintentional.`
-						: "";
-					return textContent(
-						`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.${contentionWarning}`,
-					);
+						agents,
+						globalThinking: settings.globalThinking,
+						agentScope,
+						maxKeptRuns: settings.taskflow.maxKeptRuns,
+						maxRunAgeDays: settings.taskflow.maxRunAgeDays,
+					}));
 				} catch (error) {
 					return textContent(
 						`Failed to start background taskflow: ${error instanceof Error ? error.message : String(error)}`,
 						true,
 					);
 				}
+
+				let contentionWarning = "";
+				try {
+					const { activeCount } = listMcpBackgroundRuns(cwd, 0);
+					contentionWarning = activeCount > BACKGROUND_RUN_WARNING_THRESHOLD
+						? `\n\nWarning: ${activeCount} background runs are active in this project. Taskflow does not provide a global cross-host concurrency or budget coordinator; use taskflow_runs list/cancel if this is unintentional.`
+						: "";
+				} catch (error) {
+					contentionWarning = `\n\nWarning: the run started successfully, but background contention could not be inspected: ${error instanceof Error ? error.message : String(error)}`;
+				}
+				return textContent(
+					`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.${contentionWarning}`,
+				);
 			}
 			// Deterministic-replay trace (best-effort, fail-open).
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
@@ -935,7 +955,18 @@ export function makeToolHandlers(
 			}
 			if (action === "cancel") {
 				if (state.status !== "running") return textContent(`Run is already ${state.status}.\n${formatBackgroundRun(state, true)}`);
+				if (state.detachedControlVersion !== DETACHED_CONTROL_VERSION) {
+					return textContent(
+						`Run \"${runId}\" was created by a legacy detached worker that does not support durable cross-request cancellation. Wait for it to finish or stop that worker through its original host.`,
+						true,
+					);
+				}
 				cancelMcpBackgroundRun(cwd, runId, typeof args.reason === "string" ? args.reason : undefined);
+				const afterRequest = refreshDetachedRun(cwd, runId);
+				if (afterRequest && afterRequest.status !== "running") {
+					clearDetachedCancelRequest(afterRequest.cwd, afterRequest.runId);
+					return textContent(`Run became ${afterRequest.status} before cancellation was delivered.\n${formatBackgroundRun(afterRequest, true)}`);
+				}
 				return textContent(`Cancellation requested.\n${formatBackgroundRun(state, false)}`);
 			}
 			return textContent(`Unknown taskflow_runs action: ${action}`, true);

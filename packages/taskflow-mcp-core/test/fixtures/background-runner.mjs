@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { registerProcessTree } from "taskflow-core";
+
 const usage = {
 	input: 3,
 	output: 2,
@@ -15,6 +19,19 @@ export const instantRunner = {
 		task,
 		exitCode: 0,
 		output: "detached output",
+		stderr: "",
+		usage,
+		stopReason: "end",
+	}),
+};
+
+export const snapshotRunner = {
+	usageAccounting: "full",
+	runTask: async (_cwd, agents, agent, _task, _options, globalThinking) => ({
+		agent,
+		task: "snapshot",
+		exitCode: 0,
+		output: `${agents.find((candidate) => candidate.name === agent)?.systemPrompt ?? "missing-agent"}|${globalThinking ?? "no-thinking"}`,
 		stderr: "",
 		usage,
 		stopReason: "end",
@@ -49,5 +66,24 @@ export const cancellableRunner = {
 				clearTimeout(timer);
 				finish();
 			}, { once: true });
+		}),
+};
+
+export const orphaningRunner = {
+	usageAccounting: "full",
+	runTask: async (_cwd, _agents, agent, task) =>
+		await new Promise(() => {
+			const child = spawn(process.execPath, [
+				"-e",
+				"const fs=require('node:fs');const p=process.argv[1];setInterval(()=>fs.appendFileSync(p,'x'),25)",
+				task,
+			], {
+				detached: process.platform !== "win32",
+				stdio: "ignore",
+			});
+			if (!child.pid) throw new Error("fixture child has no pid");
+			registerProcessTree(child.pid);
+			writeFileSync(`${task}.pid`, String(child.pid));
+			void agent;
 		}),
 };

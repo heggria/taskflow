@@ -201,8 +201,8 @@ Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
 |---|---|---|
 | `builtInAgents` | `true` | 启用或禁用 18 个内置 agent。如果你只想要自己的 agent，请禁用。 |
 | `syncBuiltinAgentsToProject` | `false` | 在会话开始时把内置 agent 复制到项目的 `.pi/agents/`，以便原生 Pi `@agent` 语法也能发现它们。 |
-| `maxKeptRuns` | `100` | 保留的已完成/失败运行的最大数量。设为 `0` 禁用按数量清理。 |
-| `maxRunAgeDays` | `30` | 已完成/失败运行的最大保留天数。设为 `0` 禁用按时间清理。 |
+| `maxKeptRuns` | `100` | 保留的非活动运行（`completed`、`failed`、`paused`、`blocked`）最大数量；运行中的工作永不修剪。设为 `0` 禁用按数量清理。 |
+| `maxRunAgeDays` | `30` | 非活动运行的最大保留天数；运行中的工作永不修剪。设为 `0` 禁用按时间清理。 |
 
 <Callout type="info">
   清理自动运行，节流为每分钟一次。它只移除终态（已完成或失败）的运行——活跃的运行永远不会被触碰。

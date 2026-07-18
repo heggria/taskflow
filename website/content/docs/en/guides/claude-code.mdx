@@ -155,13 +155,9 @@ Taskflow requires Claude Code **2.1.169 or newer** for `--safe-mode`. Older CLIs
 
 ## Long-running flows
 
-Here's the one thing to know about running taskflow on Claude Code: **`taskflow_run` is synchronous.** The tool call doesn't return until the entire DAG finishes — every phase, every subagent. For a three-phase review that's fine; for a fan-out over fifty files with a tournament at the end, it can take a while.
-
-If a flow is genuinely huge, consider splitting it into a few smaller `taskflow_run` calls so each returns promptly, or run it in the background from a plain shell:
-
-```bash title="Run a flow in the background"
-claude -p "run the nightly-audit taskflow" &
-```
+`taskflow_run` is synchronous by default. For a long flow, set
+`mode: "background"`; the MCP call returns a durable `runId` immediately.
+Use `taskflow_runs` to list, inspect, wait for, or cancel that worker.
 
 Then inspect the run afterward with `taskflow_peek`:
 
@@ -189,6 +185,9 @@ Here's the full MCP surface the plugin exposes:
 | Tool | Purpose |
 |---|---|
 | `taskflow_run` | Run a saved flow (by `name`) or an inline definition (by `define`). Returns the final output + a `runId`. |
+| `taskflow_runs` | List background runs, or `status` / `wait` / `cancel` one by `runId`. |
+| `taskflow_resume` | Fork a failed or paused run into a new immutable child run, with optional one-phase overrides. |
+| `taskflow_version` | Report package version, build commit, schema version, build time, and host. |
 | `taskflow_list` | List saved flows discoverable from the cwd, with library metadata when available. |
 | `taskflow_show` | Show a saved flow's definition plus its library sidecar metadata. |
 | `taskflow_save` | Save a flow to the library with optional `purpose`, `tags`, and `notes`. |
@@ -200,6 +199,7 @@ Here's the full MCP surface the plugin exposes:
 | `taskflow_replay` | Replay recorded decisions offline with no model calls. |
 | `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
 | `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
+| `taskflow_reconcile_workspace` | Explicitly accept an inspected/repaired resolve-only workspace after a dirty-unknown write. |
 
 <Callout type="tip">
   You rarely need to memorize these. The bundled skill tells Claude Code which tool fits the request — "verify this flow", "show me the diagram", "run it" all route correctly on their own.

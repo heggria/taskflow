@@ -467,6 +467,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		budget: budgetBlocked,
 		budgetReason,
 	});
+	state.finalOutput = finalOutput;
+	state.outputSourcePhaseId = outputSourcePhaseId;
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	try {

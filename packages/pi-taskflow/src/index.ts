@@ -97,6 +97,9 @@ import {
 	reconcileResolveOnlyWorkspace,
 	WORKSPACE_RECONCILE_ACKNOWLEDGEMENT,
 	workspaceReconcileAllowedFromEnv,
+	clearDetachedProcessRegistry,
+	DETACHED_CONTROL_VERSION,
+	terminateDetachedProcessTrees,
 } from "taskflow-core";
 
 interface TaskflowDetails {
@@ -1363,8 +1366,21 @@ export default function (pi: ExtensionAPI) {
 			if (params.detach) {
 				const state = makeRunState(def, args, ctx.cwd);
 				state.detached = true;
-				saveRun(state);
-
+				state.detachedStartedAt = Date.now();
+				state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+				state.detachedInstanceId = (await import("node:crypto")).randomUUID();
+				const detachedSettings = readSubagentSettings();
+				state.detachedRetention = {
+					maxKeep: detachedSettings.taskflow.maxKeptRuns,
+					maxAgeDays: detachedSettings.taskflow.maxRunAgeDays,
+				};
+				const detachedScope: AgentScope = def.agentScope ?? "user";
+				const detachedAgents = discoverAgents(
+					ctx.cwd,
+					detachedScope,
+					detachedSettings.modelRoles,
+					detachedSettings.taskflow,
+				).agents;
 				// Serialize context for the detached runner script.
 				const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
 				const { spawn } = await import("node:child_process");
@@ -1373,6 +1389,7 @@ export default function (pi: ExtensionAPI) {
 				const tmpDir = mkdtempSync(path.join(os.tmpdir(), "taskflow-detach-"));
 				chmodSync(tmpDir, 0o700);
 				const tmpFile = path.join(tmpDir, "context.json");
+				const startFile = path.join(tmpDir, "start");
 				// The runner module path is SELF-REPORTED by runner.ts (import.meta.url):
 				// src/runner.ts in dev, dist/runner.js in the compiled package. Do NOT
 				// switch this to resolving the relative "./runner" specifier with a .ts
@@ -1389,7 +1406,19 @@ export default function (pi: ExtensionAPI) {
 					cwd: ctx.cwd,
 					runnerModule,
 					runnerFactoryExport: "createPiSubagentRunner",
-					runnerConfig: readSubagentSettings().taskflow.piChild,
+					runnerConfig: detachedSettings.taskflow.piChild,
+					waitForStart: true,
+					incremental: params.incremental === true,
+					reusedSavedName:
+						params.reusedFromSearch === true && typeof params.name === "string" && params.name.trim()
+							? params.name.trim()
+							: undefined,
+					agents: detachedAgents,
+					globalThinking: detachedSettings.globalThinking,
+					agentScope: detachedScope,
+					maxKeptRuns: detachedSettings.taskflow.maxKeptRuns,
+					maxRunAgeDays: detachedSettings.taskflow.maxRunAgeDays,
+					detachedInstanceId: state.detachedInstanceId,
 				}), { encoding: "utf-8", flag: "wx", mode: 0o600 });
 
 				// detached-runner lives in taskflow-core (spawn-only entry). Resolve it
@@ -1403,10 +1432,14 @@ export default function (pi: ExtensionAPI) {
 				const runnerScript = (await import("node:url")).fileURLToPath(
 					import.meta.resolve("taskflow-core/detached-runner"),
 				);
+				// Persist only after all pre-spawn preparation succeeds. The start
+				// gate still prevents the child from racing the later pid update.
+				saveRun(state, state.detachedRetention);
 				// Capture stderr so a crashed child is debuggable instead of invisible.
 				const child = spawn(process.execPath, [runnerScript, tmpFile], {
 					detached: true,
 					stdio: ["ignore", "ignore", "pipe"],
+					env: { ...process.env, TASKFLOW_DETACHED_RUNNER: "1" },
 				});
 				let childErr = "";
 				child.stderr?.on("data", (chunk: Buffer) => { childErr += chunk.toString(); });
@@ -1415,10 +1448,15 @@ export default function (pi: ExtensionAPI) {
 				// Guarded by pid + status so we never clobber a genuine terminal state
 				// the runner may have persisted between spawn and this callback.
 				const markFailedOnEarlyExit = (exitCode: number | null) => {
+					try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* child consumed it */ }
 					if (exitCode === 0) return; // clean exit — runner persists its own state
 					try {
 						const cur = loadRun(ctx.cwd, state.runId);
 						if (cur && cur.status === "running" && cur.pid === child.pid) {
+							if (cur.detachedInstanceId) {
+								terminateDetachedProcessTrees(cur.cwd, cur.runId, cur.detachedInstanceId);
+								clearDetachedProcessRegistry(cur.cwd, cur.runId, cur.detachedInstanceId);
+							}
 							cur.status = "failed";
 							// Record the crash reason in a synthetic phase so it is persisted,
 							// pollable, and debuggable (RunState has no run-level error field).
@@ -1430,7 +1468,10 @@ export default function (pi: ExtensionAPI) {
 									? `Detached runner exited with code ${exitCode}: ${childErr.trim().slice(0, 2000)}`
 									: `Detached runner exited with code ${exitCode} before completing.`,
 							};
-							saveRun(cur, { maxKeep: 50, maxAgeDays: 14 });
+							saveRun(cur, {
+								maxKeep: detachedSettings.taskflow.maxKeptRuns,
+								maxAgeDays: detachedSettings.taskflow.maxRunAgeDays,
+							});
 						}
 					} catch { /* best-effort: never let a handler throw */ }
 				};
@@ -1447,14 +1488,21 @@ export default function (pi: ExtensionAPI) {
 								endedAt: Date.now(),
 								error: `Failed to spawn detached runner: ${err.message}`,
 							};
-							saveRun(cur, { maxKeep: 50, maxAgeDays: 14 });
+							saveRun(cur, {
+								maxKeep: detachedSettings.taskflow.maxKeptRuns,
+								maxAgeDays: detachedSettings.taskflow.maxRunAgeDays,
+							});
 						}
 					} catch { /* best-effort */ }
 				});
 				child.unref();
 
 				state.pid = child.pid ?? undefined;
-				saveRun(state);
+				saveRun(state, {
+					maxKeep: detachedSettings.taskflow.maxKeptRuns,
+					maxAgeDays: detachedSettings.taskflow.maxRunAgeDays,
+				});
+				writeFileSync(startFile, "start\n", { encoding: "utf-8", flag: "wx", mode: 0o600 });
 
 				return {
 					content: [{ type: "text", text: `Taskflow '${def.name}' started in background (pid: ${child.pid}). Run id: ${state.runId}` }],

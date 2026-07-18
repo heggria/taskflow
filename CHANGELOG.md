@@ -2,11 +2,19 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.2.3] — Unreleased
+## [0.2.3] — 2026-07-18
 
 ### Added
 
 - **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`; lists report the total active count and can filter `running` versus `terminal` runs. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries. Starting a sixth concurrent background run emits an explicit resource-contention warning because Taskflow intentionally has no hidden global cross-host scheduler.
+
+### Fixed
+
+- **Atomic terminal results.** The runtime now persists `finalOutput` and `outputSourcePhaseId` in the same terminal-state write, so a crash or immediate poll can never observe `completed` without its result.
+- **Detached-run ownership and cleanup.** Cancellation and process-heartbeat records now live in a user-private control directory keyed by canonical invocation root, preventing project symlinks and sibling worktrees from redirecting or cross-cancelling runs. Current workers carry a versioned instance identity; stale or killed workers are terminalized and their registered Host CLI process groups are reaped, while ambiguous legacy runs fail closed for cancellation.
+- **Foreground/background parity.** MCP and Pi detached launches snapshot the same agent scope, model roles, global thinking, runner profile, incremental settings, and retention policy as the foreground invocation. Launch failures preserve their real cause, and post-spawn roster diagnostics can no longer misreport a successfully started run as a launch failure.
+- **Bounded run history and accurate rosters.** Retention now applies to every inactive state (`completed`, `failed`, `paused`, and `blocked`) while never pruning active runs. MCP background lists compute counts from the complete project roster without the former 1000-run cap or per-row reload pattern.
+- **Release surface synchronization.** Package/plugin versions, installation pins, built-dist MCP expectations, the 16-tool roster, background-run documentation, and English/Chinese host guides are synchronized for 0.2.3.
 
 ## [0.2.2] — 2026-07-14
 

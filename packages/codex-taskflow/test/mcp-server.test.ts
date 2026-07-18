@@ -51,7 +51,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-codex");
-	assert.equal(res.result.serverInfo.version, "0.2.2");
+	assert.equal(res.result.serverInfo.version, "0.2.3");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {

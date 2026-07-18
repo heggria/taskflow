@@ -3,7 +3,7 @@
   "mcp": {
     "taskflow": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "opencode-taskflow@0.2.2", "opencode-taskflow-mcp"],
+      "command": ["npx", "-y", "-p", "opencode-taskflow@0.2.3", "opencode-taskflow-mcp"],
       "enabled": true
     }
   },

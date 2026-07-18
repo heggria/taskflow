@@ -17,6 +17,10 @@ import { StringDecoder } from "node:string_decoder";
 import { emptyUsage, type UsageStats } from "./usage.ts";
 import type { AgentConfig } from "./agents.ts";
 import type { CoreMessage, LiveUpdate, RunResult } from "./host/runner-types.ts";
+import {
+	registerDetachedProcessTreeFromEnv,
+	unregisterDetachedProcessTreeFromEnv,
+} from "./detached-control.ts";
 
 // Re-export the host-neutral execution contract types so importers of the
 // runner surface get them from one place.
@@ -294,12 +298,14 @@ const activeChildren = new Set<number>();
  * cannot leave either kind of child mutating the workspace. */
 export function registerProcessTree(pid: number): void {
 	activeChildren.add(pid);
+	registerDetachedProcessTreeFromEnv(pid);
 }
 
 /** Remove a process group after its stdio has closed and all descendants have
  * been synchronously reaped. */
 export function unregisterProcessTree(pid: number): void {
 	activeChildren.delete(pid);
+	unregisterDetachedProcessTreeFromEnv(pid);
 }
 
 /** Signal the whole process tree rooted at a spawned subagent. POSIX children
@@ -372,6 +378,13 @@ for (const signal of EXTERNAL_SIGNALS) {
 		if (handlingExternalSignal) return;
 		handlingExternalSignal = true;
 		killAllChildren();
+		// Detached workers own a higher-level AbortController that persists the
+		// run as paused. Let its later signal listener finish that state transition
+		// instead of immediately restoring the OS default and killing the process.
+		if (process.env.TASKFLOW_DETACHED_RUNNER === "1") {
+			handlingExternalSignal = false;
+			return;
+		}
 		// Existing listeners have already been snapshotted for this EventEmitter
 		// dispatch. Removing them here only ensures the re-delivered signal takes
 		// the OS default path instead of recursively entering user handlers.

@@ -11,7 +11,7 @@
 
 import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
+import { type AgentConfig, type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { executeTaskflow } from "./runtime.ts";
 import { cwdBridgeModeFromEnv } from "./cwd-bridge.ts";
 import {
@@ -26,6 +26,12 @@ import {
 } from "./store.ts";
 import {
 	clearDetachedCancelRequest,
+	clearDetachedProcessRegistry,
+	DETACHED_CONTROL_CWD_ENV,
+	DETACHED_CONTROL_INSTANCE_ENV,
+	DETACHED_CONTROL_RUN_ID_ENV,
+	heartbeatDetachedProcessRegistry,
+	terminateDetachedProcessTrees,
 	watchDetachedCancel,
 } from "./detached-control.ts";
 import { FileTraceSink } from "./trace.ts";
@@ -54,6 +60,14 @@ interface DetachContext {
 	incremental?: boolean;
 	/** Saved flow selected through search; bump reuse only after success. */
 	reusedSavedName?: string;
+	/** Parent-resolved execution context. Freezing this at dispatch keeps mode
+	 * background semantically identical to the foreground invocation. */
+	agents?: AgentConfig[];
+	globalThinking?: string;
+	agentScope?: AgentScope;
+	maxKeptRuns?: number;
+	maxRunAgeDays?: number;
+	detachedInstanceId?: string;
 }
 
 const START_GATE_TIMEOUT_MS = 5_000;
@@ -128,18 +142,34 @@ try {
 		process.exit(1);
 	}
 
-	// Re-discover agents using the same settings as the host session.
+	process.env.TASKFLOW_DETACHED_RUNNER = "1";
+	let heartbeatTimer: NodeJS.Timeout | undefined;
+	if (ctx.detachedInstanceId) {
+		process.env[DETACHED_CONTROL_CWD_ENV] = ctx.cwd;
+		process.env[DETACHED_CONTROL_RUN_ID_ENV] = ctx.runId;
+		process.env[DETACHED_CONTROL_INSTANCE_ENV] = ctx.detachedInstanceId;
+		heartbeatDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
+		heartbeatTimer = setInterval(() => {
+			try { heartbeatDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId!); } catch { /* best-effort lease */ }
+		}, 1_000);
+		heartbeatTimer.unref();
+	}
+
+	// Prefer the execution context frozen by the parent. Legacy callers without
+	// a snapshot retain the old discovery fallback.
 	const settings = readSubagentSettings();
-	cleanupConfig.maxKeep = settings.taskflow.maxKeptRuns;
-	cleanupConfig.maxAgeDays = settings.taskflow.maxRunAgeDays;
-	const scope: AgentScope = state.def.agentScope ?? "user";
-	const { agents } = discoverAgents(ctx.cwd, scope, settings.modelRoles, settings.taskflow);
+	cleanupConfig.maxKeep = ctx.maxKeptRuns ?? state.detachedRetention?.maxKeep ?? settings.taskflow.maxKeptRuns;
+	cleanupConfig.maxAgeDays = ctx.maxRunAgeDays ?? state.detachedRetention?.maxAgeDays ?? settings.taskflow.maxRunAgeDays;
+	const legacyDefaultScope: AgentScope = ctx.runnerFactoryExport ? "user" : "both";
+	const scope: AgentScope = ctx.agentScope ?? state.def.agentScope ?? legacyDefaultScope;
+	const agents = ctx.agents ?? discoverAgents(ctx.cwd, scope, settings.modelRoles, settings.taskflow).agents;
 
 	// The host adapter injects its subagent runner. Core is host-neutral and
 	// CANNOT spawn pi/codex itself, so without this every phase would fail with
 	// "No subagent runner injected". Resolve the runner via a dynamic import of
 	// the module path the host serialized into the context file.
 	let injectedRunner: SubagentRunner | undefined;
+	let runnerLoadError: string | undefined;
 	if (ctx.runnerModule) {
 		try {
 			const runnerMod = await import(ctx.runnerModule);
@@ -154,7 +184,8 @@ try {
 				console.error(`[detached-runner] '${exportName}' on '${ctx.runnerModule}' is not a SubagentRunner (missing runTask)`);
 			}
 		} catch (e) {
-			console.error(`[detached-runner] Failed to load runner module '${ctx.runnerModule}': ${e instanceof Error ? e.message : String(e)}`);
+			runnerLoadError = e instanceof Error ? e.message : String(e);
+			console.error(`[detached-runner] Failed to load runner module '${ctx.runnerModule}': ${runnerLoadError}`);
 		}
 	} else {
 		console.error("[detached-runner] No runnerModule in context — phases will fail with 'No subagent runner injected'");
@@ -172,14 +203,18 @@ try {
 			id: "__detach__",
 			status: "failed",
 			endedAt: Date.now(),
-			error: `Runner module failed to load: '${ctx.runnerModule}' (export '${ctx.runnerFactoryExport ?? ctx.runnerExport ?? "piSubagentRunner"}'). See detached-runner stderr for the import error.`,
+			error: `Runner module failed to load: '${ctx.runnerModule}' (export '${ctx.runnerFactoryExport ?? ctx.runnerExport ?? "piSubagentRunner"}'): ${runnerLoadError ?? "export is not a SubagentRunner"}`,
 		};
 		saveRun(state, cleanupConfig);
+		if (heartbeatTimer) clearInterval(heartbeatTimer);
+		if (ctx.detachedInstanceId) clearDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
 		process.exit(1);
 	}
 
 	const abortController = new AbortController();
-	const stopCancelWatch = watchDetachedCancel(ctx.cwd, ctx.runId, abortController);
+	const stopCancelWatch = watchDetachedCancel(ctx.cwd, ctx.runId, abortController, undefined, (request) => {
+		state.detachedCancel = request;
+	});
 	const abortForSignal = () => abortController.abort({ reason: "detached-process-signal" });
 	process.once("SIGTERM", abortForSignal);
 	process.once("SIGINT", abortForSignal);
@@ -188,7 +223,7 @@ try {
 		cwd: ctx.cwd,
 		cwdBridgeMode: cwdBridgeModeFromEnv(),
 		agents,
-		globalThinking: settings.globalThinking,
+		globalThinking: ctx.globalThinking ?? settings.globalThinking,
 		persist: (s) => saveRun(s, cleanupConfig),
 		runTask: injectedRunner?.runTask,
 		usageAccounting: injectedRunner?.usageAccounting,
@@ -209,7 +244,9 @@ try {
 		}
 	} finally {
 		stopCancelWatch();
+		if (heartbeatTimer) clearInterval(heartbeatTimer);
 		clearDetachedCancelRequest(ctx.cwd, ctx.runId);
+		if (ctx.detachedInstanceId) clearDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
 		process.removeListener("SIGTERM", abortForSignal);
 		process.removeListener("SIGINT", abortForSignal);
 		process.removeListener("SIGHUP", abortForSignal);
@@ -222,11 +259,19 @@ try {
 		const state = loadRun(ctx.cwd, ctx.runId);
 		if (state && state.status === "running") {
 			state.status = "failed";
+			state.phases["__detach__"] = {
+				id: "__detach__",
+				status: "failed",
+				endedAt: Date.now(),
+				error: message.slice(0, 2_000),
+			};
 			saveRun(state, cleanupConfig);
 		}
 	} catch {
 		// Best-effort — if we can't even load the state, there's nothing to persist.
 	}
+	if (ctx.detachedInstanceId) terminateDetachedProcessTrees(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
 	clearDetachedCancelRequest(ctx.cwd, ctx.runId);
+	if (ctx.detachedInstanceId) clearDetachedProcessRegistry(ctx.cwd, ctx.runId, ctx.detachedInstanceId);
 	process.exit(1);
 }

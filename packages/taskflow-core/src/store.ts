@@ -22,7 +22,7 @@ import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import { parseStrict } from "./interpolate.ts";
 import type { Taskflow } from "./schema.ts";
-import type { DirectoryIdentity } from "./cwd-bridge.ts";
+import { directoryIdentity, type DirectoryIdentity } from "./cwd-bridge.ts";
 import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
@@ -195,6 +195,18 @@ export interface RunState {
 	detached?: boolean;
 	/** Wall-clock launch time for detached lifecycle/orphan diagnostics. */
 	detachedStartedAt?: number;
+	/** Version of the durable detached-control protocol understood by the
+	 * worker. Missing means a legacy detached run that cannot safely accept
+	 * cross-request lifecycle commands. */
+	detachedControlVersion?: number;
+	/** Unforgeable identity for one detached worker instance. Unlike a PID, this
+	 * value cannot be silently reused by an unrelated OS process. */
+	detachedInstanceId?: string;
+	/** Retention policy frozen at detached dispatch so crash/orphan writes do
+	 * not silently fall back to another session's defaults. */
+	detachedRetention?: { maxKeep: number; maxAgeDays: number };
+	/** Durable audit record for the cancellation request that paused this run. */
+	detachedCancel?: { requestedAt: number; reason?: string };
 	/** Final output persisted by a detached runner for later wait/status calls. */
 	finalOutput?: string;
 	/** Phase whose output supplied `finalOutput`, when attributable. */
@@ -250,6 +262,9 @@ export interface RunState {
 export interface RunIndexEntry {
 	runId: string;
 	flowName: string;
+	/** Invocation cwd used to bind user-private detached lifecycle records.
+	 * Absent on historical indexes; callers must retain a safe fallback. */
+	cwd?: string;
 	status: RunState["status"];
 	createdAt: number;
 	updatedAt: number;
@@ -356,14 +371,7 @@ function lockPathForRun(runsRoot: string, flowName: string, runId: string): stri
  * Legitimate runIds are produced by newRunId() and contain only [A-Za-z0-9._-].
  */
 export function validateRunId(runId: string): boolean {
-	return (
-		typeof runId === "string" &&
-		runId.length > 0 &&
-		!runId.includes("/") &&
-		!runId.includes("\\") &&
-		!runId.includes("\0") &&
-		!runId.includes("..")
-	);
+	return typeof runId === "string" && runId.length <= 160 && /^[A-Za-z0-9_-](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?$/.test(runId) && !runId.includes("..");
 }
 
 // ---------------------------------------------------------------------------
@@ -460,6 +468,7 @@ export function extractIndexEntry(state: RunState, relPath: string): RunIndexEnt
 	return {
 		runId: state.runId,
 		flowName: state.flowName,
+		cwd: state.cwd,
 		status: state.status,
 		createdAt: state.createdAt,
 		updatedAt: state.updatedAt,
@@ -593,11 +602,12 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Remove excess and expired terminal (completed/failed) runs.
+ * Remove excess and expired inactive runs.
  *
  * Called opportunistically at the end of saveRun.  Throttled to at most once
- * per CLEANUP_INTERVAL_MS.  Active runs (running/paused/blocked) are never
- * touched.
+ * per CLEANUP_INTERVAL_MS. Only actually executing (`running`) runs are never
+ * touched. Paused and blocked runs remain resumable/inspectable inside the
+ * configured retention window, but no longer bypass it forever.
  *
  * The index read-modify-write is performed under the index lock so it cannot
  * race a concurrent updateIndexEntry and clobber a freshly-added entry (M1).
@@ -625,7 +635,7 @@ function cleanupTerminalRuns(
 		const active: RunIndexEntry[] = [];
 
 		for (const e of entries) {
-			if (e.status === "completed" || e.status === "failed") {
+			if (e.status !== "running") {
 				terminal.push(e);
 			} else {
 				active.push(e);
@@ -648,8 +658,8 @@ function cleanupTerminalRuns(
 
 		for (let i = 0; i < cleanTerminal.length; i++) {
 			const e = cleanTerminal[i]!;
-			const expiredByAge = now - e.updatedAt > maxAgeMs;
-			const excessByCount = i >= maxKeep;
+			const expiredByAge = maxAgeDays > 0 && now - e.updatedAt > maxAgeMs;
+			const excessByCount = maxKeep > 0 && i >= maxKeep;
 			if (expiredByAge || excessByCount) {
 				toRemove.push(e);
 			}
@@ -686,9 +696,12 @@ function cleanupTerminalRuns(
 		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
 		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
 		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }
-		// Remove a detached control marker left by a process killed before it
-		// could consume/clear cancellation itself.
-		try { fs.unlinkSync(path.join(runsRoot, ".control", `${e.runId}.cancel.json`)); } catch { /* ignore */ }
+		// Remove user-private detached control records left by a process killed
+		// before it could consume/clear cancellation or process ownership state.
+		const controlDir = detachedControlDir(e.cwd ?? path.dirname(path.dirname(path.dirname(runsRoot))));
+		try { fs.unlinkSync(path.join(controlDir, `${e.runId}.cancel.json`)); } catch { /* ignore */ }
+		try { fs.unlinkSync(path.join(controlDir, `${e.runId}.processes.json`)); } catch { /* ignore */ }
+		try { fs.rmdirSync(controlDir); } catch { /* other runs / missing */ }
 		// Also remove the per-run isolated-workspace dir tree (cwd:"dedicated").
 		// `dedicated` workspaces are persistent by design; reclaim them once the
 		// run is pruned. The dir name uses the same sanitization as workspace.ts.
@@ -971,6 +984,23 @@ export function runsDir(cwd: string): string {
 	return path.join(projDir, "runs");
 }
 
+/**
+ * User-private control directory for one invocation root.
+ *
+ * Cancellation and process-registry markers must not live below a repository:
+ * a checked-out `.pi` tree can contain symlinks controlled by project content.
+ * Bind the control plane to the canonical directory identity and keep only its
+ * digest in the user agent directory, so sibling worktrees remain isolated.
+ */
+export function detachedControlDir(cwd: string): string {
+	const identity = directoryIdentity(cwd);
+	const source = identity
+		? `${identity.canonicalPath}\0${identity.device}\0${identity.inode}`
+		: path.resolve(cwd);
+	const key = crypto.createHash("sha256").update(source).digest("hex");
+	return path.join(getAgentDir(), "taskflow-control", key);
+}
+
 /** Root dir for the cross-run memoization cache (sibling of `runs`). */
 export function cacheDir(cwd: string): string {
 	const projDir = findProjectFlowsDir(cwd, true)!;
@@ -1199,13 +1229,32 @@ export function hashInput(...parts: string[]): string {
  * Uses signal 0 (no signal sent) — succeeds if the process exists and we have
  * permission to signal it, throws ESRCH if it doesn't exist.
  */
-export function isProcessAlive(pid: number): boolean {
+export type ProcessLiveness = "alive" | "dead" | "unknown";
+
+export function probeProcess(
+	pid: number,
+	signalZero: (pid: number, signal: 0) => unknown = (candidate, signal) => process.kill(candidate, signal),
+): ProcessLiveness {
+	// Node/libuv rejects values outside the signed 32-bit PID range before an
+	// OS probe occurs; those are definitively not live process identifiers.
+	if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) return "dead";
 	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
+		signalZero(pid, 0);
+		return "alive";
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error
+			? String((error as { code?: unknown }).code ?? "")
+			: "";
+		if (code === "ESRCH") return "dead";
+		// EPERM proves that a process exists but its identity is not observable.
+		// Unknown platform errors must likewise never terminalize a live run.
+		return "unknown";
 	}
+}
+
+/** Back-compatible boolean probe. Unknown is conservatively treated as alive. */
+export function isProcessAlive(pid: number): boolean {
+	return probeProcess(pid) !== "dead";
 }
 
 /**

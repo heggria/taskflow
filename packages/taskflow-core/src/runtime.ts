@@ -4124,31 +4124,24 @@ export async function recomputeTaskflow(
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	deps = snapshotFlowLoader(deps);
 	const def: Taskflow = state.def;
+	const failBeforeExecution = (finalOutput: string): RuntimeResult => {
+		state.status = "failed";
+		state.finalOutput = finalOutput;
+		state.outputSourcePhaseId = undefined;
+		safeEmit(deps, state);
+		return { state, finalOutput, ok: false, totalUsage: emptyUsage() };
+	};
 	// Normalize defaults at the engine boundary too. Adapters already do this,
 	// but direct Core callers, resume, and detached execution must behave the same.
 	state.args = resolveArgs(def, state.args);
 	const invocationErrors = validateInvocationArgs(def, state.args);
 	if (invocationErrors.length > 0) {
-		state.status = "failed";
-		safeEmit(deps, state);
-		return {
-			state,
-			finalOutput: `Taskflow '${def.name}' invocation is invalid: ${invocationErrors.join("; ")}`,
-			ok: false,
-			totalUsage: emptyUsage(),
-		};
+		return failBeforeExecution(`Taskflow '${def.name}' invocation is invalid: ${invocationErrors.join("; ")}`);
 	}
 	if (deps._dynamic === true) {
 		const dynamicValidation = validateTaskflow(def, { dynamic: true, cwd: deps.cwd, args: state.args });
 		if (!dynamicValidation.ok) {
-			state.status = "failed";
-			safeEmit(deps, state);
-			return {
-				state,
-				finalOutput: `Dynamic taskflow '${def.name}' is invalid: ${dynamicValidation.errors.join("; ")}`,
-				ok: false,
-				totalUsage: emptyUsage(),
-			};
+			return failBeforeExecution(`Dynamic taskflow '${def.name}' is invalid: ${dynamicValidation.errors.join("; ")}`);
 		}
 	}
 	// A cwd bridge carries compatibility read-write authority. Until workspace
@@ -4179,15 +4172,9 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			(launchRoot !== undefined && !sameDirectoryIdentity(launchRoot, invocationRoot)) ||
 			(recordedRoot !== undefined && !sameDirectoryIdentity(recordedRoot, invocationRoot))
 		) {
-			state.status = "failed";
-			safeEmit(deps, state);
-			return {
-				state,
-				finalOutput:
-					`Taskflow '${def.name}' cwd-bridge invocation root does not match the run's persisted root; start a new run instead of rebinding on resume`,
-				ok: false,
-				totalUsage: emptyUsage(),
-			};
+			return failBeforeExecution(
+				`Taskflow '${def.name}' cwd-bridge invocation root does not match the run's persisted root; start a new run instead of rebinding on resume`,
+			);
 		}
 		state.cwdRootBinding ??= invocationRoot;
 		// Freeze the invocation root to the canonical identity we just bound. In
@@ -4213,14 +4200,9 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				}),
 			};
 		} catch (error) {
-			state.status = "failed";
-			safeEmit(deps, state);
-			return {
-				state,
-				finalOutput: `Taskflow '${def.name}' workspace capability initialization failed: ${error instanceof Error ? error.message : String(error)}`,
-				ok: false,
-				totalUsage: emptyUsage(),
-			};
+			return failBeforeExecution(
+				`Taskflow '${def.name}' workspace capability initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 	const runnerUsageAccounting = (deps.runTask as (RunTaskFn & { usageAccounting?: "available" | "tokens-only" | "unavailable" }) | undefined)
@@ -4284,9 +4266,12 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			}
 		}
 		state.status = "failed";
+		const finalOutput = `Taskflow '${def.name}' crashed: ${message}`;
+		state.finalOutput = finalOutput;
+		state.outputSourcePhaseId = undefined;
 		safeEmit(deps, state);
 		const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
-		return { state, finalOutput: `Taskflow '${def.name}' crashed: ${message}`, ok: false, totalUsage };
+		return { state, finalOutput, ok: false, totalUsage };
 	}
 }
 
@@ -4546,7 +4531,6 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			: anyFailed
 				? "failed"
 				: "completed";
-	safeEmit(deps, state);
 
 	const { finalOutput, outputSourcePhaseId } = resolveFinalOutput(def.phases, state, {
 		gate: gateBlocked,
@@ -4556,6 +4540,12 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		budget: budgetBlocked,
 		budgetReason,
 	});
+	// A terminal status and the result promised by status/wait are one durable
+	// transaction. Publishing `completed` before these fields created a crash
+	// window where a successful detached run permanently lost its final output.
+	state.finalOutput = finalOutput;
+	state.outputSourcePhaseId = outputSourcePhaseId;
+	safeEmit(deps, state);
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	return {

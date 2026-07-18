@@ -1,18 +1,28 @@
 /** Host-neutral detached launch + lifecycle helpers for MCP adapters. */
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	clearDetachedCancelRequest,
+	clearDetachedProcessRegistry,
+	directoryIdentity,
+	DETACHED_CONTROL_VERSION,
 	isProcessAlive,
+	killProcessTree,
 	listRuns,
 	loadRun,
+	probeProcess,
 	readDetachedCancelRequest,
+	readDetachedProcessRegistry,
 	requestDetachedCancel,
 	saveRun,
+	terminateDetachedProcessTrees,
+	type AgentConfig,
+	type AgentScope,
 	type DetachedCancelRequest,
 	type RunState,
 } from "taskflow-core";
@@ -28,11 +38,17 @@ export interface BackgroundLaunchOptions {
 	runner: DetachedRunnerBinding;
 	incremental?: boolean;
 	reusedSavedName?: string;
+	agents: AgentConfig[];
+	globalThinking?: string;
+	agentScope: AgentScope;
+	maxKeptRuns: number;
+	maxRunAgeDays: number;
 }
 
 const STARTING_GRACE_MS = 5_000;
 const WAIT_POLL_MS = 100;
-const BACKGROUND_SCAN_LIMIT = 1_000;
+const HEARTBEAT_STALE_MS = 30_000;
+const MAX_PRESENTED_OUTPUT_CHARS = 50_000;
 
 export const BACKGROUND_RUN_WARNING_THRESHOLD = 5;
 
@@ -46,20 +62,27 @@ export interface BackgroundRunList {
 
 function markDetachedFailure(state: RunState, message: string): RunState {
 	state.status = "failed";
+	if (!state.phases || typeof state.phases !== "object") state.phases = {};
 	state.phases["__detach__"] = {
 		id: "__detach__",
 		status: "failed",
 		endedAt: Date.now(),
 		error: message.slice(0, 2_000),
 	};
-	saveRun(state);
+	saveRun(state, state.detachedRetention);
 	return state;
 }
 
 function markDetachedExit(cwd: string, runId: string, pid: number, message: string): void {
 	try {
 		const state = loadRun(cwd, runId);
-		if (state?.status === "running" && state.pid === pid) markDetachedFailure(state, message);
+		if (state?.status === "running" && state.pid === pid) {
+			if (state.detachedInstanceId) {
+				terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
+				clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+			}
+			markDetachedFailure(state, message);
+		}
 	} catch {
 		/* best-effort crash guard */
 	}
@@ -82,38 +105,58 @@ export function launchMcpBackgroundRun(options: BackgroundLaunchOptions): { pid:
 	clearDetachedCancelRequest(state.cwd, state.runId);
 	state.detached = true;
 	state.detachedStartedAt = Date.now();
-	saveRun(state);
-
-	const tempDir = mkdtempSync(join(tmpdir(), "taskflow-detach-"));
-	chmodSync(tempDir, 0o700);
-	const contextPath = join(tempDir, "context.json");
-	const startPath = join(tempDir, "start");
-	writeFileSync(contextPath, JSON.stringify({
-		runId: state.runId,
-		defName: state.flowName,
-		args: state.args,
-		cwd: state.cwd,
-		runnerModule: options.runner.module,
-		runnerExport: options.runner.exportName,
-		waitForStart: true,
-		incremental: options.incremental === true,
-		reusedSavedName: options.reusedSavedName,
-	}), { encoding: "utf8", flag: "wx", mode: 0o600 });
+	state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+	state.detachedInstanceId = randomUUID();
+	state.detachedRetention = {
+		maxKeep: options.maxKeptRuns,
+		maxAgeDays: options.maxRunAgeDays,
+	};
+	let tempDir: string | undefined;
+	let child: ChildProcess | undefined;
 
 	try {
+		saveRun(state, { maxKeep: options.maxKeptRuns, maxAgeDays: options.maxRunAgeDays });
+		tempDir = mkdtempSync(join(tmpdir(), "taskflow-detach-"));
+		chmodSync(tempDir, 0o700);
+		const contextPath = join(tempDir, "context.json");
+		const startPath = join(tempDir, "start");
+		writeFileSync(contextPath, JSON.stringify({
+			runId: state.runId,
+			defName: state.flowName,
+			args: state.args,
+			cwd: state.cwd,
+			runnerModule: options.runner.module,
+			runnerExport: options.runner.exportName,
+			waitForStart: true,
+			incremental: options.incremental === true,
+			reusedSavedName: options.reusedSavedName,
+			agents: options.agents,
+			globalThinking: options.globalThinking,
+			agentScope: options.agentScope,
+			maxKeptRuns: options.maxKeptRuns,
+			maxRunAgeDays: options.maxRunAgeDays,
+			detachedInstanceId: state.detachedInstanceId,
+		}), { encoding: "utf8", flag: "wx", mode: 0o600 });
 		const runnerScript = fileURLToPath(import.meta.resolve("taskflow-core/detached-runner"));
-		const child = spawn(
+		child = spawn(
 			process.execPath,
 			[...detachedNodeArgs(runnerScript), runnerScript, contextPath],
-			{ cwd: state.cwd, detached: true, stdio: "ignore" },
+			{
+				cwd: state.cwd,
+				detached: true,
+				stdio: "ignore",
+				env: { ...process.env, TASKFLOW_DETACHED_RUNNER: "1" },
+			},
 		);
 		const pid = child.pid;
 		if (typeof pid !== "number") throw new Error("Detached runner did not report a pid");
 
 		child.once("error", (error) => {
 			markDetachedExit(state.cwd, state.runId, pid, `Failed to spawn detached runner: ${error.message}`);
+			if (tempDir) try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 		});
 		child.once("exit", (code, signal) => {
+			if (tempDir) try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* child consumed it */ }
 			if (code === 0) return;
 			markDetachedExit(
 				state.cwd,
@@ -124,30 +167,71 @@ export function launchMcpBackgroundRun(options: BackgroundLaunchOptions): { pid:
 		});
 
 		state.pid = pid;
-		saveRun(state);
+		saveRun(state, { maxKeep: options.maxKeptRuns, maxAgeDays: options.maxRunAgeDays });
 		writeFileSync(startPath, "start\n", { encoding: "utf8", flag: "wx", mode: 0o600 });
 		child.unref();
 		return { pid };
 	} catch (error) {
-		try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+		if (child?.pid) killProcessTree(child.pid, "SIGKILL", child);
+		if (tempDir) try { rmSync(tempDir, { recursive: true, force: true }); } catch { /* best-effort */ }
 		const message = error instanceof Error ? error.message : String(error);
-		markDetachedFailure(state, `Failed to launch detached runner: ${message}`);
+		try { markDetachedFailure(state, `Failed to launch detached runner: ${message}`); } catch { /* preserve launch cause */ }
 		throw error;
 	}
 }
 
-/** Refresh a detached run and terminalize an orphaned process. */
-export function refreshDetachedRun(cwd: string, runId: string): RunState | null {
-	const state = loadRun(cwd, runId);
-	if (!state || state.status !== "running" || !state.detached) return state;
+function sameInvocationRoot(state: RunState, cwd: string): boolean {
+	const current = directoryIdentity(cwd);
+	const owner = state.invocationRootSnapshot ?? directoryIdentity(state.cwd);
+	return Boolean(
+		current && owner &&
+		current.canonicalPath === owner.canonicalPath &&
+		current.device === owner.device &&
+		current.inode === owner.inode,
+	);
+}
 
-	const cancel = readDetachedCancelRequest(cwd, runId);
+function isStructurallyUsableRun(state: RunState): boolean {
+	return Boolean(
+		state && typeof state === "object" &&
+		typeof state.runId === "string" && typeof state.cwd === "string" &&
+		state.def && Array.isArray(state.def.phases) &&
+		state.phases && typeof state.phases === "object" &&
+		["running", "completed", "failed", "paused", "blocked"].includes(state.status),
+	);
+}
+
+function refreshDetachedState(cwd: string, state: RunState): RunState | null {
+	if (!isStructurallyUsableRun(state) || !sameInvocationRoot(state, cwd)) return null;
+	if (state.status !== "running" || !state.detached) return state;
+
+	const cancel = readDetachedCancelRequest(state.cwd, state.runId);
 	if (typeof state.pid === "number") {
-		if (isProcessAlive(state.pid)) return state;
-		const fresh = loadRun(cwd, runId);
+		const liveness = probeProcess(state.pid);
+		if (state.detachedControlVersion === DETACHED_CONTROL_VERSION && state.detachedInstanceId) {
+			const registry = readDetachedProcessRegistry(state.cwd, state.runId);
+			const heartbeatFresh = Boolean(
+				registry && registry.instanceId === state.detachedInstanceId &&
+				registry.ownerPid === state.pid && Date.now() - registry.heartbeatAt <= HEARTBEAT_STALE_MS,
+			);
+			if (liveness !== "dead" && heartbeatFresh) return state;
+			if (
+				liveness !== "dead" && !registry &&
+				Date.now() - (state.detachedStartedAt ?? state.createdAt) <= STARTING_GRACE_MS
+			) return state;
+			// For current-protocol workers the private heartbeat is authoritative.
+			// EPERM from signal 0 must not keep a run phantom-running forever once
+			// the startup grace has elapsed without a registry heartbeat.
+			terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
+			clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+		} else if (isProcessAlive(state.pid)) {
+			return state;
+		}
+		const fresh = loadRun(cwd, state.runId);
 		if (!fresh || fresh.status !== "running" || fresh.pid !== state.pid) return fresh;
 		if (cancel) {
 			fresh.status = "paused";
+			fresh.detachedCancel = cancel;
 			fresh.phases["__detach__"] = {
 				id: "__detach__",
 				status: "skipped",
@@ -155,7 +239,7 @@ export function refreshDetachedRun(cwd: string, runId: string): RunState | null 
 				warnings: ["Cancellation requested; detached process exited before persisting its normal paused state."],
 			};
 			saveRun(fresh);
-			clearDetachedCancelRequest(cwd, runId);
+			clearDetachedCancelRequest(fresh.cwd, fresh.runId);
 			return fresh;
 		}
 		return markDetachedFailure(fresh, "Detached runner process exited before persisting a terminal state.");
@@ -163,6 +247,12 @@ export function refreshDetachedRun(cwd: string, runId: string): RunState | null 
 
 	if (Date.now() - (state.detachedStartedAt ?? state.createdAt) <= STARTING_GRACE_MS) return state;
 	return markDetachedFailure(state, "Detached runner never persisted a process id.");
+}
+
+/** Refresh a detached run and terminalize an orphaned process. */
+export function refreshDetachedRun(cwd: string, runId: string): RunState | null {
+	const state = loadRun(cwd, runId);
+	return state ? refreshDetachedState(cwd, state) : null;
 }
 
 export function cancelMcpBackgroundRun(cwd: string, runId: string, reason?: string): DetachedCancelRequest {
@@ -194,9 +284,10 @@ export function listMcpBackgroundRuns(
 	limit: number,
 	filter: BackgroundRunFilter = "all",
 ): BackgroundRunList {
-	const all = listRuns(cwd, BACKGROUND_SCAN_LIMIT)
-		.filter((run) => run.detached)
-		.map((run) => refreshDetachedRun(cwd, run.runId) ?? run);
+	const all = listRuns(cwd, Number.MAX_SAFE_INTEGER)
+		.filter((run) => isStructurallyUsableRun(run) && run.detached && sameInvocationRoot(run, cwd))
+		.map((run) => refreshDetachedState(cwd, run))
+		.filter((run): run is RunState => run !== null);
 	const activeCount = all.filter((run) => run.status === "running").length;
 	const filtered = filter === "all"
 		? all
@@ -228,13 +319,19 @@ function statusGlyph(status: RunState["status"]): string {
 export function formatBackgroundRun(state: RunState, includeOutput: boolean): string {
 	const progress = phaseProgress(state);
 	const pid = typeof state.pid === "number" ? ` · pid ${state.pid}` : "";
-	const first = `${statusGlyph(state.status)} ${state.status} · ${state.flowName} · ${progress.done}/${progress.total} phases${pid} · run ${state.runId}`;
+	const host = state.host ? ` · ${state.host}` : "";
+	const first = `${statusGlyph(state.status)} ${state.status} · ${state.flowName} · ${progress.done}/${progress.total} phases${pid}${host} · run ${state.runId} · cwd ${state.cwd}`;
 	if (!includeOutput || state.status === "running") {
 		const cancel = readDetachedCancelRequest(state.cwd, state.runId);
 		return cancel ? `${first} · cancellation requested` : first;
 	}
 	const source = state.outputSourcePhaseId ? `--- ${state.outputSourcePhaseId} ---\n` : "";
-	if (state.finalOutput) return `${first}\n\n${source}${state.finalOutput}`;
+	if (state.finalOutput !== undefined) {
+		const truncated = state.finalOutput.length > MAX_PRESENTED_OUTPUT_CHARS
+			? `${state.finalOutput.slice(0, MAX_PRESENTED_OUTPUT_CHARS)}\n\n… output truncated; use taskflow_peek for targeted inspection.`
+			: state.finalOutput;
+		return `${first}\n\n${source}${truncated}`;
+	}
 	const failure = Object.values(state.phases).find((phase) => phase.status === "failed" && phase.error)?.error;
 	return failure ? `${first}\n\n${failure}` : first;
 }

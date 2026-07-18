@@ -116,9 +116,9 @@ The 50 per-file transcripts never enter your Codex context. Only the merged repo
 | **Quality gate** | eyeball it | `gate` phase halts on `BLOCK` |
 | **Context** | every transcript returns | only the final report returns |
 
-## Inspect or repeat across sessions
+## Inspect or resume across sessions
 
-Codex MCP does not expose a `taskflow_resume` tool. Keep the reported run id to inspect the stored run:
+Keep the reported run id to inspect the stored run:
 
 Call `taskflow_peek` with structured arguments:
 
@@ -126,7 +126,7 @@ Call `taskflow_peek` with structured arguments:
 { "runId": "<runId>" }
 ```
 
-To execute again, call `taskflow_run` again. Cross-run reuse is opt-in with `cache.scope: "cross-run"`; without it, a new run executes the phases again. Exact paused-run resume by run id is currently Pi-only (`/tf resume`). See [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
+To continue a `failed` or `paused` run, call `taskflow_resume` with its `runId`. Resume forks immutable history into a new child run and may override one phase. To start an unrelated fresh execution, call `taskflow_run` again; cross-run reuse remains opt-in with `cache.scope: "cross-run"`. See [incremental recompute](/en/docs/compiler-runtime/incremental-recompute).
 
 ## When to stay ad-hoc
 

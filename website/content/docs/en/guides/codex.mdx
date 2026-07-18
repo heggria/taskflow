@@ -134,7 +134,7 @@ Or render the DAG as a diagram to eyeball its shape:
 
 ## Long-running flows
 
-Here's the one thing to know about running taskflow on Codex: **`taskflow_run` is synchronous.** The tool call doesn't return until the entire DAG finishes — every phase, every subagent. For a three-phase review that's fine; for a fan-out over fifty files with a tournament at the end, it can take a while.
+`taskflow_run` is synchronous by default, which is ideal when you want the final result in the current turn. For a long DAG, set `mode: "background"`; Codex receives a durable `runId` immediately and the worker continues independently.
 
 The plugin ships a 30-minute default tool-call timeout to accommodate this. If your flows run longer, override it in your Codex config:
 
@@ -144,10 +144,10 @@ tool_timeout_sec = 3600
 ```
 
 <Callout type="warn">
-  Don't set this timeout lower than your longest expected run. Codex sends MCP cancellation when it gives up; taskflow propagates that cancellation to the DAG and active subagent. MCP does not turn the request into a detached background run.
+  This timeout applies to foreground calls. For longer work, prefer background mode instead of relying on an oversized request timeout.
 </Callout>
 
-For genuinely long work, consider splitting the flow: run the heavy phases in a saved flow, and use a downstream `approval` or `gate` phase to pause for review. (Resuming a paused run by `runId` is a Pi-only capability — `/tf resume`. On Codex there is no `taskflow_resume` MCP tool, so a paused run is continued by re-running the flow; phases with `cache.scope: "cross-run"` are reused automatically.)
+Start background work with `taskflow_run { name: "...", mode: "background" }`, then use `taskflow_runs` to list, inspect, wait for, or cancel it. A failed or paused run can be continued with `taskflow_resume`, which forks immutable history into a new child run.
 
 <Callout type="info">
   Codex reports token usage but not cost. A Codex flow may use `budget.maxTokens`; any `budget.maxUSD` is rejected before execution. The budget is an observed-usage stop-loss, not a zero-overshoot maximum: ordinary calls are admitted serially, while active `race` branches may overshoot together.
@@ -181,6 +181,9 @@ Here's the full MCP surface the plugin exposes:
 | Tool | Purpose |
 |---|---|
 | `taskflow_run` | Run a saved flow (by `name`) or an inline definition (by `define`). Returns the final output. |
+| `taskflow_runs` | List background runs, or `status` / `wait` / `cancel` one by `runId`. |
+| `taskflow_resume` | Fork a failed or paused run into a new immutable child run, with optional one-phase overrides. |
+| `taskflow_version` | Report package version, build commit, schema version, build time, and host. |
 | `taskflow_list` | List saved flows in the current project. |
 | `taskflow_show` | Print a saved flow's JSON definition. |
 | `taskflow_verify` | Statically verify a flow (cycles, refs, configs) at zero cost. |
@@ -190,6 +193,7 @@ Here's the full MCP surface the plugin exposes:
 | `taskflow_replay` | Replay recorded decisions offline with no model calls. |
 | `taskflow_why_stale` | Explain dependency staleness at zero tokens. |
 | `taskflow_recompute` | Report the stale frontier (MCP is dry-run only). |
+| `taskflow_reconcile_workspace` | Explicitly accept an inspected/repaired resolve-only workspace after a dirty-unknown write. |
 | `taskflow_save` | Save a reusable flow and optional library metadata. |
 | `taskflow_search` | Search and rank reusable flows. |
 
