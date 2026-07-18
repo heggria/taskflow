@@ -148,7 +148,7 @@ Background runs can fail in ways that inline runs cannot: the child process can 
 
 ### Top-level crash guard
 
-The detached runner wraps its entire execution in a top-level `try/catch`. If an unhandled exception reaches the top level, the catch block persists `status: "failed"` to the run state before exiting. The run is never left in `status: "running"` after the child process dies.
+The detached runner wraps its entire execution in a top-level `try/catch`. If an unhandled exception reaches the top level, the catch block persists `status: "failed"` to the run state before exiting. If the process dies before that catch can run, the parent guard or the next status refresh terminalizes the stale `running` record.
 
 ### Runner module failure
 
@@ -166,7 +166,7 @@ This fail-fast behavior prevents the runner from limping on and failing every ph
 
 ### Early exit guard
 
-The parent registers an `exit` handler. If the child exits with a non-zero code before reaching a terminal state, it marks the run failed and writes a `__detach__` phase. Pi also captures bounded child stderr; MCP records the exit code/signal and relies on the worker's own persisted diagnostic when available:
+The parent registers an `exit` handler. If the child exits with a non-zero code before reaching a terminal state, it marks the run failed and writes a `__detach__` phase. Pi and MCP both detach standard I/O completely; the worker persists import/runtime diagnostics itself, while the guard records generic exit-code/signal metadata when no richer diagnostic was saved:
 
 ```json
 {
@@ -287,7 +287,7 @@ When a detached run fails, the run state tells you why. Check the `__detach__` p
 /tf peek <runId> __detach__
 ```
 
-If the `__detach__` phase exists, it contains the crash reason — a runner module import error, a spawn failure, or early-exit metadata (plus bounded stderr on Pi). If it does not exist, the failure was a normal flow failure. Check the other phases to find the root cause.
+If the `__detach__` phase exists, it contains the crash reason — a runner module import error, a spawn failure, or early-exit metadata. If it does not exist, the failure was a normal flow failure. Check the other phases to find the root cause.
 
 ## Next
 

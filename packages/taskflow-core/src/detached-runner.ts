@@ -9,8 +9,9 @@
  * This file is NOT imported by index.ts — it is spawned via `child_process.spawn`.
  */
 
-import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, lstatSync, readFileSync, realpathSync, rmdirSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { type AgentConfig, type AgentScope, discoverAgents, readSubagentSettings } from "./agents.ts";
 import { executeTaskflow } from "./runtime.ts";
 import { cwdBridgeModeFromEnv } from "./cwd-bridge.ts";
@@ -74,6 +75,39 @@ interface DetachContext {
 
 const START_GATE_TIMEOUT_MS = 5_000;
 
+/**
+ * The spawn-only entry consumes and deletes its context file. Refuse arbitrary
+ * command-line paths so a direct or malformed invocation cannot turn that
+ * one-shot cleanup into an unlink primitive outside Taskflow's private temp
+ * directory.
+ */
+function isPrivateDetachContextPath(candidate: string): boolean {
+	if (!isAbsolute(candidate) || basename(candidate) !== "context.json") return false;
+	const parent = dirname(candidate);
+	if (!basename(parent).startsWith("taskflow-detach-")) return false;
+
+	try {
+		const tempRoot = realpathSync(tmpdir());
+		const realParent = realpathSync(parent);
+		const rel = relative(tempRoot, realParent);
+		if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+			return false;
+		}
+
+		const parentStat = lstatSync(parent);
+		const fileStat = lstatSync(candidate);
+		if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) return false;
+		if (!fileStat.isFile() || fileStat.isSymbolicLink()) return false;
+		if (typeof process.getuid === "function") {
+			const uid = process.getuid();
+			if (parentStat.uid !== uid || fileStat.uid !== uid) return false;
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 async function waitForStartGate(contextDir: string): Promise<boolean> {
 	const startPath = join(contextDir, "start");
 	const deadline = Date.now() + START_GATE_TIMEOUT_MS;
@@ -97,6 +131,10 @@ function cleanupContextDir(contextPath: string): void {
 const contextPath = process.argv[2];
 if (!contextPath) {
 	console.error("[detached-runner] Missing context file path argument");
+	process.exit(1);
+}
+if (!isPrivateDetachContextPath(contextPath)) {
+	console.error("[detached-runner] Refusing context outside a private taskflow-detach temp directory");
 	process.exit(1);
 }
 
@@ -199,7 +237,9 @@ try {
 	// stub — burying the real cause (a bad module path, a compile-time specifier
 	// bug, a missing export). Exiting non-zero here routes the real stderr
 	// message into the host's early-exit crash guard, which persists it on the
-	// run's synthetic __detach__ phase where it is pollable and debuggable.
+	// run's synthetic __detach__ phase where it is pollable and debuggable. The
+	// non-zero exit then lets the parent guard observe that terminal record
+	// without overwriting it; detached stdio itself is intentionally ignored.
 	if (ctx.runnerModule && !injectedRunner) {
 		state.status = "failed";
 		state.phases["__detach__"] = {

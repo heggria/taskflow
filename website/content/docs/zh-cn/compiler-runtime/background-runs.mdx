@@ -40,7 +40,7 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
     **上下文序列化到临时文件。** 私有 `/tmp/taskflow-detach-*/context.json` 文件携带 `runId`、`defName`、`args`、`cwd`、父调用冻结的配置快照，以及宿主适配器运行模块的绝对路径。这个文件是子进程的唯一输入，读取后即删除。
   </Step>
   <Step>
-    **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true` 并立即 `unref()`。Pi 管道接收有限 stderr；MCP 使用 `stdio: "ignore"`，真实导入错误由 worker 直接持久化到 `__detach__`。
+    **生成子进程。** 宿主 fork `node <detached-runner.js> <context-file>`，使用 `detached: true`、`stdio: "ignore"` 并立即 `unref()`。Pi 与 MCP 都完全分离标准输入输出；真实导入或运行错误由 worker 直接持久化到 `__detach__`。
   </Step>
   <Step>
     **父进程返回 runId。** 子进程的 PID 写入 `RunState.pid`，Pi `taskflow` 工具响应同时包含 PID 和 runId。父会话可以继续其他工作。
@@ -90,7 +90,7 @@ Taskflow 'code-audit' started in background (pid: 48231). Run id: 20260706T14302
 崩溃保护仅在运行仍为 `"running"` 且 PID 匹配时触发——它永远不会覆盖运行器已持久化的真正终态。这意味着：
 
 - **正常退出（code 0）：** 运行器已持久化自己的状态。崩溃保护不执行操作。
-- **非零退出：** 崩溃保护检查运行状态。如果仍为 `"running"`，则标记为 `"failed"`；Pi 可附带有限 stderr，MCP 至少记录退出码/信号。
+- **非零退出：** 崩溃保护检查运行状态。如果仍为 `"running"`，则标记为 `"failed"`；worker 优先保留具体诊断，崩溃保护至少记录退出码/信号。
 - **Spawn 错误：** `child.on("error")` 处理器用 spawn 错误信息写入相同的合成阶段。
 
 `__detach__` 阶段可轮询、可调试——你可以在 `/tf runs` 和运行详情视图中看到它，就像任何其他阶段一样。
@@ -257,7 +257,7 @@ done
 └─ 用户轮询 /tf runs → 看到 "completed"
 ```
 
-如果子进程在写入终态之前异常退出，父进程的 `exit` 处理器或下一次 `taskflow_runs` 轮询会把它终态化为 `"failed"`；Pi 可保留有限 stderr，MCP 保留退出信息和 worker 已写入的诊断。
+如果子进程在写入终态之前异常退出，父进程的 `exit` 处理器或下一次 `taskflow_runs` 轮询会把它终态化为 `"failed"`；Pi 与 MCP 都保留退出信息和 worker 已写入的诊断。
 
 ## 下一步
 

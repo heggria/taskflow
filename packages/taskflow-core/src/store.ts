@@ -291,6 +291,8 @@ const LOCK_STALE_MS = 30_000;
 const LOCK_POLL_MS = 50;
 /** Default acquisition timeout before throwing. */
 const LOCK_TIMEOUT_MS = 10_000;
+/** Retention is opportunistic: never stall a foreground save behind cleanup. */
+const CLEANUP_LOCK_TIMEOUT_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Cleanup throttle
@@ -379,6 +381,33 @@ export function validateRunId(runId: string): boolean {
 		/^[A-Za-z0-9._-]+$/.test(runId) && !runId.includes("..");
 }
 
+/**
+ * Validate an index path before it is joined to the runs root.
+ *
+ * Index files live in a project-controlled directory and may be stale or
+ * manually edited. Only the two layouts Taskflow itself has ever emitted are
+ * accepted: `<flowDir>/<runId>.json` and the legacy `<runId>.json`. Keeping
+ * this check independent from the host OS also makes an index written on one
+ * platform safe to consume on another (generated index paths always use `/`).
+ */
+function isSafeRunIndexRelPath(relPath: string, runId: string): boolean {
+	if (!validateRunId(runId) || relPath.length === 0 || relPath.length > 420) return false;
+	if (path.isAbsolute(relPath) || relPath.includes("\\")) return false;
+
+	const parts = relPath.split("/");
+	if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return false;
+	if (parts.length === 1) return parts[0] === `${runId}.json`;
+	if (parts.length !== 2) return false;
+
+	const [flowDir, fileName] = parts;
+	return flowDir!.length <= 255 && safeFlowDirName(flowDir!) === flowDir && fileName === `${runId}.json`;
+}
+
+/** Join an already-validated, platform-neutral index path to the runs root. */
+function runIndexFilePath(runsRoot: string, relPath: string): string {
+	return path.join(runsRoot, ...relPath.split("/"));
+}
+
 // ---------------------------------------------------------------------------
 // File-lock primitives — zero-dependency, using O_CREAT|O_EXCL (atomic)
 // ---------------------------------------------------------------------------
@@ -452,8 +481,8 @@ function releaseLock(lockPath: string): void {
 /**
  * Execute `fn` while holding a file lock.  Guarantees release even on throw.
  */
-export function withLock<T>(lockPath: string, fn: () => T): T {
-	acquireLock(lockPath);
+export function withLock<T>(lockPath: string, fn: () => T, timeoutMs: number = LOCK_TIMEOUT_MS): T {
+	acquireLock(lockPath, timeoutMs);
 	try {
 		return fn();
 	} finally {
@@ -490,9 +519,11 @@ function readIndex(runsRoot: string): RunIndexEntry[] {
 		const raw = fs.readFileSync(indexPath(runsRoot), "utf-8");
 		const parsed = JSON.parse(raw);
 		if (!Array.isArray(parsed)) return [];
-		// Validate each entry minimally.
+		// Treat the project-controlled index as untrusted input. In particular,
+		// never let a crafted relPath escape runsRoot during load or retention.
 		return (parsed as RunIndexEntry[]).filter(
-			(e) => e && typeof e.runId === "string" && typeof e.relPath === "string",
+			(e) => e && typeof e.runId === "string" && typeof e.relPath === "string" &&
+				isSafeRunIndexRelPath(e.relPath, e.runId),
 		);
 	} catch {
 		return [];
@@ -557,13 +588,10 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 		} catch { continue; }
 
 		for (const file of files) {
-			try {
-				const raw = fs.readFileSync(path.join(dirPath, file), "utf-8");
-				const state = JSON.parse(raw) as RunState;
-				if (state && typeof state.runId === "string") {
-					entries.set(state.runId, extractIndexEntry(state, `${dirName}/${file}`));
-				}
-			} catch { /* skip corrupt */ }
+			const loaded = tryReadRunFile(runsRoot, path.join(dirPath, file));
+			if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json`) {
+				entries.set(loaded.value.runId, extractIndexEntry(loaded.value, `${dirName}/${file}`));
+			}
 		}
 	}
 
@@ -579,13 +607,11 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
 
 	for (const file of flatFiles) {
 		if (entries.has(file.replace(/\.json$/, ""))) continue; // prefer subdir entry
-		try {
-			const raw = fs.readFileSync(path.join(runsRoot, file), "utf-8");
-			const state = JSON.parse(raw) as RunState;
-			if (state && typeof state.runId === "string" && !entries.has(state.runId)) {
-				entries.set(state.runId, extractIndexEntry(state, file));
-			}
-		} catch { /* skip corrupt */ }
+		const loaded = tryReadRunFile(runsRoot, path.join(runsRoot, file));
+		if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json` &&
+			!entries.has(loaded.value.runId)) {
+			entries.set(loaded.value.runId, extractIndexEntry(loaded.value, file));
+		}
 	}
 
 	const scanned = Array.from(entries.values());
@@ -618,16 +644,16 @@ function rebuildIndex(runsRoot: string): RunIndexEntry[] {
  * race a concurrent updateIndexEntry and clobber a freshly-added entry (M1).
  * We re-read the index *inside* the lock (rather than trusting a snapshot read
  * before locking) so the rewrite reflects the latest committed state. File and
- * directory unlinks happen after the lock is released to keep the critical
- * section short; deleting a file that is no longer in the index is harmless.
+ * directory unlinks happen after the index lock is released, but each candidate
+ * is revalidated while holding its own run lock. This prevents cleanup from
+ * unlinking a run that was resumed or otherwise saved after selection.
  */
 function cleanupTerminalRuns(
 	runsRoot: string,
 	maxKeep: number = DEFAULT_MAX_KEPT_TERMINAL,
 	maxAgeDays: number = DEFAULT_MAX_AGE_DAYS,
 ): void {
-	const cleanupStarted = Date.now();
-	const now = cleanupStarted;
+	const now = Date.now();
 	if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
 	lastCleanupAt = now;
 
@@ -674,52 +700,110 @@ function cleanupTerminalRuns(
 
 		// Commit the pruned index while holding the lock so a concurrent
 		// updateIndexEntry cannot interleave and lose entries.
-		const remaining = cleanTerminal.filter((e) => !toRemove.includes(e));
+		const removalSet = new Set(toRemove);
+		const remaining = cleanTerminal.filter((e) => !removalSet.has(e));
 		writeIndex(runsRoot, [...active, ...remaining]);
 	});
 
 	if (toRemove.length === 0) return;
 
-	console.warn(
-		`[taskflow] Cleaning up ${toRemove.length} old run(s) ` +
-		`(max ${maxKeep} runs, ${maxAgeDays} day age limit). ` +
-		`Configure 'taskflow.maxKeptRuns' / 'taskflow.maxRunAgeDays' in settings.json (0 = keep all).`,
-	);
-
-	// Delete run files + lock files (outside the index lock).
+	// Delete artifacts outside the index lock, but under the exact per-run lock
+	// used by saveRun. Only the entries whose on-disk snapshots still match the
+	// selected index entries are safe to remove.
+	const removed: RunIndexEntry[] = [];
 	for (const e of toRemove) {
-		const filePath = path.join(runsRoot, e.relPath);
-		// Race guard: skip files modified after cleanup started (Finding 2).
-		try { if (fs.statSync(filePath).mtimeMs > cleanupStarted) continue; } catch { continue; }
-		try { fs.unlinkSync(filePath); } catch { /* already gone */ }
-		// Also remove any orphaned lock file.
-		try { fs.unlinkSync(filePath + ".lock"); } catch { /* ignore */ }
-		// Also remove the deterministic-replay trace (sibling .trace.jsonl +
-		// its append lock) so pruned runs don't accumulate trace files.
-		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl")); } catch { /* ignore */ }
-		try { fs.unlinkSync(filePath.replace(/\.json$/, ".trace.jsonl.lock")); } catch { /* ignore */ }
-		// Also remove the per-run Shared Context Tree directory (C6). Orphaned
-		// ctx dirs would otherwise accumulate under runs/ctx/ over many runs.
-		try { fs.rmSync(path.join(runsRoot, "ctx", e.runId), { recursive: true, force: true }); } catch { /* ignore */ }
-		// Remove user-private detached control records left by a process killed
-		// before it could consume/clear cancellation or process ownership state.
-		const controlDir = detachedControlDir(e.cwd ?? path.dirname(path.dirname(path.dirname(runsRoot))));
-		try { fs.unlinkSync(path.join(controlDir, `${e.runId}.cancel.json`)); } catch { /* ignore */ }
-		try { fs.unlinkSync(path.join(controlDir, `${e.runId}.processes.json`)); } catch { /* ignore */ }
-		try { fs.rmdirSync(controlDir); } catch { /* other runs / missing */ }
-		// Also remove the per-run isolated-workspace dir tree (cwd:"dedicated").
-		// `dedicated` workspaces are persistent by design; reclaim them once the
-		// run is pruned. The dir name uses the same sanitization as workspace.ts.
-		try {
-			const wsSeg = e.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
-			fs.rmSync(path.join(runsRoot, "ws", wsSeg), { recursive: true, force: true });
-		} catch { /* ignore */ }
+		if (cleanupRunArtifactsIfSnapshotMatches(runsRoot, e)) removed.push(e);
+	}
+
+	if (removed.length > 0) {
+		console.warn(
+			`[taskflow] Cleaning up ${removed.length} old run(s) ` +
+			`(max ${maxKeep} runs, ${maxAgeDays} day age limit). ` +
+			`Configure 'taskflow.maxKeptRuns' / 'taskflow.maxRunAgeDays' in settings.json (0 = keep all).`,
+		);
 	}
 
 	// Remove empty flow subdirectories.
-	for (const e of toRemove) {
-		const dirPath = path.dirname(path.join(runsRoot, e.relPath));
+	for (const e of removed) {
+		const dirPath = path.dirname(runIndexFilePath(runsRoot, e.relPath));
 		try { fs.rmdirSync(dirPath); } catch { /* ENOTEMPTY or ENOENT — ignore */ }
+	}
+}
+
+/**
+ * Remove one retention candidate if it is still the exact state selected from
+ * the index. Returning false is deliberately fail-open: the run remains on
+ * disk, and a changed valid snapshot is restored to the index.
+ */
+function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexEntry): boolean {
+	if (!isSafeRunIndexRelPath(entry.relPath, entry.runId)) return false;
+	const filePath = runIndexFilePath(runsRoot, entry.relPath);
+	const restore = (state: RunState): void => {
+		try { updateIndexEntry(runsRoot, extractIndexEntry(state, entry.relPath)); } catch { /* best effort */ }
+	};
+
+	try {
+		return withLock(`${filePath}.lock`, () => {
+			// saveRun holds this same run lock until its index upsert commits. If a
+			// save won the race after cleanup pruned the old entry, that fresh entry
+			// is now visible and owns the file even when Date.now() reused the same
+			// millisecond/status values. Never remove a re-indexed candidate.
+			const wasReindexed = withLock(indexLockPath(runsRoot), () =>
+				readIndex(runsRoot).some((current) => current.runId === entry.runId),
+				CLEANUP_LOCK_TIMEOUT_MS,
+			);
+			if (wasReindexed) return false;
+
+			let state: RunState;
+			try {
+				const stat = fs.lstatSync(filePath);
+				if (!stat.isFile() || stat.isSymbolicLink()) return false;
+				state = JSON.parse(fs.readFileSync(filePath, "utf-8")) as RunState;
+			} catch {
+				return false;
+			}
+
+			if (state.runId !== entry.runId) return false;
+			if (state.status === "running" || state.status !== entry.status || state.updatedAt !== entry.updatedAt) {
+				restore(state);
+				return false;
+			}
+
+			try {
+				fs.unlinkSync(filePath);
+			} catch {
+				restore(state);
+				return false;
+			}
+
+			// Remove deterministic-replay trace while respecting its append lock.
+			const tracePath = filePath.replace(/\.json$/, ".trace.jsonl");
+			try {
+				withLock(
+					`${tracePath}.lock`,
+					() => { try { fs.unlinkSync(tracePath); } catch { /* missing */ } },
+					CLEANUP_LOCK_TIMEOUT_MS,
+				);
+			} catch { /* best effort */ }
+			// Remove per-run Shared Context Tree and isolated-workspace artifacts.
+			try { fs.rmSync(path.join(runsRoot, "ctx", entry.runId), { recursive: true, force: true }); } catch { /* ignore */ }
+			try {
+				const wsSeg = entry.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
+				fs.rmSync(path.join(runsRoot, "ws", wsSeg), { recursive: true, force: true });
+			} catch { /* ignore */ }
+
+			// Remove user-private detached control records left by an interrupted worker.
+			const fallbackCwd = path.dirname(path.dirname(path.dirname(runsRoot)));
+			const controlCwd = typeof entry.cwd === "string" ? entry.cwd : fallbackCwd;
+			const controlDir = detachedControlDir(controlCwd);
+			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.cancel.json`)); } catch { /* ignore */ }
+			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.processes.json`)); } catch { /* ignore */ }
+			try { fs.rmdirSync(controlDir); } catch { /* other runs / missing */ }
+			return true;
+		}, CLEANUP_LOCK_TIMEOUT_MS);
+	} catch {
+		// Retention is opportunistic and must never make saveRun fail.
+		return false;
 	}
 }
 
@@ -1088,7 +1172,8 @@ export function loadRunDiagnosed(cwd: string, runId: string): LoadResult<RunStat
 	let corrupt: Extract<LoadResult<RunState>, { ok: false }> | null = null;
 	const probe = (filePath: string): RunState | undefined => {
 		const r = tryReadRunFile(root, filePath);
-		if (r.ok) return r.value;
+		// A filename/index record must never alias a different run's state.
+		if (r.ok) return r.value.runId === runId ? r.value : undefined;
 		if (r.reason === "unparseable" && !corrupt) corrupt = r;
 		return undefined;
 	};
@@ -1193,31 +1278,30 @@ export function listRuns(cwd: string, limit = 20): RunState[] {
 	for (const file of flatFiles) {
 		const runIdFromName = file.replace(/\.json$/, "");
 		if (indexRunIds.has(runIdFromName)) continue;
-		try {
-			const raw = fs.readFileSync(path.join(root, file), "utf-8");
-			const state = JSON.parse(raw) as RunState;
-			if (state && typeof state.runId === "string" && !indexRunIds.has(state.runId)) {
-				entries.push(extractIndexEntry(state, file));
-				indexRunIds.add(state.runId);
-			}
-		} catch { /* skip corrupt */ }
+		const loaded = tryReadRunFile(root, path.join(root, file));
+		if (loaded.ok && validateRunId(loaded.value.runId) && file === `${loaded.value.runId}.json` &&
+			!indexRunIds.has(loaded.value.runId)) {
+			entries.push(extractIndexEntry(loaded.value, file));
+			indexRunIds.add(loaded.value.runId);
+		}
 	}
 
-	// Sort by updatedAt desc, slice to limit.
+	// Sort by updatedAt desc. Invalid/unreadable files do not consume the limit:
+	// otherwise one corrupt or replaced high-ranked entry could hide healthy
+	// history that follows it.
 	// Filter out entries with non-numeric/NaN updatedAt BEFORE sorting to
 	// prevent NaN from corrupting V8's sort order (which can displace valid
 	// entries when a limit is applied).
 	const valid = entries.filter((e) => typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt));
 	valid.sort((a, b) => b.updatedAt - a.updatedAt);
-	const sliced = valid.slice(0, limit);
+	const targetLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : valid.length;
 
 	// Read full RunState for each entry.
 	const runs: RunState[] = [];
-	for (const e of sliced) {
-		try {
-			const raw = fs.readFileSync(path.join(root, e.relPath), "utf-8");
-			runs.push(JSON.parse(raw) as RunState);
-		} catch { /* file may have been deleted since index was built — skip */ }
+	for (const e of valid) {
+		if (runs.length >= targetLimit) break;
+		const loaded = tryReadRunFile(root, runIndexFilePath(root, e.relPath));
+		if (loaded.ok && loaded.value.runId === e.runId) runs.push(loaded.value);
 	}
 
 	// F-010: filter out records with non-numeric/NaN updatedAt.
