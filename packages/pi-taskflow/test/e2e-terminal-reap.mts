@@ -70,7 +70,12 @@ try {
 		},
 	});
 
-	assert.equal(result.ok, true, result.finalOutput);
+	assert.equal(result.ok, true, JSON.stringify({
+		finalOutput: result.finalOutput,
+		status: result.state.status,
+		phases: result.state.phases,
+		calls,
+	}, null, 2));
 	assert.equal(calls.length, 2);
 	assert.match(calls[0].output, /PHASE_ONE_DONE/);
 	assert.match(calls[1].output, /PHASE_TWO_DONE/);

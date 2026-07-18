@@ -12,7 +12,7 @@ import {
 	makeToolHandlers as coreMakeToolHandlers,
 	startMcpServer as coreStartMcpServer,
 } from "taskflow-mcp-core/server";
-import type { RpcHandler } from "taskflow-mcp-core/jsonrpc";
+import type { RpcContext, RpcHandler } from "taskflow-mcp-core/jsonrpc";
 import { codexSubagentRunner } from "taskflow-hosts";
 
 const HOST_OPTIONS = {
@@ -24,7 +24,9 @@ const HOST_OPTIONS = {
 } as const;
 
 /** Per-call tool handlers with codex subagent execution bound in. */
-export function makeToolHandlers(cwd: string): Record<string, (args: Record<string, unknown>) => Promise<unknown>> {
+export function makeToolHandlers(
+	cwd: string,
+): Record<string, (args: Record<string, unknown>, context?: RpcContext) => Promise<unknown>> {
 	return coreMakeToolHandlers(cwd, codexSubagentRunner, HOST_OPTIONS);
 }
 

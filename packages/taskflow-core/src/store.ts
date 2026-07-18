@@ -300,6 +300,9 @@ const CLEANUP_LOCK_TIMEOUT_MS = 250;
 
 /** Minimum ms between opportunistic cleanup runs (called inside saveRun). */
 const CLEANUP_INTERVAL_MS = 60_000;
+/** Bound the project-keyed throttle so a long-lived multi-project host cannot
+ * retain one map entry for every directory it has ever visited. */
+const CLEANUP_THROTTLE_MAX_ROOTS = 256;
 /** Retain at most this many terminal runs by default. */
 const DEFAULT_MAX_KEPT_TERMINAL = 100;
 /** Remove terminal runs older than this (days). */
@@ -309,11 +312,24 @@ const DEFAULT_MAX_AGE_DAYS = 30;
 export const DEFAULT_KEPT_RUNS = DEFAULT_MAX_KEPT_TERMINAL;
 export const DEFAULT_RUN_AGE_DAYS = DEFAULT_MAX_AGE_DAYS;
 
-/** Last cleanup timestamp — module-level so it persists across calls. */
-let lastCleanupAt = 0;
+/** Per-runs-root cleanup timestamps. A process-global scalar lets one busy
+ * project suppress retention in every other project served by the same host. */
+const lastCleanupAtByRoot = new Map<string, number>();
 
 /** Shared buffer for Atomics.wait in acquireLock busy-wait (Finding 6). */
 const LOCK_WAIT_BUF = new Int32Array(new SharedArrayBuffer(4));
+
+interface FileLockHandle {
+	device: number;
+	inode: number;
+	token: string;
+}
+
+interface LockOwnerRecord {
+	pid: number;
+	ts: number;
+	token?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers — path construction & sanitisation
@@ -408,24 +424,180 @@ function runIndexFilePath(runsRoot: string, relPath: string): string {
 	return path.join(runsRoot, ...relPath.split("/"));
 }
 
+/** Canonical, bounded-LRU throttle for opportunistic per-project cleanup. */
+function shouldRunCleanup(runsRoot: string, now: number): boolean {
+	let key: string;
+	try { key = fs.realpathSync(runsRoot); } catch { key = path.resolve(runsRoot); }
+	const previous = lastCleanupAtByRoot.get(key);
+	if (previous !== undefined && now - previous < CLEANUP_INTERVAL_MS) return false;
+
+	// Refresh insertion order for simple LRU eviction.
+	lastCleanupAtByRoot.delete(key);
+	lastCleanupAtByRoot.set(key, now);
+	while (lastCleanupAtByRoot.size > CLEANUP_THROTTLE_MAX_ROOTS) {
+		const oldest = lastCleanupAtByRoot.keys().next().value as string | undefined;
+		if (oldest === undefined) break;
+		lastCleanupAtByRoot.delete(oldest);
+	}
+	return true;
+}
+
+interface PhysicalDirectorySnapshot {
+	realPath: string;
+	device: number;
+	inode: number;
+}
+
+/**
+ * Resolve a physical directory only when it is a non-symlink descendant of
+ * runsRoot. Retention performs destructive operations, so lexical containment
+ * alone is insufficient: a checked-in `runs/<flow>` symlink could otherwise
+ * redirect the run lock and unlink to an arbitrary directory.
+ */
+function physicalDirectoryInsideRunsRoot(
+	runsRoot: string,
+	candidate: string,
+): PhysicalDirectorySnapshot | null {
+	try {
+		const rootReal = fs.realpathSync(runsRoot);
+		const stat = fs.lstatSync(candidate);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) return null;
+		const realPath = fs.realpathSync(candidate);
+		const rel = path.relative(rootReal, realPath);
+		if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
+		return { realPath, device: stat.dev, inode: stat.ino };
+	} catch {
+		return null;
+	}
+}
+
+function physicalDirectoryStillMatches(
+	runsRoot: string,
+	candidate: string,
+	snapshot: PhysicalDirectorySnapshot,
+): boolean {
+	const current = physicalDirectoryInsideRunsRoot(runsRoot, candidate);
+	return Boolean(
+		current && current.realPath === snapshot.realPath &&
+		current.device === snapshot.device && current.inode === snapshot.inode,
+	);
+}
+
+/** Remove a Taskflow-owned artifact tree without following a project symlink. */
+function removeArtifactDirectoryInsideRunsRoot(runsRoot: string, target: string): void {
+	const parent = path.dirname(target);
+	const parentSnapshot = physicalDirectoryInsideRunsRoot(runsRoot, parent);
+	if (!parentSnapshot) return;
+	try {
+		const stat = fs.lstatSync(target);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+		const targetSnapshot = physicalDirectoryInsideRunsRoot(runsRoot, target);
+		if (!targetSnapshot || !physicalDirectoryStillMatches(runsRoot, parent, parentSnapshot)) return;
+		if (!physicalDirectoryStillMatches(runsRoot, target, targetSnapshot)) return;
+		fs.rmSync(target, { recursive: true, force: true });
+	} catch { /* missing / concurrently changed */ }
+}
+
+/** Accept a persisted cwd for control-record cleanup only when it resolves to
+ * the same project run store currently being retained. */
+function controlCwdForRunsRoot(runsRoot: string, candidate: unknown): string {
+	const fallback = path.dirname(path.dirname(path.dirname(runsRoot)));
+	if (typeof candidate !== "string" || candidate.length === 0) return fallback;
+	try {
+		if (fs.realpathSync(runsDir(candidate)) === fs.realpathSync(runsRoot)) return candidate;
+	} catch { /* malformed, missing, or from another project */ }
+	return fallback;
+}
+
 // ---------------------------------------------------------------------------
 // File-lock primitives — zero-dependency, using O_CREAT|O_EXCL (atomic)
 // ---------------------------------------------------------------------------
+
+function readLockOwner(lockPath: string): LockOwnerRecord | null {
+	try {
+		const stat = fs.lstatSync(lockPath);
+		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4_096) return null;
+		const raw = fs.readFileSync(lockPath, "utf-8");
+		if (Buffer.byteLength(raw, "utf-8") > 4_096) return null;
+		const parsed = JSON.parse(raw) as Record<string, unknown>;
+		if (!Number.isSafeInteger(parsed.pid) || typeof parsed.ts !== "number") return null;
+		return {
+			pid: parsed.pid as number,
+			ts: parsed.ts,
+			...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
+		};
+	} catch {
+		return null;
+	}
+}
+
+function sameLockOwner(left: LockOwnerRecord | null, right: LockOwnerRecord): boolean {
+	return Boolean(
+		left && left.pid === right.pid && left.ts === right.ts && left.token === right.token,
+	);
+}
+
+/**
+ * Serialize stale-lock stealers for one observed lock generation. Without this
+ * claim, contender B can replace a dead lock and contender C — acting on its
+ * earlier observation — can then rename B's fresh live lock.
+ */
+function tryStealDeadLock(lockPath: string, observed: fs.Stats, owner: LockOwnerRecord): boolean {
+	if (probeProcess(owner.pid) !== "dead") return false;
+	const generation = crypto.createHash("sha256")
+		.update(`${observed.dev}\0${observed.ino}\0${owner.pid}\0${owner.ts}\0${owner.token ?? ""}`)
+		.digest("hex")
+		.slice(0, 16);
+	const claimPath = `${lockPath}.steal.${generation}`;
+	let claimFd: number;
+	try {
+		claimFd = fs.openSync(claimPath, "wx");
+	} catch {
+		return false;
+	}
+
+	const claimToken = crypto.randomBytes(16).toString("hex");
+	let claimHandle: FileLockHandle | undefined;
+	try {
+		fs.writeFileSync(claimFd, JSON.stringify({ pid: process.pid, ts: Date.now(), token: claimToken }));
+		const claimStat = fs.fstatSync(claimFd);
+		claimHandle = { device: claimStat.dev, inode: claimStat.ino, token: claimToken };
+		fs.closeSync(claimFd);
+		claimFd = -1;
+
+		const current = fs.lstatSync(lockPath);
+		if (current.dev !== observed.dev || current.ino !== observed.ino) return false;
+		if (!sameLockOwner(readLockOwner(lockPath), owner)) return false;
+
+		const grave = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
+		fs.renameSync(lockPath, grave);
+		try { fs.unlinkSync(grave); } catch { /* best-effort grave cleanup */ }
+		return true;
+	} catch {
+		return false;
+	} finally {
+		if (claimFd >= 0) {
+			try { fs.closeSync(claimFd); } catch { /* ignore */ }
+		}
+		if (claimHandle) releaseLock(claimPath, claimHandle);
+		else {
+			// Initialization did not finish; only this exclusive creator can own it.
+			try { fs.unlinkSync(claimPath); } catch { /* ignore */ }
+		}
+	}
+}
 
 /**
  * Acquire a file lock by atomically creating a lock file.
  *
  * Uses O_CREAT|O_EXCL (`wx` flag) which is atomic on POSIX and NTFS.
- * Stale locks (> LOCK_STALE_MS) are stolen via an atomic rename rather than a
- * naive unlink-then-create: a plain `unlinkSync` + `openSync('wx')` has a
- * TOCTOU window where two processes both unlink the same stale lock and both
- * then create a fresh one, yielding two simultaneous holders (risk-reviewer
- * v0.0.9 audit, L1). `rename` is atomic and removes the *specific* inode the
- * caller observed: only one racing process can win the rename of that exact
- * stale file, so at most one process proceeds to re-create the lock.
+ * Stale locks (> LOCK_STALE_MS) are stolen only after their recorded owner PID
+ * is definitively dead, then moved via an atomic rename. Age alone cannot prove
+ * abandonment: stealing from a slow but live holder creates two simultaneous
+ * critical sections, and the old holder can later unlink the new holder's lock.
  * Throws on timeout.
  */
-function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): void {
+function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): FileLockHandle {
 	const start = Date.now();
 	// Ensure parent directory exists (lock file lives inside the flow subdir).
 	const dir = path.dirname(lockPath);
@@ -434,27 +606,31 @@ function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): voi
 	while (true) {
 		try {
 			const fd = fs.openSync(lockPath, "wx");
-			fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now() }));
-			fs.closeSync(fd);
-			return; // lock acquired
+			const token = crypto.randomBytes(16).toString("hex");
+			try {
+				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ts: Date.now(), token }));
+				const stat = fs.fstatSync(fd);
+				return { device: stat.dev, inode: stat.ino, token };
+			} catch (error) {
+				// Creation succeeded but initialization did not. Remove only the inode
+				// this process created so a partial lock cannot become unstealable.
+				try {
+					const held = fs.fstatSync(fd);
+					const current = fs.lstatSync(lockPath);
+					if (current.dev === held.dev && current.ino === held.ino) fs.unlinkSync(lockPath);
+				} catch { /* best-effort rollback */ }
+				throw error;
+			} finally {
+				fs.closeSync(fd);
+			}
 		} catch (e: unknown) {
 			if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
 			// Lock file exists — check if stale.
 			try {
-				const stat = fs.statSync(lockPath);
+				const stat = fs.lstatSync(lockPath);
 				if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-					// Stale lock — steal it via atomic rename so only one racing
-					// stealer can win (L1). The "graveyard" name is unique per
-					// process+attempt; the winner unlinks it, losers see ENOENT
-					// on their own rename and simply retry the acquire loop.
-					const grave = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
-					try {
-						fs.renameSync(lockPath, grave);
-						// We won the steal — discard the graveyard copy and retry
-						// the loop, where openSync('wx') will create a fresh lock.
-						try { fs.unlinkSync(grave); } catch { /* ignore */ }
-					} catch { /* lost the steal race (ENOENT) — just retry */ }
-					continue;
+					const owner = readLockOwner(lockPath);
+					if (owner && tryStealDeadLock(lockPath, stat, owner)) continue;
 				}
 			} catch {
 				// ENOENT: another process released it between openSync and statSync — retry.
@@ -471,22 +647,28 @@ function acquireLock(lockPath: string, timeoutMs: number = LOCK_TIMEOUT_MS): voi
 }
 
 /**
- * Release a file lock by deleting the lock file.  Ignores ENOENT (already
- * released by another process or stolen due to staleness).
+ * Release a file lock only when the path still carries this holder's inode and
+ * random ownership token. A dead-owner steal must never let an old finally
+ * block delete the successor's lock.
  */
-function releaseLock(lockPath: string): void {
-	try { fs.unlinkSync(lockPath); } catch { /* ENOENT or other — ignore */ }
+function releaseLock(lockPath: string, handle: FileLockHandle): void {
+	try {
+		const stat = fs.lstatSync(lockPath);
+		if (!stat.isFile() || stat.dev !== handle.device || stat.ino !== handle.inode) return;
+		if (readLockOwner(lockPath)?.token !== handle.token) return;
+		fs.unlinkSync(lockPath);
+	} catch { /* ENOENT, replaced, or corrupt — never unlink another owner's lock */ }
 }
 
 /**
  * Execute `fn` while holding a file lock.  Guarantees release even on throw.
  */
 export function withLock<T>(lockPath: string, fn: () => T, timeoutMs: number = LOCK_TIMEOUT_MS): T {
-	acquireLock(lockPath, timeoutMs);
+	const handle = acquireLock(lockPath, timeoutMs);
 	try {
 		return fn();
 	} finally {
-		releaseLock(lockPath);
+		releaseLock(lockPath, handle);
 	}
 }
 
@@ -654,56 +836,60 @@ function cleanupTerminalRuns(
 	maxAgeDays: number = DEFAULT_MAX_AGE_DAYS,
 ): void {
 	const now = Date.now();
-	if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
-	lastCleanupAt = now;
+	if (!shouldRunCleanup(runsRoot, now)) return;
 
 	const maxAgeMs = maxAgeDays * 86_400_000;
 	let toRemove: RunIndexEntry[] = [];
 
-	withLock(indexLockPath(runsRoot), () => {
-		const entries = readIndex(runsRoot);
-		const terminal: RunIndexEntry[] = [];
-		const active: RunIndexEntry[] = [];
+	try {
+		withLock(indexLockPath(runsRoot), () => {
+			const entries = readIndex(runsRoot);
+			const terminal: RunIndexEntry[] = [];
+			const active: RunIndexEntry[] = [];
 
-		for (const e of entries) {
-			if (e.status !== "running") {
-				terminal.push(e);
-			} else {
-				active.push(e);
+			for (const e of entries) {
+				if (e.status !== "running") {
+					terminal.push(e);
+				} else {
+					active.push(e);
+				}
 			}
-		}
 
-		// Sort terminal by updatedAt desc (newest first).
-		// Filter out entries with corrupt updatedAt (non-numeric/NaN) BEFORE sorting
-		// to prevent NaN from corrupting sort order. Corrupt entries cannot be
-		// reliably aged, so they are always moved to toRemove.
-		const cleanTerminal: RunIndexEntry[] = [];
-		for (const e of terminal) {
-			if (typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt)) {
-				cleanTerminal.push(e);
-			} else {
-				toRemove.push(e);
+			// Sort terminal by updatedAt desc (newest first).
+			// Filter out entries with corrupt updatedAt (non-numeric/NaN) BEFORE sorting
+			// to prevent NaN from corrupting sort order. Corrupt entries cannot be
+			// reliably aged, so they are always moved to toRemove.
+			const cleanTerminal: RunIndexEntry[] = [];
+			for (const e of terminal) {
+				if (typeof e.updatedAt === "number" && !Number.isNaN(e.updatedAt)) {
+					cleanTerminal.push(e);
+				} else {
+					toRemove.push(e);
+				}
 			}
-		}
-		cleanTerminal.sort((a, b) => b.updatedAt - a.updatedAt);
+			cleanTerminal.sort((a, b) => b.updatedAt - a.updatedAt);
 
-		for (let i = 0; i < cleanTerminal.length; i++) {
-			const e = cleanTerminal[i]!;
-			const expiredByAge = maxAgeDays > 0 && now - e.updatedAt > maxAgeMs;
-			const excessByCount = maxKeep > 0 && i >= maxKeep;
-			if (expiredByAge || excessByCount) {
-				toRemove.push(e);
+			for (let i = 0; i < cleanTerminal.length; i++) {
+				const e = cleanTerminal[i]!;
+				const expiredByAge = maxAgeDays > 0 && now - e.updatedAt > maxAgeMs;
+				const excessByCount = maxKeep > 0 && i >= maxKeep;
+				if (expiredByAge || excessByCount) {
+					toRemove.push(e);
+				}
 			}
-		}
 
-		if (toRemove.length === 0) return;
+			if (toRemove.length === 0) return;
 
-		// Commit the pruned index while holding the lock so a concurrent
-		// updateIndexEntry cannot interleave and lose entries.
-		const removalSet = new Set(toRemove);
-		const remaining = cleanTerminal.filter((e) => !removalSet.has(e));
-		writeIndex(runsRoot, [...active, ...remaining]);
-	});
+			// Commit the pruned index while holding the lock so a concurrent
+			// updateIndexEntry cannot interleave and lose entries.
+			const removalSet = new Set(toRemove);
+			const remaining = cleanTerminal.filter((e) => !removalSet.has(e));
+			writeIndex(runsRoot, [...active, ...remaining]);
+		}, CLEANUP_LOCK_TIMEOUT_MS);
+	} catch {
+		// Retention is opportunistic. A busy index must not stall or fail saveRun.
+		return;
+	}
 
 	if (toRemove.length === 0) return;
 
@@ -738,12 +924,16 @@ function cleanupTerminalRuns(
 function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexEntry): boolean {
 	if (!isSafeRunIndexRelPath(entry.relPath, entry.runId)) return false;
 	const filePath = runIndexFilePath(runsRoot, entry.relPath);
+	const fileDir = path.dirname(filePath);
+	const directorySnapshot = physicalDirectoryInsideRunsRoot(runsRoot, fileDir);
+	if (!directorySnapshot) return false;
 	const restore = (state: RunState): void => {
 		try { updateIndexEntry(runsRoot, extractIndexEntry(state, entry.relPath)); } catch { /* best effort */ }
 	};
 
 	try {
 		return withLock(`${filePath}.lock`, () => {
+			if (!physicalDirectoryStillMatches(runsRoot, fileDir, directorySnapshot)) return false;
 			// saveRun holds this same run lock until its index upsert commits. If a
 			// save won the race after cleanup pruned the old entry, that fresh entry
 			// is now visible and owns the file even when Date.now() reused the same
@@ -755,10 +945,14 @@ function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexE
 			if (wasReindexed) return false;
 
 			let state: RunState;
+			let fileSnapshot: { device: number; inode: number };
 			try {
 				const stat = fs.lstatSync(filePath);
 				if (!stat.isFile() || stat.isSymbolicLink()) return false;
-				state = JSON.parse(fs.readFileSync(filePath, "utf-8")) as RunState;
+				fileSnapshot = { device: stat.dev, inode: stat.ino };
+				const loaded = tryReadRunFile(runsRoot, filePath);
+				if (!loaded.ok) return false;
+				state = loaded.value;
 			} catch {
 				return false;
 			}
@@ -770,6 +964,16 @@ function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexE
 			}
 
 			try {
+				if (!physicalDirectoryStillMatches(runsRoot, fileDir, directorySnapshot)) {
+					restore(state);
+					return false;
+				}
+				const currentFile = fs.lstatSync(filePath);
+				if (!currentFile.isFile() || currentFile.isSymbolicLink() ||
+					currentFile.dev !== fileSnapshot.device || currentFile.ino !== fileSnapshot.inode) {
+					restore(state);
+					return false;
+				}
 				fs.unlinkSync(filePath);
 			} catch {
 				restore(state);
@@ -786,15 +990,12 @@ function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexE
 				);
 			} catch { /* best effort */ }
 			// Remove per-run Shared Context Tree and isolated-workspace artifacts.
-			try { fs.rmSync(path.join(runsRoot, "ctx", entry.runId), { recursive: true, force: true }); } catch { /* ignore */ }
-			try {
-				const wsSeg = entry.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
-				fs.rmSync(path.join(runsRoot, "ws", wsSeg), { recursive: true, force: true });
-			} catch { /* ignore */ }
+			removeArtifactDirectoryInsideRunsRoot(runsRoot, path.join(runsRoot, "ctx", entry.runId));
+			const wsSeg = entry.runId.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_").slice(0, 100) || "phase";
+			removeArtifactDirectoryInsideRunsRoot(runsRoot, path.join(runsRoot, "ws", wsSeg));
 
 			// Remove user-private detached control records left by an interrupted worker.
-			const fallbackCwd = path.dirname(path.dirname(path.dirname(runsRoot)));
-			const controlCwd = typeof entry.cwd === "string" ? entry.cwd : fallbackCwd;
+			const controlCwd = controlCwdForRunsRoot(runsRoot, state.cwd);
 			const controlDir = detachedControlDir(controlCwd);
 			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.cancel.json`)); } catch { /* ignore */ }
 			try { fs.unlinkSync(path.join(controlDir, `${entry.runId}.processes.json`)); } catch { /* ignore */ }
