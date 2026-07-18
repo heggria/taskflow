@@ -6,7 +6,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Added
 
-- **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries.
+- **Durable MCP background runs.** `taskflow_run` now accepts `mode: "background"` on Codex, Claude Code, OpenCode, and Grok Build, returning a durable `runId` immediately instead of tying a long DAG to one MCP request timeout. The new `taskflow_runs` tool lists background runs and supports `status`, bounded/repeatable `wait`, and explicit `cancel`; lists report the total active count and can filter `running` versus `terminal` runs. Detached runs persist their final output and trace, preserve incremental-cache and library-reuse behavior, detect orphaned processes, and use a file-backed cancellation control plane that survives MCP request and server boundaries. Starting a sixth concurrent background run emits an explicit resource-contention warning because Taskflow intentionally has no hidden global cross-host scheduler.
 
 ## [0.2.2] — 2026-07-14
 

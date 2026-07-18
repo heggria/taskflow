@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadRun, type SubagentRunner } from "taskflow-core";
+import { loadRun, newRunId, saveRun, type RunState, type SubagentRunner, type Taskflow } from "taskflow-core";
 import { makeToolHandlers } from "taskflow-mcp-core/server";
 
 interface TextResult {
@@ -28,10 +28,28 @@ function runIdFrom(result: TextResult): string {
 	return match[1]!;
 }
 
-function inlineAgentFlow(name: string) {
+function inlineAgentFlow(name: string): Taskflow {
 	return {
 		name,
 		phases: [{ id: "work", type: "agent", agent: "executor", task: "work", final: true }],
+	};
+}
+
+function runningBackgroundState(cwd: string, name: string): RunState {
+	const now = Date.now();
+	return {
+		runId: newRunId(name),
+		flowName: name,
+		def: inlineAgentFlow(name),
+		args: {},
+		status: "running",
+		phases: {},
+		createdAt: now,
+		updatedAt: now,
+		cwd,
+		detached: true,
+		detachedStartedAt: now,
+		pid: process.pid,
 	};
 }
 
@@ -82,6 +100,33 @@ test("mcp background: cancel survives request boundaries and pauses the run", as
 		assert.equal(waited.isError, true);
 		assert.match(waited.content[0]!.text, /Ⅱ paused/);
 		assert.equal(loadRun(cwd, runId)?.status, "paused");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("mcp background: roster filters active runs and warns about uncoordinated contention", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-roster-"));
+	try {
+		for (let index = 0; index < 5; index++) {
+			saveRun(runningBackgroundState(cwd, `already-running-${index}`));
+		}
+
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner, {
+			host: "test",
+			detachedRunner: { module: fixtureModule(), exportName: "cancellableRunner" },
+		});
+		const started = await tools.taskflow_run({ define: inlineAgentFlow("contention-warning"), mode: "background" }) as TextResult;
+		assert.equal(started.isError, false);
+		assert.match(started.content[0]!.text, /Warning: 6 background runs are active/);
+		const runId = runIdFrom(started);
+
+		const active = await tools.taskflow_runs({ action: "list", status: "running", limit: 3 }) as TextResult;
+		assert.match(active.content[0]!.text, /6 active · 6 total · running/);
+		assert.doesNotMatch(active.content[0]!.text, /completed/);
+
+		await tools.taskflow_runs({ action: "cancel", runId, reason: "test cleanup" });
+		await tools.taskflow_runs({ action: "wait", runId, timeoutMs: 5_000 });
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}

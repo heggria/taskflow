@@ -158,6 +158,9 @@ continues independently of that MCP request. Use `taskflow_runs` with `action:
 "status"`, `"wait"`, or `"cancel"`; bounded waits can be repeated until the
 persisted final output is ready. Cancelling a foreground MCP request still
 aborts that foreground DAG; background runs are cancelled explicitly by id.
+`action: "list"` reports total active concurrency and accepts
+`status: "running" | "terminal"`; starting a sixth active background run warns
+that no global cross-host concurrency/budget coordinator exists.
 
 ## Alternative: register the MCP server manually
 

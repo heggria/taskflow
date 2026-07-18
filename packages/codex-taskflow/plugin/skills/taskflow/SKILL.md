@@ -667,6 +667,9 @@ For a flow that may outlive one MCP tool call, set `mode: "background"` on
 `taskflow_run`. It returns immediately; use `taskflow_runs` with `action:
 "status"`, `"wait"`, or `"cancel"` and the returned `runId`. A bounded `wait`
 can be called repeatedly, and completion returns the persisted final output.
+Use `action: "list"` with optional `status: "running" | "terminal"` to see
+active concurrency. Starting a sixth active run warns that Taskflow has no
+hidden global cross-host concurrency or budget coordinator.
 
 Use `taskflow_trace` to inspect the append-only event log for a finished run,
 then `taskflow_replay` to re-judge it under alternate thresholds/budget **offline

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
 	clearDetachedCancelRequest,
 	isProcessAlive,
+	listRuns,
 	loadRun,
 	readDetachedCancelRequest,
 	requestDetachedCancel,
@@ -31,6 +32,17 @@ export interface BackgroundLaunchOptions {
 
 const STARTING_GRACE_MS = 5_000;
 const WAIT_POLL_MS = 100;
+const BACKGROUND_SCAN_LIMIT = 1_000;
+
+export const BACKGROUND_RUN_WARNING_THRESHOLD = 5;
+
+export type BackgroundRunFilter = "all" | "running" | "terminal";
+
+export interface BackgroundRunList {
+	runs: RunState[];
+	activeCount: number;
+	totalCount: number;
+}
 
 function markDetachedFailure(state: RunState, message: string): RunState {
 	state.status = "failed";
@@ -170,6 +182,30 @@ export async function waitForMcpBackgroundRun(
 		state = refreshDetachedRun(cwd, runId);
 	}
 	return state;
+}
+
+/**
+ * Read the project-backed background roster, refreshing orphaned processes
+ * before filtering. The active count is always computed from the full roster,
+ * so a filtered/limited list still reports total contention.
+ */
+export function listMcpBackgroundRuns(
+	cwd: string,
+	limit: number,
+	filter: BackgroundRunFilter = "all",
+): BackgroundRunList {
+	const all = listRuns(cwd, BACKGROUND_SCAN_LIMIT)
+		.filter((run) => run.detached)
+		.map((run) => refreshDetachedRun(cwd, run.runId) ?? run);
+	const activeCount = all.filter((run) => run.status === "running").length;
+	const filtered = filter === "all"
+		? all
+		: all.filter((run) => filter === "running" ? run.status === "running" : run.status !== "running");
+	return {
+		runs: filtered.slice(0, Math.max(0, limit)),
+		activeCount,
+		totalCount: all.length,
+	};
 }
 
 function phaseProgress(state: RunState): { done: number; total: number } {

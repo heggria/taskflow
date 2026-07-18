@@ -31,11 +31,14 @@
 import { RpcError, RPC, serveStdio, type RpcContext, type RpcHandler } from "./jsonrpc.ts";
 import { renderFlowSvg, renderFlowOutline, svgToBase64 } from "./svg.ts";
 import {
+	BACKGROUND_RUN_WARNING_THRESHOLD,
 	cancelMcpBackgroundRun,
 	formatBackgroundRun,
 	launchMcpBackgroundRun,
+	listMcpBackgroundRuns,
 	refreshDetachedRun,
 	waitForMcpBackgroundRun,
+	type BackgroundRunFilter,
 	type DetachedRunnerBinding,
 } from "./background.ts";
 import { readFileSync, realpathSync } from "node:fs";
@@ -47,7 +50,6 @@ import {
 	executeTaskflow,
 	getFlowDiagnosed,
 	listFlows,
-	listRuns,
 	newRunId,
 	peekRun,
 	saveRun,
@@ -442,6 +444,7 @@ const TOOLS: McpTool[] = [
 				runId: { type: "string", description: "Required for status, wait, and cancel." },
 				timeoutMs: { type: "integer", description: "For wait: return after this many ms if still running (default 30000, max 300000)." },
 				limit: { type: "integer", description: "For list: maximum recent background runs (default 10, max 50)." },
+				status: { type: "string", enum: ["all", "running", "terminal"], description: "For list: show all runs (default), only active runs, or only terminal runs." },
 				reason: { type: "string", description: "For cancel: optional audit reason." },
 			},
 			required: ["action"],
@@ -835,8 +838,12 @@ export function makeToolHandlers(
 						incremental: args.incremental === true,
 						reusedSavedName: args.reusedFromSearch === true ? reusedSavedName : undefined,
 					});
+					const { activeCount } = listMcpBackgroundRuns(cwd, 0);
+					const contentionWarning = activeCount > BACKGROUND_RUN_WARNING_THRESHOLD
+						? `\n\nWarning: ${activeCount} background runs are active in this project. Taskflow does not provide a global cross-host concurrency or budget coordinator; use taskflow_runs list/cancel if this is unintentional.`
+						: "";
 					return textContent(
-						`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.`,
+						`↻ taskflow started in background\n\n${state.flowName} · pid ${pid} · run ${state.runId}\nUse taskflow_runs with action status, wait, or cancel.${contentionWarning}`,
 					);
 				} catch (error) {
 					return textContent(
@@ -900,12 +907,18 @@ export function makeToolHandlers(
 			const action = String(args.action ?? "");
 			if (action === "list") {
 				const limit = Math.max(1, Math.min(50, typeof args.limit === "number" ? Math.floor(args.limit) : 10));
-				const runs = listRuns(cwd, 1_000)
-					.filter((run) => run.detached)
-					.slice(0, limit)
-					.map((run) => refreshDetachedRun(cwd, run.runId) ?? run);
-				if (runs.length === 0) return textContent("No background taskflow runs found from this directory.");
-				return textContent(`Background taskflow runs:\n${runs.map((run) => formatBackgroundRun(run, false)).join("\n")}`);
+				const filter: BackgroundRunFilter = args.status === "running" || args.status === "terminal"
+					? args.status
+					: "all";
+				const roster = listMcpBackgroundRuns(cwd, limit, filter);
+				if (roster.runs.length === 0) {
+					const scope = filter === "all" ? "" : `${filter} `;
+					return textContent(`No ${scope}background taskflow runs found from this directory. ${roster.activeCount} active total.`);
+				}
+				const scope = filter === "all" ? "" : ` · ${filter}`;
+				return textContent(
+					`Background taskflow runs — ${roster.activeCount} active · ${roster.totalCount} total${scope}:\n${roster.runs.map((run) => formatBackgroundRun(run, false)).join("\n")}`,
+				);
 			}
 
 			const runId = typeof args.runId === "string" ? args.runId.trim() : "";

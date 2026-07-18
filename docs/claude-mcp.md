@@ -79,6 +79,9 @@ long flow, pass `mode: "background"`: it returns a durable `runId` immediately
 and continues independently of that MCP request. Use `taskflow_runs` with
 `action: "status"`, `"wait"`, or `"cancel"`; `wait` is bounded by `timeoutMs`
 and can be called repeatedly until the persisted final output is ready.
+`action: "list"` reports total active concurrency and accepts
+`status: "running" | "terminal"`; starting a sixth active background run warns
+that no global cross-host concurrency/budget coordinator exists.
 
 ## Alternative: register the MCP server manually
 

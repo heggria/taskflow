@@ -56,7 +56,9 @@ For a long flow, pass `mode: "background"`: the call returns a durable `runId`
 immediately, and the run continues independently of that MCP request. Use
 `taskflow_runs` with `action: "status"`, `"wait"`, or `"cancel"`; `wait` may
 be called repeatedly with a bounded `timeoutMs` and returns the persisted final
-output when complete.
+output when complete. `action: "list"` reports total active concurrency and
+accepts `status: "running" | "terminal"`; starting a sixth active background
+run warns that no global cross-host concurrency/budget coordinator exists.
 
 Codex still applies a per-server MCP **tool-call timeout** to foreground calls.
 
