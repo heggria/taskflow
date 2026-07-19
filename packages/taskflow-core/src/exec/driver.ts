@@ -27,6 +27,7 @@ import { foldEvents } from "./fold.ts";
 import { EVENT_SCHEMA_VERSION, type Event } from "./events.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
+import { pluginVerifierErrors } from "../verify.ts";
 import type { TaskflowVerifier } from "../verify.ts";
 import {
 	clampSubFlowBudget,
@@ -50,8 +51,9 @@ export interface EventKernelDeps {
 	eventKernel?: boolean;
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
-	/** Caller-supplied zero-token verifiers (see verify.ts). Threaded into the
-	 *  inline-def verification in executeFlowBody; recurses via the ...deps spread. */
+	/** Caller-supplied zero-token verifiers (see verify.ts). Run in runNested's
+	 *  plugin-error preflight before every child-flow dispatch on this engine, and
+	 *  recursed via the ...deps spread. */
 	verifiers?: TaskflowVerifier[];
 	_stack?: string[];
 	_dynamic?: boolean;
@@ -254,6 +256,37 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				blocked: false,
 			};
 		}
+		// Plugin-error verifier preflight (no-spend gate, zero-token). runNested is
+		// the single funnel for BOTH inline-def and saved-use child dispatch on this
+		// engine, so centralizing here covers every child flow (review of #84, issue
+		// 1). It runs BEFORE childState is created, so a blocked child never
+		// dispatches. Verifiers see the DECLARED child def (opts.def), not the
+		// budget-clamped effectiveDef, matching what the imperative path's verify
+		// sites observe: a budget/concurrency policy verifier must see the same
+		// declaration on both engines, or the event kernel would silently let a child
+		// it blocks on the imperative path go on to spend.
+		//
+		// Built-in graph detectors (dead-ends, unreachable, …) are intentionally NOT
+		// run here: this is a plugin-only gate, matching the top-level preflight's
+		// advisory treatment of built-ins. It costs nothing reachable — the only
+		// error-severity built-ins are `unreachable` and self-dependency, and neither
+		// can reach a dispatching event-kernel child. A flow nesting an unreachable
+		// child is itself kernel-ineligible (concurrent DAG layers), so it runs on the
+		// imperative path where the built-in detectors still run; a self-dependency is
+		// rejected by validateTaskflow above. (Pinned in verify-pluggable.test.ts.)
+		const pluginErrors = pluginVerifierErrors(
+			{ name: opts.def.name, phases: opts.def.phases as Phase[], budget: opts.def.budget, concurrency: opts.def.concurrency },
+			deps.verifiers,
+		);
+		if (pluginErrors) {
+			return {
+				finalOutput: `Nested flow '${effectiveDef.name}' failed verifier preflight: ${pluginErrors.join("; ")}`,
+				ok: false,
+				usage: emptyUsage(),
+				events: [],
+				blocked: false,
+			};
+		}
 		const childState: RunState = {
 			// No `/` — validateRunId rejects path separators if ever persisted.
 			runId: `${state.runId}-n-${effectiveDef.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 40)}`,
@@ -293,7 +326,6 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		runTask: deps.runTask,
 		signal: deps.signal,
 		globalThinking: deps.globalThinking,
-		verifiers: deps.verifiers,
 		requestApproval: deps.requestApproval,
 		loadFlow: deps.loadFlow,
 		stack: deps._stack ?? [],

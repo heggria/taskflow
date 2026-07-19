@@ -11,7 +11,6 @@ import { dependenciesOf, MAX_DYNAMIC_MAP_ITEMS, PHASE_TYPES } from "../schema.ts
 import type { RunState } from "../store.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
-import type { TaskflowVerifier } from "../verify.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
@@ -82,9 +81,6 @@ export interface StepDeps {
 	runTask: RunTaskFn;
 	signal?: AbortSignal;
 	globalThinking?: string;
-	/** Caller-supplied zero-token verifiers, threaded into the inline-def
-	 *  verifyTaskflow preflight in executeFlowBody. Forwarded from EventKernelDeps. */
-	verifiers?: TaskflowVerifier[];
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
 	/** Sub-flow call stack (recursion guard). */
