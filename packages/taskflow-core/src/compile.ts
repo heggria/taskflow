@@ -20,7 +20,7 @@ import {
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	TOURNAMENT_DEFAULT_VARIANTS,
 } from "./schema.ts";
-import { verifyTaskflow, type VerificationIssue, type VerificationResult } from "./verify.ts";
+import { verifyTaskflow, type TaskflowVerifier, type VerificationIssue, type VerificationResult } from "./verify.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +40,9 @@ export interface CompileOptions {
 	direction?: "TD" | "LR";
 	/** Document title (defaults to the flow name). */
 	title?: string;
+	/** Caller-supplied verifiers forwarded into `verifyTaskflow`; their issues
+	 *  overlay on the Mermaid diagram + report exactly like built-in issues. */
+	verifiers?: TaskflowVerifier[];
 }
 
 // ---------------------------------------------------------------------------
@@ -308,11 +311,24 @@ function buildMermaid(flow: Taskflow, verification: VerificationResult, opts: Co
 
 	// Final phases get a distinct border (unless they already carry an issue,
 	// where the issue color wins — a final node that's broken should read red).
-	const finals = phases.filter((p) => p.final && !sev.has(p.id)).map((p) => idMap.get(p.id) ?? p.id);
+	// Overlays are applied ONLY to phase ids present in `idMap`: a plugin-supplied
+	// `phaseId` that names no real phase (or carries newlines/Mermaid syntax) must
+	// never reach a `class` statement, where it could inject extra directives.
+	// Such findings still appear as escaped text in the report below.
+	const finals = phases
+		.filter((p) => p.final && !sev.has(p.id))
+		.map((p) => idMap.get(p.id))
+		.filter((id): id is string => id !== undefined);
 	if (finals.length) lines.push(`\tclass ${finals.join(",")} ${CLASS_FINAL};`);
 
-	const errNodes = [...sev].filter(([, s]) => s === "error").map(([id]) => idMap.get(id) ?? id);
-	const warnNodes = [...sev].filter(([, s]) => s === "warning").map(([id]) => idMap.get(id) ?? id);
+	const errNodes = [...sev]
+		.filter(([, s]) => s === "error")
+		.map(([id]) => idMap.get(id))
+		.filter((id): id is string => id !== undefined);
+	const warnNodes = [...sev]
+		.filter(([, s]) => s === "warning")
+		.map(([id]) => idMap.get(id))
+		.filter((id): id is string => id !== undefined);
 	if (errNodes.length) lines.push(`\tclass ${errNodes.join(",")} ${CLASS_ERROR};`);
 	if (warnNodes.length) lines.push(`\tclass ${warnNodes.join(",")} ${CLASS_WARN};`);
 
@@ -341,13 +357,17 @@ function buildReport(flow: Taskflow, verification: VerificationResult): string {
 		lines.push("");
 		lines.push(`### ❌ Errors (${errors.length})`);
 		for (const e of errors)
-			lines.push(`- **${e.category}**${e.phaseId ? ` \`${mdInline(e.phaseId)}\`` : ""}: ${mdInline(e.message)}`);
+			lines.push(
+				`- **${e.category}**${e.phaseId ? ` \`${mdInline(e.phaseId)}\`` : ""}${e.source ? ` _(${mdInline(e.source)})_` : ""}: ${mdInline(e.message)}`,
+			);
 	}
 	if (warnings.length) {
 		lines.push("");
 		lines.push(`### ⚠️ Warnings (${warnings.length})`);
 		for (const w of warnings)
-			lines.push(`- **${w.category}**${w.phaseId ? ` \`${mdInline(w.phaseId)}\`` : ""}: ${mdInline(w.message)}`);
+			lines.push(
+				`- **${w.category}**${w.phaseId ? ` \`${mdInline(w.phaseId)}\`` : ""}${w.source ? ` _(${mdInline(w.source)})_` : ""}: ${mdInline(w.message)}`,
+			);
 	}
 	return lines.join("\n");
 }
@@ -361,12 +381,15 @@ function buildReport(flow: Taskflow, verification: VerificationResult): string {
  * report. Pure function — zero tokens, no LLM, no I/O.
  */
 export function compileTaskflow(flow: Taskflow, opts: CompileOptions = {}): CompileResult {
-	const verification = verifyTaskflow({
-		name: flow.name ?? "taskflow",
-		phases: flow.phases ?? [],
-		budget: flow.budget,
-		concurrency: flow.concurrency,
-	});
+	const verification = verifyTaskflow(
+		{
+			name: flow.name ?? "taskflow",
+			phases: flow.phases ?? [],
+			budget: flow.budget,
+			concurrency: flow.concurrency,
+		},
+		{ verifiers: opts.verifiers },
+	);
 
 	const mermaid = buildMermaid(flow, verification, opts);
 	const report = buildReport(flow, verification);

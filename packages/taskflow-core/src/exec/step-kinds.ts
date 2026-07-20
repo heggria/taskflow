@@ -17,10 +17,9 @@ import {
 	validateTaskflow,
 } from "../schema.ts";
 import { parseGateVerdict, parseTournamentWinner } from "../deterministic.ts";
-import { verifyTaskflow } from "../verify.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "../usage.ts";
 import { evaluateCondition, interpolate, interpolateValue, safeParse, tryEvaluateCondition, type InterpolationContext } from "../interpolate.ts";
-import { clampSubFlowBudget, kernelAttemptsOverBudget } from "./kernel-policy.ts";
+import { kernelAttemptsOverBudget } from "./kernel-policy.ts";
 import { abortableDelay, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
 import type { Event } from "./events.ts";
 import { EVENT_SCHEMA_VERSION } from "./events.ts";
@@ -686,19 +685,12 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		if (!v.ok) {
 			return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
 		}
-		const ver = verifyTaskflow({
-			name: wrapped.name,
-			phases: wrapped.phases as Phase[],
-			budget: wrapped.budget,
-			concurrency: wrapped.concurrency,
-		});
-		if (!ver.ok) {
-			const errs = ver.issues.filter((i) => i.severity === "error");
-			if (errs.length) {
-				return { midEvents: [], output: "", status: "done", usage: emptyUsage() };
-			}
-		}
-		subDef = clampSubFlowBudget(wrapped, ctx.state.def.budget);
+		// Pass the DECLARED def (unclamped). runNested clamps to effectiveDef
+		// internally for dispatch, and its verifier preflight inspects opts.def — so
+		// this makes the event kernel verify the same declared budget/concurrency
+		// the imperative path verifies (wrapped), keeping the no-spend gate at parity
+		// across engines (review of #84, issue 1).
+		subDef = wrapped;
 		recursionKey = `def:${subDef.name}`;
 	} else {
 		const useName = phase.use;

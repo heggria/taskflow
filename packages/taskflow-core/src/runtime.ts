@@ -37,7 +37,7 @@ const noRunnerInjected: RunTaskFn = async (_cwd, _agents, agentName, task) => ({
 export { PHASE_TIMEOUT_ABORT_GRACE_MS } from "./runner-core.ts";
 import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
-import { verifyTaskflow } from "./verify.ts";
+import { verifyTaskflow, pluginVerifierErrors, formatPluginIssueMessages, type TaskflowVerifier } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
 import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
 export { parseTournamentWinner } from "./deterministic.ts";
@@ -117,6 +117,13 @@ export interface RuntimeDeps {
 	 * fallback. Default false; also set `PI_TASKFLOW_EVENT_KERNEL=1`.
 	 */
 	eventKernel?: boolean;
+	/** Caller-supplied zero-token verifiers (see verify.ts). Threaded into every
+	 *  `verifyTaskflow` preflight the runtime performs — dynamic subflows (spawn +
+	 *  inline `flow{def}`), the event-kernel path, and the top-level pre-execution
+	 *  gate (which blocks only on error-severity plugin issues, leaving built-in
+	 *  detectors advisory at the top level as before). A host embedding the engine
+	 *  registers the verifiers it trusts here. Undefined ⇒ built-in detectors only. */
+	verifiers?: TaskflowVerifier[];
 	/** Internal: sub-flow call stack, for recursion detection. */
 	_stack?: string[];
 	/** Internal: pre-resolved Shared Context Tree dir for this run (sub-flows inherit the parent's). */
@@ -147,6 +154,11 @@ export interface RuntimeDeps {
 	/** Internal: one immutable loader view per top-level execution. Saved-flow
 	 * definitions must not change between capability scan and execution. */
 	_flowLoaderSnapshot?: Map<string, FlowLoaderSnapshotEntry>;
+	/** Internal: a child-flow dispatch site has already run the plugin-verifier
+	 * preflight on the child's declared def, so executeTaskflow's top-level
+	 * preflight must NOT re-run it on re-entry (avoids verifying each child 2-3x
+	 * across the imperative path). Root/ctx_spawn entries leave this unset. */
+	_verifierPreflightDone?: boolean;
 	/** Internal phase-scoped W1a execution binding inherited only by descendants
 	 * that remain inside the selected cwd capability. */
 	_workspaceBinding?: ResolveOnlyPhaseBinding;
@@ -870,7 +882,7 @@ async function runInlineSubflow(
 		const error = `spawned subflow failed validation: ${v.errors.join("; ")}`;
 		return { output: `(${error})`, usage: emptyUsage(), failed: true, error };
 	}
-	const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency });
+	const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency }, { verifiers: deps.verifiers });
 	if (!ver.ok) {
 		const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 		const error = `spawned subflow failed verification: ${errs.join("; ")}`;
@@ -903,6 +915,9 @@ async function runInlineSubflow(
 			cwd: dynCwd,
 			_cacheCwdIdentity: phase.cwd !== undefined || deps._cacheCwdIdentity !== undefined ? dynCwd : undefined,
 			_dynamic: true,
+			// runInlineSubflow already ran the plugin-verifier preflight on this
+			// spawned child (above); don't re-run it on executeTaskflow re-entry.
+			_verifierPreflightDone: true,
 			// The parent phase's isolated workspace (if any) applies only to the
 			// parent — each spawned sub-phase resolves its own cwd. Clear the
 			// override so the whole subflow doesn't inherit the parent's dir
@@ -2813,8 +2828,21 @@ async function executePhaseInner(
 				return defFailOpen(`inline def failed validation: ${v.errors.join("; ")}`);
 			}
 			// Static verification (dead-ends, unreachable, gate-exhaustion, budget,
-			// concurrency). Only error-severity issues block; warnings are advisory.
-			const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency });
+			// concurrency) + caller-supplied verifiers. Two contracts by issue origin:
+			//  - Built-in error-severity issues FAIL-OPEN: a malformed LLM-authored def
+			//    resolves as done/empty with a defError diagnostic and never aborts the
+			//    run (authors who want a hard failure can gate downstream). Warnings
+			//    are advisory.
+			//  - Plugin-verifier errors FAIL-CLOSE: a host's trusted policy must block
+			//    spend AND surface as a run failure — matching the saved-use path just
+			//    below, runInlineSubflow, the event kernel (runNested), and the top-level
+			//    preflight. Without this an inline-def child would silently bypass a
+			//    plugin block with res.ok=true (review of #84).
+			const ver = verifyTaskflow({ name: wrapped.name, phases: wrapped.phases as Phase[], budget: wrapped.budget, concurrency: wrapped.concurrency }, { verifiers: deps.verifiers });
+			const inlinePluginErrors = ver.issues.filter((i) => i.category === "plugin" && i.severity === "error");
+			if (inlinePluginErrors.length) {
+				return failPhase(phase.id, `flow phase '${phase.id}': inline def '${wrapped.name}' failed verifier preflight: ${formatPluginIssueMessages(inlinePluginErrors).join("; ")}`);
+			}
 			if (!ver.ok) {
 				const errs = ver.issues.filter((i) => i.severity === "error").map((i) => i.message);
 				return defFailOpen(`inline def failed verification: ${errs.join("; ")}`);
@@ -2855,6 +2883,25 @@ async function executePhaseInner(
 		// a bridge-bearing child must never be skipped by a cached parent result.
 		const nestedBridgeTree = flowTreeUsesCwdBridge(subDef, deps.loadFlow);
 		if (nestedBridgeTree) deps._disableCache = true;
+		// Plugin-error verifier preflight (no-spend gate) BEFORE cache/resume reuse,
+		// for SAVED-USE children only. Inline-def children are already gated by the
+		// verifyTaskflow in the hasDef branch above (plugin errors fail-close,
+		// built-in errors fail-open) — which also runs before this cache lookup — so
+		// re-verifying them here would be redundant. A cached saved-use child is
+		// returned just below WITHOUT re-entering executeTaskflow, and a saved-use
+		// child has no earlier verify site, so this is its single plugin gate and
+		// the cache-reuse guard (review
+		// of #84, issue 1). Blocks only on plugin error-severity issues; built-in
+		// detectors stay advisory.
+		if (!hasDef) {
+			const flowPluginErrors = pluginVerifierErrors(
+				{ name: subDef.name, phases: subDef.phases as Phase[], budget: subDef.budget, concurrency: subDef.concurrency },
+				deps.verifiers,
+			);
+			if (flowPluginErrors) {
+				return failPhase(phase.id, `flow phase '${phase.id}': sub-flow '${subDef.name}' failed verifier preflight: ${flowPluginErrors.join("; ")}`);
+			}
+		}
 		const flowCc: PhaseCacheCtx = nestedBridgeTree ? { ...cc, scope: "off" } : cc;
 		// Every sub-flow cache identity includes the resolved definition. A saved
 		// flow's name alone is insufficient: its contents can change without the
@@ -2909,6 +2956,10 @@ async function executePhaseInner(
 			cwd: effCwd,
 			_cacheCwdIdentity: phase.cwd !== undefined || deps._cacheCwdIdentity !== undefined ? effCwd : undefined,
 			_dynamic: hasDef || deps._dynamic === true ? true : undefined,
+			// The flow-phase handler already ran the plugin-verifier preflight on
+			// this child (inline-def via verifyTaskflow at the def branch, saved-use
+			// via pluginVerifierErrors just above); don't re-run it on re-entry.
+			_verifierPreflightDone: true,
 			// The workspace override applies only to THIS flow phase, not to the
 			// nested sub-phases (each resolves its own cwd). Clear it so the child
 			// phases don't all inherit this phase's isolated dir as an override.
@@ -4225,6 +4276,30 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 					"Use budget.maxTokens or a host with cost accounting.",
 			);
 		}
+		// Top-level structural preflight (zero-token). Built-in detector findings
+		// (any severity) stay advisory at the top level — a flow may still run even
+		// with structural errors, exactly as before this seam existed. We block ONLY
+		// on error-severity issues from caller-supplied verifiers (deps.verifiers):
+		// category "plugin" is the canonical discriminator (a nameless verifier's
+		// fail-closed issue still carries it, whereas `source` would be undefined).
+		// Existing flows are unaffected and a host's trusted verifiers can gate spend
+		// before any agent is spawned. Plugin warnings never block here. SKIPPED on
+		// re-entry: a child-flow dispatch site (executePhaseInner / runInlineSubflow)
+		// already ran this gate on the child's declared def and sets
+		// _verifierPreflightDone, so we neither re-verify the same child nor re-run
+		// it against the budget-clamped child def that differs from what the
+		// dispatch site saw.
+		if (deps.verifiers?.length && !deps._verifierPreflightDone) {
+			const pluginErrors = pluginVerifierErrors(
+				{ name: def.name, phases: def.phases as Phase[], budget: def.budget, concurrency: def.concurrency },
+				deps.verifiers,
+			);
+			if (pluginErrors) {
+				throw new Error(
+					`Taskflow '${def.name}' failed verifier preflight: ${pluginErrors.join("; ")}`,
+				);
+			}
+		}
 		// S2 strangler (default OFF): all phase kinds may use the event kernel when enabled.
 		const { eventKernelEnabled, canUseEventKernel, runEventKernel } = await import("./exec/driver.ts");
 		// Existing phase state requires the imperative cache/inputHash machinery to
@@ -4247,6 +4322,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				persist: deps.persist,
 				onProgress: deps.onProgress,
 				eventKernel: deps.eventKernel,
+				verifiers: deps.verifiers,
 				requestApproval: deps.requestApproval,
 				loadFlow: deps.loadFlow,
 				_stack: deps._stack,
