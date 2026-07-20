@@ -2,6 +2,29 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.4] — 2026-07-20
+
+### Added
+
+- **Event kernel concurrent DAG layers.** The event kernel now executes phases within a topological layer concurrently via `Promise.all` with atomic layer-boundary commit. Gate and budget decisions are checked between layers, not within. This removes the single largest blocker to kernel default-ON: previously any flow with independent parallel phases (the common case) was forced to the imperative runtime.
+- **Kernel retry support.** `phase.retry = { max, backoffMs, factor }` is now honored on the event kernel path for ALL failures (not just transient errors), matching the imperative contract. Both `runOneAgent` (step.ts) and `runAgentCall` (step-kinds.ts) implement the full retry curve with budget-aware admission.
+- **Kernel context pre-read.** `phase.context` files are now read and prepended to the prompt as `<context file="...">` blocks on the event kernel path, matching the imperative runtime's `resolvePhaseContext` behavior.
+- **Kernel per-phase literal cwd.** Literal string `phase.cwd` values (absolute or relative to the flow cwd) are now resolved and passed to `runTask` on the event kernel path. Interpolation placeholder cwds (`{args.*}`, `{steps.*}`) and workspace keywords (`temp`/`dedicated`/`worktree`) remain imperative-only.
+- **Built-in script-lint verifier.** New `scriptLintVerifier` (exported from `taskflow-core/verifiers`) statically analyzes `script` phase `run` commands for common shell mistakes: `grep` patterns starting with `-` without a `--` separator, unbalanced regex brackets/parens in `grep`/`sed`, and pipelines ending with a filter (`grep`/`awk`/`head`/`tail`/`wc`/`sort`) without `set -o pipefail` or `PIPESTATUS`. Auto-included by `compileTaskflow` (opt out with `lint: false`). Motivated by issue #82.
+- **Verifier discovery.** New `discoverVerifiers(cwd)` API loads project-local verifiers from `.pi/taskflows/verifiers/` (project scope, shadows user) and `~/.pi/taskflows/verifiers/` (user scope). Each `.ts`/`.js`/`.mjs` file is dynamically imported; default, `verifier`, and `verifiers` exports are collected. Fail-open: broken modules are skipped with a warning. Convention over configuration — no config file needed.
+- **MCP `taskflow_lint` tool.** The 17th MCP tool. Runs built-in and discovered pluggable verifiers on a flow without executing it. Exposes the verifier ecosystem to all MCP hosts (Codex, Claude Code, OpenCode, Grok Build). Provide `name`, `define`, or `defineFile`.
+- **Compile subgraph visualization.** Inline flow definitions (`phase.def`) now render as Mermaid `subgraph` blocks showing child phases and their dependency edges. Saved-use flows (`phase.use`) remain plain nodes. The subgraph title shows the child flow's name.
+- **S5.0 kernel parity harness.** New `kernel-parity.test.ts`: 10 golden fixture flows run on BOTH engines (imperative + event kernel) with a deterministic mock runner, asserting status, per-phase output, error, and gate-decision parity. Covers: linear chain, concurrent independent agents, gate, reduce, when-guard skip, join-any with optional dep, script, loop, three-layer wide DAG, and retry. This is the differential gate that must stay green before the kernel can be flipped to default ON (S5.2).
+
+### Changed
+
+- **MCP tool count is now 17.** `taskflow_lint` joins the existing 16 tools. Marketplace metadata, host adapter tool-roster tests, and skill discovery assertions are synchronized.
+- **Kernel admission expanded.** `canUseEventKernel` now admits flows with: concurrent DAG layers, explicit `retry`, `context` pre-read, and literal per-phase `cwd`. Remaining imperative-only features: `score` gates, `reflexion`, `onBlock:retry`, `reduceStrategy:"tree"`, cross-run cache, `shareContext`, per-branch cwd, script stdin input, interpolated script argv, budgeted fan-out, and budgeted loop/tournament.
+
+### Fixed
+
+- **Gate parity normalization.** The kernel parity harness normalizes gate objects to strip `reason: undefined` vs absent-key serialization differences between the two engines.
+
 ## [0.2.3] — 2026-07-18
 
 ### Added
