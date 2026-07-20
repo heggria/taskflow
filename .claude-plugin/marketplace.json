@@ -10,14 +10,14 @@
   "plugins": [
     {
       "name": "taskflow",
-      "description": "Multi-phase subagent orchestration for Codex: 16 taskflow_* MCP tools (run/runs/resume/version/list/show/verify/compile/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. Background runs support status/wait/cancel; compile returns SVG + text outline. The server runs via npx (codex-taskflow).",
+      "description": "Multi-phase subagent orchestration for Codex: 17 taskflow_* MCP tools (run/runs/resume/version/list/show/verify/compile/lint/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. Background runs support status/wait/cancel; compile returns SVG + text outline. The server runs via npx (codex-taskflow).",
       "source": "./packages/codex-taskflow/plugin",
       "category": "developer-tools",
       "homepage": "https://github.com/heggria/taskflow"
     },
     {
       "name": "claude-taskflow",
-      "description": "Multi-phase subagent orchestration for Claude Code: 16 taskflow_* MCP tools (run/runs/resume/version/list/show/verify/compile/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. Background runs support status/wait/cancel; compile returns SVG + text outline. The server runs via npx (claude-taskflow).",
+      "description": "Multi-phase subagent orchestration for Claude Code: 17 taskflow_* MCP tools (run/runs/resume/version/list/show/verify/compile/lint/peek/trace/replay/why_stale/recompute/reconcile_workspace/save/search) plus a routing skill. Background runs support status/wait/cancel; compile returns SVG + text outline. The server runs via npx (claude-taskflow).",
       "source": "./packages/claude-taskflow/plugin",
       "category": "developer-tools",
       "homepage": "https://github.com/heggria/taskflow"

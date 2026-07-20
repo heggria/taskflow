@@ -816,9 +816,10 @@ test("runtime: an event-kernel child with a built-in error-severity issue is scr
 		],
 	};
 	assert.equal(verifyTaskflow(unreachableChild).ok, false, "the child carries an error-severity built-in (unreachable)");
-	// canUseEventKernel recurses into nested inline defs: the unreachable child's
-	// concurrent DAG layers make the PARENT kernel-ineligible, so the whole run
-	// takes the imperative path — where the built-in detectors still run.
+	// Since 0.2.4, concurrent DAG layers are supported on the kernel, so the
+	// unreachable child's concurrent layers no longer make the parent
+	// kernel-ineligible. The child IS kernel-eligible (unreachable is a
+	// verify-time concern, not a kernel admission concern).
 	const parent: Taskflow = { name: "parent", phases: [{ id: "run-child", type: "flow", def: unreachableChild, final: true }] };
-	assert.equal(canUseEventKernel(parent), false, "nesting an unreachable child makes the flow kernel-ineligible");
+	assert.equal(canUseEventKernel(parent), true, "concurrent layers are now kernel-eligible (0.2.4)");
 });

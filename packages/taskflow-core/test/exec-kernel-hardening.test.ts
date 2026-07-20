@@ -63,12 +63,12 @@ test("feature fall-back: score gate refuses kernel", () => {
 	assert.match(kernelUnsupportedReason(def) ?? "", /score/);
 });
 
-test("feature fall-back: retry refuses kernel", () => {
+test("feature: retry is now admitted on the kernel (0.2.4)", () => {
 	const def: Taskflow = {
 		name: "r",
 		phases: [{ id: "a", type: "agent", agent: "a", task: "t", retry: { max: 2 }, final: true }],
 	};
-	assert.equal(canUseEventKernel(def), false);
+	assert.equal(canUseEventKernel(def), true, "retry is supported on the kernel since 0.2.4");
 });
 
 test("budget: second phase skipped after cost cap on kernel", async () => {

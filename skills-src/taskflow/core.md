@@ -140,6 +140,7 @@ For a non-trivial flow you'll iterate on, **write the definition to a file**
 // 2. verify, iterate, run — all reference the SAME file by path:
 { "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
 { "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
+{ "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers
 { "name": "taskflow_run",    "arguments": { "defineFile": "/tmp/audit.json" } }
 ```
 <!-- /host:codex,claude,opencode,grok -->

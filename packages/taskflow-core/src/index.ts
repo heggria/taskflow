@@ -57,3 +57,4 @@ export * from "./trace.ts";
 export * from "./deterministic.ts";
 export * from "./replay.ts";
 export * from "./exec/index.ts";
+export * from "./verifiers/index.ts";
