@@ -73,10 +73,15 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 			return `phase '${id}': reduceStrategy 'tree' requires the imperative runtime`;
 		}
 		// Explicit multi-attempt retry: now supported on the kernel path (0.2.4).
-		// The retry curve is handled in step-kinds.ts runAgentCall.
+		// The retry curve is handled in step.ts runOneAgent and step-kinds.ts
+		// runAgentCall.
 
-		// expect contracts: now supported on the kernel path (0.2.4).
-		// Contract checks run after the agent call in step-kinds.ts.
+		// expect contracts remain imperative-only (0.2.4): the contract-violation
+		// retry loop (contractViolations + runOne integration) is not yet ported
+		// to the kernel step handlers.
+		if (p.expect !== undefined) {
+			return `phase '${id}': expect contracts require the imperative runtime`;
+		}
 		if (p.cache && typeof p.cache === "object") {
 			const scope = (p.cache as { scope?: string }).scope;
 			if (scope === "cross-run") {

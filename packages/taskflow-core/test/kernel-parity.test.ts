@@ -226,3 +226,18 @@ test("parity: retry on kernel matches imperative", async () => {
 		],
 	});
 });
+
+test("parity: gate in a concurrent layer blocks the next layer on both engines", async () => {
+	// A gate and an independent agent share a layer. The gate passes, so the
+	// next layer should run. This tests that concurrent-layer commit correctly
+	// propagates gate decisions to subsequent layers.
+	await assertParity({
+		name: "gate-concurrent",
+		phases: [
+			{ id: "work", type: "agent", agent: "a", task: "do work" },
+			{ id: "side", type: "agent", agent: "b", task: "independent" },
+			{ id: "check", type: "gate", agent: "b", task: "Review. VERDICT: PASS or BLOCK", dependsOn: ["work", "side"] },
+			{ id: "report", type: "agent", agent: "a", task: "summarize", dependsOn: ["check"], final: true },
+		],
+	});
+});

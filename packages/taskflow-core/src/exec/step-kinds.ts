@@ -7,6 +7,8 @@
  */
 
 import type { Phase, Taskflow } from "../schema.ts";
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import {
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	LOOP_HARD_MAX_ITERATIONS,
@@ -84,9 +86,7 @@ async function runAgentCall(
 		for (const file of phase.context) {
 			if (typeof file !== "string") continue;
 			try {
-				const { readFileSync } = await import("node:fs");
-				const { resolve } = await import("node:path");
-				const filePath = resolve(effCwd, file);
+				const filePath = resolvePath(effCwd, file);
 				const content = readFileSync(filePath, "utf8");
 				contextParts.push(`<context file="${file}">\n${content}\n</context>`);
 			} catch {
