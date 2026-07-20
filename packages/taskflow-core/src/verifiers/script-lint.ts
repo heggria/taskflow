@@ -107,10 +107,18 @@ function splitPipeline(cmd: string): string[] {
 
 const GREP_COMMANDS = new Set(["grep", "egrep", "fgrep", "rg", "ag"]);
 
+/** Strip a directory path prefix from a command name using linear-time
+ *  lastIndexOf instead of a regex (avoids CodeQL ReDoS alert). */
+function stripPathPrefix(token: string | undefined): string | undefined {
+	if (!token) return undefined;
+	const idx = token.lastIndexOf("/");
+	return idx >= 0 ? token.slice(idx + 1) : token;
+}
+
 /** Check if a grep-like command has a pattern starting with `-` without a `--`
  *  separator before it. */
 function checkGrepDashPattern(tokens: string[]): string | undefined {
-	const cmdName = tokens[0]?.replace(/.*\//, ""); // strip path prefix
+	const cmdName = stripPathPrefix(tokens[0]);
 	if (!cmdName || !GREP_COMMANDS.has(cmdName)) return undefined;
 
 	let sawDoubleDash = false;
@@ -140,7 +148,7 @@ function checkGrepDashPattern(tokens: string[]): string | undefined {
 
 /** Check for obviously unbalanced regex in grep/sed patterns. */
 function checkUnbalancedRegex(tokens: string[]): string | undefined {
-	const cmdName = tokens[0]?.replace(/.*\//, "");
+	const cmdName = stripPathPrefix(tokens[0]);
 	if (!cmdName) return undefined;
 
 	let pattern: string | undefined;
@@ -228,7 +236,7 @@ function checkPipefail(cmd: string, segments: string[]): string | undefined {
 
 	const lastSegment = segments[segments.length - 1];
 	const lastTokens = tokenize(lastSegment);
-	const lastCmd = lastTokens[0]?.replace(/.*\//, "");
+	const lastCmd = stripPathPrefix(lastTokens[0]);
 
 	// Only flag when the last command is a filter (grep/awk/head/tail/wc/sort).
 	const FILTER_COMMANDS = new Set(["grep", "egrep", "fgrep", "rg", "ag", "awk", "head", "tail", "wc", "sort", "uniq"]);
@@ -240,7 +248,7 @@ function checkPipefail(cmd: string, segments: string[]): string | undefined {
 	if (/pipefail/.test(cmd)) return undefined;
 
 	// Check if the script uses `bash -o pipefail` or similar.
-	if (/bash\s+.*-o\s+pipefail/.test(cmd)) return undefined;
+	if (cmd.includes("-o") && cmd.includes("pipefail") && cmd.includes("bash")) return undefined;
 
 	return `pipeline ends with '${lastCmd}' but has no 'set -o pipefail' or PIPESTATUS check — a failing upstream command will be masked by the filter's exit code`;
 }
