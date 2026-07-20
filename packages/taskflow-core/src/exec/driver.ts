@@ -334,17 +334,13 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 
 	for (const layer of layers) {
 		if (deps.signal?.aborted) break;
-		for (const phase of layer) {
-			if (deps.signal?.aborted) break;
-			let skipReason: string | undefined;
-			if (gateBlocked) skipReason = `Gate blocked${gateReason ? `: ${gateReason}` : ""}`;
-			else if (budgetBlocked) skipReason = `Budget exceeded${budgetReason ? `: ${budgetReason}` : ""}`;
-			else {
-				const dep = depsSatisfied(phase, state.phases, byId);
-				if (!dep.ok) skipReason = dep.skipReason;
-			}
 
-			if (skipReason) {
+		// --- Pre-layer gate/budget check: skip the entire layer if blocked ---
+		if (gateBlocked || budgetBlocked) {
+			for (const phase of layer) {
+				const skipReason = gateBlocked
+					? `Gate blocked${gateReason ? `: ${gateReason}` : ""}`
+					: `Budget exceeded${budgetReason ? `: ${budgetReason}` : ""}`;
 				if (skipReason.startsWith("Budget exceeded")) {
 					budgetBlocked = true;
 					const be: Event = {
@@ -358,25 +354,68 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 					allEvents.push(be);
 					safeTraceEmit(deps, be);
 				}
-				const startedAt = Date.now();
 				emitLifecycle(deps, allEvents, state.runId, phase, "skipped", skipReason);
 				state.phases[phase.id] = {
 					id: phase.id,
 					status: "skipped",
 					error: skipReason,
-					startedAt,
+					startedAt: Date.now(),
 					endedAt: Date.now(),
 					usage: emptyUsage(),
 				};
-				continue;
 			}
+			continue;
+		}
 
-			const startedAt = Date.now();
-			state.phases[phase.id] = { id: phase.id, status: "running", startedAt };
-			const readRefs: string[] = [];
-			const promptCalls: string[] = [];
-			const ctx: StepContext = { state, deps: stepDeps, steps, args, readRefs, promptCalls };
-			const result = await stepPhase(phase, ctx);
+		// --- Resolve which phases in this layer can run vs must skip ---
+		interface PhasePlan {
+			phase: Phase;
+			skipReason?: string;
+		}
+		const plans: PhasePlan[] = layer.map((phase) => {
+			const dep = depsSatisfied(phase, state.phases, byId);
+			return { phase, skipReason: dep.ok ? undefined : dep.skipReason };
+		});
+
+		// Emit skips for dep-unsatisfied phases (sequential, cheap).
+		for (const { phase, skipReason } of plans) {
+			if (!skipReason) continue;
+			emitLifecycle(deps, allEvents, state.runId, phase, "skipped", skipReason);
+			state.phases[phase.id] = {
+				id: phase.id,
+				status: "skipped",
+				error: skipReason,
+				startedAt: Date.now(),
+				endedAt: Date.now(),
+				usage: emptyUsage(),
+			};
+		}
+
+		// --- Execute runnable phases concurrently within the layer ---
+		const runnable = plans.filter((p) => !p.skipReason);
+		if (runnable.length === 0) continue;
+
+		interface PhaseOutcome {
+			phase: Phase;
+			result: Awaited<ReturnType<typeof stepPhase>>;
+			startedAt: number;
+			readRefs: string[];
+			promptCalls: string[];
+		}
+
+		const outcomes = await Promise.all(
+			runnable.map(async ({ phase }): Promise<PhaseOutcome> => {
+				const startedAt = Date.now();
+				const readRefs: string[] = [];
+				const promptCalls: string[] = [];
+				const ctx: StepContext = { state, deps: stepDeps, steps, args, readRefs, promptCalls };
+				const result = await stepPhase(phase, ctx);
+				return { phase, result, startedAt, readRefs, promptCalls };
+			}),
+		);
+
+		// --- Atomic layer commit: fold all outcomes into state ---
+		for (const { phase, result, startedAt, readRefs } of outcomes) {
 			if (!result) {
 				state.phases[phase.id] = {
 					id: phase.id,
@@ -421,18 +460,13 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				approval: result.approval,
 				warnings: result.warnings,
 				...(observedReads.length ? { reads: observedReads } : {}),
-				// Prompt-size diagnostics (parity with imperative PhaseState.promptStats).
 				...(result.promptStats ? { promptStats: result.promptStats } : {}),
-				// Match the imperative audit marker: an idempotent:false phase
-				// records that its side effect may have fired, unless its guard skipped
-				// all execution.
 				...(phase.idempotent === false && result.status !== "skipped" ? { sideEffect: true as const } : {}),
 				...(result.status === "timedOut" ? { timedOut: true as const } : {}),
 			};
 			if (result.status === "done" && result.output !== undefined) {
 				steps[phase.id] = {
 					output: result.output,
-					// Always best-effort parse so {steps.X.json.field} works for JSON agents
 					json: phaseJson ?? safeParse(result.output),
 				};
 			}
@@ -442,33 +476,37 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				gateOutput = result.output ?? "";
 				gatePhaseId = phase.id;
 			}
-			const ob = runOverBudget(state);
-			if (ob.over) {
-				budgetBlocked = true;
-				budgetReason = ob.reason;
-				const be: Event = {
-					v: EVENT_SCHEMA_VERSION,
-					ts: Date.now(),
-					runId: state.runId,
-					phaseId: phase.id,
-					kind: "decision",
-					decision: { type: "budget-hit", value: "budget", reason: ob.reason },
-				};
-				allEvents.push(be);
-				safeTraceEmit(deps, be);
-				// stepPhase already flushed this phase's lifecycle batch.
-				safeTraceFlush(deps, phase.id);
-			}
-			try {
-				deps.persist?.(state);
-			} catch {
-				/* fail-open */
-			}
-			try {
-				deps.onProgress?.(state);
-			} catch {
-				/* fail-open */
-			}
+		}
+
+		// --- Post-layer budget check ---
+		const ob = runOverBudget(state);
+		if (ob.over) {
+			budgetBlocked = true;
+			budgetReason = ob.reason;
+			// Attribute the budget-hit to the last phase in the layer.
+			const lastPhase = layer[layer.length - 1];
+			const be: Event = {
+				v: EVENT_SCHEMA_VERSION,
+				ts: Date.now(),
+				runId: state.runId,
+				phaseId: lastPhase.id,
+				kind: "decision",
+				decision: { type: "budget-hit", value: "budget", reason: ob.reason },
+			};
+			allEvents.push(be);
+			safeTraceEmit(deps, be);
+			safeTraceFlush(deps, lastPhase.id);
+		}
+
+		try {
+			deps.persist?.(state);
+		} catch {
+			/* fail-open */
+		}
+		try {
+			deps.onProgress?.(state);
+		} catch {
+			/* fail-open */
 		}
 	}
 

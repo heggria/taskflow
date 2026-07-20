@@ -7,6 +7,8 @@
  */
 
 import type { Phase, Taskflow } from "../schema.ts";
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import {
 	LOOP_DEFAULT_MAX_ITERATIONS,
 	LOOP_HARD_MAX_ITERATIONS,
@@ -67,9 +69,48 @@ async function runAgentCall(
 		typeof phase.timeout === "number" && Number.isFinite(phase.timeout) && phase.timeout >= 1000
 			? phase.timeout
 			: undefined;
+
+	// --- Per-phase cwd resolution (0.2.4) ---
+	// A literal string cwd is resolved relative to the flow cwd. Workspace
+	// keywords (temp/dedicated/worktree) remain imperative-only.
+	const effCwd = typeof phase.cwd === "string" && !/^(temp|dedicated|worktree)$/.test(phase.cwd)
+		? (phase.cwd.startsWith("/") ? phase.cwd : `${ctx.deps.cwd}/${phase.cwd}`)
+		: ctx.deps.cwd;
+
+	// --- Context pre-read (0.2.4) ---
+	// Read context files and prepend them to the task prompt, matching the
+	// imperative runtime's resolvePhaseContext behavior.
+	let effectiveTask = task;
+	if (Array.isArray(phase.context) && phase.context.length > 0) {
+		const contextParts: string[] = [];
+		for (const file of phase.context) {
+			if (typeof file !== "string") continue;
+			try {
+				const filePath = resolvePath(effCwd, file);
+				const content = readFileSync(filePath, "utf8");
+				contextParts.push(`<context file="${file}">\n${content}\n</context>`);
+			} catch {
+				contextParts.push(`<context file="${file}">\n[file not found or unreadable]\n</context>`);
+			}
+		}
+		if (contextParts.length > 0) {
+			effectiveTask = `${contextParts.join("\n\n")}\n\n${task}`;
+		}
+	}
+
+	// --- Explicit retry support (0.2.4) ---
+	// The imperative runtime supports phase.retry = { max, backoffMs, factor }.
+	// The kernel previously only did transient-error retries (up to 4 attempts).
+	// Now we honor the declared retry.max for ALL failures (not just transient),
+	// matching the imperative contract.
+	const retryMax = phase.retry && typeof phase.retry === "object" ? (phase.retry.max ?? 0) : 0;
+	const retryBackoffMs = phase.retry && typeof phase.retry === "object" ? (phase.retry.backoffMs ?? 2000) : 2000;
+	const retryFactor = phase.retry && typeof phase.retry === "object" ? (phase.retry.factor ?? 2) : 2;
+	const maxAttempts = Math.max(4, retryMax + 1); // at least 4 for transient retries
+
 	const usages: UsageStats[] = [];
 	let r: RunResult | undefined;
-	for (let attempt = 0; attempt < 4; attempt++) {
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
 		if (ctx.deps.signal?.aborted) break;
 		let timedOut = false;
 		let terminalCommitted = false;
@@ -97,17 +138,17 @@ async function runAgentCall(
 					timer = undefined;
 				}
 			};
-			ctx.promptCalls?.push(task);
+			ctx.promptCalls?.push(effectiveTask);
 			const invocation = ctx.deps.runTask(
-				ctx.deps.cwd,
+				effCwd,
 				ctx.deps.agents,
 				agentName,
-				task,
+				effectiveTask,
 				{
 					model: phase.model,
 					thinking: phase.thinking,
 					tools: phase.tools,
-					cwd: ctx.deps.cwd,
+					cwd: effCwd,
 					signal: callSignal,
 					idleTimeoutMs: resolveIdleMs(phase, ctx.state.def),
 					onTerminalCommit,
@@ -122,7 +163,7 @@ async function runAgentCall(
 						timeoutController?.abort();
 						forceReturnTimer = setTimeout(() => resolve({
 							agent: agentName,
-							task,
+							task: effectiveTask,
 							exitCode: 1,
 							output: "",
 							stderr: "",
@@ -156,8 +197,13 @@ async function runAgentCall(
 		usages.push(r.usage ? { ...emptyUsage(), ...r.usage } : emptyUsage());
 		if (!isFailedResult(r)) break;
 		if (kernelAttemptsOverBudget(ctx.state, phase.id, usages)) break;
-		if (r.phaseTimeout || phase.idempotent === false || !isTransientError(r) || attempt >= 3) break;
-		const wait = Math.min(60_000, (phase.retry?.backoffMs ?? 2_000) * 2 ** attempt);
+		if (r.phaseTimeout || phase.idempotent === false) break;
+		// Explicit retry: retry ALL failures up to retryMax, not just transient.
+		const isTransient = isTransientError(r);
+		const withinExplicitRetry = attempt < retryMax;
+		const withinTransientRetry = isTransient && attempt < 3;
+		if (!withinExplicitRetry && !withinTransientRetry) break;
+		const wait = Math.min(60_000, retryBackoffMs * retryFactor ** attempt);
 		await abortableDelay(wait, ctx.deps.signal);
 	}
 	if (!r) {

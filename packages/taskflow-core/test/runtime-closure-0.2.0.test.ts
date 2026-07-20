@@ -54,22 +54,10 @@ function ok(agent: string, task: string, output = "ok", cost = 0): RunResult {
 
 test("kernel admission safely falls back for every currently unsupported semantic", () => {
 	const cases: Array<[Taskflow, RegExp]> = [
-		[{ name: "cwd", phases: [{ id: "p", task: "x", cwd: "/tmp", final: true }] }, /cwd/],
-		[{ name: "ctx", phases: [{ id: "p", task: "x", context: ["a.txt"], final: true }] }, /context/],
 		[{ name: "stdin", phases: [{ id: "p", type: "script", run: ["cat"], input: "x", final: true }] }, /stdin/],
 		[
 			{ name: "argv", phases: [{ id: "p", type: "script", run: ["echo", "{args.x}"], final: true }] },
 			/argv/,
-		],
-		[
-			{
-				name: "layer",
-				phases: [
-					{ id: "a", task: "a" },
-					{ id: "b", task: "b", final: true },
-				],
-			},
-			/concurrent DAG layers/,
 		],
 		[
 			{
@@ -84,6 +72,19 @@ test("kernel admission safely falls back for every currently unsupported semanti
 		assert.equal(canUseEventKernel(def), false, def.name);
 		assert.match(kernelUnsupportedReason(def) ?? "", reason, def.name);
 	}
+});
+
+test("kernel admission: cwd, context, and concurrent layers are now supported (0.2.4)", () => {
+	// These previously forced imperative fallback; now admitted on the kernel.
+	assert.equal(canUseEventKernel({ name: "cwd", phases: [{ id: "p", task: "x", cwd: "/tmp", final: true }] }), true);
+	assert.equal(canUseEventKernel({ name: "ctx", phases: [{ id: "p", task: "x", context: ["a.txt"], final: true }] }), true);
+	assert.equal(canUseEventKernel({
+		name: "layer",
+		phases: [
+			{ id: "a", task: "a" },
+			{ id: "b", task: "b", final: true },
+		],
+	}), true);
 });
 
 test("kernel placeholder detection is linear and distinguishes static JSON", () => {

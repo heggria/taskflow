@@ -206,6 +206,56 @@ overrides, ordinary resume re-runs the non-done phases.
 
 ---
 
+## Pluggable verifiers — zero-token custom static checks
+
+Beyond the built-in structural detectors (dead-ends, unreachable, gate-exhaustion,
+budget-overflow, concurrency, ref-integrity, guard-contradictions, contracts),
+Taskflow supports **pluggable verifiers**: pure functions that lint a flow's
+declarations at compile time, before any model is spawned.
+
+### Built-in: script-lint
+
+`compileTaskflow` auto-includes the **script-lint** verifier (opt out with
+`lint: false`). It catches common shell mistakes in `script` phase `run`
+commands:
+
+- `grep` pattern starting with `-` without a `--` separator (exit 2, false RED)
+- Unbalanced `[` or `(` in `grep`/`sed` regex (exit 2)
+- Pipeline ending with a filter (`grep`/`awk`/`head`/`tail`/`wc`/`sort`)
+  without `set -o pipefail` or `PIPESTATUS` (failing upstream masked)
+
+### Custom verifiers (convention dir)
+
+Drop a `.ts`/`.js`/`.mjs` file in `.pi/taskflows/verifiers/` (project) or
+`~/.pi/taskflows/verifiers/` (user). Export a `TaskflowVerifier`:
+
+```ts
+export default {
+  name: "my-check",
+  verify(flow) {
+    // flow.phases, flow.budget, flow.name are available.
+    // Return VerifierIssue[]: { phaseId?, message, severity: "error"|"warning" }.
+    return [];
+  },
+};
+```
+
+Project-scope verifiers shadow user-scope by `name`. Broken modules are
+skipped with a warning (fail-open). Use `taskflow_lint` (MCP) or
+`verifyTaskflow(flow, { verifiers })` (programmatic) to run them.
+
+### MCP: `taskflow_lint`
+
+```
+taskflow_lint { "defineFile": "/tmp/flow.json" }
+```
+
+Runs built-in + discovered verifiers. Plugin issues are stamped
+`category: "plugin"` with `source: <verifier-name>`. Structural issues
+are covered by `taskflow_verify`; `taskflow_lint` reports only plugin findings.
+
+---
+
 ## `taskflow_version` — build/host identity
 
 `taskflow_version` reports the engine package version, the git commit the dist

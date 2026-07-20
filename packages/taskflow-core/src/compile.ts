@@ -21,6 +21,7 @@ import {
 	TOURNAMENT_DEFAULT_VARIANTS,
 } from "./schema.ts";
 import { verifyTaskflow, type TaskflowVerifier, type VerificationIssue, type VerificationResult } from "./verify.ts";
+import { scriptLintVerifier } from "./verifiers/script-lint.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +44,10 @@ export interface CompileOptions {
 	/** Caller-supplied verifiers forwarded into `verifyTaskflow`; their issues
 	 *  overlay on the Mermaid diagram + report exactly like built-in issues. */
 	verifiers?: TaskflowVerifier[];
+	/** Include the built-in script-lint verifier. Default `true`. Set `false`
+	 *  to disable (e.g. when the host registers its own verifiers and wants
+	 *  full control). */
+	lint?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +177,29 @@ function typeTag(p: Phase): string {
 	}
 }
 
+/** Extract an inline flow definition from a flow phase's `def` field (0.2.4
+ *  subgraph rendering). Returns undefined for saved-use flows or unparseable
+ *  defs. */
+function extractInlineDef(p: Phase): { name?: string; phases?: Phase[] } | undefined {
+	const raw = (p as { def?: unknown }).def;
+	if (!raw) return undefined;
+	if (typeof raw === "string") {
+		try {
+			const parsed = JSON.parse(raw) as unknown;
+			if (Array.isArray(parsed)) return { phases: parsed as Phase[] };
+			if (parsed && typeof parsed === "object" && Array.isArray((parsed as { phases?: unknown }).phases)) {
+				return parsed as { name?: string; phases?: Phase[] };
+			}
+		} catch { return undefined; }
+		return undefined;
+	}
+	if (Array.isArray(raw)) return { phases: raw as Phase[] };
+	if (raw && typeof raw === "object" && Array.isArray((raw as { phases?: unknown }).phases)) {
+		return raw as { name?: string; phases?: Phase[] };
+	}
+	return undefined;
+}
+
 /** The body text inside a node: id, type tag, a task summary, agent. */
 function nodeBody(p: Phase): string {
 	const lines: string[] = [];
@@ -292,8 +320,25 @@ function buildMermaid(flow: Taskflow, verification: VerificationResult, opts: Co
 	const lines: string[] = [];
 	lines.push(`flowchart ${dir}`);
 
-	// Nodes
-	for (const p of phases) lines.push(`\t${nodeShape(p, idMap)}`);
+	// Nodes — flow phases with inline defs get a subgraph (0.2.4).
+	for (const p of phases) {
+		const childDef = (p.type ?? "agent") === "flow"
+			? extractInlineDef(p)
+			: undefined;
+		if (childDef && Array.isArray(childDef.phases) && childDef.phases.length > 0) {
+			const subId = idMap.get(p.id) ?? p.id;
+			lines.push(`\tsubgraph ${subId} ["${label(p.id)}: ${mdInline(childDef.name ?? p.use ?? "flow")}"]`);
+			const childIdMap = buildNodeIds(childDef.phases as Phase[]);
+			for (const cp of childDef.phases as Phase[]) {
+				lines.push(`\t\t${nodeShape(cp, childIdMap)}`);
+			}
+			const childEdges = edges(childDef.phases as Phase[], childIdMap);
+			for (const ce of childEdges) lines.push(`\t\t${ce}`);
+			lines.push("\tend");
+		} else {
+			lines.push(`\t${nodeShape(p, idMap)}`);
+		}
+	}
 
 	// Edges
 	const e = edges(phases, idMap);
@@ -381,6 +426,11 @@ function buildReport(flow: Taskflow, verification: VerificationResult): string {
  * report. Pure function — zero tokens, no LLM, no I/O.
  */
 export function compileTaskflow(flow: Taskflow, opts: CompileOptions = {}): CompileResult {
+	// Merge built-in script-lint (default ON) with caller-supplied verifiers.
+	const verifiers: TaskflowVerifier[] = [];
+	if (opts.lint !== false) verifiers.push(scriptLintVerifier);
+	if (opts.verifiers) verifiers.push(...opts.verifiers);
+
 	const verification = verifyTaskflow(
 		{
 			name: flow.name ?? "taskflow",
@@ -388,7 +438,7 @@ export function compileTaskflow(flow: Taskflow, opts: CompileOptions = {}): Comp
 			budget: flow.budget,
 			concurrency: flow.concurrency,
 		},
-		{ verifiers: opts.verifiers },
+		{ verifiers: verifiers.length ? verifiers : undefined },
 	);
 
 	const mermaid = buildMermaid(flow, verification, opts);

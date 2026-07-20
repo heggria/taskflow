@@ -31,7 +31,7 @@ test("release discovery metadata advertises the complete MCP surface", async () 
 	const { readFileSync } = await import("node:fs");
 	for (const file of [".claude-plugin/marketplace.json", ".grok-plugin/marketplace.json"]) {
 		const text = readFileSync(path.join(root, file), "utf8");
-		assert.match(text, /16 taskflow_\* MCP tools/);
+		assert.match(text, /17 taskflow_\* MCP tools/);
 		assert.match(text, /run\/runs\/resume\/version\/list/);
 	}
 	const piSource = readFileSync(path.join(root, "packages", "pi-taskflow", "src", "index.ts"), "utf8");
