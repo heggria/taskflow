@@ -381,3 +381,42 @@ test("compile: a cyclic dependency graph renders back-edges without crashing", (
 	assert.match(r.mermaid, /x --> y/);
 	assert.match(r.mermaid, /y --> x/);
 });
+
+// ---------------------------------------------------------------------------
+// 0.2.4: subgraph rendering for inline flow defs
+// ---------------------------------------------------------------------------
+
+test("compile: inline flow def renders as a Mermaid subgraph", () => {
+	const tf: Taskflow = {
+		name: "parent",
+		phases: [
+			{
+				id: "nested",
+				type: "flow",
+				def: {
+					name: "child",
+					phases: [
+						{ id: "c1", type: "agent", task: "step one" },
+						{ id: "c2", type: "agent", task: "step two", dependsOn: ["c1"] },
+					],
+				},
+				final: true,
+			},
+		],
+	};
+	const r = compileTaskflow(tf);
+	assert.match(r.mermaid, /subgraph nested/, "inline flow renders as a subgraph");
+	assert.match(r.mermaid, /c1/, "child phase c1 appears inside the subgraph");
+	assert.match(r.mermaid, /c2/, "child phase c2 appears inside the subgraph");
+	assert.match(r.mermaid, /end/, "subgraph is closed");
+});
+
+test("compile: saved-use flow (no def) does NOT render as a subgraph", () => {
+	const tf: Taskflow = {
+		name: "parent",
+		phases: [{ id: "saved", type: "flow", use: "my-saved-flow", final: true }],
+	};
+	const r = compileTaskflow(tf);
+	assert.doesNotMatch(r.mermaid, /subgraph/, "saved-use flow is a plain node");
+	assert.match(r.mermaid, /my-saved-flow/, "use name appears in the node label");
+});

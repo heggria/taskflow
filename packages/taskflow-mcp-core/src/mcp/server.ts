@@ -88,6 +88,7 @@ import {
 } from "taskflow-core";
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import { getBuildInfo, type BuildInfo } from "taskflow-core";
+import { builtinVerifiers, discoverVerifiers } from "taskflow-core";
 import { forkRunForResume, validateResumeRequest, type ResumeOverrides } from "taskflow-core";
 import {
 	runsDir,
@@ -511,6 +512,20 @@ const TOOLS: McpTool[] = [
 				name: { type: "string" },
 				define: { type: "object" },
 				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file. See taskflow_run.defineFile." },
+			},
+		},
+	},
+	{
+		name: "taskflow_lint",
+		title: "Lint a taskflow with pluggable verifiers",
+		description: "Run built-in and project-local pluggable verifiers (script-lint, custom checks) on a flow WITHOUT executing it. Discovers verifiers from .pi/taskflows/verifiers/. Provide `name`, `define`, or `defineFile`.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				name: { type: "string" },
+				define: { type: "object" },
+				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file." },
 			},
 		},
 	},
@@ -1292,6 +1307,45 @@ export function makeToolHandlers(
 			const svg = renderFlowSvg(def, mergedVerification);
 			if (svg) return imageContent(svgToBase64(svg), "image/svg+xml", [textReport], !passed);
 			return textContent(textReport, !passed);
+		},
+
+		taskflow_lint: async (args) => {
+			const def = resolveFlow(cwd, args);
+			const val = validateTaskflow(def);
+			const phasesIterable = Array.isArray((def as { phases?: unknown }).phases);
+			if (!phasesIterable) {
+				const { errorCount, warningCount, text } = issueBlocks([], val.errors, val.warnings);
+				return textContent(`✗ lint FAILED — flow is not lintable (phases not an array)${text}`, true);
+			}
+			// Discover project-local verifiers (fail-open).
+			const discovered = await discoverVerifiers(cwd);
+			const verifiers = [...builtinVerifiers, ...discovered.verifiers];
+			const result = verifyTaskflow(def as Parameters<typeof verifyTaskflow>[0], { verifiers });
+			// Filter to plugin-category issues only (built-in structural issues
+			// are covered by taskflow_verify).
+			const pluginIssues = result.issues.filter((i) => i.category === "plugin");
+			const errorCount = pluginIssues.filter((i) => i.severity === "error").length;
+			const warningCount = pluginIssues.filter((i) => i.severity === "warning").length;
+			const passed = errorCount === 0;
+			const head = passed
+				? warningCount
+					? `✓ lint PASSED — ${count(warningCount, "warning")}`
+					: "✓ lint PASSED — no issues"
+				: `✗ lint FAILED — ${count(errorCount, "error")}, ${count(warningCount, "warning")}`;
+			const lines: string[] = [head];
+			if (discovered.verifiers.length > 0) {
+				lines.push(`Verifiers: ${[...builtinVerifiers, ...discovered.verifiers].map((v) => v.name).join(", ")}`);
+			}
+			if (discovered.warnings.length > 0) {
+				lines.push(`Discovery warnings: ${discovered.warnings.join("; ")}`);
+			}
+			for (const issue of pluginIssues) {
+				const icon = issue.severity === "error" ? "✗" : "⚠";
+				const loc = issue.phaseId ? ` [${issue.phaseId}]` : "";
+				const src = issue.source ? ` (${issue.source})` : "";
+				lines.push(`  ${icon}${loc}${src} ${issue.message}`);
+			}
+			return textContent(lines.join("\n"), !passed);
 		},
 
 		taskflow_version: async () => {

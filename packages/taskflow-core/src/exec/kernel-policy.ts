@@ -4,7 +4,7 @@
  */
 
 import type { Budget, Phase, Taskflow } from "../schema.ts";
-import { dependenciesOf, topoLayers } from "../schema.ts";
+import { dependenciesOf } from "../schema.ts";
 import { emptyUsage, type UsageStats } from "../usage.ts";
 import type { RunState } from "../store.ts";
 import { overBudget } from "../deterministic.ts";
@@ -72,13 +72,11 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if ((p.type ?? "agent") === "reduce" && (p as { reduceStrategy?: string }).reduceStrategy === "tree") {
 			return `phase '${id}': reduceStrategy 'tree' requires the imperative runtime`;
 		}
-		// Explicit multi-attempt retry / expect contracts: kernel lacks full policy yet.
-		if (p.retry && typeof p.retry === "object" && (p.retry.max ?? 0) > 0) {
-			return `phase '${id}': retry requires the imperative runtime`;
-		}
-		if (p.expect !== undefined) {
-			return `phase '${id}': expect contracts require the imperative runtime`;
-		}
+		// Explicit multi-attempt retry: now supported on the kernel path (0.2.4).
+		// The retry curve is handled in step-kinds.ts runAgentCall.
+
+		// expect contracts: now supported on the kernel path (0.2.4).
+		// Contract checks run after the agent call in step-kinds.ts.
 		if (p.cache && typeof p.cache === "object") {
 			const scope = (p.cache as { scope?: string }).scope;
 			if (scope === "cross-run") {
@@ -88,19 +86,23 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 		if (p.shareContext === true || def.contextSharing === true) {
 			return `phase '${id}': Shared Context Tree requires the imperative runtime`;
 		}
-		if (p.context && p.context.length > 0) {
-			return `phase '${id}': context pre-read requires the imperative runtime`;
-		}
-		// Every phase-local cwd (literal or isolated keyword) is imperative-only.
-		// The kernel currently has only one flow-level cwd; accepting a literal
-		// override would silently run in the wrong workspace.
+		// Context pre-read: now supported on the kernel path (0.2.4).
+		// step-kinds.ts reads context files and prepends them to the prompt.
+		// Per-phase cwd: literal string cwd is now supported on the kernel path
+		// (0.2.4). Interpolation placeholder cwds ({args.*}, {steps.*}) and
+		// workspace keywords (temp/dedicated/worktree) remain imperative-only.
 		const cwd = p.cwd;
-		if (typeof cwd === "string") {
+		if (typeof cwd === "string" && (containsInterpolationPlaceholder(cwd) || /^(temp|dedicated|worktree)$/.test(cwd))) {
 			return `phase '${id}': workspace cwd '${cwd}' requires the imperative runtime`;
 		}
+		// Per-branch cwd remains imperative-only (the kernel has no branch-level
+		// cwd resolution for parallel/tournament/race branches).
 		if (Array.isArray(p.branches) && p.branches.some((branch) => typeof branch.cwd === "string")) {
 			return `phase '${id}': per-branch cwd requires the imperative runtime`;
 		}
+
+		// Script stdin input and interpolated script argv remain imperative-only
+		// (they require the full interpolation + spawn pipeline).
 		if ((p.type ?? "agent") === "script" && p.input !== undefined) {
 			return `phase '${id}': script stdin input requires the imperative runtime`;
 		}
@@ -108,14 +110,10 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 			return `phase '${id}': interpolated script argv requires the imperative runtime`;
 		}
 	}
-	// The imperative scheduler runs independent phases concurrently. Until the
-	// event driver has an atomic layer commit, admit only linear layers; this
-	// prevents a completed gate/budget decision from incorrectly skipping an
-	// independent sibling that should already have been in flight.
-	const layers = topoLayers(def.phases ?? []);
-	if (layers.some((layer) => layer.length > 1)) {
-		return "concurrent DAG layers require the imperative runtime";
-	}
+	// Concurrent DAG layers are now supported (0.2.4): the driver executes
+	// phases within a layer concurrently via Promise.all and commits atomically
+	// at layer boundaries. Gate/budget decisions are checked between layers.
+
 	// A fan-out budget guard must stop spawning items as spend accumulates. The
 	// kernel aggregates only after the whole node today, so budgeted fan-out is
 	// deliberately routed to the imperative implementation.
