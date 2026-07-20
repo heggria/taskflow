@@ -59,7 +59,7 @@ test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -245,7 +245,7 @@ test("mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_compile", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
 	);
 });
 

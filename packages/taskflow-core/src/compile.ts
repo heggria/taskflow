@@ -322,7 +322,7 @@ function buildMermaid(flow: Taskflow, verification: VerificationResult, opts: Co
 
 	// Nodes — flow phases with inline defs get a subgraph (0.2.4).
 	for (const p of phases) {
-		const childDef = (p.type === "flow" || (p.type ?? "agent") === "flow")
+		const childDef = (p.type ?? "agent") === "flow"
 			? extractInlineDef(p)
 			: undefined;
 		if (childDef && Array.isArray(childDef.phases) && childDef.phases.length > 0) {

@@ -55,6 +55,7 @@ test("grok mcp: tools/list exposes the same taskflow tools as other hosts", asyn
 		names.sort(),
 		[
 			"taskflow_compile",
+			"taskflow_lint",
 			"taskflow_list",
 			"taskflow_peek",
 			"taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay",
@@ -100,6 +101,7 @@ test("grok mcp: makeToolHandlers exposes the tools", () => {
 		Object.keys(tools).sort(),
 		[
 			"taskflow_compile",
+			"taskflow_lint",
 			"taskflow_list",
 			"taskflow_peek",
 			"taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay",

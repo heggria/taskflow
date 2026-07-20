@@ -1314,7 +1314,7 @@ export function makeToolHandlers(
 			const val = validateTaskflow(def);
 			const phasesIterable = Array.isArray((def as { phases?: unknown }).phases);
 			if (!phasesIterable) {
-				const { errorCount, warningCount, text } = issueBlocks([], val.errors, val.warnings);
+				const { text } = issueBlocks([], val.errors, val.warnings);
 				return textContent(`✗ lint FAILED — flow is not lintable (phases not an array)${text}`, true);
 			}
 			// Discover project-local verifiers (fail-open).
