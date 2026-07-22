@@ -11,6 +11,7 @@ export * from "./grants.ts";
 export * from "./legacy-conflict.ts";
 export * from "./artifact-uri.ts";
 export * from "./mcp-route.ts";
+export * from "./compaction.ts";
 export * from "./store/project-store.ts";
 export * from "./store/registry.ts";
 export * from "./store/coordinator.ts";
