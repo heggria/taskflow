@@ -23,6 +23,23 @@ export function hashExecutionSemantic(descriptor: unknown): string {
 	return `es:${sha256Hex(stableStringify(descriptor))}`;
 }
 
+/**
+ * BoundFragment dual hashes (P7): full audit identity + execution-semantic reuse key.
+ * - boundFragmentHash (`bf:…`) — full fragment body for audit
+ * - executionSemanticHash (`es:…`) — reuse key (no blind promotedPhases restore)
+ */
+export function hashBoundFragment(fragment: unknown, meta: Record<string, unknown> = {}): {
+	boundFragmentHash: string;
+	executionSemanticHash: string;
+} {
+	const semantics = extractExecutionSemantics(fragment);
+	const body = stableStringify({ fragment, meta, semantics });
+	return {
+		boundFragmentHash: `bf:${sha256Hex(body)}`,
+		executionSemanticHash: hashExecutionSemantic({ ...semantics, meta }),
+	};
+}
+
 /** Extract timeout / provider-relevant fields from a Taskflow program for hashing. */
 export function extractExecutionSemantics(program: unknown): Record<string, unknown> {
 	if (!program || typeof program !== "object") return {};

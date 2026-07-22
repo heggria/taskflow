@@ -298,6 +298,19 @@ export interface BoundPlan {
 	grantRefs: string[];
 }
 
+/**
+ * Dynamic IR after expand/graft (P7). Dual hashes — never restore promotedPhases
+ * without re-Link / authority + executionSemanticHash equality.
+ */
+export interface BoundFragment {
+	boundFragmentHash: string;
+	executionSemanticHash: string;
+	/** Nested/grafted program fragment (immutable snapshot). */
+	fragment: unknown;
+	parentBoundPlanHash?: string;
+	createdAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency reservation record
 // ---------------------------------------------------------------------------
