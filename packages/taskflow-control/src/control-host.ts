@@ -127,6 +127,20 @@ export interface ControlHost {
 		runId: string,
 		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number },
 	): Promise<AdmitResult>;
+	/**
+	 * Edit parked approval: CAS decide edit + re-reserve + terminal with edited payload.
+	 * Same first-commit-wins CAS as approve (P15).
+	 */
+	edit(
+		runId: string,
+		opts: {
+			commandId?: string;
+			principal?: string;
+			expectedRunVersion?: number;
+			/** Required edited output / note (never empty). */
+			note: string;
+		},
+	): Promise<AdmitResult>;
 	/** Reject parked approval → blocked terminal (no re-reserve). */
 	reject(
 		runId: string,
@@ -1275,6 +1289,142 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				/* keep */
 			}
 
+			return {
+				ok: true,
+				run: cas.run,
+				receipt: cas.receipt,
+				snapshot: { run: cas.run, receipt: cas.receipt },
+			};
+		},
+
+		async edit(runId, opts) {
+			if (!canMutate) return attachDenied("edit");
+			const note = opts.note?.trim();
+			if (!note) {
+				return casError("TF_INVALID_ARGUMENT", "edit requires non-empty note/payload");
+			}
+			const pendingApr = loadApprovalForRun(store.projectRoot, runId);
+			if (pendingApr) {
+				const decided = decideApproval(store.projectRoot, pendingApr.approvalRequestId, {
+					decision: "edit",
+					principal: opts.principal ?? "local",
+					commandId: opts.commandId ?? newId("cmd"),
+					note,
+				});
+				if (!decided.ok) {
+					return casError(decided.code, decided.message, store.getRun(runId) ?? undefined);
+				}
+			}
+			// Re-reserve before terminal (same as approve — future provider resume shares this path)
+			const reservation = coordinator.reserve({
+				coordinatorEpoch: singleton?.lock.fencingEpoch ?? Date.now(),
+			});
+			if (!reservation) {
+				return {
+					ok: false,
+					run: store.getRun(runId) ?? undefined,
+					error: {
+						code: "TF_CAPACITY_EXCEEDED",
+						message: "cannot re-reserve after edit",
+						recoveryAction: "retry-same-command",
+						sideEffects: "none",
+					},
+				};
+			}
+			const cas = store.compareAndCommit({
+				runId,
+				expectedRunVersion: opts.expectedRunVersion,
+				validate: (run) => {
+					if (run.stage === "terminal" || run.receiptId) {
+						return `run is terminal/has Receipt; cannot edit`;
+					}
+					if (run.status !== "paused" || run.stage !== "parked") {
+						return `edit requires paused+parked (have ${run.status}/${run.stage})`;
+					}
+					return null;
+				},
+				build: (run) => {
+					const now = Date.now();
+					const after: RunProjection = {
+						...run,
+						status: "completed",
+						stage: "terminal",
+						reservationId: reservation.reservationId,
+						finalOutput: note,
+						updatedAt: now,
+						runVersion: run.runVersion + 1,
+					};
+					const evDecide = makeEvent(runId, {
+						type: "ApprovalDecided",
+						runId,
+						approvalRequestId: run.approvalRequestId ?? "",
+						decision: "edit",
+					});
+					const evStatus = makeEvent(runId, {
+						type: "RunStatusChanged",
+						runId,
+						status: "completed",
+						stage: "terminal",
+						reason: "approval edited",
+					});
+					const receiptId = newId("rcpt");
+					const evReceipt = makeEvent(runId, {
+						type: "ReceiptIssued",
+						runId,
+						receiptId,
+					});
+					const receipt = issueReceipt(
+						after,
+						{
+							boundPlanHash: after.boundPlanHash,
+							executionSemanticHash: "",
+							programName: "edited",
+							program: {},
+							createdAt: now,
+							approvalMode: "durable-optional",
+							grantRefs: [],
+						},
+						[evDecide.eventId, evStatus.eventId, evReceipt.eventId],
+					);
+					const receiptFixed: Receipt = { ...receipt, receiptId };
+					return {
+						run: { ...after, receiptId },
+						receipt: receiptFixed,
+						events: [evDecide, evStatus, evReceipt],
+					};
+				},
+			});
+			if (!cas.ok) {
+				try {
+					coordinator.normalRelease(reservation.reservationId, {
+						noLiveOrAmbiguousSideEffects: true,
+						runIsTerminal: false,
+						runIsParkedAndFutureDispatchRequiresReadmission: true,
+					});
+				} catch {
+					/* ignore */
+				}
+				return casError(cas.code, cas.message, cas.run);
+			}
+			try {
+				coordinator.commitReservation(reservation.reservationId, {
+					projectId: store.header.projectId,
+					projectControlDomainId: store.header.controlDomainId,
+					runId,
+					projectAdmitCommitSeq: cas.commitSeqEnd,
+				});
+			} catch {
+				/* ignore */
+			}
+			try {
+				coordinator.normalRelease(reservation.reservationId, {
+					noLiveOrAmbiguousSideEffects: true,
+					runIsTerminal: true,
+					runIsParkedAndFutureDispatchRequiresReadmission: false,
+				});
+			} catch {
+				/* keep */
+			}
 			return {
 				ok: true,
 				run: cas.run,

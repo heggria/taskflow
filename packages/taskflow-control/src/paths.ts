@@ -105,41 +105,89 @@ export function readJsonFile<T>(filePath: string): T | null {
 }
 
 /**
- * Cross-process exclusive critical section via O_CREAT|O_EXCL lock file.
- * Callers re-read durable state inside `fn` (do not trust pre-lock memory).
+ * Cross-process exclusive critical section via atomic `mkdir` (POSIX exclusive).
+ *
+ * Previous O_CREAT|O_EXCL *file* lock had a steal race: between `open(wx)` and
+ * writing owner pid, another waiter could read an empty lock, treat pid=0 as
+ * dead, unlink, and enter concurrently — dual approve Receipts under CAS.
+ *
+ * Directory create is a single exclusive step; owner metadata is written inside
+ * only after the dir is held. Incomplete dirs (no owner yet) are not stolen
+ * until a short abandon window. Callers must re-read durable state inside `fn`.
  */
-export function withExclusiveLockFile<T>(lockPath: string, fn: () => T, opts?: { maxAttempts?: number; staleMs?: number }): T {
+export function withExclusiveLockFile<T>(
+	lockPath: string,
+	fn: () => T,
+	opts?: { maxAttempts?: number; staleMs?: number },
+): T {
 	ensureDir(path.dirname(lockPath));
-	const maxAttempts = opts?.maxAttempts ?? 200;
+	const maxAttempts = opts?.maxAttempts ?? 500;
 	const staleMs = opts?.staleMs ?? 30_000;
-	for (let i = 0; i < maxAttempts; i++) {
+	const abandonIncompleteMs = 5_000;
+	const ownerFile = path.join(lockPath, "owner.json");
+
+	function removeLockTree(): void {
 		try {
-			const fd = fs.openSync(lockPath, "wx");
+			fs.rmSync(lockPath, { recursive: true, force: true });
+		} catch {
 			try {
-				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-				return fn();
-			} finally {
-				fs.closeSync(fd);
+				fs.unlinkSync(lockPath); // legacy file lock
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+
+	for (let i = 0; i < maxAttempts; i++) {
+		// Migrate leftover file locks from older builds.
+		try {
+			const st = fs.statSync(lockPath);
+			if (st.isFile()) {
 				try {
 					fs.unlinkSync(lockPath);
 				} catch {
-					/* ignore */
+					/* race */
 				}
+			}
+		} catch {
+			/* missing — good */
+		}
+
+		try {
+			fs.mkdirSync(lockPath); // atomic exclusive create
+			try {
+				fs.writeFileSync(
+					ownerFile,
+					JSON.stringify({ pid: process.pid, at: Date.now() }),
+					"utf-8",
+				);
+				return fn();
+			} finally {
+				removeLockTree();
 			}
 		} catch (e) {
 			const err = e as NodeJS.ErrnoException;
 			if (err.code !== "EEXIST") throw e;
-			// Steal clearly stale locks (no live writer holding them).
+			// Contended or stale lock dir.
 			try {
 				const st = fs.statSync(lockPath);
-				if (Date.now() - st.mtimeMs > staleMs) {
-					const raw = fs.readFileSync(lockPath, "utf-8");
-					let pid = 0;
-					try {
-						pid = (JSON.parse(raw) as { pid?: number }).pid ?? 0;
-					} catch {
-						pid = 0;
+				const age = Date.now() - st.mtimeMs;
+				let pid = 0;
+				let hasOwner = false;
+				try {
+					const raw = fs.readFileSync(ownerFile, "utf-8");
+					hasOwner = true;
+					pid = (JSON.parse(raw) as { pid?: number }).pid ?? 0;
+				} catch {
+					/* owner not written yet */
+				}
+				if (!hasOwner) {
+					// Do NOT steal during the mkdir→write window of a live holder.
+					if (age > abandonIncompleteMs) {
+						removeLockTree();
+						continue;
 					}
+				} else {
 					let alive = false;
 					if (pid > 0) {
 						try {
@@ -149,13 +197,9 @@ export function withExclusiveLockFile<T>(lockPath: string, fn: () => T, opts?: {
 							alive = false;
 						}
 					}
-					if (!alive) {
-						try {
-							fs.unlinkSync(lockPath);
-							continue;
-						} catch {
-							/* race */
-						}
+					if (!alive && age > staleMs) {
+						removeLockTree();
+						continue;
 					}
 				}
 			} catch {

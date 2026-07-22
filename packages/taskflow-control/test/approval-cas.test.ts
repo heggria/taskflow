@@ -264,9 +264,17 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 		assert.ok(winners[0]!.receiptId, "winner must issue Receipt");
 		assert.equal(winners[0]!.status, "completed");
 		for (const l of losers) {
-			assert.equal(l.code, "TF_STALE_VERSION", `loser code=${l.code}`);
+			// Concurrent losers: STALE_VERSION (preferred) or INVALID once terminal/Receipt
+			// is already durable under the exclusive lock.
+			assert.ok(
+				l.code === "TF_STALE_VERSION" || l.code === "TF_INVALID_ARGUMENT",
+				`loser code=${l.code} full=${JSON.stringify(parsed)}`,
+			);
 			assert.equal(l.receiptId, null);
 		}
+		// Exactly one distinct receipt id among all children
+		const winnerReceipts = new Set(winners.map((w) => w.receiptId).filter(Boolean));
+		assert.equal(winnerReceipts.size, 1);
 
 		// Durable store: exactly one Receipt artifact
 		const receiptsDir = path.join(t.project, ".taskflow", "control", "receipts");

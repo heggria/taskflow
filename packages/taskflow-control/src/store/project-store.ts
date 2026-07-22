@@ -408,6 +408,8 @@ export function openProjectControlStore(
 						message: `run ${opts.runId} not found`,
 					};
 				}
+				// Version check first so concurrent CAS losers report TF_STALE_VERSION
+				// (not terminal/INVALID) when the winner already advanced runVersion.
 				if (
 					opts.expectedRunVersion !== undefined &&
 					current.runVersion !== opts.expectedRunVersion
@@ -416,6 +418,18 @@ export function openProjectControlStore(
 						ok: false as const,
 						code: "TF_STALE_VERSION" as const,
 						message: `expected runVersion ${opts.expectedRunVersion}, have ${current.runVersion}`,
+						run: current,
+					};
+				}
+				// Defense: durable receipt index wins even if projection lag.
+				const existingRcpt = readJsonFile<{ receiptId: string }>(
+					path.join(projectReceiptsDir(root), `by-run-${opts.runId}.json`),
+				);
+				if (existingRcpt?.receiptId || current.receiptId || current.stage === "terminal") {
+					return {
+						ok: false as const,
+						code: "TF_INVALID_ARGUMENT" as const,
+						message: `run is terminal/has Receipt (status=${current.status} stage=${current.stage}); cannot mutate`,
 						run: current,
 					};
 				}

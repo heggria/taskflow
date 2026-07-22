@@ -191,24 +191,30 @@ test("script provider: probe/prepare/loadHandle durable across provider instance
 		});
 		assert.equal(sub.kind, "accepted");
 		const handle = sub.handle;
+		assert.ok(typeof sub.leaseEpoch === "number");
 
-		// New provider instance (simulates process restart) loads durable handle
+		// Drive to terminal on the original instance (close event persists completed).
+		// Cross-instance poll of a mid-flight dead pid is fail-closed by design (not this test).
+		let c1 = await p1.poll(handle);
+		const deadline = Date.now() + 5000;
+		while (c1.kind === "still-running" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 20));
+			c1 = await p1.poll(handle);
+		}
+		assert.equal(c1.kind, "completed", JSON.stringify(c1));
+		if (c1.kind === "completed") assert.match(c1.output ?? "", /done/);
+
+		// New provider instance (simulates process restart) loads durable completed handle
 		const p2 = createScriptExecutionProvider({ stateDir });
 		const loaded = p2.loadHandle!(handle);
 		assert.ok(loaded, "handle must load after restart");
 		assert.equal(loaded.runId, "run-1");
 		assert.equal(loaded.providerName, "script");
+		assert.equal(loaded.status, "completed");
 		assert.ok(typeof loaded.leaseEpoch === "number");
-
-		// Poll until terminal via second instance
-		let c = await p2.poll(handle);
-		const deadline = Date.now() + 5000;
-		while (c.kind === "still-running" && Date.now() < deadline) {
-			await new Promise((r) => setTimeout(r, 30));
-			c = await p2.poll(handle);
-		}
-		assert.equal(c.kind, "completed", JSON.stringify(c));
-		if (c.kind === "completed") assert.match(c.output ?? "", /done/);
+		const c2 = await p2.poll(handle);
+		assert.equal(c2.kind, "completed", JSON.stringify(c2));
+		if (c2.kind === "completed") assert.match(c2.output ?? "", /done/);
 
 		// Non-script program rejected by prepare
 		const bad = await p1.prepare!({

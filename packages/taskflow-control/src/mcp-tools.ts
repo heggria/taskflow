@@ -14,9 +14,19 @@ export interface ControlToolHandlers {
 	status: (runId: string) => RunSnapshot | null;
 	wait: (runId: string) => Promise<RunSnapshot>;
 	cancel: (runId: string) => Promise<AdmitResult>;
+	approve: (runId: string, opts?: { principal?: string; expectedRunVersion?: number }) => Promise<AdmitResult>;
+	reject: (runId: string, opts?: { principal?: string; note?: string }) => Promise<AdmitResult>;
+	edit: (
+		runId: string,
+		opts: { note: string; principal?: string; expectedRunVersion?: number },
+	) => Promise<AdmitResult>;
 }
 
-/** Bind stable MCP-facing handlers to a ControlHost instance. */
+/**
+ * Bind stable MCP-facing handlers to a ControlHost instance.
+ * All host adapters (codex/claude/opencode/grok/pi) should route through this
+ * when controlMode is enabled — single ControlHost admit/observe surface (D21).
+ */
 export function bindControlHostTools(host: ControlHost): ControlToolHandlers {
 	return {
 		async run(args) {
@@ -37,6 +47,15 @@ export function bindControlHostTools(host: ControlHost): ControlToolHandlers {
 		},
 		cancel(runId) {
 			return host.cancel(runId);
+		},
+		approve(runId, opts) {
+			return host.approve(runId, opts);
+		},
+		reject(runId, opts) {
+			return host.reject(runId, opts);
+		},
+		edit(runId, opts) {
+			return host.edit(runId, opts);
 		},
 	};
 }

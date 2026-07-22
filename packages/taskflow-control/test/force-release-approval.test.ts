@@ -154,6 +154,63 @@ test("durable approval reject → blocked; expire → blocked; illegal transitio
 	}
 });
 
+test("durable approval edit → re-reserve + completed Receipt with edited payload", async () => {
+	const t = temp();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({
+			program: {
+				name: "edit-flow",
+				phases: [{ id: "main", type: "script", run: "true", final: true }],
+			},
+		});
+		const runId = admitted.run!.runId;
+		provider.quiesceAll?.();
+		const parked = await host.parkForApproval(runId);
+		assert.equal(parked.ok, true, JSON.stringify(parked.error));
+		assert.equal(parked.run?.status, "paused");
+		assert.equal(parked.run?.stage, "parked");
+
+		// Empty note rejected
+		const empty = await host.edit(runId, {
+			note: "   ",
+			principal: "editor",
+			expectedRunVersion: parked.run!.runVersion,
+		});
+		assert.equal(empty.ok, false);
+		assert.equal(empty.error?.code, "TF_INVALID_ARGUMENT");
+
+		const edited = await host.edit(runId, {
+			note: "edited-output-body",
+			principal: "editor",
+			expectedRunVersion: parked.run!.runVersion,
+		});
+		assert.equal(edited.ok, true, JSON.stringify(edited.error));
+		assert.equal(edited.run?.status, "completed");
+		assert.equal(edited.run?.stage, "terminal");
+		assert.equal(edited.run?.finalOutput, "edited-output-body");
+		assert.ok(edited.receipt);
+		const apr = loadApprovalForRun(t.project, runId);
+		assert.equal(apr?.status, "edited");
+		assert.equal(apr?.decision, "edit");
+
+		// Terminal immutability: re-edit rejected
+		const again = await host.edit(runId, { note: "nope", principal: "editor" });
+		assert.equal(again.ok, false);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("streamSeq is monotonic unique per stream within journal", async () => {
 	const t = temp();
 	try {
