@@ -10,11 +10,14 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - **taskflowd UDS transport**: hello/handshake, RPC routing, singleton fencing epoch; auto/coordinated/standalone controlMode (coordinated fail-closed without authority).
 - **Policy overlay (P1/P2)**: `compilePolicy` / host-default attenuated empty exposure; BoundPlan hash covers policy/exposure/grants/provider/timeouts.
 - **Project identity (P3)**: strict clone/worktree fail-closed (`TF_IDENTITY_MISMATCH`); explicit `rebind` / `new-identity` policies.
-- **Pack/publish**: control trio included in release pack smoke and publish workflow (release still requires workspace version alignment to the tag).
+- **P6–P11 control semantics**: BoundFragment dual hashes; capability tokens + grant narrowing; enforcement capabilities (sandbox fail-closed); legacy-conflict probe; artifact URI ACL; compaction cursor (`minAvailableCommitSeq`, `TF_CURSOR_EXPIRED`); rollback tiers (no DomainTransfer-as-rollback).
+- **D21 MCP bridge**: `tryControlPlaneRun` + optional `TASKFLOW_CONTROL_PLANE=1` route in `taskflow-mcp-core` (shared by all host adapters); CLI/daemon always on ControlHost.
+- **Pack/publish**: control trio included in release pack smoke and publish workflow.
 
 ### Notes
 
-- Closed-loop GA is **not** declared until D1–D38 / P1–P16 matrix is fully evidenced and root package versions are aligned for release. Web Console remains post-GA / non-blocking unless RFC is amended.
+- **Closed-loop GA is not declared.** Remaining: workspace version alignment (control packages at 0.3.0 while root/core hosts remain 0.2.4 until release cut), ControlHost default-on for non-script MCP flows, remote CI after authorized push. Web Console is **post-GA / non-blocking** (RFC beta.2 draft preserved; not a 0.3.0 MUST unless amended).
+- **Release gate**: all packages in `RELEASE_PACKAGE_NAMES` must share the tag version before `v0.3.0` publish (see `.github/workflows/publish.yml`).
 
 ## [0.2.4] — 2026-07-20
 
