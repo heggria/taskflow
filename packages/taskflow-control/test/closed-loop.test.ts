@@ -1,10 +1,10 @@
 /**
  * §23 GA closed-loop tests — drive shipped ControlHost / bootstrap APIs.
  * No soft assertions: capacity/attach/idempotency/park must hard-fail when wrong.
- * Includes real multi-process races for header identity and coordinator capacity.
+ * Multi-process races use parallel spawn + shared start barrier so children overlap.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -23,25 +23,88 @@ import {
 	assertControlModeExplicit,
 	type ControlEvent,
 } from "../src/index.ts";
+import { parentReleaseStart } from "./helpers/mp-barrier.mts";
 
 const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
 
-function runMpHelper(script: string, args: string[]): { status: number; stdout: string; stderr: string } {
+interface MpChildResult {
+	status: number;
+	stdout: string;
+	stderr: string;
+	id: string;
+}
+
+/**
+ * Launch N children in parallel (non-blocking spawn + Promise.all).
+ * Shared barrier: each child writes ready-${id}, parent drops `start` only after
+ * all are ready so open/reserve/bootstrap critical sections truly collide.
+ */
+async function runMpHelpersParallel(
+	script: string,
+	argsList: string[][],
+	opts?: { timeoutMs?: number },
+): Promise<MpChildResult[]> {
+	const timeoutMs = opts?.timeoutMs ?? 30_000;
+	const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mp-barrier-"));
 	const scriptPath = path.join(helpersDir, script);
-	const r = spawnSync(
-		process.execPath,
-		["--conditions=development", "--experimental-strip-types", scriptPath, ...args],
-		{
-			encoding: "utf-8",
-			env: process.env,
-			timeout: 30_000,
-		},
-	);
-	return {
-		status: r.status ?? 1,
-		stdout: r.stdout ?? "",
-		stderr: r.stderr ?? "",
-	};
+
+	const children: Array<{
+		id: string;
+		child: ChildProcessWithoutNullStreams;
+		done: Promise<MpChildResult>;
+	}> = [];
+
+	for (let i = 0; i < argsList.length; i++) {
+		const id = String(i);
+		const child = spawn(
+			process.execPath,
+			["--conditions=development", "--experimental-strip-types", scriptPath, ...argsList[i]!],
+			{
+				env: {
+					...process.env,
+					TF_MP_BARRIER: barrierDir,
+					TF_MP_ID: id,
+				},
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
+		const done = new Promise<MpChildResult>((resolve) => {
+			let stdout = "";
+			let stderr = "";
+			child.stdout.setEncoding("utf-8");
+			child.stderr.setEncoding("utf-8");
+			child.stdout.on("data", (c: string) => {
+				stdout += c;
+			});
+			child.stderr.on("data", (c: string) => {
+				stderr += c;
+			});
+			const timer = setTimeout(() => {
+				try {
+					child.kill("SIGKILL");
+				} catch {
+					/* ignore */
+				}
+				resolve({ status: 124, stdout, stderr: stderr + "\nparent timeout", id });
+			}, timeoutMs);
+			child.on("close", (code) => {
+				clearTimeout(timer);
+				resolve({ status: code ?? 1, stdout, stderr, id });
+			});
+		});
+		children.push({ id, child, done });
+	}
+
+	// Wait until every child has parked on the barrier, then release together.
+	parentReleaseStart(barrierDir, argsList.length, timeoutMs);
+
+	const results = await Promise.all(children.map((c) => c.done));
+	try {
+		fs.rmSync(barrierDir, { recursive: true, force: true });
+	} catch {
+		/* ignore */
+	}
+	return results;
 }
 
 function tempEnv(): { env: NodeJS.ProcessEnv; home: string; project: string; cleanup: () => void } {
@@ -490,24 +553,25 @@ test("openProjectControlStore header is authority for identity", () => {
 	}
 });
 
-test("multi-process concurrent first-open: single projectId/controlDomainId on durable header", () => {
+test("multi-process concurrent first-open: single projectId/controlDomainId on durable header", async () => {
 	const t = tempEnv();
 	try {
 		const N = 8;
-		// Launch N child processes nearly simultaneously (sequential spawn is fine —
-		// they contend on header.lock during open).
-		const results: Array<{ projectId: string; controlDomainId: string; pid: number }> = [];
-		const children = Array.from({ length: N }, () =>
-			runMpHelper("mp-open-store.mts", [t.project]),
+		// True overlap: parallel spawn + shared start barrier (not serial spawnSync).
+		const children = await runMpHelpersParallel(
+			"mp-open-store.mts",
+			Array.from({ length: N }, () => [t.project]),
 		);
+		const results: Array<{ projectId: string; controlDomainId: string; pid: number }> = [];
 		for (const c of children) {
-			assert.equal(c.status, 0, `child failed: ${c.stderr}\n${c.stdout}`);
-			const parsed = JSON.parse(c.stdout) as {
-				projectId: string;
-				controlDomainId: string;
-				pid: number;
-			};
-			results.push(parsed);
+			assert.equal(c.status, 0, `child ${c.id} failed: ${c.stderr}\n${c.stdout}`);
+			results.push(
+				JSON.parse(c.stdout) as {
+					projectId: string;
+					controlDomainId: string;
+					pid: number;
+				},
+			);
 		}
 		assert.equal(results.length, N);
 		const projectIds = new Set(results.map((r) => r.projectId));
@@ -515,14 +579,12 @@ test("multi-process concurrent first-open: single projectId/controlDomainId on d
 		assert.equal(projectIds.size, 1, `forked projectIds: ${[...projectIds].join(",")}`);
 		assert.equal(domainIds.size, 1, `forked domainIds: ${[...domainIds].join(",")}`);
 
-		// Durable header on disk matches
 		const durable = JSON.parse(
 			fs.readFileSync(path.join(t.project, ".taskflow", "control", "header.json"), "utf-8"),
 		) as { projectId: string; controlDomainId: string };
 		assert.equal(durable.projectId, results[0]!.projectId);
 		assert.equal(durable.controlDomainId, results[0]!.controlDomainId);
 
-		// Parent open agrees
 		const parent = openProjectControlStore(t.project);
 		assert.equal(parent.header.projectId, durable.projectId);
 		assert.equal(parent.header.controlDomainId, durable.controlDomainId);
@@ -531,12 +593,13 @@ test("multi-process concurrent first-open: single projectId/controlDomainId on d
 	}
 });
 
-test("multi-process concurrent bootstrap: shared identity; at most one writer", () => {
+test("multi-process concurrent bootstrap: shared identity under parallel barrier", async () => {
 	const t = tempEnv();
 	try {
 		const N = 4;
-		const children = Array.from({ length: N }, (_, i) =>
-			runMpHelper("mp-bootstrap.mts", [t.project, t.home, `mp-holder-${i}`]),
+		const children = await runMpHelpersParallel(
+			"mp-bootstrap.mts",
+			Array.from({ length: N }, (_, i) => [t.project, t.home, `mp-holder-${i}`]),
 		);
 		const results: Array<{
 			projectId: string;
@@ -545,7 +608,7 @@ test("multi-process concurrent bootstrap: shared identity; at most one writer", 
 			canMutate: boolean;
 		}> = [];
 		for (const c of children) {
-			assert.equal(c.status, 0, `bootstrap child failed: ${c.stderr}\n${c.stdout}`);
+			assert.equal(c.status, 0, `bootstrap child ${c.id} failed: ${c.stderr}\n${c.stdout}`);
 			results.push(JSON.parse(c.stdout));
 		}
 		const projectIds = new Set(results.map((r) => r.projectId));
@@ -553,23 +616,18 @@ test("multi-process concurrent bootstrap: shared identity; at most one writer", 
 		assert.equal(projectIds.size, 1, `forked projectIds: ${[...projectIds].join(",")}`);
 		assert.equal(domainIds.size, 1);
 
-		// Durable header
 		const durable = JSON.parse(
 			fs.readFileSync(path.join(t.project, ".taskflow", "control", "header.json"), "utf-8"),
 		) as { projectId: string; controlDomainId: string };
 		assert.equal(durable.projectId, results[0]!.projectId);
 		assert.equal(durable.controlDomainId, results[0]!.controlDomainId);
-
-		// Roles: writers may die after host.close() releasing lock — so multiple
-		// children can each have been writer at some point. What we require is
-		// that they never disagreed on identity (above) and durable header is unique.
 		assert.ok(results.every((r) => r.projectId === durable.projectId));
 	} finally {
 		t.cleanup();
 	}
 });
 
-test("multi-process concurrent reserve: capacity never exceeds maxActiveRuns", () => {
+test("multi-process concurrent reserve: capacity never exceeds maxActiveRuns", async () => {
 	const t = tempEnv();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
@@ -581,16 +639,18 @@ test("multi-process concurrent reserve: capacity never exceeds maxActiveRuns", (
 		assert.equal(coord.maxActiveRuns, 2);
 
 		const N = 8;
-		const children = Array.from({ length: N }, () => runMpHelper("mp-reserve.mts", [t.home]));
+		// Parallel barriered reserve — without state.lock this oversubscribes.
+		const children = await runMpHelpersParallel(
+			"mp-reserve.mts",
+			Array.from({ length: N }, () => [t.home]),
+		);
 		let okCount = 0;
 		for (const c of children) {
-			assert.equal(c.status, 0, `reserve child failed: ${c.stderr}\n${c.stdout}`);
+			assert.equal(c.status, 0, `reserve child ${c.id} failed: ${c.stderr}\n${c.stdout}`);
 			const parsed = JSON.parse(c.stdout) as { ok: boolean; occupying: number };
 			if (parsed.ok) okCount += 1;
 		}
-		// At most maxActiveRuns successful reserves
 		assert.ok(okCount <= 2, `okCount=${okCount} exceeded maxActiveRuns=2`);
-		// Durable occupying count still within capacity
 		const final = openUserCoordinatorStore(t.env);
 		assert.ok(final.occupyingCount() <= 2, `occupying=${final.occupyingCount()}`);
 		assert.ok(okCount >= 1, "at least one reserve should succeed");
