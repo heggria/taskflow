@@ -77,12 +77,14 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
    worker backends: local CLI pool | script | (later) cloud agents
 ```
 
-**Non-negotiables** (from [`rfc-local-daemon.md`](./rfc-local-daemon.md)):
+**Non-negotiables** (aligned with [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md); partially supersedes [`rfc-local-daemon.md`](./rfc-local-daemon.md) for 0.3+):
 
-- Disk is authority; daemon is cache/scheduler/admission  
-- Default-off / degrade without daemon  
-- Per-project namespace; version handshake; local auth (socket + token)  
-- One admission path if global concurrency/budget is claimed  
+- Disk / journal is authority; control process is not the sole state copy  
+- 0.3 clients default **`controlMode: auto`** (on-demand control); fail closed if control required and unavailable — **not** silent full-power degrade  
+- Explicit **`standalone`** for single-owner in-process ControlHost  
+- Version handshake; local auth (socket + token)  
+- One admission authority when claimed (user-level ControlDomain with project partitions for multi-project coordination)  
+
 
 **Policy is 3-D (not just agent/model checkboxes):**
 

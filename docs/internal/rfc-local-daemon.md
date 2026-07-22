@@ -1,8 +1,25 @@
 # RFC: optional local daemon (`taskflowd`)
 
-> Status: **Deferred after the 0.2.3 background lifecycle**
-> Updated: **2026-07-18**
-> Related: [`rfc-background-run.md`](./rfc-background-run.md)
+> Status: **Partially superseded for 0.3+**
+> Updated: **2026-07-18** · **Supersession note: 2026-07-22**
+> Related: [`rfc-background-run.md`](./rfc-background-run.md), [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md)
+>
+> ### 0.3 supersession
+>
+> For **0.3 ControlHost clients**, product defaults and outage behavior are defined by
+> [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) (§4, §25). In particular:
+>
+> - 0.3 clients default to **`controlMode: auto`** (on-demand control), not “daemon default-off”;
+> - control unavailable under `auto`/`coordinated` → **fail closed** (no silent full-power in-process);
+> - `standalone` is explicit; same ControlHost semantics;
+> - journal may live in a **user-level ControlDomain** with projects as partitions (not only “per-project process-less store”).
+>
+> **Still non-negotiable (retained by 0.3 RFC):** disk is authority; UDS + auth; version handshake;
+> one admission authority when claimed; no default network listener; daemon memory is never the only
+> copy of run state.
+>
+> This document remains the historical decision record for **deferring** a daemon in 0.2.3 and the
+> process-less detached lifecycle. Do not treat its “Default off” bullet as binding on 0.3 clients.
 
 ## Decision
 
