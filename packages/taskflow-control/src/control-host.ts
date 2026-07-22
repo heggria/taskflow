@@ -41,6 +41,7 @@ import {
 	expireApprovalIfDue,
 	loadApprovalForRun,
 } from "./approval.ts";
+import { legacyConflictError, probeLegacyConflict } from "./legacy-conflict.ts";
 
 export interface ControlHostOptions {
 	projectRoot: string;
@@ -380,7 +381,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							: run.status === "failed"
 								? "failed"
 								: "unknown",
-				artifactIntegrity: "ok",
+				// Fail-closed: do not claim artifact integrity without verification.
+				artifactIntegrity: "unknown",
 				provenance: "ok",
 			},
 			buildInfo: { packageVersion: "0.3.0", controlSchemaVersion: 1 },
@@ -476,6 +478,12 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 			// New admits require write authority (P13: attach must not fork writers).
 			if (!canMutate) return attachDenied("admitAndRun");
+
+			// P9: refuse new Attempts while recent 0.2-style writers may be active.
+			const legacy = probeLegacyConflict(opts.projectRoot);
+			if (legacy.conflict) {
+				return { ok: false, error: legacyConflictError(legacy) };
+			}
 
 			const linked = linkProgram({ program: req.program });
 			if (!linked.ok) {

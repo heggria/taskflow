@@ -66,6 +66,7 @@
     }
   },
   "dependencies": {
-    "taskflow-core": "workspace:*"
+    "taskflow-core": "workspace:*",
+    "taskflow-control": "workspace:*"
   }
 }

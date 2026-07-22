@@ -810,6 +810,22 @@ export function makeToolHandlers(
 			const resolvedArgs = resolveArgs(def, providedArgs);
 			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
+
+			// D21: optional ControlHost path for script-only flows (TASKFLOW_CONTROL_PLANE=1).
+			// All host adapters share this MCP core — one admit surface when enabled.
+			try {
+				const { tryControlPlaneRun } = await import("taskflow-control");
+				const routed = await tryControlPlaneRun(cwd, def, {
+					commandId: typeof args.commandId === "string" ? args.commandId : undefined,
+					principal: typeof args.principal === "string" ? args.principal : `mcp:${host ?? "unknown"}`,
+				});
+				if (routed.handled) {
+					return textContent(routed.text, !routed.ok);
+				}
+			} catch {
+				/* control package unavailable or route error → fall through to 0.2 engine */
+			}
+
 			const usageAccounting = runner.usageAccounting;
 			if (def.budget && usageAccounting === "unavailable") {
 				return textContent(
