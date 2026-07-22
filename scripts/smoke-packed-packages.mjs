@@ -20,6 +20,9 @@ import { packReleasePackages } from "./pack-release-packages.mjs";
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageNames = [
 	"taskflow-core",
+	"taskflow-control",
+	"taskflow-daemon",
+	"taskflow-cli",
 	"taskflow-mcp-core",
 	"taskflow-hosts",
 	"taskflow-dsl",
@@ -139,15 +142,30 @@ try {
 		{ cwd: consumerDir },
 	);
 
+	// Per-package versions (0.3 control packages may differ from root until release align).
+	const packageVersions = Object.fromEntries(
+		packageNames.map((name) => {
+			const v = JSON.parse(readFileSync(join(repo, "packages", name, "package.json"), "utf8")).version;
+			return [name, v];
+		}),
+	);
 	const expectedVersion = rootManifest.version;
 	const lock = JSON.parse(readFileSync(join(consumerDir, "package-lock.json"), "utf8"));
 	for (const name of packageNames) {
 		const manifest = packedManifest(name);
-		assert.equal(manifest.version, expectedVersion, `${name} installed at the wrong version`);
+		assert.equal(
+			manifest.version,
+			packageVersions[name],
+			`${name} installed at the wrong version (expected ${packageVersions[name]})`,
+		);
 		for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
 			assert.doesNotMatch(range, /^workspace:/, `${name} tarball leaked a workspace dependency`);
 			if (packageNames.includes(dependency)) {
-				assert.equal(range, expectedVersion, `${name} must pin internal dependency ${dependency} exactly`);
+				assert.equal(
+					range,
+					packageVersions[dependency],
+					`${name} must pin internal dependency ${dependency} to ${packageVersions[dependency]}`,
+				);
 			}
 		}
 		assert.equal(
@@ -228,6 +246,9 @@ try {
 
 	const publicImports = [
 		"taskflow-core",
+		"taskflow-control",
+		"taskflow-daemon",
+		"taskflow-cli",
 		"taskflow-mcp-core",
 		"taskflow-mcp-core/server",
 		"taskflow-mcp-core/jsonrpc",
@@ -270,6 +291,23 @@ try {
 		cwd: consumerDir,
 	}).trim();
 	assert.equal(dslVersion, expectedVersion, "taskflow-dsl executable reported the wrong version");
+
+	// 0.3 control-plane consumer smoke: import ControlHost + createScriptExecutionProvider from tarball
+	const packedControl = await importFromConsumer("taskflow-control");
+	assert.equal(typeof packedControl.createControlHost, "function", "packed taskflow-control must export createControlHost");
+	assert.equal(typeof packedControl.createScriptExecutionProvider, "function", "packed taskflow-control must export createScriptExecutionProvider");
+	assert.equal(typeof packedControl.linkProgram, "function");
+	assert.equal(typeof packedControl.compilePolicy, "function");
+	const packedCli = await importFromConsumer("taskflow-cli");
+	assert.ok(packedCli, "packed taskflow-cli must import");
+	const packedDaemon = await importFromConsumer("taskflow-daemon");
+	assert.ok(packedDaemon, "packed taskflow-daemon must import");
+	// Bins exist and are executable entrypoints
+	for (const bin of ["taskflow", "taskflowd"]) {
+		const binPath = join(consumerDir, "node_modules", ".bin", bin);
+		assert.ok(readFileSync(binPath, "utf8").length > 0, `missing bin ${bin}`);
+	}
+
 	writeFileSync(join(consumerDir, "types-smoke.ts"), `${publicImports.map((specifier) => `import ${JSON.stringify(specifier)};`).join("\n")}\n`);
 	run(
 		join(consumerDir, "node_modules", ".bin", "tsc"),
@@ -296,7 +334,7 @@ try {
 	}
 
 	process.stdout.write(
-		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 5 bins\n`,
+		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, bins\n`,
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });

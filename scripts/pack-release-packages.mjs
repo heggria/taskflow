@@ -26,6 +26,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const RELEASE_PACKAGE_NAMES = [
 	"taskflow-core",
+	// 0.3 control plane (depends on core; daemon/cli depend on control)
+	"taskflow-control",
+	"taskflow-daemon",
+	"taskflow-cli",
 	"taskflow-mcp-core",
 	"taskflow-hosts",
 	"taskflow-dsl",

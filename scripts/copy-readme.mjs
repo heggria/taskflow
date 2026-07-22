@@ -23,7 +23,11 @@ const repoRoot = join(here, "..");
 // Packages that are published to npm and should carry the README.
 const PUBLISHABLE = new Set([
 	"taskflow-core",
+	"taskflow-control",
+	"taskflow-daemon",
+	"taskflow-cli",
 	"taskflow-mcp-core",
+	"taskflow-hosts",
 	"taskflow-dsl",
 	"pi-taskflow",
 	"codex-taskflow",

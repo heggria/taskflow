@@ -8,6 +8,7 @@ import {
 	type BoundPlan,
 } from "./types.ts";
 import { extractExecutionSemantics, hashBoundPlan, hashExecutionSemantic } from "./hash.ts";
+import { compilePolicy, type CompilePolicyInput, type Exposure } from "./policy.ts";
 
 export interface LinkInput {
 	program: unknown;
@@ -15,14 +16,16 @@ export interface LinkInput {
 	grantRefs?: string[];
 	/** Provider class / name pinned at link (enters boundPlanHash). */
 	providerClass?: string;
-	/** Optional policy overlay digest. */
+	/** Optional policy overlay digest (when not compiling from overlays). */
 	policyHash?: string;
 	/** Optional exposure set digest. */
 	exposureHash?: string;
+	/** Optional policy overlays; empty → host-default attenuated exposure (P2). */
+	policy?: CompilePolicyInput;
 }
 
 export type LinkResult =
-	| { ok: true; boundPlan: BoundPlan }
+	| { ok: true; boundPlan: BoundPlan; exposure: Exposure }
 	| { ok: false; errors: string[] };
 
 export function linkProgram(input: LinkInput): LinkResult {
@@ -46,14 +49,25 @@ export function linkProgram(input: LinkInput): LinkResult {
 	const approvalMode = input.approvalMode ?? DEFAULT_APPROVAL_MODE;
 	const grantRefs = input.grantRefs ?? [];
 	const providerClass = input.providerClass ?? "script";
+
+	// P1/P2: compile policy → exposure; empty policy is host-default attenuated.
+	const policyDecision = compilePolicy(input.policy ?? {});
+	if (!policyDecision.ok && input.policy && Object.keys(input.policy).length > 0) {
+		// Explicit requested caps denied
+		return { ok: false, errors: [policyDecision.reason] };
+	}
+	const exposure = policyDecision.exposure;
+	const policyHash = input.policyHash ?? exposure.policyHash;
+	const exposureHash = input.exposureHash ?? exposure.exposureHash;
+
 	const semantics = extractExecutionSemantics(program);
 	// Bound plan hash covers ALL execution-semantic fields (P6).
 	const boundPlanHash = hashBoundPlan(program, {
 		approvalMode,
 		grantRefs,
 		providerClass,
-		policyHash: input.policyHash ?? null,
-		exposureHash: input.exposureHash ?? null,
+		policyHash,
+		exposureHash,
 		semantics,
 	});
 	const executionSemanticHash = hashExecutionSemantic({
@@ -61,8 +75,8 @@ export function linkProgram(input: LinkInput): LinkResult {
 		approvalMode,
 		grantRefs,
 		providerClass,
-		policyHash: input.policyHash ?? null,
-		exposureHash: input.exposureHash ?? null,
+		policyHash,
+		exposureHash,
 	});
 	const boundPlan: BoundPlan = {
 		boundPlanHash,
@@ -73,5 +87,5 @@ export function linkProgram(input: LinkInput): LinkResult {
 		approvalMode,
 		grantRefs,
 	};
-	return { ok: true, boundPlan };
+	return { ok: true, boundPlan, exposure };
 }

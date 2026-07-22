@@ -1,10 +1,10 @@
 name: Publish & Release
 
-# Publishes all nine packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
-# taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
-# grok-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
-# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All nine workspace
-# versions must equal the tag.
+# Publishes all release packages (taskflow-core, taskflow-control, taskflow-daemon,
+# taskflow-cli, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow,
+# codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow) to npmjs.com
+# and creates a GitHub Release when a v* tag is pushed. All workspace package
+# versions in that list must equal the tag.
 
 on:
   push:
@@ -95,7 +95,7 @@ jobs:
             echo "::error::CHANGELOG.md has no dated release heading for $VERSION"
             exit 1
           fi
-          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
+          for pkg in taskflow-core taskflow-control taskflow-daemon taskflow-cli taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
@@ -176,6 +176,9 @@ jobs:
             fi
           }
           publish_one taskflow-core
+          publish_one taskflow-control
+          publish_one taskflow-daemon
+          publish_one taskflow-cli
           publish_one taskflow-mcp-core
           publish_one taskflow-hosts
           publish_one taskflow-dsl
@@ -204,6 +207,9 @@ jobs:
             return 1
           }
           verify_one taskflow-core
+          verify_one taskflow-control
+          verify_one taskflow-daemon
+          verify_one taskflow-cli
           verify_one taskflow-mcp-core
           verify_one taskflow-hosts
           verify_one taskflow-dsl

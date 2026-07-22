@@ -23,7 +23,14 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+    }
   },
   "dependencies": {
     "taskflow-control": "workspace:*",

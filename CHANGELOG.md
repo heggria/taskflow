@@ -2,6 +2,20 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.3.0] — Unreleased
+
+### Added
+
+- **0.3 control plane packages** (`taskflow-control`, `taskflow-daemon`, `taskflow-cli`): Program → BoundPlan → Run → Receipt closed loop via ControlHost; Project ControlStore (journal-authoritative), ControlRegistry, UserCoordinatorStore; ScriptExecutionProvider as production default (not Mock).
+- **taskflowd UDS transport**: hello/handshake, RPC routing, singleton fencing epoch; auto/coordinated/standalone controlMode (coordinated fail-closed without authority).
+- **Policy overlay (P1/P2)**: `compilePolicy` / host-default attenuated empty exposure; BoundPlan hash covers policy/exposure/grants/provider/timeouts.
+- **Project identity (P3)**: strict clone/worktree fail-closed (`TF_IDENTITY_MISMATCH`); explicit `rebind` / `new-identity` policies.
+- **Pack/publish**: control trio included in release pack smoke and publish workflow (release still requires workspace version alignment to the tag).
+
+### Notes
+
+- Closed-loop GA is **not** declared until D1–D38 / P1–P16 matrix is fully evidenced and root package versions are aligned for release. Web Console remains post-GA / non-blocking unless RFC is amended.
+
 ## [0.2.4] — 2026-07-20
 
 ### Added
