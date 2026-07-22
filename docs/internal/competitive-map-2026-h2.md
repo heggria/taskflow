@@ -133,8 +133,8 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
 
 Ship when these are true:
 
-- [ ] Thin MCP clients use default `controlMode: auto` (connect to or bootstrap taskflowd); in-process ControlHost only under explicit `controlMode: standalone` (never silent fallback)
-- [ ] Per-project ControlStore authority; user ControlRegistry mounts/aggregates only
+- [ ] Thin MCP clients use default `controlMode: auto` (connect to or bootstrap **taskflowd or embedded multi-mount** on the same singleton); in-process ControlHost only under explicit `controlMode: standalone` (never silent fallback)
+- [ ] Per-project ControlStore = Run authority; ControlRegistry = mount/aggregate only; UserCoordinatorStore = global maxActiveRuns concurrency only
 - [ ] `taskflow_capabilities` reflects live policy for the caller
 - [ ] Policy: agent + model + tools + budget + roots; deny/substitute/attenuate traced
 - [ ] WebUI or CLI: run observe + cancel/resume + policy edit (observe first)
