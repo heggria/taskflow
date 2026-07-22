@@ -12,19 +12,20 @@ for (let i = 0; i < args.length; i++) {
 	}
 }
 
-const daemon = startDaemon({ projectRoots });
+const daemon = await startDaemon({ projectRoots });
 console.log(
 	JSON.stringify({
 		ok: true,
 		role: daemon.role,
 		holderId: daemon.holderId,
+		socketPath: daemon.socketPath,
+		fencingEpoch: daemon.fencingEpoch,
 		mounted: [...daemon.hosts.keys()],
 	}),
 );
 
 const shutdown = () => {
-	daemon.stop();
-	process.exit(0);
+	void Promise.resolve(daemon.stop()).finally(() => process.exit(0));
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
