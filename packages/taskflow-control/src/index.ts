@@ -7,6 +7,7 @@ export * from "./paths.ts";
 export * from "./identity.ts";
 export * from "./policy.ts";
 export * from "./bound-fragment.ts";
+export * from "./grants.ts";
 export * from "./store/project-store.ts";
 export * from "./store/registry.ts";
 export * from "./store/coordinator.ts";
