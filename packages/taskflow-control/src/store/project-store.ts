@@ -36,11 +36,48 @@ export interface CommitBatch {
 	receipt?: Receipt;
 }
 
+export type CompareAndCommitFailCode = "TF_NOT_FOUND" | "TF_STALE_VERSION" | "TF_INVALID_ARGUMENT";
+
+export type CompareAndCommitResult =
+	| {
+			ok: true;
+			run: RunProjection;
+			receipt?: Receipt;
+			commitSeqStart: number;
+			commitSeqEnd: number;
+	  }
+	| {
+			ok: false;
+			code: CompareAndCommitFailCode;
+			message: string;
+			run?: RunProjection;
+	  };
+
+export interface CompareAndCommitOpts {
+	runId: string;
+	/** When set, re-read under lock must match (first-commit-wins dual-client CAS). */
+	expectedRunVersion?: number;
+	/** Return error message to reject (TF_INVALID_ARGUMENT); null = ok. */
+	validate?: (run: RunProjection) => string | null;
+	/** Build the mutation from the locked durable run snapshot. */
+	build: (run: RunProjection) => {
+		run: RunProjection;
+		events: ControlEvent[];
+		command?: CommandRecord;
+		receipt?: Receipt;
+	};
+}
+
 export interface ProjectControlStore {
 	readonly projectRoot: string;
 	readonly header: ControlStoreHeader;
 	/** Atomic commit: exclusive lock + re-read seq + contiguous commitSeq + fsync. */
 	commit(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number };
+	/**
+	 * Dual-client first-commit-wins: under exclusive commit lock, re-read run,
+	 * check expectedRunVersion + validate, then commit in the same critical section.
+	 */
+	compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult;
 	getRun(runId: string): RunProjection | null;
 	listRuns(): RunProjection[];
 	getReceipt(receiptId: string): Receipt | null;
@@ -126,6 +163,114 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 	// Mutable local cache; identity fields never change after first create.
 	let headerCache = header;
 
+	function readRunFromDisk(runId: string): RunProjection | null {
+		return readJsonFile<RunProjection>(
+			path.join(projectProjectionsDir(root), `run-${runId}.json`),
+		);
+	}
+
+	/** Caller MUST hold commitLockPath. */
+	function commitUnlocked(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number } {
+		const events = batch.events;
+		let next = readSeqNext();
+		if (events.length === 0 && !batch.command && !batch.run && !batch.receipt) {
+			return { commitSeqStart: next, commitSeqEnd: next - 1 };
+		}
+		const start = next;
+		let seq = start;
+		const stamped: ControlEvent[] = events.map((ev, i) => {
+			const e: ControlEvent = {
+				...ev,
+				commitSeq: seq,
+				streamSeq: ev.streamSeq || i + 1,
+				controlDomainId: headerCache.controlDomainId,
+				projectId: headerCache.projectId,
+			};
+			seq += 1;
+			return e;
+		});
+		if (stamped.length === 0) {
+			seq += 1;
+		}
+		const end = seq - 1;
+		next = seq;
+
+		const command: CommandRecord | undefined = batch.command
+			? {
+					...batch.command,
+					firstCommitSeq: batch.command.firstCommitSeq || start,
+					lastCommitSeq: end,
+					projectId: headerCache.projectId,
+					controlDomainId: headerCache.controlDomainId,
+				}
+			: undefined;
+
+		const journalEntry = {
+			commitSeqStart: start,
+			commitSeqEnd: end,
+			command,
+			events: stamped,
+			run: batch.run,
+			receipt: batch.receipt,
+			recordedAt: Date.now(),
+		};
+		const journalFile = path.join(
+			projectJournalDir(root),
+			`${String(start).padStart(12, "0")}-${String(end).padStart(12, "0")}.json`,
+		);
+		if (fs.existsSync(journalFile)) {
+			throw new Error(
+				`journal segment collision at commitSeq ${start}-${end} — commit lock / seq broken`,
+			);
+		}
+		writeFileAtomic(journalFile, JSON.stringify(journalEntry, null, 2));
+		writeFileAtomic(seqPath, JSON.stringify({ next }, null, 2));
+
+		if (command) {
+			writeFileAtomic(
+				path.join(projectCommandsDir(root), `${command.commandId}.json`),
+				JSON.stringify(command, null, 2),
+			);
+			if (command.runId) {
+				writeFileAtomic(
+					path.join(projectCommandsDir(root), `by-cmd-${command.commandId}.json`),
+					JSON.stringify({ runId: command.runId }, null, 2),
+				);
+			}
+		}
+		if (batch.run) {
+			const run = {
+				...batch.run,
+				projectId: headerCache.projectId,
+				controlDomainId: headerCache.controlDomainId,
+			};
+			writeFileAtomic(
+				path.join(projectProjectionsDir(root), `run-${run.runId}.json`),
+				JSON.stringify(run, null, 2),
+			);
+		}
+		if (batch.receipt) {
+			const receipt = {
+				...batch.receipt,
+				projectId: headerCache.projectId,
+				controlDomainId: headerCache.controlDomainId,
+			};
+			writeFileAtomic(
+				path.join(projectReceiptsDir(root), `${receipt.receiptId}.json`),
+				JSON.stringify(receipt, null, 2),
+			);
+			writeFileAtomic(
+				path.join(projectReceiptsDir(root), `by-run-${receipt.runId}.json`),
+				JSON.stringify({ receiptId: receipt.receiptId }, null, 2),
+			);
+		}
+
+		headerCache = { ...headerCache, updatedAt: Date.now() };
+		writeFileAtomic(headerPath, JSON.stringify(headerCache, null, 2));
+
+		return { commitSeqStart: start, commitSeqEnd: end };
+	}
+
 	const store: ProjectControlStore = {
 		projectRoot: root,
 		get header() {
@@ -138,114 +283,61 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 		},
 
 		commit(batch: CommitBatch) {
+			return withExclusiveLockFile(commitLockPath, () => commitUnlocked(batch));
+		},
+
+		compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult {
 			return withExclusiveLockFile(commitLockPath, () => {
-				const events = batch.events;
-				// Re-read seq from disk under lock (cross-process safe).
-				let next = readSeqNext();
-				if (events.length === 0 && !batch.command && !batch.run && !batch.receipt) {
-					return { commitSeqStart: next, commitSeqEnd: next - 1 };
-				}
-				const start = next;
-				let seq = start;
-				const stamped: ControlEvent[] = events.map((ev, i) => {
-					const e: ControlEvent = {
-						...ev,
-						commitSeq: seq,
-						streamSeq: ev.streamSeq || i + 1,
-						controlDomainId: headerCache.controlDomainId,
-						projectId: headerCache.projectId,
+				// Re-read durable projection under the same lock as commit (P15 first-commit-wins).
+				const current = readRunFromDisk(opts.runId);
+				if (!current) {
+					return {
+						ok: false as const,
+						code: "TF_NOT_FOUND" as const,
+						message: `run ${opts.runId} not found`,
 					};
-					seq += 1;
-					return e;
-				});
-				if (stamped.length === 0) {
-					seq += 1;
 				}
-				const end = seq - 1;
-				next = seq;
-
-				const command: CommandRecord | undefined = batch.command
-					? {
-							...batch.command,
-							firstCommitSeq: batch.command.firstCommitSeq || start,
-							lastCommitSeq: end,
-							projectId: headerCache.projectId,
-							controlDomainId: headerCache.controlDomainId,
-						}
-					: undefined;
-
-				const journalEntry = {
-					commitSeqStart: start,
-					commitSeqEnd: end,
-					command,
-					events: stamped,
-					run: batch.run,
-					receipt: batch.receipt,
-					recordedAt: Date.now(),
-				};
-				const journalFile = path.join(
-					projectJournalDir(root),
-					`${String(start).padStart(12, "0")}-${String(end).padStart(12, "0")}.json`,
-				);
-				// Unique journal path: if a collision ever occurs under lock, fail closed.
-				if (fs.existsSync(journalFile)) {
-					throw new Error(
-						`journal segment collision at commitSeq ${start}-${end} — commit lock / seq broken`,
-					);
+				if (
+					opts.expectedRunVersion !== undefined &&
+					current.runVersion !== opts.expectedRunVersion
+				) {
+					return {
+						ok: false as const,
+						code: "TF_STALE_VERSION" as const,
+						message: `expected runVersion ${opts.expectedRunVersion}, have ${current.runVersion}`,
+						run: current,
+					};
 				}
-				writeFileAtomic(journalFile, JSON.stringify(journalEntry, null, 2));
-				writeFileAtomic(seqPath, JSON.stringify({ next }, null, 2));
-
-				if (command) {
-					writeFileAtomic(
-						path.join(projectCommandsDir(root), `${command.commandId}.json`),
-						JSON.stringify(command, null, 2),
-					);
-					if (command.runId) {
-						writeFileAtomic(
-							path.join(projectCommandsDir(root), `by-cmd-${command.commandId}.json`),
-							JSON.stringify({ runId: command.runId }, null, 2),
-						);
+				if (opts.validate) {
+					const msg = opts.validate(current);
+					if (msg) {
+						return {
+							ok: false as const,
+							code: "TF_INVALID_ARGUMENT" as const,
+							message: msg,
+							run: current,
+						};
 					}
 				}
-				if (batch.run) {
-					const run = {
-						...batch.run,
-						projectId: headerCache.projectId,
-						controlDomainId: headerCache.controlDomainId,
-					};
-					writeFileAtomic(
-						path.join(projectProjectionsDir(root), `run-${run.runId}.json`),
-						JSON.stringify(run, null, 2),
-					);
-				}
-				if (batch.receipt) {
-					const receipt = {
-						...batch.receipt,
-						projectId: headerCache.projectId,
-						controlDomainId: headerCache.controlDomainId,
-					};
-					writeFileAtomic(
-						path.join(projectReceiptsDir(root), `${receipt.receiptId}.json`),
-						JSON.stringify(receipt, null, 2),
-					);
-					writeFileAtomic(
-						path.join(projectReceiptsDir(root), `by-run-${receipt.runId}.json`),
-						JSON.stringify({ receiptId: receipt.receiptId }, null, 2),
-					);
-				}
-
-				headerCache = { ...headerCache, updatedAt: Date.now() };
-				writeFileAtomic(headerPath, JSON.stringify(headerCache, null, 2));
-
-				return { commitSeqStart: start, commitSeqEnd: end };
+				const built = opts.build(current);
+				const ranges = commitUnlocked({
+					command: built.command,
+					events: built.events,
+					run: built.run,
+					receipt: built.receipt,
+				});
+				return {
+					ok: true as const,
+					run: built.run,
+					receipt: built.receipt,
+					commitSeqStart: ranges.commitSeqStart,
+					commitSeqEnd: ranges.commitSeqEnd,
+				};
 			});
 		},
 
 		getRun(runId: string) {
-			return readJsonFile<RunProjection>(
-				path.join(projectProjectionsDir(root), `run-${runId}.json`),
-			);
+			return readRunFromDisk(runId);
 		},
 
 		listRuns() {

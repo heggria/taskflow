@@ -172,23 +172,24 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		return true;
 	}
 
-	/** Optimistic concurrency for dual-client approval/cancel (P15). */
-	function casMismatch(
-		run: RunProjection,
-		expectedRunVersion: number | undefined,
-	): ControlError | null {
-		if (expectedRunVersion === undefined) return null;
-		if (run.runVersion !== expectedRunVersion) {
-			return {
-				code: "TF_STALE_VERSION",
-				message: `expected runVersion ${expectedRunVersion}, have ${run.runVersion}`,
-				recoveryAction: "refresh",
+	function casError(
+		code: "TF_STALE_VERSION" | "TF_NOT_FOUND" | "TF_INVALID_ARGUMENT",
+		message: string,
+		run?: RunProjection,
+	): AdmitResult {
+		return {
+			ok: false,
+			run,
+			error: {
+				code,
+				message,
+				recoveryAction: code === "TF_STALE_VERSION" ? "refresh" : code === "TF_NOT_FOUND" ? "none" : "refresh",
 				sideEffects: "none",
 				projectId: store.header.projectId,
 				controlDomainId: store.header.controlDomainId,
-			};
-		}
-		return null;
+			},
+			snapshot: run ? { run } : undefined,
+		};
 	}
 
 	function emit(
@@ -213,11 +214,39 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		return store.getRun(run.runId) ?? run;
 	}
 
-	function issueReceipt(run: RunProjection, boundPlan: BoundPlan): Receipt {
+	function makeEvent(
+		runId: string,
+		payload: ControlEvent["payload"],
+		commandId?: string,
+	): ControlEvent {
+		return {
+			eventId: newId("ev"),
+			schemaVersion: 1,
+			controlDomainId: store.header.controlDomainId,
+			streamId: runId,
+			streamSeq: 0,
+			commitSeq: 0,
+			projectId: store.header.projectId,
+			recordedAt: Date.now(),
+			payload,
+			commandId,
+		};
+	}
+
+	function issueReceipt(
+		run: RunProjection,
+		boundPlan: BoundPlan,
+		/** When committing in the same batch, pass event ids about to be written. */
+		pendingEventIds?: string[],
+	): Receipt {
 		const events = store.readEvents(1, store.nextCommitSeq());
 		const runEvents = events.filter(
 			(e) => e.streamId === run.runId || (e.payload as { runId?: string }).runId === run.runId,
 		);
+		const manifest =
+			pendingEventIds && pendingEventIds.length > 0
+				? [...runEvents.map((e) => e.eventId), ...pendingEventIds]
+				: runEvents.map((e) => e.eventId);
 		const receipt: Receipt = {
 			receiptId: newId("rcpt"),
 			controlDomainId: store.header.controlDomainId,
@@ -225,9 +254,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			runId: run.runId,
 			boundPlanHash: boundPlan.boundPlanHash,
 			boundFragmentHash: run.boundFragmentHash,
-			eventManifest: runEvents.map((e) => e.eventId),
-			startCommitSeq: runEvents[0]?.commitSeq ?? 1,
-			endCommitSeq: runEvents[runEvents.length - 1]?.commitSeq ?? store.nextCommitSeq() - 1,
+			eventManifest: manifest,
+			startCommitSeq: runEvents[0]?.commitSeq ?? store.nextCommitSeq(),
+			endCommitSeq: store.nextCommitSeq() + Math.max(0, (pendingEventIds?.length ?? 0) - 1),
 			artifactRefs: [],
 			assurance: {
 				journalContinuity: "ok",
@@ -652,35 +681,43 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 		async cancel(runId, opts = {}) {
 			if (!canMutate) return attachDenied("cancel");
-			// Re-read under mutation path for dual-client freshness.
-			const run = store.getRun(runId);
-			if (!run) {
-				return {
-					ok: false,
-					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
-				};
-			}
-			const stale = casMismatch(run, opts.expectedRunVersion);
-			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
 			const handle = handles.get(runId);
 			if (handle) await provider.cancel(handle);
-			const next: RunProjection = {
-				...run,
-				status: "cancelled",
-				stage: "terminal",
-				updatedAt: Date.now(),
-				runVersion: run.runVersion + 1,
-			};
-			const updated = emit(next, {
-				type: "RunStatusChanged",
+
+			// CAS + commit under exclusive store lock (first-commit-wins).
+			const cas = store.compareAndCommit({
 				runId,
-				status: "cancelled",
-				stage: "terminal",
-				reason: "cancel",
+				expectedRunVersion: opts.expectedRunVersion,
+				build: (run) => {
+					const next: RunProjection = {
+						...run,
+						status: "cancelled",
+						stage: "terminal",
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					return {
+						run: next,
+						events: [
+							makeEvent(runId, {
+								type: "RunStatusChanged",
+								runId,
+								status: "cancelled",
+								stage: "terminal",
+								reason: "cancel",
+							}),
+						],
+					};
+				},
 			});
-			if (run.reservationId) {
+			if (!cas.ok) return casError(cas.code, cas.message, cas.run);
+
+			const priorReservationId = store.getRun(runId)?.reservationId;
+			// Use the pre-commit reservation from built run — re-read may already be terminal.
+			const resId = cas.run.reservationId ?? priorReservationId;
+			if (resId) {
 				try {
-					coordinator.normalRelease(run.reservationId, {
+					coordinator.normalRelease(resId, {
 						noLiveOrAmbiguousSideEffects: providerQuiescent(runId),
 						runIsTerminal: true,
 						runIsParkedAndFutureDispatchRequiresReadmission: false,
@@ -689,26 +726,17 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					/* keep */
 				}
 			}
-			return { ok: true, run: updated, snapshot: { run: updated } };
+			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
 		},
 
 		async parkForApproval(runId, opts = {}) {
 			if (!canMutate) return attachDenied("parkForApproval");
-			const run = store.getRun(runId);
-			if (!run) {
+			// Quiescence check before lock (provider is process-local).
+			const pre = store.getRun(runId);
+			if (pre && !providerQuiescent(runId)) {
 				return {
 					ok: false,
-					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
-				};
-			}
-			const stale = casMismatch(run, opts.expectedRunVersion);
-			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
-			// D38: release slot only when provider is quiescent (no live/ambiguous side effects).
-			const quiescent = providerQuiescent(runId);
-			if (!quiescent) {
-				return {
-					ok: false,
-					run,
+					run: pre,
 					error: {
 						code: "TF_PROVIDER_AMBIGUOUS",
 						message:
@@ -718,59 +746,57 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						projectId: store.header.projectId,
 						controlDomainId: store.header.controlDomainId,
 					},
-					snapshot: { run },
+					snapshot: { run: pre },
 				};
 			}
-			const approvalRequestId = newId("apr");
-			if (run.reservationId) {
-				coordinator.normalRelease(run.reservationId, {
-					noLiveOrAmbiguousSideEffects: true,
-					runIsTerminal: false,
-					runIsParkedAndFutureDispatchRequiresReadmission: true,
-				});
+
+			let releasedReservationId: string | undefined;
+			const cas = store.compareAndCommit({
+				runId,
+				expectedRunVersion: opts.expectedRunVersion,
+				build: (run) => {
+					releasedReservationId = run.reservationId;
+					const approvalRequestId = newId("apr");
+					const next: RunProjection = {
+						...run,
+						status: "paused",
+						stage: "parked",
+						approvalRequestId,
+						reservationId: undefined,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					return {
+						run: next,
+						events: [makeEvent(runId, { type: "ApprovalParked", runId, approvalRequestId })],
+					};
+				},
+			});
+			if (!cas.ok) return casError(cas.code, cas.message, cas.run);
+
+			if (releasedReservationId) {
+				try {
+					coordinator.normalRelease(releasedReservationId, {
+						noLiveOrAmbiguousSideEffects: true,
+						runIsTerminal: false,
+						runIsParkedAndFutureDispatchRequiresReadmission: true,
+					});
+				} catch {
+					/* keep */
+				}
 			}
-			const next: RunProjection = {
-				...run,
-				status: "paused",
-				stage: "parked",
-				approvalRequestId,
-				reservationId: undefined,
-				updatedAt: Date.now(),
-				runVersion: run.runVersion + 1,
-			};
-			const updated = emit(next, { type: "ApprovalParked", runId, approvalRequestId });
-			return { ok: true, run: updated, snapshot: { run: updated } };
+			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
 		},
 
 		async approve(runId, opts = {}) {
 			if (!canMutate) return attachDenied("approve");
-			const run = store.getRun(runId);
-			if (!run) {
-				return {
-					ok: false,
-					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
-				};
-			}
-			const stale = casMismatch(run, opts.expectedRunVersion);
-			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
-			if (run.stage !== "parked" && run.status !== "paused") {
-				return {
-					ok: false,
-					run,
-					error: {
-						code: "TF_INVALID_ARGUMENT",
-						message: `approve requires paused+parked run (have status=${run.status} stage=${run.stage})`,
-						recoveryAction: "refresh",
-						sideEffects: "none",
-					},
-					snapshot: { run },
-				};
-			}
-			// Re-reserve before execute (D38)
+
+			// Re-reserve before execute (D38). If CAS loses, free the reserved slot.
 			const reservation = coordinator.reserve({
 				coordinatorEpoch: singleton?.lock.fencingEpoch ?? Date.now(),
 			});
 			if (!reservation) {
+				const run = store.getRun(runId) ?? undefined;
 				return {
 					ok: false,
 					run,
@@ -782,53 +808,117 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					},
 				};
 			}
-			let next: RunProjection = {
-				...run,
-				status: "running",
-				stage: "queued",
-				reservationId: reservation.reservationId,
-				updatedAt: Date.now(),
-				runVersion: run.runVersion + 1,
-			};
-			next = emit(next, {
-				type: "ApprovalDecided",
+
+			// Single exclusive compareAndCommit: re-read + CAS + paused+parked + Receipt.
+			// Two clients with the same expectedRunVersion → exactly one ok:true.
+			const cas = store.compareAndCommit({
 				runId,
-				approvalRequestId: run.approvalRequestId ?? "",
-				decision: "approve",
+				expectedRunVersion: opts.expectedRunVersion,
+				validate: (run) => {
+					// D38: require BOTH paused status AND parked stage (not OR).
+					if (run.status !== "paused" || run.stage !== "parked") {
+						return `approve requires paused+parked run (have status=${run.status} stage=${run.stage})`;
+					}
+					return null;
+				},
+				build: (run) => {
+					const now = Date.now();
+					const afterDecide: RunProjection = {
+						...run,
+						status: "completed",
+						stage: "terminal",
+						reservationId: reservation.reservationId,
+						finalOutput: run.finalOutput ?? "approved",
+						updatedAt: now,
+						// One version bump for the whole atomic transition (CAS base → terminal).
+						runVersion: run.runVersion + 1,
+					};
+					const evDecide = makeEvent(runId, {
+						type: "ApprovalDecided",
+						runId,
+						approvalRequestId: run.approvalRequestId ?? "",
+						decision: "approve",
+					});
+					const evStatus = makeEvent(runId, {
+						type: "RunStatusChanged",
+						runId,
+						status: "completed",
+						stage: "terminal",
+					});
+					const receiptId = newId("rcpt");
+					const evReceipt = makeEvent(runId, {
+						type: "ReceiptIssued",
+						runId,
+						receiptId,
+					});
+					const receipt = issueReceipt(
+						afterDecide,
+						{
+							boundPlanHash: afterDecide.boundPlanHash,
+							executionSemanticHash: "",
+							programName: "approved",
+							program: {},
+							createdAt: now,
+							approvalMode: "durable-optional",
+							grantRefs: [],
+						},
+						[evDecide.eventId, evStatus.eventId, evReceipt.eventId],
+					);
+					// Stable receiptId for event + receipt object
+					const receiptFixed: Receipt = { ...receipt, receiptId };
+					const withReceipt: RunProjection = {
+						...afterDecide,
+						receiptId,
+					};
+					return {
+						run: withReceipt,
+						receipt: receiptFixed,
+						events: [evDecide, evStatus, evReceipt],
+					};
+				},
 			});
-			coordinator.commitReservation(reservation.reservationId, {
-				projectId: store.header.projectId,
-				projectControlDomainId: store.header.controlDomainId,
-				runId,
-				projectAdmitCommitSeq: store.nextCommitSeq() - 1,
-			});
-			// Complete as simple approved continuation for closed-loop tests
-			next = {
-				...next,
-				status: "completed",
-				stage: "terminal",
-				finalOutput: next.finalOutput ?? "approved",
-				updatedAt: Date.now(),
-				runVersion: next.runVersion + 1,
+
+			if (!cas.ok) {
+				// Loser frees pre-admit reserved slot (still `reserved`, TTL-reclaimable too).
+				try {
+					coordinator.normalRelease(reservation.reservationId, {
+						noLiveOrAmbiguousSideEffects: true,
+						runIsTerminal: false,
+						runIsParkedAndFutureDispatchRequiresReadmission: true,
+					});
+				} catch {
+					/* ignore */
+				}
+				return casError(cas.code, cas.message, cas.run);
+			}
+
+			// Winner: commit then release the re-reserved slot (terminal).
+			try {
+				coordinator.commitReservation(reservation.reservationId, {
+					projectId: store.header.projectId,
+					projectControlDomainId: store.header.controlDomainId,
+					runId,
+					projectAdmitCommitSeq: cas.commitSeqEnd,
+				});
+			} catch {
+				/* reservation may already be committed */
+			}
+			try {
+				coordinator.normalRelease(reservation.reservationId, {
+					noLiveOrAmbiguousSideEffects: true,
+					runIsTerminal: true,
+					runIsParkedAndFutureDispatchRequiresReadmission: false,
+				});
+			} catch {
+				/* keep */
+			}
+
+			return {
+				ok: true,
+				run: cas.run,
+				receipt: cas.receipt,
+				snapshot: { run: cas.run, receipt: cas.receipt },
 			};
-			coordinator.normalRelease(reservation.reservationId, {
-				noLiveOrAmbiguousSideEffects: true,
-				runIsTerminal: true,
-				runIsParkedAndFutureDispatchRequiresReadmission: false,
-			});
-			const boundPlanHash = next.boundPlanHash;
-			const receipt = issueReceipt(next, {
-				boundPlanHash,
-				executionSemanticHash: "",
-				programName: "approved",
-				program: {},
-				createdAt: Date.now(),
-				approvalMode: "durable-optional",
-				grantRefs: [],
-			});
-			next = { ...next, receiptId: receipt.receiptId };
-			next = emit(next, { type: "ReceiptIssued", runId, receiptId: receipt.receiptId }, undefined, receipt);
-			return { ok: true, run: next, receipt, snapshot: { run: next, receipt } };
 		},
 
 		forceReleaseReservation(reservationId, opts) {
