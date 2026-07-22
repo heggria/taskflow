@@ -1,9 +1,9 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v7 (approved architecture + approved 0.3 protocol model)**
+> **Document version:** **v7.1** (doc-alignment + global budget stats, RunStatus/Stage, P-ADR gate, P15)
 > **Branch:** `feat/0.3.0`
 > **Date:** 2026-07-22
-> **Approver action:** Product decisions below are **accepted** for 0.3 implementation planning (Steps 1–2.5).
+> **Approver action:** Architecture + 0.3 protocol model **approved** for Steps 1–2.5.
 > **Wire/schema freeze:** still **not** approved until P-ADRs land concrete TypeBox.
 >
 > | Layer | Status |
@@ -119,7 +119,9 @@ ExecutionProvider (agent / script)
 | **D27** | **Per-project domain fixed at first registration; no DomainTransfer in 0.3** |
 | **D28** | Node ≥22.19; **TS 7** workspace; **DSL TS 6 API isolated**; pnpm 11 |
 | **D29** | User **ControlRegistry** for multi-project mount/aggregate |
-| **D30** | Global concurrency/budget via **user scheduler leases + aggregation**, not merged project journals |
+| **D30** | **Global concurrency (0.3):** strong only under the user-level **singleton coordinator** (daemon/embedded). **Global budget (0.3):** Receipt **aggregation / statistics only** — not a hard cross-project admission gate. Cross-project hard budget deferred. |
+| **D31** | **RunStatus** vs **RunStage** are distinct fields (§8) |
+| **D32** | Embedded multi-mount supervisor must use the **same user singleton lock + endpoint** as taskflowd |
 
 ---
 
@@ -143,18 +145,42 @@ Records at least: CommandRecords, ControlEvents, Run projections, approval state
 
 Storage engine: **port only**. **Do not** default to `node:sqlite` without a dedicated P-ADR covering stability, txn, concurrency, upgrade (Node API stability note). File/log backend is acceptable for 0.3.
 
-### 4.3 ControlRegistry (user-level, non-authoritative)
+### 4.3 ControlRegistry (user-level, non-authoritative for project Runs)
 
 ```text
 ControlRegistry
 ├── projectId → { controlDomainId, storePath, directoryBinding, mountState, summary? }
-└── rebuildable indexes (run list, open approvals) — derived, not authority
+└── rebuildable indexes (run list, open approvals) — derived, not project-run authority
 ```
 
 - taskflowd **mounts** each project store listed in the registry.
-- Mutating commands always commit to the **project** ControlStore.
+- Mutating project commands always commit to the **project** ControlStore.
 - Global run list / search / approval inbox = **aggregate views**.
-- Registry corruption → rebuild by scanning known project bindings; must not invent run state.
+
+#### 4.3.1 Registry loss / rebuild (P3 must implement)
+
+- Every **ControlStore header** persists `{ projectId, controlDomainId, schemaVersion, directoryBinding evidence }`.
+- If Registry is lost: **on next open** of a project path, re-register from store header (no invention of run state).
+- Optional full-disk discovery only if **explicit discovery roots** are configured (not implicit whole home crawl by default).
+- **clone / copy / worktree / move** policy (P3):
+  - **move** same inode evidence after rebind → same projectId when rebind succeeds;
+  - **copy/clone** → **new projectId** (new domain) unless explicit “adopt identity” operator command;
+  - **git worktree** → new binding; default **new projectId** (avoid two worktrees sharing one live journal without exclusive lease).
+
+#### 4.3.2 UserCoordinatorStore (narrow authority — not a project total ledger)
+
+For **global concurrency** under multi-mount control only:
+
+```text
+UserCoordinatorStore (user-private, small)
+├── daemon / embedded supervisor lease + fencing epoch
+├── concurrency reservations (lease records)
+└── optional budget *reservations* only if a future ADR enables hard global budget
+```
+
+- Does **not** store project Run history, CommandRecords, or Receipts for projects.
+- **0.3 global budget:** aggregate Receipts for **statistics/UI only**; project-level `budget` on BoundPlan remains enforced **inside that project’s ControlStore**.
+- Strong cross-project budget gate = **post-0.3**.
 
 ### 4.4 DomainTransfer — **out of 0.3**
 
@@ -170,8 +196,8 @@ If a future product requires “two projects, one atomic admission Receipt,” d
 | Need | 0.3 mechanism |
 |------|----------------|
 | Unified dashboard | Registry + aggregate index |
-| Global concurrency | User-level scheduler **leases** |
-| Global budget view | Aggregate Receipts / optional user quota ledger of **reservations** only |
+| Global concurrency | **UserCoordinatorStore** leases under singleton multi-mount control; strong only when that coordinator is active |
+| Global budget | **Statistics only** (aggregate Receipts); not hard admission across projects |
 | Cross-project workflow | Coordinator Run with **references** to child run ids (best-effort; not one atomic dual-ledger txn in 0.3) |
 | Unified approvals | Inbox of **refs**; decisions write back to home project store |
 
@@ -181,16 +207,25 @@ If a future product requires “two projects, one atomic admission Receipt,” d
 
 | Mode | Behavior |
 |------|----------|
-| **auto (default)** | Ensure user registry + project domain store; start or attach **taskflowd** (or embedded multi-mount supervisor) per bootstrap contract; fail closed if control cannot run |
+| **auto (default)** | Ensure user registry + project ControlStore; start or attach the **user singleton multi-mount control** (taskflowd **or** embedded supervisor that competes for the **same** lock/endpoint — D32); fail closed if control cannot run |
 | **coordinated** | External control required; fail closed if down |
-| **standalone** | Explicit. In-process ControlHost opens **the same project ControlStore**; single-owner lease; no multi-client domain claims |
+| **standalone** | Explicit. In-process ControlHost opens **the same project ControlStore**; single-owner lease; **no** global concurrency claims across projects |
 
 **Silent fallback from auto → full standalone is forbidden.** Only explicit `controlMode: standalone`.
 
-### 5.1 Fresh-install / upgrade contract (GA must pass)
+### 5.1 Embedded multi-mount supervisor (not a forked auto)
+
+If a host package embeds a multi-mount supervisor instead of spawning an external `taskflowd` binary:
+
+1. It **must** compete for the **same user-level singleton lock** and **same coordination endpoint** (UDS path / pipe name) as the standalone `taskflowd`.
+2. Losers **attach as clients** to the winner — they must **not** each become an independent multi-mount authority.
+3. Wire protocol, fencing epoch, and UserCoordinatorStore path are **identical** to external daemon.
+4. Failing the lock and then running “local multi-mount alone” is **forbidden** (that is silent fork).
+
+### 5.2 Fresh-install / upgrade contract (GA must pass)
 
 1. **Bundled control binary** path documented (`taskflowd` / host package bin).
-2. First `taskflow_run` (or CLI equivalent) with defaults: creates registry entry + project ControlStore if missing, starts control if needed, completes one run **without manual daemon config**.
+2. First `taskflow_run` (or CLI equivalent) with defaults: creates registry entry + project ControlStore if missing, starts/attaches singleton control, completes one run **without manual daemon config**.
 3. **Concurrent client start:** single-instance lock / socket acquire; losers attach to winner (no dual writers).
 4. **Stale socket:** detect dead peer (pid/lock), remove socket, restart.
 5. **Version skew:** handshake rejects incompatible client/daemon; upgrade path documented (restart daemon from matching package).
@@ -246,23 +281,40 @@ allowedAgentClasses, allowedProviderClasses, tool/effect ceilings, maxChildren, 
 
 ---
 
-## §8. Run / Attempt machines
+## §8. RunStatus, RunStage, Attempt machines
 
-**Run states (0.3 wire) with 0.2.4 compatibility mapping:**
+### 8.1 Two orthogonal fields (D31 — frozen)
 
-| 0.3 terminal / live | 0.2.4 RunState.status | Notes |
-|---------------------|----------------------|--------|
-| running | running | |
-| completed | completed | **Prefer keep `completed` in wire**, not rename to success (compat). RFC prose may say “successful completion”. |
+```text
+RunStatus = running | completed | failed | paused | blocked | cancelled | unknown
+RunStage  = received | compiled | linked | queued | admitted | executing | terminal
+```
+
+| Field | Meaning |
+|-------|---------|
+| **RunStatus** | User-visible / API lifecycle (maps to 0.2.4 `RunState.status` + extensions) |
+| **RunStage** | Internal control pipeline progress (link/admit pipeline); may advance while status stays `running` or `paused` |
+
+### 8.2 RunStatus ↔ 0.2.4 mapping (frozen for goldens)
+
+| 0.3 RunStatus | 0.2.4 | Notes |
+|---------------|-------|--------|
+| running | running | Active work or between stages while not terminal |
+| completed | completed | Successful terminal (do **not** rename wire to `success`) |
 | failed | failed | |
-| paused | paused | Includes waiting for approval / human |
-| blocked | blocked | Gate / budget policy block |
-| cancelled | failed or extended | P5 must pin: add `cancelled` only with import mapping from 0.2 |
-| unknown | — | New; unclean provider/journal uncertainty |
+| paused | paused | Waiting approval / human; RunStage may be `executing` |
+| blocked | blocked | Gate / **project** budget block |
+| cancelled | *(new)* | Explicit cancel terminal; **import:** 0.2 runs without cancel → never map to cancelled; legacy failed-with-cancel-message stays failed unless importer proves cancel |
+| unknown | *(new)* | Unclean provider/journal uncertainty |
 
-**P5 golden matrix must include** completed↔success naming, paused (approval), blocked, resume-from-paused, and any new unknown.
+### 8.3 RunStage progression
 
-**Run flow:** Received → Compiled → Linked → Queued → Admitted → Running ⇄ FragmentLinked* → Terminal.
+```text
+received → compiled → linked → queued → admitted → executing → terminal
+```
+
+- Fragment link mid-run keeps status `running` (or `paused` if waiting approval) while stage may re-enter `executing` after `FragmentLinked`.
+- Terminal stage pairs with a terminal RunStatus (`completed|failed|blocked|cancelled|unknown`).
 
 **Attempt:**
 
@@ -447,18 +499,42 @@ Discriminated unions for accepted | rejected | ambiguous.
 
 ---
 
-## §17. Approval
+## §17. Approval (outline; full wire in **P15**)
+
+0.2.4 `ApprovalRequest` is minimal (`phaseId/message/upstream`). 0.3 is a protocol upgrade.
+
+### 17.1 Objects
 
 ```text
-approvalRequestId, runId, nodeInstanceId, boundPlanHash|boundFragmentHash
-expectedRunVersion, allowedDecisions, owner/audience, deadline
+ApprovalRequest {
+  approvalRequestId
+  runId, nodeInstanceId
+  boundPlanHash | boundFragmentHash
+  expectedRunVersion
+  allowedDecisions: approve | reject | edit
+  owner / audience / requiredPrincipals?
+  deadline, timeoutPolicy
+  status: pending | approved | rejected | edited | expired | cancelled
+  createdAt, decidedAt?
+  decisionCommandId?     // CommandRecord of the decision
+  editArtifactRef?       // when edit
+}
 ```
 
-- CancelRequested first → later ApprovalDecision CAS fails.
-- Approval first → later cancel may still cancel Run.
-- Timeout → **reject**.
-- edit output → no re-link; edit plan → re-Link.
-- Maps to 0.2 `paused` while waiting.
+### 17.2 Rules (normative minimum)
+
+- RunStatus **`paused`** while request `pending`.
+- Decision is a **CommandRecord** (idempotent; re-auth on disclosure).
+- **CancelRequested first** → later ApprovalDecision CAS fails; request → `cancelled`.
+- **ApprovalDecision first** → clears pause; later CancelRequested may still cancel Run.
+- Same `expectedRunVersion` race → first commit wins.
+- **Timeout → reject** (status `expired` or rejected-by-timeout); **never** default approve.
+- **edit output** → validate against OutputContract; no re-link.
+- **edit plan/obligations** → re-Link required before continue.
+- Decider must match **principal / audience** rules (P15).
+- Survive control restart; dual-client decide tests required.
+
+**P15** freezes TypeBox + full CAS table before wire freeze.
 
 ---
 
@@ -528,7 +604,7 @@ taskflow-web (0.3.1+) / host delivery packages
 
 | Item | Baseline |
 |------|----------|
-| Node engines | ≥22.19; **@types/node aligned to 22** for published packages (or dual CI 22/24/26 with 22 as gate) |
+| Node engines | ≥22.19; **@types/node aligned to 22** for package typecheck **and** CI matrix **22 + 24 LTS (+ 26 Current optional)** — not “types 22 *or* multi-version CI” |
 | TypeScript | **Root TS 7** CLI/typecheck; **taskflow-dsl** isolated **TS 6** compiler API; resolution guard test against drift |
 | pnpm | **11.x** stable (`packageManager` field) |
 | SQLite | only behind ControlStore port + explicit P-ADR |
@@ -540,13 +616,13 @@ taskflow-web (0.3.1+) / host delivery packages
 ```text
 1.   Green trunk
 1.a  Public 0.2.4 surface → golden plan
-1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22 alignment
+1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22 + CI 22/24/26
 2.   Single scheduler convergence
-2.5  P-ADRs P1–P12 (all required before wire freeze; body absorbs intent, ADRs freeze schemas)
+2.5  P-ADRs (gate below)
 3.   Wire freeze + TypeBox
 4.   ControlHost extract
-5.   Per-project ControlStore + user Registry
-6.   Bootstrap + daemon multi-mount
+5.   Per-project ControlStore + user Registry + UserCoordinatorStore (concurrency only)
+6.   Bootstrap + singleton multi-mount (taskflowd / embedded)
 7.   Linker + admission
 8.   ExecutionProviders
 9.   Thin MCP + CLI
@@ -555,9 +631,29 @@ taskflow-web (0.3.1+) / host delivery packages
 
 **Allowed now: 1–2.5.**
 
-### P-ADR set (all before wire freeze)
+### P-ADR wire-freeze gate (unified)
 
-P1 policy · P2 empty exposure · P3 domain+registry (no transfer) · P4 negotiate+errors · P5 matrix · P6 hash/artifact/secret · P7 dynamic+cache · P8 enforcement · P9 legacy-conflict · P10 rollback · P11 compaction+cursor · P12 command batch+re-auth · **P13 bootstrap/fresh-install** · **P14 ControlStore engine** (if not files-only).
+> **P1–P13 and P15 required before wire freeze.**
+> **P14** (ControlStore engine) **required unless** P3 freezes a **files-only** engine with no sqlite/other port.
+
+| ID | Topic |
+|----|--------|
+| P1 | Policy overlay |
+| P2 | Empty-policy Exposure |
+| P3 | Domain + Registry rebuild + clone/worktree identity (no DomainTransfer) |
+| P4 | Negotiation + errors + recoveryAction |
+| P5 | Phase × feature matrix + RunStatus mapping + ternary suites |
+| P6 | Canonical hash + ArtifactRef + SecretRef |
+| P7 | Dynamic paths + dual hashes + cache |
+| P8 | Enforcement capabilities |
+| P9 | legacy-conflict |
+| P10 | Rollback tiers |
+| P11 | Compaction + cursor + minAvailableCommitSeq |
+| P12 | Command batch + re-auth disclosure |
+| P13 | Bootstrap / fresh-install / singleton lock / platforms |
+| P14 | ControlStore engine (skip only if files-only frozen in P3) |
+| P15 | **Approval protocol** (full state machine + principal rules) |
+| P16 | UserCoordinatorStore concurrency leases (optional if folded into P13) |
 
 ---
 
@@ -582,12 +678,14 @@ P1 policy · P2 empty exposure · P3 domain+registry (no transfer) · P4 negotia
 
 ```text
 Architecture: Approved
-Protocol model (0.3): Approved (v7)
-Wire freeze: Not approved
+Protocol model (0.3): Approved (v7.1 doc-alignment patch)
+Wire freeze: Not approved (needs P1–P13+P15, P14 if not files-only)
 Steps 1–2.5: Approved to start
 DomainTransfer: Rejected for 0.3
 User merged journal: Rejected for 0.3
 User Registry + multi-mount: Approved
+Global concurrency: strong under singleton coordinator only
+Global budget: statistics only in 0.3
 ```
 
 ---

@@ -132,13 +132,14 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
 
 Ship when these are true:
 
-- [ ] `taskflowd` optional; thin MCP clients talk socket (or fall back in-process)
+- [ ] Thin MCP clients use default `controlMode: auto` (connect to or bootstrap taskflowd); in-process ControlHost only under explicit `controlMode: standalone` (never silent fallback)
+- [ ] Per-project ControlStore authority; user ControlRegistry mounts/aggregates only
 - [ ] `taskflow_capabilities` reflects live policy for the caller
-- [ ] Policy: agent + model + tools + budget + roots; strict/remap traced
+- [ ] Policy: agent + model + tools + budget + roots; deny/substitute/attenuate traced
 - [ ] WebUI or CLI: run observe + cancel/resume + policy edit (observe first)
 - [ ] At least one **visible** incremental win (re-run cost / why-stale in UI)
-- [ ] Docs: this map + updated north-star (“control plane”, not “another DAG”)
-- [ ] Explicit non-goal list published (no Temporal, no org-chart OS, no Squad clone)
+- [ ] Docs: this map + control-plane RFC v7+ (“control plane”, not “another DAG”)
+- [ ] Explicit non-goal list published (no Temporal, no org-chart OS, no Squad clone, no DomainTransfer in 0.3)
 
 **Later (post-0.3 spikes):** cloud worker adapter, env-addressed cache, proof-carrying PR artifact, A2A worker advertisement, approval→policy learning.
 

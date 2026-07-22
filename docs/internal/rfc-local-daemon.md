@@ -7,12 +7,13 @@
 > ### 0.3 supersession
 >
 > For **0.3 ControlHost clients**, product defaults and outage behavior are defined by
-> [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) (§4, §25). In particular:
+> [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) (**§5, §25**). In particular:
 >
 > - 0.3 clients default to **`controlMode: auto`** (on-demand control), not “daemon default-off”;
 > - control unavailable under `auto`/`coordinated` → **fail closed** (no silent full-power in-process);
 > - `standalone` is explicit; same ControlHost semantics;
-> - journal may live in a **user-level ControlDomain** with projects as partitions (not only “per-project process-less store”).
+> - **0.3 keeps one authoritative ControlStore per project**; the user-level **ControlRegistry** only
+>   mounts and aggregates them (not a user-level journal with projects as partitions).
 >
 > **Still non-negotiable (retained by 0.3 RFC):** disk is authority; UDS + auth; version handshake;
 > one admission authority when claimed; no default network listener; daemon memory is never the only
@@ -24,7 +25,7 @@
 ## Historical 0.2.x decision
 
 > **Label:** Historical requirements for the **0.2.3 process-less** line.
-> **Not binding on 0.3 ControlHost clients** — see [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) §4–§5 and §25.
+> **Not binding on 0.3 ControlHost clients** — see [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) §5 and §25.
 
 Taskflow **0.2.x** remains process-less by default. The project store is authoritative;
 hosts start ordinary stdio MCP servers and long runs execute in isolated,
