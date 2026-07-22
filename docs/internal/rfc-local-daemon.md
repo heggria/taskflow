@@ -12,12 +12,14 @@
 > - 0.3 clients default to **`controlMode: auto`** (on-demand control), not “daemon default-off”;
 > - control unavailable under `auto`/`coordinated` → **fail closed** (no silent full-power in-process);
 > - `standalone` is explicit; same ControlHost semantics;
-> - **0.3 keeps one authoritative ControlStore per project**; the user-level **ControlRegistry** only
->   mounts and aggregates them (not a user-level journal with projects as partitions).
+> - **0.3 keeps one authoritative project ControlStore per project** (Run/Command/Approval/Receipt).
+> - User-level **ControlRegistry** only mounts/aggregates (non-authoritative).
+> - User-level **UserCoordinatorStore** is authoritative **only** for daemon singleton lease and
+>   **global concurrency reservations** — not project Run history (not a merged total ledger).
 >
 > **Still non-negotiable (retained by 0.3 RFC):** disk is authority; UDS + auth; version handshake;
-> one admission authority when claimed; no default network listener; daemon memory is never the only
-> copy of run state.
+> one multi-mount admission path when claimed; no default network listener; daemon memory is never the
+> only copy of project run state.
 >
 > This document remains the historical decision record for **deferring** a daemon in 0.2.3 and the
 > process-less detached lifecycle. Do not treat its “Default off” bullet as binding on 0.3 clients.
