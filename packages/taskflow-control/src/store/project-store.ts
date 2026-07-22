@@ -70,6 +70,9 @@ function bindDirectory(projectRoot: string): DirectoryBinding {
 /**
  * Open or create the project ControlStore at projectRoot.
  * Registry is NOT authoritative — header is the source of projectId/domainId.
+ *
+ * Header create/open is under exclusive lock so concurrent first-opens
+ * (cross-process) mint a single projectId/controlDomainId.
  */
 export function openProjectControlStore(projectRoot: string): ProjectControlStore {
 	const root = path.resolve(projectRoot);
@@ -80,10 +83,26 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 	ensureDir(projectReceiptsDir(root));
 
 	const headerPath = projectHeaderPath(root);
-	let header = readJsonFile<ControlStoreHeader>(headerPath);
-	if (!header) {
+	const headerLockPath = path.join(projectControlRoot(root), "header.lock");
+
+	// Cross-process identity mint: lock → re-read → create-if-missing → write.
+	const header = withExclusiveLockFile(headerLockPath, () => {
+		const existing = readJsonFile<ControlStoreHeader>(headerPath);
+		if (existing) {
+			const refreshed: ControlStoreHeader = {
+				...existing,
+				directoryBinding: {
+					...existing.directoryBinding,
+					path: path.resolve(root),
+				},
+				updatedAt: Date.now(),
+			};
+			// Preserve identity fields exactly; only refresh binding path.
+			writeFileAtomic(headerPath, JSON.stringify(refreshed, null, 2));
+			return refreshed;
+		}
 		const now = Date.now();
-		header = {
+		const created: ControlStoreHeader = {
 			schemaVersion: CONTROL_STORE_SCHEMA_VERSION,
 			projectId: newId("proj"),
 			controlDomainId: newId("dom"),
@@ -91,18 +110,11 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 			createdAt: now,
 			updatedAt: now,
 		};
-		writeFileAtomic(headerPath, JSON.stringify(header, null, 2));
-	} else {
-		header = {
-			...header,
-			directoryBinding: {
-				...header.directoryBinding,
-				path: path.resolve(root),
-			},
-			updatedAt: Date.now(),
-		};
-		writeFileAtomic(headerPath, JSON.stringify(header, null, 2));
-	}
+		writeFileAtomic(headerPath, JSON.stringify(created, null, 2));
+		// Re-read after write in case another process won a rare race after unlock
+		// (should not happen under lock; defensive).
+		return readJsonFile<ControlStoreHeader>(headerPath) ?? created;
+	});
 
 	const seqPath = path.join(projectControlRoot(root), "commit-seq.json");
 	const commitLockPath = path.join(projectControlRoot(root), "commit.lock");
@@ -111,10 +123,13 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 		return readJsonFile<{ next: number }>(seqPath)?.next ?? 1;
 	}
 
+	// Mutable local cache; identity fields never change after first create.
+	let headerCache = header;
+
 	const store: ProjectControlStore = {
 		projectRoot: root,
 		get header() {
-			return header!;
+			return headerCache;
 		},
 
 		nextCommitSeq() {
@@ -137,8 +152,8 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 						...ev,
 						commitSeq: seq,
 						streamSeq: ev.streamSeq || i + 1,
-						controlDomainId: header!.controlDomainId,
-						projectId: header!.projectId,
+						controlDomainId: headerCache.controlDomainId,
+						projectId: headerCache.projectId,
 					};
 					seq += 1;
 					return e;
@@ -154,8 +169,8 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 							...batch.command,
 							firstCommitSeq: batch.command.firstCommitSeq || start,
 							lastCommitSeq: end,
-							projectId: header!.projectId,
-							controlDomainId: header!.controlDomainId,
+							projectId: headerCache.projectId,
+							controlDomainId: headerCache.controlDomainId,
 						}
 					: undefined;
 
@@ -196,8 +211,8 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 				if (batch.run) {
 					const run = {
 						...batch.run,
-						projectId: header!.projectId,
-						controlDomainId: header!.controlDomainId,
+						projectId: headerCache.projectId,
+						controlDomainId: headerCache.controlDomainId,
 					};
 					writeFileAtomic(
 						path.join(projectProjectionsDir(root), `run-${run.runId}.json`),
@@ -207,8 +222,8 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 				if (batch.receipt) {
 					const receipt = {
 						...batch.receipt,
-						projectId: header!.projectId,
-						controlDomainId: header!.controlDomainId,
+						projectId: headerCache.projectId,
+						controlDomainId: headerCache.controlDomainId,
 					};
 					writeFileAtomic(
 						path.join(projectReceiptsDir(root), `${receipt.receiptId}.json`),
@@ -220,8 +235,8 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 					);
 				}
 
-				header = { ...header!, updatedAt: Date.now() };
-				writeFileAtomic(headerPath, JSON.stringify(header, null, 2));
+				headerCache = { ...headerCache, updatedAt: Date.now() };
+				writeFileAtomic(headerPath, JSON.stringify(headerCache, null, 2));
 
 				return { commitSeqStart: start, commitSeqEnd: end };
 			});

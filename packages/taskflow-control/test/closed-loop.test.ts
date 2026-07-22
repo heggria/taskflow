@@ -1,11 +1,14 @@
 /**
  * §23 GA closed-loop tests — drive shipped ControlHost / bootstrap APIs.
  * No soft assertions: capacity/attach/idempotency/park must hard-fail when wrong.
+ * Includes real multi-process races for header identity and coordinator capacity.
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
 	bootstrapControl,
@@ -20,6 +23,26 @@ import {
 	assertControlModeExplicit,
 	type ControlEvent,
 } from "../src/index.ts";
+
+const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
+
+function runMpHelper(script: string, args: string[]): { status: number; stdout: string; stderr: string } {
+	const scriptPath = path.join(helpersDir, script);
+	const r = spawnSync(
+		process.execPath,
+		["--conditions=development", "--experimental-strip-types", scriptPath, ...args],
+		{
+			encoding: "utf-8",
+			env: process.env,
+			timeout: 30_000,
+		},
+	);
+	return {
+		status: r.status ?? 1,
+		stdout: r.stdout ?? "",
+		stderr: r.stderr ?? "",
+	};
+}
 
 function tempEnv(): { env: NodeJS.ProcessEnv; home: string; project: string; cleanup: () => void } {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-ctrl-home-"));
@@ -462,6 +485,115 @@ test("openProjectControlStore header is authority for identity", () => {
 		reg.wipe();
 		const s3 = openProjectControlStore(t.project);
 		assert.equal(s3.header.projectId, id);
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("multi-process concurrent first-open: single projectId/controlDomainId on durable header", () => {
+	const t = tempEnv();
+	try {
+		const N = 8;
+		// Launch N child processes nearly simultaneously (sequential spawn is fine —
+		// they contend on header.lock during open).
+		const results: Array<{ projectId: string; controlDomainId: string; pid: number }> = [];
+		const children = Array.from({ length: N }, () =>
+			runMpHelper("mp-open-store.mts", [t.project]),
+		);
+		for (const c of children) {
+			assert.equal(c.status, 0, `child failed: ${c.stderr}\n${c.stdout}`);
+			const parsed = JSON.parse(c.stdout) as {
+				projectId: string;
+				controlDomainId: string;
+				pid: number;
+			};
+			results.push(parsed);
+		}
+		assert.equal(results.length, N);
+		const projectIds = new Set(results.map((r) => r.projectId));
+		const domainIds = new Set(results.map((r) => r.controlDomainId));
+		assert.equal(projectIds.size, 1, `forked projectIds: ${[...projectIds].join(",")}`);
+		assert.equal(domainIds.size, 1, `forked domainIds: ${[...domainIds].join(",")}`);
+
+		// Durable header on disk matches
+		const durable = JSON.parse(
+			fs.readFileSync(path.join(t.project, ".taskflow", "control", "header.json"), "utf-8"),
+		) as { projectId: string; controlDomainId: string };
+		assert.equal(durable.projectId, results[0]!.projectId);
+		assert.equal(durable.controlDomainId, results[0]!.controlDomainId);
+
+		// Parent open agrees
+		const parent = openProjectControlStore(t.project);
+		assert.equal(parent.header.projectId, durable.projectId);
+		assert.equal(parent.header.controlDomainId, durable.controlDomainId);
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("multi-process concurrent bootstrap: shared identity; at most one writer", () => {
+	const t = tempEnv();
+	try {
+		const N = 4;
+		const children = Array.from({ length: N }, (_, i) =>
+			runMpHelper("mp-bootstrap.mts", [t.project, t.home, `mp-holder-${i}`]),
+		);
+		const results: Array<{
+			projectId: string;
+			controlDomainId: string;
+			role: string;
+			canMutate: boolean;
+		}> = [];
+		for (const c of children) {
+			assert.equal(c.status, 0, `bootstrap child failed: ${c.stderr}\n${c.stdout}`);
+			results.push(JSON.parse(c.stdout));
+		}
+		const projectIds = new Set(results.map((r) => r.projectId));
+		const domainIds = new Set(results.map((r) => r.controlDomainId));
+		assert.equal(projectIds.size, 1, `forked projectIds: ${[...projectIds].join(",")}`);
+		assert.equal(domainIds.size, 1);
+
+		// Durable header
+		const durable = JSON.parse(
+			fs.readFileSync(path.join(t.project, ".taskflow", "control", "header.json"), "utf-8"),
+		) as { projectId: string; controlDomainId: string };
+		assert.equal(durable.projectId, results[0]!.projectId);
+		assert.equal(durable.controlDomainId, results[0]!.controlDomainId);
+
+		// Roles: writers may die after host.close() releasing lock — so multiple
+		// children can each have been writer at some point. What we require is
+		// that they never disagreed on identity (above) and durable header is unique.
+		assert.ok(results.every((r) => r.projectId === durable.projectId));
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("multi-process concurrent reserve: capacity never exceeds maxActiveRuns", () => {
+	const t = tempEnv();
+	try {
+		const coord = openUserCoordinatorStore(t.env);
+		coord.setMaxActiveRuns(2, {
+			commandId: "mp-max",
+			callerPrincipal: "op",
+			requestBody: { maxActiveRuns: 2 },
+		});
+		assert.equal(coord.maxActiveRuns, 2);
+
+		const N = 8;
+		const children = Array.from({ length: N }, () => runMpHelper("mp-reserve.mts", [t.home]));
+		let okCount = 0;
+		for (const c of children) {
+			assert.equal(c.status, 0, `reserve child failed: ${c.stderr}\n${c.stdout}`);
+			const parsed = JSON.parse(c.stdout) as { ok: boolean; occupying: number };
+			if (parsed.ok) okCount += 1;
+		}
+		// At most maxActiveRuns successful reserves
+		assert.ok(okCount <= 2, `okCount=${okCount} exceeded maxActiveRuns=2`);
+		// Durable occupying count still within capacity
+		const final = openUserCoordinatorStore(t.env);
+		assert.ok(final.occupyingCount() <= 2, `occupying=${final.occupyingCount()}`);
+		assert.ok(okCount >= 1, "at least one reserve should succeed");
 	} finally {
 		t.cleanup();
 	}

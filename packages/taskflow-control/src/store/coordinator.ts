@@ -5,8 +5,10 @@
  * Capacity: count(reserved|committed|orphan-suspect) ≤ maxActiveRuns
  * slots ≡ 1 per admitted Run.
  * committed / orphan-suspect release ONLY via D37 normalRelease / forceRelease.
+ *
+ * All mutations run under exclusive state.lock with load→mutate→save inside
+ * the critical section (cross-process safe; no last-writer-wins loss).
  */
-import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	CAPACITY_OCCUPYING_STATES,
@@ -21,6 +23,7 @@ import {
 	coordinatorDir,
 	ensureDir,
 	readJsonFile,
+	withExclusiveLockFile,
 	writeFileAtomic,
 } from "../paths.ts";
 
@@ -96,26 +99,39 @@ interface CoordinatorFile {
 	nextCommandSeq: number;
 }
 
+function emptyCoordinator(): CoordinatorFile {
+	return {
+		schemaVersion: 1,
+		maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
+		lease: null,
+		reservations: [],
+		commands: [],
+		nextCommandSeq: 1,
+	};
+}
+
 export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): UserCoordinatorStore {
 	const dir = coordinatorDir(env);
 	ensureDir(dir);
 	const file = path.join(dir, "state.json");
+	const lockPath = path.join(dir, "state.lock");
 
 	function load(): CoordinatorFile {
-		return (
-			readJsonFile<CoordinatorFile>(file) ?? {
-				schemaVersion: 1,
-				maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
-				lease: null,
-				reservations: [],
-				commands: [],
-				nextCommandSeq: 1,
-			}
-		);
+		return readJsonFile<CoordinatorFile>(file) ?? emptyCoordinator();
 	}
 
 	function save(data: CoordinatorFile): void {
 		writeFileAtomic(file, JSON.stringify(data, null, 2));
+	}
+
+	/** load → mutate → save under exclusive cross-process lock. */
+	function mutate<T>(fn: (data: CoordinatorFile) => T): T {
+		return withExclusiveLockFile(lockPath, () => {
+			const data = load();
+			const result = fn(data);
+			save(data);
+			return result;
+		});
 	}
 
 	function occupying(data: CoordinatorFile): number {
@@ -146,9 +162,9 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 		},
 
 		setLease(lease: CoordinatorLease) {
-			const data = load();
-			data.lease = lease;
-			save(data);
+			mutate((data) => {
+				data.lease = lease;
+			});
 		},
 
 		occupyingCount() {
@@ -164,64 +180,60 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 		},
 
 		reserve(opts) {
-			const data = load();
-			// Reclaim expired reserved first
-			const now = Date.now();
-			for (const r of data.reservations) {
-				if (
-					r.state === "reserved" &&
-					r.reservedExpiresAt !== undefined &&
-					r.reservedExpiresAt <= now
-				) {
-					r.state = "expired";
-					r.updatedAt = now;
+			return mutate((data) => {
+				const now = Date.now();
+				for (const r of data.reservations) {
+					if (
+						r.state === "reserved" &&
+						r.reservedExpiresAt !== undefined &&
+						r.reservedExpiresAt <= now
+					) {
+						r.state = "expired";
+						r.updatedAt = now;
+					}
 				}
-			}
-			if (occupying(data) >= data.maxActiveRuns) {
-				save(data);
-				return null;
-			}
-			const ttl = opts.ttlMs ?? RESERVED_TTL_MS;
-			const res: ConcurrencyReservation = {
-				reservationId: newId("rsv"),
-				state: "reserved",
-				slots: RESERVATION_SLOTS,
-				coordinatorEpoch: opts.coordinatorEpoch,
-				reservedExpiresAt: now + ttl,
-				createdAt: now,
-				updatedAt: now,
-			};
-			data.reservations.push(res);
-			save(data);
-			return res;
+				if (occupying(data) >= data.maxActiveRuns) {
+					return null;
+				}
+				const ttl = opts.ttlMs ?? RESERVED_TTL_MS;
+				const res: ConcurrencyReservation = {
+					reservationId: newId("rsv"),
+					state: "reserved",
+					slots: RESERVATION_SLOTS,
+					coordinatorEpoch: opts.coordinatorEpoch,
+					reservedExpiresAt: now + ttl,
+					createdAt: now,
+					updatedAt: now,
+				};
+				data.reservations.push(res);
+				return res;
+			});
 		},
 
 		commitReservation(reservationId, binding) {
-			const data = load();
-			const r = data.reservations.find((x) => x.reservationId === reservationId);
-			if (!r) throw new Error(`reservation not found: ${reservationId}`);
-			if (r.state !== "reserved") {
-				throw new Error(`cannot commit reservation in state ${r.state}`);
-			}
-			const next = updateRes(data, reservationId, {
-				state: "committed",
-				...binding,
-				reservedExpiresAt: undefined, // no TTL on committed
+			return mutate((data) => {
+				const r = data.reservations.find((x) => x.reservationId === reservationId);
+				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				if (r.state !== "reserved") {
+					throw new Error(`cannot commit reservation in state ${r.state}`);
+				}
+				return updateRes(data, reservationId, {
+					state: "committed",
+					...binding,
+					reservedExpiresAt: undefined,
+				});
 			});
-			save(data);
-			return next;
 		},
 
 		markOrphanSuspect(reservationId) {
-			const data = load();
-			const r = data.reservations.find((x) => x.reservationId === reservationId);
-			if (!r) throw new Error(`reservation not found: ${reservationId}`);
-			if (r.state !== "committed" && r.state !== "orphan-suspect") {
-				throw new Error(`cannot mark orphan-suspect from state ${r.state}`);
-			}
-			const next = updateRes(data, reservationId, { state: "orphan-suspect" });
-			save(data);
-			return next;
+			return mutate((data) => {
+				const r = data.reservations.find((x) => x.reservationId === reservationId);
+				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				if (r.state !== "committed" && r.state !== "orphan-suspect") {
+					throw new Error(`cannot mark orphan-suspect from state ${r.state}`);
+				}
+				return updateRes(data, reservationId, { state: "orphan-suspect" });
+			});
 		},
 
 		normalRelease(reservationId, ctx) {
@@ -230,90 +242,88 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 					"D37 normalRelease denied: noLiveOrAmbiguousSideEffects and (terminal|parked-readmit) required",
 				);
 			}
-			const data = load();
-			const r = data.reservations.find((x) => x.reservationId === reservationId);
-			if (!r) throw new Error(`reservation not found: ${reservationId}`);
-			if (r.state !== "committed" && r.state !== "orphan-suspect" && r.state !== "reserved") {
-				throw new Error(`cannot normalRelease from state ${r.state}`);
-			}
-			const next = updateRes(data, reservationId, { state: "released" });
-			save(data);
-			return next;
+			return mutate((data) => {
+				const r = data.reservations.find((x) => x.reservationId === reservationId);
+				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				if (r.state !== "committed" && r.state !== "orphan-suspect" && r.state !== "reserved") {
+					throw new Error(`cannot normalRelease from state ${r.state}`);
+				}
+				return updateRes(data, reservationId, { state: "released" });
+			});
 		},
 
 		forceRelease(reservationId, cmd) {
-			const data = load();
-			const r = data.reservations.find((x) => x.reservationId === reservationId);
-			if (!r) throw new Error(`reservation not found: ${reservationId}`);
-			const seq = data.nextCommandSeq++;
-			const command: CoordinatorCommandRecord = {
-				commandId: cmd.commandId,
-				requestHash: hashRequest(cmd.requestBody),
-				callerPrincipal: cmd.callerPrincipal,
-				kind: "forceRelease",
-				firstCommitSeq: seq,
-				lastCommitSeq: seq,
-				status: "completed",
-				payload: { reservationId, riskAcknowledged: true },
-				recordedAt: Date.now(),
-			};
-			data.commands.push(command);
-			const next = updateRes(data, reservationId, {
-				state: "released",
-				operatorOverridden: true,
+			return mutate((data) => {
+				const r = data.reservations.find((x) => x.reservationId === reservationId);
+				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				const seq = data.nextCommandSeq++;
+				const command: CoordinatorCommandRecord = {
+					commandId: cmd.commandId,
+					requestHash: hashRequest(cmd.requestBody),
+					callerPrincipal: cmd.callerPrincipal,
+					kind: "forceRelease",
+					firstCommitSeq: seq,
+					lastCommitSeq: seq,
+					status: "completed",
+					payload: { reservationId, riskAcknowledged: true },
+					recordedAt: Date.now(),
+				};
+				data.commands.push(command);
+				const next = updateRes(data, reservationId, {
+					state: "released",
+					operatorOverridden: true,
+				});
+				writeFileAtomic(
+					path.join(dir, `cmd-${command.commandId}.json`),
+					JSON.stringify(command, null, 2),
+				);
+				return { reservation: next, command };
 			});
-			save(data);
-			// Also persist command file for audit
-			writeFileAtomic(
-				path.join(dir, `cmd-${command.commandId}.json`),
-				JSON.stringify(command, null, 2),
-			);
-			return { reservation: next, command };
 		},
 
 		setMaxActiveRuns(value, cmd) {
 			if (!Number.isInteger(value) || value < 1) {
 				throw new Error("maxActiveRuns must be integer >= 1");
 			}
-			const data = load();
-			const seq = data.nextCommandSeq++;
-			const command: CoordinatorCommandRecord = {
-				commandId: cmd.commandId,
-				requestHash: hashRequest(cmd.requestBody),
-				callerPrincipal: cmd.callerPrincipal,
-				kind: "setMaxActiveRuns",
-				firstCommitSeq: seq,
-				lastCommitSeq: seq,
-				status: "completed",
-				payload: { maxActiveRuns: value },
-				recordedAt: Date.now(),
-			};
-			data.commands.push(command);
-			data.maxActiveRuns = value;
-			save(data);
-			writeFileAtomic(
-				path.join(dir, `cmd-${command.commandId}.json`),
-				JSON.stringify(command, null, 2),
-			);
-			return command;
+			return mutate((data) => {
+				const seq = data.nextCommandSeq++;
+				const command: CoordinatorCommandRecord = {
+					commandId: cmd.commandId,
+					requestHash: hashRequest(cmd.requestBody),
+					callerPrincipal: cmd.callerPrincipal,
+					kind: "setMaxActiveRuns",
+					firstCommitSeq: seq,
+					lastCommitSeq: seq,
+					status: "completed",
+					payload: { maxActiveRuns: value },
+					recordedAt: Date.now(),
+				};
+				data.commands.push(command);
+				data.maxActiveRuns = value;
+				writeFileAtomic(
+					path.join(dir, `cmd-${command.commandId}.json`),
+					JSON.stringify(command, null, 2),
+				);
+				return command;
+			});
 		},
 
 		reclaimExpiredReserved(now = Date.now()) {
-			const data = load();
-			let n = 0;
-			for (const r of data.reservations) {
-				if (
-					r.state === "reserved" &&
-					r.reservedExpiresAt !== undefined &&
-					r.reservedExpiresAt <= now
-				) {
-					r.state = "expired";
-					r.updatedAt = now;
-					n += 1;
+			return mutate((data) => {
+				let n = 0;
+				for (const r of data.reservations) {
+					if (
+						r.state === "reserved" &&
+						r.reservedExpiresAt !== undefined &&
+						r.reservedExpiresAt <= now
+					) {
+						r.state = "expired";
+						r.updatedAt = now;
+						n += 1;
+					}
 				}
-			}
-			if (n) save(data);
-			return n;
+				return n;
+			});
 		},
 
 		getCommand(commandId: string) {
@@ -330,6 +340,3 @@ export function capacityOk(reservations: ConcurrencyReservation[], maxActiveRuns
 	).length;
 	return n <= maxActiveRuns;
 }
-
-// Silence unused import when fs only used indirectly — keep for lock files later
-void fs;
