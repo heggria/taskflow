@@ -30,15 +30,26 @@ import {
 	createMockExecutionProvider,
 	type ExecutionProvider,
 } from "./provider.ts";
+import { createScriptExecutionProvider } from "./script-provider.ts";
 import { boundedReconcile, applyReconcileToRun, DEFAULT_RECONCILE_BUDGET, type ReconcileBudget } from "./reconcile.ts";
+import { isSafeId } from "./validate-ids.ts";
 
 export interface ControlHostOptions {
 	projectRoot: string;
 	/** Default auto. Silent auto→standalone is forbidden. */
 	controlMode?: ControlMode;
 	env?: NodeJS.ProcessEnv;
-	/** Inject provider (default mock completed). */
+	/**
+	 * Inject provider. **Production default is ScriptExecutionProvider** (real OS
+	 * processes). Mock is NEVER the production default — tests must inject mock
+	 * explicitly via `provider` or `allowMockProvider: true` (test-only).
+	 */
 	provider?: ExecutionProvider;
+	/**
+	 * TEST ONLY: when true and `provider` omitted, use MockExecutionProvider.
+	 * Production CLI/daemon must never set this.
+	 */
+	allowMockProvider?: boolean;
 	/** Skip process singleton (tests that only need store path). */
 	skipSingleton?: boolean;
 	/** Holder id for singleton. */
@@ -140,7 +151,14 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 	const registry = openControlRegistry(env);
 	registry.registerFromStore(store, opts.projectRoot);
 	const coordinator = openUserCoordinatorStore(env);
-	const provider = opts.provider ?? createMockExecutionProvider();
+	// Production default: real script provider. Mock only when explicitly allowed (tests).
+	const provider =
+		opts.provider ??
+		(opts.allowMockProvider
+			? createMockExecutionProvider()
+			: createScriptExecutionProvider({
+					stateDir: `${opts.projectRoot}/.taskflow/control/provider-jobs`,
+				}));
 	const reconcileBudget = opts.reconcileBudget ?? DEFAULT_RECONCILE_BUDGET;
 
 	// Provider handles by runId
@@ -294,6 +312,17 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 		async admitAndRun(req: AdmitRequest): Promise<AdmitResult> {
 			const commandId = req.commandId ?? newId("cmd");
+			if (!isSafeId(commandId)) {
+				return {
+					ok: false,
+					error: {
+						code: "TF_INVALID_ARGUMENT",
+						message: `unsafe commandId: ${JSON.stringify(commandId)}`,
+						recoveryAction: "retry-new-command",
+						sideEffects: "none",
+					},
+				};
+			}
 			const principal = req.callerPrincipal ?? "local";
 			const requestHash = hashRequest({ program: req.program, v: 1 });
 
@@ -551,9 +580,14 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					}
 				}
 
-				// Happy path: poll collect
+				// Happy path: poll until terminal (real script providers are async).
 				if (handle) {
-					const collected = await provider.poll(handle);
+					const pollDeadline = Date.now() + (reconcileBudget.deadlineMs ?? 30_000);
+					let collected = await provider.poll(handle);
+					while (collected.kind === "still-running" && Date.now() < pollDeadline) {
+						await new Promise((r) => setTimeout(r, 10));
+						collected = await provider.poll(handle);
+					}
 					if (collected.kind === "completed") {
 						run = {
 							...run,
@@ -575,9 +609,25 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							runIsParkedAndFutureDispatchRequiresReadmission: false,
 						});
 						const receipt = issueReceipt(run, boundPlan);
-						run = { ...run, receiptId: receipt.receiptId };
-						run = emit(run, { type: "ReceiptIssued", runId, receiptId: receipt.receiptId }, undefined, receipt);
-						return { ok: true, run, receipt, snapshot: { run, receipt } };
+						// Fail-closed assurance: only claim ok when we have real provider completed outcome
+						const receiptHonest: typeof receipt = {
+							...receipt,
+							assurance: {
+								...receipt.assurance,
+								providerOutcome: "ok",
+								journalContinuity: "ok",
+								artifactIntegrity: "unknown",
+								provenance: "ok",
+							},
+						};
+						run = { ...run, receiptId: receiptHonest.receiptId };
+						run = emit(
+							run,
+							{ type: "ReceiptIssued", runId, receiptId: receiptHonest.receiptId },
+							undefined,
+							receiptHonest,
+						);
+						return { ok: true, run, receipt: receiptHonest, snapshot: { run, receipt: receiptHonest } };
 					}
 					if (collected.kind === "failed") {
 						run = {
@@ -599,10 +649,31 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							runIsTerminal: true,
 							runIsParkedAndFutureDispatchRequiresReadmission: false,
 						});
-						return { ok: false, run };
+						// No final Receipt on failed terminal without explicit success evidence (fail-closed)
+						return { ok: false, run, snapshot: { run, receipt: null } };
+					}
+					if (collected.kind === "cancelled") {
+						run = {
+							...run,
+							status: "cancelled",
+							stage: "terminal",
+							updatedAt: Date.now(),
+							runVersion: run.runVersion + 1,
+						};
+						run = emit(run, {
+							type: "RunStatusChanged",
+							runId,
+							status: "cancelled",
+							stage: "terminal",
+						});
+						coordinator.normalRelease(reservation.reservationId, {
+							noLiveOrAmbiguousSideEffects: true,
+							runIsTerminal: true,
+							runIsParkedAndFutureDispatchRequiresReadmission: false,
+						});
+						return { ok: false, run, snapshot: { run, receipt: null } };
 					}
 					if (collected.kind === "still-running") {
-						// Treat as needs reconcile
 						const outcome = await boundedReconcile(provider, handle, reconcileBudget);
 						run = applyReconcileToRun(run, outcome);
 						if (outcome.exhausted) {
@@ -681,6 +752,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 		async cancel(runId, opts = {}) {
 			if (!canMutate) return attachDenied("cancel");
+			if (!isSafeId(runId)) {
+				return casError("TF_INVALID_ARGUMENT", `unsafe runId: ${JSON.stringify(runId)}`);
+			}
 			const handle = handles.get(runId);
 			if (handle) await provider.cancel(handle);
 
@@ -688,6 +762,21 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			const cas = store.compareAndCommit({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
+				validate: (run) => {
+					// Terminal + Receipt immutability (P0): never rewrite completed work.
+					if (run.stage === "terminal" || run.receiptId) {
+						return `run is terminal/has Receipt (status=${run.status}); cannot cancel`;
+					}
+					if (
+						run.status === "completed" ||
+						run.status === "failed" ||
+						run.status === "cancelled" ||
+						run.status === "blocked"
+					) {
+						return `run already terminal status=${run.status}`;
+					}
+					return null;
+				},
 				build: (run) => {
 					const next: RunProjection = {
 						...run,
@@ -815,6 +904,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
 				validate: (run) => {
+					if (run.stage === "terminal" || run.receiptId) {
+						return `run is terminal/has Receipt; cannot approve`;
+					}
 					// D38: require BOTH paused status AND parked stage (not OR).
 					if (run.status !== "paused" || run.stage !== "parked") {
 						return `approve requires paused+parked run (have status=${run.status} stage=${run.stage})`;

@@ -78,6 +78,8 @@ export interface ProjectControlStore {
 	 * check expectedRunVersion + validate, then commit in the same critical section.
 	 */
 	compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult;
+	/** Rebuild projections from journal (also runs on open). */
+	recoverFromJournal(): { rebuiltRuns: number; rebuiltCommands: number; rebuiltReceipts: number };
 	getRun(runId: string): RunProjection | null;
 	listRuns(): RunProjection[];
 	getReceipt(receiptId: string): Receipt | null;
@@ -168,6 +170,71 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 			path.join(projectProjectionsDir(root), `run-${runId}.json`),
 		);
 	}
+
+	/**
+	 * Journal is authoritative: rebuild run projections / command indexes / receipt
+	 * indexes from journal segments when projections are missing (half-commit recovery).
+	 */
+	function rebuildFromJournal(): { rebuiltRuns: number; rebuiltCommands: number; rebuiltReceipts: number } {
+		const dir = projectJournalDir(root);
+		let rebuiltRuns = 0;
+		let rebuiltCommands = 0;
+		let rebuiltReceipts = 0;
+		if (!fs.existsSync(dir)) return { rebuiltRuns, rebuiltCommands, rebuiltReceipts };
+		const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json")).sort();
+		for (const f of files) {
+			const entry = readJsonFile<{
+				command?: CommandRecord;
+				run?: RunProjection;
+				receipt?: Receipt;
+				events?: ControlEvent[];
+			}>(path.join(dir, f));
+			if (!entry) continue; // corrupt segment: skip (fail-open recover other segments)
+			if (entry.command && isSafeCommandId(entry.command.commandId)) {
+				// Later segments overwrite earlier (journal order = authority)
+				writeFileAtomic(
+					path.join(projectCommandsDir(root), `${entry.command.commandId}.json`),
+					JSON.stringify(entry.command, null, 2),
+				);
+				if (entry.command.runId && isSafeCommandId(entry.command.runId)) {
+					writeFileAtomic(
+						path.join(projectCommandsDir(root), `by-cmd-${entry.command.commandId}.json`),
+						JSON.stringify({ runId: entry.command.runId }, null, 2),
+					);
+				}
+				rebuiltCommands += 1;
+			}
+			if (entry.run && isSafeCommandId(entry.run.runId)) {
+				// Always write: later journal segments win (full rebuild to latest)
+				writeFileAtomic(
+					path.join(projectProjectionsDir(root), `run-${entry.run.runId}.json`),
+					JSON.stringify(entry.run, null, 2),
+				);
+				rebuiltRuns += 1;
+			}
+			if (entry.receipt && isSafeCommandId(entry.receipt.receiptId)) {
+				writeFileAtomic(
+					path.join(projectReceiptsDir(root), `${entry.receipt.receiptId}.json`),
+					JSON.stringify(entry.receipt, null, 2),
+				);
+				if (isSafeCommandId(entry.receipt.runId)) {
+					writeFileAtomic(
+						path.join(projectReceiptsDir(root), `by-run-${entry.receipt.runId}.json`),
+						JSON.stringify({ receiptId: entry.receipt.receiptId }, null, 2),
+					);
+				}
+				rebuiltReceipts += 1;
+			}
+		}
+		return { rebuiltRuns, rebuiltCommands, rebuiltReceipts };
+	}
+
+	function isSafeCommandId(id: string): boolean {
+		return typeof id === "string" && id.length > 0 && !id.includes("..") && !id.includes("/");
+	}
+
+	// Recover half-commits before serving reads.
+	rebuildFromJournal();
 
 	/** Caller MUST hold commitLockPath. */
 	function commitUnlocked(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number } {
@@ -334,6 +401,10 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 					commitSeqEnd: ranges.commitSeqEnd,
 				};
 			});
+		},
+
+		recoverFromJournal() {
+			return withExclusiveLockFile(commitLockPath, () => rebuildFromJournal());
 		},
 
 		getRun(runId: string) {

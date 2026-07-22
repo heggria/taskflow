@@ -114,7 +114,8 @@ test("approve requires paused AND parked (not OR)", async () => {
 		const bad = await host.approve(r.run!.runId, { expectedRunVersion: r.run!.runVersion });
 		assert.equal(bad.ok, false);
 		assert.equal(bad.error?.code, "TF_INVALID_ARGUMENT");
-		assert.match(bad.error?.message ?? "", /paused\+parked/);
+		// Terminal+Receipt immutability wins over parked check for completed runs
+		assert.match(bad.error?.message ?? "", /terminal|paused\+parked|Receipt/);
 		host.close();
 	} finally {
 		t.cleanup();
