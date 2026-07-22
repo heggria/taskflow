@@ -1,10 +1,10 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v7.4** (no fake terminal on reconcile timeout; maxActiveRuns; durable approval triad)
+> **Document version:** **v7.5** (release predicates, slots≡1, coordinator commands, approval slot release)
 > **Branch:** `feat/0.3.0`
 > **Date:** 2026-07-22
 > **Approver action:** Architecture **Approved**; protocol model **Approved with conditions**; Steps 1–2.5 **go**; wire freeze **not** yet.
-> **Wire freeze:** P1–P16 ADRs + TypeBox. Crash matrices stay in P-ADRs — stop expanding this master RFC.
+> **Stop expanding this master RFC.** Further detail only in P1–P16 ADRs + TypeBox.
 >
 > | Layer | Status |
 > |-------|--------|
@@ -70,7 +70,9 @@
 | **ControlRegistry** | Non-authoritative **directory** of project ledgers (paths, mount, rebuildable indexes). |
 | **taskflowd / embedded supervisor / standalone** | **Clerk** processes. Swap clerks; **do not swap project ledgers** in 0.3. Embedded multi-mount uses same singleton as taskflowd. |
 | **Receipt** | Evidence package derived from the **project** ledger. |
-| **CoordinatorLease / ConcurrencyReservation** | Records in UserCoordinatorStore for global concurrency. |
+| **CoordinatorLease / ConcurrencyReservation** | Records in UserCoordinatorStore for global **maxActiveRuns**. |
+| **CoordinatorCommandRecord** | Narrow user-level command ledger for coordinator ops (set maxActiveRuns, force-release) — not project Run history. |
+| **needs-operator** | Auto-reconcile exhausted; Run may stay `unknown`; wait returns snapshot + TF_RECONCILE_REQUIRED. |
 
 ```text
 Codex / Pi / CLI / Claude
@@ -97,9 +99,9 @@ standalone (one project)  OR  taskflowd / embedded multi-mount (singleton)
 | **D1** | CACP |
 | **D2** | Single scheduler; legacy phase code as executors only |
 | **D3** | Planes: Intent · Compile · Link · Control · Exec · Ledger (+ diagnostic Trace) |
-| **D4** | Entities: ControlDomain, **Project ControlStore**, **UserCoordinatorStore**, **CoordinatorLease**, **ConcurrencyReservation**, ControlRegistry, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
+| **D4** | Entities: ControlDomain, Project ControlStore, UserCoordinatorStore, CoordinatorLease, ConcurrencyReservation, **CoordinatorCommandRecord**, ControlRegistry, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
 | **D5** | `controlMode`: **auto** default; coordinated fail-closed; standalone explicit |
-| **D6** | **Scoped authority:** Project ControlStore = Run/Command/Approval/Receipt; UserCoordinatorStore = singleton + concurrency reservations; ControlRegistry = non-authoritative |
+| **D6** | **Scoped authority:** Project ControlStore = Run/Command/Approval/Receipt; UserCoordinatorStore = singleton + concurrency + **coordinator commands**; ControlRegistry = non-authoritative |
 | **D7** | `projectId` UUID stored in **ControlStore header** and Registry; `directoryBinding`; rebind binding only |
 | **D8** | Thin MCP + CLI; stable tool names |
 | **D9** | Async ExecutionProvider; control mints Receipts |
@@ -123,7 +125,9 @@ standalone (one project)  OR  taskflowd / embedded multi-mount (singleton)
 | **D27** | **Per-project domain fixed at first registration; no DomainTransfer in 0.3** |
 | **D28** | Node ≥22.19; **TS 7** workspace; **DSL TS 6 API isolated**; pnpm 11 |
 | **D29** | User **ControlRegistry** for multi-project mount/aggregate |
-| **D30** | **Global concurrency unit = `maxActiveRuns`** (one slot per admitted Run under singleton coordinator). **Does not** claim to cap global provider/subagent fan-out (that remains `flow.concurrency` per Run). **Global budget:** statistics only. |
+| **D30** | **Global concurrency = `maxActiveRuns` with `slots ≡ 1` per admitted Run.** Capacity: `count(reserved\|committed\|orphan-suspect) ≤ maxActiveRuns`. Not a global subagent cap (`flow.concurrency` stays per-Run). Global budget: statistics only. |
+| **D37** | **Release predicates** for concurrency slots: terminal **and** no live/ambiguous side effects; or parked+re-admit; or operator force-release (§4.3.2) |
+| **D38** | Durable approval **park**: when provider quiescent, **release** run-slot; on approve, re-enter **queued** and re-reserve before execute (§17.4) |
 | **D31** | **RunStatus** vs **RunStage** are distinct fields (§8) |
 | **D32** | Embedded multi-mount supervisor must use the **same user singleton lock + endpoint** as taskflowd |
 | **D33** | **`unknown` non-terminal**; auto-reconcile/wait **bounded**; timeout → **needs-operator**, keep capacity, **no** final Receipt / no fake `failed` (§8.4) |
@@ -180,50 +184,82 @@ ControlRegistry
 ```text
 UserCoordinatorStore (user-private)
 ├── CoordinatorLease { holderId, fencingEpoch, endpoint, expiresAt }
-├── maxActiveRuns              # unit: admitted Runs, NOT subagent count
+├── maxActiveRuns
+├── CoordinatorCommandRecord {   # narrow command authority (D6)
+│     commandId, requestHash, callerPrincipal,
+│     kind: setMaxActiveRuns | forceRelease | …
+│     firstCommitSeq, lastCommitSeq, status
+│   }
 ├── ConcurrencyReservation {
 │     reservationId
 │     state: reserved | committed | released | expired | orphan-suspect
-│     slots                    # typically 1 run-slot
+│     slots: 1                 # FIXED in 0.3 — not weighted
 │     # required when state=committed:
-│     projectId
-│     projectControlDomainId
-│     runId
-│     projectAdmitCommitSeq    # REQUIRED once committed
-│     attemptId?
-│     providerJobHandle?
+│     projectId, projectControlDomainId, runId
+│     projectAdmitCommitSeq    # REQUIRED
+│     attemptId?, providerJobHandle?
 │     coordinatorEpoch
-│     reservedExpiresAt?       # ONLY while state=reserved
+│     reservedExpiresAt?       # ONLY while reserved
 │     renewedAt?
 │   }
-└── (no project Run/Command/Receipt bodies)
+└── (no project Run history / project Receipts)
 ```
 
-**Metering (D30):** one **active Run** = one coordinator slot after admit.
-`flow.concurrency` caps **subagents inside a Run**; UserCoordinatorStore does **not** sum peak map/expand providers across projects.
+**Capacity (D30):**
 
-**0.3 global budget:** Receipt **statistics only**. Project `budget` enforced inside that project’s ControlStore.
+```text
+count(reservations where state ∈ {reserved, committed, orphan-suspect})
+  ≤ maxActiveRuns
+```
 
-**P16 lifecycle (required):**
+Each admitted Run occupies **exactly one** slot (`slots: 1`). Future weighted runs need a separate `admissionWeight` ADR — not 0.3.
+
+**Metering:** `maxActiveRuns` = concurrent **admitted Runs**.
+`flow.concurrency` = concurrent **subagents inside one Run**. Do not conflate.
+
+**0.3 global budget:** statistics only.
+
+**P16 lifecycle:**
 
 ```text
 reserve (reserved, TTL OK)
-  → project Run Admitted + projectAdmitCommitSeq
-  → reservation → committed (TTL auto-release OFF)
-  → dispatch
-  → release only when allowed below
+  → Run Admitted + projectAdmitCommitSeq
+  → committed (no TTL release)
+  → dispatch / park / reconciling …
+  → normalRelease | forceRelease
 ```
 
-**TTL / release (D36):**
+**Release predicates (D37 — product pin):**
 
-| State | TTL auto-reclaim? | Release when |
-|-------|-------------------|--------------|
-| **reserved** | Yes | unused / expired before admit |
-| **committed** | **Never by TTL alone** | (1) project Run **true terminal**; (2) isolation proves process tree **stopped**; (3) **operator force-release** (audit + `operator-overridden`) |
-| **orphan-suspect** | holds capacity | after coordinator crash / auto-reconcile exhausted while work may still run |
+```text
+noLiveOrAmbiguousSideEffects =
+  provider/isolation proves no live process tree
+  AND no open ambiguous provider job for this run
+  AND (if unknown/reconciling: NOT merely "auto-reconcile timed out")
 
-**Forbidden:** reconcile-timeout → fake `failed` → final Receipt → free committed slot while provider may still run.
-Crash matrix → **P16 ADR** only.
+normalRelease =
+  noLiveOrAmbiguousSideEffects
+  AND (
+    runIsTerminal (completed|failed|blocked|cancelled)
+    OR runIsParkedAndFutureDispatchRequiresReadmission
+         // e.g. durable approval pause with provider quiescent
+  )
+
+forceRelease =
+  authorizedOperatorCommand (CoordinatorCommandRecord)
+  AND explicitRiskAcknowledgement
+  → mark concurrency guarantee operator-overridden
+```
+
+| State | TTL auto-reclaim? | Notes |
+|-------|-------------------|--------|
+| **reserved** | Yes | pre-admit |
+| **committed** | **Never by TTL** | only normalRelease / forceRelease |
+| **orphan-suspect** | holds capacity | crash / reconcile-automation exhausted; still counts in capacity formula |
+
+**Forbidden:** status field alone without `noLiveOrAmbiguousSideEffects`; fake terminal after reconcile timeout; CLI mutating reservations without CoordinatorCommandRecord.
+
+Crash matrices → **P16 ADR** only.
 
 ### 4.4 DomainTransfer — **out of 0.3**
 
@@ -639,6 +675,18 @@ History: auto-rejected stays blocked unless resume/re-run; pending may be decide
 
 **P15** owns TypeBox + CAS — stop expanding master RFC.
 
+### 17.4 Approval vs maxActiveRuns (D38 — product pin)
+
+| Situation | Run-slot |
+|-----------|----------|
+| Durable approval **pending** and provider **quiescent** (no live/ambiguous side effects) | **normalRelease** (park); Run stays `paused` |
+| Approval **approved** | Run → **`queued`** (or re-admit path); must **re-reserve** before further execute |
+| Approval **rejected/expired** → `blocked` | release if quiescent (terminal park) |
+| Cancel-in-flight / `unknown` / non-quiescent | **keep** committed or orphan-suspect slot |
+| compat-auto-reject | never holds long-lived approval slot |
+
+Joint **P15 × P16** tests required.
+
 ---
 
 ## §18. Negotiation & errors
@@ -658,7 +706,10 @@ requiredFeatures[], offeredFeatures[], buildInfo
 }
 ```
 
-Codes include: TF_PROTOCOL_INCOMPATIBLE, TF_SCHEMA_*, TF_FEATURE_REQUIRED, TF_POLICY_DENIED, TF_AUTHORITY_REVOKED, TF_STALE_VERSION, TF_IDEMPOTENCY_CONFLICT, TF_CROSS_PRINCIPAL_COMMAND, TF_LEGACY_CONFLICT, TF_PROVIDER_AMBIGUOUS, TF_JOURNAL_UNAVAILABLE, TF_DURABILITY_FAILED, TF_CURSOR_EXPIRED, TF_COMMAND_FAILED, TF_BOOTSTRAP_FAILED, **TF_RECONCILE_REQUIRED** (auto-reconcile exhausted / needs-operator; not a fake terminal).
+Codes include: TF_PROTOCOL_INCOMPATIBLE, TF_SCHEMA_*, TF_FEATURE_REQUIRED, TF_POLICY_DENIED, TF_AUTHORITY_REVOKED, TF_STALE_VERSION, TF_IDEMPOTENCY_CONFLICT, TF_CROSS_PRINCIPAL_COMMAND, TF_LEGACY_CONFLICT, TF_PROVIDER_AMBIGUOUS, TF_JOURNAL_UNAVAILABLE, TF_DURABILITY_FAILED, TF_CURSOR_EXPIRED, TF_COMMAND_FAILED, TF_BOOTSTRAP_FAILED, **TF_RECONCILE_REQUIRED**.
+
+**TF_RECONCILE_REQUIRED (P4 pin):** `recoveryAction: operator`, `sideEffects: unknown`.
+`taskflow_runs(wait)` / status RPCs return a **normal snapshot** (status=unknown, needs-operator flags) — **not** a transport-level RPC failure.
 
 Cursor: `minAvailableCommitSeq`, cursor lease/TTL, TF_CURSOR_EXPIRED → checkpoint resync.
 
@@ -680,8 +731,9 @@ PHASE_TYPES (all, incl. race/expand)
   | foreground | detached | idempotent:false
   | final-output attribution
   | score | onBlock:retry | reflexion | tree reduce
-  | RunStatus × RunStage (incl. unknown + reconciling)
-  | headless auto-reject vs durable approval
+  | RunStatus × RunStage (incl. unknown + reconciling + needs-operator)
+  | approval modes: compat-auto-reject | durable-optional | durable-required
+  | approval park → release slot → re-reserve on approve
 ```
 
 Ternary suites: expand×cache×authority epoch; detached×approval×resume; concurrency reserve×crash×release.
@@ -730,7 +782,7 @@ taskflow-web (0.3.1+) / host delivery packages
 5.   Project ControlStore + Registry + UserCoordinatorStore
 6.   Bootstrap + singleton multi-mount
 7.   Linker + admission + concurrency reserve path
-8.   ExecutionProviders + reconcile → settle unknown
+8.   ExecutionProviders + reconcile unknown / surface needs-operator
 9.   Thin MCP + CLI
 10. WebUI 0.3.1
 ```
@@ -760,7 +812,7 @@ taskflow-web (0.3.1+) / host delivery packages
 | P13 | Bootstrap / fresh-install / singleton lock / platforms |
 | P14 | **ControlStore engine** (always — including files-only) |
 | P15 | **Approval protocol** (headless compat + wire status `expired` only) |
-| P16 | **UserCoordinatorStore**: maxActiveRuns, reserved vs committed, orphan-suspect, no TTL on committed, operator force-release, crash matrix |
+| P16 | UserCoordinatorStore: slots≡1, capacity formula, release predicates, CoordinatorCommandRecord, orphan-suspect, crash matrix |
 
 ---
 
@@ -771,14 +823,14 @@ taskflow-web (0.3.1+) / host delivery packages
 - [ ] Stale socket recovery
 - [ ] Per-project store; registry multi-mount; standalone+daemon same store
 - [ ] Registry wiped → reopen project restores same projectId/domainId from store header
-- [ ] maxActiveRuns: N slots, N+1 compete; **committed/orphan-suspect hold capacity**; TTL never frees committed
-- [ ] reconcile timeout: stays unknown, orphan-suspect, no final Receipt, needs-operator
+- [ ] maxActiveRuns with slots≡1; capacity formula; N+1 compete
+- [ ] committed release only via D37 predicates; orphan-suspect holds capacity
+- [ ] reconcile automation exhausted → unknown + needs-operator + no final Receipt
+- [ ] wait returns snapshot + TF_RECONCILE_REQUIRED (not RPC fail)
+- [ ] CoordinatorCommandRecord for setMaxActiveRuns / force-release
+- [ ] Approval park releases slot when quiescent; re-reserve on approve
 - [ ] No DomainTransfer; no federated multi-ControlStore workflow
-- [ ] Command re-exec suppressed; disclosure re-authed; artifact read authz
-- [ ] Public-surface goldens; RunStatus/Stage; cancelled; wait bounded on unknown
-- [ ] detachedCancel terminated → cancelled
-- [ ] Approval: durable-required vs optional vs compat; expire→blocked; dual client / restart races
-- [ ] Receipt event manifest + compaction rules
+- [ ] Public-surface goldens; cancelled; detachedCancel; approval three modes
 - [ ] P1–P16 ADRs present for shipped wire types
 
 ---
@@ -787,13 +839,11 @@ taskflow-web (0.3.1+) / host delivery packages
 
 ```text
 Architecture: Approved
-Protocol model (0.3): Approved with conditions (v7.4)
+Protocol model (0.3): Approved with conditions (v7.5) — freeze detail in P-ADRs
 Wire freeze: Not approved (P1–P16)
 Steps 1–2.5: Approved to start
-Global concurrency unit: maxActiveRuns (not subagent count)
-committed/orphan-suspect: no TTL free
-unknown: bounded auto-reconcile; no fake terminal
-Federated multi-ControlStore workflow: out of 0.3
+Master RFC: STOP expanding — use P15/P16 for crash/CAS matrices
+slots: 1; release predicates: D37; approval park: D38
 ```
 
 ---
@@ -810,12 +860,12 @@ Federated multi-ControlStore workflow: out of 0.3
 
 ## Appendix A — Vocabulary
 
-ControlDomain · Project ControlStore · UserCoordinatorStore · CoordinatorLease · ConcurrencyReservation · ControlRegistry · CommandRecord · BoundPlan · BoundFragment · RunStatus · RunStage · reconciling · executionSemanticHash · ArtifactRef · SecretRef · ControlHost · recoveryAction · public surface · durable-approval feature
+ControlDomain · Project ControlStore · UserCoordinatorStore · CoordinatorLease · ConcurrencyReservation · CoordinatorCommandRecord · maxActiveRuns · orphan-suspect · needs-operator · ControlRegistry · CommandRecord · BoundPlan · BoundFragment · RunStatus · RunStage · reconciling · executionSemanticHash · ArtifactRef · SecretRef · ControlHost · recoveryAction · public surface · compat-auto-reject · durable-optional · durable-required · operator-overridden · noLiveOrAmbiguousSideEffects
 
 ## Appendix B — Explicitly cut from 0.3
 
-DomainTransfer · merged project journal · federated multi-ControlStore workflow · silent auto→standalone · GA fail-at-link for public 0.2.4 features · node:sqlite without P14 · commitSeq renumbering · fake terminal after reconcile timeout · hard cross-project budget · committed-slot TTL reclaim · global subagent cap via UserCoordinatorStore
+DomainTransfer · merged project journal · federated multi-ControlStore workflow · silent auto→standalone · GA fail-at-link for public 0.2.4 features · node:sqlite without P14 · commitSeq renumbering · fake terminal after reconcile timeout · hard cross-project budget · committed-slot TTL reclaim · global subagent cap via UserCoordinatorStore · weighted slots in 0.3
 
 ---
 
-*End RFC v7.4. Architecture approved; protocol approved with conditions; Steps 1–2.5 go; remaining detail only in P5/P15/P16 ADRs.*
+*End RFC v7.5. Architecture approved; protocol approved with conditions; Steps 1–2.5 go. **Master RFC frozen for expansion** — implement via P-ADRs.*

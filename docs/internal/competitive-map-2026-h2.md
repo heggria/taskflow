@@ -80,7 +80,7 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
             ExecutionProviders
 ```
 
-**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7.3+):
+**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7.5+):
 
 - **Project ControlStore** = Run authority; **UserCoordinatorStore** = singleton + global concurrency only; **Registry** = non-authoritative
 - Disk/journal authority; clerk process is not the sole state copy
