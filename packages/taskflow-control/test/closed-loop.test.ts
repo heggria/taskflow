@@ -1,5 +1,6 @@
 /**
  * §23 GA closed-loop tests — drive shipped ControlHost / bootstrap APIs.
+ * No soft assertions: capacity/attach/idempotency/park must hard-fail when wrong.
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -17,6 +18,7 @@ import {
 	canNormalRelease,
 	DEFAULT_CONTROL_MODE,
 	assertControlModeExplicit,
+	type ControlEvent,
 } from "../src/index.ts";
 
 function tempEnv(): { env: NodeJS.ProcessEnv; home: string; project: string; cleanup: () => void } {
@@ -50,6 +52,9 @@ test("fresh install auto: one run → Receipt with bound plan identity", async (
 		});
 		assert.equal(controlMode, "auto");
 		assert.ok(role === "writer" || role === "attach");
+		// Fresh install is the first client → writer
+		assert.equal(host.role, "writer");
+		assert.equal(host.canMutate, true);
 
 		const result = await host.admitAndRun({ program: SCRIPT_FLOW, callerPrincipal: "test" });
 		assert.equal(result.ok, true, JSON.stringify(result.error));
@@ -68,7 +73,7 @@ test("fresh install auto: one run → Receipt with bound plan identity", async (
 	}
 });
 
-test("concurrent client start: single writer, loser attaches", () => {
+test("concurrent client start: single writer; attach cannot admit (no dual writers)", async () => {
 	const t = tempEnv();
 	try {
 		const a = bootstrapControl({
@@ -83,20 +88,36 @@ test("concurrent client start: single writer, loser attaches", () => {
 			holderId: "client-b",
 			provider: createMockExecutionProvider(),
 		});
-		const roles = [a.role, b.role].sort();
-		// One writer path via singleton; both share same project identity
 		assert.equal(a.host.projectId, b.host.projectId);
 		assert.equal(a.host.controlDomainId, b.host.controlDomainId);
-		// At least one is writer; the other attaches or also got writer after steal — same lock holder id wins
-		assert.ok(a.host.singleton || b.host.singleton);
-		if (a.host.singleton && b.host.singleton) {
-			// Same endpoint
-			assert.equal(a.host.singleton.lock.endpoint, b.host.singleton.lock.endpoint);
-			// Exactly one writer among concurrent acquires when first still alive
-			const writers = [a, b].filter((x) => x.host.singleton?.role === "writer");
-			const attaches = [a, b].filter((x) => x.host.singleton?.role === "attach");
-			assert.ok(writers.length === 1 || attaches.length >= 1, `roles=${roles}`);
-		}
+
+		const writers = [a, b].filter((x) => x.host.role === "writer" && x.host.canMutate);
+		const attaches = [a, b].filter((x) => x.host.role === "attach" && !x.host.canMutate);
+		assert.equal(writers.length, 1, "exactly one multi-mount writer");
+		assert.equal(attaches.length, 1, "loser must attach read-only");
+		assert.equal(a.host.singleton?.lock.endpoint, b.host.singleton?.lock.endpoint);
+
+		const writer = writers[0]!.host;
+		const attach = attaches[0]!.host;
+
+		// Writer can admit
+		const wRun = await writer.admitAndRun({ program: SCRIPT_FLOW, commandId: "writer-cmd" });
+		assert.equal(wRun.ok, true, JSON.stringify(wRun.error));
+		assert.ok(wRun.receipt);
+
+		// Attach must NOT mint a second authority path (no Run/Receipt)
+		const aRun = await attach.admitAndRun({ program: SCRIPT_FLOW, commandId: "attach-cmd" });
+		assert.equal(aRun.ok, false);
+		assert.equal(aRun.error?.code, "TF_AUTHORITY_REVOKED");
+		assert.equal(aRun.receipt, undefined);
+		// Store still has only the writer's run
+		assert.equal(writer.store.listRuns().length, 1);
+		assert.equal(attach.store.listRuns().length, 1);
+		// Attach may still observe snapshots
+		const snap = attach.getSnapshot(wRun.run!.runId);
+		assert.ok(snap);
+		assert.equal(snap!.run.status, "completed");
+
 		a.host.close();
 		b.host.close();
 	} finally {
@@ -129,7 +150,6 @@ test("registry wipe + reopen restores projectId/domainId from store header", () 
 		});
 		assert.equal(host2.projectId, projectId);
 		assert.equal(host2.controlDomainId, domainId);
-		// Registry re-registered from header
 		const entry = host2.registry.getByProjectId(projectId);
 		assert.ok(entry);
 		assert.equal(entry!.controlDomainId, domainId);
@@ -148,11 +168,10 @@ test("silent auto→standalone is impossible via assertControlModeExplicit", () 
 	assert.doesNotThrow(() => assertControlModeExplicit(undefined, "auto"));
 });
 
-test("maxActiveRuns capacity: N admitted, N+1 rejected; slots≡1", async () => {
+test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED; slots≡1", async () => {
 	const t = tempEnv();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
-		// Set max to 2 via coordinator command
 		coord.setMaxActiveRuns(2, {
 			commandId: "cmd-max",
 			callerPrincipal: "op",
@@ -160,6 +179,7 @@ test("maxActiveRuns capacity: N admitted, N+1 rejected; slots≡1", async () => 
 		});
 		assert.equal(coord.maxActiveRuns, 2);
 
+		// hang + reconcile budget 1 → both occupy as orphan-suspect (never release)
 		const provider = createMockExecutionProvider({ outcome: "hang" });
 		const host = createControlHost({
 			projectRoot: t.project,
@@ -172,18 +192,17 @@ test("maxActiveRuns capacity: N admitted, N+1 rejected; slots≡1", async () => 
 
 		const r1 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c1" });
 		const r2 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c2" });
-		// hang → needs-operator after reconcile; both may occupy slots as orphan-suspect
-		assert.ok(r1.run || r1.error);
-		assert.ok(r2.run || r2.error);
+		// Both must have runs that still hold capacity
+		assert.ok(r1.run, JSON.stringify(r1.error));
+		assert.ok(r2.run, JSON.stringify(r2.error));
+		assert.equal(host.coordinator.occupyingCount(), 2);
 
 		const r3 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c3" });
-		// Third should hit capacity if first two still occupying
-		const occupying = host.coordinator.occupyingCount();
-		if (occupying >= host.coordinator.maxActiveRuns) {
-			assert.equal(r3.ok, false);
-			assert.equal(r3.error?.code, "TF_CAPACITY_EXCEEDED");
-		}
-		// All reservations slots ≡ 1
+		// Hard requirement — not soft if
+		assert.equal(r3.ok, false);
+		assert.equal(r3.error?.code, "TF_CAPACITY_EXCEEDED");
+		assert.equal(host.coordinator.occupyingCount(), 2);
+
 		for (const r of host.coordinator.listReservations()) {
 			assert.equal(r.slots, 1);
 		}
@@ -205,18 +224,11 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			runId: "r",
 			projectAdmitCommitSeq: 1,
 		});
-		// Wait past TTL
-		const n = coord.reclaimExpiredReserved(Date.now() + 10_000);
-		// committed must NOT be reclaimed
+		coord.reclaimExpiredReserved(Date.now() + 10_000);
 		const still = coord.getReservation(rsv!.reservationId);
 		assert.equal(still?.state, "committed");
-		assert.equal(
-			CAPACITY_OCCUPYING_STATES.includes(still!.state),
-			true,
-		);
-		void n;
+		assert.ok(CAPACITY_OCCUPYING_STATES.includes(still!.state));
 
-		// normalRelease without predicates fails
 		assert.throws(() =>
 			coord.normalRelease(rsv!.reservationId, {
 				noLiveOrAmbiguousSideEffects: false,
@@ -225,7 +237,6 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			}),
 		);
 
-		// forceRelease via command path
 		const { reservation, command } = coord.forceRelease(rsv!.reservationId, {
 			commandId: "force-1",
 			callerPrincipal: "op",
@@ -258,17 +269,14 @@ test("reconcile exhaustion: unknown + needs-operator + no Receipt; wait returns 
 		assert.equal(result.run?.needsOperator, true);
 		assert.equal(result.error?.code, "TF_RECONCILE_REQUIRED");
 		assert.equal(result.error?.recoveryAction, "operator");
-		// No final Receipt
 		assert.equal(result.receipt, undefined);
 		assert.equal(host.store.getReceiptForRun(result.run!.runId), null);
 
-		// wait returns normal snapshot, not transport failure
 		const snap = await host.wait(result.run!.runId);
 		assert.equal(snap.run.status, "unknown");
 		assert.equal(snap.controlError?.code, "TF_RECONCILE_REQUIRED");
 		assert.equal(snap.receipt, null);
 
-		// Slot held as orphan-suspect
 		const rsv = host.coordinator.getReservation(result.run!.reservationId!);
 		assert.ok(rsv);
 		assert.equal(rsv!.state, "orphan-suspect");
@@ -278,7 +286,53 @@ test("reconcile exhaustion: unknown + needs-operator + no Receipt; wait returns 
 	}
 });
 
-test("approval park releases slot; approve re-reserves", async () => {
+test("parkForApproval refuses while provider live; succeeds after quiesce (D38)", async () => {
+	const t = tempEnv();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "park-1" });
+		const runId = admitted.run?.runId;
+		assert.ok(runId);
+		const reservationId = admitted.run!.reservationId;
+		assert.ok(reservationId);
+		const before = host.coordinator.occupyingCount();
+		assert.ok(before >= 1);
+
+		// Still live → park denied, slot held
+		const refused = await host.parkForApproval(runId!);
+		assert.equal(refused.ok, false);
+		assert.equal(refused.error?.code, "TF_PROVIDER_AMBIGUOUS");
+		assert.equal(host.coordinator.getReservation(reservationId!)?.state, "orphan-suspect");
+		assert.equal(host.coordinator.occupyingCount(), before);
+
+		// Quiesce provider → park allowed, slot released
+		provider.quiesceAll?.();
+		const parked = await host.parkForApproval(runId!);
+		assert.equal(parked.ok, true, JSON.stringify(parked.error));
+		assert.equal(parked.run?.status, "paused");
+		assert.equal(parked.run?.stage, "parked");
+		assert.equal(host.coordinator.getReservation(reservationId!)?.state, "released");
+		assert.ok(host.coordinator.occupyingCount() < before);
+
+		const approved = await host.approve(runId!);
+		assert.equal(approved.ok, true);
+		assert.equal(approved.run?.status, "completed");
+		assert.ok(approved.receipt);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("idempotent commandId returns the bound run, not another project's receipt", async () => {
 	const t = tempEnv();
 	try {
 		const host = createControlHost({
@@ -286,41 +340,82 @@ test("approval park releases slot; approve re-reserves", async () => {
 			env: t.env,
 			skipSingleton: true,
 			controlMode: "standalone",
-			provider: createMockExecutionProvider({ outcome: "completed" }),
+			provider: createMockExecutionProvider({ outcome: "completed", output: "first" }),
 		});
-		// Start a hang-like path by parking manually after a successful admit is awkward;
-		// park API on a completed run still tests stage transitions for unit purposes —
-		// instead: admit hang, then park.
-		const hangHost = createControlHost({
-			projectRoot: t.project,
-			env: t.env,
-			skipSingleton: true,
-			controlMode: "standalone",
-			provider: createMockExecutionProvider({ outcome: "hang" }),
-			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
-		});
-		const admitted = await hangHost.admitAndRun({ program: SCRIPT_FLOW, commandId: "park-1" });
-		// may be needs-operator; still has reservation
-		const runId = admitted.run?.runId;
-		assert.ok(runId);
-		const before = hangHost.coordinator.occupyingCount();
-		const parked = await hangHost.parkForApproval(runId!);
-		assert.equal(parked.run?.status, "paused");
-		assert.equal(parked.run?.stage, "parked");
-		assert.ok(canNormalRelease({
-			noLiveOrAmbiguousSideEffects: true,
-			runIsTerminal: false,
-			runIsParkedAndFutureDispatchRequiresReadmission: true,
-		}));
-		const afterPark = hangHost.coordinator.occupyingCount();
-		assert.ok(afterPark <= before);
+		const a = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "cmd-A", callerPrincipal: "u" });
+		const b = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "cmd-B", callerPrincipal: "u" });
+		assert.equal(a.ok, true);
+		assert.equal(b.ok, true);
+		assert.notEqual(a.run!.runId, b.run!.runId);
 
-		const approved = await hangHost.approve(runId!);
-		assert.equal(approved.ok, true);
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
-		hangHost.close();
+		const replayA = await host.admitAndRun({
+			program: SCRIPT_FLOW,
+			commandId: "cmd-A",
+			callerPrincipal: "u",
+		});
+		assert.equal(replayA.ok, true);
+		assert.equal(replayA.run!.runId, a.run!.runId);
+		assert.equal(replayA.receipt?.runId, a.run!.runId);
+		assert.notEqual(replayA.run!.runId, b.run!.runId);
+
+		const replayB = await host.admitAndRun({
+			program: SCRIPT_FLOW,
+			commandId: "cmd-B",
+			callerPrincipal: "u",
+		});
+		assert.equal(replayB.run!.runId, b.run!.runId);
 		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("Project ControlStore: concurrent opens assign distinct commitSeq (no journal overwrite)", () => {
+	const t = tempEnv();
+	try {
+		const s1 = openProjectControlStore(t.project);
+		const s2 = openProjectControlStore(t.project);
+		const mk = (i: number): { events: ControlEvent[]; run: import("../src/types.ts").RunProjection } => ({
+			events: [
+				{
+					eventId: `ev-${i}`,
+					schemaVersion: 1,
+					controlDomainId: s1.header.controlDomainId,
+					streamId: `run-${i}`,
+					streamSeq: 1,
+					commitSeq: 0,
+					projectId: s1.header.projectId,
+					recordedAt: Date.now(),
+					payload: { type: "Generic", kind: "test", data: { i } },
+				},
+			],
+			run: {
+				runId: `run-${i}`,
+				projectId: s1.header.projectId,
+				controlDomainId: s1.header.controlDomainId,
+				status: "running",
+				stage: "executing",
+				boundPlanHash: "bp:x",
+				needsOperator: false,
+				createdAt: Date.now(),
+				updatedAt: Date.now(),
+				runVersion: 1,
+			},
+		});
+		const results: Array<{ start: number; end: number }> = [];
+		// Interleave commits from two store handles
+		for (let i = 0; i < 8; i++) {
+			const store = i % 2 === 0 ? s1 : s2;
+			const batch = mk(i);
+			const r = store.commit(batch);
+			results.push({ start: r.commitSeqStart, end: r.commitSeqEnd });
+		}
+		const starts = results.map((r) => r.start);
+		assert.equal(new Set(starts).size, starts.length, `duplicate commitSeq starts: ${starts.join(",")}`);
+		// Journal files must all exist and not share ranges
+		const journalDir = path.join(t.project, ".taskflow", "control", "journal");
+		const files = fs.readdirSync(journalDir).filter((f) => f.endsWith(".json")).sort();
+		assert.equal(files.length, 8);
 	} finally {
 		t.cleanup();
 	}

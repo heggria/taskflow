@@ -190,6 +190,8 @@ export interface CommandRecord {
 	status: CommandStatus;
 	firstCommitSeq: number;
 	lastCommitSeq: number;
+	/** Run created by this command (idempotent disclosure key). */
+	runId?: string;
 	responseArtifactRef?: string;
 	recordedAt: number;
 }

@@ -98,3 +98,70 @@ export function readJsonFile<T>(filePath: string): T | null {
 		return null;
 	}
 }
+
+/**
+ * Cross-process exclusive critical section via O_CREAT|O_EXCL lock file.
+ * Callers re-read durable state inside `fn` (do not trust pre-lock memory).
+ */
+export function withExclusiveLockFile<T>(lockPath: string, fn: () => T, opts?: { maxAttempts?: number; staleMs?: number }): T {
+	ensureDir(path.dirname(lockPath));
+	const maxAttempts = opts?.maxAttempts ?? 200;
+	const staleMs = opts?.staleMs ?? 30_000;
+	for (let i = 0; i < maxAttempts; i++) {
+		try {
+			const fd = fs.openSync(lockPath, "wx");
+			try {
+				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
+				return fn();
+			} finally {
+				fs.closeSync(fd);
+				try {
+					fs.unlinkSync(lockPath);
+				} catch {
+					/* ignore */
+				}
+			}
+		} catch (e) {
+			const err = e as NodeJS.ErrnoException;
+			if (err.code !== "EEXIST") throw e;
+			// Steal clearly stale locks (no live writer holding them).
+			try {
+				const st = fs.statSync(lockPath);
+				if (Date.now() - st.mtimeMs > staleMs) {
+					const raw = fs.readFileSync(lockPath, "utf-8");
+					let pid = 0;
+					try {
+						pid = (JSON.parse(raw) as { pid?: number }).pid ?? 0;
+					} catch {
+						pid = 0;
+					}
+					let alive = false;
+					if (pid > 0) {
+						try {
+							process.kill(pid, 0);
+							alive = true;
+						} catch {
+							alive = false;
+						}
+					}
+					if (!alive) {
+						try {
+							fs.unlinkSync(lockPath);
+							continue;
+						} catch {
+							/* race */
+						}
+					}
+				}
+			} catch {
+				/* lock disappeared */
+			}
+			// Brief backoff
+			const until = Date.now() + 2 + (i % 5);
+			while (Date.now() < until) {
+				/* spin */
+			}
+		}
+	}
+	throw new Error(`could not acquire exclusive lock: ${lockPath}`);
+}

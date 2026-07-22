@@ -32,8 +32,10 @@ export interface ExecutionProvider {
 	poll(handle: string): Promise<CollectResult>;
 	cancel(handle: string): Promise<{ kind: "cancelled" | "already-terminal" | "ambiguous" }>;
 	reconcile(handle: string): Promise<ReconcileResult>;
-	/** Test/introspect: whether the job is still live. */
+	/** Whether the job still has live/ambiguous side effects. */
 	isLive?(handle: string): boolean;
+	/** Mark all jobs quiescent (tests / operator after proven dead). */
+	quiesceAll?(): void;
 }
 
 export interface MockProviderOptions {
@@ -112,6 +114,12 @@ export function createMockExecutionProvider(opts: MockProviderOptions = {}): Exe
 
 		isLive(handle) {
 			return jobs.get(handle)?.live ?? false;
+		},
+
+		quiesceAll() {
+			for (const job of jobs.values()) {
+				job.live = false;
+			}
 		},
 	};
 }

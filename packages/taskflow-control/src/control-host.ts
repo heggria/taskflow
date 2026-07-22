@@ -71,21 +71,27 @@ export interface RunSnapshot {
 	receipt?: Receipt | null;
 }
 
+export type ControlHostRole = "writer" | "attach" | "standalone-local";
+
 export interface ControlHost {
 	readonly projectId: string;
 	readonly controlDomainId: string;
 	readonly controlMode: ControlMode;
+	/** writer | attach (singleton multi-mount) | standalone-local (explicit). */
+	readonly role: ControlHostRole;
+	/** False for singleton attach — may observe only; must not commit Runs/Receipts. */
+	readonly canMutate: boolean;
 	readonly singleton?: SingletonResult;
 	readonly store: ProjectControlStore;
 	readonly registry: ControlRegistry;
 	readonly coordinator: UserCoordinatorStore;
-	/** Link + admit + execute (or park / needs-operator). */
+	/** Link + admit + execute (or park / needs-operator). Writer/standalone only. */
 	admitAndRun(req: AdmitRequest): Promise<AdmitResult>;
 	/** Status/wait snapshot — never transport-fails on TF_RECONCILE_REQUIRED. */
 	getSnapshot(runId: string): RunSnapshot | null;
 	wait(runId: string): Promise<RunSnapshot>;
 	cancel(runId: string, opts?: { commandId?: string; principal?: string }): Promise<AdmitResult>;
-	/** Durable approval: park (release slot) or decide. */
+	/** Durable approval: park (release slot) only when provider quiescent (D38). */
 	parkForApproval(runId: string): Promise<AdmitResult>;
 	approve(runId: string, opts?: { commandId?: string; principal?: string }): Promise<AdmitResult>;
 	/** Operator force-release of a concurrency reservation (CoordinatorCommandRecord). */
@@ -112,6 +118,15 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		// without an explicit controlMode: standalone.
 	}
 
+	const role: ControlHostRole =
+		controlMode === "standalone"
+			? "standalone-local"
+			: singleton?.role === "attach"
+				? "attach"
+				: "writer";
+	/** Attach clients observe only — sole multi-mount writer mutates (P13/D32). */
+	const canMutate = role !== "attach";
+
 	const store = openProjectControlStore(opts.projectRoot);
 	const registry = openControlRegistry(env);
 	registry.registerFromStore(store, opts.projectRoot);
@@ -121,6 +136,32 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 	// Provider handles by runId
 	const handles = new Map<string, string>();
+
+	function attachDenied(op: string): AdmitResult {
+		return {
+			ok: false,
+			error: {
+				code: "TF_AUTHORITY_REVOKED",
+				message: `singleton attach cannot ${op}; route mutations to the multi-mount writer (holder=${singleton?.lock.holderId ?? "?"})`,
+				recoveryAction: "retry-same-command",
+				sideEffects: "none",
+				projectId: store.header.projectId,
+				controlDomainId: store.header.controlDomainId,
+			},
+		};
+	}
+
+	function providerQuiescent(runId: string): boolean {
+		const handle = handles.get(runId);
+		if (!handle) {
+			// No in-process handle — treat as no live side effects known to this host.
+			return true;
+		}
+		if (typeof provider.isLive === "function") {
+			return !provider.isLive(handle);
+		}
+		return true;
+	}
 
 	function emit(
 		run: RunProjection,
@@ -187,6 +228,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return store.header.controlDomainId;
 		},
 		controlMode,
+		role,
+		canMutate,
 		singleton,
 		store,
 		registry,
@@ -197,7 +240,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			const principal = req.callerPrincipal ?? "local";
 			const requestHash = hashRequest({ program: req.program, v: 1 });
 
-			// Idempotency: same commandId + hash → return prior without re-exec
+			// Idempotent disclosure is allowed for attach (read-only return of prior result).
 			const priorCmd = store.getCommand(commandId);
 			if (priorCmd) {
 				if (priorCmd.requestHash !== requestHash) {
@@ -225,18 +268,34 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						},
 					};
 				}
-				// Prefer run with receipt; else most recent run for this project.
-				const runs = store.listRuns();
-				const match = runs.find((r) => r.receiptId) ?? runs[0];
-				if (match) {
-					return {
-						ok: true,
-						run: match,
-						receipt: store.getReceiptForRun(match.runId) ?? undefined,
-						snapshot: host.getSnapshot(match.runId) ?? undefined,
-					};
+				// Return the run bound to THIS commandId — never listRuns()[0].
+				const boundRunId = store.getRunIdForCommand(commandId) ?? priorCmd.runId;
+				if (boundRunId) {
+					const match = store.getRun(boundRunId);
+					if (match) {
+						return {
+							ok: true,
+							run: match,
+							receipt: store.getReceiptForRun(match.runId) ?? undefined,
+							snapshot: host.getSnapshot(match.runId) ?? undefined,
+						};
+					}
 				}
+				// Command recorded but run missing — do not invent another run's receipt.
+				return {
+					ok: false,
+					error: {
+						code: "TF_NOT_FOUND",
+						message: `command ${commandId} known but bound run not found`,
+						recoveryAction: "operator",
+						sideEffects: "unknown",
+						commandId,
+					},
+				};
 			}
+
+			// New admits require write authority (P13: attach must not fork writers).
+			if (!canMutate) return attachDenied("admitAndRun");
 
 			const linked = linkProgram({ program: req.program });
 			if (!linked.ok) {
@@ -295,6 +354,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				status: "accepted" as const,
 				firstCommitSeq: 0,
 				lastCommitSeq: 0,
+				runId,
 				recordedAt: now,
 			};
 
@@ -563,6 +623,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		async cancel(runId, opts = {}) {
+			if (!canMutate) return attachDenied("cancel");
 			const run = store.getRun(runId);
 			if (!run) {
 				return {
@@ -589,7 +650,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			if (run.reservationId) {
 				try {
 					coordinator.normalRelease(run.reservationId, {
-						noLiveOrAmbiguousSideEffects: true,
+						noLiveOrAmbiguousSideEffects: providerQuiescent(runId),
 						runIsTerminal: true,
 						runIsParkedAndFutureDispatchRequiresReadmission: false,
 					});
@@ -602,6 +663,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		async parkForApproval(runId) {
+			if (!canMutate) return attachDenied("parkForApproval");
 			const run = store.getRun(runId);
 			if (!run) {
 				return {
@@ -609,8 +671,25 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
 				};
 			}
+			// D38: release slot only when provider is quiescent (no live/ambiguous side effects).
+			const quiescent = providerQuiescent(runId);
+			if (!quiescent) {
+				return {
+					ok: false,
+					run,
+					error: {
+						code: "TF_PROVIDER_AMBIGUOUS",
+						message:
+							"cannot parkForApproval while provider job is still live; slot held until quiescence (D38)",
+						recoveryAction: "reconcile",
+						sideEffects: "possible",
+						projectId: store.header.projectId,
+						controlDomainId: store.header.controlDomainId,
+					},
+					snapshot: { run },
+				};
+			}
 			const approvalRequestId = newId("apr");
-			// D38: paused + parked, release slot when quiescent
 			if (run.reservationId) {
 				coordinator.normalRelease(run.reservationId, {
 					noLiveOrAmbiguousSideEffects: true,
@@ -632,6 +711,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		async approve(runId, opts = {}) {
+			if (!canMutate) return attachDenied("approve");
 			const run = store.getRun(runId);
 			if (!run) {
 				return {
@@ -706,6 +786,12 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		forceReleaseReservation(reservationId, opts) {
+			if (!canMutate) {
+				return {
+					ok: false as const,
+					error: attachDenied("forceReleaseReservation").error!,
+				};
+			}
 			try {
 				coordinator.forceRelease(reservationId, {
 					commandId: opts.commandId ?? newId("cmd"),
