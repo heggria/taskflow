@@ -1,18 +1,18 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v7.1** (doc-alignment + global budget stats, RunStatus/Stage, P-ADR gate, P15)
+> **Document version:** **v7.2** (Major pins: scoped authority, unknown=suspend, P14/P16 required, cancel/approval compat)
 > **Branch:** `feat/0.3.0`
 > **Date:** 2026-07-22
-> **Approver action:** Architecture + 0.3 protocol model **approved** for Steps 1–2.5.
-> **Wire/schema freeze:** still **not** approved until P-ADRs land concrete TypeBox.
+> **Approver action:** Architecture **Approved**; protocol model **Approve with conditions** (wire still open); Steps 1–2.5 **go**.
+> **Wire/schema freeze:** **not** approved until P1–P16 ADRs + TypeBox.
 >
 > | Layer | Status |
 > |-------|--------|
 > | Architecture | **Approved** |
-> | 0.3 protocol model (domains, commands, modes, parity) | **Approved** (this version) |
+> | 0.3 protocol model | **Approved with conditions** (this version) |
 > | Wire / TypeBox freeze | **Not yet** |
 > | Implementation now | **§22 steps 1–2.5** |
-> | DomainTransfer / merged user journal | **Out of 0.3** (deferred) |
+> | DomainTransfer / merged user journal | **Out of 0.3** |
 >
 > **Self-contained:** implementers need not read v1–v6 history.
 > **Supersession:** for 0.3+ ControlHost clients this RFC wins over conflicting bullets in
@@ -34,20 +34,21 @@
 
 2. **Soul:** single execution semantics · immutable BoundPlan/BoundFragment · durable per-project journal.
 
-3. **Ledger model for 0.3 (product decision — accepted):**
-   - **One ControlDomain + ControlStore per project** (project-local authority ledger).
-   - **User-level ControlRegistry** (non-authoritative): maps `projectId → domain location`, mount status, optional aggregates.
-   - **taskflowd mounts many project domains**; it does **not** merge project histories into one user journal in 0.3.
-   - **No DomainTransfer in 0.3 GA.** First registration fixes the project’s ControlDomain; mode changes **change the process (clerk), not the ledger**.
+3. **Scoped authority (accepted):**
+   - **Project ControlStore** = Run / Command / Approval / Receipt authority.
+   - **UserCoordinatorStore** = singleton lease + **concurrency reservation** authority (not project history).
+   - **ControlRegistry** = non-authoritative discovery / projection.
+   - One ControlDomain per project; daemon multi-mount; **no** DomainTransfer / merged user journal in 0.3.
 
-4. **`controlMode: auto` default** for 0.3 clients with a **fresh-install bootstrap contract** (§5). No silent full-power fallback.
+4. **`unknown` is a reconcilable suspended status**, not an immutable tombstone (§8.4). Stage may be `reconciling`.
 
-5. **D21:** publicly supported 0.2.4 semantics stay compatible at GA.
+5. **`controlMode: auto`** + fresh-install bootstrap (§5). No silent full-power fallback.
 
-6. **Toolchain (D28):** Node **≥22.19** production; **TypeScript 7** monorepo CLI; **taskflow-dsl** isolated on **TS 6 compiler API**; **pnpm 11**.
+6. **D21** public 0.2.4 surface at GA; headless approval compat explicit (§17.3).
 
-7. **Start now:** green trunk, public-surface goldens, toolchain, single scheduler, P-ADRs.
-   **Hold:** wire freeze, DomainTransfer, multi-package RPC feature race.
+7. **Toolchain (D28):** Node ≥22.19 + @types/node 22 + CI **22/24 required, 26 allowed-to-fail**; TS 7 root; DSL TS 6 API isolated; pnpm 11.
+
+8. **Start now:** Steps 1–2.5. **Hold:** wire freeze.
 
 ---
 
@@ -63,26 +64,29 @@
 
 | Concept | Plain language |
 |---------|----------------|
-| **ControlDomain** | The **jurisdiction**: one project’s sole authority for command order, Run state, approvals, recovery. |
-| **ControlStore** | The **official ledger** on disk for that domain (commands, events, projections, idempotency, receipt refs). Memory and process speech are not truth. |
-| **ControlRegistry** (user-level) | A **directory of ledgers**: where each project’s domain lives, mount health, rebuildable indexes. **Not** a second authority for run mutations. |
-| **taskflowd / standalone** | The **clerk**: process that opens ledgers and schedules work. Swap clerks freely; **do not swap ledgers** in 0.3. |
-| **Receipt** | Signed evidence package derived from the ledger. |
+| **ControlDomain** | Project **jurisdiction** for command order, Run/Approval/Receipt. |
+| **Project ControlStore** | Official **project ledger** (commands, events, projections, receipts). Process speech is not truth. |
+| **UserCoordinatorStore** | Narrow **user-level authority** for daemon singleton + **global concurrency reservations** only. Not project Run history. |
+| **ControlRegistry** | Non-authoritative **directory** of project ledgers (paths, mount, rebuildable indexes). |
+| **taskflowd / embedded supervisor / standalone** | **Clerk** processes. Swap clerks; **do not swap project ledgers** in 0.3. Embedded multi-mount uses same singleton as taskflowd. |
+| **Receipt** | Evidence package derived from the **project** ledger. |
+| **CoordinatorLease / ConcurrencyReservation** | Records in UserCoordinatorStore for global concurrency. |
 
 ```text
 Codex / Pi / CLI / Claude
         │ commands
         ▼
-standalone clerk  OR  taskflowd (multi-mount clerk)
+standalone (one project)  OR  taskflowd / embedded multi-mount (singleton)
         │
-        ▼
-ControlRegistry (user) ──► open project ControlStore (authority)
-        │
-        ▼
-ExecutionProvider (agent / script)
+        ├── ControlRegistry ────────── discovery (non-authoritative)
+        ├── UserCoordinatorStore ───── concurrency leases (scoped authority)
+        └── project ControlStore ───── Run/Command/Approval/Receipt authority
+                    │
+                    ▼
+            ExecutionProvider
 ```
 
-**Daily multi-project needs** (list runs, search, approval inbox, global concurrency, budget totals) are solved by **registry + aggregation + scheduler leases**, not by merging Git-style histories into one repo.
+**Daily multi-project UX** = registry aggregates + coordinator concurrency + Receipt budget **stats**. Not a merged total journal.
 
 ---
 
@@ -93,10 +97,10 @@ ExecutionProvider (agent / script)
 | **D1** | CACP |
 | **D2** | Single scheduler; legacy phase code as executors only |
 | **D3** | Planes: Intent · Compile · Link · Control · Exec · Ledger (+ diagnostic Trace) |
-| **D4** | Entities: ControlDomain, ControlRegistry, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
+| **D4** | Entities: ControlDomain, **Project ControlStore**, **UserCoordinatorStore**, **CoordinatorLease**, **ConcurrencyReservation**, ControlRegistry, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
 | **D5** | `controlMode`: **auto** default; coordinated fail-closed; standalone explicit |
-| **D6** | Authority = **project ControlStore journal**; registry non-authoritative |
-| **D7** | `projectId` UUID + `directoryBinding`; rebind binding only, not domain id (0.3) |
+| **D6** | **Scoped authority:** Project ControlStore = Run/Command/Approval/Receipt; UserCoordinatorStore = singleton + concurrency reservations; ControlRegistry = non-authoritative |
+| **D7** | `projectId` UUID stored in **ControlStore header** and Registry; `directoryBinding`; rebind binding only |
 | **D8** | Thin MCP + CLI; stable tool names |
 | **D9** | Async ExecutionProvider; control mints Receipts |
 | **D10** | Policy: deny \| substitute \| attenuate |
@@ -122,6 +126,8 @@ ExecutionProvider (agent / script)
 | **D30** | **Global concurrency (0.3):** strong only under the user-level **singleton coordinator** (daemon/embedded). **Global budget (0.3):** Receipt **aggregation / statistics only** — not a hard cross-project admission gate. Cross-project hard budget deferred. |
 | **D31** | **RunStatus** vs **RunStage** are distinct fields (§8) |
 | **D32** | Embedded multi-mount supervisor must use the **same user singleton lock + endpoint** as taskflowd |
+| **D33** | **`unknown` is reconcilable (non-terminal)**; stage `reconciling`; settles to a true terminal status |
+| **D34** | 0.2 headless auto-reject approval: **compat mode preserved** unless client opts into durable inbox (§17.3) |
 
 ---
 
@@ -130,20 +136,20 @@ ExecutionProvider (agent / script)
 ### 4.1 Per-project ControlDomain (0.3 default — frozen)
 
 - First successful project control registration creates:
-  - `projectId` (stable UUID in user-private store)
-  - `ControlDomainId` (stable UUID, **equals or 1:1 with project’s ledger identity**)
-  - on-disk **ControlStore** under the project control path (exact path in ControlStore ADR)
+  - `projectId` (stable UUID) in **ControlStore header** and mirrored in Registry
+  - `ControlDomainId` (stable UUID, 1:1 with project ledger)
+  - on-disk **Project ControlStore** (path in P14)
   - `directoryBinding` for swap/move detection
 - **ControlDomainId does not change** on daemon restart, standalone↔daemon, or client upgrade.
 - **No second domain** for the same projectId in 0.3.
 
-### 4.2 ControlStore (authority)
+### 4.2 Project ControlStore (Run authority)
 
-Records at least: CommandRecords, ControlEvents, Run projections, approval state, idempotency, receipt metadata, artifact/secret refs, recovery cursors.
+Records: CommandRecords, ControlEvents, Run projections, approval state, idempotency, receipt metadata, artifact/secret refs, recovery cursors.
 
-**Process speech is not truth; committed ControlStore records are.**
+**Process speech is not truth; committed project ControlStore records are** for Run/Command/Approval/Receipt.
 
-Storage engine: **port only**. **Do not** default to `node:sqlite` without a dedicated P-ADR covering stability, txn, concurrency, upgrade (Node API stability note). File/log backend is acceptable for 0.3.
+Storage engine: **always specified in P14** (files-only is still an engine: fsync, batch, locks, recovery, compaction). No `node:sqlite` without P14 covering stability.
 
 ### 4.3 ControlRegistry (user-level, non-authoritative for project Runs)
 
@@ -167,20 +173,31 @@ ControlRegistry
   - **copy/clone** → **new projectId** (new domain) unless explicit “adopt identity” operator command;
   - **git worktree** → new binding; default **new projectId** (avoid two worktrees sharing one live journal without exclusive lease).
 
-#### 4.3.2 UserCoordinatorStore (narrow authority — not a project total ledger)
-
-For **global concurrency** under multi-mount control only:
+#### 4.3.2 UserCoordinatorStore (scoped authority — not a project total ledger)
 
 ```text
-UserCoordinatorStore (user-private, small)
-├── daemon / embedded supervisor lease + fencing epoch
-├── concurrency reservations (lease records)
-└── optional budget *reservations* only if a future ADR enables hard global budget
+UserCoordinatorStore (user-private)
+├── CoordinatorLease { holderId, fencingEpoch, endpoint, expiresAt }
+├── ConcurrencyReservation {
+│     reservationId, projectId, runId?, slots, epoch,
+│     state: reserved | committed | released | expired | orphan-suspect,
+│     expiresAt, renewedAt
+│   }
+└── (no project Run/Command/Receipt bodies)
 ```
 
-- Does **not** store project Run history, CommandRecords, or Receipts for projects.
-- **0.3 global budget:** aggregate Receipts for **statistics/UI only**; project-level `budget` on BoundPlan remains enforced **inside that project’s ControlStore**.
-- Strong cross-project budget gate = **post-0.3**.
+**0.3 global budget:** Receipt **aggregation / statistics only**. Project-level `budget` still enforced **inside** that project’s ControlStore. Hard cross-project budget = post-0.3.
+
+**P16 concurrency lifecycle (required):**
+
+```text
+reserve slot (UserCoordinatorStore)
+  → commit project Run Admitted (project ControlStore)
+  → dispatch
+  → terminal / cancel → release reservation
+```
+
+Crash windows (P16 must test): reserve-before-admit, admit-before-dispatch, terminal-before-release, TTL/renew, orphan after daemon death, epoch fencing, **conservative rebuild** on coordinator restart (never over-admit; may under-admit until release/TTL).
 
 ### 4.4 DomainTransfer — **out of 0.3**
 
@@ -287,34 +304,66 @@ allowedAgentClasses, allowedProviderClasses, tool/effect ceilings, maxChildren, 
 
 ```text
 RunStatus = running | completed | failed | paused | blocked | cancelled | unknown
-RunStage  = received | compiled | linked | queued | admitted | executing | terminal
+RunStage  = received | compiled | linked | queued | admitted | executing
+          | reconciling | terminal
 ```
 
 | Field | Meaning |
 |-------|---------|
-| **RunStatus** | User-visible / API lifecycle (maps to 0.2.4 `RunState.status` + extensions) |
-| **RunStage** | Internal control pipeline progress (link/admit pipeline); may advance while status stays `running` or `paused` |
+| **RunStatus** | User-visible / API lifecycle |
+| **RunStage** | Control pipeline progress |
 
-### 8.2 RunStatus ↔ 0.2.4 mapping (frozen for goldens)
+**Terminal RunStatus only:** `completed | failed | blocked | cancelled`.
+**`unknown` is NOT terminal** (D33).
+
+### 8.2 RunStatus ↔ 0.2.4 mapping (P5 goldens)
 
 | 0.3 RunStatus | 0.2.4 | Notes |
 |---------------|-------|--------|
-| running | running | Active work or between stages while not terminal |
-| completed | completed | Successful terminal (do **not** rename wire to `success`) |
+| running | running | Active work |
+| completed | completed | Wire keeps `completed` (not `success`) |
 | failed | failed | |
-| paused | paused | Waiting approval / human; RunStage may be `executing` |
-| blocked | blocked | Gate / **project** budget block |
-| cancelled | *(new)* | Explicit cancel terminal; **import:** 0.2 runs without cancel → never map to cancelled; legacy failed-with-cancel-message stays failed unless importer proves cancel |
-| unknown | *(new)* | Unclean provider/journal uncertainty |
+| paused | paused | Approval wait **or** 0.2 detached cancel-in-progress (see below) |
+| blocked | blocked | Gate / project budget |
+| cancelled | — | Explicit cancel **settled** |
+| unknown | — | Ambiguous provider/journal; **must** enter reconcile path |
+
+**Cancellation import / resume (frozen intent for P5):**
+
+| 0.2.4 observation | 0.3 import |
+|-------------------|------------|
+| `paused` + `detachedCancel` + worker **still live** | `paused` (cancel in flight); stage `executing` |
+| `paused` + `detachedCancel` + worker **terminated** / confirmed dead | **`cancelled`** terminal (do not leave paused forever; resume must not restart as normal) |
+| failed message mentions cancel only | stay **`failed`** unless durable cancel marker exists |
+| clean cancel with no paused intermediate | **`cancelled`** |
+
+P5 must include resume-after-detachedCancel goldens.
 
 ### 8.3 RunStage progression
 
 ```text
-received → compiled → linked → queued → admitted → executing → terminal
+received → compiled → linked → queued → admitted → executing
+  ⇄ reconciling → terminal
 ```
 
-- Fragment link mid-run keeps status `running` (or `paused` if waiting approval) while stage may re-enter `executing` after `FragmentLinked`.
-- Terminal stage pairs with a terminal RunStatus (`completed|failed|blocked|cancelled|unknown`).
+- Fragment link: status often `running`; stage stays `executing`.
+- **True terminal stage** only with terminal status `completed|failed|blocked|cancelled`.
+
+### 8.4 `unknown` + reconcile (D33 — accepted: suspend, not tombstone)
+
+**Decision:** `unknown` is a **reconcilable suspended status**.
+
+```text
+provider ambiguous / crash window
+  → RunStatus = unknown, RunStage = reconciling
+  → Provider.reconcile / operator
+  → settle to completed | failed | cancelled | blocked
+     (or remain unknown only while reconciling continues under policy)
+```
+
+- **Forbidden:** treating `unknown` as immutable terminal that forbids reconcile in place.
+- **Forbidden:** silent flip without ControlEvent (`ReconcileStarted` / `ReconcileSettled`).
+- Optional: after max reconcile attempts, settle to `failed` with reason `unreconciled` (P5 pins policy); still not “unknown forever as terminal”.
 
 **Attempt:**
 
@@ -528,13 +577,22 @@ ApprovalRequest {
 - **CancelRequested first** → later ApprovalDecision CAS fails; request → `cancelled`.
 - **ApprovalDecision first** → clears pause; later CancelRequested may still cancel Run.
 - Same `expectedRunVersion` race → first commit wins.
-- **Timeout → reject** (status `expired` or rejected-by-timeout); **never** default approve.
+- **Timeout → single wire status `expired`** (maps to run leave-pause as **blocked** or stay with approval expired — P15 pins run transition; **never** default approve). Do not dual-encode `rejected-by-timeout` on the wire.
 - **edit output** → validate against OutputContract; no re-link.
 - **edit plan/obligations** → re-Link required before continue.
 - Decider must match **principal / audience** rules (P15).
 - Survive control restart; dual-client decide tests required.
 
-**P15** freezes TypeBox + full CAS table before wire freeze.
+### 17.3 Headless / no-interactive approver (D21 + D34)
+
+| Client class | 0.3 behavior |
+|--------------|--------------|
+| **Compat / headless** (default for MCP without durable inbox capability) | Preserve **0.2.4 auto-reject** → RunStatus **`blocked`** immediately (no durable pending inbox). |
+| **Durable-inbox clients** (CLI/WebUI/control that advertise `feature:durable-approval`) | Create **pending** ApprovalRequest; RunStatus **`paused`** until decide/timeout/cancel. |
+
+This is **not** an accidental behavior change for headless hosts: default remains auto-reject unless the client negotiates durable approval.
+
+**P15** freezes TypeBox + full CAS table + headless negotiation flag before wire freeze.
 
 ---
 
@@ -572,14 +630,16 @@ P5 matrix:
 PHASE_TYPES (all, incl. race/expand)
 × when | join:any | retry | timeout | expect | budget | cache
   | cwd | workspace | shareContext | dynamic def | saved use
-  | resume | recompute | replay | approval | cancel/abort
+  | resume | recompute | replay | approval | cancel/abort | cancelled
+  | detachedCancel → cancelled mapping
   | foreground | detached | idempotent:false
   | final-output attribution
   | score | onBlock:retry | reflexion | tree reduce
-  | Run status mapping (completed/paused/blocked/unknown)
+  | RunStatus × RunStage (incl. unknown + reconciling)
+  | headless auto-reject vs durable approval
 ```
 
-Ternary suites: expand×cache×authority epoch; detached×approval×resume.
+Ternary suites: expand×cache×authority epoch; detached×approval×resume; concurrency reserve×crash×release.
 
 Fail-at-link: **dev-only**.
 
@@ -604,10 +664,11 @@ taskflow-web (0.3.1+) / host delivery packages
 
 | Item | Baseline |
 |------|----------|
-| Node engines | ≥22.19; **@types/node aligned to 22** for package typecheck **and** CI matrix **22 + 24 LTS (+ 26 Current optional)** — not “types 22 *or* multi-version CI” |
-| TypeScript | **Root TS 7** CLI/typecheck; **taskflow-dsl** isolated **TS 6** compiler API; resolution guard test against drift |
+| Node engines | ≥22.19; **@types/node@22** for package typecheck |
+| Node CI | **22 + 24 required green**; **26 Current required-to-run, allowed-to-fail** (warn only) until baseline raise ADR |
+| TypeScript | **Root TS 7** CLI/typecheck; **taskflow-dsl** isolated **TS 6** compiler API; resolution guard test |
 | pnpm | **11.x** stable (`packageManager` field) |
-| SQLite | only behind ControlStore port + explicit P-ADR |
+| SQLite | only via **required P14** |
 
 ---
 
@@ -616,33 +677,34 @@ taskflow-web (0.3.1+) / host delivery packages
 ```text
 1.   Green trunk
 1.a  Public 0.2.4 surface → golden plan
-1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22 + CI 22/24/26
+1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22; CI 22/24 required, 26 allowed-to-fail
 2.   Single scheduler convergence
-2.5  P-ADRs (gate below)
+2.5  P-ADRs P1–P16 (all required before wire freeze)
 3.   Wire freeze + TypeBox
 4.   ControlHost extract
-5.   Per-project ControlStore + user Registry + UserCoordinatorStore (concurrency only)
-6.   Bootstrap + singleton multi-mount (taskflowd / embedded)
-7.   Linker + admission
-8.   ExecutionProviders
+5.   Project ControlStore + Registry + UserCoordinatorStore
+6.   Bootstrap + singleton multi-mount
+7.   Linker + admission + concurrency reserve path
+8.   ExecutionProviders + reconcile → settle unknown
 9.   Thin MCP + CLI
 10. WebUI 0.3.1
 ```
 
 **Allowed now: 1–2.5.**
 
-### P-ADR wire-freeze gate (unified)
+### P-ADR wire-freeze gate (unified — no optional holes)
 
-> **P1–P13 and P15 required before wire freeze.**
-> **P14** (ControlStore engine) **required unless** P3 freezes a **files-only** engine with no sqlite/other port.
+> **P1–P16 are all required before wire freeze.**
+> Files-only storage is still specified in **P14** (fsync, atomic batch, locks, recovery, compaction).
+> **P16 is not foldable into P13.**
 
 | ID | Topic |
 |----|--------|
 | P1 | Policy overlay |
 | P2 | Empty-policy Exposure |
-| P3 | Domain + Registry rebuild + clone/worktree identity (no DomainTransfer) |
+| P3 | Domain + Registry rebuild + clone/worktree identity |
 | P4 | Negotiation + errors + recoveryAction |
-| P5 | Phase × feature matrix + RunStatus mapping + ternary suites |
+| P5 | Phase × feature + RunStatus/Stage + cancelled + unknown/reconcile + headless approval |
 | P6 | Canonical hash + ArtifactRef + SecretRef |
 | P7 | Dynamic paths + dual hashes + cache |
 | P8 | Enforcement capabilities |
@@ -651,26 +713,27 @@ taskflow-web (0.3.1+) / host delivery packages
 | P11 | Compaction + cursor + minAvailableCommitSeq |
 | P12 | Command batch + re-auth disclosure |
 | P13 | Bootstrap / fresh-install / singleton lock / platforms |
-| P14 | ControlStore engine (skip only if files-only frozen in P3) |
-| P15 | **Approval protocol** (full state machine + principal rules) |
-| P16 | UserCoordinatorStore concurrency leases (optional if folded into P13) |
+| P14 | **ControlStore engine** (always — including files-only) |
+| P15 | **Approval protocol** (headless compat + wire status `expired` only) |
+| P16 | **UserCoordinatorStore** reserve→admit→release + crash windows |
 
 ---
 
 ## §23. GA acceptance (minimum)
 
 - [ ] Fresh install, default auto, one run, no manual daemon config
-- [ ] Concurrent client start → single writer
+- [ ] Concurrent client start → single writer / singleton attach
 - [ ] Stale socket recovery
-- [ ] Per-project store; registry multi-mount
-- [ ] standalone and daemon open **same** store
-- [ ] No DomainTransfer code path in GA
-- [ ] Command re-exec suppressed; disclosure re-authed
-- [ ] Artifact read authz
-- [ ] Public-surface goldens + Run status mapping
-- [ ] Receipt event manifest survives compaction rules
-- [ ] bounded-latency maxLatencyMs when used
-- [ ] All §22 P-ADRs present for shipped wire types
+- [ ] Per-project store; registry multi-mount; standalone+daemon same store
+- [ ] Registry wiped → reopen project restores same projectId/domainId from store header
+- [ ] Global concurrency: N slots, N+1 cross-project compete; crash + lease expiry never over-admit
+- [ ] No DomainTransfer code path
+- [ ] Command re-exec suppressed; disclosure re-authed; artifact read authz
+- [ ] Public-surface goldens; RunStatus/Stage; cancelled; unknown→reconcile settle
+- [ ] detachedCancel terminated → cancelled; resume rules
+- [ ] Approval: dual client, restart, timeout/cancel/approve race; headless auto-reject vs durable inbox
+- [ ] Receipt event manifest survives compaction; bounded-latency maxLatencyMs when used
+- [ ] P1–P16 ADRs present for shipped wire types
 
 ---
 
@@ -678,14 +741,13 @@ taskflow-web (0.3.1+) / host delivery packages
 
 ```text
 Architecture: Approved
-Protocol model (0.3): Approved (v7.1 doc-alignment patch)
-Wire freeze: Not approved (needs P1–P13+P15, P14 if not files-only)
+Protocol model (0.3): Approved with conditions (v7.2)
+Wire freeze: Not approved (P1–P16 required)
 Steps 1–2.5: Approved to start
-DomainTransfer: Rejected for 0.3
-User merged journal: Rejected for 0.3
-User Registry + multi-mount: Approved
-Global concurrency: strong under singleton coordinator only
-Global budget: statistics only in 0.3
+unknown: reconcilable suspend (not immutable terminal)
+Global concurrency: UserCoordinatorStore
+Global budget: statistics only
+DomainTransfer / merged journal: out of 0.3
 ```
 
 ---
@@ -702,12 +764,12 @@ Global budget: statistics only in 0.3
 
 ## Appendix A — Vocabulary
 
-ControlDomain · ControlStore · ControlRegistry · CommandRecord · BoundPlan · BoundFragment · executionSemanticHash · ArtifactRef · SecretRef · ControlHost · recoveryAction · public surface
+ControlDomain · Project ControlStore · UserCoordinatorStore · CoordinatorLease · ConcurrencyReservation · ControlRegistry · CommandRecord · BoundPlan · BoundFragment · RunStatus · RunStage · reconciling · executionSemanticHash · ArtifactRef · SecretRef · ControlHost · recoveryAction · public surface · durable-approval feature
 
 ## Appendix B — Explicitly cut from 0.3
 
-DomainTransfer · user-level merged authority journal · silent auto→standalone · GA fail-at-link for public 0.2.4 features · node:sqlite without P-ADR · commitSeq renumbering
+DomainTransfer · user-level merged project journal · silent auto→standalone · GA fail-at-link for public 0.2.4 features · node:sqlite without P14 · commitSeq renumbering · unknown as immutable terminal · hard cross-project budget gate
 
 ---
 
-*End RFC v7. Approved product model: per-project ledger + user registry multi-mount; no DomainTransfer. Proceed with Steps 1–2.5.*
+*End RFC v7.2. Architecture approved; protocol approved with conditions; Steps 1–2.5 go; wire freeze after P1–P16.*

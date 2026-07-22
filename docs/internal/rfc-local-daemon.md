@@ -45,7 +45,7 @@ This gives users a controllable long-run lifecycle without introducing a
 resident service, socket, installer, upgrade protocol, or second source of
 truth.
 
-## Current boundary
+## Historical 0.2.3 boundary
 
 | Capability | 0.2.3 mechanism |
 |---|---|
@@ -62,9 +62,9 @@ The active-run warning is deliberately advisory. A hidden scheduler would
 change execution semantics and introduce policy questions that cannot be
 answered safely by a patch release.
 
-## When a daemon becomes justified
+## Historical note: when a daemon became justified (pre-0.3)
 
-Reopen this RFC only when measured usage repeatedly shows at least one of:
+Reopen / supersede via [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md). Original triggers were:
 
 1. MCP cold-start/process churn materially dominates short runs;
 2. users need one cross-host concurrency or budget admission policy rather than
@@ -121,5 +121,6 @@ Pi / Codex / Claude / OpenCode / Grok
 - `list` / `status` / `wait` / `subscribe` — observation surfaces;
 - `admission` — explicit concurrency/budget policy and queue position.
 
-Until the trigger evidence exists, the 0.2.3 process-less lifecycle is the
-smaller and more reliable product.
+**Historical closing line (0.2.3):** until daemon triggers were productized, the
+process-less lifecycle was the smaller path. **0.3** productizes control via the
+control-plane RFC (per-project ControlStore + Registry multi-mount), not this deferred design.

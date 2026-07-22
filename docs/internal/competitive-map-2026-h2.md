@@ -159,7 +159,7 @@ Avoid: “declarative multi-agent workflows” (Conductor-shaped); “run agents
 
 | Doc | Role |
 |-----|------|
-| [`rfc-local-daemon.md`](./rfc-local-daemon.md) | Daemon triggers + non-negotiables |
+| [`rfc-local-daemon.md`](./rfc-local-daemon.md) | Historical 0.2.x rationale + retained transport invariants |
 | [`0.2.0-north-star.md`](../0.2.0-north-star.md) | Compiler / incremental / replay story |
 | [`market-positioning-2026-07.md`](../market-positioning-2026-07.md) | Conductor red-ocean detail |
 | [`COMPETITORS.md`](./COMPETITORS.md) | Older full matrix (pre–H2 cloud wave) |
