@@ -110,8 +110,11 @@ function emptyCoordinator(): CoordinatorFile {
 	};
 }
 
-export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): UserCoordinatorStore {
-	const dir = coordinatorDir(env);
+export function openUserCoordinatorStore(
+	env: NodeJS.ProcessEnv = process.env,
+	opts?: { /** Override on-disk directory (project-local standalone). */ baseDir?: string },
+): UserCoordinatorStore {
+	const dir = opts?.baseDir ?? coordinatorDir(env);
 	ensureDir(dir);
 	const file = path.join(dir, "state.json");
 	const lockPath = path.join(dir, "state.lock");

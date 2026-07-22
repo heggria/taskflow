@@ -40,6 +40,11 @@ export function coordinatorDir(env: NodeJS.ProcessEnv = process.env): string {
 	return path.join(userControlRoot(env), "coordinator");
 }
 
+/** Standalone / project-local coordinator — not the user-level multi-project store. */
+export function projectCoordinatorDir(projectRoot: string): string {
+	return path.join(projectControlRoot(projectRoot), "coordinator-local");
+}
+
 export function singletonLockPath(env: NodeJS.ProcessEnv = process.env): string {
 	return path.join(userControlRoot(env), "singleton.lock");
 }

@@ -29,8 +29,8 @@ export interface BootstrapResult {
 /**
  * Bootstrap ControlHost per controlMode.
  * - auto (default): registry + project store + singleton multi-mount; fail closed if singleton impossible
- * - coordinated: same as auto but requires existing singleton writer (attach only) — fail closed if none
- * - standalone: explicit only; in-process host on project store; no multi-project concurrency claims intent
+ * - coordinated: **must attach to existing writer**; becoming sole writer = no authority → fail closed
+ * - standalone: explicit only; project-local coordinator (not user-level multi-project)
  */
 export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 	const controlMode = opts.controlMode ?? DEFAULT_CONTROL_MODE;
@@ -62,12 +62,22 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 	if (controlMode === "coordinated" && !opts.skipSingleton) {
 		if (!host.singleton) {
 			host.close();
-			throw Object.assign(new Error("TF_BOOTSTRAP_FAILED: coordinated mode requires singleton control"), {
-				code: "TF_BOOTSTRAP_FAILED",
-			});
+			throw Object.assign(
+				new Error("TF_BOOTSTRAP_FAILED: coordinated mode requires singleton control"),
+				{ code: "TF_BOOTSTRAP_FAILED" },
+			);
 		}
-		// coordinated prefers attach to external writer; if we became writer that's OK
-		// (we are the control) — if skip not set, singleton always set.
+		// No external authority: we created the lock ourselves → fail closed.
+		// Daemon/taskflowd uses controlMode auto (or skipSingleton after holding lock).
+		if (host.singleton.role === "writer") {
+			host.close();
+			throw Object.assign(
+				new Error(
+					"TF_BOOTSTRAP_FAILED: coordinated mode requires an existing multi-mount writer (taskflowd); no authority present",
+				),
+				{ code: "TF_BOOTSTRAP_FAILED" },
+			);
+		}
 	}
 
 	const role =

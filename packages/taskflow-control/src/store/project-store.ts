@@ -80,6 +80,20 @@ export interface ProjectControlStore {
 	compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult;
 	/** Rebuild projections from journal (also runs on open). */
 	recoverFromJournal(): { rebuiltRuns: number; rebuiltCommands: number; rebuiltReceipts: number };
+	/**
+	 * Atomic command claim under commit.lock — concurrent same commandId:
+	 * same hash → existing; different hash → conflict; missing → claim.
+	 */
+	claimCommand(input: {
+		commandId: string;
+		requestHash: string;
+		callerPrincipal: string;
+		kind: string;
+		runId: string;
+	}):
+		| { kind: "claimed" }
+		| { kind: "existing"; command: CommandRecord }
+		| { kind: "conflict"; command: CommandRecord };
 	getRun(runId: string): RunProjection | null;
 	listRuns(): RunProjection[];
 	getReceipt(receiptId: string): Receipt | null;
@@ -405,6 +419,43 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 
 		recoverFromJournal() {
 			return withExclusiveLockFile(commitLockPath, () => rebuildFromJournal());
+		},
+
+		claimCommand(input) {
+			return withExclusiveLockFile(commitLockPath, () => {
+				const existing = readJsonFile<CommandRecord>(
+					path.join(projectCommandsDir(root), `${input.commandId}.json`),
+				);
+				if (existing) {
+					if (existing.requestHash === input.requestHash) {
+						return { kind: "existing" as const, command: existing };
+					}
+					return { kind: "conflict" as const, command: existing };
+				}
+				const cmd: CommandRecord = {
+					commandId: input.commandId,
+					requestHash: input.requestHash,
+					callerPrincipal: input.callerPrincipal,
+					authorizationContextHash: input.requestHash,
+					projectId: headerCache.projectId,
+					controlDomainId: headerCache.controlDomainId,
+					kind: input.kind,
+					status: "accepted",
+					firstCommitSeq: 0,
+					lastCommitSeq: 0,
+					runId: input.runId,
+					recordedAt: Date.now(),
+				};
+				writeFileAtomic(
+					path.join(projectCommandsDir(root), `${input.commandId}.json`),
+					JSON.stringify(cmd, null, 2),
+				);
+				writeFileAtomic(
+					path.join(projectCommandsDir(root), `by-cmd-${input.commandId}.json`),
+					JSON.stringify({ runId: input.runId }, null, 2),
+				);
+				return { kind: "claimed" as const };
+			});
 		},
 
 		getRun(runId: string) {

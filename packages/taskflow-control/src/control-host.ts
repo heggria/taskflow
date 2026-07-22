@@ -33,6 +33,7 @@ import {
 import { createScriptExecutionProvider } from "./script-provider.ts";
 import { boundedReconcile, applyReconcileToRun, DEFAULT_RECONCILE_BUDGET, type ReconcileBudget } from "./reconcile.ts";
 import { isSafeId } from "./validate-ids.ts";
+import { projectCoordinatorDir } from "./paths.ts";
 
 export interface ControlHostOptions {
 	projectRoot: string;
@@ -149,8 +150,14 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 	const store = openProjectControlStore(opts.projectRoot);
 	const registry = openControlRegistry(env);
-	registry.registerFromStore(store, opts.projectRoot);
-	const coordinator = openUserCoordinatorStore(env);
+	// Standalone must not claim user-level multi-project coordinator (D5/D30).
+	if (controlMode !== "standalone") {
+		registry.registerFromStore(store, opts.projectRoot);
+	}
+	const coordinator =
+		controlMode === "standalone"
+			? openUserCoordinatorStore(env, { baseDir: projectCoordinatorDir(opts.projectRoot) })
+			: openUserCoordinatorStore(env);
 	// Production default: real script provider. Mock only when explicitly allowed (tests).
 	const provider =
 		opts.provider ??
@@ -399,7 +406,68 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			const runId = newId("run");
 			const now = Date.now();
 
-			// Reserve (standalone still uses local coordinator for tests of capacity)
+			// Atomic command claim — concurrent same commandId cannot mint dual Runs.
+			const claim = store.claimCommand({
+				commandId,
+				requestHash,
+				callerPrincipal: principal,
+				kind: "admitAndRun",
+				runId,
+			});
+			if (claim.kind === "conflict") {
+				return {
+					ok: false,
+					error: {
+						code: "TF_IDEMPOTENCY_CONFLICT",
+						message: "same commandId with different requestHash",
+						recoveryAction: "retry-new-command",
+						sideEffects: "none",
+						commandId,
+					},
+				};
+			}
+			if (claim.kind === "existing") {
+				// Wait for the first claimer to publish the run (do not mint a second Run).
+				const boundRunId = store.getRunIdForCommand(commandId) ?? claim.command.runId;
+				if (!boundRunId) {
+					return {
+						ok: false,
+						error: {
+							code: "TF_NOT_FOUND",
+							message: `command ${commandId} claimed by peer without runId`,
+							recoveryAction: "retry-same-command",
+							sideEffects: "unknown",
+							commandId,
+						},
+					};
+				}
+				const deadline = Date.now() + 15_000;
+				while (Date.now() < deadline) {
+					const match = store.getRun(boundRunId);
+					if (match) {
+						return {
+							ok: true,
+							run: match,
+							receipt: store.getReceiptForRun(match.runId) ?? undefined,
+							snapshot: host.getSnapshot(match.runId) ?? undefined,
+						};
+					}
+					await new Promise((r) => setTimeout(r, 20));
+				}
+				return {
+					ok: false,
+					error: {
+						code: "TF_NOT_FOUND",
+						message: `command ${commandId} in flight; run ${boundRunId} not published in time`,
+						recoveryAction: "retry-same-command",
+						sideEffects: "unknown",
+						commandId,
+					},
+				};
+			}
+			// claim.kind === "claimed" — we alone may proceed to mint this runId
+
+			// Reserve (standalone uses project-local coordinator only)
 			const reservation = coordinator.reserve({
 				coordinatorEpoch: singleton?.lock.fencingEpoch ?? now,
 			});
