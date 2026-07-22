@@ -90,10 +90,19 @@ export interface ControlHost {
 	/** Status/wait snapshot — never transport-fails on TF_RECONCILE_REQUIRED. */
 	getSnapshot(runId: string): RunSnapshot | null;
 	wait(runId: string): Promise<RunSnapshot>;
-	cancel(runId: string, opts?: { commandId?: string; principal?: string }): Promise<AdmitResult>;
+	cancel(
+		runId: string,
+		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number },
+	): Promise<AdmitResult>;
 	/** Durable approval: park (release slot) only when provider quiescent (D38). */
-	parkForApproval(runId: string): Promise<AdmitResult>;
-	approve(runId: string, opts?: { commandId?: string; principal?: string }): Promise<AdmitResult>;
+	parkForApproval(
+		runId: string,
+		opts?: { expectedRunVersion?: number },
+	): Promise<AdmitResult>;
+	approve(
+		runId: string,
+		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number },
+	): Promise<AdmitResult>;
 	/** Operator force-release of a concurrency reservation (CoordinatorCommandRecord). */
 	forceReleaseReservation(
 		reservationId: string,
@@ -161,6 +170,25 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return !provider.isLive(handle);
 		}
 		return true;
+	}
+
+	/** Optimistic concurrency for dual-client approval/cancel (P15). */
+	function casMismatch(
+		run: RunProjection,
+		expectedRunVersion: number | undefined,
+	): ControlError | null {
+		if (expectedRunVersion === undefined) return null;
+		if (run.runVersion !== expectedRunVersion) {
+			return {
+				code: "TF_STALE_VERSION",
+				message: `expected runVersion ${expectedRunVersion}, have ${run.runVersion}`,
+				recoveryAction: "refresh",
+				sideEffects: "none",
+				projectId: store.header.projectId,
+				controlDomainId: store.header.controlDomainId,
+			};
+		}
+		return null;
 	}
 
 	function emit(
@@ -624,6 +652,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 		async cancel(runId, opts = {}) {
 			if (!canMutate) return attachDenied("cancel");
+			// Re-read under mutation path for dual-client freshness.
 			const run = store.getRun(runId);
 			if (!run) {
 				return {
@@ -631,6 +660,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
 				};
 			}
+			const stale = casMismatch(run, opts.expectedRunVersion);
+			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
 			const handle = handles.get(runId);
 			if (handle) await provider.cancel(handle);
 			const next: RunProjection = {
@@ -658,11 +689,10 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					/* keep */
 				}
 			}
-			void opts;
 			return { ok: true, run: updated, snapshot: { run: updated } };
 		},
 
-		async parkForApproval(runId) {
+		async parkForApproval(runId, opts = {}) {
 			if (!canMutate) return attachDenied("parkForApproval");
 			const run = store.getRun(runId);
 			if (!run) {
@@ -671,6 +701,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
 				};
 			}
+			const stale = casMismatch(run, opts.expectedRunVersion);
+			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
 			// D38: release slot only when provider is quiescent (no live/ambiguous side effects).
 			const quiescent = providerQuiescent(runId);
 			if (!quiescent) {
@@ -719,7 +751,22 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					error: { code: "TF_NOT_FOUND", message: "run not found", recoveryAction: "none", sideEffects: "none" },
 				};
 			}
-			// Re-reserve before execute
+			const stale = casMismatch(run, opts.expectedRunVersion);
+			if (stale) return { ok: false, run, error: stale, snapshot: { run } };
+			if (run.stage !== "parked" && run.status !== "paused") {
+				return {
+					ok: false,
+					run,
+					error: {
+						code: "TF_INVALID_ARGUMENT",
+						message: `approve requires paused+parked run (have status=${run.status} stage=${run.stage})`,
+						recoveryAction: "refresh",
+						sideEffects: "none",
+					},
+					snapshot: { run },
+				};
+			}
+			// Re-reserve before execute (D38)
 			const reservation = coordinator.reserve({
 				coordinatorEpoch: singleton?.lock.fencingEpoch ?? Date.now(),
 			});
@@ -781,7 +828,6 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			});
 			next = { ...next, receiptId: receipt.receiptId };
 			next = emit(next, { type: "ReceiptIssued", runId, receiptId: receipt.receiptId }, undefined, receipt);
-			void opts;
 			return { ok: true, run: next, receipt, snapshot: { run: next, receipt } };
 		},
 
