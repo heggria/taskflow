@@ -2,14 +2,14 @@
   "name": "pi-taskflow-monorepo",
   "version": "0.2.4",
   "private": true,
-  "description": "Monorepo for taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, and the documentation website.",
+  "description": "Monorepo for taskflow-core, taskflow-control, taskflow-daemon, taskflow-cli, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, and the documentation website.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@11.15.1",
   "scripts": {
-    "build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build",
+    "build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter taskflow-control build && pnpm --filter taskflow-daemon build && pnpm --filter taskflow-cli build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build",
     "build:website": "cd website && npm run build",
     "build:skills": "node scripts/build-skills.mjs",
     "test:pack": "pnpm run build && node scripts/smoke-packed-packages.mjs",
@@ -22,6 +22,9 @@
     "test:opencode": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/opencode-taskflow/test/*.test.ts'",
     "test:grok": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/grok-taskflow/test/*.test.ts'",
     "test:dsl": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-dsl/test/*.test.ts'",
+    "test:control": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-control/test/*.test.ts'",
+    "test:daemon": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-daemon/test/*.test.ts'",
+    "test:cli": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-cli/test/*.test.ts'",
     "test:workspace-baseline": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test packages/taskflow-core/test/workspace-baseline.test.ts",
     "probe:workspace-hosts": "node scripts/workspace-probes/run.mjs",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
@@ -40,13 +43,8 @@
     "@earendil-works/pi-ai": "^0.80.7",
     "@earendil-works/pi-coding-agent": "^0.80.7",
     "@earendil-works/pi-tui": "^0.80.7",
-    "@types/node": "^26",
+    "@types/node": "^22.15.0",
     "typebox": "^1.3.6",
     "typescript": "^7.0.2"
-  },
-  "pnpm": {
-    "overrides": {
-      "postcss": "^8.5.10"
-    }
   }
 }

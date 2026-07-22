@@ -1,10 +1,16 @@
-# pnpm workspace — nine packages under packages/ + website.
+# pnpm workspace — packages under packages/ + website.
 # (Replaces the npm `workspaces` field in the root package.json; pnpm ignores
 # that field and requires this file instead.)
+#
+# pnpm 11 (D28): overrides / allowBuilds live here — the package.json "pnpm"
+# field is no longer read.
 packages:
   - "packages/taskflow-core"
   - "packages/taskflow-mcp-core"
   - "packages/taskflow-hosts"
+  - "packages/taskflow-control"
+  - "packages/taskflow-daemon"
+  - "packages/taskflow-cli"
   - "packages/pi-taskflow"
   - "packages/codex-taskflow"
   - "packages/claude-taskflow"
@@ -12,6 +18,8 @@ packages:
   - "packages/grok-taskflow"
   - "packages/taskflow-dsl"
   - "website"
+overrides:
+  postcss: "^8.5.10"
 allowBuilds:
   "@google/genai": true
   esbuild: true

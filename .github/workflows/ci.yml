@@ -41,7 +41,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: ["22", "24"]
+        # D28: 22 + 24 required green; 26 Current runs but is allowed-to-fail
+        # until a baseline-raise ADR promotes it.
+        include:
+          - node: "22"
+            allow_fail: false
+          - node: "24"
+            allow_fail: false
+          - node: "26"
+            allow_fail: true
+    continue-on-error: ${{ matrix.allow_fail }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 

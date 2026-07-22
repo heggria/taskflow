@@ -1,0 +1,57 @@
+{
+  "name": "taskflow-control",
+  "version": "0.3.0",
+  "description": "Host-neutral ControlHost: Project ControlStore, ControlRegistry, UserCoordinatorStore, admit/link, reconcile, Receipt — the 0.3 control plane.",
+  "keywords": ["taskflow", "control-plane", "controlhost", "dag", "orchestration"],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/taskflow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/taskflow-control"
+  },
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "development": "./src/*.ts",
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" }
+    }
+  },
+  "dependencies": {
+    "taskflow-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "typebox": "^1.3.6",
+    "typescript": "^7.0.2"
+  }
+}
