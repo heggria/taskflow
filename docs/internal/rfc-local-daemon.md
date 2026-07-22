@@ -14,8 +14,9 @@
 > - `standalone` is explicit; same ControlHost semantics;
 > - **0.3 keeps one authoritative project ControlStore per project** (Run/Command/Approval/Receipt).
 > - User-level **ControlRegistry** only mounts/aggregates (non-authoritative).
-> - User-level **UserCoordinatorStore** is authoritative **only** for daemon singleton lease and
->   **global concurrency reservations** — not project Run history (not a merged total ledger).
+> - User-level **UserCoordinatorStore** is authoritative for daemon singleton lease,
+>   **global concurrency reservations**, and **narrow CoordinatorCommandRecord** ops
+>   (e.g. setMaxActiveRuns, force-release) — **not** project Run history (not a merged total ledger).
 >
 > **Still non-negotiable (retained by 0.3 RFC):** disk is authority; UDS + auth; version handshake;
 > one multi-mount admission path when claimed; no default network listener; daemon memory is never the

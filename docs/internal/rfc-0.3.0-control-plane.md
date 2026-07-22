@@ -1,10 +1,10 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v7.5** (release predicates, slots≡1, coordinator commands, approval slot release)
+> **Document version:** **v7.6 (MASTER RFC FROZEN for expansion)**
 > **Branch:** `feat/0.3.0`
 > **Date:** 2026-07-22
-> **Approver action:** Architecture **Approved**; protocol model **Approved with conditions**; Steps 1–2.5 **go**; wire freeze **not** yet.
-> **Stop expanding this master RFC.** Further detail only in P1–P16 ADRs + TypeBox.
+> **Approver action:** Architecture **Approved**; protocol model **Approved with conditions**; Steps 1–2.5 **go**; wire freeze **not** yet (P1–P16).
+> **No further master-RFC growth** except typo/conflict fixes. Detail → P-ADRs + TypeBox only.
 >
 > | Layer | Status |
 > |-------|--------|
@@ -36,7 +36,7 @@
 
 3. **Scoped authority (accepted):**
    - **Project ControlStore** = Run / Command / Approval / Receipt authority.
-   - **UserCoordinatorStore** = singleton lease + **concurrency reservation** authority (not project history).
+   - **UserCoordinatorStore** = singleton lease + **concurrency reservations** + narrow **CoordinatorCommandRecord** authority (not project Run history).
    - **ControlRegistry** = non-authoritative discovery / projection.
    - One ControlDomain per project; daemon multi-mount; **no** DomainTransfer / merged user journal in 0.3.
 
@@ -126,14 +126,14 @@ standalone (one project)  OR  taskflowd / embedded multi-mount (singleton)
 | **D28** | Node ≥22.19; **TS 7** workspace; **DSL TS 6 API isolated**; pnpm 11 |
 | **D29** | User **ControlRegistry** for multi-project mount/aggregate |
 | **D30** | **Global concurrency = `maxActiveRuns` with `slots ≡ 1` per admitted Run.** Capacity: `count(reserved\|committed\|orphan-suspect) ≤ maxActiveRuns`. Not a global subagent cap (`flow.concurrency` stays per-Run). Global budget: statistics only. |
-| **D37** | **Release predicates** for concurrency slots: terminal **and** no live/ambiguous side effects; or parked+re-admit; or operator force-release (§4.3.2) |
-| **D38** | Durable approval **park**: when provider quiescent, **release** run-slot; on approve, re-enter **queued** and re-reserve before execute (§17.4) |
-| **D31** | **RunStatus** vs **RunStage** are distinct fields (§8) |
+| **D31** | **RunStatus** vs **RunStage** are distinct fields (§8); RunStage includes **`parked`** |
 | **D32** | Embedded multi-mount supervisor must use the **same user singleton lock + endpoint** as taskflowd |
 | **D33** | **`unknown` non-terminal**; auto-reconcile/wait **bounded**; timeout → **needs-operator**, keep capacity, **no** final Receipt / no fake `failed` (§8.4) |
 | **D34** | Approval durability: **compat-auto-reject \| durable-optional \| durable-required** (§17.3) |
 | **D35** | **No federated multi-ControlStore workflow** in 0.3 (one Run ↔ one project ControlStore). Multi-root *within* one project is workspace-capability, not this. |
-| **D36** | Concurrency: **`reserved` TTL-reclaimable; `committed` never TTL-only release**; release only terminal proof / process-dead proof / operator force-release (§4.3.2) |
+| **D36** | Concurrency: **`reserved` TTL-reclaimable; `committed` never TTL-only release**; release **only via D37** `normalRelease` or `forceRelease` |
+| **D37** | **Release predicates** `normalRelease` / `forceRelease` (§4.3.2) — do not use weaker shorthands |
+| **D38** | Durable approval **park**: stage **`parked`**, release run-slot when quiescent; on approve → **`queued`** + re-reserve (§8.3, §17.4) |
 
 ---
 
@@ -194,7 +194,7 @@ UserCoordinatorStore (user-private)
 │     reservationId
 │     state: reserved | committed | released | expired | orphan-suspect
 │     slots: 1                 # FIXED in 0.3 — not weighted
-│     # required when state=committed:
+│     # required when state ∈ {committed, orphan-suspect}:
 │     projectId, projectControlDomainId, runId
 │     projectAdmitCommitSeq    # REQUIRED
 │     attemptId?, providerJobHandle?
@@ -254,10 +254,10 @@ forceRelease =
 | State | TTL auto-reclaim? | Notes |
 |-------|-------------------|--------|
 | **reserved** | Yes | pre-admit |
-| **committed** | **Never by TTL** | only normalRelease / forceRelease |
+| **committed** | **Never by TTL** | **only D37** `normalRelease` / `forceRelease` |
 | **orphan-suspect** | holds capacity | crash / reconcile-automation exhausted; still counts in capacity formula |
 
-**Forbidden:** status field alone without `noLiveOrAmbiguousSideEffects`; fake terminal after reconcile timeout; CLI mutating reservations without CoordinatorCommandRecord.
+**Forbidden:** weaker shorthands than D37; status field alone without `noLiveOrAmbiguousSideEffects`; fake terminal after reconcile timeout; CLI mutating reservations without CoordinatorCommandRecord.
 
 Crash matrices → **P16 ADR** only.
 
@@ -366,8 +366,8 @@ allowedAgentClasses, allowedProviderClasses, tool/effect ceilings, maxChildren, 
 
 ```text
 RunStatus = running | completed | failed | paused | blocked | cancelled | unknown
-RunStage  = received | compiled | linked | queued | admitted | executing
-          | reconciling | terminal
+RunStage  = received | compiled | linked | queued | admitted
+          | executing | parked | reconciling | terminal
 ```
 
 | Field | Meaning |
@@ -378,6 +378,15 @@ RunStage  = received | compiled | linked | queued | admitted | executing
 **Terminal RunStatus only:** `completed | failed | blocked | cancelled`.
 **`unknown` is NOT terminal** (D33).
 
+**Pairings (normative):**
+
+| Situation | RunStatus | RunStage | Slot |
+|-----------|-----------|----------|------|
+| Durable approval, provider quiescent | `paused` | **`parked`** | released (D37/D38) |
+| Cancel-in-flight, worker still live | `paused` | **`executing`** | held |
+| Provider ambiguous | `unknown` | **`reconciling`** | held / orphan-suspect |
+| True end | terminal status | **`terminal`** | released only via D37 |
+
 ### 8.2 RunStatus ↔ 0.2.4 mapping (P5 goldens)
 
 | 0.3 RunStatus | 0.2.4 | Notes |
@@ -385,17 +394,17 @@ RunStage  = received | compiled | linked | queued | admitted | executing
 | running | running | Active work |
 | completed | completed | Wire keeps `completed` (not `success`) |
 | failed | failed | |
-| paused | paused | Approval wait **or** 0.2 detached cancel-in-progress (see below) |
-| blocked | blocked | Gate / project budget |
+| paused | paused | Approval park **or** cancel-in-flight (stage distinguishes) |
+| blocked | blocked | Gate / project budget / approval expired |
 | cancelled | — | Explicit cancel **settled** |
-| unknown | — | Ambiguous provider/journal; **must** enter reconcile path |
+| unknown | — | Ambiguous; reconcile path |
 
 **Cancellation import / resume (frozen intent for P5):**
 
 | 0.2.4 observation | 0.3 import |
 |-------------------|------------|
-| `paused` + `detachedCancel` + worker **still live** | `paused` (cancel in flight); stage `executing` |
-| `paused` + `detachedCancel` + worker **terminated** / confirmed dead | **`cancelled`** terminal (do not leave paused forever; resume must not restart as normal) |
+| `paused` + `detachedCancel` + worker **still live** | `paused` + stage **`executing`** (slot held) |
+| `paused` + `detachedCancel` + worker **terminated** / confirmed dead | **`cancelled`** + stage **`terminal`** |
 | failed message mentions cancel only | stay **`failed`** unless durable cancel marker exists |
 | clean cancel with no paused intermediate | **`cancelled`** |
 
@@ -405,16 +414,22 @@ P5 must include resume-after-detachedCancel goldens.
 
 ```text
 received → compiled → linked → queued → admitted → executing
-  ⇄ reconciling → terminal
+  ⇄ reconciling
+  → parked              // D38: approval pause, slot released
+  → queued              // approval approved → re-queue
+  → admitted → executing
+parked → terminal       // reject / expire / cancel settle
+* → terminal            // completed|failed|blocked|cancelled
 ```
 
 - Fragment link: status often `running`; stage stays `executing`.
-- **True terminal stage** only with terminal status `completed|failed|blocked|cancelled`.
+- **`executing → queued` is illegal** without going through **`parked`** (or full re-admit from a defined restart path in P5).
+- **True terminal stage** only with terminal RunStatus `completed|failed|blocked|cancelled`.
 
 ### 8.4 `unknown` + reconcile (D33 — bounded wait ≠ fake terminal)
 
 **Decision:** `unknown` is **reconcilable and non-terminal**.
-**Bounded** auto-reconcile loops and client waits **must not invent** objective provider termination.
+**Bounded** auto-reconcile / client waits **must not invent** objective provider termination.
 
 ```text
 provider ambiguous / crash window
@@ -426,22 +441,23 @@ provider ambiguous / crash window
   → if auto-reconcile budget exhausted
        → stop auto-polling
        → stay unknown / reconciling
-       → concurrency reservation → orphan-suspect (still occupies maxActiveRuns)
+       → reservation → orphan-suspect (still occupies maxActiveRuns)
        → no final Receipt
-       → surface needs-operator (TF_RECONCILE_REQUIRED)
+       → needs-operator (TF_RECONCILE_REQUIRED)
 ```
 
 | Rule | Normative |
 |------|-----------|
 | Auto-reconcile deadline / max attempts | **Required** (numbers in P5) — bounds **automation**, not truth |
-| On auto-reconcile exhaustion | **Do not** force `failed`/`completed`; keep `unknown` + `reconciling` (or explicit operator-wait projection) |
-| Final Receipt | **Only** after true terminal + proven end of side effects |
+| On auto-reconcile exhaustion | **Do not** force `failed`/`completed`; keep `unknown` + `reconciling` |
+| Final Receipt | **Only** after true terminal + D37-compatible end of side effects |
 | Checkpoints | Allowed while reconciling; not final Receipt |
-| Committed slot | **Held** in `orphan-suspect` until terminal proof, process-dead proof, or operator force-release |
-| `taskflow_runs(wait)` | Bounded: return `unknown` + needs-operator / client timeout — **never hang forever**; never imply work is dead |
-| Operator force-release | Audit event; concurrency guarantee marked **`operator-overridden`** |
+| Committed / orphan-suspect slot | **Held** until **D37** `normalRelease` or `forceRelease` only |
+| `taskflow_runs(wait)` | Bounded snapshot + needs-operator; never hang forever; never imply work is dead |
+| Operator force-release | CoordinatorCommandRecord; guarantee **`operator-overridden`** |
 
 **Forbidden:** timeout → fake terminal → free slot → new Run while old provider may still mutate workspace.
+**Release wording:** always **“via D37 `normalRelease` / `forceRelease` only”** — never weaker shorthands.
 
 **Attempt:**
 
@@ -824,13 +840,15 @@ taskflow-web (0.3.1+) / host delivery packages
 - [ ] Per-project store; registry multi-mount; standalone+daemon same store
 - [ ] Registry wiped → reopen project restores same projectId/domainId from store header
 - [ ] maxActiveRuns with slots≡1; capacity formula; N+1 compete
-- [ ] committed release only via D37 predicates; orphan-suspect holds capacity
+- [ ] committed / orphan-suspect release **only via D37** normalRelease/forceRelease
 - [ ] reconcile automation exhausted → unknown + needs-operator + no final Receipt
 - [ ] wait returns snapshot + TF_RECONCILE_REQUIRED (not RPC fail)
 - [ ] CoordinatorCommandRecord for setMaxActiveRuns / force-release
-- [ ] Approval park releases slot when quiescent; re-reserve on approve
+- [ ] Approval: `paused+parked` releases slot; approve → queued + re-reserve; dual-client + restart + timeout/cancel/approve CAS
+- [ ] Command idempotency; disclosure re-auth; ArtifactRef ledger-reachability authz
+- [ ] Receipt event manifest survives compaction; bounded-latency assurance verified when used
 - [ ] No DomainTransfer; no federated multi-ControlStore workflow
-- [ ] Public-surface goldens; cancelled; detachedCancel; approval three modes
+- [ ] Public-surface goldens; cancelled; detachedCancel; approval three modes; RunStage parked
 - [ ] P1–P16 ADRs present for shipped wire types
 
 ---
@@ -839,11 +857,12 @@ taskflow-web (0.3.1+) / host delivery packages
 
 ```text
 Architecture: Approved
-Protocol model (0.3): Approved with conditions (v7.5) — freeze detail in P-ADRs
-Wire freeze: Not approved (P1–P16)
+Protocol model (0.3): Approved with conditions (v7.6 MASTER FROZEN)
+Wire freeze: Not approved (P1–P16 ADRs + TypeBox)
 Steps 1–2.5: Approved to start
-Master RFC: STOP expanding — use P15/P16 for crash/CAS matrices
-slots: 1; release predicates: D37; approval park: D38
+Master RFC: FROZEN — no expansion; P-ADRs only
+RunStage.parked closed for D38
+Release: D37 only (no weaker shorthand)
 ```
 
 ---
@@ -868,4 +887,4 @@ DomainTransfer · merged project journal · federated multi-ControlStore workflo
 
 ---
 
-*End RFC v7.5. Architecture approved; protocol approved with conditions; Steps 1–2.5 go. **Master RFC frozen for expansion** — implement via P-ADRs.*
+*End RFC v7.6. Architecture approved; protocol approved with conditions; Steps 1–2.5 go. **Master RFC FROZEN** — implement via P1–P16 ADRs only.*
