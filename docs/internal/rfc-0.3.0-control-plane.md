@@ -4,90 +4,82 @@
 >
 > | Layer | Verdict |
 > |-------|---------|
-> | **Top-level architecture (planes, triad, controlMode, ControlHost, D17 template+fragment)** | **Approved** |
-> | **Protocol freeze (ControlEvent / RPC / BoundPlan wire schema)** | **Not frozen** — Draft v4 closes remaining protocol Blockers; re-review for freeze |
+> | **Architecture** | **Approved** |
+> | **Protocol model** | **Approved with clarifications (v5)** — ControlDomain, CommandRecord, dual fragment hashes, ArtifactRef, D21 public surface |
+> | **Wire / schema freeze** | **Not yet** — freeze after P-ADRs encode v5 pins |
+> | **Implementation allowed now** | **§19 steps 1–2.5 only** |
 >
-> **Date:** 2026-07-22 · **v4** after third review  
+> **Date:** 2026-07-22 · **v5** closes remaining protocol Blockers B1–B3 from fourth review  
 > **Branch:** `feat/0.3.0`  
-> **May start now:** §18 steps **1, 1.5, 2** (green trunk, toolchain, single-scheduler convergence) + write P-ADRs.  
-> **Must wait for protocol freeze:** journal schema impl, daemon/provider RPC, multi-package parallel feature work.  
-> **v4 watershed:** **0.3 GA must not fail-at-link any 0.2.4-supported, test-covered semantic** solely because a kernel port is unfinished. Fail-at-link is a **dev-only** bridge, not a GA exit.
+> **Watershed (v5):** Physical journal scope = **user-level ControlDomain by default** (project is logical partition).  
+> **Watershed (v4 retained):** 0.3 GA must not fail-at-link publicly supported 0.2.4 semantics.
 
 **Related**
 
 | Doc | Role |
 |-----|------|
-| [`competitive-map-2026-h2.md`](./competitive-map-2026-h2.md) | Category positioning |
+| [`competitive-map-2026-h2.md`](./competitive-map-2026-h2.md) | Category |
 | [`rfc-local-daemon.md`](./rfc-local-daemon.md) | Daemon non-negotiables |
-| [`rfc-workspace-capabilities.md`](./rfc-workspace-capabilities.md) | Normative resource/security model |
-| [`rfc-background-run.md`](./rfc-background-run.md) | Detached = provider strategy |
-| [`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md) | Kernel strangler context |
-| [`../0.2.0-north-star.md`](../0.2.0-north-star.md) | compiled · resumable · incremental · replayable-for-what-if |
-| `packages/taskflow-core/src/exec/kernel-policy.ts` | Gap inventory (must become parity matrix, not GA delete list) |
-| `packages/taskflow-core/src/resources/backend.ts` | PreparedSandboxPlan / ResourceEnforcer |
+| [`rfc-workspace-capabilities.md`](./rfc-workspace-capabilities.md) | Normative resource model |
+| [`rfc-background-run.md`](./rfc-background-run.md) | Detached provider strategy |
+| [`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md) | Kernel strangler |
+| [`../0.2.0-north-star.md`](../0.2.0-north-star.md) | North star |
+| `packages/taskflow-core/src/exec/kernel-policy.ts` | Gap rows ⊂ P5 matrix only |
+| `packages/taskflow-core/src/exec/step.ts` | `EVENT_KERNEL_PHASE_TYPES` (excludes race/expand — P5 must cover) |
+| `packages/taskflow-core/src/resources/backend.ts` | PreparedSandboxPlan / enforcer |
 
 ---
 
 ## TL;DR
 
-1. **Architecture is approved.** Soul remains: single execution semantics + BoundPlan/BoundFragment + durable journal. Default `controlMode: auto`. One ControlHost for auto/coordinated/standalone.
+1. **Architecture remains Approved.** Triad, `controlMode: auto`, one ControlHost, BoundPlan template + BoundFragment, D21 parity direction.
 
-2. **BoundPlan** is an immutable **instantiable template**; dynamic topology uses **BoundFragment hash chains** (D17 accepted).
+2. **Protocol model v5 pins (for freeze ADRs):**
+   - **ControlDomain** (default: user-level daemon domain; projectId partitions);
+   - **CommandRecord** ledger — `commandId` unique on commands, **not** on every ControlEvent;
+   - **`boundFragmentHash` vs `executionSemanticHash`** for cache;
+   - first-class **`ArtifactRef`** + ArtifactStore port;
+   - D21 covers **publicly supported** 0.2.4 surface (docs/schema/examples/exports/tests/promised errors), not “only what already has tests”;
+   - P5 = full **PHASE_TYPES × cross-cutting features** matrix.
 
-3. **Protocol not frozen until** this v4 set is accepted:
-   - complete dynamic-path inventory (saved `use`, flat spawn, cache re-link, expand nested/graft);
-   - **single physical journal** with global `commitSeq`;
-   - authority enforcement **tiers** (not only attempt-start checks);
-   - **0.2.4 parity contract** (no GA fail-at-link for supported features).
+3. **Wire schema freeze still blocked** until P-ADRs land these pins.  
+   **May start:** green trunk, toolchain, golden corpus from public surface, single scheduler, P-ADRs.
 
-4. **Safe work now:** green trunk, toolchain ADR, golden corpus, scheduler convergence, P-ADRs.  
-   **Unsafe work now:** ControlEvent schema freeze, journal importer as authority, multi-package daemon/provider race.
+4. **Journal scope vote (accepted):** user-level ControlDomain for daemon; global `commitSeq` is **per ControlDomain**; cross-domain admission is **not** atomic.
 
-5. **Receipt assurance** is multi-dimensional (journal / provider / artifacts / provenance / guaranteeTier), not a single enum.
-
-**Re-review form:** §22. Focus: protocol freeze readiness.
+**Re-review for wire freeze:** §23.
 
 ---
 
-## §0. Motivation (stable, approved)
+## §0. Motivation (stable)
 
-0.3 is a Coding-Agent Control Plane around the 0.2 kernel wedge — not a session multiplexer, org-chart OS, or Conductor clone.
-
-**Product sentence:**
-
-> Taskflow links programs under policy and capabilities into immutable BoundPlans/BoundFragments, executes them with one semantic kernel on heterogeneous providers, and records a durable journal from which runs, receipts, and replays are derived.
-
-**Forbidden:** dual silent runtimes; spectator-only daemon defaults; laundering incomplete 0.2 traces into complete proofs; shipping a “metamorphosis” that **removes** tested 0.2.4 user capabilities at GA.
+Coding-Agent Control Plane around the 0.2 kernel wedge.  
+Not Squad / Paperclip / Conductor clone.  
+Not a metamorphosis that deletes publicly supported 0.2.4 capabilities at GA.
 
 ---
 
 ## §1. Architecture decisions (ADR)
 
-| ID | Decision | Choice | Freeze? |
-|----|----------|--------|---------|
+| ID | Decision | Choice | Layer |
+|----|----------|--------|-------|
 | **D1** | Role | CACP | Arch ✓ |
-| **D2** | Kernel | Single scheduler; legacy as executors only | Arch ✓ |
-| **D3** | Planes | Intent · Compile · Link · Control · Exec · Ledger (+ Trace diagnostics) | Arch ✓ |
-| **D4** | Entities | Program, BoundPlan, BoundFragment, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, Receipt (+ SpawnTemplate) | Protocol open |
-| **D5** | controlMode | `auto` default; coordinated fail-closed; standalone explicit | Arch ✓ |
-| **D6** | Authority store | Single physical journal; projections/receipts derived; Trace diagnostic | Protocol open |
-| **D7** | Project identity | **`projectId` (stable UUID)** + **`directoryBinding`** (path+device+inode) | Protocol open |
-| **D8** | Northbound | Thin MCP + CLI over Taskflow RPC | Arch ✓ |
-| **D9** | Southbound | Async ExecutionProvider lifecycle; control mints Receipt | Protocol open |
-| **D10** | Policy ops | deny / substitute / attenuate | Arch ✓ |
-| **D11** | Sandbox honesty | Fail closed | Arch ✓ |
-| **D12** | Migration | read-old/write-new; backup; tiered rollback (§19) | Protocol open |
-| **D13** | Scope | L1–L2 + BoundPlan/Fragment v1 + journal v1 + Receipt v1 | Arch ✓ |
-| **D14** | Resources | Workspace capability RFC normative | Arch ✓ |
-| **D15** | Caller | OS principal; labels non-authoritative alone | Arch ✓ |
-| **D16** | Delivery | at-least-once + idempotent submit + reconcile | Arch ✓ |
-| **D17** | Dynamic plan | Template + BoundFragment chain | Arch ✓ |
-| **D18** | ControlHost | Same 0.3 host in all modes | Arch ✓ |
-| **D19** | Plan authority | Grant refs + revalidation; not bearer tokens | Protocol open |
-| **D20** | Exclusive write | 0.3 stops self on conflict; cannot kill legacy writers | Protocol open |
-| **D21** | 0.2.4 parity | **GA must preserve tested 0.2.4 semantics**; fail-at-link dev-only | **Arch + GA ✓** |
-| **D22** | Journal topology | **One physical log, global `commitSeq`;** run/control are logical streams | Protocol open |
-| **D23** | Enforcement tier | resolve-only / brokered-write / sandboxed-session | Protocol open |
+| **D2** | Kernel | Single scheduler | Arch ✓ |
+| **D3** | Planes | Intent·Compile·Link·Control·Exec·Ledger (+Trace) | Arch ✓ |
+| **D4** | Entities | + **CommandRecord**, **ArtifactRef**, **ControlDomain** | Model ✓ |
+| **D5** | controlMode | auto default | Arch ✓ |
+| **D6** | Journal | Single physical log **per ControlDomain**; logical streams; global **commitSeq within domain** | Model ✓ |
+| **D7** | Project | projectId UUID + directoryBinding | Model ✓ |
+| **D8–D11** | Northbound / provider / policy / sandbox | As v4 | Arch ✓ |
+| **D12** | Migration | Tiered rollback | Model ✓ |
+| **D13–D18** | Scope / resources / caller / delivery / dynamic / ControlHost | As v4 | Arch ✓ |
+| **D19–D20** | Grant revalidation / exclusive write (0.3 stops self) | As v4 | Model ✓ |
+| **D21** | Parity | **Public 0.2.4 surface** → golden corpus in step 1; no GA fail-at-link without breaking ADR | Model ✓ |
+| **D22** | Journal topology | One physical log + commitSeq **scoped to ControlDomain** | Model ✓ |
+| **D23** | Enforcement | Orthogonal **assurance capabilities** (not only exclusive enum) | Model ✓ |
+| **D24** | Commands | **CommandRecord** unique; events reference commandId N:1 | Model ✓ |
+| **D25** | Cache identity | **executionSemanticHash** for reuse; **boundFragmentHash** for audit | Model ✓ |
+| **D26** | Artifacts | **ArtifactRef** out-of-band storage; journal holds refs | Model ✓ |
 
 ---
 
@@ -95,129 +87,256 @@
 
 ```text
 INTENT → COMPILE → LINK → CONTROL → EXEC → LEDGER
-                      ↑                │
-                      └── BoundFragment (dynamic generation)
+                      ↑
+                      BoundFragment + Artifacts
 ```
 
 ---
 
-## §3. Domain model (protocol — v4)
+## §3. ControlDomain & journal scope (B1 scope — accepted)
 
-### 3.1 Entities
+### 3.1 Definitions
 
 ```text
-Program / FlowIR
-BoundPlan              immutable template (+ embedded SpawnTemplates, saved-flow pins)
-Run                    first-class execution (projectId-scoped)
-NodeInstance           phase | map item | loop iter | graft node | flat-spawn child …
-BoundFragment          linked dynamic subgraph
-Attempt                one provider invocation
-ProviderJobHandle      external id
-ControlEvent           journal record
-Receipt                derived evidence package
+ControlDomainId    identity of one authority ledger + admission domain
+projectId          stable UUID (logical partition inside a domain)
+directoryBinding   path + device + inode evidence for a projectId
 ```
 
-Do not overload durable **Job**; use ProviderJobHandle for remote ids.
+### 3.2 Default topology
 
-### 3.2 BoundPlan = immutable instantiable template (approved)
+| Mode | ControlDomain |
+|------|----------------|
+| **User-level daemon (`auto` / `coordinated`)** | **One ControlDomain per user daemon instance** (or per configured domain). Projects are **partitions** (`projectId` on events/commands). `commitSeq` totally orders **the whole domain** → cross-project admission/budget **within that domain** can be atomic. |
+| **`standalone`** | After exclusive project ownership, open a **single-project ControlDomain** (domain may equal that project’s ledger). No claim of atomic admission with other projects or with a concurrent user daemon on the same projects without ownership rules. |
 
-Parent plan bytes never mutate. Execution is either:
+### 3.3 Non-claims
 
-- deterministic **NodeInstance** of a template node, or  
-- a **BoundFragment** after Compile+Link under attenuated parent authority.
+- No atomic admission **across** ControlDomains.  
+- Backup/corruption blast radius = **one ControlDomain**.  
+- Ownership lease is per project (or per domain policy); dual domains writing same projectId → fail closed / legacy-conflict as before.
 
-#### 3.2.1 Dynamic / delayed-binding inventory (complete for freeze)
+---
 
-| Path | Rule |
-|------|------|
-| `flow { def }` (inline model IR) | PlanFragment → BoundFragment chain |
-| `expand` **nested** | Same — runtime IR must Link (not only graft) |
-| `expand:graft` | BoundFragment then promote NodeInstances under prefix |
-| `ctx_spawn({ subflow })` | Child Run and/or BoundFragment; attenuate only |
-| **Saved `flow` `use`** | **Pin at root Link** (default): resolve loader → store child `irHash` + `boundPlanHash` (or equivalent pin) on BoundPlan. **Admit/execute must not re-resolve a mutable same-name flow.** Optional late-bind is **only** via explicit BoundFragment path, never silent re-load |
-| **Flat `ctx_spawn({ task, agent, … })`** | Constrained by BoundPlan **`SpawnTemplate`** (below). In-ceiling → NodeInstance; out-of-ceiling → BoundFragment or **deny** |
-| `map` / `loop` / `tournament` items | Deterministic `nodeInstanceId` when obligations already bound; else fragment or deny |
-
-#### 3.2.2 SpawnTemplate (flat spawn)
-
-BoundPlan may include:
+## §4. Domain entities
 
 ```text
-SpawnTemplate {
-  allowedAgentClasses
-  allowedProviderClasses
-  toolCeiling / effectCeiling
-  maxChildren
-  maxDepth
-  budgetShare
+ControlDomain
+CommandRecord
+Program / FlowIR
+BoundPlan / BoundFragment / SpawnTemplate
+Run / NodeInstance / Attempt / ProviderJobHandle
+ControlEvent
+ArtifactRef
+Receipt
+```
+
+---
+
+## §5. Commands vs events (B1 commandId — accepted: scheme A)
+
+### 5.1 Problem
+
+One RPC command often appends **many** ControlEvents (`BudgetClaimGranted`, `RunAdmitted`, `OwnershipLeaseAcquired`, …).  
+A unique index on `ControlEvent.commandId` is wrong.
+
+### 5.2 CommandRecord (unique)
+
+```text
+CommandRecord {
+  commandId              // UNIQUE in ControlDomain
+  requestHash            // canonical hash of accepted request body
+  status                 // accepted | rejected | failed | …
+  firstCommitSeq
+  lastCommitSeq
+  responseArtifactRef?   // ArtifactRef to durable response payload
+  recordedAt
 }
 ```
 
-Flat spawn that changes agent/model/provider/tools/effects beyond the template **must not** execute as a bare NodeInstance.
-
-#### 3.2.3 Cached / resumed dynamic fragments
-
-**Forbidden:** restore grafted/dynamic **NodeInstance state** from cache without re-validation (today’s “restore promotedPhases on cache hit” is not 0.3-legal as authority).
-
-Cache **may** store:
-
-- original PlanFragment artifact;  
-- original `boundFragmentHash`;  
-- source Receipt / event range;  
-- output artifacts.
-
-**Reuse path:**
+### 5.3 ControlEvent envelope
 
 ```text
-Load fragment artifact
-  → re-Link / validate under current policy + authorityEpoch + resource baseline
-  → new BoundFragment
-  → only if new boundFragmentHash is equivalent (defined semantic equality) to allowed cache key,
-     instantiate outputs without new provider work
-  → else re-execute or deny
+ControlEvent {
+  eventId
+  schemaVersion
+  controlDomainId
+  streamId                 // logical: "control" | "run:<runId>" | …
+  streamSeq
+  commitSeq                // global within ControlDomain
+  commandId?               // NON-UNIQUE FK → CommandRecord
+  commandEventIndex?       // optional 0..n within command
+  causationId
+  correlationId
+  projectId?
+  recordedAt
+  payload                  // small; large blobs → ArtifactRef inside payload
+}
 ```
 
-#### 3.2.4 Hash chain (fragments)
+### 5.4 Idempotent RPC rules
+
+| Case | Behavior |
+|------|----------|
+| Same `commandId` + same `requestHash` | Return **original** durable response (from CommandRecord / responseArtifactRef). **Do not** re-execute side effects. |
+| Same `commandId` + different `requestHash` | **Idempotency conflict** — reject |
+| Command failed with **no** durable ControlEvent / no CommandRecord accept | May retry with **same** commandId only if protocol marks command as safe-retry; else new commandId |
+| Response durability | RPC `accepted` only after CommandRecord + its events are **durably committed** (domain fsync policy) |
+
+Optional unique `(commandId, commandEventIndex)` on events for ordering within a command — **not** a substitute for CommandRecord dedup.
+
+### 5.5 Fragment source pointers
+
+Replace ambiguous `sourceEventSeq` with:
 
 ```text
-parentBoundPlanHash
-parentBoundFragmentHash?
-sourceEventSeq
-fragmentIRHash
-fragmentPolicyHash
-capabilitySetHash
-authorityEpoch
+sourceEventId
+sourceCommitSeq
+```
+
+---
+
+## §6. Dynamic plan (v4 inventory + cache hashes)
+
+### 6.1 Paths (retained)
+
+saved `use` pin at root Link; flat spawn + SpawnTemplate; flow{def}; expand nested/graft; ctx_spawn subflow; map/loop NodeInstance rules — as v4.
+
+### 6.2 Two hashes (B2 — accepted)
+
+```text
 boundFragmentHash
+  = audit identity of full link decision
+    (IR + policy + capability snapshot + authority epoch/refs
+     + provider/model/tool bindings as linked + resource baseline pins …)
+
+executionSemanticHash
+  = identity of factors that determine computational outputs
+    (task/inputs/contracts, provider class, model class, tools/effects,
+     relevant resource-read versions / content digests, fragment IR
+     semantic body — NOT raw authority epoch alone)
 ```
 
-Saved-flow pins:
+### 6.3 Cache reuse predicate
 
 ```text
-savedFlowRef { name, irHash, boundPlanHash, contentAddress }
+reuse_allowed iff
+  current authority valid for required grants
+  AND current lease / workspace version valid
+  AND executionSemanticHash equal to cached
+  AND source ArtifactRef integrity verified
+  AND output contract still compatible
+  AND re-Link/validate under current policy does not deny
 ```
 
-### 3.3 Run / Attempt machines (approved shape)
+**Do not** require full `boundFragmentHash` equality for reuse (epoch churn would false-miss).  
+**Do** store both hashes on cache entries and journal fragment-link events.
 
-Run: `Received → Compiled → Linked → Queued → Admitted → Running ⇄ FragmentLinked* → Terminal`
+### 6.4 Cached dynamic fragments
 
-Attempt dispatch (intent vs observe):
+Store PlanFragment **ArtifactRef**, prior hashes, source Receipt/event range (`sourceEventId`/`sourceCommitSeq`…`endCommitSeq`), output ArtifactRefs.  
+Never blind-restore promoted phase state as authority.
+
+---
+
+## §7. ArtifactRef (B2 — accepted, D26)
+
+### 7.1 Type
 
 ```text
-AttemptPrepared
-  → DispatchIntentRecorded  (+ durability)
-  → provider.submit(idempotencyKey)
-  → DispatchAcknowledged | rejected | ambiguous
-  → ProviderProgress*       (observation only)
-  → terminal after collect/reconcile
+ArtifactRef {
+  digest                 // content hash
+  size
+  mediaType
+  storageClass           // e.g. local-blob | ephemeral | external
+  redactionClass         // none | redact-on-export | secret-never-journal
+}
 ```
 
-Crash windows and `idempotencyLevel` / `reconcileLevel` as in v3 (retained).
+### 7.2 Rules
 
-**Idempotency key** is derived from **stable Attempt identity** (runId, nodeInstanceId, attemptNo, boundPlan/Fragment hash) — **never** regenerated on retry.
+- ControlEvent / CommandRecord payloads stay **small**; large outputs, PlanFragments, transcripts → **ArtifactStore** via ArtifactRef.  
+- Secrets: never place raw secrets in journal payload; use redactionClass + external secret stores as needed.  
+- Receipt references ArtifactRefs; retention policy must define when digests remain verifiable vs `artifactIntegrity: unknown`.  
+- ArtifactStore is a **port** (local dir, sqlite blob, …) beside ControlStore.
 
-### 3.4 Receipt assurance (multi-dimensional)
+---
 
-Replace single `completeness` enum with:
+## §8. D21 parity & P5 matrix (B3 — accepted amendment)
+
+### 8.1 D21 wording (normative)
+
+> **All documented or publicly supported 0.2.4 semantics must remain compatible at 0.3 GA** on the single scheduler.  
+> Step 1 **first** converts that public surface into a **comprehensive golden corpus**.  
+> Test coverage is the **proof mechanism**, not the boundary of what users may rely on.  
+> Removal requires explicit breaking-change ADR + migration + version policy.  
+> Fail-at-link is **dev-only** for unfinished ports, not a GA exit.
+
+### 8.2 Public surface sources (minimum)
+
+- TypeBox / public schema  
+- README, skills, host docs  
+- `examples/`  
+- public package exports  
+- existing tests  
+- explicitly promised error/handling behavior in released docs
+
+### 8.3 P5 matrix (2D)
+
+```text
+rows:    all PHASE_TYPES (including race, expand — not only kernelUnsupportedReason rows)
+columns: cross-cutting features, at least:
+         retry | timeout | expect | budget | cache
+         cwd | workspace | shareContext | dynamic def | saved use
+         resume | recompute | replay | approval
+         foreground | detached
+         map/loop/tournament instantiation
+         score gates | onBlock:retry | reflexion | tree reduce
+```
+
+Each cell: `port | n/a | breaking-ADR`.  
+`kernelUnsupportedReason` and `EVENT_KERNEL_PHASE_TYPES` exclusions are **inputs** to the matrix, not the whole matrix.
+
+---
+
+## §9. Enforcement as capabilities (M1 — preferred)
+
+Prefer orthogonal **assurance capabilities** over a single exclusive ladder:
+
+```text
+resolution:          contained | unbound
+mutationMediation:   none | brokered
+processIsolation:    none | sandboxed
+revocation:          admission-only | per-mutation | bounded-latency
+```
+
+**Receipt / BoundPlan** record the capability set actually claimed.  
+Legacy names map as profiles:
+
+| Profile | Typical capabilities |
+|---------|----------------------|
+| resolve-only | resolution=contained; mutationMediation=none; processIsolation=none; revocation=admission-only |
+| brokered-write | + mutationMediation=brokered; revocation=per-mutation |
+| sandboxed-session | + processIsolation=sandboxed; revocation=bounded-latency; may **also** use brokered writes |
+
+Cancel after revocation remains **best-effort** for live processes; do not over-claim.
+
+Wire to PreparedSandboxPlan / ResourceEnforcer as before.
+
+---
+
+## §10. Intent / observe dispatch (retained)
+
+```text
+DispatchIntentRecorded → submit → DispatchAcknowledged | ambiguous
+→ observations → collect/reconcile → terminal
+```
+
+Idempotency key from stable Attempt identity. Provider caps: idempotencyLevel / reconcileLevel.
+
+---
+
+## §11. Receipt assurance (multi-dim, retained)
 
 ```text
 assurance {
@@ -225,225 +344,35 @@ assurance {
   providerOutcome:   confirmed | ambiguous | unknown
   artifactIntegrity: verified | partial | unknown
   provenance:        native-v1 | legacy-trace
-  guaranteeTier:     resolve-only | brokered-write | sandboxed-session | …
+  enforcement:       { resolution, mutationMediation, processIsolation, revocation }
 }
 ```
 
-A run can have `journalContinuity: complete` and still `providerOutcome: unknown`.
+---
+
+## §12. ControlHost modes (approved)
+
+auto / coordinated / standalone share one ControlHost semantics.  
+auto cannot start control → error.  
+Legacy writer → `legacy-conflict`; 0.3 stops **itself**.
 
 ---
 
-## §4. Single execution semantics + **0.2.4 parity** (D21)
+## §13. Approval (deterministic, retained)
 
-### 4.1 One scheduler
-
-No silent imperative↔kernel fork at GA. Dev may use temporary bridges; GA ships one semantic path.
-
-### 4.2 Parity contract (watershed — **accepted: no GA fail-at-link for 0.2.4**)
-
-> **All 0.2.4-supported semantics that have test coverage must remain behavior-compatible on the single scheduler at 0.3 GA.**  
-> Removal requires an **explicit breaking-change ADR**, migration note, and version policy.  
-> **Fail-at-link** is allowed **only in development** for features not yet ported — **not** as a GA exit for product features.
-
-Implications:
-
-- P5 parity matrix is a **port checklist**, not a delete list.  
-- ControlEvent schema must reserve kinds for score, cache, ctx_spawn, workspace, approval, etc., **before** freeze.  
-- “Incremental / dynamic wedge” cannot be sacrificed to ship daemon chrome.
-
-### 4.3 Kernel gap inventory
-
-Current `kernelUnsupportedReason` rows become **owned port tasks** with owners and GA blockers. None of the 0.2.4 product features in that list are eligible for “just fail-at-link at GA” without breaking-change process.
+CancelRequested first → later ApprovalDecision CAS fails.  
+Approval first → later cancel may still cancel Run.  
+Timeout → **reject**. Edit plan → re-Link.
 
 ---
 
-## §5. Resource model (normative workspace RFC)
+## §14. ExecutionProvider (async sketch, retained)
 
-Unchanged: attenuate-only nesting; intent before mutation; dirty-unknown; cache cannot skip auth/lease/version; sandbox fail-closed.
-
----
-
-## §6. Journal architecture (protocol — B2)
-
-### 6.1 Topology — **single physical journal** (D22 preferred)
-
-**Normative choice for freeze:**
-
-> **One physical append log** with global monotonic **`commitSeq`**.  
-> `streamId` (e.g. `control`, `run:<runId>`) is a **logical** partition; records still share one commit order.
-
-Rejected as default: dual independent streams without atomic cross-stream commit (creates “quota taken / run not admitted” splits).
-
-**Minimum envelope:**
-
-```text
-eventId
-schemaVersion
-streamId
-streamSeq              // per logical stream
-commitSeq              // global, subscription cursor
-commandId              // unique → command idempotency
-causationId
-correlationId
-recordedAt
-payload
-```
-
-Rules:
-
-- unique index on `commandId`;  
-- CAS via `expectedStreamSeq` / fencing as needed;  
-- RPC returns **accepted only after durable commit** (fsync policy for the class of event);  
-- subscription cursors use **`commitSeq`**;  
-- alternative (same-txn multi-record or single-authority-stream) only with ADR — default is global commitSeq.
-
-### 6.2 Layers
-
-| Layer | Name |
-|-------|------|
-| Authority | ControlEvent journal |
-| Projections | RunState, indexes |
-| Diagnostics | ExecutionTraceEvent |
-| Derived | Receipt |
-
-### 6.3 Legacy import
-
-`LegacyEvidenceImported` only; `assurance.provenance: legacy-trace`; never synthesize missing lifecycle facts. Max Receipt tier: legacy-unverified-equivalent under multi-dim assurance.
-
-### 6.4 ControlStore
-
-Port abstraction; sqlite-or-files behind it; not on network FS if WAL; fault injection required before freeze of storage ADR.
+probe / prepare / submit / watch / poll / cancel / collect / reconcile with discriminated unions.
 
 ---
 
-## §7. Authority revalidation & enforcement tiers (B3)
-
-### 7.1 Plan is evidence, not bearer
-
-Grant refs + epochs; revalidate at admit; revocation blocks **new** Attempts.
-
-### 7.2 Enforcement granularity (D23)
-
-| `guaranteeTier` | Meaning | Revocation / check granularity |
-|-----------------|---------|--------------------------------|
-| **resolve-only** | Path containment at resolve; **no** FS containment claim | Admission-time checks; **no** claim of mid-attempt containment |
-| **brokered-write** | Every Taskflow-brokered mutation checks permit/fence/version | Per mutation via ResourceEnforcer |
-| **sandboxed-session** | Sealed plan / PreparedSandboxPlan activates for Attempt; process constrained | Attempt lifetime under sealed plan; **revocation latency / expiry recorded**; cancel of live process is **best-effort**, not proof all side effects stopped |
-
-**Normative:** “Before each mutating Attempt” is **necessary but not sufficient** for brokered-write and sandboxed tiers. Wire to existing PreparedSandboxPlan / WorkspaceExecutionBackend concepts.
-
-Cache/resume/recompute: never skip auth, lease, version, restore (workspace inv. 8).
-
----
-
-## §8. Policy linker (approved algebra)
-
-```text
-effectiveAuthority =
-  hostGrants ∩ userConstraints ∩ projectConstraints ∩ invocationConstraints
-```
-
-Denies union; capabilities intersection; substitution conflict → deny; catalog ≠ authority; project cannot enlarge user/host grants.
-
-Ops: deny / substitute / attenuate.
-
-Unknown security fields: fail closed. Canonical hash: single library + versioned domain tags (Protocol ADR).
-
----
-
-## §9. ControlHost modes (approved)
-
-```text
-auto         = ControlHost in taskflowd (on-demand); fail if cannot start
-coordinated  = same; daemon required
-standalone   = same ControlHost in-process
-```
-
-Same compiler, linker, scheduler, journal schema, plans, receipts, enforcer.
-
-### 9.1 Dual-writer / legacy 0.2 process (M4 — honest fail-closed)
-
-0.3 **cannot stop** an old binary from writing disks it still knows about.
-
-**Required 0.3 behavior:**
-
-1. New authority store **isolated** from 0.2 paths where possible;  
-2. Monitor legacy generation / mtime / hash after import;  
-3. If legacy writes after import → project state **`legacy-conflict`**;  
-4. **0.3 control stops new Attempts** and demands explicit reconcile/re-import;  
-5. Do not claim “we prevented the old client from writing.”
-
----
-
-## §10. Project identity (M1)
-
-```text
-projectId          // stable random UUID in user-private store
-directoryBinding   // { canonicalPath, device, inode, … }
-```
-
-- **projectId** is the long-term namespace.  
-- **directoryBinding** detects path swap / move / reclone.  
-- **Explicit rebind** attaches a new directoryBinding to the same projectId after verification.
-
----
-
-## §11. ExecutionProvider (async sketch)
-
-```ts
-interface ExecutionProvider {
-  probe(ctx: ProbeContext): Promise<ProviderCapabilities>;
-  prepare(req: PrepareRequest): Promise<FulfillmentPlan>;
-  submit(req: SubmitRequest): Promise<SubmitResult>;
-  watch(req: WatchRequest): AsyncIterable<ProviderEvent>;
-  poll(req: PollRequest): Promise<PollResult>;
-  cancel(req: CancelRequest): Promise<CancelResult>;
-  collect(req: CollectRequest): Promise<BackendResult>;
-  reconcile(req: ReconcileRequest): Promise<ReconcileResult>;
-}
-
-type SubmitResult =
-  | { status: "accepted"; handle: ProviderJobHandle }
-  | { status: "rejected"; reason: string }
-  | { status: "ambiguous"; idempotencyKey: string; hint?: string };
-```
-
----
-
-## §12. Approval state machine (M2 — deterministic)
-
-```text
-ApprovalRequest {
-  approvalRequestId, runId, nodeInstanceId,
-  boundPlanHash | boundFragmentHash,
-  expectedRunVersion, allowedDecisions,
-  owner/audience, deadline, timeoutPolicy
-}
-```
-
-**Rules:**
-
-1. Journal serializes all decisions (CAS on `expectedRunVersion`).  
-2. If **`CancelRequested` commits first** → later `ApprovalDecision` CAS **fails**.  
-3. If **`ApprovalDecision` commits first** → pause clears; a **later** `CancelRequested` may still cancel the Run.  
-4. Concurrent decisions at same version → first commit wins; loser fails.  
-5. **Timeout default = reject** (never default approve).  
-6. **`edit` output** → no re-link; **`edit` plan/obligations** → re-Link required.  
-7. Survive control restart; dual-client tests required.
-
----
-
-## §13. Replay & cache
-
-- What-if replay consumes **DecisionProjection** from ControlEvents (not diagnostics-as-authority).  
-- Cache stores fragment artifacts + hashes + source Receipt/event range; re-Link/validate on hit (§3.2.3).  
-- Cache-hit Receipt: `providerOutcome` reflects reuse; no new Attempt when valid.
-
----
-
-## §14. Protocol negotiation (M3)
-
-Not only `version + minCompatible`:
+## §15. Protocol negotiation (retained + errors)
 
 ```text
 protocolMajor
@@ -454,169 +383,145 @@ offeredFeatures[]
 buildInfo
 ```
 
-Reject when required features missing or write schema unsupported. Asymmetric read/write supported explicitly.
+### 15.1 Error taxonomy (M2 — minimum)
+
+Stable codes (adapters map, do not invent strings):
+
+| Code | Retryable? | Side effects possible? |
+|------|------------|-------------------------|
+| `TF_PROTOCOL_INCOMPATIBLE` | no | no |
+| `TF_SCHEMA_READ_UNSUPPORTED` | no | no |
+| `TF_SCHEMA_WRITE_UNSUPPORTED` | no | no |
+| `TF_FEATURE_REQUIRED` | no | no |
+| `TF_POLICY_DENIED` | no | no |
+| `TF_AUTHORITY_REVOKED` | no | maybe (prior work) |
+| `TF_STALE_VERSION` | yes (refresh) | no if pure CAS miss |
+| `TF_IDEMPOTENCY_CONFLICT` | no | no |
+| `TF_LEGACY_CONFLICT` | no until reconcile | prior legacy yes |
+| `TF_PROVIDER_AMBIGUOUS` | reconcile path | **yes** |
+| `TF_PROVIDER_REJECTED` | depends | no if rejected pre-accept |
+| `TF_JOURNAL_UNAVAILABLE` | maybe | no if pre-intent |
+| `TF_DURABILITY_FAILED` | maybe | **unknown** |
+| `TF_COMMAND_FAILED` | if no durable accept | no |
+
+Every RPC error includes: `code`, `message`, `retryable`, `sideEffects: none|possible|unknown`, optional `commandId` / `commitSeq`.
 
 ---
 
-## §15. Packages (approved direction)
+## §16. Compaction & checkpoints (M3 — ControlStore constraints)
+
+Before ControlStore schema freeze, ADR must define:
+
+| Topic | Requirement |
+|-------|-------------|
+| Projection checkpoint | snapshot of projections + covered `commitSeq` |
+| Rebuild | checkpoint + tail, or genesis + full log |
+| Compaction preconditions | no live cursor behind drop line; Receipts that need dropped events must embed **event digests** or copied decision artifacts |
+| Artifact retention | independent TTL; missing blob → `artifactIntegrity: unknown` not silent success |
+| Receipt durability | must remain meaningful after compaction via digests / retained decision artifacts |
+| Delete vs integrity failure | distinct error/assurance states |
+
+Does not block architecture; **blocks ControlStore wire freeze**.
+
+---
+
+## §17. Policy algebra (retained)
 
 ```text
-taskflow-core / taskflow-control / taskflow-daemon
-taskflow-mcp-core (thin) / taskflow-hosts / taskflow-cli
-taskflow-web (0.3.1+)
+effectiveAuthority = host ∩ user ∩ project ∩ invocation
 ```
 
-MCP ≠ internal protocol. Tools freeze names; add `taskflow_capabilities`.
+deny ∪; capability ∩; substitution conflict → deny; catalog ≠ authority.
 
 ---
 
-## §16. Toolchain (informative + ordered)
+## §18. Pre-freeze checklist (wire freeze)
 
-Step **1.5** after green corpus:
+| ID | Content | Status after v5 |
+|----|---------|-----------------|
+| P1 | Policy overlay | Direction closed |
+| P2 | Empty-policy Exposure | Direction closed |
+| P3 | ControlDomain + single log + commitSeq + CommandRecord | **Closed in model** |
+| P4 | Negotiation + error taxonomy | **Closed in model** |
+| P5 | PHASE_TYPES × features matrix + D21 public surface | **Closed in principle** — matrix doc still to write |
+| P6 | Canonical hash + ArtifactRef digests | **Closed in model** |
+| P7 | Dynamic paths + dual hashes + cache predicate | **Closed in model** |
+| P8 | Enforcement capabilities | **Closed in model** |
+| P9 | legacy-conflict | Closed |
+| P10 | Rollback tiers | Closed |
+| P11 | Compaction/checkpoint | **Must write ControlStore ADR** |
 
-- Node LTS baseline + Current CI  
-- TS7 CLI / isolate TS6 compiler-API (DSL)  
-- pnpm current + frozen lockfile  
-- single formatter; avoid CI-breaking hard-break noise if `git diff --check` enforced  
-- clean install / typecheck / test / build / pack  
-
----
-
-## §17. Pre-freeze gate (schema freeze checklist)
-
-Protocol freeze requires **all** of:
-
-| Gate | Content |
-|------|---------|
-| P1 | Policy overlay algebra (§8) |
-| P2 | Empty-policy Exposure |
-| P3 | **Single physical journal + commitSeq** (§6) |
-| P4 | Negotiation fields (§14) |
-| P5 | **Parity matrix** as port list under **D21** (no GA delete-by-link) |
-| P6 | Canonical hash library |
-| P7 | Saved flow pin + SpawnTemplate + cache re-link semantics (§3.2) |
-| P8 | Enforcement tiers (§7) |
-| P9 | Legacy-conflict detection (§9.1) |
-| P10 | Rollback tiers (§19) |
-
-Until then: **no** ControlEvent schema freeze, **no** multi-package daemon/provider implementation race.
+**Wire freeze** when P5 matrix document exists and P11 ADR exists (plus TypeBox sketches reviewed).
 
 ---
 
-## §18. Implementation order
+## §19. Implementation order
 
 ```text
-1.   Green trunk + freeze 0.2.4 golden corpus (parity oracle)
+1.   Green trunk
+1.a  Inventory public 0.2.4 surface → golden corpus plan (D21)
 1.5  Toolchain ADR + clean matrix
-2.   Single scheduler convergence (ports driven by P5/D21)
-2.5  Write P1–P10 ADRs (thin, normative)
-3.   Protocol freeze re-review → then TypeBox ControlEvent + BoundPlan wire types
-4.   Extract ControlHost from MCP monolith
-5.   ControlStore + journal + legacy evidence importer
-6.   Daemon + RPC + ownership + subscribe(commitSeq)
-7.   Linker (BoundPlan/Fragment, SpawnTemplate, saved pins) + admission
-8.   ExecutionProvider on all hosts + detached
+2.   Single scheduler convergence (ports from P5 matrix)
+2.5  P-ADRs encoding v5 (CommandRecord, ControlDomain, hashes, ArtifactRef, P5 matrix, P11)
+3.   Wire freeze re-review → TypeBox schemas
+4.   Extract ControlHost
+5.   ControlStore + ArtifactStore + journal
+6.   Daemon + RPC
+7.   Linker + admission
+8.   ExecutionProviders
 9.   Thin MCP + CLI
 10.  WebUI 0.3.1
 ```
 
-**Allowed in parallel today:** 1, 1.5, 2, 2.5 only.
+**Allowed now:** 1–2.5 only.
 
 ---
 
-## §19. Compatibility, migration, rollback (M5)
+## §20. Compatibility & rollback (retained tiers)
 
-| Mode | Promise |
-|------|---------|
-| Pre-migration backup restore | Full restore to pre-0.3 bits |
-| Rollback with **no** 0.3 authority writes yet | Full rollback OK |
-| After 0.3 runs exist | **Read-only export** of 0.3 data; **lossy** 0.2-shaped export **without** continue-execution promise |
-| BoundFragment / ControlEvent → 0.2 RunState | **Not** lossless; do not claim round-trip execute |
-
-Importer: legacy evidence only (§6.3).
+Pre-migration backup full restore; no-0.3-writes full rollback; after 0.3 writes read-only / lossy 0.2 export without execute promise.
 
 ---
 
-## §20. GA acceptance (expanded; tests live here)
+## §21. GA acceptance (additions on top of v4)
 
-### Architecture / triad
+- [ ] CommandRecord dedup: same id+hash → same response; hash mismatch → conflict  
+- [ ] Multi-event single command shares commandId  
+- [ ] commitSeq order across logical streams within ControlDomain  
+- [ ] Cross-project admit atomic only within same ControlDomain  
+- [ ] executionSemanticHash cache hit after authority epoch change when predicate holds  
+- [ ] ArtifactRef retention / missing blob behavior  
+- [ ] P5 matrix cells all ported or breaking-ADR  
+- [ ] Public-surface goldens pass (not only pre-existing tests)  
+- [ ] Error codes stable across MCP/CLI  
+- [ ] Compaction preserves Receipt verifiability rules  
 
-- [ ] Single scheduler; no silent dual path  
-- [ ] controlMode auto/coordinated/standalone = one ControlHost  
-- [ ] Journal rebuild ≡ projection  
-
-### Dynamic / delayed bind
-
-- [ ] flow{def}, expand nested, expand graft, ctx_spawn subflow  
-- [ ] **saved use pinned at link; no mutable re-resolve**  
-- [ ] **flat spawn within SpawnTemplate / fragment / deny**  
-- [ ] **cache hit re-Links fragment; no blind promotedPhases restore**  
-
-### Journal
-
-- [ ] Global commitSeq; RPC accept after durable commit  
-- [ ] Cross-claim admit (budget+run) atomic w.r.t. commitSeq  
-- [ ] Kill windows: intent / post-submit pre-ack / pre-receipt  
-- [ ] disk-full, fsync fail, torn tail  
-
-### Authority
-
-- [ ] revoke between link and admit  
-- [ ] brokered mutation checks; sandboxed sealed plan tests  
-- [ ] revocation does not over-claim live process stop  
-
-### Parity
-
-- [ ] **Every 0.2.4 golden still passes under 0.3 ControlHost**  
-- [ ] No GA fail-at-link for covered features without breaking ADR  
-
-### Approval / multi-writer / legacy
-
-- [ ] Approval CAS / cancel-first / timeout=reject  
-- [ ] legacy-conflict stops 0.3 Attempts  
-- [ ] dual daemon fail closed  
-
-### Receipt / cache / replay
-
-- [ ] Multi-dim assurance correctness  
-- [ ] DecisionProjection what-if goldens  
-- [ ] Cache provenance + revalidation  
-
-### Negotiation / identity
-
-- [ ] Feature/schema negotiation rejects skew  
-- [ ] projectId stable across rebind; binding swap detected  
+(Include full v4 dynamic/authority/approval/legacy matrices.)
 
 ---
 
-## §21. Product success
+## §22. Product success (stable)
 
-- Default auto admission path when control can run.  
-- Dynamic + incremental wedges intact at GA (D21).  
-- CLI acceptance without WebUI.  
-- Honest unknown/dirty-unknown and legacy-conflict.  
-- Competitive story: compile · link · admit · journal · recompute/replay.
+auto admission; dynamic + incremental wedges; D21 no silent capability loss; honest unknown/legacy-conflict; CLI-first.
 
 ---
 
-## §22. Structured re-review (protocol freeze)
+## §23. Structured re-review (wire freeze)
 
 ```text
-Verdict: Approve-architecture (already) | Approve-protocol-freeze | Request-changes | Reject
+Verdict: Approve-wire-freeze | Request-changes | Reject
 
-Protocol freeze sections:
-  §3.2 dynamic inventory (saved use, flat spawn, cache): Ready | Not ready
-  §6 journal commitSeq model: Ready | Not ready
-  §7 enforcement tiers: Ready | Not ready
-  §4 / D21 parity contract: Ready | Not ready
+Model pins:
+  ControlDomain user-level default: Agree | Disagree
+  CommandRecord scheme A: Agree | Disagree
+  executionSemanticHash + ArtifactRef: Agree | Disagree
+  D21 public surface: Agree | Disagree
+  Enforcement capabilities (orthogonal): Agree | Disagree
 
-May start:
-  steps 1–2.5: Yes (architecture approved)
-  journal schema + daemon RPC: only if protocol freeze Approved
+P5 matrix document ready: Yes | No
+P11 compaction ADR ready: Yes | No
 
-D21 no GA fail-at-link for 0.2.4: Agree | Disagree
-D22 single physical journal: Agree | Disagree
-D23 enforcement tiers: Agree | Disagree
+May implement wire schemas: Yes only if both Yes above + Approve-wire-freeze
 
 Residual risks (≤3)
 Nits
@@ -624,32 +529,28 @@ Nits
 
 ---
 
-## §23. Review disposition log
+## §24. Review disposition
 
-| Version | Outcome |
-|---------|---------|
-| v1 | Request changes (soul = daemon risk) |
-| v2 | Request changes (triad strong; protocol weak) |
-| v3 | Architecture line crossed; protocol still open |
-| **v4** | **Architecture Approved**; protocol Blockers B1–B4 addressed for freeze review |
+| Version | Result |
+|---------|--------|
+| v1–v3 | Architecture strengthened |
+| v4 | Architecture Approved; protocol almost frozen |
+| **v5** | **Protocol model Approved with clarifications**; wire freeze pending P5 doc + P11 ADR + TypeBox review |
 
-### v4 closes (protocol draft)
+### v5 closes
 
 | Item | Disposition |
 |------|-------------|
-| Saved `flow use` | Pin at root Link; no mutable re-resolve |
-| Flat ctx_spawn | SpawnTemplate ceiling |
-| Cached dynamic fragment | Re-Link/validate; no blind phase restore |
-| expand:nested | Explicit dynamic path |
-| Dual stream atomicity | Single physical journal + commitSeq |
-| Receipt completeness | Multi-dim assurance |
-| Authority mid-attempt | Enforcement tiers + sealed plan |
-| P5 fail-at-link at GA | **Forbidden for 0.2.4 covered features (D21)** |
-| projectId | UUID + directoryBinding |
-| Approval cancel | Deterministic state machine |
-| Negotiation | schemas + features |
-| Dual-writer | 0.3 stops self; legacy-conflict |
-| Rollback | Tiered promises |
+| commandId unique on events | **CommandRecord**; events N:1 FK |
+| Journal scope | **User-level ControlDomain** default; project partition; commitSeq per domain |
+| sourceEventSeq | **sourceEventId + sourceCommitSeq** |
+| Cache equality | **executionSemanticHash** + auth/lease/artifact checks |
+| Artifact | **ArtifactRef** + store port |
+| D21 scope | **Public surface**, then goldens |
+| P5 | **Full phase × feature matrix** |
+| guaranteeTier | **Orthogonal enforcement capabilities** |
+| Errors | Stable **TF_*** taxonomy |
+| Compaction | Required **before** ControlStore freeze |
 
 ---
 
@@ -657,21 +558,18 @@ Nits
 
 | Term | Meaning |
 |------|---------|
-| ControlHost | Shared 0.3 control application |
-| BoundPlan | Immutable template |
-| BoundFragment | Linked dynamic subgraph |
-| SpawnTemplate | Ceiling for flat ctx_spawn |
-| commitSeq | Global journal order / cursor |
-| projectId | Stable UUID namespace |
-| directoryBinding | Path+device+inode evidence |
-| guaranteeTier | resolve-only / brokered-write / sandboxed-session |
-| legacy-conflict | Post-import legacy write detected |
-| D21 | 0.2.4 parity at GA |
+| ControlDomain | One physical journal + admission total order |
+| CommandRecord | Idempotent command ledger row |
+| commitSeq | Domain-global event order / cursor |
+| boundFragmentHash | Full link audit identity |
+| executionSemanticHash | Output-determining semantic identity |
+| ArtifactRef | Content-addressed blob reference |
+| Public surface | Docs/schema/examples/exports/tests/promised behavior |
 
 ## Appendix B — Refusals
 
-No GA capability regression by fail-at-link; no trace laundering; no dual silent runtimes; no silent standalone fallback; no claim to preempt foreign 0.2 writers; no lossless 0.3→0.2 execute rollback fiction; no fully static BoundPlan that deletes dynamic Taskflow.
+No unique commandId on every event; no undefined “semantic equality”; no journal-as-blob-dump; no GA parity limited to pre-existing tests; no cross-ControlDomain atomic admission claim; no over-claim of live process revocation.
 
 ---
 
-*End RFC v4. Architecture approved. Protocol freeze pending §22. Execute §18.1–2.5 immediately; hold schema/RPC multi-package work.*
+*End RFC v5. Architecture Approved. Protocol model Approved with clarifications. Wire freeze after P5 matrix document + P11 ControlStore ADR. Execute §19.1–2.5 now.*
