@@ -77,9 +77,17 @@ export interface UserCoordinatorStore {
 	 * D37 forceRelease — only via CoordinatorCommandRecord.
 	 * Marks operator-overridden.
 	 */
+	/**
+	 * D37 forceRelease — requires authorized principal + explicit riskAcknowledged:true.
+	 * Idempotent: same commandId returns prior command without re-mutating if already applied.
+	 */
 	forceRelease(
 		reservationId: string,
-		cmd: { commandId: string; callerPrincipal: string; requestBody: unknown },
+		cmd: {
+			commandId: string;
+			callerPrincipal: string;
+			requestBody: { reservationId: string; riskAcknowledged: boolean; reason?: string };
+		},
 	): { reservation: ConcurrencyReservation; command: CoordinatorCommandRecord };
 	setMaxActiveRuns(
 		value: number,
@@ -256,9 +264,45 @@ export function openUserCoordinatorStore(
 		},
 
 		forceRelease(reservationId, cmd) {
+			if (!cmd.callerPrincipal || !String(cmd.callerPrincipal).trim()) {
+				throw new Error("forceRelease requires non-empty callerPrincipal");
+			}
+			if (cmd.requestBody?.riskAcknowledged !== true) {
+				throw new Error(
+					"forceRelease requires requestBody.riskAcknowledged === true (explicit risk acknowledgement)",
+				);
+			}
+			if (cmd.requestBody.reservationId !== reservationId) {
+				throw new Error("forceRelease requestBody.reservationId must match argument");
+			}
 			return mutate((data) => {
+				// Idempotent: same commandId already completed
+				const prior = data.commands.find((c) => c.commandId === cmd.commandId);
+				if (prior) {
+					if (prior.kind !== "forceRelease") {
+						throw new Error(`commandId ${cmd.commandId} already used for ${prior.kind}`);
+					}
+					const priorHash = hashRequest(cmd.requestBody);
+					if (prior.requestHash !== priorHash) {
+						throw new Error(`TF_IDEMPOTENCY_CONFLICT: forceRelease commandId ${cmd.commandId}`);
+					}
+					const res =
+						data.reservations.find((x) => x.reservationId === reservationId) ??
+						({
+							reservationId,
+							state: "released" as const,
+							slots: RESERVATION_SLOTS,
+							coordinatorEpoch: 0,
+							createdAt: prior.recordedAt,
+							updatedAt: prior.recordedAt,
+							operatorOverridden: true,
+						} satisfies ConcurrencyReservation);
+					return { reservation: res, command: prior };
+				}
+
 				const r = data.reservations.find((x) => x.reservationId === reservationId);
 				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				// Safe to force-release already-released (idempotent outcome)
 				const seq = data.nextCommandSeq++;
 				const command: CoordinatorCommandRecord = {
 					commandId: cmd.commandId,
@@ -268,14 +312,25 @@ export function openUserCoordinatorStore(
 					firstCommitSeq: seq,
 					lastCommitSeq: seq,
 					status: "completed",
-					payload: { reservationId, riskAcknowledged: true },
+					payload: {
+						reservationId,
+						riskAcknowledged: true,
+						reason: cmd.requestBody.reason ?? null,
+					},
 					recordedAt: Date.now(),
 				};
 				data.commands.push(command);
-				const next = updateRes(data, reservationId, {
-					state: "released",
-					operatorOverridden: true,
-				});
+				const next =
+					r.state === "released"
+						? { ...r, operatorOverridden: true, updatedAt: Date.now() }
+						: updateRes(data, reservationId, {
+								state: "released",
+								operatorOverridden: true,
+							});
+				if (r.state === "released") {
+					const i = data.reservations.findIndex((x) => x.reservationId === reservationId);
+					if (i >= 0) data.reservations[i] = next;
+				}
 				writeFileAtomic(
 					path.join(dir, `cmd-${command.commandId}.json`),
 					JSON.stringify(command, null, 2),

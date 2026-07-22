@@ -250,6 +250,12 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 	// Recover half-commits before serving reads.
 	rebuildFromJournal();
 
+	const streamSeqPath = path.join(projectControlRoot(root), "stream-seq.json");
+
+	function readStreamSeqMap(): Record<string, number> {
+		return readJsonFile<Record<string, number>>(streamSeqPath) ?? {};
+	}
+
 	/** Caller MUST hold commitLockPath. */
 	function commitUnlocked(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number } {
 		const events = batch.events;
@@ -259,11 +265,17 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 		}
 		const start = next;
 		let seq = start;
-		const stamped: ControlEvent[] = events.map((ev, i) => {
+		// streamSeq monotonic + unique per streamId within the domain
+		const streamMap = readStreamSeqMap();
+		const stamped: ControlEvent[] = events.map((ev) => {
+			const streamId = ev.streamId || "default";
+			const nextStream = (streamMap[streamId] ?? 0) + 1;
+			streamMap[streamId] = nextStream;
 			const e: ControlEvent = {
 				...ev,
 				commitSeq: seq,
-				streamSeq: ev.streamSeq || i + 1,
+				streamSeq: nextStream,
+				streamId,
 				controlDomainId: headerCache.controlDomainId,
 				projectId: headerCache.projectId,
 			};
@@ -275,6 +287,7 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 		}
 		const end = seq - 1;
 		next = seq;
+		writeFileAtomic(streamSeqPath, JSON.stringify(streamMap, null, 2));
 
 		const command: CommandRecord | undefined = batch.command
 			? {

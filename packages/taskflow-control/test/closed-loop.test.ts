@@ -325,7 +325,7 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 		const { reservation, command } = coord.forceRelease(rsv!.reservationId, {
 			commandId: "force-1",
 			callerPrincipal: "op",
-			requestBody: { reservationId: rsv!.reservationId },
+			requestBody: { reservationId: rsv!.reservationId, riskAcknowledged: true },
 		});
 		assert.equal(reservation.state, "released");
 		assert.equal(reservation.operatorOverridden, true);
