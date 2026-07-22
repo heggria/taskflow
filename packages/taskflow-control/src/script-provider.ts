@@ -24,6 +24,11 @@ interface ScriptJob {
 	error?: string;
 	/** Durable handle metadata for restart reconcile. */
 	startedAt: number;
+	/**
+	 * In-process only: resolves when close/error handler has persisted terminal status.
+	 * Not serialized — after restart, dead pid with status=running is fail-closed.
+	 */
+	exitSettled?: Promise<void>;
 }
 
 function extractScriptCommand(program: unknown): { cmd: string | string[]; timeoutMs: number } | null {
@@ -167,12 +172,19 @@ export function createScriptExecutionProvider(opts?: {
 				if (job.stderr.length < 4096) job.stderr += d.toString("utf8");
 			});
 
+			// Settle exit before poll can race pid-dead fail-closed over a successful close.
+			let settleExit!: () => void;
+			job.exitSettled = new Promise<void>((resolve) => {
+				settleExit = resolve;
+			});
+
 			child.on("error", (err) => {
 				clearTimeout(timer);
 				job.status = "failed";
 				job.error = err.message;
 				job.exitCode = null;
 				persist(handle, job);
+				settleExit();
 			});
 
 			child.on("close", (code) => {
@@ -180,6 +192,7 @@ export function createScriptExecutionProvider(opts?: {
 				job.exitCode = code;
 				if (job.status === "cancelled") {
 					persist(handle, job);
+					settleExit();
 					return;
 				}
 				if (timedOut) {
@@ -192,6 +205,7 @@ export function createScriptExecutionProvider(opts?: {
 					job.error = `script exited with code ${code}${job.stderr ? `: ${job.stderr.trim()}` : ""}`;
 				}
 				persist(handle, job);
+				settleExit();
 			});
 
 			return { kind: "accepted", handle, leaseEpoch: job.startedAt };
@@ -211,25 +225,51 @@ export function createScriptExecutionProvider(opts?: {
 		},
 
 		async poll(handle) {
-			const job = jobs.get(handle) ?? loadPersisted(handle);
+			let job = jobs.get(handle) ?? loadPersisted(handle);
 			if (!job) return { kind: "failed", error: "unknown handle" };
 			if (job.status === "running") {
 				if (job.pid && !isPidAlive(job.pid)) {
-					// Process died without close event — fail-closed (never invent completed).
-					// reconcile() still reports ambiguous for operator needs-operator path.
-					job.status = "failed";
-					job.error =
-						job.error ??
-						`pid ${job.pid} dead without recorded terminal status (fail-closed)`;
-					job.exitCode = job.exitCode ?? null;
-					persist(handle, job);
-					return { kind: "failed", error: job.error };
+					// In-process: wait briefly for close handler so we do not race a clean exit
+					// into fail-closed. After restart, exitSettled is absent → fail-closed.
+					const mem = jobs.get(handle);
+					if (mem?.exitSettled) {
+						await Promise.race([
+							mem.exitSettled,
+							new Promise<void>((r) => setTimeout(r, 100)),
+						]);
+						job = jobs.get(handle) ?? loadPersisted(handle) ?? job;
+						if (job.status !== "running") {
+							// fall through to terminal mapping below
+						} else {
+							// close never settled — fail-closed
+							job.status = "failed";
+							job.error =
+								job.error ??
+								`pid ${job.pid} dead without recorded terminal status (fail-closed)`;
+							job.exitCode = job.exitCode ?? null;
+							persist(handle, job);
+							return { kind: "failed", error: job.error };
+						}
+					} else {
+						// Restart path: durable status=running + dead pid → fail-closed
+						job.status = "failed";
+						job.error =
+							job.error ??
+							`pid ${job.pid} dead without recorded terminal status (fail-closed)`;
+						job.exitCode = job.exitCode ?? null;
+						persist(handle, job);
+						return { kind: "failed", error: job.error };
+					}
+				} else {
+					return { kind: "still-running" };
 				}
-				return { kind: "still-running" };
 			}
 			if (job.status === "completed") return { kind: "completed", output: job.stdout || "ok" };
 			if (job.status === "cancelled") return { kind: "cancelled" };
-			return { kind: "failed", error: job.error ?? `exit ${job.exitCode}` };
+			if (job.status === "failed") {
+				return { kind: "failed", error: job.error ?? `exit ${job.exitCode}` };
+			}
+			return { kind: "still-running" };
 		},
 
 		async cancel(handle) {
