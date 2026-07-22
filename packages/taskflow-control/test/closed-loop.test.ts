@@ -4,7 +4,7 @@
  * Multi-process races use parallel spawn + shared start barrier so children overlap.
  */
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -50,7 +50,7 @@ async function runMpHelpersParallel(
 
 	const children: Array<{
 		id: string;
-		child: ChildProcessWithoutNullStreams;
+		child: ChildProcess;
 		done: Promise<MpChildResult>;
 	}> = [];
 
@@ -71,12 +71,12 @@ async function runMpHelpersParallel(
 		const done = new Promise<MpChildResult>((resolve) => {
 			let stdout = "";
 			let stderr = "";
-			child.stdout.setEncoding("utf-8");
-			child.stderr.setEncoding("utf-8");
-			child.stdout.on("data", (c: string) => {
+			child.stdout?.setEncoding("utf-8");
+			child.stderr?.setEncoding("utf-8");
+			child.stdout?.on("data", (c: string) => {
 				stdout += c;
 			});
-			child.stderr.on("data", (c: string) => {
+			child.stderr?.on("data", (c: string) => {
 				stderr += c;
 			});
 			const timer = setTimeout(() => {
