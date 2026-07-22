@@ -70,24 +70,25 @@ Lead with: **compiled + incremental + multi-coding-backend + single MCP + enforc
 Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
         │  one Taskflow MCP (thin client)
         ▼
-   taskflowd (multi-mount clerk)  ── CLI / WebUI
+   taskflowd / embedded multi-mount (user singleton)
         │
-   ControlRegistry (user, non-authoritative)
-        │ mounts
-   per-project ControlStore (authority journal)
-        │
-   orchestrator + ExecutionProviders
+        ├── ControlRegistry (discovery, non-authoritative)
+        ├── UserCoordinatorStore (concurrency leases only)
+        └── per-project ControlStore (Run/Command/Approval/Receipt authority)
+                    │
+                    ▼
+            ExecutionProviders
 ```
 
-**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7+):
+**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7.3+):
 
-- Per-project ControlStore is authority; user Registry aggregates only
+- **Project ControlStore** = Run authority; **UserCoordinatorStore** = singleton + global concurrency only; **Registry** = non-authoritative
 - Disk/journal authority; clerk process is not the sole state copy
 - 0.3 clients default **`controlMode: auto`**; control unavailable → **fail closed**
 - **`standalone` only when user sets it explicitly** — never silent auto fallback
 - Version handshake; local auth (socket + token)
-- One admission path when multi-client coordination is claimed
-- **No DomainTransfer / merged user journal in 0.3**
+- One multi-mount singleton when multi-client coordination is claimed
+- **No DomainTransfer / merged user journal / cross-project parent Runs in 0.3**
 
 
 
