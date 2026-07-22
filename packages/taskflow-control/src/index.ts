@@ -4,6 +4,7 @@
 export * from "./types.ts";
 export * from "./hash.ts";
 export * from "./paths.ts";
+export * from "./identity.ts";
 export * from "./store/project-store.ts";
 export * from "./store/registry.ts";
 export * from "./store/coordinator.ts";

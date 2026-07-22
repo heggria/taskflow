@@ -8,15 +8,49 @@ export function sha256Hex(input: string | Buffer): string {
 	return crypto.createHash("sha256").update(input).digest("hex");
 }
 
-/** Content-addressed bound plan hash: `bp:<64-hex>`. */
+/**
+ * Content-addressed bound plan hash: `bp:<64-hex>`.
+ * Meta must include all execution-semantic fields (grants, approvalMode, policy,
+ * provider class, timeouts) so semantic changes change the hash (P6).
+ */
 export function hashBoundPlan(program: unknown, meta: Record<string, unknown> = {}): string {
-	const body = stableStringify({ program, ...meta });
+	const body = stableStringify({ program, meta });
 	return `bp:${sha256Hex(body)}`;
 }
 
 /** Execution semantic hash: `es:<64-hex>`. */
 export function hashExecutionSemantic(descriptor: unknown): string {
 	return `es:${sha256Hex(stableStringify(descriptor))}`;
+}
+
+/** Extract timeout / provider-relevant fields from a Taskflow program for hashing. */
+export function extractExecutionSemantics(program: unknown): Record<string, unknown> {
+	if (!program || typeof program !== "object") return {};
+	const p = program as {
+		name?: string;
+		budget?: unknown;
+		concurrency?: unknown;
+		idleTimeout?: unknown;
+		phases?: Array<Record<string, unknown>>;
+	};
+	return {
+		name: p.name,
+		budget: p.budget,
+		concurrency: p.concurrency,
+		idleTimeout: p.idleTimeout,
+		phases: (p.phases ?? []).map((ph) => ({
+			id: ph.id,
+			type: ph.type,
+			agent: ph.agent,
+			task: ph.task,
+			run: ph.run,
+			timeout: ph.timeout,
+			idleTimeout: ph.idleTimeout,
+			model: ph.model,
+			tools: ph.tools,
+			provider: ph.provider,
+		})),
+	};
 }
 
 /** Request hash for CommandRecord idempotency. */

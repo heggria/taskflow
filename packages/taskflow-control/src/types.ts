@@ -109,6 +109,8 @@ export const TF_ERROR_CODES = [
 	"TF_CAPACITY_EXCEEDED",
 	"TF_NOT_FOUND",
 	"TF_INVALID_ARGUMENT",
+	/** Control domain identity mismatch (clone/worktree/copy of store). */
+	"TF_IDENTITY_MISMATCH",
 ] as const;
 export type TfErrorCode = (typeof TF_ERROR_CODES)[number];
 
@@ -247,6 +249,11 @@ export interface RunProjection {
 	runVersion: number;
 	error?: string;
 	approvalRequestId?: string;
+	/** Durable provider job handle (persisted for restart reconcile). */
+	providerHandle?: string;
+	/** Provider lease/epoch at submit time. */
+	providerLeaseEpoch?: number;
+	providerName?: string;
 }
 
 // ---------------------------------------------------------------------------

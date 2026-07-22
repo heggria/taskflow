@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { newId } from "./hash.ts";
-import type { ExecutionProvider } from "./provider.ts";
+import type { ExecutionProvider, ProviderJobHandle, ProbeResult } from "./provider.ts";
 
 interface ScriptJob {
 	runId: string;
@@ -90,6 +90,25 @@ export function createScriptExecutionProvider(opts?: {
 
 	return {
 		name: "script",
+
+		async probe(ctx): Promise<ProbeResult> {
+			const extracted = extractScriptCommand(ctx.program);
+			return {
+				ok: true,
+				providerName: "script",
+				capabilities: ["probe", "prepare", "submit", "poll", "collect", "cancel", "reconcile", "watch"],
+				supportsProgram: extracted !== null,
+				detail: extracted ? undefined : "no script phase in program",
+			};
+		},
+
+		async prepare(req) {
+			const extracted = extractScriptCommand(req.program);
+			if (!extracted) {
+				return { kind: "rejected", reason: "no script phase" };
+			}
+			return { kind: "ready", planId: `script-plan-${req.runId}` };
+		},
 
 		async submit(req) {
 			const extracted = extractScriptCommand(req.program);
@@ -175,7 +194,20 @@ export function createScriptExecutionProvider(opts?: {
 				persist(handle, job);
 			});
 
-			return { kind: "accepted", handle };
+			return { kind: "accepted", handle, leaseEpoch: job.startedAt };
+		},
+
+		async collect(handle) {
+			return this.poll(handle);
+		},
+
+		async *watch(handle) {
+			for (let i = 0; i < 100; i++) {
+				const c = await this.poll(handle);
+				yield { type: "poll", data: c };
+				if (c.kind !== "still-running") return;
+				await new Promise((r) => setTimeout(r, 20));
+			}
 		},
 
 		async poll(handle) {
@@ -228,7 +260,27 @@ export function createScriptExecutionProvider(opts?: {
 			const job = jobs.get(handle) ?? loadPersisted(handle);
 			if (!job || job.status !== "running") return false;
 			if (job.pid) return isPidAlive(job.pid);
-			return true; // unknown live
+			// No pid recorded while "running" → cannot prove quiescent; treat as live/ambiguous
+			return true;
+		},
+
+		loadHandle(handle): ProviderJobHandle | null {
+			const job = jobs.get(handle) ?? loadPersisted(handle);
+			if (!job) return null;
+			return {
+				handle,
+				runId: job.runId,
+				providerName: "script",
+				pid: job.pid,
+				leaseEpoch: job.startedAt,
+				cwd: job.cwd,
+				startedAt: job.startedAt,
+				status: job.status,
+				exitCode: job.exitCode,
+				stdout: job.stdout,
+				stderr: job.stderr,
+				error: job.error,
+			};
 		},
 	};
 }

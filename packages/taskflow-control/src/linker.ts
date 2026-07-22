@@ -7,12 +7,18 @@ import {
 	type ApprovalMode,
 	type BoundPlan,
 } from "./types.ts";
-import { hashBoundPlan, hashExecutionSemantic } from "./hash.ts";
+import { extractExecutionSemantics, hashBoundPlan, hashExecutionSemantic } from "./hash.ts";
 
 export interface LinkInput {
 	program: unknown;
 	approvalMode?: ApprovalMode;
 	grantRefs?: string[];
+	/** Provider class / name pinned at link (enters boundPlanHash). */
+	providerClass?: string;
+	/** Optional policy overlay digest. */
+	policyHash?: string;
+	/** Optional exposure set digest. */
+	exposureHash?: string;
 }
 
 export type LinkResult =
@@ -38,16 +44,25 @@ export function linkProgram(input: LinkInput): LinkResult {
 	}
 	const program: Taskflow = def;
 	const approvalMode = input.approvalMode ?? DEFAULT_APPROVAL_MODE;
-	const boundPlanHash = hashBoundPlan(program, { approvalMode });
+	const grantRefs = input.grantRefs ?? [];
+	const providerClass = input.providerClass ?? "script";
+	const semantics = extractExecutionSemantics(program);
+	// Bound plan hash covers ALL execution-semantic fields (P6).
+	const boundPlanHash = hashBoundPlan(program, {
+		approvalMode,
+		grantRefs,
+		providerClass,
+		policyHash: input.policyHash ?? null,
+		exposureHash: input.exposureHash ?? null,
+		semantics,
+	});
 	const executionSemanticHash = hashExecutionSemantic({
-		name: program.name,
-		phases: (program.phases ?? []).map((p: Taskflow["phases"][number]) => ({
-			id: p.id,
-			type: p.type,
-			agent: p.agent,
-			task: p.task,
-			run: p.run,
-		})),
+		...semantics,
+		approvalMode,
+		grantRefs,
+		providerClass,
+		policyHash: input.policyHash ?? null,
+		exposureHash: input.exposureHash ?? null,
 	});
 	const boundPlan: BoundPlan = {
 		boundPlanHash,
@@ -56,7 +71,7 @@ export function linkProgram(input: LinkInput): LinkResult {
 		program,
 		createdAt: Date.now(),
 		approvalMode,
-		grantRefs: input.grantRefs ?? [],
+		grantRefs,
 	};
 	return { ok: true, boundPlan };
 }

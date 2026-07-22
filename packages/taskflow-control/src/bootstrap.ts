@@ -17,6 +17,8 @@ export interface BootstrapOptions {
 	provider?: ExecutionProvider;
 	holderId?: string;
 	skipSingleton?: boolean;
+	/** See ControlHostOptions.identityPolicy — default strict. */
+	identityPolicy?: import("./identity.ts").IdentityOpenPolicy;
 }
 
 export interface BootstrapResult {
@@ -43,6 +45,7 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 			provider: opts.provider,
 			holderId: opts.holderId,
 			skipSingleton: true,
+			identityPolicy: opts.identityPolicy,
 		});
 		return { host, controlMode, role: "standalone-local" };
 	}
@@ -55,6 +58,7 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 		provider: opts.provider,
 		holderId: opts.holderId,
 		skipSingleton: opts.skipSingleton,
+		identityPolicy: opts.identityPolicy,
 	};
 
 	const host = createControlHost(hostOpts);

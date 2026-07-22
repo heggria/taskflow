@@ -34,6 +34,7 @@ import { createScriptExecutionProvider } from "./script-provider.ts";
 import { boundedReconcile, applyReconcileToRun, DEFAULT_RECONCILE_BUDGET, type ReconcileBudget } from "./reconcile.ts";
 import { isSafeId } from "./validate-ids.ts";
 import { projectCoordinatorDir } from "./paths.ts";
+import type { IdentityOpenPolicy } from "./identity.ts";
 import {
 	createApprovalRequest,
 	decideApproval,
@@ -63,6 +64,11 @@ export interface ControlHostOptions {
 	holderId?: string;
 	/** Standalone skips global concurrency claims across projects. */
 	reconcileBudget?: ReconcileBudget;
+	/**
+	 * Project identity policy for ControlStore open (P3).
+	 * Default strict: refuse clone/worktree silent domain share.
+	 */
+	identityPolicy?: IdentityOpenPolicy;
 }
 
 export interface AdmitRequest {
@@ -167,7 +173,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 	/** Attach clients observe only — sole multi-mount writer mutates (P13/D32). */
 	const canMutate = role !== "attach";
 
-	const store = openProjectControlStore(opts.projectRoot);
+	const store = openProjectControlStore(opts.projectRoot, {
+		identityPolicy: opts.identityPolicy ?? "strict",
+	});
 	const registry = openControlRegistry(env);
 	// Registry discovery is fine for standalone; capacity must not use user-level
 	// multi-project coordinator (D5/D30) — project-local baseDir below.
@@ -186,8 +194,20 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				}));
 	const reconcileBudget = opts.reconcileBudget ?? DEFAULT_RECONCILE_BUDGET;
 
-	// Provider handles by runId
+	// Provider handles by runId (memory cache; durable copy on RunProjection.providerHandle)
 	const handles = new Map<string, string>();
+
+	/** Resolve handle from memory or durable run projection (restart-safe). */
+	function resolveHandle(runId: string): string | undefined {
+		const mem = handles.get(runId);
+		if (mem) return mem;
+		const run = store.getRun(runId);
+		if (run?.providerHandle) {
+			handles.set(runId, run.providerHandle);
+			return run.providerHandle;
+		}
+		return undefined;
+	}
 
 	function attachDenied(op: string): AdmitResult {
 		return {
@@ -203,16 +223,51 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		};
 	}
 
+	/**
+	 * Fail-closed quiescent check (D9/D38).
+	 * Restart must not treat unknown non-terminal provider state as quiescent.
+	 * When isLive is available it is authoritative (supports explicit quiesceAll in tests
+	 * and pid checks in ScriptExecutionProvider).
+	 */
 	function providerQuiescent(runId: string): boolean {
-		const handle = handles.get(runId);
+		const run = store.getRun(runId);
+		if (!run) return true;
+		if (isTerminalRunStatus(run.status) && !run.needsOperator) return true;
+
+		const handle = resolveHandle(runId);
 		if (!handle) {
-			// No in-process handle — treat as no live side effects known to this host.
+			// Non-terminal without durable handle → cannot prove quiescent
+			if (
+				run.status === "running" ||
+				run.status === "unknown" ||
+				run.stage === "executing" ||
+				run.stage === "reconciling"
+			) {
+				return false;
+			}
 			return true;
 		}
+
+		// isLive is authoritative when implemented (covers quiesceAll + pid liveness).
 		if (typeof provider.isLive === "function") {
 			return !provider.isLive(handle);
 		}
-		return true;
+
+		// No isLive — use durable handle record after restart.
+		if (typeof provider.loadHandle === "function") {
+			const rec = provider.loadHandle(handle);
+			if (!rec) {
+				// Handle missing for non-terminal → not proven quiescent
+				return false;
+			}
+			if (rec.status === "running") return false;
+			return (
+				rec.status === "completed" || rec.status === "failed" || rec.status === "cancelled"
+			);
+		}
+
+		// Cannot prove → fail-closed not quiescent
+		return false;
 	}
 
 	function casError(
@@ -550,7 +605,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				{ type: "RunAdmitted", runId, reservationId: reservation.reservationId },
 			);
 
-			// Dispatch
+			// Dispatch — probe → prepare → submit (D9 full contract)
 			run = {
 				...run,
 				stage: "executing",
@@ -564,6 +619,86 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				status: "running",
 				stage: "executing",
 			});
+
+			if (typeof provider.probe === "function") {
+				const probe = await provider.probe({ cwd: opts.projectRoot, program: boundPlan.program });
+				if (!probe.ok || probe.supportsProgram === false) {
+					const reason = probe.detail ?? "provider probe rejected program";
+					run = {
+						...run,
+						status: "failed",
+						stage: "terminal",
+						error: reason,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					run = emit(run, {
+						type: "RunStatusChanged",
+						runId,
+						status: "failed",
+						stage: "terminal",
+						reason,
+					});
+					try {
+						coordinator.normalRelease(reservation.reservationId, {
+							noLiveOrAmbiguousSideEffects: true,
+							runIsTerminal: true,
+							runIsParkedAndFutureDispatchRequiresReadmission: false,
+						});
+					} catch {
+						/* keep slot */
+					}
+					return {
+						ok: false,
+						run,
+						error: { code: "TF_COMMAND_FAILED", message: reason, recoveryAction: "none", sideEffects: "none" },
+					};
+				}
+			}
+
+			if (typeof provider.prepare === "function") {
+				const prep = await provider.prepare({
+					runId,
+					program: boundPlan.program,
+					cwd: opts.projectRoot,
+				});
+				if (prep.kind === "rejected") {
+					run = {
+						...run,
+						status: "failed",
+						stage: "terminal",
+						error: prep.reason,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					run = emit(run, {
+						type: "RunStatusChanged",
+						runId,
+						status: "failed",
+						stage: "terminal",
+						reason: prep.reason,
+					});
+					try {
+						coordinator.normalRelease(reservation.reservationId, {
+							noLiveOrAmbiguousSideEffects: true,
+							runIsTerminal: true,
+							runIsParkedAndFutureDispatchRequiresReadmission: false,
+						});
+					} catch {
+						/* keep slot */
+					}
+					return {
+						ok: false,
+						run,
+						error: {
+							code: "TF_COMMAND_FAILED",
+							message: prep.reason,
+							recoveryAction: "none",
+							sideEffects: "none",
+						},
+					};
+				}
+			}
 
 			const submit = await provider.submit({
 				runId,
@@ -602,7 +737,28 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 			if (submit.kind === "ambiguous" || submit.kind === "accepted") {
 				const handle = submit.kind === "accepted" ? submit.handle : submit.handle;
-				if (handle) handles.set(runId, handle);
+				if (handle) {
+					handles.set(runId, handle);
+					// Persist handle + lease on run for restart reconcile (D9)
+					run = {
+						...run,
+						providerHandle: handle,
+						providerLeaseEpoch:
+							submit.kind === "accepted" ? submit.leaseEpoch : undefined,
+						providerName: provider.name,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					run = emit(run, {
+						type: "Generic",
+						kind: "ProviderHandleBound",
+						data: {
+							handle,
+							leaseEpoch: submit.kind === "accepted" ? submit.leaseEpoch : undefined,
+							providerName: provider.name,
+						},
+					});
+				}
 
 				if (submit.kind === "ambiguous" || (handle && provider.isLive?.(handle))) {
 					// Enter reconciling
@@ -841,7 +997,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			if (!isSafeId(runId)) {
 				return casError("TF_INVALID_ARGUMENT", `unsafe runId: ${JSON.stringify(runId)}`);
 			}
-			const handle = handles.get(runId);
+			const handle = resolveHandle(runId);
 			if (handle) await provider.cancel(handle);
 
 			// CAS + commit under exclusive store lock (first-commit-wins).

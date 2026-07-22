@@ -1,6 +1,7 @@
 /**
  * ControlRegistry — non-authoritative discovery (D6 / D29 / P3).
  * Rebuild from Project ControlStore header restores same projectId/domainId.
+ * All mutations under exclusive registry.lock (multi-process safe).
  */
 import type { DirectoryBinding } from "../types.ts";
 import {
@@ -9,8 +10,10 @@ import {
 	registryPath,
 	userControlRoot,
 	writeFileAtomic,
+	withExclusiveLockFile,
 } from "../paths.ts";
 import type { ProjectControlStore } from "./project-store.ts";
+import * as path from "node:path";
 
 export interface RegistryEntry {
 	projectId: string;
@@ -41,6 +44,7 @@ interface RegistryFile {
 
 export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): ControlRegistry {
 	const file = registryPath(env);
+	const lockPath = path.join(userControlRoot(env), "registry.lock");
 	ensureDir(userControlRoot(env));
 
 	function load(): RegistryFile {
@@ -49,6 +53,15 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 
 	function save(data: RegistryFile): void {
 		writeFileAtomic(file, JSON.stringify(data, null, 2));
+	}
+
+	function mutate<T>(fn: (data: RegistryFile) => T): T {
+		return withExclusiveLockFile(lockPath, () => {
+			const data = load();
+			const result = fn(data);
+			save(data);
+			return result;
+		});
 	}
 
 	return {
@@ -70,28 +83,43 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 		},
 
 		registerFromStore(store: ProjectControlStore, projectRoot: string) {
-			const h = store.header;
-			const data = load();
-			const now = Date.now();
-			const existing = data.entries.findIndex((e) => e.projectId === h.projectId);
-			const entry: RegistryEntry = {
-				projectId: h.projectId,
-				controlDomainId: h.controlDomainId,
-				storePath: store.projectRoot,
-				projectRoot: projectRoot.replace(/\/$/, ""),
-				directoryBinding: h.directoryBinding,
-				mountState: "mounted",
-				registeredAt: existing >= 0 ? data.entries[existing]!.registeredAt : now,
-				updatedAt: now,
-			};
-			if (existing >= 0) data.entries[existing] = entry;
-			else data.entries.push(entry);
-			save(data);
-			return entry;
+			return mutate((data) => {
+				const h = store.header;
+				const now = Date.now();
+				const resolvedRoot = path.resolve(projectRoot).replace(/\/$/, "");
+				// Domain collision: same controlDomainId registered at a different root → refuse silent share
+				const domainClash = data.entries.find(
+					(e) =>
+						e.controlDomainId === h.controlDomainId &&
+						path.resolve(e.projectRoot) !== resolvedRoot &&
+						e.projectId === h.projectId,
+				);
+				if (domainClash) {
+					// Mark prior mount demounted; current path becomes mounted (explicit open won at store layer).
+					domainClash.mountState = "unmounted";
+					domainClash.updatedAt = now;
+				}
+				const existing = data.entries.findIndex((e) => e.projectId === h.projectId);
+				const entry: RegistryEntry = {
+					projectId: h.projectId,
+					controlDomainId: h.controlDomainId,
+					storePath: store.projectRoot,
+					projectRoot: resolvedRoot,
+					directoryBinding: h.directoryBinding,
+					mountState: "mounted",
+					registeredAt: existing >= 0 ? data.entries[existing]!.registeredAt : now,
+					updatedAt: now,
+				};
+				if (existing >= 0) data.entries[existing] = entry;
+				else data.entries.push(entry);
+				return entry;
+			});
 		},
 
 		wipe() {
-			save({ schemaVersion: 1, entries: [] });
+			mutate((data) => {
+				data.entries = [];
+			});
 		},
 	};
 }

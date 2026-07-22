@@ -11,11 +11,15 @@ import {
 	type CommandRecord,
 	type ControlEvent,
 	type ControlStoreHeader,
-	type DirectoryBinding,
 	type Receipt,
 	type RunProjection,
 } from "../types.ts";
 import { newId } from "../hash.ts";
+import {
+	bindDirectory,
+	resolveIdentityOnOpen,
+	type IdentityOpenPolicy,
+} from "../identity.ts";
 import {
 	ensureDir,
 	projectCommandsDir,
@@ -106,18 +110,14 @@ export interface ProjectControlStore {
 	readEvents(startCommitSeq: number, endCommitSeq: number): ControlEvent[];
 }
 
-function bindDirectory(projectRoot: string): DirectoryBinding {
-	const resolved = path.resolve(projectRoot);
-	let inode: string | undefined;
-	let dev: string | undefined;
-	try {
-		const st = fs.statSync(resolved);
-		inode = String(st.ino);
-		dev = String(st.dev);
-	} catch {
-		/* path may not exist yet */
-	}
-	return { path: resolved, inode, dev };
+export interface OpenProjectStoreOptions {
+	/**
+	 * How to treat a ControlStore whose directoryBinding.path differs from open root.
+	 * Default **strict**: refuse clone/worktree silent domain share (TF_IDENTITY_MISMATCH).
+	 * - rebind: keep projectId/domainId, update path (explicit project move)
+	 * - new-identity: mint new projectId/controlDomainId at this path
+	 */
+	identityPolicy?: IdentityOpenPolicy;
 }
 
 /**
@@ -126,9 +126,15 @@ function bindDirectory(projectRoot: string): DirectoryBinding {
  *
  * Header create/open is under exclusive lock so concurrent first-opens
  * (cross-process) mint a single projectId/controlDomainId.
+ *
+ * Path mismatch (copy/clone/worktree) is fail-closed unless identityPolicy allows rebind/mint.
  */
-export function openProjectControlStore(projectRoot: string): ProjectControlStore {
+export function openProjectControlStore(
+	projectRoot: string,
+	opts?: OpenProjectStoreOptions,
+): ProjectControlStore {
 	const root = path.resolve(projectRoot);
+	const identityPolicy = opts?.identityPolicy ?? "strict";
 	ensureDir(projectControlRoot(root));
 	ensureDir(projectJournalDir(root));
 	ensureDir(projectProjectionsDir(root));
@@ -142,15 +148,26 @@ export function openProjectControlStore(projectRoot: string): ProjectControlStor
 	const header = withExclusiveLockFile(headerLockPath, () => {
 		const existing = readJsonFile<ControlStoreHeader>(headerPath);
 		if (existing) {
+			const decision = resolveIdentityOnOpen(existing, root, identityPolicy);
+			if (decision.action === "mint-new") {
+				const now = Date.now();
+				const created: ControlStoreHeader = {
+					schemaVersion: CONTROL_STORE_SCHEMA_VERSION,
+					projectId: newId("proj"),
+					controlDomainId: newId("dom"),
+					directoryBinding: decision.binding,
+					createdAt: now,
+					updatedAt: now,
+				};
+				writeFileAtomic(headerPath, JSON.stringify(created, null, 2));
+				return readJsonFile<ControlStoreHeader>(headerPath) ?? created;
+			}
+			// keep (same path) or rebind (path move with same identity)
 			const refreshed: ControlStoreHeader = {
 				...existing,
-				directoryBinding: {
-					...existing.directoryBinding,
-					path: path.resolve(root),
-				},
+				directoryBinding: decision.binding,
 				updatedAt: Date.now(),
 			};
-			// Preserve identity fields exactly; only refresh binding path.
 			writeFileAtomic(headerPath, JSON.stringify(refreshed, null, 2));
 			return refreshed;
 		}
