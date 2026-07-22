@@ -86,6 +86,67 @@ test("script provider: exit 37 → failed terminal, no success Receipt", async (
 	}
 });
 
+test("script provider: dead pid while status=running → poll fails closed (not still-running)", async () => {
+	const t = temp();
+	try {
+		const stateDir = path.join(t.project, "jobs");
+		fs.mkdirSync(stateDir, { recursive: true });
+		// Simulate restart: durable handle claims running, but pid is already dead.
+		// Use a pid that cannot be alive (process.pid of a short-lived child we wait for).
+		const { spawnSync } = await import("node:child_process");
+		const dead = spawnSync(process.execPath, ["-e", "process.exit(0)"], { encoding: "utf-8" });
+		assert.equal(dead.status, 0);
+		// Re-spawn and capture pid then ensure it exits
+		const { spawn } = await import("node:child_process");
+		const child = spawn(process.execPath, ["-e", "setTimeout(()=>{}, 1)"], {
+			stdio: "ignore",
+		});
+		const deadPid = child.pid!;
+		await new Promise<void>((resolve) => child.on("exit", () => resolve()));
+		assert.ok(deadPid > 0);
+		// Confirm not alive
+		let alive = true;
+		try {
+			process.kill(deadPid, 0);
+		} catch {
+			alive = false;
+		}
+		assert.equal(alive, false, "fixture pid must be dead");
+
+		const handle = "job_dead_pid_fixture";
+		fs.writeFileSync(
+			path.join(stateDir, `${handle}.json`),
+			JSON.stringify({
+				runId: "run-dead",
+				pid: deadPid,
+				cwd: t.project,
+				cmd: "sleep 60",
+				stdout: "",
+				stderr: "",
+				status: "running",
+				startedAt: Date.now(),
+			}),
+		);
+
+		const provider = createScriptExecutionProvider({ stateDir });
+		const polled = await provider.poll(handle);
+		assert.equal(polled.kind, "failed", JSON.stringify(polled));
+		if (polled.kind === "failed") {
+			assert.match(polled.error ?? "", /dead without recorded terminal/i);
+		}
+		// Must not report still-running (would hang host poll loop)
+		assert.notEqual(polled.kind, "still-running");
+		assert.equal(provider.isLive?.(handle), false);
+		// Durable record updated to failed
+		const loaded = provider.loadHandle!(handle);
+		assert.equal(loaded?.status, "failed");
+		const recon = await provider.reconcile(handle);
+		assert.equal(recon.kind, "failed", JSON.stringify(recon));
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("production default (no allowMockProvider) uses script provider name path", async () => {
 	const t = temp();
 	try {

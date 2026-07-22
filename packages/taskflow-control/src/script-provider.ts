@@ -215,8 +215,15 @@ export function createScriptExecutionProvider(opts?: {
 			if (!job) return { kind: "failed", error: "unknown handle" };
 			if (job.status === "running") {
 				if (job.pid && !isPidAlive(job.pid)) {
-					// Process died without close event — treat as failed unknown
-					return { kind: "still-running" };
+					// Process died without close event — fail-closed (never invent completed).
+					// reconcile() still reports ambiguous for operator needs-operator path.
+					job.status = "failed";
+					job.error =
+						job.error ??
+						`pid ${job.pid} dead without recorded terminal status (fail-closed)`;
+					job.exitCode = job.exitCode ?? null;
+					persist(handle, job);
+					return { kind: "failed", error: job.error };
 				}
 				return { kind: "still-running" };
 			}
