@@ -1,536 +1,434 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v6 (self-contained normative)**  
-> **Branch:** `feat/0.3.0`  
-> **Date:** 2026-07-22  
+> **Document version:** **v7 (approved architecture + approved 0.3 protocol model)**
+> **Branch:** `feat/0.3.0`
+> **Date:** 2026-07-22
+> **Approver action:** Product decisions below are **accepted** for 0.3 implementation planning (Steps 1–2.5).
+> **Wire/schema freeze:** still **not** approved until P-ADRs land concrete TypeBox.
 >
 > | Layer | Status |
 > |-------|--------|
 > | Architecture | **Approved** |
-> | Protocol model | **Approved with v6 pins** (ControlDomain lifecycle, Command batch, dual hashes, Artifact/Secret, D21 public surface) |
-> | Wire / schema freeze | **Not frozen** until P-ADR set + TypeBox review |
-> | Implementation allowed now | **§22 steps 1–2.5 only** |
+> | 0.3 protocol model (domains, commands, modes, parity) | **Approved** (this version) |
+> | Wire / TypeBox freeze | **Not yet** |
+> | Implementation now | **§22 steps 1–2.5** |
+> | DomainTransfer / merged user journal | **Out of 0.3** (deferred) |
 >
-> **This document is self-contained.** Implementers must not require Git history of v1–v5. Prior drafts are historical only.
->
-> **Supersession (normative):** Where this RFC conflicts with older docs, **this RFC wins for 0.3+ clients**:
->
-> | Older doc | Still true | **Superseded for 0.3 clients** |
-> |-----------|------------|--------------------------------|
-> | [`rfc-local-daemon.md`](./rfc-local-daemon.md) | Disk authority; UDS+auth; version handshake; one admission authority when claimed; no network by default | “Default off”; “stdio always remains full-power alternative”; graceful **silent** degrade to full in-process on outage |
-> | [`competitive-map-2026-h2.md`](./competitive-map-2026-h2.md) | Category wedge; disk authority; local auth | “Default-off / degrade without daemon” as non-negotiable for 0.3 |
->
-> Older docs remain valid for **0.2.x process-less** product line and historical intent. They are **not** non-negotiable constraints on 0.3 ControlHost behavior.
->
-> **Related (normative dependencies, not copy-paste):**
-> [`rfc-workspace-capabilities.md`](./rfc-workspace-capabilities.md), [`rfc-background-run.md`](./rfc-background-run.md), [`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md), [`../0.2.0-north-star.md`](../0.2.0-north-star.md).
+> **Self-contained:** implementers need not read v1–v6 history.
+> **Supersession:** for 0.3+ ControlHost clients this RFC wins over conflicting bullets in
+> [`rfc-local-daemon.md`](./rfc-local-daemon.md) and [`competitive-map-2026-h2.md`](./competitive-map-2026-h2.md)
+> (see §25). Those files’ 0.2.x history is labeled **Historical**.
+
+**Normative dependencies:**
+[`rfc-workspace-capabilities.md`](./rfc-workspace-capabilities.md) ·
+[`rfc-background-run.md`](./rfc-background-run.md) ·
+[`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md) ·
+[`../0.2.0-north-star.md`](../0.2.0-north-star.md)
 
 ---
 
-## §0. TL;DR
+## §0. TL;DR (approved)
 
-1. **Product:** Coding-Agent Control Plane (CACP).  
-   Story: `Program → BoundPlan → Run → Receipt`.
+1. **Product:** Coding-Agent Control Plane.
+   `Program → BoundPlan → Run → Receipt`.
 
-2. **Soul:** (1) single execution semantics, (2) immutable BoundPlan/BoundFragment after Link, (3) durable journal as authority.
+2. **Soul:** single execution semantics · immutable BoundPlan/BoundFragment · durable per-project journal.
 
-3. **0.3 clients default `controlMode: auto`** (on-demand user-level control).  
-   Failure to start/reach control → **error** (no silent full-power standalone).  
-   `standalone` is **explicit** 0.2-compat mode using the **same** ControlHost semantics in-process.
+3. **Ledger model for 0.3 (product decision — accepted):**
+   - **One ControlDomain + ControlStore per project** (project-local authority ledger).
+   - **User-level ControlRegistry** (non-authoritative): maps `projectId → domain location`, mount status, optional aggregates.
+   - **taskflowd mounts many project domains**; it does **not** merge project histories into one user journal in 0.3.
+   - **No DomainTransfer in 0.3 GA.** First registration fixes the project’s ControlDomain; mode changes **change the process (clerk), not the ledger**.
 
-4. **ControlDomain** is a **persistent** ledger identity (not per process). One `projectId` binds to **one** domain at a time. Mode changes require **DomainTransfer**, not silent moves.
+4. **`controlMode: auto` default** for 0.3 clients with a **fresh-install bootstrap contract** (§5). No silent full-power fallback.
 
-5. **CommandRecord** + multi-event **atomic commit batches** per command; `commandId` unique on commands only.
+5. **D21:** publicly supported 0.2.4 semantics stay compatible at GA.
 
-6. **D21:** all **publicly supported** 0.2.4 semantics stay compatible at GA; fail-at-link is dev-only.
+6. **Toolchain (D28):** Node **≥22.19** production; **TypeScript 7** monorepo CLI; **taskflow-dsl** isolated on **TS 6 compiler API**; **pnpm 11**.
 
-7. **Toolchain (0.3 engineering baseline):** Node **≥22.19** production; **TypeScript 6** unified; **pnpm 11** stable.
-
-8. **Start now:** green trunk, public-surface goldens, toolchain ADR, single scheduler, P-ADRs.  
-   **Hold:** wire freeze, multi-package daemon/RPC race.
+7. **Start now:** green trunk, public-surface goldens, toolchain, single scheduler, P-ADRs.
+   **Hold:** wire freeze, DomainTransfer, multi-package RPC feature race.
 
 ---
 
 ## §1. Product sentence & non-goals
 
-> Taskflow links programs under policy and capabilities into immutable BoundPlans/BoundFragments, executes them with one semantic kernel on heterogeneous providers, and records a durable journal (per ControlDomain) from which runs, receipts, and replays are derived.
+> Taskflow links programs under policy and capabilities into immutable BoundPlans/BoundFragments, executes them with one semantic kernel on heterogeneous providers, and records a durable **per-project** journal from which runs, receipts, and replays are derived. A user-level daemon **mounts** many project ledgers and provides a unified console—not a merged total ledger.
 
-**Non-goals:** multi-cluster k8s; Temporal exactly-once marketing; Squad session TUI; Paperclip org OS; Conductor feature race; silent dual runtimes; laundering 0.2 traces into complete proofs; GA capability regression by fail-at-link.
-
----
-
-## §2. Architecture decisions (complete ADR table)
-
-| ID | Decision | Normative choice |
-|----|----------|------------------|
-| **D1** | Role | CACP — programs for real coding agents |
-| **D2** | Kernel | Single scheduler/state machine; legacy phase code only as executors |
-| **D3** | Planes | Intent · Compile · Link · Control · Exec · Ledger (+ diagnostic Trace) |
-| **D4** | Durable entities | ControlDomain, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
-| **D5** | controlMode | **`auto` default** for 0.3 clients; `coordinated` fail-closed; `standalone` explicit |
-| **D6** | Authority | Control journal (in ControlDomain) is authority; RunState/index projections; Receipt derived; Trace diagnostic |
-| **D7** | Project | `projectId` (UUID) + `directoryBinding` (path+device+inode); explicit rebind |
-| **D8** | Northbound | Thin MCP + CLI over Taskflow RPC; tool **names** stable |
-| **D9** | Southbound | Async ExecutionProvider lifecycle; control mints Receipts |
-| **D10** | Policy ops | deny \| substitute \| attenuate only |
-| **D11** | Sandbox honesty | Unsupported enforcement → fail closed |
-| **D12** | Store migration | read-old/write-new; backup; tiered rollback (§20) |
-| **D13** | 0.3 scope | ControlHost + BoundPlan/Fragment v1 + journal v1 + Receipt v1 + CLI; WebUI 0.3.1 |
-| **D14** | Resources | [`rfc-workspace-capabilities.md`](./rfc-workspace-capabilities.md) **normative** |
-| **D15** | Caller | OS principal + optional adapter credential; `mcp:*` label non-authoritative alone |
-| **D16** | Delivery | at-least-once + idempotent submit + reconcile; unknown/dirty-unknown allowed |
-| **D17** | Dynamic plan | Immutable template BoundPlan + BoundFragment hash chains |
-| **D18** | ControlHost unity | auto/coordinated/standalone share **same** ControlHost semantics |
-| **D19** | Plan authority | Grant refs + epochs; revalidate; plan ≠ bearer token |
-| **D20** | Dual write | 0.3 stops **itself** on conflict; cannot preempt foreign 0.2 binaries |
-| **D21** | Parity | **Public 0.2.4 surface** compatible at GA; tests prove, not bound, compatibility |
-| **D22** | Journal | One physical log **per ControlDomain**; logical streams; domain-global `commitSeq` |
-| **D23** | Enforcement | Orthogonal capabilities (resolution / mutationMediation / processIsolation / revocation) |
-| **D24** | Commands | CommandRecord unique; events N:1; atomic command batch |
-| **D25** | Cache | `boundFragmentHash` (audit) + `executionSemanticHash` (reuse) |
-| **D26** | Blobs | ArtifactRef for content; **SecretRef** (no content digest) for credentials |
-| **D27** | Domain lifecycle | Persistent ControlDomainId; one project→domain binding; explicit DomainTransfer |
-| **D28** | Toolchain | Node ≥22.19; TypeScript 6; pnpm 11 |
+**Non-goals (0.3):** DomainTransfer; physical merge of project journals; multi-cluster; exactly-once marketing; Squad/Paperclip clones; silent dual runtimes; GA capability regression; ControlStore on `node:sqlite` without dedicated P-ADR.
 
 ---
 
-## §3. Planes
+## §2. Human model (normative narrative)
+
+| Concept | Plain language |
+|---------|----------------|
+| **ControlDomain** | The **jurisdiction**: one project’s sole authority for command order, Run state, approvals, recovery. |
+| **ControlStore** | The **official ledger** on disk for that domain (commands, events, projections, idempotency, receipt refs). Memory and process speech are not truth. |
+| **ControlRegistry** (user-level) | A **directory of ledgers**: where each project’s domain lives, mount health, rebuildable indexes. **Not** a second authority for run mutations. |
+| **taskflowd / standalone** | The **clerk**: process that opens ledgers and schedules work. Swap clerks freely; **do not swap ledgers** in 0.3. |
+| **Receipt** | Signed evidence package derived from the ledger. |
 
 ```text
-INTENT → COMPILE → LINK → CONTROL → EXEC → LEDGER
-                      │                │
-                      │                └── ArtifactStore / SecretStore
-                      └── BoundFragment under parent authority
+Codex / Pi / CLI / Claude
+        │ commands
+        ▼
+standalone clerk  OR  taskflowd (multi-mount clerk)
+        │
+        ▼
+ControlRegistry (user) ──► open project ControlStore (authority)
+        │
+        ▼
+ExecutionProvider (agent / script)
 ```
 
-Northbound (MCP/CLI/Web) → Control only.  
-Exec workers are untrusted relative to Control.  
-Ledger is durable; daemon memory is not authority.
+**Daily multi-project needs** (list runs, search, approval inbox, global concurrency, budget totals) are solved by **registry + aggregation + scheduler leases**, not by merging Git-style histories into one repo.
 
 ---
 
-## §4. controlMode (normative product behavior)
+## §3. Architecture decisions (complete)
+
+| ID | Choice |
+|----|--------|
+| **D1** | CACP |
+| **D2** | Single scheduler; legacy phase code as executors only |
+| **D3** | Planes: Intent · Compile · Link · Control · Exec · Ledger (+ diagnostic Trace) |
+| **D4** | Entities: ControlDomain, ControlRegistry, CommandRecord, Program/FlowIR, BoundPlan, BoundFragment, SpawnTemplate, Run, NodeInstance, Attempt, ProviderJobHandle, ControlEvent, ArtifactRef, SecretRef, Receipt |
+| **D5** | `controlMode`: **auto** default; coordinated fail-closed; standalone explicit |
+| **D6** | Authority = **project ControlStore journal**; registry non-authoritative |
+| **D7** | `projectId` UUID + `directoryBinding`; rebind binding only, not domain id (0.3) |
+| **D8** | Thin MCP + CLI; stable tool names |
+| **D9** | Async ExecutionProvider; control mints Receipts |
+| **D10** | Policy: deny \| substitute \| attenuate |
+| **D11** | Unsupported sandbox fail closed |
+| **D12** | Migration: read-old/write-new; tiered rollback; **no DomainTransfer** |
+| **D13** | 0.3 ships ControlHost + journal + BoundPlan/Fragment + CLI; WebUI 0.3.1 |
+| **D14** | Workspace capability RFC normative |
+| **D15** | OS principal + optional adapter credential; `mcp:*` label alone weak |
+| **D16** | at-least-once + idempotent submit + reconcile |
+| **D17** | BoundPlan template + BoundFragment chains |
+| **D18** | One ControlHost semantics in all modes |
+| **D19** | Grant refs + revalidation; plan ≠ bearer |
+| **D20** | Dual-write: 0.3 stops self; cannot kill foreign 0.2 writers |
+| **D21** | Public 0.2.4 surface compatible at GA |
+| **D22** | One physical journal **per project ControlDomain**; `commitSeq` per domain |
+| **D23** | Orthogonal enforcement capabilities |
+| **D24** | CommandRecord in same atomic batch as events; principal-scoped replay **with re-auth** |
+| **D25** | boundFragmentHash (audit) + executionSemanticHash (reuse) |
+| **D26** | ArtifactRef content digests; SecretRef **no** content digest |
+| **D27** | **Per-project domain fixed at first registration; no DomainTransfer in 0.3** |
+| **D28** | Node ≥22.19; **TS 7** workspace; **DSL TS 6 API isolated**; pnpm 11 |
+| **D29** | User **ControlRegistry** for multi-project mount/aggregate |
+| **D30** | Global concurrency/budget via **user scheduler leases + aggregation**, not merged project journals |
+
+---
+
+## §4. ControlDomain, ControlStore, ControlRegistry
+
+### 4.1 Per-project ControlDomain (0.3 default — frozen)
+
+- First successful project control registration creates:
+  - `projectId` (stable UUID in user-private store)
+  - `ControlDomainId` (stable UUID, **equals or 1:1 with project’s ledger identity**)
+  - on-disk **ControlStore** under the project control path (exact path in ControlStore ADR)
+  - `directoryBinding` for swap/move detection
+- **ControlDomainId does not change** on daemon restart, standalone↔daemon, or client upgrade.
+- **No second domain** for the same projectId in 0.3.
+
+### 4.2 ControlStore (authority)
+
+Records at least: CommandRecords, ControlEvents, Run projections, approval state, idempotency, receipt metadata, artifact/secret refs, recovery cursors.
+
+**Process speech is not truth; committed ControlStore records are.**
+
+Storage engine: **port only**. **Do not** default to `node:sqlite` without a dedicated P-ADR covering stability, txn, concurrency, upgrade (Node API stability note). File/log backend is acceptable for 0.3.
+
+### 4.3 ControlRegistry (user-level, non-authoritative)
+
+```text
+ControlRegistry
+├── projectId → { controlDomainId, storePath, directoryBinding, mountState, summary? }
+└── rebuildable indexes (run list, open approvals) — derived, not authority
+```
+
+- taskflowd **mounts** each project store listed in the registry.
+- Mutating commands always commit to the **project** ControlStore.
+- Global run list / search / approval inbox = **aggregate views**.
+- Registry corruption → rebuild by scanning known project bindings; must not invent run state.
+
+### 4.4 DomainTransfer — **out of 0.3**
+
+**Deferred to 0.3.1+** (or never, if registry model suffices).
+
+Rationale: daily multi-project needs do not require merging ledgers; transfer has dual-commit crash windows and is a cross-store transaction.
+**0.3 rule:** change the clerk (standalone ↔ daemon), **keep the same project ControlStore**.
+
+If a future product requires “two projects, one atomic admission Receipt,” design a **separate coordinator domain** later—do not swallow project histories.
+
+### 4.5 Cross-project features without merge
+
+| Need | 0.3 mechanism |
+|------|----------------|
+| Unified dashboard | Registry + aggregate index |
+| Global concurrency | User-level scheduler **leases** |
+| Global budget view | Aggregate Receipts / optional user quota ledger of **reservations** only |
+| Cross-project workflow | Coordinator Run with **references** to child run ids (best-effort; not one atomic dual-ledger txn in 0.3) |
+| Unified approvals | Inbox of **refs**; decisions write back to home project store |
+
+---
+
+## §5. controlMode & fresh-install bootstrap
 
 | Mode | Behavior |
 |------|----------|
-| **`auto` (default 0.3 client)** | Connect to user-level control service; **start on demand** if configured; share domain admission. If control cannot start or handshake fails → **return error**. **No** silent fallback to full standalone power. |
-| **`coordinated`** | Control required; fail closed if unavailable. |
-| **`standalone`** | Explicit opt-in. Same ControlHost **in-process**, typically **single-project ControlDomain** after exclusive ownership. **Must not claim** cross-project domain admission or multi-client coordination. |
+| **auto (default)** | Ensure user registry + project domain store; start or attach **taskflowd** (or embedded multi-mount supervisor) per bootstrap contract; fail closed if control cannot run |
+| **coordinated** | External control required; fail closed if down |
+| **standalone** | Explicit. In-process ControlHost opens **the same project ControlStore**; single-owner lease; no multi-client domain claims |
 
-**Durability on outage:** control crash must **not corrupt or hide** already-journaled runs (disk authority). New work under `auto`/`coordinated` fails closed until control returns; projections rebuild from journal.
+**Silent fallback from auto → full standalone is forbidden.** Only explicit `controlMode: standalone`.
 
-**0.2.x clients** remain process-less until upgraded; they are not “0.3 auto”.
+### 5.1 Fresh-install / upgrade contract (GA must pass)
 
----
-
-## §5. ControlDomain lifecycle (D27)
-
-### 5.1 Identity
-
-```text
-ControlDomainId    // persistent UUID (or content-stable id), NOT process pid/boot id
-projectId          // persistent UUID in user-private store
-directoryBinding   // { canonicalPath, device, inode, … }
-projectDomainBinding { projectId, controlDomainId, fencingEpoch, boundAt }
-```
-
-- **ControlDomainId survives daemon restart.** A new process opens the **same** domain store.  
-- **A projectId binds to at most one ControlDomainId at a time.**  
-- Daemon **hosts one default user ControlDomain** and may host additional domains only via explicit config; it does **not** mint a new domain id per boot.
-
-### 5.2 Mode defaults
-
-| Mode | Domain |
-|------|--------|
-| auto / coordinated | Default **user ControlDomain**; projects partitioned by `projectId` on records |
-| standalone | Obtain exclusive ownership → attach project to a **single-project domain** **or** to the user domain under exclusive project lease (implementation picks one in ControlStore ADR; must not fork history) |
-
-### 5.3 DomainTransfer (mode change / move)
-
-Silent migration of a project between domains is **forbidden**.
-
-Required protocol:
-
-```text
-DomainTransfer {
-  projectId
-  sourceControlDomainId
-  targetControlDomainId
-  fencingEpoch++ on source binding
-  sourceCheckpoint { commitSeq, projectionDigest }
-  sourceReceiptRange / export ArtifactRefs
-  status: prepared | committed | aborted
-}
-```
-
-Rules:
-
-1. Fence source: no new Attempts on source after prepare.  
-2. Export checkpoint + required artifacts to target.  
-3. Commit target binding; source marks project **transferred**.  
-4. Failure → abort; project remains on source or `transfer-failed` requiring operator reconcile.  
-5. Receipts remain valid via digests/ArtifactRefs; `commitSeq` is **per-domain** (cite `controlDomainId` + `commitSeq` in cross-domain references).
-
-### 5.4 commitSeq scope
-
-`commitSeq` is totally ordered **within one ControlDomain only**.  
-No atomic cross-domain admission.
+1. **Bundled control binary** path documented (`taskflowd` / host package bin).
+2. First `taskflow_run` (or CLI equivalent) with defaults: creates registry entry + project ControlStore if missing, starts control if needed, completes one run **without manual daemon config**.
+3. **Concurrent client start:** single-instance lock / socket acquire; losers attach to winner (no dual writers).
+4. **Stale socket:** detect dead peer (pid/lock), remove socket, restart.
+5. **Version skew:** handshake rejects incompatible client/daemon; upgrade path documented (restart daemon from matching package).
+6. **Platforms:** Unix UDS required for 0.3 GA; **Windows named pipe** supported **or** Windows explicitly **non-GA** in release notes (choose in bootstrap P-ADR; default proposal: UDS primary, Windows pipe in same ADR before GA).
+7. Outage must not corrupt journal; new admits fail until control returns.
 
 ---
 
-## §6. Durable entities (normative)
-
-### 6.1 Program / FlowIR
-
-Portable program. Sources: JSON Taskflow, `.tf.ts`.  
-`OutputContract` / `expect` keep existing names (no rival top-level “Contract” type).
-
-### 6.2 BoundPlan (immutable template)
-
-Link(Program, PolicySnapshot, CapabilitySnapshot, AuthorityGrantRefs) → BoundPlan.
-
-Never mutated after mint. Execution uses only BoundPlan + BoundFragments + NodeInstances.
-
-**Minimum fields:**
+## §6. Planes
 
 ```text
-sourceHash, irHash, policyHash, capabilitySetHash, boundPlanHash
-template node bindings (provider/model/tools/effects ceilings)
-SpawnTemplate? (flat spawn ceilings)
-savedFlowPins[] { name, irHash, boundPlanHash, contentAddress }
-grantRefs[] { issuer, grantId, version/epoch, scope, expiry? }
-workspaceBaselineRequirements
-budgetClaims, concurrencyClaims
-redactionProfile
-enforcementCapabilities
-dynamicPolicy { allowFragmentKinds, maxFragmentDepth, maxFragmentNodes }
+INTENT → COMPILE → LINK → CONTROL → EXEC → LEDGER (per-project ControlStore)
+                      │                │
+                      │                └── ArtifactStore / SecretStore (scoped)
+                      └── BoundFragment
 ```
-
-**Normative:** BoundPlan is **decision evidence**, not an irrevocable authority bearer. Revalidate grants at admit and per enforcement capability (§14).
-
-### 6.3 BoundFragment
-
-Dynamic IR after Compile+Link under **attenuated** parent authority.
-
-```text
-parentBoundPlanHash
-parentBoundFragmentHash?
-sourceEventId
-sourceCommitSeq
-fragmentIRHash
-fragmentPolicyHash
-capabilitySetHash
-authorityEpoch
-boundFragmentHash          // full audit identity
-executionSemanticHash      // output-determining identity (§11)
-```
-
-### 6.4 Run / NodeInstance / Attempt / ProviderJobHandle
-
-| Entity | Meaning |
-|--------|---------|
-| **Run** | One execution of a root BoundPlan (first-class; maps to today’s run grain) |
-| **NodeInstance** | Concrete node (phase, map item, loop iter, graft node, flat-spawn child, …) |
-| **Attempt** | One provider invocation for a NodeInstance |
-| **ProviderJobHandle** | External provider id |
-
-**Run states:**  
-`Received → Compiled → Linked → Queued → Admitted → Running ⇄ FragmentLinked* → Terminal`  
-Terminal: success | failed | cancelled | blocked | budget-blocked | unknown.
-
-**Attempt dispatch (intent vs observation):**
-
-```text
-AttemptPrepared
-  → DispatchIntentRecorded   // durable intent BEFORE provider side effect
-  → provider.submit(idempotencyKey)
-  → DispatchAcknowledged | rejected | ambiguous
-  → ProviderProgress*        // observations only
-  → collect/reconcile
-  → AttemptTerminal
-```
-
-| Crash window | Recovery |
-|--------------|----------|
-| After intent, before call | Retry submit with **same** idempotency key |
-| After accept, before local ack | reconcile(handle \| key) |
-| No idempotency/query | `unknown`; workspace may be `dirty-unknown` |
-| Handle known, terminal unknown | watch/poll/reconcile then unknown |
-
-**Idempotency key** = stable function of  
-`(controlDomainId, runId, nodeInstanceId, attemptNo, boundPlanHash|boundFragmentHash)` — never regenerated on retry.
-
-Provider caps: `idempotencyLevel: none|best-effort|strong`, `reconcileLevel: none|handle-only|idempotency-key|full`.  
-`none` → no auto-resubmit after ambiguous crash.
-
-### 6.5 Receipt
-
-Control-issued only:
-
-```text
-Receipt {
-  controlDomainId, runId, …
-  boundPlanHash | boundFragmentHash
-  eventRange { startCommitSeq, endCommitSeq } or embedded decision digests
-  artifactRefs[]
-  assurance { … §12 }
-  buildInfo
-}
-```
-
-Proves **recorded and confirmed** facts under plan snapshot — not omniscient external truth.
 
 ---
 
-## §7. Dynamic / delayed-binding inventory (complete)
+## §7. BoundPlan, BoundFragment, dynamic paths
+
+### 7.1 BoundPlan (immutable template)
+
+Link → BoundPlan. Never mutated. Holds template bindings, SpawnTemplate, savedFlowPins, grantRefs, claims, enforcement capabilities, dynamicPolicy.
+
+**Evidence not bearer:** revalidate grants at admit and per enforcement rules.
+
+### 7.2 BoundFragment
+
+Dynamic IR after Compile+Link under attenuated parent authority.
+
+```text
+parentBoundPlanHash, parentBoundFragmentHash?
+sourceEventId, sourceCommitSeq
+fragmentIRHash, fragmentPolicyHash, capabilitySetHash, authorityEpoch
+boundFragmentHash, executionSemanticHash
+```
+
+### 7.3 Dynamic inventory
 
 | Path | Rule |
 |------|------|
-| `flow { def }` | PlanFragment → BoundFragment chain |
-| `expand` **nested** | Must Link (not only graft) |
-| `expand:graft` | BoundFragment then promote NodeInstances under prefix |
-| `ctx_spawn({ subflow })` | Child Run and/or BoundFragment; attenuate only |
-| **Saved `flow` `use`** | **Pin at root Link**: child `irHash` + `boundPlanHash` (content address). Admit/execute **must not** re-resolve a mutable same-name flow. Late-bind only via explicit BoundFragment |
-| **Flat `ctx_spawn({ task, agent, … })`** | Within BoundPlan **SpawnTemplate** → NodeInstance; else BoundFragment or **deny** |
-| map / loop / tournament items | Deterministic `nodeInstanceId` if obligations already bound; else fragment or deny |
+| flow{def}, expand nested, expand graft, ctx_spawn subflow | BoundFragment chain |
+| saved flow use | Pin irHash/boundPlanHash at root Link; no mutable re-resolve |
+| flat ctx_spawn | SpawnTemplate ceiling → NodeInstance; else fragment or deny |
+| map/loop/tournament items | Deterministic nodeInstanceId if obligations bound |
 
-**SpawnTemplate:**
+**Cache:** store fragment ArtifactRef, both hashes, event range, outputs. Re-Link/validate; reuse only if §11 predicate holds. No blind promotedPhases restore.
 
-```text
-allowedAgentClasses, allowedProviderClasses
-toolCeiling / effectCeiling
-maxChildren, maxDepth, budgetShare
-```
+### 7.4 SpawnTemplate
 
-**Cache of dynamic fragments:** store PlanFragment ArtifactRef, both hashes, source event range, output ArtifactRefs.  
-**Forbidden:** blind restore of promoted phase maps as authority.  
-**Reuse:** §11 predicate after re-Link/validate under current policy/authority/baseline.
+allowedAgentClasses, allowedProviderClasses, tool/effect ceilings, maxChildren, maxDepth, budgetShare.
 
 ---
 
-## §8. CommandRecord & atomic batches (D24)
+## §8. Run / Attempt machines
 
-### 8.1 CommandRecord (authority ledger component)
+**Run states (0.3 wire) with 0.2.4 compatibility mapping:**
 
-CommandRecord lives **in the same ControlDomain store as ControlEvents**. It is part of the **authority ledger**, not a disposable cache. Projections may index it; rebuild must restore command idempotency.
+| 0.3 terminal / live | 0.2.4 RunState.status | Notes |
+|---------------------|----------------------|--------|
+| running | running | |
+| completed | completed | **Prefer keep `completed` in wire**, not rename to success (compat). RFC prose may say “successful completion”. |
+| failed | failed | |
+| paused | paused | Includes waiting for approval / human |
+| blocked | blocked | Gate / budget policy block |
+| cancelled | failed or extended | P5 must pin: add `cancelled` only with import mapping from 0.2 |
+| unknown | — | New; unclean provider/journal uncertainty |
+
+**P5 golden matrix must include** completed↔success naming, paused (approval), blocked, resume-from-paused, and any new unknown.
+
+**Run flow:** Received → Compiled → Linked → Queued → Admitted → Running ⇄ FragmentLinked* → Terminal.
+
+**Attempt:**
 
 ```text
-CommandRecord {
-  commandId                 // UNIQUE per ControlDomain
-  requestHash
-  callerPrincipal           // OS uid / adapter credential id
-  authorizationContextHash  // policy/capability/grant epoch snapshot used
-  projectId?
-  controlDomainId
-  status                    // accepted | rejected | failed | …
-  firstCommitSeq
-  lastCommitSeq
-  responseArtifactRef?      // ArtifactRef only after durable blob
-  recordedAt
+AttemptPrepared
+  → DispatchIntentRecorded
+  → submit(idempotencyKey)
+  → DispatchAcknowledged | rejected | ambiguous
+  → progress observations
+  → collect/reconcile → terminal
+```
+
+Idempotency key from stable Attempt identity. Crash windows as prior (intent retry / reconcile / unknown).
+
+---
+
+## §9. CommandRecord (authority, atomic, re-auth)
+
+### 9.1 Placement
+
+CommandRecord is an **immutable authority record inside the same atomic commit batch** as its ControlEvents (log-structured or equivalent).
+Unique index `(controlDomainId, commandId)` **rebuildable from the journal**.
+Not a mutable side table that can drift from the log.
+
+### 9.2 Fields
+
+```text
+commandId, requestHash
+callerPrincipal, authorizationContextHash
+projectId, controlDomainId
+status, firstCommitSeq, lastCommitSeq
+responseArtifactRef?
+recordedAt
+```
+
+### 9.3 Atomic batch
+
+1. Durable-write response Artifact (rename/fsync) if any.
+2. Atomic commit: CommandRecord + all events; assign contiguous commitSeq.
+3. Then RPC accepted.
+Orphan blobs GC; never accept with dangling refs.
+
+### 9.4 Idempotent **execution** vs **disclosure**
+
+| Case | Behavior |
+|------|----------|
+| Same commandId + requestHash | **Do not re-execute** side effects |
+| Return prior response body | **Only after re-checking** current principal authorization for that project/command class (revocation → deny even if command already ran) |
+| Same id, different hash | TF_IDEMPOTENCY_CONFLICT |
+| Different principal, same id | TF_CROSS_PRINCIPAL_COMMAND |
+
+`authorizationContextHash` is **audit metadata** recorded at accept; disclosure still uses **live** authz.
+
+### 9.5 Artifact access
+
+`ArtifactRef.digest` is **not a bearer token**. Read requires current principal + project scope + **ledger reachability** (artifact referenced by authorized run/command).
+
+---
+
+## §10. ControlEvent envelope
+
+```text
+eventId, schemaVersion, controlDomainId
+streamId, streamSeq, commitSeq
+commandId? (FK, non-unique), commandEventIndex?
+causationId, correlationId, projectId, recordedAt
+payload (small; ArtifactRef/SecretRef for bulk)
+```
+
+`commitSeq` never renumbered by compaction.
+
+---
+
+## §11. executionSemanticHash & cache
+
+**boundFragmentHash:** full link audit identity.
+
+**executionSemanticHash** includes resolved execution descriptor:
+
+- model id + revision/digest when available
+- sampling / reasoning / seed policy
+- system prompt / agent body digest
+- tool schema versions + allow/deny
+- runner + parser buildInfo
+- task/input digests + OutputContract
+- fragment IR semantic body
+- declared resource-read versions/digests
+
+Authority epoch alone does **not** enter executionSemanticHash.
+Class folding only under published equivalence contracts.
+
+**Reuse iff:** authority valid ∧ lease/version valid ∧ executionSemanticHash equal ∧ artifact integrity ∧ output contract OK ∧ re-Link/validate allows.
+
+---
+
+## §12. ArtifactRef & SecretRef
+
+```text
+ArtifactRef { digest, size, mediaType, storageClass, redactionClass }
+SecretRef { secretId, issuer }  // NO content digest
+```
+
+Secrets never in general ArtifactStore as content-addressed blobs.
+
+---
+
+## §13. Receipt & compaction
+
+### 13.1 Receipt (issued once, immutable)
+
+At issue time must include:
+
+```text
+controlDomainId, runId, boundPlanHash|boundFragmentHash
+eventManifest[] | merkle/hash-chain root over included ControlEvent ids
+startCommitSeq, endCommitSeq   // bounds only; not sole proof
+artifactRefs[]
+assurance { … }
+buildInfo
+```
+
+**Compaction must not renumber commitSeq.**
+Compaction must not require mutating old Receipts; manifests/roots issued at receipt time remain valid, or Receipt embeds sufficient digests.
+Missing blob after retention → `artifactIntegrity: unknown`, not silent verify.
+
+### 13.2 assurance
+
+```text
+journalContinuity, providerOutcome, artifactIntegrity, provenance
+enforcement: {
+  resolution, mutationMediation, processIsolation,
+  revocation: admission-only | per-mutation
+             | { mode: "bounded-latency", maxLatencyMs }  // promised
 }
-```
-
-### 8.2 ControlEvent envelope
-
-```text
-ControlEvent {
-  eventId, schemaVersion
-  controlDomainId
-  streamId, streamSeq
-  commitSeq                 // domain-global
-  commandId?                // NON-UNIQUE FK
-  commandEventIndex?        // 0..n within command batch
-  causationId, correlationId
-  projectId?
-  recordedAt
-  payload                   // small; refs for large data
-}
-```
-
-### 8.3 Atomic commit batch
-
-One accepted command that produces multiple events **must**:
-
-1. Write/fsync **response Artifact** (if any) via rename-durable protocol **before** commit references it;  
-2. In **one atomic transaction**: insert/update CommandRecord + append all ControlEvents with contiguous `commitSeq` allocation;  
-3. Only then return RPC `accepted` with `commandId` + `lastCommitSeq`.
-
-**Orphan Artifacts** (blob written, txn aborted) → GC-eligible; **must never** appear as accepted CommandRecord refs.
-
-### 8.4 Idempotent RPC
-
-| Case | Result |
-|------|--------|
-| Same commandId + same requestHash + **same callerPrincipal** (or equivalent delegated auth) | Return original response |
-| Same commandId + same requestHash + **different principal** | **Authorize deny** (no cross-principal replay) |
-| Same commandId + different requestHash | `TF_IDEMPOTENCY_CONFLICT` |
-| Failed with no durable accept | Retry rules per error `recoveryAction` |
-
----
-
-## §9. Journal, cursor, compaction
-
-### 9.1 Topology
-
-One physical append log per ControlDomain. Logical `streamId` (`control`, `run:<id>`, …). Domain-global `commitSeq`.
-
-### 9.2 Layers
-
-| Layer | Type |
-|-------|------|
-| Authority | ControlEvent + CommandRecord |
-| Projections | RunState, indexes, live UI |
-| Diagnostics | ExecutionTraceEvent (today’s TraceEvent lineage) |
-| Derived | Receipt |
-
-**Do not** use `Event = TraceEvent & {v}` upgrade path as Control Journal write or laundering importer.  
-0.2 import → `LegacyEvidenceImported` only; `assurance.provenance: legacy-trace`.
-
-### 9.3 Cursor protocol
-
-```text
-minAvailableCommitSeq     // domain watermark after compaction
-cursorLease { cursorId, holder, ttl, commitSeq }
-```
-
-- Subscribe uses `commitSeq`.  
-- Cursor behind `minAvailableCommitSeq` → `TF_CURSOR_EXPIRED`; client must **resync** from checkpoint/snapshot.  
-- Live cursor lease/TTL; expired lease does not block compaction past leased seq if lease dead.  
-- Offline clients **must** handle `TF_CURSOR_EXPIRED` (v5 gap closed).
-
-### 9.4 Compaction (before ControlStore freeze)
-
-ADR must define: projection checkpoint; rebuild = checkpoint+tail or genesis; compaction preconditions; Receipt embeds digests for compacted spans; artifact TTL independent; missing blob → `artifactIntegrity: unknown`; distinct unavailable vs integrity-failure.
-
-### 9.5 Fsync points (minimum)
-
-DispatchIntentRecorded; DispatchAcknowledged; Attempt/Run terminal; CancelRequested; lease/permit before mutation; **Command batch commit**.
-
----
-
-## §10. ArtifactRef & SecretRef
-
-### 10.1 ArtifactRef
-
-```text
-ArtifactRef {
-  digest, size, mediaType
-  storageClass        // local-blob | …
-  redactionClass      // none | redact-on-export
-}
-```
-
-Large outputs, PlanFragments, command responses → ArtifactStore.  
-Journal holds refs, not megabyte payloads.
-
-### 10.2 SecretRef (not content-hash artifacts)
-
-```text
-SecretRef {
-  secretId            // opaque
-  issuer / keyring
-  // NO content digest of the secret material
-}
-```
-
-**Forbidden:** storing raw credentials in journal or general ArtifactStore under `secret-never-journal` with a **content digest** (equality/oracle leak).  
-Low-entropy secrets must not be digests for equality checks.
-
----
-
-## §11. executionSemanticHash (precise)
-
-### 11.1 boundFragmentHash
-
-Full link **audit** identity: IR + policy + capabilities + authority epoch/refs + all link decisions + resource baseline pins + …
-
-### 11.2 executionSemanticHash
-
-Identity of factors that determine **computational outputs**. Must include **resolved execution descriptor**, not mere “class” labels unless an explicit equivalence contract says class is enough:
-
-```text
-resolved model id + revision/digest when available
-sampling / reasoning effort / temperature / seed policy
-system prompt / rules digest (agent body)
-tool schema versions + allow/deny set
-runner + event-parser buildInfo (host runner version)
-task/input digests + OutputContract
-fragment IR semantic body
-resource-read versions / content digests declared as inputs
-// authority epoch alone does NOT enter executionSemanticHash
-```
-
-**Class folding** only when a published **equivalence contract** states that two concrete descriptors are interchangeable for cache (rare; default is concrete descriptor).
-
-### 11.3 Cache reuse predicate
-
-```text
-reuse_allowed iff
-  authority valid for required grants
-  AND lease / workspace version valid
-  AND executionSemanticHash equal
-  AND source ArtifactRef integrity verified
-  AND output contract compatible
-  AND re-Link/validate under current policy does not deny
+// observedRevocationLatencyMs optional on Receipt when applicable
 ```
 
 ---
 
-## §12. Receipt assurance
+## §14. Policy
 
 ```text
-assurance {
-  journalContinuity: complete | partial | unknown
-  providerOutcome:   confirmed | ambiguous | unknown
-  artifactIntegrity: verified | partial | unknown
-  provenance:        native-v1 | legacy-trace
-  enforcement: {
-    resolution: contained | unbound
-    mutationMediation: none | brokered
-    processIsolation: none | sandboxed
-    revocation: admission-only | per-mutation | bounded-latency
-  }
-}
+effectiveAuthority = host ∩ user ∩ project ∩ invocation
 ```
+
+deny∪ · capability∩ · substitution conflict→deny · catalog≠authority · project cannot enlarge user/host.
+Ops: deny | substitute | attenuate. Security unknown fields fail closed. Single canonical hash library.
 
 ---
 
-## §13. Policy linker
-
-```text
-effectiveAuthority =
-  hostGrants ∩ userConstraints ∩ projectConstraints ∩ invocationConstraints
-```
-
-- Denies: **union**  
-- Capabilities: **intersection**  
-- Substitution conflict: **deny**  
-- Catalog discovery **≠** authority  
-- Project cannot enlarge user/host grants  
-- Ops: **deny | substitute | attenuate** only  
-- Security schemas: unknown fields **fail closed**  
-- Canonical JSON hash (e.g. JCS) with domain/version prefix — single library  
-
-Empty policy still mints BoundPlan hash; Exposure = discovered catalog **∩** host/user grants.
-
----
-
-## §14. Authority revalidation & enforcement
-
-**Revalidate:** admit (run/fragment); per enforcement capability during execution; on revocation block **new** Attempts; cancel in-flight best-effort; cache/resume/recompute never skip auth/lease/version/restore ([workspace RFC](./rfc-workspace-capabilities.md) inv. 8).
+## §15. Enforcement
 
 | Capability | Meaning |
 |------------|---------|
-| resolution=contained | Canonical path within authorized roots |
-| mutationMediation=brokered | Every Taskflow-brokered mutation checks permit/fence/version |
-| processIsolation=sandboxed | Sealed plan / PreparedSandboxPlan for Attempt |
-| revocation=… | admission-only \| per-mutation \| bounded-latency (record latency; no over-claim) |
+| resolution | contained \| unbound |
+| mutationMediation | none \| brokered (per mutation) |
+| processIsolation | none \| sandboxed (sealed plan) |
+| revocation | admission-only \| per-mutation \| `{mode:"bounded-latency", maxLatencyMs}` |
 
-Profiles (resolve-only / brokered-write / sandboxed-session) are **aliases** of capability sets; sandboxed may **also** use brokered writes.
+Live process kill after revoke remains best-effort; Receipt records promise vs observation when latency mode used.
+
+Wire to workspace PreparedSandboxPlan / ResourceEnforcer.
 
 ---
 
-## §15. ExecutionProvider
+## §16. ExecutionProvider
 
 ```ts
 interface ExecutionProvider {
@@ -543,171 +441,97 @@ interface ExecutionProvider {
   collect(req: CollectRequest): Promise<BackendResult>;
   reconcile(req: ReconcileRequest): Promise<ReconcileResult>;
 }
-
-type SubmitResult =
-  | { status: "accepted"; handle: ProviderJobHandle }
-  | { status: "rejected"; reason: string }
-  | { status: "ambiguous"; idempotencyKey: string; hint?: string };
 ```
 
-`BackendResult` is evidence; **not** a Receipt.
+Discriminated unions for accepted | rejected | ambiguous.
 
 ---
 
-## §16. Approval state machine
+## §17. Approval
 
 ```text
-ApprovalRequest {
-  approvalRequestId, runId, nodeInstanceId
-  boundPlanHash | boundFragmentHash
-  expectedRunVersion
-  allowedDecisions: approve | reject | edit
-  owner/audience, deadline, timeoutPolicy
-}
+approvalRequestId, runId, nodeInstanceId, boundPlanHash|boundFragmentHash
+expectedRunVersion, allowedDecisions, owner/audience, deadline
 ```
 
-1. Journal serializes; CAS on `expectedRunVersion`.  
-2. **CancelRequested first** → later ApprovalDecision fails CAS.  
-3. **Approval first** → pause clears; later CancelRequested may still cancel Run.  
-4. Same version race → first commit wins.  
-5. **Timeout → reject** (never default approve).  
-6. edit **output** → no re-link; edit **plan** → re-Link required.  
-7. Survive control restart; dual-client tests required.
+- CancelRequested first → later ApprovalDecision CAS fails.
+- Approval first → later cancel may still cancel Run.
+- Timeout → **reject**.
+- edit output → no re-link; edit plan → re-Link.
+- Maps to 0.2 `paused` while waiting.
 
 ---
 
-## §17. Protocol negotiation & errors
+## §18. Negotiation & errors
 
 ```text
-protocolMajor
-supportedReadSchemas[]
-supportedWriteSchemas[]
-requiredFeatures[]
-offeredFeatures[]
-buildInfo
+protocolMajor, supportedReadSchemas[], supportedWriteSchemas[]
+requiredFeatures[], offeredFeatures[], buildInfo
 ```
-
-### Error object
 
 ```text
 {
-  code: "TF_…",
-  message: string,
+  code, message,
   recoveryAction: retry-same-command | retry-new-command | refresh
                 | reconcile | operator | none,
   sideEffects: none | possible | unknown,
-  commandId?, commitSeq?, controlDomainId?
+  commandId?, commitSeq?, controlDomainId?, projectId?
 }
 ```
 
-| Code | recoveryAction (typical) | sideEffects |
-|------|--------------------------|-------------|
-| TF_PROTOCOL_INCOMPATIBLE | none | none |
-| TF_SCHEMA_READ_UNSUPPORTED | none | none |
-| TF_SCHEMA_WRITE_UNSUPPORTED | none | none |
-| TF_FEATURE_REQUIRED | none | none |
-| TF_POLICY_DENIED | none | none |
-| TF_AUTHORITY_REVOKED | operator / refresh | possible |
-| TF_STALE_VERSION | refresh | none if pure CAS |
-| TF_IDEMPOTENCY_CONFLICT | none | none |
-| TF_LEGACY_CONFLICT | operator | prior legacy possible |
-| TF_PROVIDER_AMBIGUOUS | reconcile | possible |
-| TF_PROVIDER_REJECTED | retry-new-command or none | none if pre-accept |
-| TF_JOURNAL_UNAVAILABLE | retry-same-command | none if pre-intent |
-| TF_DURABILITY_FAILED | operator / reconcile | unknown |
-| TF_CURSOR_EXPIRED | refresh (checkpoint resync) | none |
-| TF_COMMAND_FAILED | retry-new-command if no accept | none if no accept |
-| TF_DOMAIN_TRANSFER_REQUIRED | operator | none |
-| TF_CROSS_PRINCIPAL_COMMAND | none | none |
+Codes include: TF_PROTOCOL_INCOMPATIBLE, TF_SCHEMA_*, TF_FEATURE_REQUIRED, TF_POLICY_DENIED, TF_AUTHORITY_REVOKED, TF_STALE_VERSION, TF_IDEMPOTENCY_CONFLICT, TF_CROSS_PRINCIPAL_COMMAND, TF_LEGACY_CONFLICT, TF_PROVIDER_AMBIGUOUS, TF_JOURNAL_UNAVAILABLE, TF_DURABILITY_FAILED, TF_CURSOR_EXPIRED, TF_COMMAND_FAILED, TF_BOOTSTRAP_FAILED.
 
-Boolean `retryable` alone is **insufficient**; clients use **`recoveryAction`**.
+Cursor: `minAvailableCommitSeq`, cursor lease/TTL, TF_CURSOR_EXPIRED → checkpoint resync.
 
 ---
 
-## §18. Single execution semantics & D21 parity
+## §19. D21 parity & P5
 
-### 18.1 One scheduler
+Public surface sources: schema, docs/skills, examples, exports, tests, promised errors.
+Step 1 converts surface → goldens.
 
-No silent imperative↔event-kernel fork at GA. Dev bridges allowed; GA one semantic path.
-
-### 18.2 D21 (public surface)
-
-> All **documented or publicly supported** 0.2.4 semantics remain compatible at 0.3 GA.  
-> Step 1 converts public surface → comprehensive golden corpus.  
-> Sources: TypeBox/schema, README/skills/docs, examples, public exports, tests, promised error behavior.  
-> Removal requires breaking-change ADR + migration + version policy.  
-> Fail-at-link = **dev-only**, not GA exit.
-
-### 18.3 P5 matrix
+P5 matrix:
 
 ```text
-rows:    all PHASE_TYPES (incl. race, expand)
-columns: when | join:any | retry | timeout | expect | budget | cache
-         cwd | workspace | shareContext | dynamic def | saved use
-         resume | recompute | replay | approval | cancel/abort
-         foreground | detached | idempotent:false
-         final-output attribution
-         score | onBlock:retry | reflexion | tree reduce
-         map/loop/tournament instantiation
+PHASE_TYPES (all, incl. race/expand)
+× when | join:any | retry | timeout | expect | budget | cache
+  | cwd | workspace | shareContext | dynamic def | saved use
+  | resume | recompute | replay | approval | cancel/abort
+  | foreground | detached | idempotent:false
+  | final-output attribution
+  | score | onBlock:retry | reflexion | tree reduce
+  | Run status mapping (completed/paused/blocked/unknown)
 ```
 
-**High-risk ternary suites (minimum):**  
-`expand × cache × authority epoch`  
-`detached × approval × resume`  
-(+ add as matrix risk rows)
+Ternary suites: expand×cache×authority epoch; detached×approval×resume.
 
-Cell values: `port | n/a | breaking-ADR`.
+Fail-at-link: **dev-only**.
 
 ---
 
-## §19. Replay & cache
+## §20. Compatibility & rollback
 
-- What-if replay: **DecisionProjection** from ControlEvents (not diagnostics-as-authority).  
-- Cache entries store both hashes, ArtifactRefs, event range.  
-- Cache-hit Receipt: providerOutcome reflects reuse; no new Attempt when valid.  
-- Legacy 0.2 pure-trace replay: compat tool with legacy provenance only.
-
----
-
-## §20. Compatibility, dual-writer, rollback
-
-| Topic | Rule |
-|-------|------|
-| 0.2 traces/runs | LegacyEvidenceImported only |
-| 0.2 live writer | Detect generation/mtime/hash; **`legacy-conflict`**; 0.3 stops new Attempts; **cannot** stop old binary |
-| Dual 0.3 writers | Exclusive ownership lease; fail closed |
-| Rollback pre-0.3 writes | Full from backup |
-| Rollback after 0.3 runs | Read-only export; **lossy** 0.2-shaped export **without** continue-execute promise |
-| DomainTransfer | §5.3 |
+- 0.2 import: LegacyEvidenceImported only.
+- legacy-conflict: 0.3 stops new Attempts.
+- Rollback: full before 0.3 writes; after 0.3 writes read-only / lossy export without execute promise.
+- **No DomainTransfer.**
 
 ---
 
 ## §21. Packages & toolchain (D28)
 
-### 21.1 Packages
-
 ```text
-taskflow-core          # kernel, resources, journal ports, single scheduler
-taskflow-control       # ControlHost application (preferred split)
-taskflow-daemon        # process + RPC
-taskflow-mcp-core      # thin MCP adapter only
-taskflow-hosts         # ExecutionProviders
-taskflow-cli           # 0.3.0 acceptance
-taskflow-web           # 0.3.1+
-{host}-taskflow        # skills + thin bins
+taskflow-core / taskflow-control / taskflow-daemon
+taskflow-mcp-core (thin) / taskflow-hosts / taskflow-cli
+taskflow-web (0.3.1+) / host delivery packages
 ```
-
-`core ↛ daemon/mcp/web`.
-
-### 21.2 Toolchain baseline (engineering, ordered in step 1.5)
 
 | Item | Baseline |
 |------|----------|
-| **Node** | **`>=22.19.0`** production engines; CI may also run newer Current for early warning — **production baseline remains 22 LTS line** until a separate ADR raises it |
-| **TypeScript** | **Unify on TypeScript 6** for CLI typecheck **and** compiler-API consumers (DSL). Do not leave root on TS 7 while DSL needs TS 6 API without isolation — **prefer one TS 6 monorepo** for 0.3 |
-| **pnpm** | **Upgrade `packageManager` from 9.15.0 to pnpm 11.x stable**; frozen lockfile; script allowlist |
-| Format | Single formatter; avoid CI-breaking hard-break trailing spaces if `git diff --check` enforced |
-| Matrix | clean install · typecheck · test · build · pack |
+| Node engines | ≥22.19; **@types/node aligned to 22** for published packages (or dual CI 22/24/26 with 22 as gate) |
+| TypeScript | **Root TS 7** CLI/typecheck; **taskflow-dsl** isolated **TS 6** compiler API; resolution guard test against drift |
+| pnpm | **11.x** stable (`packageManager` field) |
+| SQLite | only behind ControlStore port + explicit P-ADR |
 
 ---
 
@@ -715,164 +539,77 @@ taskflow-web           # 0.3.1+
 
 ```text
 1.   Green trunk
-1.a  Public 0.2.4 surface inventory → golden corpus
-1.5  Toolchain: Node 22 baseline confirmed, TS 6 unify, pnpm 11
-2.   Single scheduler convergence (P5-driven ports)
-2.5  P-ADRs (P1–P12) encoding this RFC
-3.   Wire freeze review → TypeBox
-4.   Extract ControlHost from MCP monolith
-5.   ControlStore + ArtifactStore + SecretStore + journal
-6.   Daemon + RPC + domain open/transfer
-7.   Linker + admission + SpawnTemplate + saved pins
-8.   ExecutionProviders all hosts + detached
+1.a  Public 0.2.4 surface → golden plan
+1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22 alignment
+2.   Single scheduler convergence
+2.5  P-ADRs P1–P12 (all required before wire freeze; body absorbs intent, ADRs freeze schemas)
+3.   Wire freeze + TypeBox
+4.   ControlHost extract
+5.   Per-project ControlStore + user Registry
+6.   Bootstrap + daemon multi-mount
+7.   Linker + admission
+8.   ExecutionProviders
 9.   Thin MCP + CLI
-10.  WebUI 0.3.1
+10. WebUI 0.3.1
 ```
 
-**Allowed now: 1–2.5 only.**
+**Allowed now: 1–2.5.**
+
+### P-ADR set (all before wire freeze)
+
+P1 policy · P2 empty exposure · P3 domain+registry (no transfer) · P4 negotiate+errors · P5 matrix · P6 hash/artifact/secret · P7 dynamic+cache · P8 enforcement · P9 legacy-conflict · P10 rollback · P11 compaction+cursor · P12 command batch+re-auth · **P13 bootstrap/fresh-install** · **P14 ControlStore engine** (if not files-only).
 
 ---
 
-## §23. Pre-wire-freeze checklist
+## §23. GA acceptance (minimum)
 
-| ID | Content |
-|----|---------|
-| P1 | Policy overlay algebra |
-| P2 | Empty-policy Exposure |
-| P3 | ControlDomain + persistent id + project binding + DomainTransfer |
-| P4 | Negotiation + error taxonomy + recoveryAction |
-| P5 | Full phase × feature matrix + ternary suites |
-| P6 | Canonical hash + ArtifactRef + SecretRef |
-| P7 | Dynamic paths + dual hashes + cache predicate |
-| P8 | Enforcement capabilities |
-| P9 | legacy-conflict |
-| P10 | Rollback tiers |
-| P11 | Compaction, minAvailableCommitSeq, cursor lease |
-| P12 | Command batch atomicity + principal-scoped idempotency |
+- [ ] Fresh install, default auto, one run, no manual daemon config
+- [ ] Concurrent client start → single writer
+- [ ] Stale socket recovery
+- [ ] Per-project store; registry multi-mount
+- [ ] standalone and daemon open **same** store
+- [ ] No DomainTransfer code path in GA
+- [ ] Command re-exec suppressed; disclosure re-authed
+- [ ] Artifact read authz
+- [ ] Public-surface goldens + Run status mapping
+- [ ] Receipt event manifest survives compaction rules
+- [ ] bounded-latency maxLatencyMs when used
+- [ ] All §22 P-ADRs present for shipped wire types
 
 ---
 
-## §24. GA acceptance matrix (self-contained)
-
-### Kernel / ControlHost
-
-- [ ] Single scheduler; no silent dual path  
-- [ ] auto/coordinated/standalone = same ControlHost semantics  
-- [ ] auto control failure → error (no silent standalone)  
-- [ ] Journal rebuild ≡ projection  
-
-### ControlDomain
-
-- [ ] DomainId stable across restart  
-- [ ] projectId single binding; dual binding rejected  
-- [ ] DomainTransfer fencing + failure recovery  
-- [ ] commitSeq not compared across domains without domain id  
-
-### Commands
-
-- [ ] Multi-event one commandId; unique on CommandRecord only  
-- [ ] Atomic batch; no dangling Artifact refs on accept  
-- [ ] Same id+hash+principal → same response  
-- [ ] Cross-principal same id denied  
-
-### Dynamic
-
-- [ ] flow{def}, expand nested/graft, ctx_spawn subflow  
-- [ ] saved use pin; no mutable re-resolve  
-- [ ] flat spawn SpawnTemplate  
-- [ ] cache re-Link; executionSemanticHash reuse after epoch change when predicate holds  
-
-### Authority / enforcement
-
-- [ ] revoke link→admit; brokered per mutation; sandboxed sealed plan  
-- [ ] no over-claim of process kill  
-
-### Parity
-
-- [ ] Public-surface goldens pass  
-- [ ] No GA fail-at-link without breaking ADR  
-- [ ] Ternary suites green  
-
-### Journal / cursor / artifacts
-
-- [ ] Kill windows intent/ack/receipt  
-- [ ] TF_CURSOR_EXPIRED + resync  
-- [ ] SecretRef no content digest  
-- [ ] Compaction preserves Receipt rules  
-
-### Approval / multi-writer / legacy
-
-- [ ] Approval CAS / cancel-first / timeout=reject  
-- [ ] legacy-conflict stops 0.3  
-- [ ] dual daemon fail closed  
-
-### Providers / negotiation
-
-- [ ] 5 hosts × fg/bg × cancel/resume  
-- [ ] Feature/schema negotiate rejects skew  
-- [ ] recoveryAction respected by CLI/MCP  
-
-### Replay / cache
-
-- [ ] DecisionProjection what-if  
-- [ ] Artifact tamper detection  
-
----
-
-## §25. Supersession notice (copy for related docs)
-
-**For 0.3.0+ ControlHost clients, `rfc-0.3.0-control-plane.md` supersedes:**
-
-- daemon “default-off” as product default;  
-- silent graceful degrade to full in-process on daemon outage;  
-- any reading of “per-project namespace” that forbids user-level ControlDomain partitioning of projects.
-
-**Retained from local-daemon RFC:** disk authority; UDS+token; version handshake; one admission authority when claimed; no default network listener; daemon must not be sole copy of run state (journal on disk).
-
----
-
-## §26. Structured re-review
+## §24. Structured status
 
 ```text
-Verdict: Approve-wire-freeze | Request-changes | Reject
-
-Self-contained: Yes | No
-Supersession vs local-daemon clear: Yes | No
-
-ControlDomain lifecycle: Ready | Not ready
-Command atomic batch + principal: Ready | Not ready
-executionSemanticHash specificity: Ready | Not ready
-SecretRef: Ready | Not ready
-recoveryAction + cursor TTL: Ready | Not ready
-D21 public surface: Ready | Not ready
-Toolchain D28: Ready | Not ready
-
-Implement 1–2.5: Yes
-Wire freeze: only if all Ready + P5/P11/P12 ADRs exist
+Architecture: Approved
+Protocol model (0.3): Approved (v7)
+Wire freeze: Not approved
+Steps 1–2.5: Approved to start
+DomainTransfer: Rejected for 0.3
+User merged journal: Rejected for 0.3
+User Registry + multi-mount: Approved
 ```
+
+---
+
+## §25. Supersession
+
+**0.3+ clients:** this RFC supersedes local-daemon / competitive-map bullets that require daemon default-off or silent in-process full-power degrade.
+
+**Retained:** disk authority; UDS/auth; handshake; one admission authority when claimed; no default network listener.
+
+**Historical 0.2.x:** process-less detached lifecycle remains valid for unupgraded clients.
 
 ---
 
 ## Appendix A — Vocabulary
 
-| Term | Meaning |
-|------|---------|
-| ControlDomain | Persistent ledger + admission total order |
-| CommandRecord | Authority command row; unique commandId |
-| BoundPlan | Immutable linked template |
-| BoundFragment | Linked dynamic subgraph |
-| executionSemanticHash | Output-determining resolved descriptor hash |
-| ArtifactRef | Content-addressed blob ref |
-| SecretRef | Opaque credential ref without content digest |
-| ControlHost | Shared 0.3 control application |
-| DomainTransfer | Explicit project move between domains |
-| recoveryAction | Client recovery enum (not bare bool) |
-| Public surface | Documented/supported 0.2.4 behavior set |
+ControlDomain · ControlStore · ControlRegistry · CommandRecord · BoundPlan · BoundFragment · executionSemanticHash · ArtifactRef · SecretRef · ControlHost · recoveryAction · public surface
 
-## Appendix B — Refusals
+## Appendix B — Explicitly cut from 0.3
 
-No “see v4” normative references; no silent domain re-mint per boot; no silent domain migration on mode switch; no unique commandId per event; no secret content digests; no GA fail-at-link for public 0.2.4 features; no cross-domain atomic admission; no dual silent runtimes.
+DomainTransfer · user-level merged authority journal · silent auto→standalone · GA fail-at-link for public 0.2.4 features · node:sqlite without P-ADR · commitSeq renumbering
 
 ---
 
-*End RFC v6 — self-contained. Architecture Approved. Protocol model pinned. Wire freeze after P-ADRs. Implement §22.1–2.5 now.*
+*End RFC v7. Approved product model: per-project ledger + user registry multi-mount; no DomainTransfer. Proceed with Steps 1–2.5.*

@@ -1,8 +1,8 @@
 # Competitive map — 2026 H2 → taskflow 0.3.0
 
-> **Status:** working map for 0.3 planning (not marketing)  
-> **Date:** 2026-07-22  
-> **Supersedes for 0.3 narrative:** partial updates to [`market-positioning-2026-07.md`](../market-positioning-2026-07.md), [`COMPETITORS.md`](./COMPETITORS.md), [`rfc-local-daemon.md`](./rfc-local-daemon.md)  
+> **Status:** working map for 0.3 planning (not marketing)
+> **Date:** 2026-07-22
+> **Supersedes for 0.3 narrative:** partial updates to [`market-positioning-2026-07.md`](../market-positioning-2026-07.md), [`COMPETITORS.md`](./COMPETITORS.md), [`rfc-local-daemon.md`](./rfc-local-daemon.md)
 > **Scope:** where taskflow competes, where it must not, and what 0.3 must ship to stay differentiated.
 
 ---
@@ -11,7 +11,7 @@
 
 > **taskflow is the coding-agent control plane that compiles, admits, incrementally executes, and replay-audits DAGs across real coding CLIs — not another session multiplexer, org-chart OS, or app multi-agent SDK.**
 
-Do **not** lead with “declarative DAG” alone (Microsoft Conductor already owns that headline).  
+Do **not** lead with “declarative DAG” alone (Microsoft Conductor already owns that headline).
 Lead with: **compiled + incremental + multi-coding-backend + single MCP + enforceable policy**.
 
 ---
@@ -59,7 +59,7 @@ Lead with: **compiled + incremental + multi-coding-backend + single MCP + enforc
 | **L3** | Spec→FlowIR, env-addressed cache, proof-carrying runs | **One spike or design only** — narrative anchor |
 | **L4** | Market clearing, portfolio routing, A2A federation | Out of 0.3 |
 
-> Daemon + “WebUI allowlist agents/models” alone is **L1–L2 engineering**, not thought leadership.  
+> Daemon + “WebUI allowlist agents/models” alone is **L1–L2 engineering**, not thought leadership.
 > 0.3 **shipping** is L1–L2; 0.3 **story** must still point at L3 (compiler + incremental + proof), or we sound like Squad/Paperclip.
 
 ---
@@ -70,27 +70,32 @@ Lead with: **compiled + incremental + multi-coding-backend + single MCP + enforc
 Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
         │  one Taskflow MCP (thin client)
         ▼
-   taskflowd  ── CLI / WebUI (observe + policy + approval)
+   taskflowd (multi-mount clerk)  ── CLI / WebUI
         │
-   orchestrator (taskflow-core) + store/trace (disk authority)
+   ControlRegistry (user, non-authoritative)
+        │ mounts
+   per-project ControlStore (authority journal)
         │
-   worker backends: local CLI pool | script | (later) cloud agents
+   orchestrator + ExecutionProviders
 ```
 
-**Non-negotiables** (aligned with [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md); partially supersedes [`rfc-local-daemon.md`](./rfc-local-daemon.md) for 0.3+):
+**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7+):
 
-- Disk / journal is authority; control process is not the sole state copy  
-- 0.3 clients default **`controlMode: auto`** (on-demand control); fail closed if control required and unavailable — **not** silent full-power degrade  
-- Explicit **`standalone`** for single-owner in-process ControlHost  
-- Version handshake; local auth (socket + token)  
-- One admission authority when claimed (user-level ControlDomain with project partitions for multi-project coordination)  
+- Per-project ControlStore is authority; user Registry aggregates only
+- Disk/journal authority; clerk process is not the sole state copy
+- 0.3 clients default **`controlMode: auto`**; control unavailable → **fail closed**
+- **`standalone` only when user sets it explicitly** — never silent auto fallback
+- Version handshake; local auth (socket + token)
+- One admission path when multi-client coordination is claimed
+- **No DomainTransfer / merged user journal in 0.3**
+
 
 
 **Policy is 3-D (not just agent/model checkboxes):**
 
-1. **Catalog** — what agents/models/backends exist  
-2. **Exposure** — what a *caller* may use  
-3. **Caps** — tools, budget, concurrency, workspace roots, remap/strict mode  
+1. **Catalog** — what agents/models/backends exist
+2. **Exposure** — what a *caller* may use
+3. **Caps** — tools, budget, concurrency, workspace roots, remap/strict mode
 
 ---
 
@@ -112,14 +117,14 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
 
 ## 7. Gaps we previously under-weighted
 
-1. **Cloud async coders** as default mental model for “long work”  
-2. **IDE/vendor multi-agent shells** (VS Code, Codex App) as distribution  
-3. **A2A / peer protocols** beyond MCP tools  
-4. **Spec layer** above FlowIR  
-5. **Security policy-as-code** + proof bundles (2026 breach narratives)  
-6. **Event-driven triggers** (Issue/CI/Slack → run), not only host `taskflow_run`  
-7. **Environment-addressed** fingerprints (image/nix/lockfile), not only git/glob  
-8. **Semantic merge / stronger isolation** than worktree alone  
+1. **Cloud async coders** as default mental model for “long work”
+2. **IDE/vendor multi-agent shells** (VS Code, Codex App) as distribution
+3. **A2A / peer protocols** beyond MCP tools
+4. **Spec layer** above FlowIR
+5. **Security policy-as-code** + proof bundles (2026 breach narratives)
+6. **Event-driven triggers** (Issue/CI/Slack → run), not only host `taskflow_run`
+7. **Environment-addressed** fingerprints (image/nix/lockfile), not only git/glob
+8. **Semantic merge / stronger isolation** than worktree alone
 
 ---
 
@@ -127,12 +132,12 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
 
 Ship when these are true:
 
-- [ ] `taskflowd` optional; thin MCP clients talk socket (or fall back in-process)  
-- [ ] `taskflow_capabilities` reflects live policy for the caller  
-- [ ] Policy: agent + model + tools + budget + roots; strict/remap traced  
-- [ ] WebUI or CLI: run observe + cancel/resume + policy edit (observe first)  
-- [ ] At least one **visible** incremental win (re-run cost / why-stale in UI)  
-- [ ] Docs: this map + updated north-star (“control plane”, not “another DAG”)  
+- [ ] `taskflowd` optional; thin MCP clients talk socket (or fall back in-process)
+- [ ] `taskflow_capabilities` reflects live policy for the caller
+- [ ] Policy: agent + model + tools + budget + roots; strict/remap traced
+- [ ] WebUI or CLI: run observe + cancel/resume + policy edit (observe first)
+- [ ] At least one **visible** incremental win (re-run cost / why-stale in UI)
+- [ ] Docs: this map + updated north-star (“control plane”, not “another DAG”)
 - [ ] Explicit non-goal list published (no Temporal, no org-chart OS, no Squad clone)
 
 **Later (post-0.3 spikes):** cloud worker adapter, env-addressed cache, proof-carrying PR artifact, A2A worker advertisement, approval→policy learning.
@@ -141,8 +146,8 @@ Ship when these are true:
 
 ## 9. Taglines (pick one for 0.3)
 
-1. **One Taskflow MCP. One policy. Many coding backends.**  
-2. **Verify before spend. Remember what you spent. Replay what you decided.**  
+1. **One Taskflow MCP. One policy. Many coding backends.**
+2. **Verify before spend. Remember what you spent. Replay what you decided.**
 3. **The control plane for coding agents — compiled, incremental, portable.**
 
 Avoid: “declarative multi-agent workflows” (Conductor-shaped); “run agents in parallel” (Squad-shaped); “AI company OS” (Paperclip-shaped).

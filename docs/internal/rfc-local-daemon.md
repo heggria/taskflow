@@ -21,9 +21,12 @@
 > This document remains the historical decision record for **deferring** a daemon in 0.2.3 and the
 > process-less detached lifecycle. Do not treat its “Default off” bullet as binding on 0.3 clients.
 
-## Decision
+## Historical 0.2.x decision
 
-Taskflow remains process-less by default. The project store is authoritative;
+> **Label:** Historical requirements for the **0.2.3 process-less** line.
+> **Not binding on 0.3 ControlHost clients** — see [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) §4–§5 and §25.
+
+Taskflow **0.2.x** remains process-less by default. The project store is authoritative;
 hosts start ordinary stdio MCP servers and long runs execute in isolated,
 one-shot detached processes.
 
@@ -83,21 +86,24 @@ Pi / Codex / Claude / OpenCode / Grok
           taskflow-core + store
 ```
 
-The following rules are non-negotiable:
+### Historical 0.2.x requirements (if a daemon were added under 0.2 assumptions)
 
-- **Default off.** The stdio/in-process path always remains usable.
+- **Default off (0.2.x).** The stdio/in-process path remains usable for 0.2 clients.
 - **Disk is authority.** Daemon memory may cache or schedule, never become the
-  only copy of run state.
+  only copy of run state. (**Retained in 0.3.**)
 - **Per-project namespace.** Worktrees do not silently share a global queue.
+  (**0.3 retains per-project ControlStore; user Registry is non-authoritative.**)
 - **Version handshake.** Client and daemon reject incompatible protocol/schema
-  versions before dispatch.
+  versions before dispatch. (**Retained in 0.3.**)
 - **Authenticated local transport.** Prefer a Unix-domain socket; any loopback
-  TCP fallback requires an explicit token and threat model.
-- **Graceful degradation.** A daemon outage must not corrupt or hide persisted
-  runs. Whether new work falls back or fails closed must be an explicit policy.
-- **One admission authority.** If the daemon claims global concurrency or
-  budgets, every participating host must dispatch through it; mixed hidden
-  bypasses would make the claim false.
+  TCP fallback requires an explicit token and threat model. (**Retained in 0.3.**)
+- **Graceful degradation (0.2.x wording).** A daemon outage must not corrupt or
+  hide persisted runs. *0.3 clarifies:* durability yes; **new work under
+  `controlMode: auto|coordinated` fails closed** — no silent full-power standalone
+  (see 0.3 control-plane RFC §5).
+- **One admission authority.** If global concurrency or budgets are claimed,
+  every participating client must use the control path; mixed hidden bypasses
+  falsify the claim. (**Retained in 0.3.**)
 
 ## Non-goals
 
