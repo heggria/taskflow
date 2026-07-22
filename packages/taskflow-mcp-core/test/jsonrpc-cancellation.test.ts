@@ -311,7 +311,10 @@ test("taskflow_run forwards the JSON-RPC AbortSignal into the host runner", asyn
 test("taskflow_run resolves typed cwd defaults before validation and execution", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "taskflow-mcp-cwd-bridge-"));
 	const previousMode = process.env.TASKFLOW_CWD_BRIDGE_MODE;
+	const previousCp = process.env.TASKFLOW_CONTROL_PLANE;
 	process.env.TASKFLOW_CWD_BRIDGE_MODE = "resolve-only";
+	// 0.2 engine path: per-phase cwd interpolation not yet on ControlHost ScriptExecutionProvider
+	process.env.TASKFLOW_CONTROL_PLANE = "0";
 	try {
 		await mkdir(join(cwd, "packages", "api"), { recursive: true });
 		const runner: SubagentRunner<AgentConfig> = {
@@ -339,6 +342,8 @@ test("taskflow_run resolves typed cwd defaults before validation and execution",
 	} finally {
 		if (previousMode === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
 		else process.env.TASKFLOW_CWD_BRIDGE_MODE = previousMode;
+		if (previousCp === undefined) delete process.env.TASKFLOW_CONTROL_PLANE;
+		else process.env.TASKFLOW_CONTROL_PLANE = previousCp;
 		await rm(cwd, { recursive: true, force: true });
 	}
 });

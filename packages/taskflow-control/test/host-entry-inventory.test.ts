@@ -53,13 +53,28 @@ test("D21 inventory: ControlHost + bindControlHostTools + tryControlPlaneRun are
 	assert.equal(typeof tryControlPlaneRun, "function");
 });
 
-test("D21 inventory: event-kernel remains Default OFF (dual path documented, not silent production default)", () => {
+test("D21 inventory: event-kernel remains Default OFF; script ControlHost route default ON", async () => {
 	const driver = fs.readFileSync(
 		path.join(REPO, "packages/taskflow-core/src/exec/driver.ts"),
 		"utf-8",
 	);
 	assert.match(driver, /Default OFF/);
 	assert.notEqual(process.env.PI_TASKFLOW_EVENT_KERNEL, "1");
-	// Control plane route is opt-in unless TASKFLOW_CONTROL_PLANE set
-	assert.notEqual(process.env.TASKFLOW_CONTROL_PLANE, "1");
+
+	const { controlPlaneEnabled, tryControlPlaneRun } = await import("../src/mcp-route.ts");
+	// Default ON for script-only (unset env)
+	assert.equal(controlPlaneEnabled({}), true);
+	assert.equal(controlPlaneEnabled({ TASKFLOW_CONTROL_PLANE: "0" }), false);
+
+	// MCP taskflow_run must invoke tryControlPlaneRun (call site, not import list)
+	const mcpServer = fs.readFileSync(
+		path.join(REPO, "packages/taskflow-mcp-core/src/mcp/server.ts"),
+		"utf-8",
+	);
+	const callSite = mcpServer.indexOf("await tryControlPlaneRun(");
+	assert.ok(callSite > 0, "taskflow_run must await tryControlPlaneRun(");
+	// After handled route, 0.2 path uses executeTaskflow — must appear later in handler
+	const afterRoute = mcpServer.slice(callSite);
+	assert.match(afterRoute, /executeTaskflow/, "0.2 engine remains fallback after ControlHost route");
+	void tryControlPlaneRun;
 });

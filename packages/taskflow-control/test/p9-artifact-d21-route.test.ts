@@ -105,22 +105,28 @@ test("artifact URI: relative ok; traversal and absolute escape rejected", () => 
 	}
 });
 
-test("D21 tryControlPlaneRun: force script success/fail; non-script not handled", async () => {
+test("D21 tryControlPlaneRun: script-only DEFAULTS to ControlHost (no env); exit 37 fails; agent not handled", async () => {
 	const t = temp();
 	try {
+		// Default ON — no TASKFLOW_CONTROL_PLANE, no force
+		const env = { ...t.env };
+		delete env.TASKFLOW_CONTROL_PLANE;
+
 		const ok = await tryControlPlaneRun(
 			t.project,
 			{
 				name: "s",
 				phases: [{ id: "main", type: "script", run: "echo route-ok", final: true }],
 			},
-			{ force: true, env: t.env, commandId: "route-1", principal: "test" },
+			{ env, commandId: "route-1", principal: "test" },
 		);
 		assert.equal(ok.handled, true);
 		if (ok.handled) {
 			assert.equal(ok.ok, true);
+			assert.equal(ok.viaControlHost, true);
 			assert.match(ok.text, /route-ok|control-plane run completed/);
 			assert.ok(ok.receiptId);
+			assert.match(ok.text, /artifactIntegrity=unknown/);
 		}
 
 		const fail = await tryControlPlaneRun(
@@ -129,11 +135,12 @@ test("D21 tryControlPlaneRun: force script success/fail; non-script not handled"
 				name: "f",
 				phases: [{ id: "main", type: "script", run: "exit 37", final: true }],
 			},
-			{ force: true, env: t.env, commandId: "route-fail" },
+			{ env, commandId: "route-fail" },
 		);
 		assert.equal(fail.handled, true);
 		if (fail.handled) {
 			assert.equal(fail.ok, false);
+			assert.equal(fail.viaControlHost, true);
 			assert.match(fail.text, /37|failed/i);
 		}
 
@@ -143,18 +150,18 @@ test("D21 tryControlPlaneRun: force script success/fail; non-script not handled"
 				name: "a",
 				phases: [{ id: "main", type: "agent", agent: "executor", task: "x", final: true }],
 			},
-			{ force: true, env: t.env },
+			{ env },
 		);
 		assert.equal(agentOnly.handled, false);
 
-		// Without force and without env → not handled
+		// Explicit opt-out → not handled (falls through to 0.2 engine)
 		const off = await tryControlPlaneRun(
 			t.project,
 			{
 				name: "s2",
 				phases: [{ id: "main", type: "script", run: "true", final: true }],
 			},
-			{ env: { ...t.env, TASKFLOW_CONTROL_PLANE: undefined } },
+			{ env: { ...t.env, TASKFLOW_CONTROL_PLANE: "0" } },
 		);
 		assert.equal(off.handled, false);
 	} finally {

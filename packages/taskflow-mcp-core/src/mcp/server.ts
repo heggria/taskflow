@@ -811,8 +811,9 @@ export function makeToolHandlers(
 			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
 
-			// D21: optional ControlHost path for script-only flows (TASKFLOW_CONTROL_PLANE=1).
-			// All host adapters share this MCP core — one admit surface when enabled.
+			// D21: script-only flows default to ControlHost (all host adapters share this
+			// MCP core). Opt-out: TASKFLOW_CONTROL_PLANE=0. Agent phases fall through to
+			// the host SubagentRunner until an LLM ExecutionProvider is bound.
 			try {
 				const { tryControlPlaneRun } = await import("taskflow-control");
 				const routed = await tryControlPlaneRun(cwd, def, {
