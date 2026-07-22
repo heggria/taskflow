@@ -150,10 +150,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 	const store = openProjectControlStore(opts.projectRoot);
 	const registry = openControlRegistry(env);
-	// Standalone must not claim user-level multi-project coordinator (D5/D30).
-	if (controlMode !== "standalone") {
-		registry.registerFromStore(store, opts.projectRoot);
-	}
+	// Registry discovery is fine for standalone; capacity must not use user-level
+	// multi-project coordinator (D5/D30) — project-local baseDir below.
+	registry.registerFromStore(store, opts.projectRoot);
 	const coordinator =
 		controlMode === "standalone"
 			? openUserCoordinatorStore(env, { baseDir: projectCoordinatorDir(opts.projectRoot) })

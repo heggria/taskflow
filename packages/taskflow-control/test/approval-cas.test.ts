@@ -13,6 +13,7 @@ import {
 	createControlHost,
 	createMockExecutionProvider,
 	openUserCoordinatorStore,
+	projectCoordinatorDir,
 } from "../src/index.ts";
 import { parentReleaseStart } from "./helpers/mp-barrier.mts";
 
@@ -176,8 +177,10 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 		host.close();
 
 		const N = 6;
-		// Enough slots so every contender reaches compareAndCommit (CAS), not capacity pre-check.
-		const coord = openUserCoordinatorStore(t.env);
+		// Standalone children use project-local coordinator — raise capacity there.
+		const coord = openUserCoordinatorStore(t.env, {
+			baseDir: projectCoordinatorDir(t.project),
+		});
 		coord.setMaxActiveRuns(N + 2, {
 			commandId: "mp-cas-cap",
 			callerPrincipal: "op",

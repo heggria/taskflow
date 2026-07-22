@@ -257,14 +257,6 @@ test("silent auto→standalone is impossible via assertControlModeExplicit", () 
 test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED; slots≡1", async () => {
 	const t = tempEnv();
 	try {
-		const coord = openUserCoordinatorStore(t.env);
-		coord.setMaxActiveRuns(2, {
-			commandId: "cmd-max",
-			callerPrincipal: "op",
-			requestBody: { maxActiveRuns: 2 },
-		});
-		assert.equal(coord.maxActiveRuns, 2);
-
 		// hang + reconcile budget 1 → both occupy as orphan-suspect (never release)
 		const provider = createMockExecutionProvider({ outcome: "hang" });
 		const host = createControlHost({
@@ -275,6 +267,13 @@ test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED
 			provider,
 			reconcileBudget: { maxAttempts: 1, deadlineMs: 10 },
 		});
+		// Capacity lives on the host's coordinator (project-local for standalone).
+		host.coordinator.setMaxActiveRuns(2, {
+			commandId: "cmd-max",
+			callerPrincipal: "op",
+			requestBody: { maxActiveRuns: 2 },
+		});
+		assert.equal(host.coordinator.maxActiveRuns, 2);
 
 		const r1 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c1" });
 		const r2 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c2" });
