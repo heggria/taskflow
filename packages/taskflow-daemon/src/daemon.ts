@@ -68,7 +68,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
 			fencingEpoch: singleton.lock.fencingEpoch,
 			role: singleton.role,
 			getHost: (projectId) => {
-				if (projectId && hosts.has(projectId)) return hosts.get(projectId)!;
+				// Exact projectId only when provided — no silent wrong-project fallback.
+				if (projectId) return hosts.get(projectId) ?? null;
 				const first = hosts.values().next().value;
 				return first ?? null;
 			},

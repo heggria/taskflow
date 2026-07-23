@@ -9,6 +9,7 @@
  */
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as path from "node:path";
 import type { ControlHost } from "taskflow-control";
 
 export const PROTOCOL_MAJOR = 1;
@@ -65,8 +66,19 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 		}
 	}
 
+	// Private socket directory permissions (owner-only when possible).
+	try {
+		const dir = path.dirname(opts.socketPath);
+		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+		fs.chmodSync(dir, 0o700);
+	} catch {
+		/* best-effort */
+	}
+
 	const server = net.createServer((socket) => {
 		let acc = "";
+		/** Per-connection: hello must succeed before any RPC (mandate 4). */
+		const conn = { helloOk: false, principal: "anonymous" as string };
 		socket.on("data", (chunk) => {
 			acc += chunk.toString("utf8");
 			let idx: number;
@@ -74,14 +86,21 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 				const line = acc.slice(0, idx).trim();
 				acc = acc.slice(idx + 1);
 				if (!line) continue;
-				void handleLine(socket, line, opts);
+				void handleLine(socket, line, opts, conn);
 			}
 		});
 	});
 
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
-		server.listen(opts.socketPath, () => resolve());
+		server.listen(opts.socketPath, () => {
+			try {
+				fs.chmodSync(opts.socketPath, 0o600);
+			} catch {
+				/* best-effort */
+			}
+			resolve();
+		});
 	});
 
 	return {
@@ -100,10 +119,20 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 	};
 }
 
+function isTrustedPrincipal(p: string): boolean {
+	if (!p || p.length > 128) return false;
+	if (/[\r\n\0]/.test(p)) return false;
+	if (/^https?:\/\//i.test(p)) return false;
+	return true;
+}
+
+type ConnState = { helloOk: boolean; principal: string };
+
 async function handleLine(
 	socket: net.Socket,
 	line: string,
 	opts: UdsServerOptions,
+	conn: ConnState,
 ): Promise<void> {
 	let msg: Record<string, unknown>;
 	try {
@@ -125,13 +154,26 @@ async function handleLine(
 			);
 			return;
 		}
+		const principal = String(msg.principal ?? msg.clientId ?? "anonymous");
+		if (!isTrustedPrincipal(principal)) {
+			socket.write(
+				JSON.stringify({
+					type: "hello-error",
+					code: "TF_POLICY_DENIED",
+					message: "untrusted principal",
+				}) + "\n",
+			);
+			return;
+		}
+		conn.helloOk = true;
+		conn.principal = principal;
 		socket.write(
 			JSON.stringify({
 				type: "hello-ok",
 				protocolMajor: PROTOCOL_MAJOR,
 				fencingEpoch: opts.fencingEpoch,
 				role: opts.role,
-				capabilities: ["status", "wait", "admit", "cancel"],
+				capabilities: ["status", "wait", "admit", "cancel", "approval"],
 			}) + "\n",
 		);
 		return;
@@ -139,27 +181,55 @@ async function handleLine(
 
 	if (msg.type === "rpc") {
 		const id = msg.id;
+		// Mandate 4: deny RPC before hello — no side effects.
+		if (!conn.helloOk) {
+			socket.write(
+				JSON.stringify({
+					type: "rpc-error",
+					id,
+					code: "TF_PROTOCOL_INCOMPATIBLE",
+					message: "hello required before rpc",
+				}) + "\n",
+			);
+			return;
+		}
 		const method = String(msg.method ?? "");
 		const params = (msg.params ?? {}) as Record<string, unknown>;
+		// Reject untrusted principal strings on every RPC
+		const principal = String(params.principal ?? conn.principal);
+		if (!isTrustedPrincipal(principal)) {
+			socket.write(
+				JSON.stringify({
+					type: "rpc-error",
+					id,
+					code: "TF_POLICY_DENIED",
+					message: "untrusted principal",
+				}) + "\n",
+			);
+			return;
+		}
 		try {
-			if (method === "status") {
-				const host = opts.getHost(params.projectId as string | undefined);
-				if (!host) {
+			if (method === "status" || method === "wait") {
+				const host = resolveHostExact(opts, params.projectId as string | undefined);
+				if (!host.ok) {
 					socket.write(
 						JSON.stringify({
 							type: "rpc-error",
 							id,
-							code: "TF_NOT_FOUND",
-							message: "no mounted host",
+							code: host.code,
+							message: host.message,
 						}) + "\n",
 					);
 					return;
 				}
-				const snap = host.getSnapshot(String(params.runId ?? ""));
+				const snap =
+					method === "wait"
+						? await host.host.wait(String(params.runId ?? ""))
+						: host.host.getSnapshot(String(params.runId ?? ""));
 				socket.write(JSON.stringify({ type: "rpc-result", id, result: snap }) + "\n");
 				return;
 			}
-			if (method === "admit" || method === "cancel") {
+			if (method === "admit" || method === "cancel" || method === "approval") {
 				if (opts.role !== "writer") {
 					socket.write(
 						JSON.stringify({
@@ -171,28 +241,62 @@ async function handleLine(
 					);
 					return;
 				}
-				const host = opts.getHost(params.projectId as string | undefined);
-				if (!host) {
+				const host = resolveHostExact(opts, params.projectId as string | undefined);
+				if (!host.ok) {
 					socket.write(
 						JSON.stringify({
 							type: "rpc-error",
 							id,
-							code: "TF_NOT_FOUND",
-							message: "no mounted host",
+							code: host.code,
+							message: host.message,
 						}) + "\n",
 					);
 					return;
 				}
 				if (method === "admit") {
-					const result = await host.admitAndRun({
+					const result = await host.host.admitAndRun({
 						program: params.program,
 						commandId: params.commandId as string | undefined,
-						callerPrincipal: String(params.principal ?? "uds"),
+						callerPrincipal: principal,
 					});
 					socket.write(JSON.stringify({ type: "rpc-result", id, result }) + "\n");
 					return;
 				}
-				const result = await host.cancel(String(params.runId ?? ""));
+				if (method === "approval") {
+					const decision = String(params.decision ?? "approve");
+					const runId = String(params.runId ?? "");
+					const expectedRunVersion =
+						typeof params.expectedRunVersion === "number"
+							? params.expectedRunVersion
+							: undefined;
+					let result;
+					if (decision === "reject") {
+						result = await host.host.reject(runId, {
+							expectedRunVersion,
+							principal,
+							note: params.note as string | undefined,
+						});
+					} else if (decision === "edit") {
+						result = await host.host.edit(runId, {
+							expectedRunVersion,
+							principal,
+							note: String(params.note ?? ""),
+						});
+					} else {
+						result = await host.host.approve(runId, {
+							expectedRunVersion,
+							principal,
+						});
+					}
+					socket.write(JSON.stringify({ type: "rpc-result", id, result }) + "\n");
+					return;
+				}
+				const result = await host.host.cancel(String(params.runId ?? ""), {
+					expectedRunVersion:
+						typeof params.expectedRunVersion === "number"
+							? params.expectedRunVersion
+							: undefined,
+				});
 				socket.write(JSON.stringify({ type: "rpc-result", id, result }) + "\n");
 				return;
 			}
@@ -215,6 +319,35 @@ async function handleLine(
 			);
 		}
 	}
+}
+
+/**
+ * Require exact projectId when provided; missing/unknown → deny (no silent default
+ * when client supplied an id). When projectId omitted, allow single-mount default.
+ */
+function resolveHostExact(
+	opts: UdsServerOptions,
+	projectId: string | undefined,
+):
+	| { ok: true; host: ControlHost }
+	| { ok: false; code: string; message: string } {
+	if (projectId !== undefined && projectId !== null && String(projectId).length > 0) {
+		const h = opts.getHost(String(projectId));
+		// getHost may fall back to first mount — verify identity matches.
+		if (!h || h.projectId !== String(projectId)) {
+			return {
+				ok: false,
+				code: "TF_NOT_FOUND",
+				message: `unknown or mismatched projectId: ${projectId}`,
+			};
+		}
+		return { ok: true, host: h };
+	}
+	const h = opts.getHost(undefined);
+	if (!h) {
+		return { ok: false, code: "TF_NOT_FOUND", message: "no mounted host" };
+	}
+	return { ok: true, host: h };
 }
 
 /** Client helper for tests: hello + one rpc. */

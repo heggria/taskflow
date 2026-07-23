@@ -81,9 +81,10 @@ export function ensureDir(dir: string): void {
 	fs.mkdirSync(dir, { recursive: true });
 }
 
-/** Atomic write: temp + fsync + rename (POSIX/NTFS atomic rename). */
+/** Atomic write: temp + fsync file + rename + fsync parent directory (durability). */
 export function writeFileAtomic(filePath: string, data: string | Buffer): void {
-	ensureDir(path.dirname(filePath));
+	const dir = path.dirname(filePath);
+	ensureDir(dir);
 	const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	const fd = fs.openSync(tmp, "w");
 	try {
@@ -93,6 +94,17 @@ export function writeFileAtomic(filePath: string, data: string | Buffer): void {
 		fs.closeSync(fd);
 	}
 	fs.renameSync(tmp, filePath);
+	// fsync parent so the rename itself is durable after crash (mandate 7).
+	try {
+		const dirFd = fs.openSync(dir, "r");
+		try {
+			fs.fsyncSync(dirFd);
+		} finally {
+			fs.closeSync(dirFd);
+		}
+	} catch {
+		/* some platforms / FS may not support directory fsync — best effort */
+	}
 }
 
 export function readJsonFile<T>(filePath: string): T | null {

@@ -21,6 +21,7 @@ export * from "./provider.ts";
 export * from "./script-provider.ts";
 export * from "./phase-scheduler.ts";
 export * from "./host-llm-provider.ts";
+export * from "./control-client.ts";
 export * from "./validate-ids.ts";
 export * from "./approval.ts";
 export * from "./reconcile.ts";
