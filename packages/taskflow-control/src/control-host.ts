@@ -31,7 +31,12 @@ import {
 	type ExecutionProvider,
 } from "./provider.ts";
 import { createScriptExecutionProvider } from "./script-provider.ts";
-import { boundedReconcile, applyReconcileToRun, DEFAULT_RECONCILE_BUDGET, type ReconcileBudget } from "./reconcile.ts";
+import {
+	boundedReconcile,
+	applyReconcileToRun,
+	DEFAULT_RECONCILE_BUDGET,
+	type ReconcileBudget,
+} from "./reconcile.ts";
 import { isSafeId } from "./validate-ids.ts";
 import { projectCoordinatorDir } from "./paths.ts";
 import type { IdentityOpenPolicy } from "./identity.ts";
@@ -42,6 +47,7 @@ import {
 	loadApprovalForRun,
 } from "./approval.ts";
 import { legacyConflictError, probeLegacyConflict } from "./legacy-conflict.ts";
+import { schedulePhases } from "./phase-scheduler.ts";
 
 export interface ControlHostOptions {
 	projectRoot: string;
@@ -52,8 +58,18 @@ export interface ControlHostOptions {
 	 * Inject provider. **Production default is ScriptExecutionProvider** (real OS
 	 * processes). Mock is NEVER the production default — tests must inject mock
 	 * explicitly via `provider` or `allowMockProvider: true` (test-only).
+	 * Used as the script-phase provider when `scriptProvider` omitted.
 	 */
 	provider?: ExecutionProvider;
+	/**
+	 * Phase-level script ExecutionProvider (default: ScriptExecutionProvider).
+	 */
+	scriptProvider?: ExecutionProvider;
+	/**
+	 * Phase-level host LLM ExecutionProvider (agent/gate/…). Required for
+	 * non-script phases. When omitted, agent phases fail closed on ControlHost.
+	 */
+	llmProvider?: ExecutionProvider;
 	/**
 	 * TEST ONLY: when true and `provider` omitted, use MockExecutionProvider.
 	 * Production CLI/daemon must never set this.
@@ -200,13 +216,17 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			? openUserCoordinatorStore(env, { baseDir: projectCoordinatorDir(opts.projectRoot) })
 			: openUserCoordinatorStore(env);
 	// Production default: real script provider. Mock only when explicitly allowed (tests).
-	const provider =
+	const scriptProvider =
+		opts.scriptProvider ??
 		opts.provider ??
 		(opts.allowMockProvider
 			? createMockExecutionProvider()
 			: createScriptExecutionProvider({
 					stateDir: `${opts.projectRoot}/.taskflow/control/provider-jobs`,
 				}));
+	const llmProvider = opts.llmProvider;
+	/** @deprecated single-provider field — maps to script provider for cancel/reconcile. */
+	const provider = scriptProvider;
 	const reconcileBudget = opts.reconcileBudget ?? DEFAULT_RECONCILE_BUDGET;
 
 	// Provider handles by runId (memory cache; durable copy on RunProjection.providerHandle)
@@ -627,7 +647,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				{ type: "RunAdmitted", runId, reservationId: reservation.reservationId },
 			);
 
-			// Dispatch — probe → prepare → submit (D9 full contract)
+			// Dispatch: per-phase schedule (mandate 1) — no whole-flow script shortcut.
 			run = {
 				...run,
 				stage: "executing",
@@ -642,99 +662,163 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				stage: "executing",
 			});
 
-			if (typeof provider.probe === "function") {
-				const probe = await provider.probe({ cwd: opts.projectRoot, program: boundPlan.program });
-				if (!probe.ok || probe.supportsProgram === false) {
-					const reason = probe.detail ?? "provider probe rejected program";
-					run = {
-						...run,
-						status: "failed",
-						stage: "terminal",
-						error: reason,
-						updatedAt: Date.now(),
-						runVersion: run.runVersion + 1,
-					};
-					run = emit(run, {
-						type: "RunStatusChanged",
-						runId,
-						status: "failed",
-						stage: "terminal",
-						reason,
-					});
-					try {
-						coordinator.normalRelease(reservation.reservationId, {
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						});
-					} catch {
-						/* keep slot */
-					}
-					return {
-						ok: false,
-						run,
-						error: { code: "TF_COMMAND_FAILED", message: reason, recoveryAction: "none", sideEffects: "none" },
-					};
-				}
-			}
-
-			if (typeof provider.prepare === "function") {
-				const prep = await provider.prepare({
+			const scheduled = await schedulePhases(
+				boundPlan.program,
+				{ script: scriptProvider, llm: llmProvider },
+				{
 					runId,
-					program: boundPlan.program,
 					cwd: opts.projectRoot,
+					phaseDeadlineMs: reconcileBudget.deadlineMs ?? 60_000,
+				},
+			);
+
+			// Persist last attempt handle for cancel/reconcile of the terminal phase.
+			const lastHandle =
+				scheduled.stillRunning?.handle ??
+				[...scheduled.attempts].reverse().find((a) => a.handle)?.handle;
+			const activeProvider = scheduled.stillRunning?.provider ?? scriptProvider;
+			if (lastHandle) {
+				handles.set(runId, lastHandle);
+				// Keep cancel/reconcile on the provider that owns the live handle.
+				if (activeProvider !== scriptProvider) {
+					// Prefer LLM/script that submitted the live job for isLive/cancel.
+					// `provider` alias below still points at script for default paths;
+					// resolveHandle + cancel use handles map + provider.isLive — ensure
+					// cancel uses the right provider by storing name on the run.
+				}
+				run = {
+					...run,
+					providerHandle: lastHandle,
+					providerName:
+						scheduled.stillRunning?.providerName ??
+						scheduled.attempts.find((a) => a.handle === lastHandle)?.providerName,
+					updatedAt: Date.now(),
+					runVersion: run.runVersion + 1,
+				};
+				run = emit(run, {
+					type: "Generic",
+					kind: "PhaseScheduleComplete",
+					data: {
+						attempts: scheduled.attempts.map((a) => ({
+							phaseId: a.phaseId,
+							status: a.status,
+							provider: a.providerName,
+						})),
+						stillRunning: scheduled.stillRunning
+							? {
+									phaseId: scheduled.stillRunning.phaseId,
+									handle: scheduled.stillRunning.handle,
+								}
+							: undefined,
+					},
 				});
-				if (prep.kind === "rejected") {
-					run = {
-						...run,
-						status: "failed",
-						stage: "terminal",
-						error: prep.reason,
-						updatedAt: Date.now(),
-						runVersion: run.runVersion + 1,
+			}
+
+			// Still-running after phase deadline → bounded reconcile (capacity held).
+			if (scheduled.stillRunning) {
+				const handle = scheduled.stillRunning.handle;
+				const reconProvider = scheduled.stillRunning.provider;
+				run = {
+					...run,
+					status: "unknown",
+					stage: "reconciling",
+					updatedAt: Date.now(),
+					runVersion: run.runVersion + 1,
+				};
+				run = emit(run, { type: "ReconcileStarted", runId, attempt: 1 });
+
+				const outcome = await boundedReconcile(reconProvider, handle, reconcileBudget);
+				run = applyReconcileToRun(run, outcome);
+
+				if (outcome.exhausted) {
+					coordinator.markOrphanSuspect(reservation.reservationId);
+					run = emit(run, { type: "ReconcileSettled", runId, outcome: "exhausted" });
+					run = emit(run, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" });
+					const snap: RunSnapshot = {
+						run,
+						controlError: reconcileRequiredError(
+							"auto-reconcile exhausted; run remains unknown; no final Receipt",
+							{
+								commandId,
+								projectId: store.header.projectId,
+								controlDomainId: store.header.controlDomainId,
+							},
+						),
+						receipt: null,
 					};
+					return { ok: false, run, snapshot: snap, error: snap.controlError };
+				}
+
+				if (outcome.terminal) {
 					run = emit(run, {
 						type: "RunStatusChanged",
 						runId,
-						status: "failed",
+						status: run.status,
 						stage: "terminal",
-						reason: prep.reason,
 					});
-					try {
+					if (
+						isTerminalRunStatus(run.status) &&
+						canNormalRelease({
+							noLiveOrAmbiguousSideEffects: true,
+							runIsTerminal: true,
+							runIsParkedAndFutureDispatchRequiresReadmission: false,
+						})
+					) {
 						coordinator.normalRelease(reservation.reservationId, {
 							noLiveOrAmbiguousSideEffects: true,
 							runIsTerminal: true,
 							runIsParkedAndFutureDispatchRequiresReadmission: false,
 						});
-					} catch {
-						/* keep slot */
 					}
-					return {
-						ok: false,
-						run,
-						error: {
-							code: "TF_COMMAND_FAILED",
-							message: prep.reason,
-							recoveryAction: "none",
-							sideEffects: "none",
-						},
-					};
+					if (outcome.terminal === "completed" || run.status === "completed") {
+						const receipt = issueReceipt(run, boundPlan);
+						const receiptHonest: typeof receipt = {
+							...receipt,
+							assurance: {
+								...receipt.assurance,
+								providerOutcome: "ok",
+								journalContinuity: "ok",
+								artifactIntegrity: "unknown",
+								provenance: "unknown",
+							},
+						};
+						run = { ...run, receiptId: receiptHonest.receiptId, status: "completed", stage: "terminal" };
+						run = emit(
+							run,
+							{ type: "ReceiptIssued", runId, receiptId: receiptHonest.receiptId },
+							undefined,
+							receiptHonest,
+						);
+						return {
+							ok: true,
+							run,
+							receipt: receiptHonest,
+							snapshot: { run, receipt: receiptHonest },
+						};
+					}
+					return { ok: false, run, snapshot: { run, receipt: null } };
 				}
+
+				// Non-exhausted, non-terminal reconcile: stay unknown
+				const snap: RunSnapshot = {
+					run,
+					controlError: reconcileRequiredError("reconcile did not settle", {
+						commandId,
+						projectId: store.header.projectId,
+						controlDomainId: store.header.controlDomainId,
+					}),
+					receipt: null,
+				};
+				return { ok: false, run, snapshot: snap, error: snap.controlError };
 			}
 
-			const submit = await provider.submit({
-				runId,
-				idempotencyKey: `${runId}:attempt-1`,
-				program: boundPlan.program,
-				cwd: opts.projectRoot,
-			});
-
-			if (submit.kind === "rejected") {
+			if (!scheduled.ok) {
 				run = {
 					...run,
 					status: "failed",
 					stage: "terminal",
-					error: submit.reason,
+					error: scheduled.error,
+					finalOutput: Object.values(scheduled.phaseOutputs).join("\n") || undefined,
 					updatedAt: Date.now(),
 					runVersion: run.runVersion + 1,
 				};
@@ -743,7 +827,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					runId,
 					status: "failed",
 					stage: "terminal",
-					reason: submit.reason,
+					reason: scheduled.error,
 				});
 				try {
 					coordinator.normalRelease(reservation.reservationId, {
@@ -752,220 +836,60 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						runIsParkedAndFutureDispatchRequiresReadmission: false,
 					});
 				} catch {
-					/* keep slot if predicate fails */
+					/* keep slot */
 				}
-				return { ok: false, run, error: { code: "TF_COMMAND_FAILED", message: submit.reason, recoveryAction: "none", sideEffects: "possible" } };
+				// No success Receipt on failed DAG
+				return {
+					ok: false,
+					run,
+					snapshot: { run, receipt: null },
+					error: {
+						code: "TF_COMMAND_FAILED",
+						message: scheduled.error ?? "phase schedule failed",
+						recoveryAction: "none",
+						sideEffects: "possible",
+					},
+				};
 			}
 
-			if (submit.kind === "ambiguous" || submit.kind === "accepted") {
-				const handle = submit.kind === "accepted" ? submit.handle : submit.handle;
-				if (handle) {
-					handles.set(runId, handle);
-					// Persist handle + lease on run for restart reconcile (D9)
-					run = {
-						...run,
-						providerHandle: handle,
-						providerLeaseEpoch:
-							submit.kind === "accepted" ? submit.leaseEpoch : undefined,
-						providerName: provider.name,
-						updatedAt: Date.now(),
-						runVersion: run.runVersion + 1,
-					};
-					run = emit(run, {
-						type: "Generic",
-						kind: "ProviderHandleBound",
-						data: {
-							handle,
-							leaseEpoch: submit.kind === "accepted" ? submit.leaseEpoch : undefined,
-							providerName: provider.name,
-						},
-					});
-				}
-
-				if (submit.kind === "ambiguous" || (handle && provider.isLive?.(handle))) {
-					// Enter reconciling
-					run = {
-						...run,
-						status: "unknown",
-						stage: "reconciling",
-						updatedAt: Date.now(),
-						runVersion: run.runVersion + 1,
-					};
-					run = emit(run, { type: "ReconcileStarted", runId, attempt: 1 });
-
-					const outcome = await boundedReconcile(provider, handle!, reconcileBudget);
-					run = applyReconcileToRun(run, outcome);
-
-					if (outcome.exhausted) {
-						coordinator.markOrphanSuspect(reservation.reservationId);
-						run = emit(run, { type: "ReconcileSettled", runId, outcome: "exhausted" });
-						run = emit(run, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" });
-						const snap: RunSnapshot = {
-							run,
-							controlError: reconcileRequiredError(
-								"auto-reconcile exhausted; run remains unknown; no final Receipt",
-								{
-									commandId,
-									projectId: store.header.projectId,
-									controlDomainId: store.header.controlDomainId,
-								},
-							),
-							receipt: null,
-						};
-						return { ok: false, run, snapshot: snap, error: snap.controlError };
-					}
-
-					if (outcome.terminal) {
-						run = emit(run, {
-							type: "RunStatusChanged",
-							runId,
-							status: run.status,
-							stage: "terminal",
-						});
-						// Release + receipt only on true terminal
-						if (isTerminalRunStatus(run.status) && canNormalRelease({
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						})) {
-							coordinator.normalRelease(reservation.reservationId, {
-								noLiveOrAmbiguousSideEffects: true,
-								runIsTerminal: true,
-								runIsParkedAndFutureDispatchRequiresReadmission: false,
-							});
-						}
-						if (outcome.terminal === "completed" || run.status === "completed") {
-							const receipt = issueReceipt(run, boundPlan);
-							run = { ...run, receiptId: receipt.receiptId, status: "completed", stage: "terminal" };
-							run = emit(run, { type: "ReceiptIssued", runId, receiptId: receipt.receiptId }, undefined, receipt);
-							return { ok: true, run, receipt, snapshot: { run, receipt } };
-						}
-						return { ok: false, run, snapshot: { run, receipt: null } };
-					}
-				}
-
-				// Happy path: poll until terminal (real script providers are async).
-				if (handle) {
-					const pollDeadline = Date.now() + (reconcileBudget.deadlineMs ?? 30_000);
-					let collected = await provider.poll(handle);
-					while (collected.kind === "still-running" && Date.now() < pollDeadline) {
-						await new Promise((r) => setTimeout(r, 10));
-						collected = await provider.poll(handle);
-					}
-					if (collected.kind === "completed") {
-						run = {
-							...run,
-							status: "completed",
-							stage: "terminal",
-							finalOutput: collected.output,
-							updatedAt: Date.now(),
-							runVersion: run.runVersion + 1,
-						};
-						run = emit(run, {
-							type: "RunStatusChanged",
-							runId,
-							status: "completed",
-							stage: "terminal",
-						});
-						coordinator.normalRelease(reservation.reservationId, {
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						});
-						const receipt = issueReceipt(run, boundPlan);
-						// Fail-closed assurance: only claim ok when we have real provider completed outcome
-						const receiptHonest: typeof receipt = {
-							...receipt,
-							assurance: {
-								...receipt.assurance,
-								providerOutcome: "ok",
-								journalContinuity: "ok",
-								artifactIntegrity: "unknown",
-								provenance: "ok",
-							},
-						};
-						run = { ...run, receiptId: receiptHonest.receiptId };
-						run = emit(
-							run,
-							{ type: "ReceiptIssued", runId, receiptId: receiptHonest.receiptId },
-							undefined,
-							receiptHonest,
-						);
-						return { ok: true, run, receipt: receiptHonest, snapshot: { run, receipt: receiptHonest } };
-					}
-					if (collected.kind === "failed") {
-						run = {
-							...run,
-							status: "failed",
-							stage: "terminal",
-							error: collected.error,
-							updatedAt: Date.now(),
-							runVersion: run.runVersion + 1,
-						};
-						run = emit(run, {
-							type: "RunStatusChanged",
-							runId,
-							status: "failed",
-							stage: "terminal",
-						});
-						coordinator.normalRelease(reservation.reservationId, {
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						});
-						// No final Receipt on failed terminal without explicit success evidence (fail-closed)
-						return { ok: false, run, snapshot: { run, receipt: null } };
-					}
-					if (collected.kind === "cancelled") {
-						run = {
-							...run,
-							status: "cancelled",
-							stage: "terminal",
-							updatedAt: Date.now(),
-							runVersion: run.runVersion + 1,
-						};
-						run = emit(run, {
-							type: "RunStatusChanged",
-							runId,
-							status: "cancelled",
-							stage: "terminal",
-						});
-						coordinator.normalRelease(reservation.reservationId, {
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						});
-						return { ok: false, run, snapshot: { run, receipt: null } };
-					}
-					if (collected.kind === "still-running") {
-						const outcome = await boundedReconcile(provider, handle, reconcileBudget);
-						run = applyReconcileToRun(run, outcome);
-						if (outcome.exhausted) {
-							coordinator.markOrphanSuspect(reservation.reservationId);
-							run = emit(run, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" });
-							const err = reconcileRequiredError("provider still running after budget", {
-								commandId,
-								projectId: store.header.projectId,
-								controlDomainId: store.header.controlDomainId,
-							});
-							return { ok: false, run, error: err, snapshot: { run, controlError: err, receipt: null } };
-						}
-						if (outcome.terminal === "completed") {
-							coordinator.normalRelease(reservation.reservationId, {
-								noLiveOrAmbiguousSideEffects: true,
-								runIsTerminal: true,
-								runIsParkedAndFutureDispatchRequiresReadmission: false,
-							});
-							const receipt = issueReceipt(run, boundPlan);
-							run = { ...run, receiptId: receipt.receiptId };
-							run = emit(run, { type: "ReceiptIssued", runId, receiptId: receipt.receiptId }, undefined, receipt);
-							return { ok: true, run, receipt, snapshot: { run, receipt } };
-						}
-					}
-				}
-			}
-
-			return { ok: false, run, error: { code: "TF_COMMAND_FAILED", message: "unhandled provider path", recoveryAction: "operator", sideEffects: "unknown" } };
+			run = {
+				...run,
+				status: "completed",
+				stage: "terminal",
+				finalOutput: scheduled.finalOutput,
+				updatedAt: Date.now(),
+				runVersion: run.runVersion + 1,
+			};
+			run = emit(run, {
+				type: "RunStatusChanged",
+				runId,
+				status: "completed",
+				stage: "terminal",
+			});
+			coordinator.normalRelease(reservation.reservationId, {
+				noLiveOrAmbiguousSideEffects: true,
+				runIsTerminal: true,
+				runIsParkedAndFutureDispatchRequiresReadmission: false,
+			});
+			const receipt = issueReceipt(run, boundPlan);
+			const receiptHonest: typeof receipt = {
+				...receipt,
+				assurance: {
+					...receipt.assurance,
+					providerOutcome: "ok",
+					journalContinuity: "ok",
+					artifactIntegrity: "unknown",
+					provenance: "unknown",
+				},
+			};
+			run = { ...run, receiptId: receiptHonest.receiptId };
+			run = emit(
+				run,
+				{ type: "ReceiptIssued", runId, receiptId: receiptHonest.receiptId },
+				undefined,
+				receiptHonest,
+			);
+			return { ok: true, run, receipt: receiptHonest, snapshot: { run, receipt: receiptHonest } };
 		},
 
 		getSnapshot(runId: string): RunSnapshot | null {

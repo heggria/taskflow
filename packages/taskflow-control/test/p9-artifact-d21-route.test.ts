@@ -105,7 +105,7 @@ test("artifact URI: relative ok; traversal and absolute escape rejected", () => 
 	}
 });
 
-test("D21 tryControlPlaneRun: script-only DEFAULTS to ControlHost (no env); exit 37 fails; agent not handled", async () => {
+test("D21 tryControlPlaneRun: DEFAULTS to ControlHost; exit 37 fails; agent handled (fails without llm)", async () => {
 	const t = temp();
 	try {
 		// Default ON — no TASKFLOW_CONTROL_PLANE, no force
@@ -144,15 +144,22 @@ test("D21 tryControlPlaneRun: script-only DEFAULTS to ControlHost (no env); exit
 			assert.match(fail.text, /37|failed/i);
 		}
 
+		// Agent phases are handled by ControlHost; without llmProvider they fail closed
+		// (no silent fallthrough to 0.2).
 		const agentOnly = await tryControlPlaneRun(
 			t.project,
 			{
 				name: "a",
 				phases: [{ id: "main", type: "agent", agent: "executor", task: "x", final: true }],
 			},
-			{ env },
+			{ env, commandId: "route-agent-no-llm" },
 		);
-		assert.equal(agentOnly.handled, false);
+		assert.equal(agentOnly.handled, true);
+		if (agentOnly.handled) {
+			assert.equal(agentOnly.ok, false);
+			assert.equal(agentOnly.viaControlHost, true);
+			assert.match(agentOnly.text, /LLM ExecutionProvider|no LLM|failed/i);
+		}
 
 		// Explicit opt-out → not handled (falls through to 0.2 engine)
 		const off = await tryControlPlaneRun(

@@ -1,15 +1,16 @@
 /**
  * D21 bridge: MCP taskflow_run routing into ControlHost.
  *
- * **Default (GA path):** script-only programs always run on ControlHost +
- * ScriptExecutionProvider — no Mock, no silent 0.2 dual scheduler for scripts.
+ * **Default (GA path):** ControlHost is the admit surface for all programs when
+ * control plane is enabled. Script phases use ScriptExecutionProvider; agent
+ * phases use an optional host LLM ExecutionProvider (injected by MCP host).
  *
  * Opt-out: TASKFLOW_CONTROL_PLANE=0|false|off forces fall-through to the 0.2
- * engine (tests / emergency). Agent/LLM phases still fall through until a host
- * LLM ExecutionProvider is bound.
+ * engine (tests / emergency only). Production must not rely on silent fallback.
  */
 import { createControlHost } from "./control-host.ts";
-import { createScriptExecutionProvider, isScriptOnlyProgram } from "./script-provider.ts";
+import { createScriptExecutionProvider } from "./script-provider.ts";
+import type { ExecutionProvider } from "./provider.ts";
 
 export type ControlPlaneRouteResult =
 	| {
@@ -25,7 +26,7 @@ export type ControlPlaneRouteResult =
 	| { handled: false; reason: string };
 
 /**
- * Control plane is ON for script-only by default.
+ * Control plane is ON by default.
  * Explicit disable: TASKFLOW_CONTROL_PLANE=0|false|off
  */
 export function controlPlaneEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -36,8 +37,8 @@ export function controlPlaneEnabled(env: NodeJS.ProcessEnv = process.env): boole
 }
 
 /**
- * Attempt to run a program on ControlHost (script provider).
- * Returns handled:false when control plane disabled or program is not script-only.
+ * Attempt to run a program on ControlHost (per-phase schedule).
+ * Returns handled:false only when control plane is explicitly disabled.
  */
 export async function tryControlPlaneRun(
 	cwd: string,
@@ -48,17 +49,13 @@ export async function tryControlPlaneRun(
 		/** Force attempt even if TASKFLOW_CONTROL_PLANE=0 (tests). */
 		force?: boolean;
 		env?: NodeJS.ProcessEnv;
+		/** Host LLM provider for agent phases (from SubagentRunner). */
+		llmProvider?: ExecutionProvider;
 	},
 ): Promise<ControlPlaneRouteResult> {
 	const env = opts?.env ?? process.env;
 	if (!opts?.force && !controlPlaneEnabled(env)) {
 		return { handled: false, reason: "TASKFLOW_CONTROL_PLANE disabled" };
-	}
-	if (!isScriptOnlyProgram(program)) {
-		return {
-			handled: false,
-			reason: "program is not script-only; requires host LLM ExecutionProvider on ControlHost",
-		};
 	}
 
 	const host = createControlHost({
@@ -66,9 +63,10 @@ export async function tryControlPlaneRun(
 		env,
 		controlMode: "standalone",
 		skipSingleton: true,
-		provider: createScriptExecutionProvider({
+		scriptProvider: createScriptExecutionProvider({
 			stateDir: `${cwd}/.taskflow/control/provider-jobs`,
 		}),
+		llmProvider: opts?.llmProvider,
 	});
 	try {
 		const result = await host.admitAndRun({

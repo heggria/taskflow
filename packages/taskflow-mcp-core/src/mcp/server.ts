@@ -811,22 +811,12 @@ export function makeToolHandlers(
 			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
 
-			// D21: script-only flows default to ControlHost (all host adapters share this
-			// MCP core). Opt-out: TASKFLOW_CONTROL_PLANE=0. Agent phases fall through to
-			// the host SubagentRunner until an LLM ExecutionProvider is bound.
-			try {
-				const { tryControlPlaneRun } = await import("taskflow-control");
-				const routed = await tryControlPlaneRun(cwd, def, {
-					commandId: typeof args.commandId === "string" ? args.commandId : undefined,
-					principal: typeof args.principal === "string" ? args.principal : `mcp:${host ?? "unknown"}`,
-				});
-				if (routed.handled) {
-					return textContent(routed.text, !routed.ok);
-				}
-			} catch {
-				/* control package unavailable or route error → fall through to 0.2 engine */
-			}
+			// Shared discovery for both control-plane and 0.2 paths.
+			const settings = readSubagentSettings();
+			const agentScope = def.agentScope ?? "both";
+			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
 
+			// Budget fail-closed BEFORE any execution path (ControlHost or 0.2).
 			const usageAccounting = runner.usageAccounting;
 			if (def.budget && usageAccounting === "unavailable") {
 				return textContent(
@@ -841,13 +831,76 @@ export function makeToolHandlers(
 				);
 			}
 
-			// Resolve model roles (e.g. {{fast}} -> a real model id) so the built-in
-			// agents' placeholder models map to something the host can launch. This is
-			// the same lookup the pi adapter does; without it every phase fails with
-			// "Model metadata for {{fast}} not found".
-			const settings = readSubagentSettings();
-			const agentScope = def.agentScope ?? "both";
-			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
+			// Background mode still uses the 0.2 detached runner (process + .pi store).
+			// ControlHost async admit / shared ControlStore wait is PARTIAL (mandate 3/9)
+			// until daemon-backed background lands. Do not route background through
+			// sync tryControlPlaneRun (would block and ignore detachedRunner).
+			const isBackground = args.mode === "background";
+
+			// D21: Foreground ControlHost when control plane is enabled (default ON).
+			// Script phases → ScriptExecutionProvider; agent → host LLM ExecutionProvider.
+			// Opt-out: TASKFLOW_CONTROL_PLANE=0|false|off. Mandate 3: no silent
+			// fallthrough on control-plane errors when enabled.
+			if (!isBackground) {
+				try {
+					const {
+						tryControlPlaneRun,
+						createHostLlmExecutionProvider,
+					} = await import("taskflow-control");
+					const llmProvider = createHostLlmExecutionProvider({
+						runTask: async (req) => {
+							const result = await runner.runTask(
+								req.cwd,
+								agents,
+								req.agent,
+								req.task,
+								{
+									cwd: req.cwd,
+									signal: req.signal ?? context?.signal,
+								},
+								settings.globalThinking,
+							);
+							const failed =
+								result.exitCode !== 0 ||
+								Boolean(result.errorMessage) ||
+								Boolean(result.idleTimeout) ||
+								Boolean(result.phaseTimeout);
+							return {
+								ok: !failed,
+								output: result.output ?? "",
+								error: result.errorMessage,
+								exitCode: result.exitCode,
+							};
+						},
+					});
+					const routed = await tryControlPlaneRun(cwd, def, {
+						commandId: typeof args.commandId === "string" ? args.commandId : undefined,
+						principal: typeof args.principal === "string" ? args.principal : `mcp:${host ?? "unknown"}`,
+						llmProvider,
+					});
+					if (routed.handled) {
+						return textContent(routed.text, !routed.ok);
+					}
+					// handled:false only when TASKFLOW_CONTROL_PLANE is explicitly off
+				} catch (cpErr) {
+					const { controlPlaneEnabled } = await import("taskflow-control").catch(() => ({
+						controlPlaneEnabled: () => true,
+					}));
+					if (controlPlaneEnabled()) {
+						const msg = cpErr instanceof Error ? cpErr.message : String(cpErr);
+						return textContent(
+							[
+								"✗ control-plane unavailable (no legacy fallthrough)",
+								`error: ${msg}`,
+								"Set TASKFLOW_CONTROL_PLANE=0 only for emergency 0.2 fallthrough.",
+							].join("\n"),
+							true,
+						);
+					}
+				}
+			}
+
+			// 0.2 engine path: background always; foreground only when CP disabled.
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
@@ -862,7 +915,7 @@ export function makeToolHandlers(
 				},
 			};
 			const state = mkRunState(def, resolvedArgs, cwd, host);
-			if (args.mode === "background") {
+			if (isBackground) {
 				if (!opts?.detachedRunner) {
 					return textContent(
 						"Background mode is unavailable because this MCP host did not provide a detached runner binding.",

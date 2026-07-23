@@ -12,3 +12,5 @@ data/
 .pi/teams/
 .pi/agents/
 .crew/
+.taskflow/
+.scratch/
