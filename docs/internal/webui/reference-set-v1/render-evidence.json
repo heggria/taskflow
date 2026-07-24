@@ -37,7 +37,7 @@
     "needs-input-decision": "sha256:757621dfed31882a958a53a07d563c235b967c4ee9227786a964235043d3f015",
     "pro-evidence-receipt": "sha256:ad1d2e076694d57b85e6f547c99a71a1ffcaf0669ef998839a1d8c70d8b32b37",
     "pro-graph-node-inspector": "sha256:a32b48c8eab63e719e46eedd04d17051f423a426610be2ce6051bb71a543f832",
-    "settings-session": "sha256:428693e75e518aa0122d0d59cc8cd2d5b3397b9e46a230ac54f282034eb36750",
+    "settings-session": "sha256:38d9db57d2cd0ce244f89e0fa18ee87ca8225a4d50574d34c2510e4833707927",
     "simple-home-empty": "sha256:9f92aba13cbc403bb8d911bebf7d63f2d207571a5c66d2c1e9e061731769646c",
     "simple-home-partial-disconnected": "sha256:19a8d060a53e63a9dfa2053a6de711b230c87d1b507daa489644ccc4f0062077",
     "unknown-reconciling": "sha256:53572b009cddc7f63153df779e91ee25c816af6c531581f5713e219769d22f5b"
@@ -204,7 +204,7 @@
       "theme": "light",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/pro-graph--pro-graph-node-inspector--en--light--1024x768.png",
-      "sha256": "sha256:7a52ce0634cbf34afca0aaabd5506284fc8187e5702352f53231254888a7e924",
+      "sha256": "sha256:33e7fdf1689c6a6346208696ad943a2327fe96ab9a5427a1114ff24506f33f87",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -248,7 +248,7 @@
       "theme": "light",
       "viewport": "320-css-px",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--en--light--320-css-px.png",
-      "sha256": "sha256:ce95680be73528e592d7582ccc35b277fac5d6d4bcd5dd46a43f5a8b2d389e86",
+      "sha256": "sha256:4460f061e5b34fecfe877e9dda9279c99f201e017d727dc12c5b646aa672d0cf",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": 0
     },
@@ -446,7 +446,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--en--dark--1440x900.png",
-      "sha256": "sha256:622f684ac305aa7f46c84685673ef8a544dce5ee087bdd9854e21ed279eb4cea",
+      "sha256": "sha256:f767a4dfa8ea7bdeb983ea643eff7ae8d68128abf47740b0be2053573d40cb69",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -457,7 +457,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/active-task--active-task-result--en--dark--1440x900.png",
-      "sha256": "sha256:40f83d4b01a6b7717251916a66d90350ef388139259a3ab75a27adf3335e030d",
+      "sha256": "sha256:aaa86238395e5c719b05dbb8ebd80f7dc52552b9f08f4d5b2a1054d14175a187",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -490,7 +490,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/unknown-reconciling--unknown-reconciling--en--dark--1440x900.png",
-      "sha256": "sha256:5e37105e4fca5d89d68f33a1dfe949bf3cda2c249bb570af387c619ca43e7cd3",
+      "sha256": "sha256:553ded510b142dccc717bd56e0f4aaccd67a11064ddc25a99cc977aa3dc1c572",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -534,7 +534,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--en--dark--1440x900.png",
-      "sha256": "sha256:73e1b0deb4ef6d1e5ffa9465a8cd53b385b0477ac1ad77bd4c5934dfc3273334",
+      "sha256": "sha256:7611aebae5c40d5872e29f0b5b1f6b0178f60fb7dc1833c7228ca1d51a637880",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -545,7 +545,7 @@
       "theme": "dark",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--en--dark--1024x768.png",
-      "sha256": "sha256:4efe53fce0dba470b3924af2683f2b1e1f889bf0d978e2d7fedc03df0086b6ef",
+      "sha256": "sha256:bf0c72761b6eb4eea78272457a7a05453dc36cfe5ab20b5d278712a396690282",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -633,7 +633,7 @@
       "theme": "dark",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--en--dark--1024x768.png",
-      "sha256": "sha256:69e66f2d96015595c2e8a93fcd6d58392aa04f045bee2d486a06bd19bb413d86",
+      "sha256": "sha256:8c4ac23b1b2c2295a31ac0c22772900bb8583e4067fe27ee201757457bdabe36",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -644,7 +644,7 @@
       "theme": "dark",
       "viewport": "320-css-px",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--en--dark--320-css-px.png",
-      "sha256": "sha256:66faf32a68851160d7bc301937646a5de097bb9b7de8fd6af9b0418a471899de",
+      "sha256": "sha256:e52db73e2baf20f08d15a64b69876853a05e720328256d10b2baaec30e7f3096",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -732,7 +732,7 @@
       "theme": "dark",
       "viewport": "320-css-px",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--en--dark--320-css-px.png",
-      "sha256": "sha256:c2b5eb8c449c04689c8c8b86ba333fa887878a8cfa63decd284d9ef070da4f41",
+      "sha256": "sha256:70157ca40ab1b0407e5b7cb43367cbb6e48a0c1636929e5183b7ebbb35ff1687",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -842,7 +842,7 @@
       "theme": "light",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--zh-CN--light--1440x900.png",
-      "sha256": "sha256:8cb6ce34bb0b2c90b9088ec08a4a345b73189953abde0a1f81a0e1fc71bdbd67",
+      "sha256": "sha256:30d9e543f3833a8d0727d07ff2e9fe2d3ee39e08d260a634eccf125e35f90388",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": 0
     },
@@ -875,7 +875,7 @@
       "theme": "light",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/completed-task--completed-verified--zh-CN--light--1440x900.png",
-      "sha256": "sha256:53a7c9774cad964aede833cf9ed4e77e67f8a2a79d9c8cb167786501047142c7",
+      "sha256": "sha256:ebd21da72d3c0d2be1233fa820253043b73cb86c47c516f50132a754a2ebb86f",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": 0
     },
@@ -941,7 +941,7 @@
       "theme": "light",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--zh-CN--light--1024x768.png",
-      "sha256": "sha256:1cee2b78840502e021efcef743de8105b3089fde8948ed840223c20d53c264cf",
+      "sha256": "sha256:777ec46fad4a900ba792f665176ce0ae384d3dfa6d575236e8bab19f953881c2",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -952,7 +952,7 @@
       "theme": "light",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/active-task--active-task-result--zh-CN--light--1024x768.png",
-      "sha256": "sha256:ea3e89312a3727c8dfd129b5b646ff012ce9b98de381c92ebab9276407fa0ec1",
+      "sha256": "sha256:7393fbabfeecb46841172e138668ee38317e224d251db8ad4ac52015db90c85d",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1007,7 +1007,7 @@
       "theme": "light",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/pro-evidence--pro-evidence-receipt--zh-CN--light--1024x768.png",
-      "sha256": "sha256:7ce74c9c47af587c22dc226e4cf5936732c6eb39afe2af7e0834b88391fdc364",
+      "sha256": "sha256:f869cf0441fa28b4b6f699b505daf822d28689254623c782da209407f151a40f",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1227,7 +1227,7 @@
       "theme": "light",
       "viewport": "200-percent-zoom",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--zh-CN--light--200-percent-zoom.png",
-      "sha256": "sha256:d19b5e0821cbf1399f37b9b66b83f3c25db3daa753720d590203532584fc6cd5",
+      "sha256": "sha256:b5c067c0046cb34b1dacb1685a26b858bcfab38b0915d07efd573844fa3e1560",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1249,7 +1249,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/active-task--active-task-result--zh-CN--dark--1440x900.png",
-      "sha256": "sha256:2b361085448d0bccb67d9d8fb72ec11f3b9589a0ea3a14b35b84850b106ac571",
+      "sha256": "sha256:a0433e07fec2489bd427203102299d9780be771bc4541ed707477cf85ae4deb3",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1282,7 +1282,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/unknown-reconciling--unknown-reconciling--zh-CN--dark--1440x900.png",
-      "sha256": "sha256:3977c4070250670f58adb225bcc1f559c5b076616dfc8dd01b34960df94e90a6",
+      "sha256": "sha256:ff8b9759d932834e0eee4a7f2a97218e9544321c9f70e28d803296320a9be51f",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1293,7 +1293,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/pro-graph--pro-graph-node-inspector--zh-CN--dark--1440x900.png",
-      "sha256": "sha256:5cd7bac2c778dd4f3c2cefbd198192064942032a37a0b6ce094e1a114bd9f67d",
+      "sha256": "sha256:07c81c9739053274eb43821c40a6d957304e867f477106b0daaf3bcd217eeabd",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1304,7 +1304,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/pro-evidence--pro-evidence-receipt--zh-CN--dark--1440x900.png",
-      "sha256": "sha256:102c2bcc91cda08049209678ec2423ad6995fb2ddb05b5dbe4e98e8515065e6b",
+      "sha256": "sha256:d490bb3d2f53844eff0c23d8d1b6a5316a9cf42e24556bb6c03e04decc20e1eb",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1326,7 +1326,7 @@
       "theme": "dark",
       "viewport": "1440x900",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--zh-CN--dark--1440x900.png",
-      "sha256": "sha256:9064c8c53455fd730e34962cfc3c2be780b4ee2968b6228b047531e33577810d",
+      "sha256": "sha256:6765b3d048e1550d22c618750105efaf16d703129d35920eb81ff389c5e88c84",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1337,7 +1337,7 @@
       "theme": "dark",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/simple-home--simple-home-partial-disconnected--zh-CN--dark--1024x768.png",
-      "sha256": "sha256:ffa964ae7eceb83fda938178cbfcc415727787384a4a229f94a6a122cdd3be7f",
+      "sha256": "sha256:49db542580f39c315598c4518bed328f2cf9ab89654ad07ca314a6f3caa898de",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1392,7 +1392,7 @@
       "theme": "dark",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/pro-graph--pro-graph-node-inspector--zh-CN--dark--1024x768.png",
-      "sha256": "sha256:9d28ab6ac36be070e71bd13ee254f79c34107612184875062561edcc9769982c",
+      "sha256": "sha256:8d472b932d8172500fe611e0415c0fde766db7fb816b69b7cf897631bd4c233b",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1425,7 +1425,7 @@
       "theme": "dark",
       "viewport": "1024x768",
       "path": "output/playwright/beta2-reference/error-recovery--error-command-outcome-unknown--zh-CN--dark--1024x768.png",
-      "sha256": "sha256:4dec0782c15a569e25053e50b0d144d6a8cd7d5630a928c8121ab38480ffc173",
+      "sha256": "sha256:3da016e45c39d795732855fff9c9bb0fa3db5ba78a67d469b00c99270fdcff9f",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1480,7 +1480,7 @@
       "theme": "dark",
       "viewport": "320-css-px",
       "path": "output/playwright/beta2-reference/unknown-reconciling--unknown-reconciling--zh-CN--dark--320-css-px.png",
-      "sha256": "sha256:c7efff7f8a773617ba0a1c6ffac8eb227d6e9ae6dc050e5eeb694aabf8ced38b",
+      "sha256": "sha256:1e33d0686a50711c9b9643e532a62a2b87f902bb0eada8af223881cabad381d0",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },
@@ -1513,7 +1513,7 @@
       "theme": "dark",
       "viewport": "320-css-px",
       "path": "output/playwright/beta2-reference/settings--settings-session--zh-CN--dark--320-css-px.png",
-      "sha256": "sha256:037a9d81ee644fbb47608cc14de2f3aaf5e4f6984e19979a32765d8673c85ee3",
+      "sha256": "sha256:b719233ab7c8804aef1da68b9519a6e23030b0ddcd3e539e3eb08ab631dfd832",
       "horizontalOverflow": false,
       "seriousOrCriticalA11yViolations": null
     },

@@ -10,12 +10,12 @@
     "version": "taskflow-content.v1",
     "keysetDigests": {
       "projected": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
-      "static": "sha256:b3610739da1c6afd358369059ccc9bf74c54519364a271f6b49114af148d0bbd",
-      "combined": "sha256:7eb98f11ea5d9ae8aed277610beeec92b0e09bfb2c3e7eed129389dc18369f07"
+      "static": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+      "combined": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
     },
     "catalogDigests": {
-      "en": "sha256:f8b3464b713aa015aafeb38dd8b4bcaec733ab26e74ad74beea04d5973b29d0c",
-      "zh-CN": "sha256:5a30db8e7103e172ebb4201164c30ec240e4e6834121677ea0f5b0fba9945889"
+      "en": "sha256:f54abecfbd770e162ba24101c64b49f8b60812fbaf44544b1a40caf1a2ae64c0",
+      "zh-CN": "sha256:8af0e1325cb91c7270d427810ba3136e380e6bb2124225c8e41ece52136a0805"
     }
   },
   "projectionVersions": {
@@ -284,9 +284,9 @@
           "fixtureId": "settings-session",
           "state": "simple-mode-session-active",
           "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/settings-session.json",
-          "sourceSha256": "sha256:d86abbf0ab62ec2919ce92b217cf5fec0d90f02cafb4e83afe3fbce5551bdef6",
+          "sourceSha256": "sha256:e3d748637f322fa4942b73be3b48d762e75ead4958e71e3ee89bea4cfc9db854",
           "projectionSha256": "sha256:edf44338e4dafcb80f6a203e8f5bf2e72f15440cef1e7697caf408a1e21e21cf",
-          "fixtureFileSha256": "sha256:428693e75e518aa0122d0d59cc8cd2d5b3397b9e46a230ac54f282034eb36750",
+          "fixtureFileSha256": "sha256:38d9db57d2cd0ce244f89e0fa18ee87ca8225a4d50574d34c2510e4833707927",
           "contentKeys": []
         }
       ],

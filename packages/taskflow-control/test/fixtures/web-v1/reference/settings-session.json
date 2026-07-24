@@ -21,8 +21,8 @@
     ],
     "contentKeysetDigests": {
       "projected": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
-      "static": "sha256:b3610739da1c6afd358369059ccc9bf74c54519364a271f6b49114af148d0bbd",
-      "combined": "sha256:7eb98f11ea5d9ae8aed277610beeec92b0e09bfb2c3e7eed129389dc18369f07"
+      "static": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+      "combined": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
     },
     "listenerId": "listener-1",
     "mode": "auto",

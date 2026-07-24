@@ -52,6 +52,7 @@ type BootState =
 			session?: WebSessionView;
 			bootstrap: WebBootstrapView;
 	  }
+	| { status: "terminated"; scope: "current" | "all" }
 	| { status: "failed"; error: unknown };
 
 type AppContextValue = {
@@ -62,6 +63,7 @@ type AppContextValue = {
 	readonly mode: DisplayMode;
 	readonly theme: ThemeMode;
 	readonly liveState: WebLiveState;
+	readonly endSession: (scope: "current" | "all") => void;
 	readonly setLocale: (locale: WebContentLocale) => void;
 	readonly setMode: (mode: DisplayMode) => void;
 	readonly setTheme: (theme: ThemeMode) => void;
@@ -482,6 +484,19 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	}, []);
 	const setTheme = useCallback((next: ThemeMode) => setThemeState(next), []);
 	const retryBoot = useCallback(() => setBootAttempt((value) => value + 1), []);
+	const endSession = useCallback(
+		(scope: "current" | "all") => {
+			csrfRef.current = undefined;
+			setCsrfToken(undefined);
+			clearRefreshStamps();
+			void queryClient.cancelQueries();
+			queryClient.clear();
+			liveStateRef.current = INITIAL_WEB_LIVE_STATE;
+			setLiveState(INITIAL_WEB_LIVE_STATE);
+			setBoot({ status: "terminated", scope });
+		},
+		[clearRefreshStamps, queryClient],
+	);
 	const refreshStampFor = useCallback(
 		(resource: WebAuthoritativeResourceIdentity) =>
 			refreshStampsRef.current.get(resourceKey(resource)),
@@ -509,6 +524,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			mode,
 			theme,
 			liveState,
+			endSession,
 			setLocale,
 			setMode,
 			setTheme,
@@ -521,6 +537,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			boot,
 			client,
 			csrfToken,
+			endSession,
 			locale,
 			liveState,
 			message,

@@ -173,6 +173,32 @@ function BrandMark(): React.JSX.Element {
 	);
 }
 
+function SessionEndedScreen({
+	scope,
+}: {
+	readonly scope: "current" | "all";
+}): React.JSX.Element {
+	const { t } = useApp();
+	const title = t("session.ended.headline");
+	useDocumentTitle(title);
+	return (
+		<main className="boot-page">
+			<section className="boot-card" aria-labelledby="session-ended-title">
+				<BrandMark />
+				<h1 id="session-ended-title">{title}</h1>
+				<p>
+					{t(
+						scope === "all"
+							? "session.ended.all-detail"
+							: "session.ended.current-detail",
+					)}
+				</p>
+				<p>{t("session.ended.next")}</p>
+			</section>
+		</main>
+	);
+}
+
 function DisplayModeSwitch(): React.JSX.Element {
 	const { mode, setMode, t } = useApp();
 	return (
@@ -196,6 +222,9 @@ function AppShell(): React.JSX.Element {
 	const [mobileOpen, setMobileOpen] = useState(false);
 
 	if (boot.status === "booting") return <BootScreen />;
+	if (boot.status === "terminated") {
+		return <SessionEndedScreen scope={boot.scope} />;
+	}
 	if (boot.status === "failed") {
 		return (
 			<main className="boot-page">
@@ -1856,6 +1885,7 @@ function SettingsPage(): React.JSX.Element {
 		boot,
 		client,
 		csrfToken,
+		endSession,
 		locale,
 		mode,
 		setLocale,
@@ -1881,8 +1911,8 @@ function SettingsPage(): React.JSX.Element {
 				body: { csrfToken },
 			});
 		},
-		onSuccess: () => {
-			window.location.assign("/");
+		onSuccess: (_response, action) => {
+			endSession(action);
 		},
 	});
 	return (

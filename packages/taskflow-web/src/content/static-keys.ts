@@ -179,6 +179,26 @@ export const WEB_STATIC_CONTENT_REGISTRY = {
 		"Every open Taskflow tab for this listener will lose access. Tasks will keep their current state.",
 		"这个监听器下所有已打开的 Taskflow 标签页都会失去访问权限，任务会保持现有状态。",
 	),
+	"session.ended.headline": staticEntry(
+		"shared",
+		"Browser access ended",
+		"浏览器访问已结束",
+	),
+	"session.ended.current-detail": staticEntry(
+		"shared",
+		"This tab no longer has access. Tasks kept their current state.",
+		"当前标签页已失去访问权限，任务保持原有状态。",
+	),
+	"session.ended.all-detail": staticEntry(
+		"shared",
+		"Every Taskflow tab for this listener no longer has access. Tasks kept their current state.",
+		"这个监听器下所有 Taskflow 标签页都已失去访问权限，任务保持原有状态。",
+	),
+	"session.ended.next": staticEntry(
+		"shared",
+		"Close this tab, or start Taskflow again to open a new session.",
+		"请关闭当前标签页，或重新启动 Taskflow 以打开新会话。",
+	),
 	"summary.task-count": {
 		args: [{ name: "count", kind: "count" }],
 		surface: "simple",

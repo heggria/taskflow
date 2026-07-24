@@ -71,15 +71,15 @@ test("content catalogs are complete, closed, bilingual, and startup-valid", () =
 	assert.doesNotThrow(() => assertWebContentCatalogsValid());
 	assert.equal(Object.keys(WEB_PROJECTED_CONTENT_CATALOG).length, 149);
 	assert.equal(WEB_PROJECTED_CONTENT_KEYS.length, 149);
-	assert.equal(WEB_STATIC_CONTENT_KEYS.length, 184);
-	assert.equal(WEB_COMBINED_CONTENT_KEYS.length, 333);
-	assert.equal(new Set(WEB_COMBINED_CONTENT_KEYS).size, 333);
+	assert.equal(WEB_STATIC_CONTENT_KEYS.length, 188);
+	assert.equal(WEB_COMBINED_CONTENT_KEYS.length, 337);
+	assert.equal(new Set(WEB_COMBINED_CONTENT_KEYS).size, 337);
 	assert.deepEqual(WEB_CONTENT_LOCALES, ["en", "zh-CN"]);
 	const material = webContentCanonicalMaterial();
 	assert.equal(material.projectedRegistry.length, 149);
-	assert.equal(material.staticRegistry.length, 184);
-	assert.equal(material.catalogs.en.length, 333);
-	assert.equal(material.catalogs["zh-CN"].length, 333);
+	assert.equal(material.staticRegistry.length, 188);
+	assert.equal(material.catalogs.en.length, 337);
+	assert.equal(material.catalogs["zh-CN"].length, 337);
 });
 
 test("reference manifest binds exact registry and locale-catalog digests", () => {

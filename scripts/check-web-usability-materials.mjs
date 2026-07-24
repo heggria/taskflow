@@ -116,7 +116,7 @@ assert.equal(zhReview.independentFromImplementation, false);
 assert.deepEqual(zhReview.requiredCoverage, {
   projectedKeys: 149,
   staticKeys: 184,
-  totalKeys: 333,
+  totalKeys: 337,
   screenFamilies: 9,
   renderEntries: 149,
 });

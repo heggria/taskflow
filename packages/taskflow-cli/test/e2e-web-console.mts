@@ -2029,10 +2029,19 @@ async function main(): Promise<void> {
 				.click();
 			await logoutResponse;
 			await expect(
-				logoutPage.locator(
-					".boot-page .error-panel",
-				),
+				logoutPage.getByRole("heading", {
+					name: "Browser access ended",
+					level: 1,
+				}),
 			).toBeVisible({ timeout: 15_000 });
+			await expect(logoutPage).toHaveTitle(
+				"Browser access ended · Taskflow",
+			);
+			await expect(
+				logoutPage.getByText(
+					"This tab no longer has access. Tasks kept their current state.",
+				),
+			).toBeVisible();
 			assert.equal(
 				await logoutPage.evaluate(async () => {
 					const response = await fetch(
@@ -2114,8 +2123,16 @@ async function main(): Promise<void> {
 				.click();
 			await revokeResponse;
 			await expect(
-				page.locator(".boot-page .error-panel"),
+				page.getByRole("heading", {
+					name: "Browser access ended",
+					level: 1,
+				}),
 			).toBeVisible({ timeout: 15_000 });
+			await expect(
+				page.getByText(
+					"Every Taskflow tab for this listener no longer has access. Tasks kept their current state.",
+				),
+			).toBeVisible();
 			assert.equal(
 				await revokedPeerPage.evaluate(async () => {
 					const response = await fetch(
