@@ -15,6 +15,12 @@ export type WebJsonResponseObservation = {
 export type WebJsonResponseObserver = (
 	observation: WebJsonResponseObservation,
 ) => void;
+export type WebUnauthorizedObserver = (
+	observation: Pick<
+		WebJsonResponseObservation,
+		"endpointId" | "path"
+	>,
+) => void;
 
 async function readBounded(
 	response: Response,
@@ -76,6 +82,7 @@ function artifactMetadata(response: Response): WebArtifactMetadata {
 export function createFetchWebTransport(
 	readCsrfToken: CsrfTokenReader,
 	observeJsonResponse?: WebJsonResponseObserver,
+	observeUnauthorized?: WebUnauthorizedObserver,
 ): WebClientTransport {
 	return {
 		async request(request: WebClientTransportRequest): Promise<unknown> {
@@ -103,6 +110,15 @@ export function createFetchWebTransport(
 				init.body = JSON.stringify(request.body);
 			}
 			const response = await fetch(request.path, init);
+			if (
+				response.status === 401 &&
+				request.endpointId !== "sessionExchange"
+			) {
+				observeUnauthorized?.({
+					endpointId: request.endpointId,
+					path: request.path,
+				});
+			}
 			const bytes = await readBounded(
 				response,
 				request.responseKind === "bytes"

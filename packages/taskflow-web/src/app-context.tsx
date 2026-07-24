@@ -210,6 +210,9 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	const responseObserverRef = useRef<
 		((observation: WebJsonResponseObservation) => void) | undefined
 	>(undefined);
+	const unauthorizedObserverRef = useRef<() => void>(
+		() => undefined,
+	);
 	const [csrfToken, setCsrfToken] = useState<string>();
 	const [liveState, setLiveState] = useState<WebLiveState>(
 		INITIAL_WEB_LIVE_STATE,
@@ -228,6 +231,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 				createFetchWebTransport(
 					() => csrfRef.current,
 					(observation) => responseObserverRef.current?.(observation),
+					() => unauthorizedObserverRef.current(),
 				),
 			),
 		[],
@@ -497,6 +501,9 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		},
 		[clearRefreshStamps, queryClient],
 	);
+	unauthorizedObserverRef.current = () => {
+		endSession("current");
+	};
 	const refreshStampFor = useCallback(
 		(resource: WebAuthoritativeResourceIdentity) =>
 			refreshStampsRef.current.get(resourceKey(resource)),

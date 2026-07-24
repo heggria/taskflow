@@ -2302,6 +2302,22 @@ async function main(): Promise<void> {
 					"Every Taskflow tab for this listener no longer has access. Tasks kept their current state.",
 				),
 			).toBeVisible();
+			await expect(
+				revokedPeerPage.getByRole("heading", {
+					name: "Browser access ended",
+					level: 1,
+				}),
+			).toBeVisible({
+				timeout:
+					bootstrapEnvelope.data
+						.pollingMinIntervalMs +
+					5_000,
+			});
+			await expect(
+				revokedPeerPage.getByText(
+					"This tab no longer has access. Tasks kept their current state.",
+				),
+			).toBeVisible();
 			assert.equal(
 				await revokedPeerPage.evaluate(async () => {
 					const response = await fetch(
