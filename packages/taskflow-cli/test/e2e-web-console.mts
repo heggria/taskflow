@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -67,6 +68,65 @@ const evidenceRoot = path.join(
 );
 const traceEnabled =
 	process.env.TASKFLOW_WEB_E2E_TRACE === "1";
+
+function readCandidateIdentity(): {
+	readonly gitCommit: string;
+	readonly trackedDirty: boolean;
+	readonly manifestSha256: string;
+	readonly webBuildId: string;
+	readonly packageVersion: string;
+} {
+	const manifestPath = path.join(
+		repositoryRoot,
+		"packages/taskflow-web/dist/app/taskflow-web-assets.json",
+	);
+	const buildInfoPath = path.join(
+		repositoryRoot,
+		"packages/taskflow-core/dist/build-info.json",
+	);
+	const manifestBytes = fs.readFileSync(manifestPath);
+	const manifest = JSON.parse(
+		manifestBytes.toString("utf8"),
+	) as {
+		readonly webBuildId?: unknown;
+		readonly packageVersion?: unknown;
+	};
+	const buildInfo = JSON.parse(
+		fs.readFileSync(buildInfoPath, "utf8"),
+	) as { readonly gitCommit?: unknown };
+	const head = spawnSync("git", ["rev-parse", "HEAD"], {
+		cwd: repositoryRoot,
+		encoding: "utf8",
+	});
+	assert.equal(head.status, 0, head.stderr);
+	const gitCommit = head.stdout.trim();
+	assert.match(gitCommit, /^[0-9a-f]{40}$/u);
+	assert.equal(buildInfo.gitCommit, gitCommit);
+	assert.equal(typeof manifest.webBuildId, "string");
+	assert.match(
+		manifest.webBuildId,
+		/^sha256:[0-9a-f]{64}$/u,
+	);
+	assert.equal(typeof manifest.packageVersion, "string");
+	const trackedStatus = spawnSync(
+		"git",
+		["status", "--porcelain", "--untracked-files=no"],
+		{
+			cwd: repositoryRoot,
+			encoding: "utf8",
+		},
+	);
+	assert.equal(trackedStatus.status, 0, trackedStatus.stderr);
+	return {
+		gitCommit,
+		trackedDirty: trackedStatus.stdout.trim().length > 0,
+		manifestSha256: `sha256:${createHash("sha256")
+			.update(manifestBytes)
+			.digest("hex")}`,
+		webBuildId: manifest.webBuildId,
+		packageVersion: manifest.packageVersion,
+	};
+}
 
 function trace(step: string): void {
 	if (traceEnabled) {
@@ -2359,6 +2419,8 @@ async function main(): Promise<void> {
 
 		const report = {
 			schemaVersion: 1,
+			measuredAt: new Date().toISOString(),
+			candidate: readCandidateIdentity(),
 			browserEngine: browserEngineName,
 			...(browserChannel
 				? { browserChannel }

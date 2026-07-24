@@ -40,6 +40,7 @@
     "test:e2e-web-console": "pnpm run build && node packages/taskflow-cli/test/e2e-web-console.mts",
     "test:e2e-web-console-chrome": "pnpm run build && TASKFLOW_WEB_BROWSER=chromium TASKFLOW_WEB_BROWSER_CHANNEL=chrome node packages/taskflow-cli/test/e2e-web-console.mts",
     "test:web-browser-matrix": "node scripts/test-web-browser-matrix.mjs",
+    "test:web-browser-matrix-native": "node scripts/test-web-browser-matrix.mjs --include-native-chrome",
     "test:web-packaged-compatibility": "node scripts/test-web-packaged-compatibility.mjs",
     "bench:web": "pnpm run build && node scripts/bench-web.mjs",
     "bench:web-smoke": "pnpm run build && node scripts/bench-web.mjs --smoke",
