@@ -181,7 +181,7 @@ test("approval continuation rejects unsettled, duplicate, and orphan output stat
 	);
 });
 
-test("ControlHost parks a real approval node with a private durable continuation", async () => {
+test("ControlHost parks and rejects a real approval node with truthful durable state", async () => {
 	const root = fs.mkdtempSync(
 		path.join(os.tmpdir(), "tf-approval-continuation-"),
 	);
@@ -281,6 +281,131 @@ test("ControlHost parks a real approval node with a private durable continuation
 		assert.equal(checkpoint.attempts.length, 1);
 		assert.equal(
 			host.store.getReceiptForRun(result.run!.runId),
+			null,
+		);
+		const rejected = await host.reject(result.run!.runId, {
+			commandId: "cmd-real-approval-reject",
+			principal: "local-reviewer",
+			expectedRunVersion: result.run!.runVersion,
+			approvalRequestId: approval!.approvalRequestId,
+		});
+		assert.equal(
+			rejected.ok,
+			true,
+			JSON.stringify(rejected.error),
+		);
+		assert.equal(rejected.run?.status, "blocked");
+		assert.equal(rejected.run?.stage, "terminal");
+		assert.deepEqual(
+			rejected.run?.nodes?.map((node) => [
+				node.nodeInstanceId,
+				node.status,
+			]),
+			[
+				["before", "completed"],
+				["review", "blocked"],
+				["after", "pending"],
+			],
+		);
+		assert.equal(
+			loadApprovalForRun(
+				project,
+				result.run!.runId,
+			)?.status,
+			"rejected",
+		);
+		assert.equal(
+			host.store.getReceiptForRun(result.run!.runId),
+			null,
+		);
+	} finally {
+		host.close();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("ControlHost expires a real approval node with truthful durable state", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-approval-expiration-"),
+	);
+	const project = path.join(root, "project");
+	const home = path.join(root, "home");
+	fs.mkdirSync(project, { recursive: true });
+	fs.mkdirSync(home, { recursive: true });
+	const host = createControlHost({
+		projectRoot: project,
+		controlMode: "standalone",
+		skipSingleton: true,
+		env: {
+			...process.env,
+			TASKFLOW_HOME: home,
+		},
+	});
+	try {
+		const parked = await host.admitAndRun({
+			commandId: "cmd-real-approval-expire",
+			program: {
+				name: "real-approval-expire",
+				phases: [
+					{
+						id: "before",
+						type: "script",
+						run: "printf before",
+					},
+					{
+						id: "review",
+						type: "approval",
+						dependsOn: ["before"],
+					},
+					{
+						id: "after",
+						type: "script",
+						dependsOn: ["review"],
+						run: "printf after",
+						final: true,
+					},
+				],
+			},
+		});
+		assert.equal(
+			parked.ok,
+			true,
+			JSON.stringify(parked.error),
+		);
+		assert.equal(parked.run?.status, "paused");
+		assert.equal(parked.run?.stage, "parked");
+
+		const expired = await host.expireApproval(
+			parked.run!.runId,
+			{ now: Date.now() + 1 },
+		);
+		assert.equal(
+			expired.ok,
+			true,
+			JSON.stringify(expired.error),
+		);
+		assert.equal(expired.run?.status, "blocked");
+		assert.equal(expired.run?.stage, "terminal");
+		assert.deepEqual(
+			expired.run?.nodes?.map((node) => [
+				node.nodeInstanceId,
+				node.status,
+			]),
+			[
+				["before", "completed"],
+				["review", "blocked"],
+				["after", "pending"],
+			],
+		);
+		assert.equal(
+			loadApprovalForRun(
+				project,
+				parked.run!.runId,
+			)?.status,
+			"expired",
+		);
+		assert.equal(
+			host.store.getReceiptForRun(parked.run!.runId),
 			null,
 		);
 	} finally {

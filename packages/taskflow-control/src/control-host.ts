@@ -3687,6 +3687,19 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						...run,
 						status: "blocked",
 						stage: "terminal",
+						...(run.nodes
+							? {
+									nodes: run.nodes.map((node) =>
+										node.nodeInstanceId ===
+										pendingApr.nodeInstanceId
+											? {
+													...node,
+													status: "blocked",
+												}
+											: node,
+									),
+								}
+							: {}),
 						updatedAt: Date.now(),
 						runVersion: run.runVersion + 1,
 						error: opts.note ?? "approval rejected",
@@ -3845,6 +3858,19 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						...run,
 						status: "blocked",
 						stage: "terminal",
+						...(run.nodes
+							? {
+									nodes: run.nodes.map((node) =>
+										node.nodeInstanceId ===
+										pendingApr.nodeInstanceId
+											? {
+													...node,
+													status: "blocked",
+												}
+											: node,
+									),
+								}
+							: {}),
 						updatedAt: Date.now(),
 						runVersion: run.runVersion + 1,
 						error: "approval expired",
