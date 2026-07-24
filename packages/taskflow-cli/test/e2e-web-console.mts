@@ -2321,6 +2321,18 @@ async function main(): Promise<void> {
 					level: 1,
 				}),
 			).toBeVisible({ timeout: 15_000 });
+			await revokedPeerPage.goto(
+				`${revokeLaunch.origin}/settings`,
+				{
+					waitUntil: "domcontentloaded",
+				},
+			);
+			await expect(
+				revokedPeerPage.getByRole("heading", {
+					name: "Settings",
+					level: 1,
+				}),
+			).toBeVisible();
 			sessionTerminationExpected = true;
 			await page.goto(`${reused.origin}/settings`, {
 				waitUntil: "domcontentloaded",

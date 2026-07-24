@@ -1882,7 +1882,9 @@ function SessionTerminationDialog({
 
 function SettingsPage(): React.JSX.Element {
 	const {
+		beginSessionTermination,
 		boot,
+		cancelSessionTermination,
 		client,
 		csrfToken,
 		endSession,
@@ -1898,18 +1900,24 @@ function SettingsPage(): React.JSX.Element {
 			if (!csrfToken) {
 				throw new Error("session authorization is unavailable");
 			}
-			if (action === "all") {
-				return client.sessionsRevokeAll({
+			beginSessionTermination(action);
+			try {
+				if (action === "all") {
+					return await client.sessionsRevokeAll({
+						params: {},
+						query: {},
+						body: { csrfToken },
+					});
+				}
+				return await client.sessionLogout({
 					params: {},
 					query: {},
 					body: { csrfToken },
 				});
+			} catch (error) {
+				cancelSessionTermination(action);
+				throw error;
 			}
-			return client.sessionLogout({
-				params: {},
-				query: {},
-				body: { csrfToken },
-			});
 		},
 		onSuccess: (_response, action) => {
 			endSession(action);

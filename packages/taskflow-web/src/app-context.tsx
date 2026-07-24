@@ -41,6 +41,13 @@ import {
 	createFetchWebTransport,
 	type WebJsonResponseObservation,
 } from "./api/fetch-transport.ts";
+import {
+	INITIAL_WEB_SESSION_LIFECYCLE_STATE,
+	reduceWebSessionLifecycle,
+	type WebSessionEndScope,
+	type WebSessionLifecycleEvent,
+	type WebSessionLifecycleState,
+} from "./session-lifecycle.ts";
 
 export type DisplayMode = "simple" | "pro";
 export type ThemeMode = "system" | "light" | "dark";
@@ -63,7 +70,9 @@ type AppContextValue = {
 	readonly mode: DisplayMode;
 	readonly theme: ThemeMode;
 	readonly liveState: WebLiveState;
-	readonly endSession: (scope: "current" | "all") => void;
+	readonly beginSessionTermination: (scope: WebSessionEndScope) => void;
+	readonly cancelSessionTermination: (scope: WebSessionEndScope) => void;
+	readonly endSession: (scope: WebSessionEndScope) => void;
 	readonly setLocale: (locale: WebContentLocale) => void;
 	readonly setMode: (mode: DisplayMode) => void;
 	readonly setTheme: (theme: ThemeMode) => void;
@@ -204,6 +213,9 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	);
 	const csrfRef = useRef<string | undefined>(undefined);
 	const liveStateRef = useRef<WebLiveState>(INITIAL_WEB_LIVE_STATE);
+	const sessionLifecycleRef = useRef<WebSessionLifecycleState>(
+		INITIAL_WEB_SESSION_LIFECYCLE_STATE,
+	);
 	const refreshStampsRef = useRef(
 		new Map<string, WebAuthorityRefreshStamp>(),
 	);
@@ -213,6 +225,9 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	const unauthorizedObserverRef = useRef<() => void>(
 		() => undefined,
 	);
+	const sessionRevocationObserverRef = useRef<
+		(scope: "current" | "all") => void
+	>(() => undefined);
 	const [csrfToken, setCsrfToken] = useState<string>();
 	const [liveState, setLiveState] = useState<WebLiveState>(
 		INITIAL_WEB_LIVE_STATE,
@@ -260,6 +275,13 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		[],
 	);
 	responseObserverRef.current = (observation) => {
+		if (observation.endpointId === "sessionLogout") {
+			sessionRevocationObserverRef.current("current");
+		} else if (
+			observation.endpointId === "sessionsRevokeAll"
+		) {
+			sessionRevocationObserverRef.current("all");
+		}
 		const stamp = responseRefreshStamp(
 			observation,
 			liveStateRef.current.invalidationEpoch,
@@ -317,6 +339,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		let polling = false;
 		let streamOpen = false;
 		let pollingTimer: number | undefined;
+		let sessionProbe: Promise<void> | undefined;
 		const eventSource = new EventSource("/api/v1/events");
 		const stopPolling = () => {
 			if (pollingTimer === undefined) return;
@@ -371,12 +394,45 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 				})();
 			}, boot.bootstrap.pollingMinIntervalMs);
 		};
+		const probeCurrentSession = () => {
+			if (
+				disposed ||
+				sessionProbe ||
+				sessionLifecycleRef.current.pendingScope !==
+					undefined
+			) {
+				return;
+			}
+			const probe = Promise.resolve()
+				.then(() =>
+					client.bootstrap({
+						params: {},
+						query: {},
+						body: {},
+					}),
+				)
+				.then(
+					() => undefined,
+					() => undefined,
+				)
+				.finally(() => {
+					if (sessionProbe === probe) sessionProbe = undefined;
+				});
+			sessionProbe = probe;
+		};
 		const degradeToPolling = () => {
 			streamOpen = false;
 			dispatchLiveEvent({
 				type: "stream-disconnected",
 				at: Date.now(),
 			});
+			// EventSource deliberately hides the reconnect response status.
+			// Make one deduplicated authenticated request immediately so a
+			// listener-wide revocation reaches the authoritative 401 observer
+			// even when the current route has no active data queries. A local
+			// logout/revoke request already in flight owns its exact scope and
+			// must settle before a generic current-tab probe can race it.
+			probeCurrentSession();
 			schedulePolling();
 		};
 		eventSource.onopen = () => {
@@ -475,6 +531,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			? boot.bootstrap.pollingMinIntervalMs
 			: undefined,
 		clearRefreshStamps,
+		client,
 		dispatchLiveEvent,
 		queryClient,
 	]);
@@ -488,8 +545,41 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	}, []);
 	const setTheme = useCallback((next: ThemeMode) => setThemeState(next), []);
 	const retryBoot = useCallback(() => setBootAttempt((value) => value + 1), []);
-	const endSession = useCallback(
-		(scope: "current" | "all") => {
+	const beginSessionTermination = useCallback(
+		(scope: WebSessionEndScope) => {
+			sessionLifecycleRef.current =
+				reduceWebSessionLifecycle(
+					sessionLifecycleRef.current,
+					{
+						type: "termination-started",
+						scope,
+					},
+				);
+		},
+		[],
+	);
+	const cancelSessionTermination = useCallback(
+		(scope: WebSessionEndScope) => {
+			sessionLifecycleRef.current =
+				reduceWebSessionLifecycle(
+					sessionLifecycleRef.current,
+					{
+						type: "termination-cancelled",
+						scope,
+					},
+				);
+		},
+		[],
+	);
+	const applySessionEnd = useCallback(
+		(event: WebSessionLifecycleEvent) => {
+			const lifecycle = reduceWebSessionLifecycle(
+				sessionLifecycleRef.current,
+				event,
+			);
+			sessionLifecycleRef.current = lifecycle;
+			const scope = lifecycle.terminatedScope;
+			if (!scope) return;
 			csrfRef.current = undefined;
 			setCsrfToken(undefined);
 			clearRefreshStamps();
@@ -501,9 +591,19 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		},
 		[clearRefreshStamps, queryClient],
 	);
+	const endSession = useCallback(
+		(scope: WebSessionEndScope) => {
+			applySessionEnd({
+				type: "termination-succeeded",
+				scope,
+			});
+		},
+		[applySessionEnd],
+	);
 	unauthorizedObserverRef.current = () => {
-		endSession("current");
+		applySessionEnd({ type: "unauthorized" });
 	};
+	sessionRevocationObserverRef.current = endSession;
 	const refreshStampFor = useCallback(
 		(resource: WebAuthoritativeResourceIdentity) =>
 			refreshStampsRef.current.get(resourceKey(resource)),
@@ -531,6 +631,8 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			mode,
 			theme,
 			liveState,
+			beginSessionTermination,
+			cancelSessionTermination,
 			endSession,
 			setLocale,
 			setMode,
@@ -542,6 +644,8 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		}),
 		[
 			boot,
+			beginSessionTermination,
+			cancelSessionTermination,
 			client,
 			csrfToken,
 			endSession,

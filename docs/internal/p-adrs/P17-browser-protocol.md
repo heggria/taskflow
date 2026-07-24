@@ -1079,6 +1079,8 @@ The listener permits at most eight live sessions. Each session permits 16 concur
 
 `POST /session/logout` revokes the current session and expires its cookie. `POST /sessions/revoke-all` revokes every session under the listener, expires the caller cookie, and closes SSE streams. Neither operation writes a ControlStore journal or changes execution truth.
 
+Because browser `EventSource` does not expose the HTTP status of a failed reconnect, an unexpected stream close starts one deduplicated authenticated `GET /bootstrap` session probe immediately, independent of route queries and the bounded polling cadence. A locally initiated logout or revoke-all request already in flight suppresses that generic probe until its response settles, so the successful response can preserve its exact requested scope. Outside a successful local revocation response, only an authoritative `401` from the probe or another authenticated JSON request moves the tab to the conservative current-session-ended state; a `401` never proves the broader requested scope. Network failure, timeout, or another status keeps the tab in disconnected/recovery presentation and must not be guessed as revocation.
+
 ## 10. Commands and pure analysis
 
 `WebCommandRequest` is a closed discriminated union:

@@ -1384,7 +1384,7 @@ packages/
 |-----------|-------------------|
 | Daemon unavailable in `auto` | Show bootstrap failure and explicit recovery; never silently create standalone authority. |
 | Protocol incompatible | Blocking compatibility page with client/daemon buildInfo and upgrade action. |
-| SSE disconnected | Set `streamState=disconnected`; retain snapshot without claiming authority, reconnect with backoff, disable mutations until home refresh. |
+| SSE disconnected | Set `streamState=disconnected`; retain snapshot without claiming authority; immediately start one deduplicated authenticated bootstrap probe because EventSource hides reconnect status. A local logout/revoke request already in flight suppresses the generic probe until its response settles, so success preserves the exact requested scope. Outside that success, only a real `401` ends the conservative current-tab session; `401` alone never proves a wider scope. Otherwise reconnect with backoff and disable mutations until home refresh. |
 | Cursor expired | Say that the page is out of date and that refresh will not rerun the Task; fetch checkpoint/bootstrap, replace projections, resubscribe. |
 | Registry partial/lost | Mark aggregate coverage partial; project reopen rebuilds identity from store header. |
 | Project moved/copied/worktree conflict | Show binding evidence and link to the separately authorized P3 CLI workflow; beta.2 offers no browser rebind/adopt/repair action. |
