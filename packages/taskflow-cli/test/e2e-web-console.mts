@@ -645,6 +645,7 @@ async function main(): Promise<void> {
 		await expect(
 			page.getByRole("heading", { level: 1 }),
 		).toBeVisible({ timeout: 15_000 });
+		await expect(page).toHaveTitle(/ · Taskflow$/u);
 		await expect(page.locator(".task-row")).toHaveCount(2);
 		const sseResponse = await sseResponsePromise;
 		trace("primary page and SSE ready");
@@ -1017,6 +1018,9 @@ async function main(): Promise<void> {
 				level: 1,
 			}),
 		).toBeVisible();
+		await expect(page).toHaveTitle(
+			"Stop a live verification · Taskflow",
+		);
 		const stopTask = page.getByRole("button", {
 			name: "Stop task",
 		});
@@ -1846,6 +1850,7 @@ async function main(): Promise<void> {
 					level: 1,
 				}),
 			).toBeVisible();
+			await expect(page).toHaveTitle("Settings · Taskflow");
 			const settingsModeSwitch = page
 				.locator(".settings-row")
 				.first()

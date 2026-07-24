@@ -81,7 +81,24 @@ function resolveBuild(root) {
 		],
 		"taskflow-web asset manifest",
 	);
+	const buildInfoPath = resolveFile(
+		root,
+		[
+			"packages/taskflow-core/dist/build-info.json",
+			"node_modules/taskflow-core/dist/build-info.json",
+		],
+		"taskflow-core build identity",
+	);
 	const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+	const buildInfo = JSON.parse(fs.readFileSync(buildInfoPath, "utf8"));
+	if (
+		typeof buildInfo.gitCommit !== "string" ||
+		!/^[0-9a-f]{40}$/iu.test(buildInfo.gitCommit)
+	) {
+		throw new Error(
+			`taskflow-core build identity in ${buildInfoPath} does not contain a concrete git commit`,
+		);
+	}
 	const staticRoot = path.dirname(manifestPath);
 	return {
 		root,
@@ -91,6 +108,11 @@ function resolveBuild(root) {
 		manifest,
 		staticRoot,
 		identity: {
+			gitCommit: buildInfo.gitCommit,
+			buildTime:
+				typeof buildInfo.buildTime === "number"
+					? buildInfo.buildTime
+					: null,
 			packageVersion: manifest.packageVersion,
 			manifestVersion: manifest.manifestVersion,
 			manifestSha256: `sha256:${createHash("sha256")
@@ -223,6 +245,11 @@ if (
 ) {
 	throw new Error(
 		"old-root and new-root resolve to the same asset build; historical compatibility evidence requires distinct immutable builds",
+	);
+}
+if (oldBuild.identity.gitCommit === newBuild.identity.gitCommit) {
+	throw new Error(
+		"old-root and new-root carry the same stamped git commit; historical compatibility evidence requires distinct immutable builds",
 	);
 }
 const pairs = [

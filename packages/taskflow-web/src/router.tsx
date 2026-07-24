@@ -330,6 +330,14 @@ function BootScreen(): React.JSX.Element {
 	);
 }
 
+function useDocumentTitle(title: string): void {
+	const { t } = useApp();
+	const brand = t("app.brand");
+	useEffect(() => {
+		document.title = title === brand ? brand : `${title} · ${brand}`;
+	}, [brand, title]);
+}
+
 function PageHeader({
 	eyebrow,
 	title,
@@ -341,6 +349,7 @@ function PageHeader({
 	readonly description?: string;
 	readonly actions?: ReactNode;
 }): React.JSX.Element {
+	useDocumentTitle(title);
 	return (
 		<header className="page-header">
 			<div>
@@ -1733,6 +1742,7 @@ function ProInvitation({
 	readonly onOpen: () => void;
 }): React.JSX.Element {
 	const { t } = useApp();
+	useDocumentTitle(title);
 	return (
 		<div className="page narrow-page">
 			<section className="pro-invitation">

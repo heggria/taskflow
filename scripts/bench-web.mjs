@@ -48,6 +48,30 @@ const RUNS_PER_PROJECT = 100;
 const RUN_COUNT = PROJECT_COUNT * RUNS_PER_PROJECT;
 const GRAPH_NODE_COUNT = 2_000;
 const BASE_TIME = 1_800_000_000_000;
+const BENCHMARK_SOURCE_SCOPES = Object.freeze([
+	"packages/taskflow-core/src",
+	"packages/taskflow-core/package.json",
+	"packages/taskflow-control/src",
+	"packages/taskflow-control/package.json",
+	"packages/taskflow-daemon/src",
+	"packages/taskflow-daemon/package.json",
+	"packages/taskflow-cli/src",
+	"packages/taskflow-cli/scripts",
+	"packages/taskflow-cli/package.json",
+	"packages/taskflow-web/src",
+	"packages/taskflow-web/scripts",
+	"packages/taskflow-web/index.html",
+	"packages/taskflow-web/package.json",
+	"packages/taskflow-web/vite.config.ts",
+	"packages/taskflow-web/tsconfig.build.json",
+	"scripts/bench-web.mjs",
+	"scripts/web-runtime-versions.mjs",
+	"package.json",
+	"pnpm-lock.yaml",
+	"pnpm-workspace.yaml",
+	"tsconfig.base.json",
+	"tsconfig.json",
+]);
 
 const argv = new Set(process.argv.slice(2));
 const smoke = argv.has("--smoke");
@@ -223,6 +247,7 @@ function graphNodes() {
 }
 
 function generateFixture() {
+	fs.mkdirSync(path.dirname(fixtureRoot), { recursive: true });
 	const buildRoot = fs.mkdtempSync(
 		path.join(path.dirname(fixtureRoot), ".web-bench-build-"),
 	);
@@ -831,18 +856,27 @@ function gitOutput(args) {
 
 function sourceDigest() {
 	const files = [
-		...fs.globSync("packages/taskflow-{web,control,daemon,cli}/src/**/*", {
+		...fs.globSync(
+			"packages/taskflow-{core,web,control,daemon,cli}/src/**/*",
+			{ cwd: repositoryRoot },
+		),
+		...fs.globSync("packages/taskflow-cli/scripts/**/*", {
 			cwd: repositoryRoot,
 		}),
 		...fs.globSync("packages/taskflow-web/scripts/**/*", {
 			cwd: repositoryRoot,
 		}),
+		...BENCHMARK_SOURCE_SCOPES.filter((relative) => {
+			const absolute = path.join(repositoryRoot, relative);
+			return (
+				fs.existsSync(absolute) &&
+				fs.statSync(absolute).isFile()
+			);
+		}),
 		"scripts/bench-web.mjs",
-		"package.json",
-		"pnpm-lock.yaml",
 	].sort();
 	const hash = createHash("sha256");
-	for (const relative of files) {
+	for (const relative of new Set(files)) {
 		const absolute = path.join(repositoryRoot, relative);
 		if (!fs.statSync(absolute).isFile()) continue;
 		hash.update(relative);
@@ -851,6 +885,17 @@ function sourceDigest() {
 		hash.update("\0");
 	}
 	return `sha256:${hash.digest("hex")}`;
+}
+
+function sourceDirty() {
+	return (
+		gitOutput([
+			"status",
+			"--porcelain",
+			"--",
+			...BENCHMARK_SOURCE_SCOPES,
+		]).length > 0
+	);
 }
 
 function assetEvidence() {
@@ -1730,8 +1775,7 @@ try {
 			measuredAt: new Date().toISOString(),
 			git: {
 				commit: gitOutput(["rev-parse", "HEAD"]),
-				dirty:
-					gitOutput(["status", "--porcelain"]).length > 0,
+				dirty: sourceDirty(),
 				sourceDigest: sourceDigest(),
 			},
 			fixture,
