@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-24T07:17:59Z",
+  "candidate": {
+    "branch": "codex/0.3.0-beta.2",
+    "gitCommit": "184fb5af9ee2f678e57ff33adc01e6c38fda1e59",
+    "trackedCandidateSourceDirty": false,
+    "webSourceDigest": "sha256:a411eb10d10229eed5e84c61712d635c42e0ff60c6cccb18fdef6d6ead764902",
+    "webManifestSha256": "sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f",
+    "webBuildId": "sha256:9e9d28bc51e7fa294acdc23ef74e02c48911375ec172770c77fbbc564812546a"
+  },
+  "environment": {
+    "browser": "Safari",
+    "browserVersion": "26.3",
+    "operatingSystem": "macOS 26.3",
+    "operatingSystemBuild": "25D125",
+    "localeObserved": "zh-CN"
+  },
+  "method": {
+    "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
+    "authority": "fresh isolated ControlStores seeded before the packaged browser scenario performed its automated mutations",
+    "interaction": "macOS accessibility tree plus native keyboard and accessibility actions",
+    "launchCapability": "independent one-time capability; value not retained",
+    "shutdownCheck": "manual-review process interrupted after revocation; loopback listener refused a subsequent connection"
+  },
+  "assertions": {
+    "oneTimeSessionExchangeCompleted": true,
+    "approvalQuestionAndBothConsequencesWereExposed": true,
+    "allowActionWasActivatedFromNativeKeyboardFocus": true,
+    "pendingCopyPreventedDuplicateSubmission": true,
+    "approvalWasAuthoritativelySettled": true,
+    "taskReachedCompleted": true,
+    "threeOfThreeStepsCompleted": true,
+    "partialVerificationRemainedVisible": true,
+    "resultWasPublished": true,
+    "revokeAllQuestionAndTaskPreservationConsequenceWereExposed": true,
+    "revokeAllWasAuthoritativelyApplied": true,
+    "signedOutDocumentTitleWasLocalized": true,
+    "signedOutHeadingWasBrowserAccessEnded": true,
+    "signedOutDetailSaidAllListenerTabsLostAccessAndTasksWereUnchanged": true,
+    "signedOutNextStepSaidToCloseTheTabOrRestartTaskflow": true,
+    "listenerClosedAfterTheReviewHold": true
+  },
+  "excludedClaims": [
+    "VoiceOver speech order, announcements, rotor navigation, or verbosity",
+    "native Safari reject, cancel-run, current-session logout, or independent peer-session invalidation",
+    "native Safari console, CSP, performance, or axe automation",
+    "human product, content, or comprehension approval"
+  ],
+  "result": "native-approval-and-revoke-all-smoke-pass"
+}

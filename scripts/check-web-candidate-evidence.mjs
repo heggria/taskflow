@@ -12,11 +12,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/83021958-to-fb765b21/report.json",
+	"artifacts/web-compat/83021958-to-184fb5af/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/fb765b21cc284cf70e84a577f190c4bce38d0a79",
+	"artifacts/web-bench/184fb5af9ee2f678e57ff33adc01e6c38fda1e59",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -27,6 +27,34 @@ const ledgerPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/immutable-candidate-evidence-v1.md",
 );
+const nativeSafariMutationPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-mutation-smoke-v1.json",
+);
+const candidateSourceScopes = [
+	"packages/taskflow-core/src",
+	"packages/taskflow-core/package.json",
+	"packages/taskflow-control/src",
+	"packages/taskflow-control/package.json",
+	"packages/taskflow-daemon/src",
+	"packages/taskflow-daemon/package.json",
+	"packages/taskflow-cli/src",
+	"packages/taskflow-cli/scripts",
+	"packages/taskflow-cli/package.json",
+	"packages/taskflow-web/src",
+	"packages/taskflow-web/scripts",
+	"packages/taskflow-web/index.html",
+	"packages/taskflow-web/package.json",
+	"packages/taskflow-web/vite.config.ts",
+	"packages/taskflow-web/tsconfig.build.json",
+	"scripts/bench-web.mjs",
+	"scripts/web-runtime-versions.mjs",
+	"package.json",
+	"pnpm-lock.yaml",
+	"pnpm-workspace.yaml",
+	"tsconfig.base.json",
+	"tsconfig.json",
+];
 
 function sha256File(file) {
 	return createHash("sha256")
@@ -85,6 +113,49 @@ assert.equal(
 	ancestry.status,
 	0,
 	"compatibility new build must descend from the old build",
+);
+const candidateAncestry = spawnSync(
+	"git",
+	["merge-base", "--is-ancestor", newBuild.gitCommit, "HEAD"],
+	{ cwd: repositoryRoot },
+);
+assert.equal(
+	candidateAncestry.status,
+	0,
+	"current evidence tip must descend from the immutable new build",
+);
+const sourceDrift = spawnSync(
+	"git",
+	[
+		"diff",
+		"--quiet",
+		newBuild.gitCommit,
+		"--",
+		...candidateSourceScopes,
+	],
+	{ cwd: repositoryRoot },
+);
+assert.equal(
+	sourceDrift.status,
+	0,
+	"candidate production or benchmark source changed after immutable evidence",
+);
+const sourceWorkingTree = spawnSync(
+	"git",
+	[
+		"status",
+		"--porcelain",
+		"--untracked-files=all",
+		"--",
+		...candidateSourceScopes,
+	],
+	{ cwd: repositoryRoot, encoding: "utf8" },
+);
+assert.equal(sourceWorkingTree.status, 0);
+assert.equal(
+	sourceWorkingTree.stdout.trim(),
+	"",
+	"candidate production or benchmark source is dirty",
 );
 assert.deepEqual(
 	compatibility.pairs.map((pair) => pair.label),
@@ -165,11 +236,55 @@ assertNoLocalPath(summaryBytes, "benchmark summary");
 assert.match(summaryBytes, new RegExp(newBuild.gitCommit, "u"));
 assert.match(summaryBytes, /Source: `[^`]+` \(clean\)/u);
 
+const nativeSafariMutationBytes = fs.readFileSync(
+	nativeSafariMutationPath,
+	"utf8",
+);
+assertNoLocalPath(
+	nativeSafariMutationBytes,
+	"native Safari mutation record",
+);
+const nativeSafariMutation = JSON.parse(nativeSafariMutationBytes);
+assert.equal(nativeSafariMutation.schemaVersion, 1);
+assert.equal(
+	nativeSafariMutation.result,
+	"native-approval-and-revoke-all-smoke-pass",
+);
+assert.equal(
+	nativeSafariMutation.candidate.gitCommit,
+	newBuild.gitCommit,
+);
+assert.equal(
+	nativeSafariMutation.candidate.trackedCandidateSourceDirty,
+	false,
+);
+assert.equal(
+	nativeSafariMutation.candidate.webSourceDigest,
+	benchmark.git.sourceDigest,
+);
+assert.equal(
+	nativeSafariMutation.candidate.webManifestSha256,
+	newBuild.manifestSha256,
+);
+assert.equal(nativeSafariMutation.environment.browser, "Safari");
+for (const [name, passed] of Object.entries(
+	nativeSafariMutation.assertions,
+)) {
+	assert.equal(passed, true, `native Safari assertion failed: ${name}`);
+}
+assert.equal(
+	nativeSafariMutation.excludedClaims.some((claim) =>
+		claim.includes("VoiceOver"),
+	),
+	true,
+);
+
 const ledger = fs.readFileSync(ledgerPath, "utf8");
 for (const file of [
 	compatibilityPath,
 	benchmarkPath,
 	benchmarkSummaryPath,
+	nativeSafariMutationPath,
 ]) {
 	assert.match(
 		ledger,

@@ -1376,10 +1376,12 @@ The executable implementation candidate now includes:
 - a real packaged cross-build harness that rejects identical asset manifests
   or stamped commits. Immutable candidates
   `83021958b61d65425847817f3b5d275bd048979a` and
-  `fb765b21cc284cf70e84a577f190c4bce38d0a79` pass both
+  `184fb5af9ee2f678e57ff33adc01e6c38fda1e59` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
-  contains immutable build identities and no local absolute paths;
+  contains immutable build identities and no local absolute paths. The
+  evidence checker rejects a non-descendant evidence tip or any production/
+  benchmark source drift after the new immutable build;
 - durable/recoverable BoundPlans plus conservative node/Attempt metadata and
   nineteen explicitly enumerated ControlStore/Coordinator read handlers;
 - all 29 registered WebGateway route slots, composed from session/bootstrap,
@@ -1442,8 +1444,12 @@ The executable implementation candidate now includes:
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has a separately scoped packaged read/keyboard/AX smoke; full Safari
-  mutation, Edge and assistive-technology review remain separate;
+  has separately scoped packaged read/keyboard/AX and approval/revoke-all
+  mutation smokes. The mutation smoke reaches completed 3/3 with honest
+  partial verification, applies listener-wide revocation, renders the
+  deterministic localized signed-out screen, and verifies listener close;
+  Safari reject/cancel/current-session/peer-session coverage, Edge and
+  assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1457,18 +1463,23 @@ At minimum, conformance work must still add or verify:
   new-client/old-server harness at the final reviewed tip. The first local
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
-- native Safari/Edge/assistive-technology and human review of the
-  approval-enhanced decision path. The exact checkpoint dispatcher, HTTP
-  approve/reject path, packaged Chromium/Firefox/WebKit decision flow,
-  four-prefix startup recovery, settled-work non-replay, and post-dispatch
-  ambiguity fail-closed fixtures are executable; automated Playwright engines
-  do not satisfy those native/manual gates;
+- the remaining native Safari decision/session cases, native Edge,
+  assistive-technology and human review of the approval-enhanced decision
+  path. Native Safari now has scoped approval and revoke-all execution
+  evidence, while reject, cancel, current-session logout and independent
+  peer-session invalidation remain unproven there. The exact checkpoint
+  dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
+  decision flow, four-prefix startup recovery, settled-work non-replay, and
+  post-dispatch ambiguity fail-closed fixtures are executable; automated
+  Playwright engines do not satisfy those remaining native/manual gates;
 - the raw 30-sample canonical M2/Node 24 latency/CLS report. The deterministic
   100-project/10,000-run/2,000-node packaged harness, project-local rebuildable
   read indexes, startup snapshot prewarm, commit-woken SSE invalidation,
   browser receipt/paint marks, standard CLS session-window measurement, and
-  JSON plus human summaries are implemented. The current M3 Pro/Node 24
-  30-sample structural pass remains informational;
+  JSON plus human summaries are implemented. Clean immutable commit
+  `184fb5af9ee2f678e57ff33adc01e6c38fda1e59` has a checked-in M3 Pro/
+  Node 24 30-sample structural pass, but the report also records high pre-run
+  load and large owner-launch outliers. It remains informational;
 - human approval of the 149 reference renders, the five-fresh-participant
   English comprehension record, and both native Simplified-Chinese content
   reviews using the frozen study protocol and hash-bound evidence;
