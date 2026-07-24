@@ -35,23 +35,24 @@ Simple-language guards. The loopback WebGateway implements all 29 registered
 route slots through session/bootstrap, authoritative read, pure-analysis,
 artifact, replay, durable-command, and event services. Its default capability
 set advertises only commands whose complete dispatch path exists
-(`cancel-run`); approval decisions remain visible but read-only rather than
-claiming an unavailable dispatcher.
+(`approve`, `reject`, and `cancel-run`); edit and recovery/capacity commands
+remain unadvertised rather than claiming unavailable dispatch paths.
 
 Executable evidence now includes signed page/stream cursor vectors and
 full-envelope continuation fixtures; session, CSRF, Host/Origin, static
 delivery, SSE and bounded polling fallback tests; a packaged CLI → daemon →
 WebGateway → real browser path over multiple mounted ControlStores; durable
-cancel and lost-response recovery; Receipt/artifact rendering; and 149
-hash-bound reference renders covering nine screen families, two locales, two
-themes, narrow/zoom conditions, and 36 serious/critical accessibility
-assessments. The reference set remains **draft/unapproved**, and the required
+cancel, approval recovery and lost-response handling; Receipt/artifact
+rendering; four scoped native Safari mutation smokes; and 149 hash-bound
+reference renders covering nine screen families, two locales, two themes,
+narrow/zoom conditions, and 36 serious/critical accessibility assessments.
+The reference set remains **draft/unapproved**, and the required
 five-participant English comprehension study plus independent native
-Simplified-Chinese review have not occurred. The complete §15 compatibility,
-hostile-input, platform, and endpoint/state conformance matrix is also not yet
-green. Therefore the module is an executable implementation candidate, not
-canonical frozen wire authority; neither document nor code may claim full
-conformance, wire freeze, or released WebUI.
+Simplified-Chinese review have not occurred. Canonical performance, native
+Edge/assistive-technology, reviewed-tip and separate freeze-review evidence
+also remain absent. Therefore the module is an executable implementation
+candidate, not canonical frozen wire authority; neither document nor code may
+claim full conformance, wire freeze, or released WebUI.
 
 ## 1. Conformance states and compatibility
 
@@ -1375,8 +1376,8 @@ The executable implementation candidate now includes:
   breaking changes;
 - a real packaged cross-build harness that rejects identical asset manifests
   or stamped commits. Immutable candidates
-  `83021958b61d65425847817f3b5d275bd048979a` and
-  `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` pass both
+  `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` and
+  `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
   contains immutable build identities and no local absolute paths. The
@@ -1444,14 +1445,18 @@ The executable implementation candidate now includes:
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has separately scoped packaged read/keyboard/AX, approval/revoke-all and
-  reject/current-session mutation smokes. The allow smoke reaches completed
-  3/3 with honest partial verification and applies listener-wide revocation.
-  The reject smoke reaches both choices through native Tab focus, persists the
-  approval node as blocked with downstream pending, and applies current-session
-  logout. Both render the appropriate deterministic localized signed-out
-  screen and verify listener close; Safari cancel/peer-session coverage, Edge
-  and assistive-technology review remain separate;
+  has separately scoped packaged read/keyboard/AX plus four mutation smokes.
+  Allow reaches completed 3/3 with honest partial verification and applies
+  listener-wide revocation. Reject reaches both choices through native Tab
+  focus, persists the approval node as blocked with downstream pending, and
+  applies current-session logout. Cancel settles both Run and the formerly
+  active node as stopped, retains unavailable verification, and invents no
+  result. Independent peer invalidation makes a native Safari target render
+  the deterministic localized session-ended screen rather than a generic page
+  failure after a separate authenticated P17 client revokes all sessions. The
+  latter does not claim an unlocked Safari private-window actor. Every passing
+  hold verifies listener close; Edge and assistive-technology review remain
+  separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1462,26 +1467,27 @@ The executable implementation candidate now includes:
 At minimum, conformance work must still add or verify:
 
 - repeat the now-green real packaged old-client/new-server plus
-  new-client/old-server harness at the final reviewed tip. The first local
+  new-client/old-server harness at the final reviewed tip. The latest local
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
-- the remaining native Safari decision/session cases, native Edge,
-  assistive-technology and human review of the approval-enhanced decision
-  path. Native Safari now has scoped approval and revoke-all execution
-  evidence, while reject, cancel, current-session logout and independent
-  peer-session invalidation remain unproven there. The exact checkpoint
+- native Edge, assistive-technology and human review of the
+  approval-enhanced decision path. Native Safari has scoped allow, reject,
+  cancel, current-session, listener-wide revocation and peer-invalidation
+  execution evidence, but the peer actor was an independent P17 HTTP session
+  rather than a second unlocked Safari cookie jar. The exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
-  post-dispatch ambiguity fail-closed fixtures are executable; automated
-  Playwright engines do not satisfy those remaining native/manual gates;
+  post-dispatch ambiguity fail-closed fixtures are executable; automated or
+  AX-driven browser smokes do not satisfy the remaining assistive-technology
+  and human gates;
 - the raw 30-sample canonical M2/Node 24 latency/CLS report. The deterministic
   100-project/10,000-run/2,000-node packaged harness, project-local rebuildable
   read indexes, startup snapshot prewarm, commit-woken SSE invalidation,
   browser receipt/paint marks, standard CLS session-window measurement, and
   JSON plus human summaries are implemented. Clean immutable commit
-  `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` has a checked-in M3 Pro/
+  `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` has a checked-in M3 Pro/
   Node 24 30-sample structural pass, but the report also records high pre-run
-  load and large owner-launch outliers. It remains informational;
+  load. It remains informational;
 - human approval of the 149 reference renders, the five-fresh-participant
   English comprehension record, and both native Simplified-Chinese content
   reviews using the frozen study protocol and hash-bound evidence;

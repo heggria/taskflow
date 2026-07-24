@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-24T09:02:20Z",
+  "candidate": {
+    "branch": "codex/0.3.0-beta.2",
+    "gitCommit": "7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
+    "trackedCandidateSourceDirty": false,
+    "webSourceDigest": "sha256:97076ba3daf5d08a405515cb89132f610a9b4fd04f7307d3b04d6e5123dc3e1c",
+    "webManifestSha256": "sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e",
+    "webBuildId": "sha256:dcc581791f65e251e94e7fadbd4c9b67ea2ff40e8f4d61820035dfc828fb7081"
+  },
+  "environment": {
+    "browser": "Safari",
+    "browserVersion": "26.3",
+    "operatingSystem": "macOS 26.3",
+    "operatingSystemBuild": "25D125",
+    "localeObserved": "zh-CN"
+  },
+  "method": {
+    "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
+    "authority": "fresh isolated ControlStores and two independently authenticated sessions under one listener",
+    "safariRole": "revoked peer session and visible session-ended projection",
+    "mutationActor": "a second packaged-CLI launch was exchanged by a closed P17 HTTP client and invoked CSRF-protected revoke-all; it was not a Safari private-window actor",
+    "interaction": "macOS accessibility tree for the native Safari target plus an independent protocol client for the peer mutation",
+    "launchCapabilities": "two independent one-time capabilities; values not retained",
+    "discardedAttempts": [
+      "an earlier private-window route was discarded after Safari locked Private Browsing behind local authentication",
+      "one peer launch capability expired before exchange and returned 401; a fresh capability was minted and exchanged once for the passing run"
+    ],
+    "shutdownCheck": "the staged review hold was released after Safari rendered the peer-ended state; the loopback listener then refused a connection with curl exit 7"
+  },
+  "assertions": {
+    "safariOneTimeSessionExchangeCompleted": true,
+    "independentPeerSessionExchangeCompleted": true,
+    "independentPeerRevokeAllReturnedSuccess": true,
+    "revokeAllReportedThreeRevokedSessions": true,
+    "safariPeerLostAuthorization": true,
+    "safariRenderedSessionEndedInsteadOfGenericPageFailure": true,
+    "signedOutDocumentTitleWasLocalized": true,
+    "signedOutHeadingWasBrowserAccessEnded": true,
+    "signedOutDetailSaidCurrentTabLostAccessAndTasksWereUnchanged": true,
+    "signedOutNextStepSaidToCloseTheTabOrRestartTaskflow": true,
+    "listenerClosedAfterTheReviewHold": true
+  },
+  "excludedClaims": [
+    "VoiceOver speech order, announcements, rotor navigation, or verbosity",
+    "a Safari private-window actor or two simultaneously unlocked Safari cookie jars",
+    "native Safari console, CSP, performance, or axe automation",
+    "human product, content, or comprehension approval",
+    "passing evidence from the locked-private-window or expired-capability attempts"
+  ],
+  "result": "native-safari-peer-session-invalidation-smoke-pass"
+}

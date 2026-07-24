@@ -12,11 +12,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/83021958-to-d8df9c65/report.json",
+	"artifacts/web-compat/d8df9c65-to-7e555c7d/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+	"artifacts/web-bench/7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -34,6 +34,14 @@ const nativeSafariMutationPath = path.join(
 const nativeSafariRejectCurrentPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/native-safari-reject-current-session-smoke-v1.json",
+);
+const nativeSafariCancelPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-cancel-smoke-v1.json",
+);
+const nativeSafariPeerRevocationPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-peer-revocation-smoke-v1.json",
 );
 const candidateSourceScopes = [
 	"packages/taskflow-core/src",
@@ -87,6 +95,59 @@ function assertNoLocalPath(bytes, label) {
 		bytes,
 		/#launch=[A-Za-z0-9_-]{20,}/u,
 		`${label} leaks a launch capability`,
+	);
+}
+
+function assertNativeSafariRecord(
+	record,
+	{
+		label,
+		expectedCommit,
+		expectedResult,
+		finalCandidateCommit,
+	},
+) {
+	assert.equal(record.schemaVersion, 1);
+	assert.equal(record.result, expectedResult);
+	assert.equal(record.candidate.gitCommit, expectedCommit);
+	assertConcreteCommit(record.candidate.gitCommit, `${label} commit`);
+	assert.equal(record.candidate.trackedCandidateSourceDirty, false);
+	assert.match(
+		record.candidate.webSourceDigest,
+		/^sha256:[0-9a-f]{64}$/u,
+	);
+	assert.match(
+		record.candidate.webManifestSha256,
+		/^sha256:[0-9a-f]{64}$/u,
+	);
+	assert.match(
+		record.candidate.webBuildId,
+		/^sha256:[0-9a-f]{64}$/u,
+	);
+	assert.equal(record.environment.browser, "Safari");
+	const nativeAncestry = spawnSync(
+		"git",
+		[
+			"merge-base",
+			"--is-ancestor",
+			record.candidate.gitCommit,
+			finalCandidateCommit,
+		],
+		{ cwd: repositoryRoot },
+	);
+	assert.equal(
+		nativeAncestry.status,
+		0,
+		`${label} commit must be an ancestor of the immutable candidate`,
+	);
+	for (const [name, passed] of Object.entries(record.assertions)) {
+		assert.equal(passed, true, `${label} assertion failed: ${name}`);
+	}
+	assert.equal(
+		record.excludedClaims.some((claim) =>
+			claim.includes("VoiceOver"),
+		),
+		true,
 	);
 }
 
@@ -249,39 +310,12 @@ assertNoLocalPath(
 	"native Safari mutation record",
 );
 const nativeSafariMutation = JSON.parse(nativeSafariMutationBytes);
-assert.equal(nativeSafariMutation.schemaVersion, 1);
-assert.equal(
-	nativeSafariMutation.result,
-	"native-approval-and-revoke-all-smoke-pass",
-);
-assert.equal(
-	nativeSafariMutation.candidate.gitCommit,
-	newBuild.gitCommit,
-);
-assert.equal(
-	nativeSafariMutation.candidate.trackedCandidateSourceDirty,
-	false,
-);
-assert.equal(
-	nativeSafariMutation.candidate.webSourceDigest,
-	benchmark.git.sourceDigest,
-);
-assert.equal(
-	nativeSafariMutation.candidate.webManifestSha256,
-	newBuild.manifestSha256,
-);
-assert.equal(nativeSafariMutation.environment.browser, "Safari");
-for (const [name, passed] of Object.entries(
-	nativeSafariMutation.assertions,
-)) {
-	assert.equal(passed, true, `native Safari assertion failed: ${name}`);
-}
-assert.equal(
-	nativeSafariMutation.excludedClaims.some((claim) =>
-		claim.includes("VoiceOver"),
-	),
-	true,
-);
+assertNativeSafariRecord(nativeSafariMutation, {
+	label: "native Safari allow/revoke-all record",
+	expectedCommit: "d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+	expectedResult: "native-approval-and-revoke-all-smoke-pass",
+	finalCandidateCommit: newBuild.gitCommit,
+});
 
 const nativeSafariRejectCurrentBytes = fs.readFileSync(
 	nativeSafariRejectCurrentPath,
@@ -294,45 +328,58 @@ assertNoLocalPath(
 const nativeSafariRejectCurrent = JSON.parse(
 	nativeSafariRejectCurrentBytes,
 );
-assert.equal(nativeSafariRejectCurrent.schemaVersion, 1);
-assert.equal(
-	nativeSafariRejectCurrent.result,
-	"native-reject-and-current-session-smoke-pass",
+assertNativeSafariRecord(nativeSafariRejectCurrent, {
+	label: "native Safari reject/current-session record",
+	expectedCommit: "d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+	expectedResult: "native-reject-and-current-session-smoke-pass",
+	finalCandidateCommit: newBuild.gitCommit,
+});
+
+const nativeSafariCancelBytes = fs.readFileSync(
+	nativeSafariCancelPath,
+	"utf8",
 );
-assert.equal(
-	nativeSafariRejectCurrent.candidate.gitCommit,
-	newBuild.gitCommit,
+assertNoLocalPath(
+	nativeSafariCancelBytes,
+	"native Safari cancel record",
 );
-assert.equal(
-	nativeSafariRejectCurrent.candidate.trackedCandidateSourceDirty,
-	false,
+const nativeSafariCancel = JSON.parse(nativeSafariCancelBytes);
+assertNativeSafariRecord(nativeSafariCancel, {
+	label: "native Safari cancel record",
+	expectedCommit: "794c85f8a78d30c457ef63ad9a5f2b0c69d56356",
+	expectedResult: "native-cancel-run-smoke-pass",
+	finalCandidateCommit: newBuild.gitCommit,
+});
+
+const nativeSafariPeerRevocationBytes = fs.readFileSync(
+	nativeSafariPeerRevocationPath,
+	"utf8",
 );
+assertNoLocalPath(
+	nativeSafariPeerRevocationBytes,
+	"native Safari peer-revocation record",
+);
+const nativeSafariPeerRevocation = JSON.parse(
+	nativeSafariPeerRevocationBytes,
+);
+assertNativeSafariRecord(nativeSafariPeerRevocation, {
+	label: "native Safari peer-revocation record",
+	expectedCommit: newBuild.gitCommit,
+	expectedResult:
+		"native-safari-peer-session-invalidation-smoke-pass",
+	finalCandidateCommit: newBuild.gitCommit,
+});
 assert.equal(
-	nativeSafariRejectCurrent.candidate.webSourceDigest,
+	nativeSafariPeerRevocation.candidate.webSourceDigest,
 	benchmark.git.sourceDigest,
 );
 assert.equal(
-	nativeSafariRejectCurrent.candidate.webManifestSha256,
+	nativeSafariPeerRevocation.candidate.webManifestSha256,
 	newBuild.manifestSha256,
 );
 assert.equal(
-	nativeSafariRejectCurrent.environment.browser,
-	"Safari",
-);
-for (const [name, passed] of Object.entries(
-	nativeSafariRejectCurrent.assertions,
-)) {
-	assert.equal(
-		passed,
-		true,
-		`native Safari reject/current assertion failed: ${name}`,
-	);
-}
-assert.equal(
-	nativeSafariRejectCurrent.excludedClaims.some((claim) =>
-		claim.includes("VoiceOver"),
-	),
-	true,
+	nativeSafariPeerRevocation.candidate.webBuildId,
+	benchmark.build.webBuildId,
 );
 
 const ledger = fs.readFileSync(ledgerPath, "utf8");
@@ -342,6 +389,8 @@ for (const file of [
 	benchmarkSummaryPath,
 	nativeSafariMutationPath,
 	nativeSafariRejectCurrentPath,
+	nativeSafariCancelPath,
+	nativeSafariPeerRevocationPath,
 ]) {
 	assert.match(
 		ledger,
