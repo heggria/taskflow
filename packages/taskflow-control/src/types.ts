@@ -1,10 +1,11 @@
 /**
  * 0.3 control-plane wire types (TypeBox + TypeScript).
  *
- * Frozen after P1–P16 ADRs. See docs/internal/rfc-0.3.0-control-plane.md §8–§18
- * and docs/internal/p-adrs/.
+ * Core wire types from P1–P16. P17 browser DTOs remain a provisional schema
+ * baseline in web-protocol.ts until handler/codec/compatibility gates pass.
+ * See docs/internal/rfc-0.3.0-control-plane.md and docs/internal/p-adrs/.
  */
-import { Type, type Static } from "typebox";
+import { Type, type Static, type TLiteral } from "typebox";
 
 // ---------------------------------------------------------------------------
 // RunStatus / RunStage (D31)
@@ -84,6 +85,9 @@ export const CAPACITY_OCCUPYING_STATES: readonly ReservationState[] = [
 
 /** slots ≡ 1 fixed in 0.3. */
 export const RESERVATION_SLOTS = 1 as const;
+
+export const FORCE_RELEASE_ACKNOWLEDGEMENT =
+	"I understand this may allow overlapping live side effects" as const;
 
 // ---------------------------------------------------------------------------
 // Error codes (P4)
@@ -217,6 +221,14 @@ export interface ControlEvent {
 export type ControlEventPayload =
 	| { type: "RunReceived"; runId: string; boundPlanHash: string }
 	| { type: "RunAdmitted"; runId: string; reservationId: string }
+	| {
+			type: "BoundFragmentLinked";
+			runId: string;
+			boundFragmentHash: string;
+			parentNodeInstanceId: string;
+			originPhaseId: string;
+			linkKind: BoundFragmentLinkKind;
+	  }
 	| { type: "RunStatusChanged"; runId: string; status: RunStatus; stage: RunStage; reason?: string }
 	| { type: "ReconcileStarted"; runId: string; attempt: number }
 	| { type: "ReconcileSettled"; runId: string; outcome: "terminal" | "still-running" | "exhausted" }
@@ -224,6 +236,7 @@ export type ControlEventPayload =
 	| { type: "ReceiptIssued"; runId: string; receiptId: string }
 	| { type: "ApprovalParked"; runId: string; approvalRequestId: string }
 	| { type: "ApprovalDecided"; runId: string; approvalRequestId: string; decision: string }
+	| { type: "CancelRequested"; runId: string }
 	| { type: "Generic"; kind: string; data?: Record<string, unknown> };
 
 // ---------------------------------------------------------------------------
@@ -247,13 +260,81 @@ export interface RunProjection {
 	receiptId?: string;
 	/** Version for CAS (approval/cancel races). */
 	runVersion: number;
+	/** Last project-local commit that durably changed this Run projection. */
+	lastCommitSeq?: number;
 	error?: string;
 	approvalRequestId?: string;
+	/**
+	 * Private, non-Receipt-reachable artifact containing the exact settled
+	 * scheduler state needed to continue after this approval.
+	 */
+	approvalContinuationArtifactId?: string;
 	/** Durable provider job handle (persisted for restart reconcile). */
 	providerHandle?: string;
 	/** Provider lease/epoch at submit time. */
 	providerLeaseEpoch?: number;
 	providerName?: string;
+	/** Durable static/dynamic execution inventory for browser/restart reads. */
+	nodes?: RunNodeProjection[];
+	/** Durable attempt metadata; outputs remain in artifacts/final result only. */
+	attempts?: RunAttemptProjection[];
+}
+
+export interface RunNodeProjection {
+	nodeInstanceId: string;
+	phaseId: string;
+	phaseType: string;
+	origin: "bound-plan" | "bound-fragment";
+	boundFragmentHash?: string;
+	status:
+		| "pending"
+		| "running"
+		| "waiting"
+		| "completed"
+		| "failed"
+		| "cancelled"
+		| "blocked";
+	attemptCount: number;
+	ordinal: number;
+	displayLabel: string;
+}
+
+export interface RunAttemptProjection {
+	attemptId: string;
+	nodeInstanceId: string;
+	attemptOrdinal: number;
+	provider?: string;
+	status: "completed" | "failed" | "skipped" | "still-running";
+	startedAt?: number;
+	endedAt?: number;
+	providerJobHandlePresent: boolean;
+	error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Immutable content-addressed artifacts
+// ---------------------------------------------------------------------------
+
+export type ArtifactRedactionClass =
+	| "public"
+	| "project"
+	| "sensitive"
+	| "secret";
+
+export interface ArtifactRecord {
+	artifactId: string;
+	projectId: string;
+	controlDomainId: string;
+	digest: string;
+	size: number;
+	mediaType: string;
+	role: string;
+	storageClass: "control-store";
+	redactionClass: ArtifactRedactionClass;
+	runId?: string;
+	receiptId?: string;
+	fileName?: string;
+	createdAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,12 +392,39 @@ export interface BoundFragment {
 	createdAt: number;
 }
 
+export type BoundFragmentLinkKind = "nested-flow" | "graft-promote";
+
+/**
+ * Run-scoped immutable provenance for one dynamic fragment link.
+ *
+ * The BoundFragment body is content-addressed independently. This record is
+ * the durable fact that a particular Run linked that body at a particular
+ * journal commit, so reuse never overwrites causation or parentage.
+ */
+export interface BoundFragmentLink {
+	linkId: string;
+	projectId: string;
+	controlDomainId: string;
+	runId: string;
+	boundFragmentHash: string;
+	parentNodeInstanceId: string;
+	originPhaseId: string;
+	causationId?: string;
+	linkKind: BoundFragmentLinkKind;
+	createdAtCommitSeq: number;
+	dynamicNodeCount: number;
+	staticNodeCount: number;
+	createdAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // Concurrency reservation record
 // ---------------------------------------------------------------------------
 
 export interface ConcurrencyReservation {
 	reservationId: string;
+	/** Monotonic CAS revision; migrated legacy records start at 1. */
+	revision: number;
 	state: ReservationState;
 	/** Fixed 1 in 0.3. */
 	slots: typeof RESERVATION_SLOTS;
@@ -333,6 +441,23 @@ export interface ConcurrencyReservation {
 	updatedAt: number;
 	/** Set when force-released via CoordinatorCommandRecord. */
 	operatorOverridden?: boolean;
+}
+
+export interface ForceReleaseRequest {
+	reservationId: string;
+	expectedState: "committed" | "orphan-suspect";
+	expectedRevision: number;
+	expectedCoordinatorEpoch: number;
+	expectedProjectId: string;
+	expectedControlDomainId: string;
+	expectedRunId: string;
+	acknowledgement: typeof FORCE_RELEASE_ACKNOWLEDGEMENT;
+}
+
+export interface SetMaxActiveRunsRequest {
+	value: number;
+	expectedMaxActiveRuns: number;
+	expectedCoordinatorEpoch: number;
 }
 
 export type CoordinatorCommandKind = "setMaxActiveRuns" | "forceRelease";
@@ -361,19 +486,33 @@ export interface CoordinatorLease {
 // TypeBox schemas (wire freeze surface)
 // ---------------------------------------------------------------------------
 
-export const RunStatusSchema = Type.Union(RUN_STATUSES.map((s) => Type.Literal(s)));
-export const RunStageSchema = Type.Union(RUN_STAGES.map((s) => Type.Literal(s)));
-export const ControlModeSchema = Type.Union(CONTROL_MODES.map((s) => Type.Literal(s)));
-export const ApprovalModeSchema = Type.Union(APPROVAL_MODES.map((s) => Type.Literal(s)));
+function literalSchemaUnion<
+	const Values extends readonly [string, ...string[]],
+>(values: Values) {
+	return Type.Union(
+		values.map((value) => Type.Literal(value)) as [
+			TLiteral<Values[number]>,
+			...TLiteral<Values[number]>[],
+		],
+	);
+}
 
-export const ControlErrorSchema = Type.Object({
-	code: Type.Union(TF_ERROR_CODES.map((c) => Type.Literal(c))),
-	message: Type.String(),
-	recoveryAction: Type.Union(RECOVERY_ACTIONS.map((a) => Type.Literal(a))),
-	sideEffects: Type.Union(SIDE_EFFECT_LEVELS.map((s) => Type.Literal(s))),
-	commandId: Type.Optional(Type.String()),
-	commitSeq: Type.Optional(Type.Number()),
-	controlDomainId: Type.Optional(Type.String()),
-	projectId: Type.Optional(Type.String()),
-});
+export const RunStatusSchema = literalSchemaUnion(RUN_STATUSES);
+export const RunStageSchema = literalSchemaUnion(RUN_STAGES);
+export const ControlModeSchema = literalSchemaUnion(CONTROL_MODES);
+export const ApprovalModeSchema = literalSchemaUnion(APPROVAL_MODES);
+
+export const ControlErrorSchema = Type.Object(
+	{
+		code: Type.Union(TF_ERROR_CODES.map((c) => Type.Literal(c))),
+		message: Type.String(),
+		recoveryAction: Type.Union(RECOVERY_ACTIONS.map((a) => Type.Literal(a))),
+		sideEffects: Type.Union(SIDE_EFFECT_LEVELS.map((s) => Type.Literal(s))),
+		commandId: Type.Optional(Type.String()),
+		commitSeq: Type.Optional(Type.Number()),
+		controlDomainId: Type.Optional(Type.String()),
+		projectId: Type.Optional(Type.String()),
+	},
+	{ additionalProperties: false },
+);
 export type ControlErrorStatic = Static<typeof ControlErrorSchema>;

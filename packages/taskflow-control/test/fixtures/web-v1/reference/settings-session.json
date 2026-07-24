@@ -1,0 +1,92 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "settings-session",
+  "screenId": "settings",
+  "state": "simple-mode-session-active",
+  "sourceKind": "endpoint-view",
+  "source": {
+    "browserProtocolMajor": 1,
+    "browserProtocolMinor": 0,
+    "protocolConsumerRange": {
+      "major": 1,
+      "minMinor": 0,
+      "maxMinor": 0
+    },
+    "schemaVersion": "web.v1",
+    "contentCatalogVersion": "taskflow-content.v1",
+    "defaultLocale": "en",
+    "supportedLocales": [
+      "en",
+      "zh-CN"
+    ],
+    "contentKeysetDigests": {
+      "projected": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+      "static": "sha256:b3610739da1c6afd358369059ccc9bf74c54519364a271f6b49114af148d0bbd",
+      "combined": "sha256:7eb98f11ea5d9ae8aed277610beeec92b0e09bfb2c3e7eed129389dc18369f07"
+    },
+    "listenerId": "listener-1",
+    "mode": "auto",
+    "role": "writer",
+    "principalId": "principal-1",
+    "principalDisplayName": "Local user",
+    "csrfToken": "fixture-csrf-token-000000000000000000000000",
+    "sessionIdleExpiresAt": 1800001800000,
+    "sessionAbsoluteExpiresAt": 1800028800000,
+    "buildInfo": {
+      "packageVersion": "0.3.0-beta.2",
+      "gitCommit": "fixture",
+      "controlSchemaVersion": 1
+    },
+    "supportedFeatures": [
+      "overview",
+      "run-detail",
+      "approval-detail",
+      "artifacts"
+    ],
+    "supportedCommands": [
+      "approve",
+      "reject",
+      "cancel-run"
+    ],
+    "pollingMinIntervalMs": 3000,
+    "registryContext": {
+      "mode": "auto",
+      "registryRevision": "registry-1",
+      "visibleMounts": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1"
+        }
+      ]
+    },
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    }
+  },
+  "projection": {
+    "mode": "simple",
+    "theme": "system",
+    "locale": "en"
+  },
+  "renderedContent": []
+}

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "taskflow-zh-cn-content-review.v1",
+  "status": "template-not-evidence",
+  "reviewerId": "replace-with-opaque-id",
+  "nativeSimplifiedChineseReviewer": false,
+  "independentFromImplementation": false,
+  "buildCommit": "replace",
+  "referenceManifestSha256": "replace",
+  "renderEvidenceSha256": "replace",
+  "contentDigests": {
+    "combinedKeyset": "replace",
+    "zhCN": "replace"
+  },
+  "requiredCoverage": {
+    "projectedKeys": 149,
+    "staticKeys": 184,
+    "totalKeys": 333,
+    "screenFamilies": 9,
+    "renderEntries": 149
+  },
+  "reviewedCoverage": {
+    "projectedKeys": 0,
+    "staticKeys": 0,
+    "screenFamilies": [],
+    "renderEntries": 0
+  },
+  "screenResults": [
+    {
+      "screenId": "simple-home",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "active-task",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "needs-input-decision",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "completed-task",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "unknown-reconciling",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "pro-graph",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "pro-evidence",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "settings",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "error-recovery",
+      "decision": "pending",
+      "notes": ""
+    }
+  ],
+  "checks": {
+    "meaningPreserved": null,
+    "naturalness": null,
+    "terminologyConsistency": null,
+    "decisionConsequencesClear": null,
+    "uncertaintyAndRiskNotSoftened": null,
+    "narrowScreenReadability": null,
+    "safetyCriticalMessagesPassed": null
+  },
+  "safetyCriticalFindings": [],
+  "overallDecision": "pending",
+  "completedAt": null,
+  "reviewerAttestation": false
+}

@@ -56,6 +56,108 @@ test("replayRun: stricter threshold flips pass → would-block", () => {
 	assert.equal(d.replayedOutcome, "block");
 });
 
+test("replayRun: direct gate verdict override uses recorded decision and stays offline", () => {
+	const report = replayRun(gateLog, {
+		gateVerdicts: { review: "block" },
+	});
+	const decision = report.decisions.find(
+		(candidate) => candidate.phaseId === "review",
+	);
+	assert.equal(decision?.outcome, "would-block");
+	assert.equal(decision?.priorOutcome, "pass");
+	assert.equal(decision?.replayedOutcome, "block");
+	assert.equal(report.needsLiveRerun, false);
+});
+
+test("replayRun: condition false skips the phase and invalidates recorded consumers", () => {
+	const log: Event[] = [
+		ev({
+			kind: "phase-start",
+			phaseId: "filter",
+			dependencies: [],
+		}),
+		ev({
+			kind: "decision",
+			phaseId: "filter",
+			decision: {
+				type: "when-guard",
+				expression: "enabled",
+				result: true,
+			},
+		}),
+		ev({
+			kind: "phase-end",
+			phaseId: "filter",
+			status: "done",
+		}),
+		ev({
+			kind: "phase-start",
+			phaseId: "consumer",
+			dependencies: ["filter"],
+		}),
+		ev({
+			kind: "phase-end",
+			phaseId: "consumer",
+			status: "done",
+		}),
+	];
+	const report = replayRun(log, {
+		conditionResults: { filter: false },
+	});
+	assert.equal(
+		report.decisions.find(
+			(decision) => decision.phaseId === "filter",
+		)?.outcome,
+		"would-skip",
+	);
+	assert.equal(
+		report.decisions.find(
+			(decision) => decision.phaseId === "consumer",
+		)?.outcome,
+		"needs-live-rerun",
+	);
+});
+
+test("replayRun: overriding a recorded cache hit to miss requires live downstream work", () => {
+	const log: Event[] = [
+		ev({
+			kind: "phase-start",
+			phaseId: "cached",
+			dependencies: [],
+		}),
+		ev({
+			kind: "decision",
+			phaseId: "cached",
+			decision: { type: "cache-hit", scope: "run-only" },
+		}),
+		ev({
+			kind: "phase-end",
+			phaseId: "cached",
+			status: "done",
+		}),
+		ev({
+			kind: "phase-start",
+			phaseId: "consumer",
+			dependencies: ["cached"],
+		}),
+		ev({
+			kind: "phase-end",
+			phaseId: "consumer",
+			status: "done",
+		}),
+	];
+	const report = replayRun(log, {
+		cacheDecisions: { cached: "miss" },
+	});
+	assert.equal(report.needsLiveRerun, true);
+	assert.ok(
+		report.decisions.every(
+			(decision) =>
+				decision.outcome === "needs-live-rerun",
+		),
+	);
+});
+
 test("replayRun: later cache/budget decisions do not erase gate-score history", () => {
 	const log: Event[] = [
 		ev({ kind: "phase-start", phaseId: "review", dependencies: [] }),

@@ -20,6 +20,7 @@ import {
 	CAPACITY_OCCUPYING_STATES,
 	canNormalRelease,
 	DEFAULT_CONTROL_MODE,
+	FORCE_RELEASE_ACKNOWLEDGEMENT,
 	assertControlModeExplicit,
 	type ControlEvent,
 } from "../src/index.ts";
@@ -268,10 +269,13 @@ test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED
 			reconcileBudget: { maxAttempts: 1, deadlineMs: 10 },
 		});
 		// Capacity lives on the host's coordinator (project-local for standalone).
-		host.coordinator.setMaxActiveRuns(2, {
+		host.coordinator.setMaxActiveRuns({
+			value: 2,
+			expectedMaxActiveRuns: 4,
+			expectedCoordinatorEpoch: 0,
+		}, {
 			commandId: "cmd-max",
 			callerPrincipal: "op",
-			requestBody: { maxActiveRuns: 2 },
 		});
 		assert.equal(host.coordinator.maxActiveRuns, 2);
 
@@ -281,6 +285,29 @@ test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED
 		assert.ok(r1.run, JSON.stringify(r1.error));
 		assert.ok(r2.run, JSON.stringify(r2.error));
 		assert.equal(host.coordinator.occupyingCount(), 2);
+		assert.throws(
+			() => host.coordinator.setMaxActiveRuns({
+				value: 1,
+				expectedMaxActiveRuns: 2,
+				expectedCoordinatorEpoch: 0,
+			}, {
+				commandId: "cmd-max-too-low",
+				callerPrincipal: "op",
+			}),
+			/TF_CAPACITY_EXCEEDED.*occupancy=2/,
+		);
+		assert.equal(host.coordinator.getCommand("cmd-max-too-low"), null);
+		assert.throws(
+			() => host.coordinator.setMaxActiveRuns({
+				value: 3,
+				expectedMaxActiveRuns: 4,
+				expectedCoordinatorEpoch: 0,
+			}, {
+				commandId: "cmd-max-stale",
+				callerPrincipal: "op",
+			}),
+			/TF_STALE_VERSION/,
+		);
 
 		const r3 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c3" });
 		// Hard requirement — not soft if
@@ -322,10 +349,27 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			}),
 		);
 
-		const { reservation, command } = coord.forceRelease(rsv!.reservationId, {
+		const observed = coord.getReservation(rsv!.reservationId)!;
+		const request = {
+			reservationId: observed.reservationId,
+			expectedState: "committed" as const,
+			expectedRevision: observed.revision,
+			expectedCoordinatorEpoch: observed.coordinatorEpoch,
+			expectedProjectId: observed.projectId!,
+			expectedControlDomainId: observed.projectControlDomainId!,
+			expectedRunId: observed.runId!,
+			acknowledgement: FORCE_RELEASE_ACKNOWLEDGEMENT,
+		};
+		assert.throws(
+			() => coord.forceRelease({ ...request, expectedControlDomainId: "other-domain" }, {
+				commandId: "force-stale-domain",
+				callerPrincipal: "op",
+			}),
+			/TF_STALE_VERSION/,
+		);
+		const { reservation, command } = coord.forceRelease(request, {
 			commandId: "force-1",
 			callerPrincipal: "op",
-			requestBody: { reservationId: rsv!.reservationId, riskAcknowledged: true },
 		});
 		assert.equal(reservation.state, "released");
 		assert.equal(reservation.operatorOverridden, true);
@@ -356,6 +400,21 @@ test("reconcile exhaustion: unknown + needs-operator + no Receipt; wait returns 
 		assert.equal(result.error?.recoveryAction, "operator");
 		assert.equal(result.receipt, undefined);
 		assert.equal(host.store.getReceiptForRun(result.run!.runId), null);
+		assert.deepEqual(
+			result.run?.attempts?.map((attempt) => ({
+				status: attempt.status,
+				provider: attempt.provider,
+				providerJobHandlePresent:
+					attempt.providerJobHandlePresent,
+			})),
+			[
+				{
+					status: "still-running",
+					provider: "mock",
+					providerJobHandlePresent: true,
+				},
+			],
+		);
 
 		const snap = await host.wait(result.run!.runId);
 		assert.equal(snap.run.status, "unknown");
@@ -408,9 +467,12 @@ test("parkForApproval refuses while provider live; succeeds after quiesce (D38)"
 		assert.ok(host.coordinator.occupyingCount() < before);
 
 		const approved = await host.approve(runId!);
-		assert.equal(approved.ok, true);
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
+		assert.equal(approved.ok, false);
+		assert.equal(approved.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(approved.run?.status, "unknown");
+		assert.equal(approved.run?.stage, "reconciling");
+		assert.equal(approved.receipt, undefined);
+		assert.equal(host.store.getCommand(approved.error?.commandId ?? "")?.status, "accepted");
 		host.close();
 	} finally {
 		t.cleanup();
@@ -552,6 +614,28 @@ test("openProjectControlStore header is authority for identity", () => {
 	}
 });
 
+test("Project ControlStore rejects traversal ids at filesystem boundaries", () => {
+	const t = tempEnv();
+	try {
+		const store = openProjectControlStore(t.project);
+		assert.throws(
+			() => store.claimCommand({
+				commandId: "../escape",
+				requestHash: "sha256:test",
+				callerPrincipal: "local",
+				kind: "test",
+				runId: "run-safe",
+			}),
+			/unsafe commandId/,
+		);
+		assert.equal(store.getCommand("../escape"), null);
+		assert.equal(store.getRun("a\\b"), null);
+		assert.equal(store.getReceipt("a\0b"), null);
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("multi-process concurrent first-open: single projectId/controlDomainId on durable header", async () => {
 	const t = tempEnv();
 	try {
@@ -630,10 +714,13 @@ test("multi-process concurrent reserve: capacity never exceeds maxActiveRuns", a
 	const t = tempEnv();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
-		coord.setMaxActiveRuns(2, {
+		coord.setMaxActiveRuns({
+			value: 2,
+			expectedMaxActiveRuns: 4,
+			expectedCoordinatorEpoch: 0,
+		}, {
 			commandId: "mp-max",
 			callerPrincipal: "op",
-			requestBody: { maxActiveRuns: 2 },
 		});
 		assert.equal(coord.maxActiveRuns, 2);
 

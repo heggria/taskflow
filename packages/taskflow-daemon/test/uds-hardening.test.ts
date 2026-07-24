@@ -202,3 +202,57 @@ test("adversarial: daemon writer + CLI auto succeeds via UDS client not local at
 		t.cleanup();
 	}
 });
+
+test("deep TASKFLOW_HOME uses a bounded private UDS path and remains reachable", async () => {
+	if (process.platform === "win32") return;
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-uds-deep-"),
+	);
+	const home = path.join(
+		root,
+		"a".repeat(80),
+		"nested-taskflow-home",
+	);
+	const project = path.join(root, "project");
+	fs.mkdirSync(project, { recursive: true });
+	const env = { ...process.env, TASKFLOW_HOME: home };
+	let socketDirectory: string | undefined;
+	try {
+		const daemon = await startDaemon({
+			env,
+			projectRoots: [project],
+			holderId: "uds-deep-home",
+			listenUds: true,
+		});
+		assert.equal(daemon.role, "writer");
+		assert.ok(daemon.socketPath);
+		assert.ok(
+			Buffer.byteLength(daemon.socketPath!, "utf8") <= 103,
+			daemon.socketPath,
+		);
+		assert.notEqual(
+			path.dirname(daemon.socketPath!),
+			path.join(home, ".taskflow", "control"),
+		);
+		socketDirectory = path.dirname(daemon.socketPath!);
+		const hello = await probeControlEndpoint({
+			socketPath: daemon.socketPath!,
+			env,
+			principal: "deep-home-test",
+		});
+		assert.equal(hello?.role, "writer");
+		await daemon.stop();
+		assert.equal(fs.existsSync(daemon.socketPath!), false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+		if (
+			socketDirectory &&
+			path.basename(socketDirectory).startsWith("tf-")
+		) {
+			fs.rmSync(socketDirectory, {
+				recursive: true,
+				force: true,
+			});
+		}
+	}
+});

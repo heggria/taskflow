@@ -48,6 +48,12 @@ export interface ReplayOverrides {
 	models?: Record<string, string>;
 	/** `args.*` — text-changing args → needs-live-rerun for affected phases. */
 	args?: Record<string, unknown>;
+	/** Recorded gate decision override; propagated through the recorded DAG. */
+	gateVerdicts?: Record<string, "pass" | "block">;
+	/** Recorded `when` decision override. */
+	conditionResults?: Record<string, boolean>;
+	/** Recorded cache admission override. */
+	cacheDecisions?: Record<string, "hit" | "miss">;
 }
 
 /** Result of {@link replayRun}. */
@@ -198,6 +204,15 @@ export function replayRun(events: readonly Event[], overrides: ReplayOverrides =
 	const hasArgsOverride = overrides.args && Object.keys(overrides.args).length > 0;
 	const hasThresholdOverride = overrides.thresholds !== undefined && Object.keys(overrides.thresholds).length > 0;
 	const hasBudgetOverride = overrides.budgetMaxUSD !== undefined || overrides.budgetMaxTokens !== undefined;
+	const hasGateVerdictOverride =
+		overrides.gateVerdicts !== undefined &&
+		Object.keys(overrides.gateVerdicts).length > 0;
+	const hasConditionOverride =
+		overrides.conditionResults !== undefined &&
+		Object.keys(overrides.conditionResults).length > 0;
+	const hasCacheOverride =
+		overrides.cacheDecisions !== undefined &&
+		Object.keys(overrides.cacheDecisions).length > 0;
 	const order: string[] = [];
 	const seen = new Set<string>();
 	const deps = new Map<string, string[]>();
@@ -233,6 +248,40 @@ export function replayRun(events: readonly Event[], overrides: ReplayOverrides =
 		}
 		return undefined;
 	};
+	const lastGateDecision = (
+		phaseId: string,
+	):
+		| Extract<
+				EventDecision,
+				{ type: "gate-score" | "gate-verdict" }
+		  >
+		| undefined => {
+		const history = decisionHistory.get(phaseId) ?? [];
+		for (let i = history.length - 1; i >= 0; i--) {
+			const decision = history[i];
+			if (
+				decision.type === "gate-score" ||
+				decision.type === "gate-verdict"
+			) {
+				return decision;
+			}
+		}
+		return undefined;
+	};
+	const lastWhenDecision = (
+		phaseId: string,
+	): Extract<EventDecision, { type: "when-guard" }> | undefined => {
+		const history = decisionHistory.get(phaseId) ?? [];
+		for (let i = history.length - 1; i >= 0; i--) {
+			const decision = history[i];
+			if (decision.type === "when-guard") return decision;
+		}
+		return undefined;
+	};
+	const recordedCacheHit = (phaseId: string): boolean =>
+		(decisionHistory.get(phaseId) ?? []).some(
+			(decision) => decision.type === "cache-hit",
+		);
 
 	const children = new Map<string, string[]>();
 	for (const [id, parents] of deps) {
@@ -354,6 +403,136 @@ export function replayRun(events: readonly Event[], overrides: ReplayOverrides =
 				replayedOutcome: "pending",
 			});
 			replayed.phases[phaseId]!.status = "pending";
+			continue;
+		}
+
+		const gateVerdict = overrides.gateVerdicts?.[phaseId];
+		if (gateVerdict !== undefined) {
+			const recorded = lastGateDecision(phaseId);
+			if (!recorded) {
+				needsLiveRerun = true;
+				liveRoots.push(phaseId);
+				markNeedsLive(
+					phaseId,
+					"gate override has no recorded gate decision",
+				);
+				continue;
+			}
+			const priorVerdict =
+				recorded.type === "gate-score"
+					? recorded.verdict
+					: recorded.value;
+			replayed.phases[phaseId]!.decision =
+				recorded.type === "gate-score"
+					? {
+							...recorded,
+							verdict: gateVerdict,
+						}
+					: { ...recorded, value: gateVerdict };
+			if (priorVerdict !== gateVerdict) {
+				byDecision.set(phaseId, {
+					phaseId,
+					outcome:
+						gateVerdict === "block"
+							? "would-block"
+							: "verdict-flipped",
+					reason: `recorded gate verdict ${priorVerdict}→${gateVerdict}`,
+					priorOutcome: priorVerdict,
+					replayedOutcome: gateVerdict,
+				});
+				replayed.phases[phaseId]!.status =
+					gateVerdict === "block" ? "blocked" : "done";
+				if (gateVerdict === "block") {
+					blockRoots.push(phaseId);
+				} else {
+					unblockRoots.push(phaseId);
+				}
+			} else {
+				byDecision.set(phaseId, {
+					phaseId,
+					outcome: "reused",
+					reason:
+						"gate verdict override matches the recorded decision",
+					priorOutcome: priorVerdict,
+					replayedOutcome: gateVerdict,
+				});
+			}
+			continue;
+		}
+
+		const conditionResult =
+			overrides.conditionResults?.[phaseId];
+		if (conditionResult !== undefined) {
+			const recorded = lastWhenDecision(phaseId);
+			if (!recorded) {
+				needsLiveRerun = true;
+				liveRoots.push(phaseId);
+				markNeedsLive(
+					phaseId,
+					"condition override has no recorded when decision",
+				);
+				continue;
+			}
+			if (recorded.result === conditionResult) {
+				byDecision.set(phaseId, {
+					phaseId,
+					outcome: "reused",
+					reason:
+						"condition override matches the recorded decision",
+					priorOutcome: String(recorded.result),
+					replayedOutcome: String(conditionResult),
+				});
+				continue;
+			}
+			replayed.phases[phaseId]!.decision = {
+				...recorded,
+				result: conditionResult,
+			};
+			if (conditionResult) {
+				needsLiveRerun = true;
+				liveRoots.push(phaseId);
+				markNeedsLive(
+					phaseId,
+					"a previously skipped condition branch now requires a live result",
+				);
+			} else {
+				byDecision.set(phaseId, {
+					phaseId,
+					outcome: "would-skip",
+					reason:
+						"condition override makes the recorded phase ineligible",
+					priorOutcome: "true",
+					replayedOutcome: "skipped",
+				});
+				replayed.phases[phaseId]!.status = "skipped";
+				liveRoots.push(phaseId);
+			}
+			continue;
+		}
+
+		const cacheDecision =
+			overrides.cacheDecisions?.[phaseId];
+		if (cacheDecision !== undefined) {
+			const wasHit = recordedCacheHit(phaseId);
+			if (cacheDecision === "miss" && wasHit) {
+				needsLiveRerun = true;
+				liveRoots.push(phaseId);
+				markNeedsLive(
+					phaseId,
+					"cache miss override removes the recorded reusable result",
+				);
+			} else {
+				byDecision.set(phaseId, {
+					phaseId,
+					outcome: "reused",
+					reason:
+						cacheDecision === "hit"
+							? "recorded output is reused as the counterfactual cache hit"
+							: "cache miss override matches recorded live execution",
+					priorOutcome: wasHit ? "hit" : "miss",
+					replayedOutcome: cacheDecision,
+				});
+			}
 			continue;
 		}
 
@@ -638,7 +817,14 @@ export function replayRun(events: readonly Event[], overrides: ReplayOverrides =
 	// verdict only when it is the sole override; every other potentially related
 	// phase (or every phase for model/args/budget combinations) fails safe live.
 	const phaseIds = Object.keys(baseline.phases);
-	const hasGraphSensitiveOverride = hasThresholdOverride || hasModelOverride || hasArgsOverride || hasBudgetOverride;
+	const hasGraphSensitiveOverride =
+		hasThresholdOverride ||
+		hasModelOverride ||
+		hasArgsOverride ||
+		hasBudgetOverride ||
+		hasGateVerdictOverride ||
+		hasConditionOverride ||
+		hasCacheOverride;
 	if (missingDependencyMetadata && hasGraphSensitiveOverride) {
 		const thresholdRoots = new Set(Object.keys(overrides.thresholds ?? {}));
 		const singleThresholdOnly =

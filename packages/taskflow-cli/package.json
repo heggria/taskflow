@@ -23,7 +23,7 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && node scripts/copy-web-assets.mjs",
     "prepublishOnly": "npm run build"
   },
   "publishConfig": {
@@ -34,7 +34,8 @@
   },
   "dependencies": {
     "taskflow-control": "workspace:*",
-    "taskflow-core": "workspace:*"
+    "taskflow-core": "workspace:*",
+    "taskflow-daemon": "workspace:*"
   },
   "peerDependencies": {
     "typebox": "*"

@@ -1,0 +1,77 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "pro-graph-node-inspector",
+  "screenId": "pro-graph",
+  "state": "node-selected",
+  "sourceKind": "endpoint-view",
+  "source": {
+    "projectId": "project-1",
+    "controlDomainId": "domain-1",
+    "runId": "run-1",
+    "runVersion": 3,
+    "query": {
+      "expectedRunVersion": 3,
+      "limit": 500,
+      "scope": {
+        "kind": "run"
+      }
+    },
+    "totalNodeCount": 2,
+    "matchedNodeCount": 2,
+    "totalEdgeCount": 1,
+    "matchedEdgeCount": 1,
+    "nodes": [
+      {
+        "nodeInstanceId": "node-1",
+        "phaseId": "check-tests",
+        "phaseType": "agent",
+        "origin": "bound-plan",
+        "status": "completed",
+        "attemptCount": 1
+      },
+      {
+        "nodeInstanceId": "node-2",
+        "phaseId": "publish",
+        "phaseType": "approval",
+        "origin": "bound-plan",
+        "status": "running",
+        "attemptCount": 1
+      }
+    ],
+    "edges": [
+      {
+        "fromNodeInstanceId": "node-1",
+        "toNodeInstanceId": "node-2",
+        "kind": "depends-on"
+      }
+    ],
+    "boundaryEdges": [],
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    }
+  },
+  "projection": {
+    "selectedNodeInstanceId": "node-2"
+  },
+  "renderedContent": []
+}

@@ -1,0 +1,304 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "completed-verification-unavailable",
+  "screenId": "completed-task",
+  "state": "verification-unavailable",
+  "sourceKind": "task-projection",
+  "source": {
+    "run": {
+      "status": "completed",
+      "stage": "terminal",
+      "runVersion": 6,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "needsOperator": false,
+      "stopping": false,
+      "sideEffects": "none",
+      "displayTitle": "Check release readiness",
+      "workspaceDisplayName": "Taskflow"
+    },
+    "observedAt": 1800000000000,
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "nodeInstanceId": "node-1",
+        "status": "completed",
+        "origin": "static",
+        "presentation": {
+          "authoredPhaseId": "check-tests",
+          "groupId": "group-check-tests",
+          "role": "step",
+          "ordinal": 0,
+          "label": "Check test results"
+        }
+      }
+    ],
+    "inventorySealed": true,
+    "presentationMetadataValid": true,
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "All release checks passed. The release note is ready."
+    },
+    "verification": {
+      "runStatus": "completed",
+      "checkedAt": 1800000000000,
+      "lifecycleRequiresVerification": true,
+      "verifierAvailable": false,
+      "eventManifest": "unavailable",
+      "journalContinuity": "unavailable",
+      "provenance": "unavailable",
+      "artifactIntegrity": "unavailable",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "observed": "completed",
+        "check": "unavailable",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "artifactChecks": [],
+      "artifactCheckCount": 1,
+      "requiredArtifactCheckCount": 1,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "availableActions": [],
+    "preservedResultCount": 1
+  },
+  "projection": {
+    "projectionVersion": "task-presentation.v1",
+    "source": {
+      "runVersion": 6,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "observedAt": 1800000000000,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.completed",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.completed.verification.detail",
+      "args": [
+        {
+          "name": "verificationReason",
+          "value": "receipt-missing"
+        }
+      ]
+    },
+    "activeStepCount": 0,
+    "activeSteps": [],
+    "stepGroupCount": 1,
+    "stepGroups": [
+      {
+        "groupId": "group-check-tests",
+        "label": "Check test results",
+        "state": "completed",
+        "origin": "static",
+        "memberCount": 1,
+        "memberNodeInstanceIds": [
+          "node-1"
+        ],
+        "helperNodesCollapsed": false,
+        "membersTruncated": false,
+        "ordinal": 0
+      }
+    ],
+    "progress": {
+      "semantics": "exact",
+      "completed": 1,
+      "total": 1,
+      "inventorySealed": true
+    },
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "All release checks passed. The release note is ready."
+    },
+    "verification": {
+      "state": "verification-unavailable",
+      "reason": "receipt-missing",
+      "label": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.unavailable",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "receipt-missing"
+          }
+        ]
+      },
+      "detail": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.unavailable.detail",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "receipt-missing"
+          }
+        ]
+      },
+      "checkedAt": 1800000000000,
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "observed": "completed",
+        "check": "unavailable",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "eventManifest": "unavailable",
+      "journalContinuity": "unavailable",
+      "provenance": "unavailable",
+      "artifactIntegrity": "unavailable",
+      "artifactCheckCount": 1,
+      "requiredArtifactCheckCount": 1,
+      "artifactChecks": [],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "primaryAction": {
+      "kind": "open-result"
+    },
+    "decisionProvenance": {
+      "runStatus": "completed",
+      "runStage": "terminal",
+      "runVersion": 6,
+      "needsOperator": false,
+      "sideEffects": "none",
+      "activeNodeIds": [],
+      "activeGroupIds": [],
+      "finalResultSourceId": "node-1",
+      "finalResultKind": "text",
+      "verificationCheck": "verification-unavailable",
+      "primaryActionSource": "result"
+    },
+    "warnings": []
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "task.completed",
+      "en": "Task completed",
+      "zh-CN": "任务已完成"
+    },
+    {
+      "path": "$.detail",
+      "key": "task.completed.verification.detail",
+      "en": "The task finished, but Taskflow cannot currently verify all result evidence.",
+      "zh-CN": "任务已经完成，但 Taskflow 目前无法验证全部结果证据。"
+    },
+    {
+      "path": "$.verification.label",
+      "key": "verification.unavailable",
+      "en": "Result verification unavailable",
+      "zh-CN": "暂时无法验证结果"
+    },
+    {
+      "path": "$.verification.detail",
+      "key": "verification.unavailable.detail",
+      "en": "Taskflow does not currently have enough evidence to verify this result.",
+      "zh-CN": "Taskflow 目前没有足够证据验证这个结果。"
+    }
+  ]
+}

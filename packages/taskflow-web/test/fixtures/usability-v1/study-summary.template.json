@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "taskflow-usability-study.v1",
+  "status": "template-not-evidence",
+  "studyId": "replace",
+  "sessionRecordSha256": [],
+  "freshEnglishParticipantCount": 0,
+  "nativeChineseReviewerCount": 0,
+  "taskResults": [
+    {
+      "taskId": 1,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": null,
+      "gatePassed": false
+    },
+    {
+      "taskId": 2,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": null,
+      "gatePassed": false
+    },
+    {
+      "taskId": 3,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": null,
+      "gatePassed": false
+    },
+    {
+      "taskId": 4,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": 0,
+      "gatePassed": false
+    },
+    {
+      "taskId": 5,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": null,
+      "gatePassed": false
+    },
+    {
+      "taskId": 6,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": null,
+      "gatePassed": false
+    },
+    {
+      "taskId": 7,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": 0,
+      "gatePassed": false
+    },
+    {
+      "taskId": 8,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": 0,
+      "gatePassed": false
+    },
+    {
+      "taskId": 9,
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "primaryActionFoundCount": 0,
+      "gatePassed": false
+    }
+  ],
+  "criticalMisinterpretations": [],
+  "chineseContentReviewPassed": false,
+  "overallGatePassed": false,
+  "approvedReferenceManifestSha256": null,
+  "completedAt": null,
+  "reviewerAttestation": false
+}

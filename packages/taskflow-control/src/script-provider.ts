@@ -59,6 +59,27 @@ function isPidAlive(pid: number): boolean {
 	}
 }
 
+function killProcessTree(
+	pid: number,
+	signal: NodeJS.Signals,
+): void {
+	if (!pid || pid <= 0) return;
+	if (process.platform !== "win32") {
+		try {
+			// Script children are spawned as process-group leaders below.
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall through when the group already exited or cannot be signaled.
+		}
+	}
+	try {
+		process.kill(pid, signal);
+	} catch {
+		/* already terminal */
+	}
+}
+
 /**
  * Production ExecutionProvider: runs script phases via real child_process.
  * Non-script programs are rejected (must inject a host LLM provider).
@@ -143,11 +164,13 @@ export function createScriptExecutionProvider(opts?: {
 						cwd: req.cwd,
 						shell: false,
 						env: { ...process.env },
+						detached: process.platform !== "win32",
 					})
 				: spawn(extracted.cmd as string, {
 						cwd: req.cwd,
 						shell: true,
 						env: { ...process.env },
+						detached: process.platform !== "win32",
 					});
 
 			job.pid = child.pid;
@@ -157,11 +180,7 @@ export function createScriptExecutionProvider(opts?: {
 			const timer = setTimeout(() => {
 				timedOut = true;
 				if (child.pid) {
-					try {
-						process.kill(child.pid, "SIGTERM");
-					} catch {
-						/* ignore */
-					}
+					killProcessTree(child.pid, "SIGTERM");
 				}
 			}, extracted.timeoutMs);
 
@@ -278,13 +297,17 @@ export function createScriptExecutionProvider(opts?: {
 			if (job.status !== "running") return { kind: "already-terminal" };
 			job.status = "cancelled";
 			if (job.pid) {
-				try {
-					process.kill(job.pid, "SIGKILL");
-				} catch {
-					/* ignore */
-				}
+				killProcessTree(job.pid, "SIGKILL");
 			}
 			persist(handle, job);
+			if (job.exitSettled) {
+				await Promise.race([
+					job.exitSettled,
+					new Promise<void>((resolve) =>
+						setTimeout(resolve, 2_000),
+					),
+				]);
+			}
 			return { kind: "cancelled" };
 		},
 

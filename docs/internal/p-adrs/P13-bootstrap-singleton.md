@@ -1,7 +1,7 @@
 # P13: Bootstrap / fresh-install / singleton lock / platforms
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 ### controlMode
@@ -23,6 +23,7 @@ Losers attach; must not fork independent multi-mount authority.
 ### Layout
 - User: `~/.taskflow/control/` (overridable via TASKFLOW_HOME)
 - Project: `<root>/.taskflow/control/`
+- The singleton lock stores the exact effective endpoint. When the user control root would exceed the Unix `sockaddr_un` limit, the UDS moves deterministically to an owner-private, user-root-hashed temporary directory; authority, authentication, fencing and the durable lock remain unchanged. Silent kernel path truncation is forbidden.
 
 ## Status
 Accepted for 0.3.0 wire freeze.

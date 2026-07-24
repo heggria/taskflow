@@ -32,7 +32,7 @@ export async function runCli(
 			ok: true,
 			exitCode: 0,
 			json: {
-				usage: "taskflow <run|status|wait|cancel|version> [options]",
+				usage: "taskflow <ui|run|status|wait|cancel|version> [options]",
 				controlMode: DEFAULT_CONTROL_MODE,
 			},
 		};

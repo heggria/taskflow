@@ -1,0 +1,67 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "simple-home-partial-disconnected",
+  "screenId": "simple-home",
+  "state": "partial-disconnected",
+  "sourceKind": "observation-projection",
+  "source": {
+    "sourceObservation": {
+      "coverage": "partial",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "liveState": {
+      "streamState": "disconnected",
+      "resyncState": "required",
+      "invalidationEpoch": 2
+    },
+    "scope": {
+      "kind": "aggregate"
+    }
+  },
+  "projection": {
+    "projectionVersion": "observation-presentation.v1",
+    "message": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "observation.source-coverage-partial",
+      "args": []
+    },
+    "severity": "warning",
+    "stateSensitiveActionsAllowed": false,
+    "source": {
+      "scope": "aggregate",
+      "invalidationEpoch": 2,
+      "streamState": "disconnected",
+      "resyncState": "required",
+      "coverage": "partial",
+      "authority": "verified",
+      "observedAt": 1800000000000
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.message",
+      "key": "observation.source-coverage-partial",
+      "en": "Some workspaces could not be checked. The totals shown here do not include them.",
+      "zh-CN": "部分工作区暂时无法检查。当前数量不包含这些工作区。"
+    }
+  ]
+}

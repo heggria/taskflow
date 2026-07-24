@@ -1,0 +1,57 @@
+{
+  "name": "taskflow-web",
+  "version": "0.3.0-beta.2",
+  "private": true,
+  "description": "Taskflow browser console and browser-safe content runtime.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./content/*": {
+      "development": "./src/content/*.ts",
+      "types": "./dist/content/*.d.ts",
+      "default": "./dist/content/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && vite build && node --conditions=development --experimental-strip-types scripts/build-assets.mjs",
+    "dev": "vite",
+    "test:components": "node --conditions=development --experimental-strip-types --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.101.4",
+    "@tanstack/react-router": "1.170.18",
+    "@tanstack/react-virtual": "^3.14.8",
+    "lucide-react": "1.26.0",
+    "react": "19.2.8",
+    "react-aria-components": "1.19.0",
+    "react-dom": "19.2.8",
+    "tailwindcss": "4.3.3",
+    "taskflow-control": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/jsdom": "28.0.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "jsdom": "29.1.1",
+    "typebox": "^1.3.6",
+    "typescript": "^7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

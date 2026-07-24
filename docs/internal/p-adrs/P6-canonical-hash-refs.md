@@ -1,7 +1,7 @@
 # P6: Canonical hash + ArtifactRef + SecretRef
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 - BoundPlan hash: `bp:<sha256-hex>` over stable JSON.

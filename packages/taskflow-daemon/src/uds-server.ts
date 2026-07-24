@@ -21,6 +21,23 @@ export interface UdsServerOptions {
 	getHost: (projectId?: string) => ControlHost | null;
 	/** Writer role only serves mutations. */
 	role: "writer" | "attach";
+	/** Optional owner-process WebGateway lifecycle controls. */
+	webUi?: {
+		start(
+			params: Record<string, unknown>,
+			principal: string,
+		): Promise<unknown>;
+		stop(
+			params: Record<string, unknown>,
+			principal: string,
+		): Promise<unknown>;
+		status(
+			params: Record<string, unknown>,
+			principal: string,
+		): Promise<unknown> | unknown;
+	};
+	/** Project-local standalone socket exposes only Web UI lifecycle RPCs. */
+	webUiOnly?: boolean;
 }
 
 export interface UdsServerHandle {
@@ -66,14 +83,23 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 		}
 	}
 
-	// Private socket directory permissions (owner-only when possible).
-	try {
-		const dir = path.dirname(opts.socketPath);
-		fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-		fs.chmodSync(dir, 0o700);
-	} catch {
-		/* best-effort */
+	// The endpoint may live in a deterministic temporary fallback directory
+	// when TASKFLOW_HOME is too deep for sockaddr_un. Directory ownership and
+	// privacy are therefore authority checks, not best-effort decoration.
+	const dir = path.dirname(opts.socketPath);
+	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	const directoryStat = fs.lstatSync(dir);
+	if (
+		directoryStat.isSymbolicLink() ||
+		!directoryStat.isDirectory() ||
+		(typeof process.getuid === "function" &&
+			directoryStat.uid !== process.getuid())
+	) {
+		throw new Error(
+			"TF_BOOTSTRAP_FAILED: control socket directory is not an owner-controlled directory",
+		);
 	}
+	fs.chmodSync(dir, 0o700);
 
 	const server = net.createServer((socket) => {
 		let acc = "";
@@ -173,7 +199,20 @@ async function handleLine(
 				protocolMajor: PROTOCOL_MAJOR,
 				fencingEpoch: opts.fencingEpoch,
 				role: opts.role,
-				capabilities: ["status", "wait", "admit", "cancel", "approval"],
+				capabilities: [
+					...(opts.webUiOnly
+						? []
+						: [
+								"status",
+								"wait",
+								"admit",
+								"cancel",
+								"approval",
+							]),
+					...(opts.webUi
+						? ["ui-start", "ui-stop", "ui-status"]
+						: []),
+				],
 			}) + "\n",
 		);
 		return;
@@ -209,6 +248,49 @@ async function handleLine(
 			return;
 		}
 		try {
+			if (
+				method === "ui-start" ||
+				method === "ui-stop" ||
+				method === "ui-status"
+			) {
+				if (opts.role !== "writer" || !opts.webUi) {
+					socket.write(
+						JSON.stringify({
+							type: "rpc-error",
+							id,
+							code: "TF_FEATURE_REQUIRED",
+							message:
+								"the active singleton does not expose WebGateway lifecycle control",
+						}) + "\n",
+					);
+					return;
+				}
+				const result =
+					method === "ui-start"
+						? await opts.webUi.start(params, principal)
+						: method === "ui-stop"
+							? await opts.webUi.stop(params, principal)
+							: await opts.webUi.status(params, principal);
+				socket.write(
+					JSON.stringify({
+						type: "rpc-result",
+						id,
+						result,
+					}) + "\n",
+				);
+				return;
+			}
+			if (opts.webUiOnly) {
+				socket.write(
+					JSON.stringify({
+						type: "rpc-error",
+						id,
+						code: "TF_INVALID_ARGUMENT",
+						message: `unknown method ${method}`,
+					}) + "\n",
+				);
+				return;
+			}
 			if (method === "status" || method === "wait") {
 				const host = resolveHostExact(opts, params.projectId as string | undefined);
 				if (!host.ok) {

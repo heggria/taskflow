@@ -1,0 +1,365 @@
+{
+  "manifestVersion": "taskflow-web-reference-set.v1",
+  "status": "draft-unapproved",
+  "protocol": {
+    "major": 1,
+    "minor": 0,
+    "schemaVersion": "web.v1"
+  },
+  "contentCatalogs": {
+    "version": "taskflow-content.v1",
+    "keysetDigests": {
+      "projected": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+      "static": "sha256:b3610739da1c6afd358369059ccc9bf74c54519364a271f6b49114af148d0bbd",
+      "combined": "sha256:7eb98f11ea5d9ae8aed277610beeec92b0e09bfb2c3e7eed129389dc18369f07"
+    },
+    "catalogDigests": {
+      "en": "sha256:f8b3464b713aa015aafeb38dd8b4bcaec733ab26e74ad74beea04d5973b29d0c",
+      "zh-CN": "sha256:5a30db8e7103e172ebb4201164c30ec240e4e6834121677ea0f5b0fba9945889"
+    }
+  },
+  "projectionVersions": {
+    "task": "task-presentation.v1",
+    "decision": "decision-presentation.v1",
+    "observation": "observation-presentation.v1",
+    "failure": "failure-presentation.v1"
+  },
+  "reviewMatrix": {
+    "locales": [
+      "en",
+      "zh-CN"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "viewports": [
+      "1440x900",
+      "1024x768",
+      "320-css-px",
+      "200-percent-zoom"
+    ],
+    "evidenceState": "rendered-awaiting-human-approval",
+    "evidenceManifest": "render-evidence.json"
+  },
+  "screens": [
+    {
+      "screenId": "simple-home",
+      "spec": "screens/simple-home.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.home",
+        "nav.tasks",
+        "nav.needs-input",
+        "section.active-tasks",
+        "section.recent-tasks",
+        "summary.task-count",
+        "summary.workspace-count"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "simple-home-empty",
+          "state": "empty",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/simple-home-empty.json",
+          "sourceSha256": "sha256:338151f1936aa7c1cb6dc33a7323bd85fe6da30a5668830ae998463842cd4c7a",
+          "projectionSha256": "sha256:c4eda58b55bbf3eb62c3387d20d762b4abc5637c1dc93be01ac94f2a049b3532",
+          "fixtureFileSha256": "sha256:9f92aba13cbc403bb8d911bebf7d63f2d207571a5c66d2c1e9e061731769646c",
+          "contentKeys": [
+            "empty.home.no-tasks"
+          ]
+        },
+        {
+          "fixtureId": "simple-home-partial-disconnected",
+          "state": "partial-disconnected",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/simple-home-partial-disconnected.json",
+          "sourceSha256": "sha256:3a8881069b06830e3afe3f046afe32732eaa7cf8e88e276760649232f4739836",
+          "projectionSha256": "sha256:acf30890c5d6d3798513ef2a20a886acf38713468236a4e3b6ee76f25df97f0b",
+          "fixtureFileSha256": "sha256:19a8d060a53e63a9dfa2053a6de711b230c87d1b507daa489644ccc4f0062077",
+          "contentKeys": [
+            "observation.source-coverage-partial"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "active-task",
+      "spec": "screens/active-task.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.tasks",
+        "section.task-details",
+        "section.steps",
+        "section.result",
+        "section.verification"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "active-task-result",
+          "state": "running-with-result-pane",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/active-task-result.json",
+          "sourceSha256": "sha256:8641c7e7d55abd60bfea7ce647bae5da8b58f26d17e6a750f252c309dfe6709b",
+          "projectionSha256": "sha256:7af45ccf8d2d7097f830ce20982769e60f15fb7592690386344f3bfe6e759f7c",
+          "fixtureFileSha256": "sha256:303d0f89caf4a34b3add72b13b6d96d9331bff7f20f926666b2509de8ed0a42a",
+          "contentKeys": [
+            "task.working",
+            "task.working.one.detail",
+            "verification.not-yet-verified",
+            "verification.not-yet-verified.detail"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "needs-input-decision",
+      "spec": "screens/needs-input-decision.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.needs-input",
+        "section.required-input",
+        "section.task-details"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "needs-input-decision",
+          "state": "two-sided-decision",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/needs-input-decision.json",
+          "sourceSha256": "sha256:f9f14ff7993410607424f6d4fa48e01aad6b909170c83c85f7f4b0455836633a",
+          "projectionSha256": "sha256:1b319d9b0445c89ceee0bd5c0c279d1bc501131e873d981a072a80fe4ab5253d",
+          "fixtureFileSha256": "sha256:757621dfed31882a958a53a07d563c235b967c4ee9227786a964235043d3f015",
+          "contentKeys": [
+            "decision.publish-files.allow-consequence",
+            "decision.publish-files.allow-label",
+            "decision.publish-files.do-not-allow-consequence",
+            "decision.publish-files.do-not-allow-label",
+            "decision.publish-files.impact",
+            "decision.publish-files.question",
+            "task.approval-required.detail",
+            "task.needs-input",
+            "verification.not-yet-verified",
+            "verification.not-yet-verified.detail"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "completed-task",
+      "spec": "screens/completed-task.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.tasks",
+        "section.result",
+        "section.verification"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "completed-verified",
+          "state": "verified",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/completed-verified.json",
+          "sourceSha256": "sha256:d216fe43e641a856cdf61375a70e5e7b3c7c698148a723d3d5518a2c3a0ee1c8",
+          "projectionSha256": "sha256:e7178ece8913730533a47103ab0adfe7a905fb97f4127b631f8a96e2cc3a4b97",
+          "fixtureFileSha256": "sha256:f989bd835bcbae2e8c3e409e1da0be4a87edff7770cad096f395b26f75e6e6c1",
+          "contentKeys": [
+            "task.completed",
+            "task.completed.verification.detail",
+            "verification.verified",
+            "verification.verified.detail"
+          ]
+        },
+        {
+          "fixtureId": "completed-verification-unavailable",
+          "state": "verification-unavailable",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/completed-verification-unavailable.json",
+          "sourceSha256": "sha256:add467b5c336485cc8b4a52fcfef0893f087c2face3e04a84fadbb54a8bf73fc",
+          "projectionSha256": "sha256:c1f9f2f25c8020e0cab82197c8754f66af94851efad250c6385e1dc384228562",
+          "fixtureFileSha256": "sha256:a64e3e0f8a74f4c1a3c852891194858ab4fb9dff8ae21a613956aa522f92f883",
+          "contentKeys": [
+            "task.completed",
+            "task.completed.verification.detail",
+            "verification.unavailable",
+            "verification.unavailable.detail"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "unknown-reconciling",
+      "spec": "screens/unknown-reconciling.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.tasks",
+        "section.task-details",
+        "section.steps"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "unknown-reconciling",
+          "state": "possible-live-side-effects",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/unknown-reconciling.json",
+          "sourceSha256": "sha256:d009b7035e47ab6df1d213892d560c9a2dea9a90400c09a147e5b24a2268b630",
+          "projectionSha256": "sha256:3012f9f50e7a04133da040b3f34c563b25350f3ad83d3392ed7bb5f88d74da65",
+          "fixtureFileSha256": "sha256:53572b009cddc7f63153df779e91ee25c816af6c531581f5713e219769d22f5b",
+          "contentKeys": [
+            "task.checking-execution",
+            "task.reconciling.ambiguous.detail",
+            "verification.not-yet-verified",
+            "verification.not-yet-verified.detail"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "pro-graph",
+      "spec": "screens/pro-graph.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.pro.graph",
+        "section.pro.graph",
+        "section.pro.node",
+        "graph.legend.depends-on",
+        "graph.selected-step"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "pro-graph-node-inspector",
+          "state": "node-selected",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/pro-graph-node-inspector.json",
+          "sourceSha256": "sha256:ba65823877d3a3be191567b3f68ccc31638cd06d17f760d05423452aaee32e98",
+          "projectionSha256": "sha256:45e7d743a4405135a2e1afa7151c185ca685fa59a5d2cc36e3d74e5bb5b53865",
+          "fixtureFileSha256": "sha256:a32b48c8eab63e719e46eedd04d17051f423a426610be2ce6051bb71a543f832",
+          "contentKeys": []
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "pro-evidence",
+      "spec": "screens/pro-evidence.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.pro.evidence",
+        "section.pro.evidence",
+        "section.pro.artifacts",
+        "evidence.immutable-record",
+        "evidence.current-checks",
+        "evidence.export-check-title",
+        "evidence.export-check-detail",
+        "evidence.export-downloaded",
+        "evidence.export-failed",
+        "action.download-receipt-json"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "pro-evidence-receipt",
+          "state": "verified-receipt",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/pro-evidence-receipt.json",
+          "sourceSha256": "sha256:e4b0db84f53d31bef8097f09232f9396f7f1ccd271093e49b08e21120d44841a",
+          "projectionSha256": "sha256:7137a01ec2956a69fcf49ae8fa133ddecad1bf8d4c85e6ee74520c802aa0d49f",
+          "fixtureFileSha256": "sha256:ad1d2e076694d57b85e6f547c99a71a1ffcaf0669ef998839a1d8c70d8b32b37",
+          "contentKeys": [
+            "verification.verified",
+            "verification.verified.detail"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "settings",
+      "spec": "screens/settings.md",
+      "staticContentKeys": [
+        "app.brand",
+        "nav.settings",
+        "section.preferences",
+        "settings.mode.label",
+        "settings.theme.label",
+        "settings.language.label"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "settings-session",
+          "state": "simple-mode-session-active",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/settings-session.json",
+          "sourceSha256": "sha256:d86abbf0ab62ec2919ce92b217cf5fec0d90f02cafb4e83afe3fbce5551bdef6",
+          "projectionSha256": "sha256:edf44338e4dafcb80f6a203e8f5bf2e72f15440cef1e7697caf408a1e21e21cf",
+          "fixtureFileSha256": "sha256:428693e75e518aa0122d0d59cc8cd2d5b3397b9e46a230ac54f282034eb36750",
+          "contentKeys": []
+        }
+      ],
+      "reviewStatus": "unapproved"
+    },
+    {
+      "screenId": "error-recovery",
+      "spec": "screens/error-recovery.md",
+      "staticContentKeys": [
+        "app.brand",
+        "action.show-details",
+        "section.pro.technical",
+        "pro.field.request-id"
+      ],
+      "fixtures": [
+        {
+          "fixtureId": "error-ordinary-preserved-result",
+          "state": "ordinary-failure-preserved-result",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/error-ordinary-preserved-result.json",
+          "sourceSha256": "sha256:1527a7c20acf7f5f961b016e4e5569565b2ecda570d660312b398b6208d47c51",
+          "projectionSha256": "sha256:5e331499ca32ec00ad4c80d99dfd2c0a7aadde91cf06633bb5d10da8dd09f582",
+          "fixtureFileSha256": "sha256:76a02fa001fbc54ac3ec774d4c3df97c1c870027a8f001b32c240478b5bbe4ff",
+          "contentKeys": [
+            "error.TF_COMMAND_FAILED.detail",
+            "error.TF_COMMAND_FAILED.headline",
+            "recovery.retry-new-command",
+            "risk.none"
+          ]
+        },
+        {
+          "fixtureId": "error-protocol-incompatible",
+          "state": "protocol-incompatible",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/error-protocol-incompatible.json",
+          "sourceSha256": "sha256:b8a49379d3cd0f4da578e448041ad023c4a6e465ce29b89775ff7a638a0457d9",
+          "projectionSha256": "sha256:103a30b8cdced2513eefe860a1b6a060e4a6bff24ee89e06505c377c7e174ae4",
+          "fixtureFileSha256": "sha256:4d1fd33dd78afeb160b8cc08cd9b51e9a8317196436524fbd41fe79f84b3a234",
+          "contentKeys": [
+            "error.TF_PROTOCOL_INCOMPATIBLE.detail",
+            "error.TF_PROTOCOL_INCOMPATIBLE.headline",
+            "recovery.operator",
+            "risk.none"
+          ]
+        },
+        {
+          "fixtureId": "error-cursor-expired",
+          "state": "cursor-expired",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/error-cursor-expired.json",
+          "sourceSha256": "sha256:ed279a50cf44935336c1794dea277b44dbf613868cf7adb9953a702f56860ab0",
+          "projectionSha256": "sha256:056e968c73935c0bbb9e0d3f3e8ccb869f3ee8f384217f29c1f3adf9ac34a37b",
+          "fixtureFileSha256": "sha256:66245800a5a46f5690c6cd95c053e7e65b41b7b37a84df5536b30e482bda466e",
+          "contentKeys": [
+            "error.TF_CURSOR_EXPIRED.detail",
+            "error.TF_CURSOR_EXPIRED.headline",
+            "risk.none",
+            "system.cursor-expired.refresh"
+          ]
+        },
+        {
+          "fixtureId": "error-command-outcome-unknown",
+          "state": "lost-command-outcome",
+          "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/error-command-outcome-unknown.json",
+          "sourceSha256": "sha256:a6a48a8bf6580a115b3484f062e88694088919c23039b59cc03fe444c8e85d15",
+          "projectionSha256": "sha256:8c0b89bf147e83dfa224cb406d11ab3a4b32b647f7a647494a40f497ac0adeb7",
+          "fixtureFileSha256": "sha256:c056bdf47e20c40e74930ee5c3b6920a687ddf72925ae05531a75647cd3bfaae",
+          "contentKeys": [
+            "error.TF_COMMAND_FAILED.detail",
+            "error.TF_COMMAND_FAILED.headline",
+            "recovery.retry-same-command",
+            "risk.unknown-side-effects"
+          ]
+        }
+      ],
+      "reviewStatus": "unapproved"
+    }
+  ]
+}

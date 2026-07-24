@@ -1,0 +1,133 @@
+{
+  "schemaVersion": "taskflow-browser-at-review.v1",
+  "status": "template-not-evidence",
+  "buildCommit": "replace",
+  "referenceManifestSha256": "replace",
+  "renderEvidenceSha256": "replace",
+  "reviewerId": "replace-with-opaque-id",
+  "lanes": [
+    {
+      "laneId": "safari-voiceover-macos",
+      "status": "not-run",
+      "environment": {
+        "browserVersion": "replace",
+        "operatingSystemVersion": "replace",
+        "assistiveTechnologyVersion": "replace"
+      },
+      "results": {
+        "launch-simple": null,
+        "skip-and-navigation": null,
+        "task-state": null,
+        "approval-dialog": null,
+        "mode-and-tabs": null,
+        "graph-listbox": null,
+        "evidence": null,
+        "live-update": null,
+        "narrow-zoom-contrast": null,
+        "session-dialogs": null
+      },
+      "blockingIssues": [],
+      "completedAt": null,
+      "reviewerAttestation": false
+    },
+    {
+      "laneId": "chrome-voiceover-macos",
+      "status": "not-run",
+      "environment": {
+        "browserVersion": "replace",
+        "operatingSystemVersion": "replace",
+        "assistiveTechnologyVersion": "replace"
+      },
+      "results": {
+        "launch-simple": null,
+        "skip-and-navigation": null,
+        "task-state": null,
+        "approval-dialog": null,
+        "mode-and-tabs": null,
+        "graph-listbox": null,
+        "evidence": null,
+        "live-update": null,
+        "narrow-zoom-contrast": null,
+        "session-dialogs": null
+      },
+      "blockingIssues": [],
+      "completedAt": null,
+      "reviewerAttestation": false
+    },
+    {
+      "laneId": "edge-narrator-windows",
+      "status": "not-run",
+      "environment": {
+        "browserVersion": "replace",
+        "operatingSystemVersion": "replace",
+        "assistiveTechnologyVersion": "replace"
+      },
+      "results": {
+        "launch-simple": null,
+        "skip-and-navigation": null,
+        "task-state": null,
+        "approval-dialog": null,
+        "mode-and-tabs": null,
+        "graph-listbox": null,
+        "evidence": null,
+        "live-update": null,
+        "narrow-zoom-contrast": null,
+        "session-dialogs": null
+      },
+      "blockingIssues": [],
+      "completedAt": null,
+      "reviewerAttestation": false
+    },
+    {
+      "laneId": "firefox-nvda-windows",
+      "status": "not-run",
+      "environment": {
+        "browserVersion": "replace",
+        "operatingSystemVersion": "replace",
+        "assistiveTechnologyVersion": "replace"
+      },
+      "results": {
+        "launch-simple": null,
+        "skip-and-navigation": null,
+        "task-state": null,
+        "approval-dialog": null,
+        "mode-and-tabs": null,
+        "graph-listbox": null,
+        "evidence": null,
+        "live-update": null,
+        "narrow-zoom-contrast": null,
+        "session-dialogs": null
+      },
+      "blockingIssues": [],
+      "completedAt": null,
+      "reviewerAttestation": false
+    },
+    {
+      "laneId": "edge-forced-colors-windows",
+      "status": "not-run",
+      "environment": {
+        "browserVersion": "replace",
+        "operatingSystemVersion": "replace",
+        "assistiveTechnologyVersion": "forced-colors"
+      },
+      "results": {
+        "launch-simple": null,
+        "skip-and-navigation": null,
+        "task-state": null,
+        "approval-dialog": null,
+        "mode-and-tabs": null,
+        "graph-listbox": null,
+        "evidence": null,
+        "live-update": null,
+        "narrow-zoom-contrast": null,
+        "session-dialogs": null
+      },
+      "blockingIssues": [],
+      "completedAt": null,
+      "reviewerAttestation": false
+    }
+  ],
+  "overallGatePassed": false,
+  "completedAt": null,
+  "reviewerAttestation": false
+}

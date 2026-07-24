@@ -14,6 +14,7 @@ import {
 } from "../paths.ts";
 import type { ProjectControlStore } from "./project-store.ts";
 import * as path from "node:path";
+import { newId } from "../hash.ts";
 
 export interface RegistryEntry {
 	projectId: string;
@@ -28,6 +29,8 @@ export interface RegistryEntry {
 }
 
 export interface ControlRegistry {
+	/** Monotonic-by-mutation opaque revision for aggregate cursor/SSE binding. */
+	readonly revision: string;
 	list(): RegistryEntry[];
 	getByProjectId(projectId: string): RegistryEntry | null;
 	getByProjectRoot(projectRoot: string): RegistryEntry | null;
@@ -39,6 +42,7 @@ export interface ControlRegistry {
 
 interface RegistryFile {
 	schemaVersion: number;
+	revision: string;
 	entries: RegistryEntry[];
 }
 
@@ -48,23 +52,39 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 	ensureDir(userControlRoot(env));
 
 	function load(): RegistryFile {
-		return readJsonFile<RegistryFile>(file) ?? { schemaVersion: 1, entries: [] };
+		const existing = readJsonFile<Partial<RegistryFile>>(file);
+		return {
+			schemaVersion: existing?.schemaVersion ?? 1,
+			revision: existing?.revision ?? "registry-legacy",
+			entries: existing?.entries ?? [],
+		};
 	}
 
 	function save(data: RegistryFile): void {
 		writeFileAtomic(file, JSON.stringify(data, null, 2));
 	}
 
-	function mutate<T>(fn: (data: RegistryFile) => T): T {
+	function mutate<T>(
+		fn: (
+			data: RegistryFile,
+		) => { readonly result: T; readonly changed: boolean },
+	): T {
 		return withExclusiveLockFile(lockPath, () => {
 			const data = load();
-			const result = fn(data);
-			save(data);
+			const { result, changed } = fn(data);
+			if (changed) {
+				data.revision = newId("reg");
+				save(data);
+			}
 			return result;
 		});
 	}
 
 	return {
+		get revision() {
+			return load().revision;
+		},
+
 		list() {
 			return load().entries.slice();
 		},
@@ -100,6 +120,8 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 					domainClash.updatedAt = now;
 				}
 				const existing = data.entries.findIndex((e) => e.projectId === h.projectId);
+				const previous =
+					existing >= 0 ? data.entries[existing]! : undefined;
 				const entry: RegistryEntry = {
 					projectId: h.projectId,
 					controlDomainId: h.controlDomainId,
@@ -107,18 +129,39 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 					projectRoot: resolvedRoot,
 					directoryBinding: h.directoryBinding,
 					mountState: "mounted",
-					registeredAt: existing >= 0 ? data.entries[existing]!.registeredAt : now,
+					registeredAt: previous?.registeredAt ?? now,
 					updatedAt: now,
+					...(previous?.summary
+						? { summary: previous.summary }
+						: {}),
 				};
+				const unchanged =
+					previous !== undefined &&
+					domainClash === undefined &&
+					previous.controlDomainId === entry.controlDomainId &&
+					previous.storePath === entry.storePath &&
+					previous.projectRoot === entry.projectRoot &&
+					previous.mountState === "mounted" &&
+					previous.directoryBinding.path ===
+						entry.directoryBinding.path &&
+					previous.directoryBinding.inode ===
+						entry.directoryBinding.inode &&
+					previous.directoryBinding.dev ===
+						entry.directoryBinding.dev;
+				if (unchanged) {
+					return { result: previous, changed: false };
+				}
 				if (existing >= 0) data.entries[existing] = entry;
 				else data.entries.push(entry);
-				return entry;
+				return { result: entry, changed: true };
 			});
 		},
 
 		wipe() {
 			mutate((data) => {
+				const changed = data.entries.length > 0;
 				data.entries = [];
+				return { result: undefined, changed };
 			});
 		},
 	};

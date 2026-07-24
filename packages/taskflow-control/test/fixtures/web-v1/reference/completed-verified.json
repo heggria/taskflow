@@ -1,0 +1,321 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "completed-verified",
+  "screenId": "completed-task",
+  "state": "verified",
+  "sourceKind": "task-projection",
+  "source": {
+    "run": {
+      "status": "completed",
+      "stage": "terminal",
+      "runVersion": 5,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "needsOperator": false,
+      "stopping": false,
+      "sideEffects": "none",
+      "displayTitle": "Check release readiness",
+      "workspaceDisplayName": "Taskflow"
+    },
+    "observedAt": 1800000000000,
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "nodeInstanceId": "node-1",
+        "status": "completed",
+        "origin": "static",
+        "presentation": {
+          "authoredPhaseId": "check-tests",
+          "groupId": "group-check-tests",
+          "role": "step",
+          "ordinal": 0,
+          "label": "Check test results"
+        }
+      }
+    ],
+    "inventorySealed": true,
+    "presentationMetadataValid": true,
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "All release checks passed. The release note is ready."
+    },
+    "verification": {
+      "runStatus": "completed",
+      "checkedAt": 1800000000000,
+      "lifecycleRequiresVerification": true,
+      "receiptId": "receipt-1",
+      "verifierAvailable": true,
+      "eventManifest": "ok",
+      "journalContinuity": "ok",
+      "provenance": "ok",
+      "artifactIntegrity": "ok",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "observed": "completed",
+        "check": "ok",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "artifactChecks": [
+        {
+          "artifactId": "artifact-1",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "required": true,
+          "state": "ok"
+        }
+      ],
+      "artifactCheckCount": 1,
+      "requiredArtifactCheckCount": 1,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "availableActions": [],
+    "preservedResultCount": 1
+  },
+  "projection": {
+    "projectionVersion": "task-presentation.v1",
+    "source": {
+      "runVersion": 5,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "observedAt": 1800000000000,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.completed",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.completed.verification.detail",
+      "args": [
+        {
+          "name": "verificationReason",
+          "value": "all-required-checks-ok"
+        }
+      ]
+    },
+    "activeStepCount": 0,
+    "activeSteps": [],
+    "stepGroupCount": 1,
+    "stepGroups": [
+      {
+        "groupId": "group-check-tests",
+        "label": "Check test results",
+        "state": "completed",
+        "origin": "static",
+        "memberCount": 1,
+        "memberNodeInstanceIds": [
+          "node-1"
+        ],
+        "helperNodesCollapsed": false,
+        "membersTruncated": false,
+        "ordinal": 0
+      }
+    ],
+    "progress": {
+      "semantics": "exact",
+      "completed": 1,
+      "total": 1,
+      "inventorySealed": true
+    },
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "All release checks passed. The release note is ready."
+    },
+    "verification": {
+      "state": "verified",
+      "reason": "all-required-checks-ok",
+      "label": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.verified",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "all-required-checks-ok"
+          }
+        ]
+      },
+      "detail": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.verified.detail",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "all-required-checks-ok"
+          }
+        ]
+      },
+      "checkedAt": 1800000000000,
+      "receiptId": "receipt-1",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "observed": "completed",
+        "check": "ok",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "eventManifest": "ok",
+      "journalContinuity": "ok",
+      "provenance": "ok",
+      "artifactIntegrity": "ok",
+      "artifactCheckCount": 1,
+      "requiredArtifactCheckCount": 1,
+      "artifactChecks": [
+        {
+          "artifactId": "artifact-1",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "required": true,
+          "state": "ok"
+        }
+      ],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "primaryAction": {
+      "kind": "open-result"
+    },
+    "decisionProvenance": {
+      "runStatus": "completed",
+      "runStage": "terminal",
+      "runVersion": 5,
+      "needsOperator": false,
+      "sideEffects": "none",
+      "activeNodeIds": [],
+      "activeGroupIds": [],
+      "finalResultSourceId": "node-1",
+      "finalResultKind": "text",
+      "verificationReceiptId": "receipt-1",
+      "verificationCheck": "verified",
+      "primaryActionSource": "result"
+    },
+    "warnings": []
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "task.completed",
+      "en": "Task completed",
+      "zh-CN": "任务已完成"
+    },
+    {
+      "path": "$.detail",
+      "key": "task.completed.verification.detail",
+      "en": "The task finished, and all required result checks passed.",
+      "zh-CN": "任务已经完成，所有必要的结果检查均已通过。"
+    },
+    {
+      "path": "$.verification.label",
+      "key": "verification.verified",
+      "en": "Result verified",
+      "zh-CN": "结果已验证"
+    },
+    {
+      "path": "$.verification.detail",
+      "key": "verification.verified.detail",
+      "en": "All required checks passed for the current result.",
+      "zh-CN": "当前结果的所有必要检查均已通过。"
+    }
+  ]
+}

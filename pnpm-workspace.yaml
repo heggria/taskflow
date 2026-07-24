@@ -17,6 +17,7 @@ packages:
   - "packages/opencode-taskflow"
   - "packages/grok-taskflow"
   - "packages/taskflow-dsl"
+  - "packages/taskflow-web"
   - "website"
 overrides:
   postcss: "^8.5.10"
@@ -25,3 +26,5 @@ allowBuilds:
   esbuild: true
   protobufjs: true
   sharp: true
+minimumReleaseAgeExclude:
+  - lucide-react@1.26.0

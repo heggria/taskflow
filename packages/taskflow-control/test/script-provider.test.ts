@@ -26,7 +26,7 @@ function temp(): { env: NodeJS.ProcessEnv; project: string; home: string; cleanu
 	};
 }
 
-test("script provider: exit 0 → completed + Receipt with fail-closed artifactIntegrity unknown", async () => {
+test("script provider: exit 0 → completed + verified final-output artifact", async () => {
 	const t = temp();
 	try {
 		const host = createControlHost({
@@ -49,8 +49,9 @@ test("script provider: exit 0 → completed + Receipt with fail-closed artifactI
 		assert.equal(r.run?.status, "completed");
 		assert.ok(r.receipt);
 		assert.equal(r.receipt!.assurance.providerOutcome, "ok");
-		// Unproven artifact integrity must not claim ok
-		assert.equal(r.receipt!.assurance.artifactIntegrity, "unknown");
+		// Final output is ingested into the content-addressed store before Receipt issue.
+		assert.equal(r.receipt!.assurance.artifactIntegrity, "ok");
+		assert.equal(r.receipt!.artifactRefs.length, 2);
 		assert.match(r.run?.finalOutput ?? "", /hello-out/);
 		host.close();
 	} finally {
@@ -80,6 +81,78 @@ test("script provider: exit 37 → failed terminal, no success Receipt", async (
 		assert.match(r.run?.error ?? "", /37/);
 		assert.equal(r.receipt, undefined);
 		assert.equal(host.store.getReceiptForRun(r.run!.runId), null);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("script provider: concurrent cancel kills the process group and preserves cancelled terminal", async () => {
+	const t = temp();
+	try {
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createScriptExecutionProvider({
+				stateDir: path.join(
+					t.project,
+					".taskflow",
+					"control",
+					"provider-jobs",
+				),
+			}),
+		});
+		const running = host.admitAndRun({
+			commandId: "cmd-real-script-cancel",
+			program: {
+				name: "cancel-script-tree",
+				phases: [
+					{
+						id: "main",
+						type: "script",
+						run: "sleep 10; printf should-not-run",
+						final: true,
+					},
+				],
+			},
+		});
+		let active = host.store.listRuns()[0];
+		const activeDeadline = Date.now() + 5_000;
+		while (
+			(!active?.providerHandle ||
+				active.status !== "running" ||
+				active.stage !== "executing") &&
+			Date.now() < activeDeadline
+		) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, 10),
+			);
+			active = host.store.listRuns()[0];
+		}
+		assert.ok(active?.providerHandle);
+		const cancelledAt = Date.now();
+		const cancelled = await host.cancel(active.runId, {
+			commandId: "cmd-real-script-cancel-request",
+			expectedRunVersion: active.runVersion,
+		});
+		const interrupted = await running;
+		assert.equal(
+			cancelled.ok,
+			true,
+			JSON.stringify(cancelled.error),
+		);
+		assert.equal(cancelled.run?.status, "cancelled");
+		assert.equal(interrupted.run?.status, "cancelled");
+		assert.equal(
+			host.store.getRun(active.runId)?.status,
+			"cancelled",
+		);
+		assert.ok(
+			Date.now() - cancelledAt < 3_000,
+			"cancel must not wait for a surviving shell child",
+		);
 		host.close();
 	} finally {
 		t.cleanup();

@@ -1,0 +1,109 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "error-command-outcome-unknown",
+  "screenId": "error-recovery",
+  "state": "lost-command-outcome",
+  "sourceKind": "failure-projection",
+  "source": {
+    "failure": {
+      "ok": false,
+      "requestId": "request-tf-command-failed",
+      "schemaVersion": "web.v1",
+      "error": {
+        "code": "TF_COMMAND_FAILED",
+        "message": "Sanitized fixture diagnostic",
+        "recoveryAction": "retry-same-command",
+        "sideEffects": "unknown",
+        "commandId": "command-1"
+      }
+    },
+    "context": {
+      "surface": "command-recovery",
+      "operation": "cancel-run",
+      "resourceState": {
+        "kind": "command",
+        "commandId": "command-1",
+        "outcome": "not-found"
+      },
+      "sourceAuthority": "verified",
+      "commandBodyState": "present-in-current-tab-memory",
+      "supportedFeatures": [
+        "run-detail",
+        "reconcile-run"
+      ],
+      "supportedCommands": [
+        "cancel-run",
+        "reconcile-run"
+      ],
+      "availableActions": [
+        {
+          "kind": "cancel-run",
+          "state": "available",
+          "requestBase": {
+            "kind": "cancel-run",
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "runId": "run-1",
+            "expectedRunVersion": 7
+          }
+        }
+      ]
+    }
+  },
+  "projection": {
+    "projectionVersion": "failure-presentation.v1",
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_COMMAND_FAILED.headline",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_COMMAND_FAILED.detail",
+      "args": []
+    },
+    "risk": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "risk.unknown-side-effects",
+      "args": []
+    },
+    "nextAction": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "recovery.retry-same-command",
+      "args": []
+    },
+    "actionKind": "retry-same-command",
+    "technical": {
+      "code": "TF_COMMAND_FAILED",
+      "sanitizedMessage": "Sanitized fixture diagnostic",
+      "requestId": "request-tf-command-failed",
+      "commandId": "command-1"
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "error.TF_COMMAND_FAILED.headline",
+      "en": "The action did not finish",
+      "zh-CN": "操作没有完成"
+    },
+    {
+      "path": "$.detail",
+      "key": "error.TF_COMMAND_FAILED.detail",
+      "en": "Taskflow could not complete this action. Preserved task results remain available; review the next action before trying again.",
+      "zh-CN": "Taskflow 无法完成这个操作。已保留的任务结果仍然可用；重试前请查看下一步操作。"
+    },
+    {
+      "path": "$.risk",
+      "key": "risk.unknown-side-effects",
+      "en": "Taskflow cannot yet determine whether work is still running. Repeating the action may cause it to run twice.",
+      "zh-CN": "Taskflow 还不能确定是否仍有工作在运行。重复操作可能导致工作执行两次。"
+    },
+    {
+      "path": "$.nextAction",
+      "key": "recovery.retry-same-command",
+      "en": "Retry the same action",
+      "zh-CN": "重试同一操作"
+    }
+  ]
+}

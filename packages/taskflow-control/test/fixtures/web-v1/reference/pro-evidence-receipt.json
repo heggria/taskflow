@@ -1,0 +1,264 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "pro-evidence-receipt",
+  "screenId": "pro-evidence",
+  "state": "verified-receipt",
+  "sourceKind": "endpoint-view",
+  "source": {
+    "receipt": {
+      "receiptId": "receipt-1",
+      "projectId": "project-1",
+      "controlDomainId": "domain-1",
+      "runId": "run-1",
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "eventManifest": [
+        "event-1"
+      ],
+      "startCommitSeq": 1,
+      "endCommitSeq": 9,
+      "artifactRefs": [
+        {
+          "artifactId": "artifact-1",
+          "role": "final-output",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "size": 42,
+          "mediaType": "text/plain",
+          "storageClass": "control-store",
+          "redactionClass": "public",
+          "receiptId": "receipt-1",
+          "integrity": "ok"
+        }
+      ],
+      "issuedAt": 1800000000000,
+      "assurance": {
+        "journalContinuity": "ok",
+        "providerOutcome": "ok",
+        "artifactIntegrity": "ok",
+        "provenance": "ok"
+      },
+      "buildInfo": {
+        "packageVersion": "0.3.0-beta.2",
+        "controlSchemaVersion": 1
+      }
+    },
+    "verification": {
+      "state": "verified",
+      "reason": "all-required-checks-ok",
+      "label": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.verified",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "all-required-checks-ok"
+          }
+        ]
+      },
+      "detail": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.verified.detail",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "all-required-checks-ok"
+          }
+        ]
+      },
+      "checkedAt": 1800000000000,
+      "receiptId": "receipt-1",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "observed": "completed",
+        "check": "ok",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "eventManifest": "ok",
+      "journalContinuity": "ok",
+      "provenance": "ok",
+      "artifactIntegrity": "ok",
+      "artifactCheckCount": 1,
+      "requiredArtifactCheckCount": 1,
+      "artifactChecks": [
+        {
+          "artifactId": "artifact-1",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "required": true,
+          "state": "ok"
+        }
+      ],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "artifactCount": 1,
+    "eventManifest": {
+      "items": [
+        {
+          "eventId": "event-1",
+          "commitSeq": 1,
+          "eventKind": "run-completed",
+          "eventDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    }
+  },
+  "projection": {
+    "state": "verified",
+    "reason": "all-required-checks-ok",
+    "label": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "verification.verified",
+      "args": [
+        {
+          "name": "verificationReason",
+          "value": "all-required-checks-ok"
+        }
+      ]
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "verification.verified.detail",
+      "args": [
+        {
+          "name": "verificationReason",
+          "value": "all-required-checks-ok"
+        }
+      ]
+    },
+    "checkedAt": 1800000000000,
+    "receiptId": "receipt-1",
+    "providerConsistency": {
+      "expected": {
+        "kind": "exact",
+        "outcome": "completed"
+      },
+      "observed": "completed",
+      "check": "ok",
+      "sourceEventRefs": [
+        "event-1"
+      ]
+    },
+    "eventManifest": "ok",
+    "journalContinuity": "ok",
+    "provenance": "ok",
+    "artifactIntegrity": "ok",
+    "artifactCheckCount": 1,
+    "requiredArtifactCheckCount": 1,
+    "artifactChecks": [
+      {
+        "artifactId": "artifact-1",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "required": true,
+        "state": "ok"
+      }
+    ],
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.label",
+      "key": "verification.verified",
+      "en": "Result verified",
+      "zh-CN": "结果已验证"
+    },
+    {
+      "path": "$.detail",
+      "key": "verification.verified.detail",
+      "en": "All required checks passed for the current result.",
+      "zh-CN": "当前结果的所有必要检查均已通过。"
+    }
+  ]
+}

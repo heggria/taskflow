@@ -1,7 +1,7 @@
 # P11: Compaction + cursor + minAvailableCommitSeq
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 - `commitSeq` is **never renumbered** by compaction.

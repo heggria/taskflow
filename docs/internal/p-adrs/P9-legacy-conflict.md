@@ -1,7 +1,7 @@
 # P9: legacy-conflict
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 When a 0.2 writer is detected on the same project flow storage while 0.3 control is active:

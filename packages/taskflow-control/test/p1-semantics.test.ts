@@ -16,6 +16,8 @@ import {
 	linkProgram,
 	openControlRegistry,
 	openProjectControlStore,
+	projectHeaderPath,
+	registryPath,
 } from "../src/index.ts";
 
 function temp(): { env: NodeJS.ProcessEnv; project: string; home: string; cleanup: () => void } {
@@ -118,6 +120,70 @@ test("identity: copy of ControlStore to new path is fail-closed (TF_IDENTITY_MIS
 	} finally {
 		t.cleanup();
 		fs.rmSync(clone, { recursive: true, force: true });
+	}
+});
+
+test("identity: unchanged reopen does not rewrite the authoritative header", () => {
+	const t = temp();
+	try {
+		const first = openProjectControlStore(t.project);
+		const headerFile = projectHeaderPath(t.project);
+		const header = {
+			...first.header,
+			updatedAt: 123,
+		};
+		fs.writeFileSync(headerFile, JSON.stringify(header, null, 2));
+		const before = fs.readFileSync(headerFile, "utf8");
+
+		const reopened = openProjectControlStore(t.project);
+
+		assert.equal(reopened.header.updatedAt, 123);
+		assert.equal(fs.readFileSync(headerFile, "utf8"), before);
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("registry: identical registration is a no-op and preserves summary", () => {
+	const t = temp();
+	try {
+		const store = openProjectControlStore(t.project);
+		const registry = openControlRegistry(t.env);
+		const first = registry.registerFromStore(store, t.project);
+		const registryFile = registryPath(t.env);
+		const persisted = JSON.parse(
+			fs.readFileSync(registryFile, "utf8"),
+		) as {
+			revision: string;
+			entries: Array<{
+				projectId: string;
+				updatedAt: number;
+				summary?: {
+					openRuns?: number;
+					lastRunAt?: number;
+				};
+			}>;
+		};
+		persisted.entries[0]!.summary = {
+			openRuns: 7,
+			lastRunAt: 456,
+		};
+		fs.writeFileSync(
+			registryFile,
+			JSON.stringify(persisted, null, 2),
+		);
+
+		const second = registry.registerFromStore(store, t.project);
+
+		assert.equal(registry.revision, persisted.revision);
+		assert.equal(second.updatedAt, first.updatedAt);
+		assert.deepEqual(second.summary, {
+			openRuns: 7,
+			lastRunAt: 456,
+		});
+		assert.deepEqual(registry.list(), [second]);
+	} finally {
+		t.cleanup();
 	}
 });
 
@@ -252,7 +318,7 @@ test("MCP bind: production ControlHost default uses real script provider (exit 3
 		assert.match(ok.run?.finalOutput ?? "", /mcp-real/);
 		assert.ok(ok.receipt);
 		assert.equal(ok.receipt!.assurance.providerOutcome, "ok");
-		assert.equal(ok.receipt!.assurance.artifactIntegrity, "unknown");
+			assert.equal(ok.receipt!.assurance.artifactIntegrity, "ok");
 
 		const fail = await tools.run({
 			define: {

@@ -1,0 +1,93 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "error-ordinary-preserved-result",
+  "screenId": "error-recovery",
+  "state": "ordinary-failure-preserved-result",
+  "sourceKind": "failure-projection",
+  "source": {
+    "failure": {
+      "ok": false,
+      "requestId": "request-tf-command-failed",
+      "schemaVersion": "web.v1",
+      "error": {
+        "code": "TF_COMMAND_FAILED",
+        "message": "Sanitized fixture diagnostic",
+        "recoveryAction": "retry-new-command",
+        "sideEffects": "none"
+      }
+    },
+    "context": {
+      "surface": "authoritative-detail",
+      "operation": "none",
+      "resourceState": {
+        "kind": "none"
+      },
+      "sourceAuthority": "verified",
+      "commandBodyState": "not-applicable",
+      "supportedFeatures": [
+        "run-detail",
+        "reconcile-run"
+      ],
+      "supportedCommands": [
+        "cancel-run",
+        "reconcile-run"
+      ],
+      "availableActions": []
+    }
+  },
+  "projection": {
+    "projectionVersion": "failure-presentation.v1",
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_COMMAND_FAILED.headline",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_COMMAND_FAILED.detail",
+      "args": []
+    },
+    "risk": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "risk.none",
+      "args": []
+    },
+    "nextAction": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "recovery.retry-new-command",
+      "args": []
+    },
+    "actionKind": "none",
+    "technical": {
+      "code": "TF_COMMAND_FAILED",
+      "sanitizedMessage": "Sanitized fixture diagnostic",
+      "requestId": "request-tf-command-failed"
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "error.TF_COMMAND_FAILED.headline",
+      "en": "The action did not finish",
+      "zh-CN": "操作没有完成"
+    },
+    {
+      "path": "$.detail",
+      "key": "error.TF_COMMAND_FAILED.detail",
+      "en": "Taskflow could not complete this action. Preserved task results remain available; review the next action before trying again.",
+      "zh-CN": "Taskflow 无法完成这个操作。已保留的任务结果仍然可用；重试前请查看下一步操作。"
+    },
+    {
+      "path": "$.risk",
+      "key": "risk.none",
+      "en": "No additional work is expected to be running.",
+      "zh-CN": "预计没有其他工作仍在运行。"
+    },
+    {
+      "path": "$.nextAction",
+      "key": "recovery.retry-new-command",
+      "en": "Try the action again",
+      "zh-CN": "重新执行操作"
+    }
+  ]
+}

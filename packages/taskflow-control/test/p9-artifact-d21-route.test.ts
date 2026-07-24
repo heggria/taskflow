@@ -126,7 +126,7 @@ test("D21 tryControlPlaneRun: DEFAULTS to ControlHost; exit 37 fails; agent hand
 			assert.equal(ok.viaControlHost, true);
 			assert.match(ok.text, /route-ok|control-plane run completed/);
 			assert.ok(ok.receiptId);
-			assert.match(ok.text, /artifactIntegrity=unknown/);
+				assert.match(ok.text, /artifactIntegrity=ok/);
 		}
 
 		const fail = await tryControlPlaneRun(

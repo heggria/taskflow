@@ -9,6 +9,7 @@ import {
 } from "./types.ts";
 import { createControlHost, type ControlHost, type ControlHostOptions } from "./control-host.ts";
 import type { ExecutionProvider } from "./provider.ts";
+import type { RegistryEntry } from "./store/registry.ts";
 
 export interface BootstrapOptions {
 	projectRoot: string;
@@ -19,6 +20,8 @@ export interface BootstrapOptions {
 	skipSingleton?: boolean;
 	/** See ControlHostOptions.identityPolicy — default strict. */
 	identityPolicy?: import("./identity.ts").IdentityOpenPolicy;
+	/** Daemon-only validated fast path for an existing mounted entry. */
+	registeredRegistryEntry?: RegistryEntry;
 }
 
 export interface BootstrapResult {
@@ -46,6 +49,8 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 			holderId: opts.holderId,
 			skipSingleton: true,
 			identityPolicy: opts.identityPolicy,
+			registeredRegistryEntry:
+				opts.registeredRegistryEntry,
 		});
 		return { host, controlMode, role: "standalone-local" };
 	}
@@ -59,6 +64,8 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 		holderId: opts.holderId,
 		skipSingleton: opts.skipSingleton,
 		identityPolicy: opts.identityPolicy,
+		registeredRegistryEntry:
+			opts.registeredRegistryEntry,
 	};
 
 	const host = createControlHost(hostOpts);

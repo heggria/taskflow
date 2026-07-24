@@ -1,0 +1,320 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "active-task-result",
+  "screenId": "active-task",
+  "state": "running-with-result-pane",
+  "sourceKind": "task-projection",
+  "source": {
+    "run": {
+      "status": "running",
+      "stage": "executing",
+      "runVersion": 3,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "needsOperator": false,
+      "stopping": false,
+      "sideEffects": "none",
+      "displayTitle": "Check release readiness",
+      "workspaceDisplayName": "Taskflow"
+    },
+    "observedAt": 1800000000000,
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "nodeInstanceId": "node-1",
+        "status": "running",
+        "origin": "static",
+        "presentation": {
+          "authoredPhaseId": "check-tests",
+          "groupId": "group-check-tests",
+          "role": "step",
+          "ordinal": 0,
+          "label": "Check test results"
+        }
+      }
+    ],
+    "inventorySealed": true,
+    "presentationMetadataValid": true,
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "Test execution is still running. The completed checks have not found a release blocker."
+    },
+    "verification": {
+      "runStatus": "running",
+      "checkedAt": 1800000000000,
+      "lifecycleRequiresVerification": true,
+      "verifierAvailable": true,
+      "eventManifest": "in-progress",
+      "journalContinuity": "in-progress",
+      "provenance": "in-progress",
+      "artifactIntegrity": "in-progress",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "check": "in-progress",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "artifactChecks": [],
+      "artifactCheckCount": 0,
+      "requiredArtifactCheckCount": 0,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "availableActions": [],
+    "preservedResultCount": 1
+  },
+  "projection": {
+    "projectionVersion": "task-presentation.v1",
+    "source": {
+      "runVersion": 3,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "observedAt": 1800000000000,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.working",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.working.one.detail",
+      "args": [
+        {
+          "name": "activeStepCount",
+          "value": 1
+        },
+        {
+          "name": "activeStepLabels",
+          "value": [
+            "Check test results"
+          ]
+        }
+      ]
+    },
+    "activeStepCount": 1,
+    "activeSteps": [
+      {
+        "nodeInstanceId": "node-1",
+        "groupId": "group-check-tests",
+        "label": "Check test results",
+        "status": "running",
+        "ordinal": 0
+      }
+    ],
+    "stepGroupCount": 1,
+    "stepGroups": [
+      {
+        "groupId": "group-check-tests",
+        "label": "Check test results",
+        "state": "running",
+        "origin": "static",
+        "memberCount": 1,
+        "memberNodeInstanceIds": [
+          "node-1"
+        ],
+        "helperNodesCollapsed": false,
+        "membersTruncated": false,
+        "ordinal": 0
+      }
+    ],
+    "progress": {
+      "semantics": "exact",
+      "completed": 0,
+      "total": 1,
+      "inventorySealed": true
+    },
+    "result": {
+      "kind": "text",
+      "source": {
+        "sourceId": "node-1",
+        "sourceKind": "node"
+      },
+      "preview": "Test execution is still running. The completed checks have not found a release blocker."
+    },
+    "verification": {
+      "state": "not-yet-verified",
+      "reason": "verification-in-progress",
+      "label": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.not-yet-verified",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "verification-in-progress"
+          }
+        ]
+      },
+      "detail": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.not-yet-verified.detail",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "verification-in-progress"
+          }
+        ]
+      },
+      "checkedAt": 1800000000000,
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "check": "in-progress",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "eventManifest": "in-progress",
+      "journalContinuity": "in-progress",
+      "provenance": "in-progress",
+      "artifactIntegrity": "in-progress",
+      "artifactCheckCount": 0,
+      "requiredArtifactCheckCount": 0,
+      "artifactChecks": [],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "primaryAction": {
+      "kind": "open-result"
+    },
+    "decisionProvenance": {
+      "runStatus": "running",
+      "runStage": "executing",
+      "runVersion": 3,
+      "needsOperator": false,
+      "sideEffects": "none",
+      "activeNodeIds": [
+        "node-1"
+      ],
+      "activeGroupIds": [
+        "group-check-tests"
+      ],
+      "finalResultSourceId": "node-1",
+      "finalResultKind": "text",
+      "verificationCheck": "not-yet-verified",
+      "primaryActionSource": "result"
+    },
+    "warnings": []
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "task.working",
+      "en": "Task in progress",
+      "zh-CN": "任务正在进行"
+    },
+    {
+      "path": "$.detail",
+      "key": "task.working.one.detail",
+      "en": "Taskflow is working on 1 step: Check test results. You do not need to do anything right now.",
+      "zh-CN": "Taskflow 正在处理 1 个步骤：Check test results。你暂时不需要操作。"
+    },
+    {
+      "path": "$.verification.label",
+      "key": "verification.not-yet-verified",
+      "en": "Result not verified yet",
+      "zh-CN": "结果尚未验证"
+    },
+    {
+      "path": "$.verification.detail",
+      "key": "verification.not-yet-verified.detail",
+      "en": "Required checks have not finished yet.",
+      "zh-CN": "必要检查尚未完成。"
+    }
+  ]
+}

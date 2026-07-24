@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-24T04:48:45Z",
+  "candidate": {
+    "branch": "codex/0.3.0-beta.2",
+    "gitCommit": "e11b82109e04f69e56a37aceb3f78934f822ad14",
+    "workingTree": true,
+    "webSourceDigest": "sha256:e6b8b3dc50fca74dd6f9e292ab67911a26bdfb214ddec9b9e4d3989c6b7b7378"
+  },
+  "environment": {
+    "browser": "Safari",
+    "browserVersion": "26.3",
+    "operatingSystem": "macOS 26.3",
+    "operatingSystemBuild": "25D125",
+    "localeObserved": "zh-CN"
+  },
+  "method": {
+    "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
+    "authority": "fresh isolated ControlStores seeded by the packaged browser E2E",
+    "interaction": "macOS accessibility tree plus native keyboard input",
+    "launchCapability": "independent one-time capability; value not retained"
+  },
+  "assertions": {
+    "oneTimeSessionExchangeCompleted": true,
+    "simpleModeOpenedByDefault": true,
+    "homeRenderedNeedsInputActiveAndRecentSections": true,
+    "completedTaskRenderedHumanStatusStepsVerificationAndResult": true,
+    "simplePrimarySurfaceDidNotExposeRawControlPlaneTerms": true,
+    "simpleToProPreservedTaskIdentity": true,
+    "proTabSemanticsExposedByNativeAccessibilityTree": true,
+    "graphLoadedTwoAuthoritativeNodes": true,
+    "graphAccessibilityDisclosureExpanded": true,
+    "graphListExposedSingleSelection": true,
+    "arrowKeySelectionChangedTheSelectedNode": true,
+    "selectedNodeChangeUpdatedTheInspector": true,
+    "evidenceRenderedVerificationReceiptManifestAndArtifacts": true
+  },
+  "excludedClaims": [
+    "VoiceOver speech order, announcements, rotor navigation, or verbosity",
+    "the complete native Safari mutation and session-revocation path",
+    "native Safari console, CSP, performance, or axe automation",
+    "human product, content, or comprehension approval"
+  ],
+  "result": "native-read-keyboard-smoke-pass"
+}

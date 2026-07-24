@@ -45,6 +45,14 @@ const peerSpecs = peerNames.map((name) => {
 	assert.equal(typeof range, "string", `root devDependencies must pin the consumer peer ${name}`);
 	return `${name}@${range}`;
 });
+const consumerRegistry =
+	process.env.TASKFLOW_PACK_NPM_REGISTRY ??
+	"https://registry.npmjs.org/";
+assert.match(
+	consumerRegistry,
+	/^https:\/\/[^/\s]+(?:\/.*)?$/u,
+	"TASKFLOW_PACK_NPM_REGISTRY must be an https registry URL",
+);
 const temporaryRoot = mkdtempSync(join(tmpdir(), "taskflow-packed-consumer-"));
 const tarballDir = join(temporaryRoot, "tarballs");
 const consumerDir = join(temporaryRoot, "consumer");
@@ -136,6 +144,8 @@ try {
 			"--ignore-scripts",
 			"--no-audit",
 			"--no-fund",
+			"--registry",
+			consumerRegistry,
 			...peerSpecs,
 			...tarballs,
 		],

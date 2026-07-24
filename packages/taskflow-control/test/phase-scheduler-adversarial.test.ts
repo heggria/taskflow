@@ -76,6 +76,99 @@ test("adversarial: two dependent scripts both run; first marker must exist", asy
 	}
 });
 
+test("approval continuation consumes the decision without replaying settled phases", async () => {
+	const t = tempProject();
+	try {
+		const marker = path.join(
+			t.project,
+			"approval-before-once.txt",
+		);
+		const program = {
+			name: "approval-continuation",
+			phases: [
+				{
+					id: "before",
+					type: "script",
+					run: `test ! -e "${marker}" && printf once > "${marker}" && printf before`,
+				},
+				{
+					id: "review",
+					type: "approval",
+					dependsOn: ["before"],
+					task:
+						"Continue after {steps.before.output}?",
+				},
+				{
+					id: "after",
+					type: "script",
+					dependsOn: ["review"],
+					run: `test "$(cat "${marker}")" = once && printf after`,
+					final: true,
+				},
+			],
+		};
+		const provider = createScriptExecutionProvider();
+		const parked = await schedulePhases(
+			program,
+			{ script: provider },
+			{
+				runId: "r-approval",
+				cwd: t.project,
+				phaseDeadlineMs: 15_000,
+			},
+		);
+		assert.equal(parked.ok, false);
+		assert.deepEqual(parked.approvalRequired, {
+			phaseId: "review",
+			message: "Continue after before?",
+			upstream: "before",
+		});
+		assert.equal(parked.attempts.length, 1);
+		assert.equal(
+			parked.attempts[0]?.phaseId,
+			"before",
+		);
+		assert.equal(
+			fs.readFileSync(marker, "utf8"),
+			"once",
+		);
+
+		const continued = await schedulePhases(
+			program,
+			{ script: provider },
+			{
+				runId: "r-approval",
+				cwd: t.project,
+				phaseDeadlineMs: 15_000,
+				resume: {
+					attempts: parked.attempts,
+					phaseOutputs: parked.phaseOutputs,
+					approvedApproval: {
+						phaseId: "review",
+					},
+				},
+			},
+		);
+		assert.equal(continued.ok, true, continued.error);
+		assert.equal(continued.attempts.length, 3);
+		assert.equal(
+			continued.attempts[0]?.attemptId,
+			parked.attempts[0]?.attemptId,
+		);
+		assert.equal(
+			continued.phaseOutputs.review,
+			"(approve)",
+		);
+		assert.equal(continued.finalOutput, "after");
+		assert.equal(
+			fs.readFileSync(marker, "utf8"),
+			"once",
+		);
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("adversarial: mixed agent+script executes both; agent cannot be skipped", async () => {
 	const t = tempProject();
 	try {

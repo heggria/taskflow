@@ -1,0 +1,509 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "needs-input-decision",
+  "screenId": "needs-input-decision",
+  "state": "two-sided-decision",
+  "sourceKind": "task-projection",
+  "source": {
+    "run": {
+      "status": "paused",
+      "stage": "parked",
+      "runVersion": 4,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "needsOperator": true,
+      "stopping": false,
+      "sideEffects": "none",
+      "displayTitle": "Check release readiness",
+      "workspaceDisplayName": "Taskflow"
+    },
+    "observedAt": 1800000000000,
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "nodeInstanceId": "node-approval",
+        "status": "waiting",
+        "origin": "static",
+        "presentation": {
+          "authoredPhaseId": "publish",
+          "groupId": "group-publish",
+          "role": "step",
+          "ordinal": 1,
+          "label": "Publish release"
+        }
+      }
+    ],
+    "inventorySealed": true,
+    "presentationMetadataValid": true,
+    "result": {
+      "kind": "none"
+    },
+    "verification": {
+      "runStatus": "paused",
+      "checkedAt": 1800000000000,
+      "lifecycleRequiresVerification": true,
+      "verifierAvailable": true,
+      "eventManifest": "in-progress",
+      "journalContinuity": "in-progress",
+      "provenance": "in-progress",
+      "artifactIntegrity": "in-progress",
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "check": "in-progress",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "artifactChecks": [],
+      "artifactCheckCount": 0,
+      "requiredArtifactCheckCount": 0,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "availableActions": [
+      {
+        "kind": "approve",
+        "state": "available",
+        "requestBase": {
+          "kind": "approve",
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "runId": "run-1",
+          "expectedRunVersion": 4,
+          "approvalRequestId": "approval-1"
+        }
+      },
+      {
+        "kind": "reject",
+        "state": "available",
+        "requestBase": {
+          "kind": "reject",
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "runId": "run-1",
+          "expectedRunVersion": 4,
+          "approvalRequestId": "approval-1"
+        }
+      }
+    ],
+    "preservedResultCount": 0,
+    "decision": {
+      "operationClass": "publish-files",
+      "deadline": 1800000060000,
+      "quotedContext": "Publish the generated release notes?",
+      "projectId": "project-1",
+      "controlDomainId": "domain-1",
+      "runId": "run-1",
+      "approvalRequestId": "approval-1",
+      "runVersion": 4,
+      "approvalVersion": 2,
+      "availableActions": [
+        {
+          "kind": "approve",
+          "state": "available",
+          "requestBase": {
+            "kind": "approve",
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "runId": "run-1",
+            "expectedRunVersion": 4,
+            "approvalRequestId": "approval-1"
+          }
+        },
+        {
+          "kind": "reject",
+          "state": "available",
+          "requestBase": {
+            "kind": "reject",
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "runId": "run-1",
+            "expectedRunVersion": 4,
+            "approvalRequestId": "approval-1"
+          }
+        }
+      ]
+    }
+  },
+  "projection": {
+    "projectionVersion": "task-presentation.v1",
+    "source": {
+      "runVersion": 4,
+      "boundPlanHash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "observedAt": 1800000000000,
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.needs-input",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "task.approval-required.detail",
+      "args": []
+    },
+    "activeStepCount": 1,
+    "activeSteps": [
+      {
+        "nodeInstanceId": "node-approval",
+        "groupId": "group-publish",
+        "label": "Publish release",
+        "status": "waiting",
+        "ordinal": 1
+      }
+    ],
+    "stepGroupCount": 1,
+    "stepGroups": [
+      {
+        "groupId": "group-publish",
+        "label": "Publish release",
+        "state": "waiting",
+        "origin": "static",
+        "memberCount": 1,
+        "memberNodeInstanceIds": [
+          "node-approval"
+        ],
+        "helperNodesCollapsed": false,
+        "membersTruncated": false,
+        "ordinal": 1
+      }
+    ],
+    "progress": {
+      "semantics": "exact",
+      "completed": 0,
+      "total": 1,
+      "inventorySealed": true
+    },
+    "result": {
+      "kind": "none"
+    },
+    "verification": {
+      "state": "not-yet-verified",
+      "reason": "verification-in-progress",
+      "label": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.not-yet-verified",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "verification-in-progress"
+          }
+        ]
+      },
+      "detail": {
+        "catalogVersion": "taskflow-content.v1",
+        "key": "verification.not-yet-verified.detail",
+        "args": [
+          {
+            "name": "verificationReason",
+            "value": "verification-in-progress"
+          }
+        ]
+      },
+      "checkedAt": 1800000000000,
+      "providerConsistency": {
+        "expected": {
+          "kind": "exact",
+          "outcome": "completed"
+        },
+        "check": "in-progress",
+        "sourceEventRefs": [
+          "event-1"
+        ]
+      },
+      "eventManifest": "in-progress",
+      "journalContinuity": "in-progress",
+      "provenance": "in-progress",
+      "artifactIntegrity": "in-progress",
+      "artifactCheckCount": 0,
+      "requiredArtifactCheckCount": 0,
+      "artifactChecks": [],
+      "sourceObservation": {
+        "coverage": "complete",
+        "authority": "verified",
+        "observedAt": 1800000000000,
+        "registryContext": {
+          "mode": "auto",
+          "registryRevision": "registry-1",
+          "visibleMounts": [
+            {
+              "projectId": "project-1",
+              "controlDomainId": "domain-1"
+            }
+          ]
+        },
+        "watermarks": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1",
+            "nextCommitSeq": 20,
+            "minAvailableCommitSeq": 1
+          }
+        ]
+      }
+    },
+    "primaryAction": {
+      "kind": "open-required-input"
+    },
+    "decisionSet": {
+      "status": "actionable",
+      "presentation": {
+        "projectionVersion": "decision-presentation.v1",
+        "operationClass": "publish-files",
+        "question": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.question",
+          "args": []
+        },
+        "impact": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.impact",
+          "args": []
+        },
+        "deadline": 1800000060000,
+        "quotedContext": "Publish the generated release notes?",
+        "choices": [
+          {
+            "kind": "approve",
+            "label": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "decision.publish-files.allow-label",
+              "args": []
+            },
+            "consequence": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "decision.publish-files.allow-consequence",
+              "args": []
+            },
+            "semanticWeight": "equal"
+          },
+          {
+            "kind": "reject",
+            "label": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "decision.publish-files.do-not-allow-label",
+              "args": []
+            },
+            "consequence": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "decision.publish-files.do-not-allow-consequence",
+              "args": []
+            },
+            "semanticWeight": "equal"
+          }
+        ],
+        "noDefault": true,
+        "source": {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "runId": "run-1",
+          "approvalRequestId": "approval-1",
+          "runVersion": 4,
+          "approvalVersion": 2
+        }
+      }
+    },
+    "decisionProvenance": {
+      "runStatus": "paused",
+      "runStage": "parked",
+      "runVersion": 4,
+      "needsOperator": true,
+      "sideEffects": "none",
+      "activeNodeIds": [
+        "node-approval"
+      ],
+      "activeGroupIds": [
+        "group-publish"
+      ],
+      "finalResultKind": "none",
+      "verificationCheck": "not-yet-verified",
+      "primaryActionSource": "decision-disposition"
+    },
+    "warnings": []
+  },
+  "decisionProjection": {
+    "projectionVersion": "decision-presentation.v1",
+    "operationClass": "publish-files",
+    "question": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "decision.publish-files.question",
+      "args": []
+    },
+    "impact": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "decision.publish-files.impact",
+      "args": []
+    },
+    "deadline": 1800000060000,
+    "quotedContext": "Publish the generated release notes?",
+    "choices": [
+      {
+        "kind": "approve",
+        "label": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.allow-label",
+          "args": []
+        },
+        "consequence": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.allow-consequence",
+          "args": []
+        },
+        "semanticWeight": "equal"
+      },
+      {
+        "kind": "reject",
+        "label": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.do-not-allow-label",
+          "args": []
+        },
+        "consequence": {
+          "catalogVersion": "taskflow-content.v1",
+          "key": "decision.publish-files.do-not-allow-consequence",
+          "args": []
+        },
+        "semanticWeight": "equal"
+      }
+    ],
+    "noDefault": true,
+    "source": {
+      "projectId": "project-1",
+      "controlDomainId": "domain-1",
+      "runId": "run-1",
+      "approvalRequestId": "approval-1",
+      "runVersion": 4,
+      "approvalVersion": 2
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "task.needs-input",
+      "en": "This task needs your input",
+      "zh-CN": "这个任务需要你处理"
+    },
+    {
+      "path": "$.detail",
+      "key": "task.approval-required.detail",
+      "en": "Review the decision and its consequences before choosing.",
+      "zh-CN": "请先查看决定内容和两种选择的后果。"
+    },
+    {
+      "path": "$.verification.label",
+      "key": "verification.not-yet-verified",
+      "en": "Result not verified yet",
+      "zh-CN": "结果尚未验证"
+    },
+    {
+      "path": "$.verification.detail",
+      "key": "verification.not-yet-verified.detail",
+      "en": "Required checks have not finished yet.",
+      "zh-CN": "必要检查尚未完成。"
+    },
+    {
+      "path": "$.decisionSet.presentation.question",
+      "key": "decision.publish-files.question",
+      "en": "Allow this task to publish these files?",
+      "zh-CN": "是否允许这个任务发布这些文件？"
+    },
+    {
+      "path": "$.decisionSet.presentation.impact",
+      "key": "decision.publish-files.impact",
+      "en": "Publishing makes the selected files available outside this task.",
+      "zh-CN": "发布后，所选文件会在本任务之外可用。"
+    },
+    {
+      "path": "$.decisionSet.presentation.choices[0].label",
+      "key": "decision.publish-files.allow-label",
+      "en": "Allow publishing",
+      "zh-CN": "允许发布"
+    },
+    {
+      "path": "$.decisionSet.presentation.choices[0].consequence",
+      "key": "decision.publish-files.allow-consequence",
+      "en": "The task will continue and publish the selected files.",
+      "zh-CN": "任务会继续并发布所选文件。"
+    },
+    {
+      "path": "$.decisionSet.presentation.choices[1].label",
+      "key": "decision.publish-files.do-not-allow-label",
+      "en": "Do not publish",
+      "zh-CN": "不允许发布"
+    },
+    {
+      "path": "$.decisionSet.presentation.choices[1].consequence",
+      "key": "decision.publish-files.do-not-allow-consequence",
+      "en": "This publication will stop; existing results remain available.",
+      "zh-CN": "本次发布会停止；已有结果仍然保留。"
+    }
+  ]
+}

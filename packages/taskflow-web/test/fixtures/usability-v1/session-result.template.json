@@ -1,0 +1,112 @@
+{
+  "schemaVersion": "taskflow-usability-session.v1",
+  "status": "template-not-evidence",
+  "participantId": "replace-with-opaque-id",
+  "freshParticipant": false,
+  "locale": "en",
+  "buildCommit": "replace",
+  "referenceManifestSha256": "replace",
+  "renderEvidenceSha256": "replace",
+  "environment": {
+    "viewport": "replace",
+    "zoomPercent": 100,
+    "inputMethods": [
+      "replace"
+    ],
+    "assistiveTechnology": "none-or-describe"
+  },
+  "tasks": [
+    {
+      "taskId": 1,
+      "evidenceMode": "live-packaged",
+      "fixtureId": null,
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 2,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "simple-home-partial-disconnected",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 3,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "active-task-result",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 4,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "needs-input-decision",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 5,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "completed-verified + completed-verification-unavailable",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 6,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "unknown-reconciling",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 7,
+      "evidenceMode": "live-packaged",
+      "fixtureId": "pro-evidence-receipt",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 8,
+      "evidenceMode": "fixture-render",
+      "fixtureId": "error-command-outcome-unknown",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    },
+    {
+      "taskId": 9,
+      "evidenceMode": "live-packaged",
+      "fixtureId": "settings-session",
+      "score": null,
+      "primaryActionFound": null,
+      "participantWords": "",
+      "facilitatorIntervention": "",
+      "misunderstanding": ""
+    }
+  ],
+  "completedAt": null,
+  "facilitatorAttestation": false
+}

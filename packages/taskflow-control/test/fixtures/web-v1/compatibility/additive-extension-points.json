@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "web-compatibility.v1",
+  "futureTopLevelField": "futurePresentationHint",
+  "cases": [
+    "WebOverviewView",
+    "WebProjectSummary",
+    "WebProjectDetail",
+    "WebRunSummary",
+    "WebRunDetail",
+    "WebTaskPresentationSummary",
+    "WebTaskPresentation",
+    "WebNodeDetail",
+    "WebApprovalSummary",
+    "WebApprovalDetail",
+    "WebAttentionItem",
+    "WebReceiptView",
+    "WebPolicyExplanation"
+  ],
+  "closedUnions": {
+    "WebCommandRequest": [
+      "approve",
+      "reject",
+      "edit-approval",
+      "cancel-run",
+      "resume-run",
+      "recompute-run",
+      "reconcile-run",
+      "set-max-active-runs",
+      "force-release"
+    ],
+    "WebActionRequestBase": [
+      "approve",
+      "reject",
+      "edit-approval",
+      "cancel-run",
+      "resume-run",
+      "recompute-run",
+      "reconcile-run",
+      "set-max-active-runs",
+      "force-release"
+    ],
+    "WebAvailableAction": [
+      "available:approve",
+      "available:reject",
+      "available:edit-approval",
+      "available:cancel-run",
+      "available:resume-run",
+      "available:recompute-run",
+      "available:reconcile-run",
+      "available:set-max-active-runs",
+      "available:force-release",
+      "unavailable:approve",
+      "unavailable:reject",
+      "unavailable:edit-approval",
+      "unavailable:cancel-run",
+      "unavailable:resume-run",
+      "unavailable:recompute-run",
+      "unavailable:reconcile-run",
+      "unavailable:set-max-active-runs",
+      "unavailable:force-release"
+    ],
+    "WebCommandOutcome": [
+      "pending",
+      "completed",
+      "failed",
+      "rejected",
+      "not-found"
+    ],
+    "WebPageCursorPayload": [
+      "projects",
+      "runs",
+      "fragments",
+      "graph",
+      "timeline",
+      "attempts",
+      "artifacts",
+      "receipt-manifest",
+      "approvals",
+      "attention"
+    ],
+    "WebStreamFrame": [
+      "checkpoint",
+      "change",
+      "heartbeat",
+      "reset-required"
+    ]
+  }
+}

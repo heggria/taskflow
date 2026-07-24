@@ -11,9 +11,13 @@ import {
 	bindFragment,
 	bootstrapControl,
 	createControlHost,
+	createMockExecutionProvider,
 	createScriptExecutionProvider,
 	fragmentSemanticMatch,
 	hashBoundFragment,
+	inspectProjectControlStore,
+	projectBoundFragmentLinksDir,
+	projectBoundFragmentsDir,
 } from "../src/index.ts";
 
 const fragA = {
@@ -47,6 +51,159 @@ test("P7 BoundFragment: dual hashes; semantic change changes both; reuse gate", 
 	// raw hash helper agrees
 	const h = hashBoundFragment(fragA, { parentBoundPlanHash: "bp:parent1" });
 	assert.equal(h.boundFragmentHash, a.boundFragmentHash);
+});
+
+test("P7 dynamic path: ControlHost journals fragment body, link provenance, nodes, and recovery", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-bound-fragment-"),
+	);
+	const project = path.join(root, "project");
+	const home = path.join(root, "home");
+	fs.mkdirSync(project, { recursive: true });
+	fs.mkdirSync(home, { recursive: true });
+	const host = createControlHost({
+		projectRoot: project,
+		env: { ...process.env, TASKFLOW_HOME: home },
+		controlMode: "standalone",
+		skipSingleton: true,
+		allowMockProvider: true,
+		llmProvider: createMockExecutionProvider({
+			output: "dynamic-complete",
+		}),
+	});
+	try {
+		const result = await host.admitAndRun({
+			commandId: "cmd-dynamic-fragment",
+			program: {
+				name: "dynamic",
+				phases: [
+					{
+						id: "grow",
+						type: "expand",
+						expandMode: "graft",
+						def: {
+							name: "linked-fragment",
+							phases: [
+								{
+									id: "child-a",
+									type: "script",
+									run: "printf a",
+								},
+								{
+									id: "child-b",
+									type: "script",
+									run: "printf b",
+									dependsOn: ["child-a"],
+									final: true,
+								},
+							],
+						},
+						final: true,
+					},
+				],
+			},
+		});
+		assert.equal(result.ok, true, JSON.stringify(result.error));
+		assert.match(
+			result.run?.boundFragmentHash ?? "",
+			/^bf:[a-f0-9]{64}$/u,
+		);
+		assert.equal(
+			result.receipt?.boundFragmentHash,
+			result.run?.boundFragmentHash,
+		);
+		assert.equal(
+			result.receipt?.assurance.provenance,
+			"ok",
+		);
+		const linked = host.store.listBoundFragmentsForRun(
+			result.run!.runId,
+		);
+		assert.equal(linked.length, 1);
+		assert.deepEqual(
+			{
+				parent: linked[0]?.link.parentNodeInstanceId,
+				origin: linked[0]?.link.originPhaseId,
+				kind: linked[0]?.link.linkKind,
+				dynamic: linked[0]?.link.dynamicNodeCount,
+				static: linked[0]?.link.staticNodeCount,
+			},
+			{
+				parent: "grow",
+				origin: "grow",
+				kind: "graft-promote",
+				dynamic: 2,
+				static: 2,
+			},
+		);
+		assert.ok(
+			(linked[0]?.link.createdAtCommitSeq ?? 0) > 0,
+		);
+		assert.deepEqual(
+			result.run?.nodes
+				?.filter(
+					(node) => node.origin === "bound-fragment",
+				)
+				.map((node) => [
+					node.phaseId,
+					node.boundFragmentHash,
+					node.status,
+				]),
+			[
+				[
+					"child-a",
+					result.run?.boundFragmentHash,
+					"completed",
+				],
+				[
+					"child-b",
+					result.run?.boundFragmentHash,
+					"completed",
+				],
+			],
+		);
+		assert.deepEqual(
+			result.run?.attempts?.map((attempt) => ({
+				status: attempt.status,
+				provider: attempt.provider,
+				providerJobHandlePresent:
+					attempt.providerJobHandlePresent,
+			})),
+			[
+				{
+					status: "completed",
+					provider: "mock",
+					providerJobHandlePresent: true,
+				},
+			],
+		);
+
+		for (const directory of [
+			projectBoundFragmentsDir(project),
+			projectBoundFragmentLinksDir(project),
+		]) {
+			for (const file of fs.readdirSync(directory)) {
+				fs.unlinkSync(path.join(directory, file));
+			}
+		}
+		const recovery = host.store.recoverFromJournal();
+		assert.equal(recovery.rebuiltBoundFragments, 1);
+		assert.equal(recovery.rebuiltBoundFragmentLinks, 1);
+		const inspected = inspectProjectControlStore(project, {
+			projectId: host.projectId,
+			controlDomainId: host.controlDomainId,
+		});
+		assert.equal(inspected.ok, true);
+		if (!inspected.ok) return;
+		assert.equal(inspected.snapshot.boundFragments.length, 1);
+		assert.equal(
+			inspected.snapshot.boundFragmentLinks.length,
+			1,
+		);
+	} finally {
+		host.close();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("D21: CLI/daemon bootstrap + MCP bind use ControlHost; production default is script not mock", async () => {

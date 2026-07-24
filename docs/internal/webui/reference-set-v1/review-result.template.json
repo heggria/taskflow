@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "taskflow-web-reference-review.v1",
+  "status": "template-not-evidence",
+  "reviewerId": "replace-with-opaque-id",
+  "reviewerRole": "replace",
+  "independentFromImplementation": false,
+  "buildCommit": "replace",
+  "referenceManifestSha256": "replace",
+  "renderEvidenceSha256": "replace",
+  "requiredCoverage": {
+    "screenFamilies": 9,
+    "matrixRenders": 144,
+    "supplementalRenders": 5,
+    "totalRenders": 149
+  },
+  "reviewedCoverage": {
+    "screenFamilies": [],
+    "renderEntries": 0
+  },
+  "screenResults": [
+    {
+      "screenId": "simple-home",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "active-task",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "needs-input-decision",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "completed-task",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "unknown-reconciling",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "pro-graph",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "pro-evidence",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "settings",
+      "decision": "pending",
+      "notes": ""
+    },
+    {
+      "screenId": "error-recovery",
+      "decision": "pending",
+      "notes": ""
+    }
+  ],
+  "matrixChecks": {
+    "hierarchyAndDensity": null,
+    "simpleAndProProgressiveDisclosure": null,
+    "contentAndConsequences": null,
+    "lightAndDarkParity": null,
+    "desktopAndNarrowParity": null,
+    "twoHundredPercentZoom": null,
+    "keyboardAndFocus": null,
+    "motionAndLoadingStates": null,
+    "taskflowVisualIdentity": null
+  },
+  "blockingIssues": [],
+  "overallDecision": "pending",
+  "completedAt": null,
+  "reviewerAttestation": false
+}

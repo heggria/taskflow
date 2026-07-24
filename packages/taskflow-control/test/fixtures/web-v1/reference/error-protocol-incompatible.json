@@ -1,0 +1,93 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "error-protocol-incompatible",
+  "screenId": "error-recovery",
+  "state": "protocol-incompatible",
+  "sourceKind": "failure-projection",
+  "source": {
+    "failure": {
+      "ok": false,
+      "requestId": "request-tf-protocol-incompatible",
+      "schemaVersion": "web.v1",
+      "error": {
+        "code": "TF_PROTOCOL_INCOMPATIBLE",
+        "message": "Sanitized fixture diagnostic",
+        "recoveryAction": "operator",
+        "sideEffects": "none"
+      }
+    },
+    "context": {
+      "surface": "bootstrap",
+      "operation": "none",
+      "resourceState": {
+        "kind": "none"
+      },
+      "sourceAuthority": "verified",
+      "commandBodyState": "not-applicable",
+      "supportedFeatures": [
+        "run-detail",
+        "reconcile-run"
+      ],
+      "supportedCommands": [
+        "cancel-run",
+        "reconcile-run"
+      ],
+      "availableActions": []
+    }
+  },
+  "projection": {
+    "projectionVersion": "failure-presentation.v1",
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_PROTOCOL_INCOMPATIBLE.headline",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_PROTOCOL_INCOMPATIBLE.detail",
+      "args": []
+    },
+    "risk": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "risk.none",
+      "args": []
+    },
+    "nextAction": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "recovery.operator",
+      "args": []
+    },
+    "actionKind": "contact-operator",
+    "technical": {
+      "code": "TF_PROTOCOL_INCOMPATIBLE",
+      "sanitizedMessage": "Sanitized fixture diagnostic",
+      "requestId": "request-tf-protocol-incompatible"
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "error.TF_PROTOCOL_INCOMPATIBLE.headline",
+      "en": "Taskflow needs an update",
+      "zh-CN": "Taskflow 需要更新"
+    },
+    {
+      "path": "$.detail",
+      "key": "error.TF_PROTOCOL_INCOMPATIBLE.detail",
+      "en": "The app and local service cannot safely work together. Update or reinstall Taskflow before continuing.",
+      "zh-CN": "当前应用与本地服务无法安全协作。请更新或重新安装 Taskflow 后再继续。"
+    },
+    {
+      "path": "$.risk",
+      "key": "risk.none",
+      "en": "No additional work is expected to be running.",
+      "zh-CN": "预计没有其他工作仍在运行。"
+    },
+    {
+      "path": "$.nextAction",
+      "key": "recovery.operator",
+      "en": "Ask the workspace administrator for help",
+      "zh-CN": "请工作区管理员协助"
+    }
+  ]
+}

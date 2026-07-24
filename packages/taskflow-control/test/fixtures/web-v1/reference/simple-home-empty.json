@@ -1,0 +1,92 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "simple-home-empty",
+  "screenId": "simple-home",
+  "state": "empty",
+  "sourceKind": "endpoint-view",
+  "source": {
+    "sourceObservation": {
+      "coverage": "complete",
+      "authority": "verified",
+      "observedAt": 1800000000000,
+      "registryContext": {
+        "mode": "auto",
+        "registryRevision": "registry-1",
+        "visibleMounts": [
+          {
+            "projectId": "project-1",
+            "controlDomainId": "domain-1"
+          }
+        ]
+      },
+      "watermarks": [
+        {
+          "projectId": "project-1",
+          "controlDomainId": "domain-1",
+          "nextCommitSeq": 20,
+          "minAvailableCommitSeq": 1
+        }
+      ]
+    },
+    "coordinatorCapacity": {
+      "maxActiveRuns": 4,
+      "occupied": 0,
+      "available": 4,
+      "fencingEpoch": 3
+    },
+    "runCounts": {
+      "byStatus": {
+        "running": 0,
+        "completed": 0,
+        "failed": 0,
+        "paused": 0,
+        "blocked": 0,
+        "cancelled": 0,
+        "unknown": 0
+      },
+      "byStage": {
+        "received": 0,
+        "compiled": 0,
+        "linked": 0,
+        "queued": 0,
+        "admitted": 0,
+        "executing": 0,
+        "parked": 0,
+        "reconciling": 0,
+        "terminal": 0
+      },
+      "needsOperator": 0
+    },
+    "attentionCounts": {
+      "needsUserInput": 0,
+      "statusOnly": 0,
+      "diagnostic": 0,
+      "pendingApprovals": 0
+    },
+    "usage": {
+      "availability": "measured",
+      "startAt": 1800000000000,
+      "endAt": 1800000000000,
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cost": 0,
+      "currency": "USD",
+      "methodology": "Receipt totals in the selected time range"
+    },
+    "reuse": {
+      "estimatedReusedNodes": 0,
+      "methodology": "Recorded cache decisions",
+      "unavailableReason": "No tasks have run yet"
+    },
+    "projectHealth": {
+      "healthy": 1,
+      "warning": 0,
+      "unavailable": 0,
+      "warnings": []
+    }
+  },
+  "projection": {
+    "emptyStateKey": "empty.home.no-tasks"
+  },
+  "renderedContent": []
+}

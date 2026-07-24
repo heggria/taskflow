@@ -1,0 +1,93 @@
+{
+  "fixtureVersion": "web-reference-fixture.v1",
+  "id": "error-cursor-expired",
+  "screenId": "error-recovery",
+  "state": "cursor-expired",
+  "sourceKind": "failure-projection",
+  "source": {
+    "failure": {
+      "ok": false,
+      "requestId": "request-tf-cursor-expired",
+      "schemaVersion": "web.v1",
+      "error": {
+        "code": "TF_CURSOR_EXPIRED",
+        "message": "Sanitized fixture diagnostic",
+        "recoveryAction": "refresh",
+        "sideEffects": "none"
+      }
+    },
+    "context": {
+      "surface": "aggregate-list",
+      "operation": "none",
+      "resourceState": {
+        "kind": "none"
+      },
+      "sourceAuthority": "verified",
+      "commandBodyState": "not-applicable",
+      "supportedFeatures": [
+        "run-detail",
+        "reconcile-run"
+      ],
+      "supportedCommands": [
+        "cancel-run",
+        "reconcile-run"
+      ],
+      "availableActions": []
+    }
+  },
+  "projection": {
+    "projectionVersion": "failure-presentation.v1",
+    "headline": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_CURSOR_EXPIRED.headline",
+      "args": []
+    },
+    "detail": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "error.TF_CURSOR_EXPIRED.detail",
+      "args": []
+    },
+    "risk": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "risk.none",
+      "args": []
+    },
+    "nextAction": {
+      "catalogVersion": "taskflow-content.v1",
+      "key": "system.cursor-expired.refresh",
+      "args": []
+    },
+    "actionKind": "refresh",
+    "technical": {
+      "code": "TF_CURSOR_EXPIRED",
+      "sanitizedMessage": "Sanitized fixture diagnostic",
+      "requestId": "request-tf-cursor-expired"
+    }
+  },
+  "renderedContent": [
+    {
+      "path": "$.headline",
+      "key": "error.TF_CURSOR_EXPIRED.headline",
+      "en": "This page is out of date",
+      "zh-CN": "页面信息已过期"
+    },
+    {
+      "path": "$.detail",
+      "key": "error.TF_CURSOR_EXPIRED.detail",
+      "en": "The saved list changed after this page was loaded. Refresh to continue from the latest records.",
+      "zh-CN": "加载页面后，保存的列表已经变化。请刷新并从最新记录继续。"
+    },
+    {
+      "path": "$.risk",
+      "key": "risk.none",
+      "en": "No additional work is expected to be running.",
+      "zh-CN": "预计没有其他工作仍在运行。"
+    },
+    {
+      "path": "$.nextAction",
+      "key": "system.cursor-expired.refresh",
+      "en": "Refresh the latest records. This will not run the task again.",
+      "zh-CN": "刷新最新记录。这不会重新运行任务。"
+    }
+  ]
+}
