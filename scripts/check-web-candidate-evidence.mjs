@@ -12,11 +12,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/83021958-to-33202a9c/report.json",
+	"artifacts/web-compat/83021958-to-fb765b21/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2",
+	"artifacts/web-bench/fb765b21cc284cf70e84a577f190c4bce38d0a79",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(

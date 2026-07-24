@@ -8,7 +8,7 @@ release evidence.
 | Role | Git commit | Web manifest SHA-256 |
 |---|---|---|
 | old | `83021958b61d65425847817f3b5d275bd048979a` | `sha256:4f2107eb0b1065315929f6c060031a90f05cc329df9229eb3f01d314ed47de87` |
-| new | `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2` | `sha256:d5c093782d9d10f266b82d1f1361e27032404220d3d6abbca31d8157cfa5df03` |
+| new | `fb765b21cc284cf70e84a577f190c4bce38d0a79` | `sha256:d5c093782d9d10f266b82d1f1361e27032404220d3d6abbca31d8157cfa5df03` |
 
 Both builds were produced from detached worktrees with
 `pnpm install --offline --frozen-lockfile` followed by `pnpm run build`.
@@ -23,8 +23,8 @@ Reproduction command:
 ```text
 npx --yes node@24.18.0 scripts/test-web-packaged-compatibility.mjs \
   --old-root <built-83021958-root> \
-  --new-root <built-33202a9c-root> \
-  --output artifacts/web-compat/83021958-to-33202a9c/report.json
+  --new-root <built-fb765b21-root> \
+  --output artifacts/web-compat/83021958-to-fb765b21/report.json
 ```
 
 Result:
@@ -39,9 +39,9 @@ Result:
 Evidence:
 
 - report:
-  `artifacts/web-compat/83021958-to-33202a9c/report.json`;
+  `artifacts/web-compat/83021958-to-fb765b21/report.json`;
 - report SHA-256:
-  `795d985d13877bfd71f9915fe339483f24f14e64b70359978d5af2ff0b1ad1d3`.
+  `240344084a196829ec5f9fa504da6cb996ed4c73f9df05065a1bf3d468873c2c`.
 
 The report deliberately contains build identities rather than local absolute
 paths. The harness rejects an identical manifest or an identical stamped
@@ -49,7 +49,7 @@ commit before opening a browser.
 
 ## Performance and large-data evidence
 
-Reproduction command from the clean `33202a9c` detached worktree:
+Reproduction command from the clean `fb765b21` detached worktree:
 
 ```text
 npx --yes node@24.18.0 scripts/bench-web.mjs
@@ -58,20 +58,20 @@ npx --yes node@24.18.0 scripts/bench-web.mjs
 Evidence:
 
 - JSON:
-  `artifacts/web-bench/33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2/web-perf-v1.json`;
+  `artifacts/web-bench/fb765b21cc284cf70e84a577f190c4bce38d0a79/web-perf-v1.json`;
 - human summary:
-  `artifacts/web-bench/33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2/web-perf-v1.md`;
+  `artifacts/web-bench/fb765b21cc284cf70e84a577f190c4bce38d0a79/web-perf-v1.md`;
 - JSON SHA-256:
-  `762a656d8c6c9f221f574301a0cbd1c23083fd6339b2c6a4c8f7167377ab6631`;
+  `57b711050516c941cd33afc6df95fa8f6793b93a1f211e272cfaa5b78828c8f4`;
 - summary SHA-256:
-  `a2dc6bad724bb2acafee4835ba3044a5665fa14418ad698f0cb543ebf89e45a8`.
+  `e517212b26e62a49e22468f67ccbc539089abbd1dcc61879b831ed0465dda9cb`.
 
 The schema-v4 report records:
 
-- exact commit `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2`;
+- exact commit `fb765b21cc284cf70e84a577f190c4bce38d0a79`;
 - `git.dirty:false`;
 - source digest
-  `sha256:1d270e9e8c755ea1373b1e0ca524e5b37394b0522ec64d970057a6b7ca85a282`;
+  `sha256:3863805d98bfbd34856589501cc9ce3ab589c64365e380ed36e7e6fdde2f910c`;
 - Node 24.18.0 and Chromium 149.0.7827.55;
 - MacBook Pro / Apple M3 Pro / AC power;
 - no recorded thermal or performance warning;
@@ -81,6 +81,9 @@ The schema-v4 report records:
 This is not the RFC's canonical Mac mini M2 / 16 GiB profile. Its latency
 numbers are informational even when they are below the numerical budgets.
 The canonical M2 run remains a release gate.
+The non-canonical event-to-visible p95 was 574.6 ms, above the RFC's
+250 ms canonical budget. It is therefore informational rather than a pass or
+failure, and makes the canonical-profile rerun especially important.
 
 ## Remaining interpretation boundary
 

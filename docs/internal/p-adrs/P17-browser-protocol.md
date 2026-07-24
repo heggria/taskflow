@@ -1376,7 +1376,7 @@ The executable implementation candidate now includes:
 - a real packaged cross-build harness that rejects identical asset manifests
   or stamped commits. Immutable candidates
   `83021958b61d65425847817f3b5d275bd048979a` and
-  `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2` pass both
+  `fb765b21cc284cf70e84a577f190c4bce38d0a79` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
   contains immutable build identities and no local absolute paths;
