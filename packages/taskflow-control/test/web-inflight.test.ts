@@ -198,6 +198,45 @@ test("in-flight provider is inspectable and concurrent cancel cannot be overwrit
 			host.store.getRun(durableRun.runId)?.status,
 			"cancelled",
 		);
+		assert.equal(
+			host.store.getRun(durableRun.runId)?.nodes?.[0]
+				?.status,
+			"cancelled",
+		);
+		const cancelledDetail =
+			await createWebReadHandlers(host, {
+				cursorCodec: createWebCursorCodec({
+					key: Buffer.alloc(32, 42),
+					listenerId: "listener-inflight",
+				}),
+			}).runDetail(
+				{
+					params: {
+						projectId: host.projectId,
+						controlDomainId:
+							host.controlDomainId,
+						runId: durableRun.runId,
+					},
+					query: {},
+					body: {},
+				},
+				context(Date.now()),
+			);
+		assert.equal(
+			Value.Check(
+				WebRunDetailSchema,
+				cancelledDetail,
+			),
+			true,
+		);
+		assert.equal(
+			cancelledDetail.run.status,
+			"cancelled",
+		);
+		assert.equal(
+			cancelledDetail.nodes[0]?.status,
+			"cancelled",
+		);
 	} finally {
 		settlePoll?.();
 		await running?.catch(() => undefined);

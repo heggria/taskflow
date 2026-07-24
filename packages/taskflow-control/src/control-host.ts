@@ -46,6 +46,7 @@ import {
 	boundedReconcile,
 	applyReconcileToRun,
 	DEFAULT_RECONCILE_BUDGET,
+	settleTerminalNodes,
 	type ReconcileBudget,
 } from "./reconcile.ts";
 import { isSafeId } from "./validate-ids.ts";
@@ -2813,6 +2814,14 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							...run,
 							status: "cancelled",
 							stage: "terminal",
+							...(run.nodes
+								? {
+										nodes: settleTerminalNodes(
+											run.nodes,
+											"cancelled",
+										),
+									}
+								: {}),
 							needsOperator: false,
 							updatedAt: Date.now(),
 							runVersion: run.runVersion + 1,

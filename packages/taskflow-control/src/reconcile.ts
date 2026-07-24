@@ -3,7 +3,12 @@
  * no fake terminal, no final Receipt, slot held (orphan-suspect).
  */
 import type { ExecutionProvider, ReconcileResult } from "./provider.ts";
-import type { RunProjection, RunStage, RunStatus } from "./types.ts";
+import type {
+	RunNodeProjection,
+	RunProjection,
+	RunStage,
+	RunStatus,
+} from "./types.ts";
 
 export interface ReconcileBudget {
 	/** Max auto-reconcile attempts. */
@@ -31,6 +36,23 @@ export interface ReconcileOutcome {
 	attempts: number;
 	/** Provider still ambiguous after budget. */
 	exhausted: boolean;
+}
+
+/**
+ * A proven terminal provider outcome settles only work that was active at the
+ * boundary. Pending downstream nodes remain pending so the projection does not
+ * pretend they ran; already-terminal nodes retain their stronger evidence.
+ */
+export function settleTerminalNodes(
+	nodes: readonly RunNodeProjection[],
+	terminal: "completed" | "failed" | "cancelled",
+): RunNodeProjection[] {
+	return nodes.map((node) =>
+		node.status === "running" ||
+		node.status === "waiting"
+			? { ...node, status: terminal }
+			: node,
+	);
 }
 
 /**
@@ -113,6 +135,14 @@ export function applyReconcileToRun(
 ): RunProjection {
 	return {
 		...run,
+		...(outcome.terminal && run.nodes
+			? {
+					nodes: settleTerminalNodes(
+						run.nodes,
+						outcome.terminal,
+					),
+				}
+			: {}),
 		status: outcome.status,
 		stage: outcome.stage,
 		needsOperator: outcome.needsOperator,
