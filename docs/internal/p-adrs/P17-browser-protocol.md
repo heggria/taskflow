@@ -1345,8 +1345,8 @@ P17 v5 remains **Provisional / not wire-frozen** until every Must-ship endpoint/
 
 The non-normative
 [`webui/p17-v5-conformance-matrix.md`](../webui/p17-v5-conformance-matrix.md)
-records the current working-tree evidence and keeps every partial/external gate
-visible; it cannot weaken this section.
+records the current immutable-candidate evidence and keeps every
+partial/external gate visible; it cannot weaken this section.
 
 The executable implementation candidate now includes:
 
@@ -1373,6 +1373,13 @@ The executable implementation candidate now includes:
   recursively found across 1,063 nested union occurrences; these distinguish
   an ignored top-level additive field from required-field and nested-authority
   breaking changes;
+- a real packaged cross-build harness that rejects identical asset manifests
+  or stamped commits. Immutable candidates
+  `83021958b61d65425847817f3b5d275bd048979a` and
+  `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2` pass both
+  old-client/new-server and new-client/old-server with Web v1 bootstrap and
+  zero application console/page errors; the checked-in schema-v2 report
+  contains immutable build identities and no local absolute paths;
 - durable/recoverable BoundPlans plus conservative node/Attempt metadata and
   nineteen explicitly enumerated ControlStore/Coordinator read handlers;
 - all 29 registered WebGateway route slots, composed from session/bootstrap,
@@ -1405,7 +1412,7 @@ The executable implementation candidate now includes:
   metadata and pass empty, single, exact N/N+1 full-envelope,
   concatenate-all-pages, one-oversized-element, and strict response-schema
   cases;
-- a pinned Node 22.19.0/24.18.0/26.5.0 protocol/gateway matrix (59 tests per
+- a pinned Node 22.19.0/24.18.0/26.5.0 protocol/gateway matrix (62 tests per
   runtime), including the cross-version 65-header parser sentinel required to
   enforce the 64-header application maximum without silent truncation and the
   combined event-cursor restart/query/authorization/listener/key/mount/
@@ -1434,8 +1441,9 @@ The executable implementation candidate now includes:
   zero-write/zero-provider replay checks and graph-listbox keyboard parity. The
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
-  `chrome` channel, including zero Chromium axe findings. Native Safari, Edge
-  and assistive-technology review remain separate;
+  `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
+  has a separately scoped packaged read/keyboard/AX smoke; full Safari
+  mutation, Edge and assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1445,11 +1453,10 @@ The executable implementation candidate now includes:
 
 At minimum, conformance work must still add or verify:
 
-- real historical packaged old-client/new-server plus
-  new-client/old-server build pairs beyond the committed additive/breaking
-  codec vectors. `scripts/test-web-packaged-compatibility.mjs` now performs
-  both real cross-build paths and rejects identical manifests, but the first
-  two distinct reviewed immutable build roots do not exist yet;
+- repeat the now-green real packaged old-client/new-server plus
+  new-client/old-server harness at the final reviewed tip. The first local
+  immutable pair is checked in as evidence, but it does not substitute for
+  reviewed-tip verification;
 - native Safari/Edge/assistive-technology and human review of the
   approval-enhanced decision path. The exact checkpoint dispatcher, HTTP
   approve/reject path, packaged Chromium/Firefox/WebKit decision flow,

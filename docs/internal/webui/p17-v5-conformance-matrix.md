@@ -1,11 +1,11 @@
 # P17 v5 implementation conformance matrix
 
-Status: working-tree evidence ledger; **not Conforming and not wire-frozen**.
+Status: immutable-candidate evidence ledger; **not Conforming and not wire-frozen**.
 
 This document tracks the implementation candidate in the isolated
 `codex/0.3.0-beta.2` worktree. P17 remains the normative target. A green row
-here means the named local evidence passed; it does not turn an unreviewed
-working tree into a released protocol.
+here means the named local evidence passed; it does not turn unreviewed
+candidate commits into a released protocol.
 
 Legend:
 
@@ -19,7 +19,7 @@ Legend:
 | Surface | Current evidence | State |
 |---|---|---|
 | Endpoint inventory and generation | `WEB_ENDPOINTS` is exactly 29 rows; generated route, handler and browser-client inventories are bijective; RFC/P17 drift guard has no difference | **PASS (local)** |
-| Executable codecs | Every row owns TypeBox params/query/body/success schemas; producer DTOs are closed; committed vectors cover the 13 approved additive roots, all command/action/outcome/page-cursor/SSE branches, all 29 endpoint samples, every error code, and recursively validate 14,138 branches across 1,063 nested union occurrences. `scripts/test-web-packaged-compatibility.mjs` now cross-runs real browser assets and gateway/control modules in both old/new directions and rejects identical build identities. | **PARTIAL** — the harness exists, but two distinct reviewed immutable packaged builds and their passing report do not yet exist |
+| Executable codecs | Every row owns TypeBox params/query/body/success schemas; producer DTOs are closed; committed vectors cover the 13 approved additive roots, all command/action/outcome/page-cursor/SSE branches, all 29 endpoint samples, every error code, and recursively validate 14,138 branches across 1,063 nested union occurrences. `scripts/test-web-packaged-compatibility.mjs` rejects identical asset or commit identities and cross-runs real browser assets plus gateway/control modules in both directions. Immutable candidates `83021958b61d65425847817f3b5d275bd048979a` and `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2` pass old-client/new-server and new-client/old-server with Web v1 bootstrap and zero console/page errors; the schema-v2 report is checked in at `artifacts/web-compat/83021958-to-33202a9c/report.json`. | **PASS (local)** for the first distinct immutable candidate pair; reviewed-tip rerun remains a freeze gate |
 | Authority handlers | All 29 gateway route slots are composed from session/bootstrap, 19 read handlers, analysis, artifact, replay, command and event services. Approve/reject delegate to P15 ControlHost CAS; approve reloads the exact private checkpoint and original BoundPlan rather than introducing a Web-owned scheduler. | **PASS (local)** for route/service and enabled approval authority coverage |
 | Default capability truth | Packaged bootstrap advertises `approve`, `reject` and `cancel-run`; executable ControlHost, HTTP and packaged-browser evidence covers all three. Edit/recovery/capacity mutations remain unadvertised by default. | **PASS (local)** |
 | Pro read surfaces | Graph, node detail, attempts, timeline, artifacts, Receipt, why-stale, replay and fragments use generated P17 client calls | **PASS (local)** |
@@ -31,7 +31,7 @@ Legend:
 | §15 evidence family | Evidence now | State / remaining proof |
 |---|---|---|
 | 29 endpoint/schema/route/client/docs equality | `web-presentation.test.ts`, `check:web-protocol-docs` | **PASS (local)** |
-| Request/success/error/union codec round trips | `web-compatibility.test.ts` freezes 13 additive roots; 9 command requests, 9 action request bases, 18 available/unavailable actions, 5 outcomes, 10 page cursors, 4 SSE frames, 29 endpoint samples, every `ControlError` code, and every recursively reachable nested union branch | **PARTIAL** — historical packaged pair execution awaits the first distinct reviewed build pair |
+| Request/success/error/union codec round trips | `web-compatibility.test.ts` freezes 13 additive roots; 9 command requests, 9 action request bases, 18 available/unavailable actions, 5 outcomes, 10 page cursors, 4 SSE frames, 29 endpoint samples, every `ControlError` code, and every recursively reachable nested union branch. The real packaged pair report binds two distinct stamped commits and manifests and passes both old/new directions. | **PASS (local)** for executable vectors plus the first immutable packaged pair; final reviewed-tip evidence remains separate |
 | Server/browser projection and import boundary | Projection goldens, producer/consumer tests, browser-safe import guard | **PASS (local)** for committed 14-state fixture set |
 | Task/verification/decision/failure state space | Executable schema accepts exactly 13 reachable RunStatus/RunStage pairs and rejects all other 50 pairs plus every inverse stopping flag; property tests cover all 92 reachable Task × verification × authority × decision-disposition interactions, 8 decision classes, every verification reason/check/outcome, and the 720 failure action-gate combinations | **PASS (local)** for the factorized closed projection state space |
 | Refresh epoch/resource stamp reducer | 96 state/event reducer transitions, disconnect/reset/principal de-duplication, epoch overflow, and 816 observation gate/message combinations; packaged browser proves identical live-task and stopped-task projection over SSE and polling | **PASS (local)** |
@@ -48,7 +48,7 @@ Legend:
 | Artifact and Receipt export delivery | Current Receipt reachability, pre-header content-addressed artifact snapshot digest/length, source-tamper rejection, all redaction classes, full inline MIME allowlist and denied MIME downgrade, exact 5-MiB inline/100-MiB download boundaries, bidi/traversal/control-safe disposition, sensitive acknowledgement, Range rejection, 64 KiB backpressure writes, 30-second no-progress abort, real transport abort, exact 100-MiB loopback transport with byte/digest equality, and exact production five-minute deadline. Receipt JSON export re-reads all byte-budgeted manifest pages, rejects identity drift, cursor loops, missing/duplicate/reordered/out-of-range events and count mismatch, serializes a versioned deterministic document, and downloads that exact file in Chromium, Firefox and WebKit. | **PASS (local)** for artifact transport and Receipt export consistency; export checking does not replace authoritative journal/artifact verification |
 | Static application delivery | Signed manifest, mixed-build/keyset rejection, unsorted/unknown/tampered/source-map package rejection, exact route registry, cache/MIME/CSP/HEAD and absent/multiple/wildcard/quality-zero/malformed `Accept`; one-decode canonical path corpus covers encoded separators/dot segments, double encodings, malformed/overlong UTF-8, controls/bidi, Unicode normalization and case; packaged-filesystem corpus covers root/manifest/entrypoint/leaf/parent symlinks, directories, escaping paths, duplicate assets/routes/catalog paths, unlisted files and map probes; the browser E2E loads the manifest-bound multi-chunk production build under the exact CSP | **PASS (local)** for the frozen static-delivery contract |
 | Authority/provenance | Real ControlStore/Coordinator read-service tests and the multi-project packaged path; a real `expand` Run atomically journals the immutable BoundFragment body, Run-scoped link/causation/commit provenance, dynamic NodeInstances and Receipt hash, then proves directory-loss recovery plus detail/fragment/graph/timeline handlers. Provider evidence covers checkpointed `running` and `completed`, failed collection, rejection without a handle, settled cancellation, authoritative ambiguous reconcile, checkpoint-write failure, completion recovered without a terminal Attempt checkpoint, and projection-loss recovery. Approval evidence covers restart, all four pre-dispatch saga prefixes, post-dispatch ambiguity, repeated-recovery idempotency, multiple boundaries, providerless approval Attempts, pre-boundary non-replay, corrupt-artifact fail-closed behavior, secret artifact inspection and non-Receipt/browser reachability. Node enrichment reaches all five closed outcomes; Receipt provenance reaches both `ok` and conservative `unknown`. | **PASS (local)** for the implemented provider, approval and provenance contract |
-| Performance and large-data behavior | The production builder enforces the 220-KiB-gzip Simple-shell ceiling; CSP-compatible task segmentation and graph paging are exercised by `scripts/bench-web.mjs` over the deterministic 100-project/10,000-run/2,000-node fixture. The exact current source digest `sha256:e6b8b3dc50fca74dd6f9e292ab67911a26bdfb214ddec9b9e4d3989c6b7b7378` has a schema-v4 Node 24.18.0/M3 Pro 30-sample `structural-pass`: 209,073-byte Simple shell; cold Home p95 492.2 ms; warm Home p95 451.8 ms; cached Pro p95 27.3 ms; committed event→painted detail p95 229.5 ms (commit→receipt 66.2 ms, receipt→paint 167.3 ms diagnostics); 8.1-ms list response; CLS 0.0586; all 10,000 task rows and 2,000 graph nodes; zero CSP/runtime-style findings. JSON and human summaries retain owner-ready and launch-to-useful p95 at 2.76 s and 3.27 s rather than hiding startup. The report verifies the exact primary Node version, AC power, no recorded thermal/performance warning and pre/post load averages. | **PARTIAL** — the 30-sample implementation/methodology is green locally, but this machine is not the canonical M2/Node 24 profile; the required canonical run and percentile sign-off remain absent |
+| Performance and large-data behavior | The production builder enforces the 220-KiB-gzip Simple-shell ceiling; CSP-compatible task segmentation and graph paging are exercised by `scripts/bench-web.mjs` over the deterministic 100-project/10,000-run/2,000-node fixture. Immutable commit `33202a9c26e2d3b86d8d661a09b4c9ef5f9a56e2`, source digest `sha256:1d270e9e8c755ea1373b1e0ca524e5b37394b0522ec64d970057a6b7ca85a282`, has a checked-in schema-v4 Node 24.18.0/M3 Pro 30-sample clean-source `structural-pass`: 209,114-byte Simple shell; cold Home p95 552.3 ms; warm Home p95 650.0 ms; cached Pro p95 29.8 ms; committed event→painted detail p95 149.1 ms (commit→receipt 79.2 ms, receipt→paint 75.1 ms diagnostics); 12.6-ms list response; CLS 0.0690; all 10,000 task rows and 2,000 graph nodes; zero CSP/runtime-style findings. JSON and human summaries retain owner-ready and launch-to-useful p95 at 3.72 s and 4.41 s rather than hiding startup. The report verifies `git.dirty:false`, exact primary Node version, AC power, no recorded thermal/performance warning and pre/post load averages. | **PARTIAL** — the immutable 30-sample implementation/methodology is green locally, but this machine is not the canonical M2/Node 24 profile; the required canonical run and percentile sign-off remain absent |
 | Packaged browser path | Built packages → CLI → daemon → multi-project WebGateway → browser; independent cross-port listeners, SSE, live/stopped polling projection equivalence, every current GET polling query surface, live cancel, restart-safe contextual approval, downstream execution and Receipt, private-checkpoint non-reachability, Receipt/artifact plus deterministic JSON export, zero-write/zero-provider replay, Pro graph/timeline/evidence, React Aria tabs/disclosure/alert-dialog/listbox and single-selection relations, Simple → Pro focus restoration, keyboard selection, graph arrow-navigation/inspector parity, modal focus containment/Escape/trigger restoration, settings switch semantics, current-session logout isolation, listener-wide revoke-all invalidation of an independent peer session, 320px and Chromium axe | **PASS (local)** for the representative complete path on Chromium, Firefox, WebKit and native Chrome; native Safari has a separately scoped read/keyboard smoke, while full native-product mutation and assistive-technology matrices remain |
 | Packaged browser engines | The approval-enhanced packaged candidate passes Chromium 149.0.7827.55, Firefox 151.0 and WebKit 26.5 from the same source state, each on its first matrix attempt with zero application console/page errors, CSP violations, runtime style insertions, final inline styles or runtime style elements. All three pass Receipt export, zero-write/zero-provider replay, graph-listbox keyboard parity, current-session logout and listener-wide peer-session revocation. Firefox records six explicitly classified EventSource navigation-interruption diagnostics; they are transport diagnostics, not application console failures. Native Google Chrome 150.0.7871.184 passes the same complete packaged path and Chromium axe checks. Native Safari 26.3 on macOS 26.3 passes an independently recorded packaged read/keyboard smoke: one-time exchange, Simple home/task, Simple → Pro, tab semantics, graph load, accessibility disclosure, arrow-key list selection with inspector parity, and Evidence/Receipt/artifact rendering. | **PARTIAL** — Playwright's three-engine matrix, native Chrome and the scoped native Safari smoke pass locally; Edge, full native Safari mutation coverage, VoiceOver and the remaining assistive-technology/manual matrices remain |
 | Native browser and assistive-technology review | A frozen ten-task protocol and checked no-evidence result template cover native Safari/Chrome + VoiceOver, Edge + Narrator, Firefox + NVDA, and Edge forced colors. The native Safari AX smoke is separately scoped and cannot populate a VoiceOver lane. | **EXTERNAL BLOCKER** — all five native/AT lanes remain `not-run` |
@@ -74,9 +74,11 @@ pnpm test:control
 pnpm test:daemon
 pnpm test:web-node-matrix
 pnpm test:web-browser-matrix
+npx --yes node@24.18.0 scripts/test-web-packaged-compatibility.mjs --old-root <83021958-build> --new-root <33202a9c-build> --output artifacts/web-compat/83021958-to-33202a9c/report.json
 pnpm test
 pnpm test:pack
 node packages/taskflow-cli/test/e2e-web-console.mts
+npx --yes node@24.18.0 scripts/bench-web.mjs
 git diff --check
 ```
 
@@ -94,6 +96,9 @@ Observed counts:
 - packaged smoke: 12 packages, 27 explicit imports, 68 wildcard exports and
   package bins;
 - reference renders: 149 total, 36 axe-assessed;
+- immutable compatibility: two distinct stamped commits and asset manifests,
+  both old-client/new-server and new-client/old-server pass with zero
+  application console/page errors;
 - packaged browser: the approval-enhanced source state passes Chromium
   149.0.7827.55, Firefox 151.0 and WebKit 26.5 on the first attempt of each
   matrix lane, with zero application console/page errors, CSP violations,
@@ -117,7 +122,7 @@ The production WebUI build is successful without a chunk-size warning. Stable
 TypeBox, React runtime, TanStack, React Aria and icon dependency boundaries
 reduce the largest minified chunk to 191.20 kB and the entry chunk to 155.96
 kB. The production asset builder measures the modulepreloaded Simple shell at
-209,073 gzip bytes (204.17 KiB) and fails above the RFC's 220-KiB budget; the
+209,114 gzip bytes (204.21 KiB) and fails above the RFC's 220-KiB budget; the
 Pro panel remains a separate lazy chunk. The packaged browser E2E loads this
 exact manifest-bound split build rather than a Vite development server.
 
@@ -126,7 +131,7 @@ exact manifest-bound split build rather than a Vite development server.
 The implementation is ready for targeted human review and continued
 adversarial/compatibility hardening. It is **not** ready for a P17 wire-freeze
 claim because the external comprehension/content gates, canonical 30-sample
-performance evidence, historical build pairs, native Edge/full-Safari/AT
-review, and the remaining PARTIAL §15 matrices above are not complete.
+performance evidence, native Edge/full-Safari/AT review, reviewed-tip evidence,
+and the remaining PARTIAL §15 matrices above are not complete.
 Capability-gated writes that are absent and unadvertised do not block beta.2
 by themselves.

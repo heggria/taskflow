@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 
 function parseArgs(argv) {
 	const values = new Map();
@@ -199,7 +199,8 @@ async function runPair(serverBuild, clientBuild, label) {
 		});
 		const bootstrapResponse = await bootstrapResponsePromise;
 		const bootstrapBody = await bootstrapResponse.json();
-		await page.waitForLoadState("networkidle", {
+		await page.locator("#main-content h1").waitFor({
+			state: "visible",
 			timeout: 15_000,
 		});
 		const bodyText = await page.locator("body").innerText();
@@ -257,7 +258,7 @@ const pairs = [
 	await runPair(oldBuild, newBuild, "new-client/old-server"),
 ];
 const report = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	status: pairs.every((pair) => pair.pass) ? "pass" : "fail",
 	measuredAt: new Date().toISOString(),
 	runtime: {
@@ -265,8 +266,10 @@ const report = {
 		platform: process.platform,
 		arch: process.arch,
 	},
-	oldRoot: fs.realpathSync(args.oldRoot),
-	newRoot: fs.realpathSync(args.newRoot),
+	builds: {
+		old: oldBuild.identity,
+		new: newBuild.identity,
+	},
 	pairs,
 };
 fs.mkdirSync(path.dirname(args.output), { recursive: true });
