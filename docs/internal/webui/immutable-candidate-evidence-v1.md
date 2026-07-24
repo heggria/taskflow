@@ -8,7 +8,7 @@ release evidence.
 | Role | Git commit | Web manifest SHA-256 |
 |---|---|---|
 | old | `83021958b61d65425847817f3b5d275bd048979a` | `sha256:4f2107eb0b1065315929f6c060031a90f05cc329df9229eb3f01d314ed47de87` |
-| new | `184fb5af9ee2f678e57ff33adc01e6c38fda1e59` | `sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f` |
+| new | `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` | `sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f` |
 
 Both builds were produced from detached worktrees with
 `pnpm install --offline --frozen-lockfile` followed by `pnpm run build`.
@@ -23,8 +23,8 @@ Reproduction command:
 ```text
 npx --yes node@24.18.0 scripts/test-web-packaged-compatibility.mjs \
   --old-root <built-83021958-root> \
-  --new-root <built-184fb5af-root> \
-  --output artifacts/web-compat/83021958-to-184fb5af/report.json
+  --new-root <built-d8df9c65-root> \
+  --output artifacts/web-compat/83021958-to-d8df9c65/report.json
 ```
 
 Result:
@@ -39,9 +39,9 @@ Result:
 Evidence:
 
 - report:
-  `artifacts/web-compat/83021958-to-184fb5af/report.json`;
+  `artifacts/web-compat/83021958-to-d8df9c65/report.json`;
 - report SHA-256:
-  `f3275ecadf0eeaa47c845c0b02ca61e602a6bbaf9241dfe6ea5da6e94a9c4c06`.
+  `8f681f6cde03b41ebf52e79f1ce86b42958d7972e267f95501c8f4c209891ef4`.
 
 The report deliberately contains build identities rather than local absolute
 paths. The harness rejects an identical manifest or an identical stamped
@@ -54,7 +54,7 @@ source commit; a source change requires a new immutable build and rerun.
 
 ## Performance and large-data evidence
 
-Reproduction command from the clean `184fb5af` detached worktree:
+Reproduction command from the clean `d8df9c65` detached worktree:
 
 ```text
 npx --yes node@24.18.0 scripts/bench-web.mjs
@@ -63,20 +63,20 @@ npx --yes node@24.18.0 scripts/bench-web.mjs
 Evidence:
 
 - JSON:
-  `artifacts/web-bench/184fb5af9ee2f678e57ff33adc01e6c38fda1e59/web-perf-v1.json`;
+  `artifacts/web-bench/d8df9c650b68e4c0854aaad03e6da3ce0dc3352f/web-perf-v1.json`;
 - human summary:
-  `artifacts/web-bench/184fb5af9ee2f678e57ff33adc01e6c38fda1e59/web-perf-v1.md`;
+  `artifacts/web-bench/d8df9c650b68e4c0854aaad03e6da3ce0dc3352f/web-perf-v1.md`;
 - JSON SHA-256:
-  `2845eb2f47bea3448c071bf5aa8d0292ba486051fd3a68b7da68b762ad9f6462`;
+  `8dc2a14652caa24f95c69799280065bf4f67d6b4f00646f4fd0e7170b64082b8`;
 - summary SHA-256:
-  `65af3f3585d19513ee04e47d904df51a0654542d17fd74237217b71d5474f668`.
+  `f66d7ace514bd776850db251435cf95761524650c72c802b8c75194ccc2fdc39`.
 
 The schema-v4 report records:
 
-- exact commit `184fb5af9ee2f678e57ff33adc01e6c38fda1e59`;
+- exact commit `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f`;
 - `git.dirty:false`;
 - source digest
-  `sha256:a411eb10d10229eed5e84c61712d635c42e0ff60c6cccb18fdef6d6ead764902`;
+  `sha256:648b778e4e316be5f93e4ef2b68c07ba45bea4d0d2731a9dc2d471ec3b18c0b3`;
 - Node 24.18.0 and Chromium 149.0.7827.55;
 - MacBook Pro / Apple M3 Pro / AC power;
 - no recorded thermal or performance warning;
@@ -87,18 +87,18 @@ The schema-v4 report records:
 This is not the RFC's canonical Mac mini M2 / 16 GiB profile. Its latency
 numbers are informational even when they are below the numerical budgets.
 The canonical M2 run remains a release gate. The non-canonical p95s were
-1,217.9 ms cold Home, 465.0 ms warm Home, 24.4 ms cached Pro, 225.9 ms
-event-to-visible, 81.5 ms commit-to-receipt, 161.3 ms receipt-to-visible,
-8.5 ms list response, and 0.0742 CLS. Owner-ready and launch-to-useful p95s
-were 18.286 s and 19.132 s. The report records a high pre-run load average of
-11.69/7.97/7.26 and large process-owner launch outliers. Those startup
+1,268.1 ms cold Home, 904.7 ms warm Home, 30.7 ms cached Pro, 151.1 ms
+event-to-visible, 76.9 ms commit-to-receipt, 95.0 ms receipt-to-visible,
+8.6 ms list response, and 0.0784 CLS. Owner-ready and launch-to-useful p95s
+were 25.700 s and 27.175 s. The report records a high pre-run load average of
+8.05/8.69/8.62 and large process-owner launch outliers. Those startup
 measurements are not hidden or promoted to release evidence; they make an
 unloaded canonical-profile rerun especially important.
 
-## Native Safari mutation smoke
+## Native Safari mutation smokes
 
-Native Safari 26.3 on macOS 26.3 exercised the packaged `184fb5af` source
-through a fresh isolated control store. The scoped run:
+Native Safari 26.3 on macOS 26.3 exercised the packaged `d8df9c65` source
+through separate fresh isolated control stores. The allow/revoke-all run:
 
 - exchanged an independent one-time launch capability;
 - exposed the approval question and both allow/reject consequences;
@@ -111,17 +111,34 @@ through a fresh isolated control store. The scoped run:
 - interrupted the review hold and verified that its listener refused a
   subsequent connection.
 
+The reject/current-session run:
+
+- reached both decision controls through native Tab focus and activated Reject
+  with the keyboard;
+- authoritatively settled the task as unable to continue, with 1/3 steps,
+  `publish review` blocked, downstream pending, verification unavailable, and
+  result `approval rejected`;
+- exposed the current-session consequence, ended only that session, and
+  rendered the localized current-tab signed-out screen;
+- interrupted the review hold and verified that its listener refused a
+  subsequent connection.
+
 Evidence:
 
 - record:
   `docs/internal/webui/native-safari-mutation-smoke-v1.json`;
 - record SHA-256:
-  `b07732984e07739515f20604e0f5478092b5d1af2d3c6a6cccda53fd911a173e`.
+  `e949c3f3573c73dcf4d057245309f183917cfe25350025fe98a3a68c35a95540`;
+- reject/current-session record:
+  `docs/internal/webui/native-safari-reject-current-session-smoke-v1.json`;
+- reject/current-session record SHA-256:
+  `e3d9a1c26bcba19d5b2c6deaab28212420e3a61663fb991b5c6ab4eb8a07497c`.
 
-This is a native AX/keyboard mutation smoke, not a VoiceOver attestation. It
-does not claim native Safari reject, cancel-run, current-session logout,
-independent peer-session invalidation, console/CSP automation, or human
-approval.
+These are native AX/keyboard mutation smokes, not VoiceOver attestations. They
+do not claim native Safari cancel-run, independent peer-session invalidation,
+console/CSP automation, or human approval. The reject record also retains one
+discarded automation-only address-field attempt; no passing assertion derives
+from it.
 
 ## Remaining interpretation boundary
 
@@ -131,7 +148,7 @@ replace working-tree-only performance evidence. They do not provide:
 - human product/reference approval;
 - five fresh English participant results;
 - two native Simplified-Chinese reviews;
-- native Edge; the remaining native Safari mutation/session cases; VoiceOver,
-  Narrator, or NVDA evidence;
+- native Edge; native Safari cancel-run and independent peer-session
+  invalidation; VoiceOver, Narrator, or NVDA evidence;
 - the canonical M2 performance report;
 - reviewed-tip evidence or a wire-freeze decision.

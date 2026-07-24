@@ -12,11 +12,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/83021958-to-184fb5af/report.json",
+	"artifacts/web-compat/83021958-to-d8df9c65/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/184fb5af9ee2f678e57ff33adc01e6c38fda1e59",
+	"artifacts/web-bench/d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -30,6 +30,10 @@ const ledgerPath = path.join(
 const nativeSafariMutationPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/native-safari-mutation-smoke-v1.json",
+);
+const nativeSafariRejectCurrentPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-reject-current-session-smoke-v1.json",
 );
 const candidateSourceScopes = [
 	"packages/taskflow-core/src",
@@ -279,12 +283,65 @@ assert.equal(
 	true,
 );
 
+const nativeSafariRejectCurrentBytes = fs.readFileSync(
+	nativeSafariRejectCurrentPath,
+	"utf8",
+);
+assertNoLocalPath(
+	nativeSafariRejectCurrentBytes,
+	"native Safari reject/current-session record",
+);
+const nativeSafariRejectCurrent = JSON.parse(
+	nativeSafariRejectCurrentBytes,
+);
+assert.equal(nativeSafariRejectCurrent.schemaVersion, 1);
+assert.equal(
+	nativeSafariRejectCurrent.result,
+	"native-reject-and-current-session-smoke-pass",
+);
+assert.equal(
+	nativeSafariRejectCurrent.candidate.gitCommit,
+	newBuild.gitCommit,
+);
+assert.equal(
+	nativeSafariRejectCurrent.candidate.trackedCandidateSourceDirty,
+	false,
+);
+assert.equal(
+	nativeSafariRejectCurrent.candidate.webSourceDigest,
+	benchmark.git.sourceDigest,
+);
+assert.equal(
+	nativeSafariRejectCurrent.candidate.webManifestSha256,
+	newBuild.manifestSha256,
+);
+assert.equal(
+	nativeSafariRejectCurrent.environment.browser,
+	"Safari",
+);
+for (const [name, passed] of Object.entries(
+	nativeSafariRejectCurrent.assertions,
+)) {
+	assert.equal(
+		passed,
+		true,
+		`native Safari reject/current assertion failed: ${name}`,
+	);
+}
+assert.equal(
+	nativeSafariRejectCurrent.excludedClaims.some((claim) =>
+		claim.includes("VoiceOver"),
+	),
+	true,
+);
+
 const ledger = fs.readFileSync(ledgerPath, "utf8");
 for (const file of [
 	compatibilityPath,
 	benchmarkPath,
 	benchmarkSummaryPath,
 	nativeSafariMutationPath,
+	nativeSafariRejectCurrentPath,
 ]) {
 	assert.match(
 		ledger,

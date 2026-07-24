@@ -20,32 +20,39 @@
     "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
     "authority": "fresh isolated ControlStores seeded before the packaged browser scenario performed its automated mutations",
     "interaction": "macOS accessibility tree plus native keyboard and accessibility actions",
-    "launchCapability": "independent one-time capability; value not retained",
-    "shutdownCheck": "manual-review process interrupted after revocation; loopback listener refused a subsequent connection"
+    "launchCapability": "independent one-time capability entered through native keyboard; value not retained",
+    "discardedAttempt": "one earlier isolated run was discarded after programmatic address-field replacement did not complete session exchange; no assertion derives from that run",
+    "shutdownCheck": "manual-review process interrupted after current-session logout; loopback listener refused a subsequent connection"
   },
   "assertions": {
     "oneTimeSessionExchangeCompleted": true,
     "approvalQuestionAndBothConsequencesWereExposed": true,
-    "allowActionWasActivatedFromNativeKeyboardFocus": true,
+    "tabFocusReachedAllowAction": true,
+    "tabFocusReachedRejectAction": true,
+    "rejectActionWasActivatedFromNativeKeyboardFocus": true,
     "pendingCopyPreventedDuplicateSubmission": true,
-    "approvalWasAuthoritativelySettled": true,
-    "taskReachedCompleted": true,
-    "threeOfThreeStepsCompleted": true,
-    "partialVerificationRemainedVisible": true,
-    "resultWasPublished": true,
-    "revokeAllQuestionAndTaskPreservationConsequenceWereExposed": true,
-    "revokeAllWasAuthoritativelyApplied": true,
+    "approvalWasAuthoritativelyRejected": true,
+    "homeShowedZeroActiveAndZeroNeedsInput": true,
+    "taskWasReportedUnableToContinue": true,
+    "oneOfThreeStepsWasCompleted": true,
+    "approvalNodeWasBlocked": true,
+    "downstreamNodeRemainedPending": true,
+    "verificationUnavailableRemainedVisible": true,
+    "resultWasApprovalRejected": true,
+    "currentSessionQuestionAndTaskPreservationConsequenceWereExposed": true,
+    "currentSessionLogoutWasAuthoritativelyApplied": true,
     "signedOutDocumentTitleWasLocalized": true,
     "signedOutHeadingWasBrowserAccessEnded": true,
-    "signedOutDetailSaidAllListenerTabsLostAccessAndTasksWereUnchanged": true,
+    "signedOutDetailSaidCurrentTabLostAccessAndTasksWereUnchanged": true,
     "signedOutNextStepSaidToCloseTheTabOrRestartTaskflow": true,
     "listenerClosedAfterTheReviewHold": true
   },
   "excludedClaims": [
     "VoiceOver speech order, announcements, rotor navigation, or verbosity",
-    "native Safari reject, cancel-run, current-session logout, or independent peer-session invalidation",
+    "native Safari cancel-run or independent peer-session invalidation",
     "native Safari console, CSP, performance, or axe automation",
-    "human product, content, or comprehension approval"
+    "human product, content, or comprehension approval",
+    "normal-user reproduction of the discarded programmatic address-field attempt"
   ],
-  "result": "native-approval-and-revoke-all-smoke-pass"
+  "result": "native-reject-and-current-session-smoke-pass"
 }

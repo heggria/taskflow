@@ -1376,7 +1376,7 @@ The executable implementation candidate now includes:
 - a real packaged cross-build harness that rejects identical asset manifests
   or stamped commits. Immutable candidates
   `83021958b61d65425847817f3b5d275bd048979a` and
-  `184fb5af9ee2f678e57ff33adc01e6c38fda1e59` pass both
+  `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
   contains immutable build identities and no local absolute paths. The
@@ -1444,12 +1444,14 @@ The executable implementation candidate now includes:
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has separately scoped packaged read/keyboard/AX and approval/revoke-all
-  mutation smokes. The mutation smoke reaches completed 3/3 with honest
-  partial verification, applies listener-wide revocation, renders the
-  deterministic localized signed-out screen, and verifies listener close;
-  Safari reject/cancel/current-session/peer-session coverage, Edge and
-  assistive-technology review remain separate;
+  has separately scoped packaged read/keyboard/AX, approval/revoke-all and
+  reject/current-session mutation smokes. The allow smoke reaches completed
+  3/3 with honest partial verification and applies listener-wide revocation.
+  The reject smoke reaches both choices through native Tab focus, persists the
+  approval node as blocked with downstream pending, and applies current-session
+  logout. Both render the appropriate deterministic localized signed-out
+  screen and verify listener close; Safari cancel/peer-session coverage, Edge
+  and assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1477,7 +1479,7 @@ At minimum, conformance work must still add or verify:
   read indexes, startup snapshot prewarm, commit-woken SSE invalidation,
   browser receipt/paint marks, standard CLS session-window measurement, and
   JSON plus human summaries are implemented. Clean immutable commit
-  `184fb5af9ee2f678e57ff33adc01e6c38fda1e59` has a checked-in M3 Pro/
+  `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` has a checked-in M3 Pro/
   Node 24 30-sample structural pass, but the report also records high pre-run
   load and large owner-launch outliers. It remains informational;
 - human approval of the 149 reference renders, the five-fresh-participant
