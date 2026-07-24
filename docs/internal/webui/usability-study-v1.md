@@ -43,12 +43,38 @@ TASKFLOW_WEB_MANUAL_REVIEW_MS=900000 \
 node packages/taskflow-cli/test/e2e-web-console.mts
 ```
 
-The process prints one `[manual-review]` JSON record to stderr containing a
-single-use `launchUrl`. Open that URL immediately in the participant's fresh
-browser profile. The hold occurs before the automated scenario mutates any Run;
-after the session, interrupt the process and verify that its isolated listener
-has closed. The launch capability is secret and ephemeral: never copy it into a
-result record, screenshot, issue, or chat transcript.
+The default `initial` stage prints one `[manual-review]` JSON record to stderr
+containing a single-use launch capability. Open it immediately in the
+participant's fresh browser profile. The hold occurs before the automated
+scenario mutates any Run.
+
+Native-browser mutation checks may instead select `cancel` or `sessions`:
+
+```bash
+review_root="$(mktemp -d)"
+TASKFLOW_WEB_E2E_TRACE=1 \
+TASKFLOW_WEB_MANUAL_REVIEW_MS=180000 \
+TASKFLOW_WEB_MANUAL_REVIEW_STAGE=cancel \
+TASKFLOW_WEB_MANUAL_REVIEW_EXIT_AFTER_HOLD=1 \
+TASKFLOW_WEB_MANUAL_REVIEW_RELEASE_DIR="$review_root/release" \
+node packages/taskflow-cli/test/e2e-web-console.mts
+```
+
+The `cancel` stage holds after a real script task is running, keeps both the
+task and its phase timeout alive for the configured hold plus cleanup margins,
+and exposes one fresh launch capability. Its hold must not exceed 180 seconds:
+that leaves 60 seconds of task margin and 60 seconds of cleanup margin within
+the DSL's 300-second script timeout ceiling. The `sessions` stage exposes two
+independently minted capabilities; exchange them in separate browser cookie
+jars, such as a normal window and a private window. After the native review,
+create the configured release directory. With `EXIT_AFTER_HOLD=1`, the harness
+then closes its isolated listener without running later automated mutations.
+If the reviewer did not stop the staged task, harness cleanup cancels it before
+exiting so no script process survives the review.
+
+Every launch capability is secret and ephemeral: never copy it into a result
+record, screenshot, issue, or chat transcript. After the harness exits, verify
+that its loopback listener is closed.
 
 Reset between participants:
 

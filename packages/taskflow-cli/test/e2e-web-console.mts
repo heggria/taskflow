@@ -20,6 +20,11 @@ import {
 	inspectProjectControlStore,
 	loadApprovalForRun,
 } from "../../taskflow-control/dist/index.js";
+import {
+	holdWebManualReview,
+	isWebManualReviewStage,
+	readWebManualReviewConfig,
+} from "./web-manual-review-harness.ts";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDir, "../../..");
@@ -417,6 +422,9 @@ async function captureScreenshot(
 
 async function main(): Promise<void> {
 	trace("starting");
+	const manualReview = readWebManualReviewConfig(
+		process.env,
+	);
 	fs.rmSync(evidenceRoot, { recursive: true, force: true });
 	fs.mkdirSync(evidenceRoot, { recursive: true });
 	const tempRoot = fs.mkdtempSync(
@@ -653,13 +661,11 @@ async function main(): Promise<void> {
 			sseResponse.headers()["content-type"] ?? "",
 			/^text\/event-stream(?:;|$)/u,
 		);
-		const manualReviewHoldMs = Number.parseInt(
-			process.env.TASKFLOW_WEB_MANUAL_REVIEW_MS ?? "0",
-			10,
-		);
 		if (
-			Number.isSafeInteger(manualReviewHoldMs) &&
-			manualReviewHoldMs > 0
+			isWebManualReviewStage(
+				manualReview,
+				"initial",
+			)
 		) {
 			const manualReviewLaunch = runCli(
 				[
@@ -675,18 +681,22 @@ async function main(): Promise<void> {
 				manualReviewLaunch.origin,
 				owner.result.origin,
 			);
-			process.stderr.write(
-				`[manual-review] ${JSON.stringify({
-					browser: "native",
-					holdMs: manualReviewHoldMs,
-					launchUrl: manualReviewLaunch.launchUrl,
-					origin: manualReviewLaunch.origin,
-					project: "release-checks",
-				})}\n`,
-			);
-			await new Promise<void>((resolve) => {
-				setTimeout(resolve, manualReviewHoldMs);
+			await holdWebManualReview(manualReview, {
+				stage: "initial",
+				launches: [
+					{
+						label: "initial",
+						launchUrl:
+							manualReviewLaunch.launchUrl,
+						origin:
+							manualReviewLaunch.origin,
+						project: "release-checks",
+					},
+				],
 			});
+			if (manualReview.exitAfterHold) {
+				return;
+			}
 		}
 		const bootstrapEnvelope = (await page.evaluate(async () => {
 			const response = await fetch("/api/v1/bootstrap");
@@ -945,6 +955,16 @@ async function main(): Promise<void> {
 		);
 		trace("polling fallback home cycle complete");
 
+		const nativeCancelReview =
+			isWebManualReviewStage(
+				manualReview,
+				"cancel",
+			);
+		const liveTaskSleepSeconds =
+			nativeCancelReview
+				? Math.ceil(manualReview.holdMs / 1_000) +
+					60
+				: 30;
 		const liveAdmissionPromise = controlClientRpc(
 			"admit",
 			{
@@ -957,7 +977,15 @@ async function main(): Promise<void> {
 						{
 							id: "wait-for-cancel",
 							type: "script",
-							run: "sleep 30; printf 'should-not-complete\\n'",
+							run: `sleep ${liveTaskSleepSeconds}; printf 'should-not-complete\\n'`,
+							...(nativeCancelReview
+								? {
+										timeout:
+											(liveTaskSleepSeconds +
+												60) *
+											1_000,
+									}
+								: {}),
 							final: true,
 						},
 					],
@@ -989,6 +1017,83 @@ async function main(): Promise<void> {
 				bootstrapEnvelope.data.pollingMinIntervalMs +
 				5_000,
 		});
+		if (
+			isWebManualReviewStage(
+				manualReview,
+				"cancel",
+			)
+		) {
+			const manualReviewLaunch = runCli(
+				[
+					"ui",
+					"--no-open",
+					"--project",
+					liveProject,
+				],
+				env,
+			) as unknown as CliLaunchResult;
+			assert.equal(manualReviewLaunch.reused, true);
+			assert.equal(
+				manualReviewLaunch.origin,
+				owner.result.origin,
+			);
+			await holdWebManualReview(manualReview, {
+				stage: "cancel",
+				launches: [
+					{
+						label: "live-task",
+						launchUrl:
+							manualReviewLaunch.launchUrl,
+						origin:
+							manualReviewLaunch.origin,
+						project: "live-check",
+					},
+				],
+			});
+			if (manualReview.exitAfterHold) {
+				const reviewSnapshot =
+					inspectProjectControlStore(liveProject, {
+						projectId: seeded.live.projectId,
+						controlDomainId:
+							seeded.live.controlDomainId,
+					});
+				assert.equal(reviewSnapshot.ok, true);
+				if (reviewSnapshot.ok) {
+					const reviewRun =
+						reviewSnapshot.snapshot.runs[0];
+					assert.ok(reviewRun);
+					if (reviewRun.status === "running") {
+						await controlClientRpc(
+							"cancel",
+							{
+								projectId:
+									seeded.live
+										.projectId,
+								runId: reviewRun.runId,
+								expectedRunVersion:
+									reviewRun.runVersion,
+							},
+							{
+								env,
+								principal:
+									"packaged-e2e-review-cleanup",
+								timeoutMs: 30_000,
+							},
+						);
+					}
+				}
+				const reviewAdmission =
+					await liveAdmissionPromise;
+				assert.equal(
+					reviewAdmission.ok,
+					true,
+					reviewAdmission.ok
+						? undefined
+						: String(reviewAdmission.error),
+				);
+				return;
+			}
+		}
 		assert.equal(
 			await pollingLiveRow.innerText(),
 			await liveRow.innerText(),
@@ -2062,6 +2167,70 @@ async function main(): Promise<void> {
 			);
 		} finally {
 			await logoutContext.close();
+		}
+
+		if (
+			isWebManualReviewStage(
+				manualReview,
+				"sessions",
+			)
+		) {
+			const primaryManualLaunch = runCli(
+				[
+					"ui",
+					"--no-open",
+					"--project",
+					completedProject,
+				],
+				env,
+			) as unknown as CliLaunchResult;
+			const peerManualLaunch = runCli(
+				[
+					"ui",
+					"--no-open",
+					"--project",
+					completedProject,
+				],
+				env,
+			) as unknown as CliLaunchResult;
+			assert.equal(primaryManualLaunch.reused, true);
+			assert.equal(peerManualLaunch.reused, true);
+			assert.equal(
+				primaryManualLaunch.origin,
+				reused.origin,
+			);
+			assert.equal(
+				peerManualLaunch.origin,
+				reused.origin,
+			);
+			assert.notEqual(
+				primaryManualLaunch.launchUrl,
+				peerManualLaunch.launchUrl,
+			);
+			await holdWebManualReview(manualReview, {
+				stage: "sessions",
+				launches: [
+					{
+						label: "primary-session",
+						launchUrl:
+							primaryManualLaunch.launchUrl,
+						origin:
+							primaryManualLaunch.origin,
+						project: "release-checks",
+					},
+					{
+						label: "peer-session",
+						launchUrl:
+							peerManualLaunch.launchUrl,
+						origin:
+							peerManualLaunch.origin,
+						project: "release-checks",
+					},
+				],
+			});
+			if (manualReview.exitAfterHold) {
+				return;
+			}
 		}
 
 		const revokeLaunch = runCli(
