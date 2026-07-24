@@ -61,6 +61,7 @@ Legend:
 The following commands exited 0 on 2026-07-24:
 
 ```text
+pnpm verify:web-candidate  # exact tip 0ed4230547a983ba1235a06c1afa040d821ea510
 pnpm check:web-protocol-docs
 pnpm check:web-cursor-vector
 pnpm check:web-reference-fixtures
@@ -89,9 +90,9 @@ working-tree check.
 
 Observed counts:
 
-- control tests: 188/188;
+- control tests: 190/190;
 - daemon tests: 35/35;
-- full unit suite: 2288/2288;
+- full unit suite: 2296/2296;
 - pinned Node matrix: 62/62 on each of 22.19.0, 24.18.0 and 26.5.0;
 - packaged smoke: 12 packages, 27 explicit imports, 68 wildcard exports and
   package bins;
