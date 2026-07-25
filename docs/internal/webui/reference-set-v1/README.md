@@ -46,9 +46,9 @@ classes are required.
 
 ## Approval
 
-Human reviewers must inspect the rendered matrix, confirm the screen-specific
+The product owner must inspect the rendered matrix, confirm the screen-specific
 comprehension goal in each `screens/*.md`, and create a completed copy of
-`review-result.template.json`. The template itself is checked to contain no
-approval evidence. Until a completed, independently reviewed record is bound
-to the exact manifest and render-evidence hashes, `manifest.json.status` and
-every screen `reviewStatus` remain unapproved.
+`review-result.template.json` with reviewer role `product-owner`. The template
+itself is checked to contain no approval evidence. Until that independently
+reviewed record is bound to the exact manifest and render-evidence hashes,
+`manifest.json.status` and every screen `reviewStatus` remain unapproved.

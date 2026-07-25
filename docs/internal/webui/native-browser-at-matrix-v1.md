@@ -41,7 +41,7 @@ lane.
 
 1. Verify the candidate build, manifest, content and render hashes.
 2. Start the native-browser review hold described in
-   `usability-study-v1.md`; never retain its one-time launch capability.
+   `usability-script-v1.md`; never retain its one-time launch capability.
 3. Run all ten tasks without changing the expected wording or order.
 4. Copy `browser-at-result.template.json`; fill one lane at a time.
 5. Record observed spoken words or focus behavior, not an inferred summary.
@@ -53,3 +53,14 @@ lane.
 The five lanes pass only when every task is `pass`, no blocking issue remains,
 the record hashes bind the exact candidate, and the reviewer attestation is
 true.
+
+Validate the completed record:
+
+```bash
+node scripts/verify-web-browser-at-evidence.mjs \
+  --evidence-file artifacts/web-browser-at/<release-candidate>.json
+```
+
+The verifier requires a non-empty observed spoken/focus/contrast behavior for
+every task. A set of checked `pass` values without observations is not
+evidence.

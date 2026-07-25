@@ -1,88 +1,91 @@
 {
   "schemaVersion": "taskflow-usability-study.v1",
   "status": "template-not-evidence",
-  "studyId": "replace",
+  "studyId": "replace-with-opaque-id",
+  "buildCommit": "replace",
+  "referenceManifestSha256": "replace",
+  "renderEvidenceSha256": "replace",
+  "referenceReviewRecordSha256": null,
   "sessionRecordSha256": [],
+  "zhCNReviewRecordSha256": [],
+  "retainedFailedRecordSha256": [],
   "freshEnglishParticipantCount": 0,
+  "participantProfileCounts": {
+    "taskflow-naive-software-engineer": 0,
+    "ordinary-developer-tool-user": 0
+  },
   "nativeChineseReviewerCount": 0,
   "taskResults": [
     {
-      "taskId": 1,
+      "taskId": "find-attention",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
-      "primaryActionFoundCount": null,
-      "gatePassed": false
-    },
-    {
-      "taskId": 2,
-      "score2Count": 0,
-      "score1Count": 0,
-      "score0Count": 0,
-      "primaryActionFoundCount": null,
-      "gatePassed": false
-    },
-    {
-      "taskId": 3,
-      "score2Count": 0,
-      "score1Count": 0,
-      "score0Count": 0,
-      "primaryActionFoundCount": null,
-      "gatePassed": false
-    },
-    {
-      "taskId": 4,
-      "score2Count": 0,
-      "score1Count": 0,
-      "score0Count": 0,
+      "withinTimeScore2Count": 0,
       "primaryActionFoundCount": 0,
       "gatePassed": false
     },
     {
-      "taskId": 5,
+      "taskId": "explain-active-task",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
+      "withinTimeScore2Count": 0,
       "primaryActionFoundCount": null,
       "gatePassed": false
     },
     {
-      "taskId": 6,
+      "taskId": "understand-approval",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
+      "withinTimeScore2Count": 0,
       "primaryActionFoundCount": null,
       "gatePassed": false
     },
     {
-      "taskId": 7,
+      "taskId": "make-approval-decision",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
+      "withinTimeScore2Count": 0,
       "primaryActionFoundCount": 0,
       "gatePassed": false
     },
     {
-      "taskId": 8,
+      "taskId": "cancel-task",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
+      "withinTimeScore2Count": 0,
       "primaryActionFoundCount": 0,
       "gatePassed": false
     },
     {
-      "taskId": 9,
+      "taskId": "find-assess-result",
       "score2Count": 0,
       "score1Count": 0,
       "score0Count": 0,
+      "withinTimeScore2Count": 0,
+      "primaryActionFoundCount": 0,
+      "gatePassed": false
+    },
+    {
+      "taskId": "open-technical-evidence",
+      "score2Count": 0,
+      "score1Count": 0,
+      "score0Count": 0,
+      "withinTimeScore2Count": null,
       "primaryActionFoundCount": 0,
       "gatePassed": false
     }
   ],
-  "criticalMisinterpretations": [],
+  "severity1FindingCount": 0,
+  "severity1Findings": [],
+  "findingDispositions": [],
   "chineseContentReviewPassed": false,
+  "referenceReviewPassed": false,
   "overallGatePassed": false,
-  "approvedReferenceManifestSha256": null,
   "completedAt": null,
   "reviewerAttestation": false
 }

@@ -131,6 +131,31 @@ Packaged browser evidence:
 These automated reports do not substitute for native Safari/Edge,
 assistive-technology or human-comprehension review.
 
+## Human-gate execution materials
+
+The local candidate now freezes the exact seven RFC v7 §19.4 ordinary-engineer
+tasks rather than the earlier mismatched nine-task draft. The executable
+protocol includes the 30/60/90-second limits, moderator introduction, consent
+and privacy boundary, permitted neutral prompts, stop rules, two isolated
+native-browser holds, expected consequences and eight closed severity-1
+classes.
+
+The no-evidence templates bind five English sessions, one product-owner
+reference review and exactly one native `content-ux` plus one native
+`technical-safety` Simplified-Chinese review. The Chinese coverage was
+corrected to 149 projected + 188 static = 337 keys. Native browser/AT lanes
+record an independent reviewer and an observed behavior for every task rather
+than accepting a bare checkbox.
+
+`scripts/verify-web-human-evidence.mjs` recomputes every 4/5 task/action gate,
+validates timing and approval-variant balance, rejects any severity-1 finding,
+checks all review roles/attestations/coverage, binds every source-record digest
+into the summary, rejects launch capabilities, local user paths and email
+addresses, and requires one immutable build/hash lineage. Its generated
+passing bundle and severity-1 negative self-test run from
+`check:web-usability-materials`. These are execution materials only: no human
+result or approval is implied.
+
 ## Native Safari mutation smokes
 
 Native Safari 26.3 on macOS 26.3 exercised four scoped packaged mutation

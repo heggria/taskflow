@@ -2,7 +2,7 @@
   "schemaVersion": "taskflow-web-reference-review.v1",
   "status": "template-not-evidence",
   "reviewerId": "replace-with-opaque-id",
-  "reviewerRole": "replace",
+  "reviewerRole": "replace-with-product-owner",
   "independentFromImplementation": false,
   "buildCommit": "replace",
   "referenceManifestSha256": "replace",

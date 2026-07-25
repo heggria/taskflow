@@ -1469,6 +1469,13 @@ The executable implementation candidate now includes:
   representative renders have zero recorded serious/critical axe violations.
   Human product/content approval and comprehension evidence remain absent, so
   the manifest deliberately stays `draft-unapproved`.
+- the exact seven-task RFC v7 §19.4 usability script, timing/moderator/privacy
+  rules, eight closed severity-1 classes, corrected 149 + 188 = 337-key
+  Simplified-Chinese review coverage, observed-behavior native/AT template,
+  and a completed-evidence verifier. The verifier recomputes every 4/5 gate,
+  binds immutable source-record hashes, rejects fabricated template state and
+  has generated passing plus severity-1 negative self-tests. No participant,
+  reviewer, or assistive-technology result has been recorded.
 
 At minimum, conformance work must still add or verify:
 

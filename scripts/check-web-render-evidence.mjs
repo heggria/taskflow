@@ -117,6 +117,9 @@ if (
 if (reviewTemplate.status !== "template-not-evidence") {
 	throw new Error("reference review template cannot claim evidence");
 }
+if (reviewTemplate.reviewerRole !== "replace-with-product-owner") {
+	throw new Error("reference review template must require product-owner");
+}
 if (reviewTemplate.independentFromImplementation !== false) {
 	throw new Error("blank review template cannot claim independence");
 }

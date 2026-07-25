@@ -4,27 +4,59 @@
   "buildCommit": "replace",
   "referenceManifestSha256": "replace",
   "renderEvidenceSha256": "replace",
-  "reviewerId": "replace-with-opaque-id",
+  "recordCoordinatorId": "replace-with-opaque-id",
   "lanes": [
     {
       "laneId": "safari-voiceover-macos",
       "status": "not-run",
+      "reviewerId": "replace-with-opaque-id",
+      "independentFromImplementation": false,
       "environment": {
         "browserVersion": "replace",
         "operatingSystemVersion": "replace",
         "assistiveTechnologyVersion": "replace"
       },
       "results": {
-        "launch-simple": null,
-        "skip-and-navigation": null,
-        "task-state": null,
-        "approval-dialog": null,
-        "mode-and-tabs": null,
-        "graph-listbox": null,
-        "evidence": null,
-        "live-update": null,
-        "narrow-zoom-contrast": null,
-        "session-dialogs": null
+        "launch-simple": {
+          "decision": null,
+          "observation": ""
+        },
+        "skip-and-navigation": {
+          "decision": null,
+          "observation": ""
+        },
+        "task-state": {
+          "decision": null,
+          "observation": ""
+        },
+        "approval-dialog": {
+          "decision": null,
+          "observation": ""
+        },
+        "mode-and-tabs": {
+          "decision": null,
+          "observation": ""
+        },
+        "graph-listbox": {
+          "decision": null,
+          "observation": ""
+        },
+        "evidence": {
+          "decision": null,
+          "observation": ""
+        },
+        "live-update": {
+          "decision": null,
+          "observation": ""
+        },
+        "narrow-zoom-contrast": {
+          "decision": null,
+          "observation": ""
+        },
+        "session-dialogs": {
+          "decision": null,
+          "observation": ""
+        }
       },
       "blockingIssues": [],
       "completedAt": null,
@@ -33,22 +65,54 @@
     {
       "laneId": "chrome-voiceover-macos",
       "status": "not-run",
+      "reviewerId": "replace-with-opaque-id",
+      "independentFromImplementation": false,
       "environment": {
         "browserVersion": "replace",
         "operatingSystemVersion": "replace",
         "assistiveTechnologyVersion": "replace"
       },
       "results": {
-        "launch-simple": null,
-        "skip-and-navigation": null,
-        "task-state": null,
-        "approval-dialog": null,
-        "mode-and-tabs": null,
-        "graph-listbox": null,
-        "evidence": null,
-        "live-update": null,
-        "narrow-zoom-contrast": null,
-        "session-dialogs": null
+        "launch-simple": {
+          "decision": null,
+          "observation": ""
+        },
+        "skip-and-navigation": {
+          "decision": null,
+          "observation": ""
+        },
+        "task-state": {
+          "decision": null,
+          "observation": ""
+        },
+        "approval-dialog": {
+          "decision": null,
+          "observation": ""
+        },
+        "mode-and-tabs": {
+          "decision": null,
+          "observation": ""
+        },
+        "graph-listbox": {
+          "decision": null,
+          "observation": ""
+        },
+        "evidence": {
+          "decision": null,
+          "observation": ""
+        },
+        "live-update": {
+          "decision": null,
+          "observation": ""
+        },
+        "narrow-zoom-contrast": {
+          "decision": null,
+          "observation": ""
+        },
+        "session-dialogs": {
+          "decision": null,
+          "observation": ""
+        }
       },
       "blockingIssues": [],
       "completedAt": null,
@@ -57,22 +121,54 @@
     {
       "laneId": "edge-narrator-windows",
       "status": "not-run",
+      "reviewerId": "replace-with-opaque-id",
+      "independentFromImplementation": false,
       "environment": {
         "browserVersion": "replace",
         "operatingSystemVersion": "replace",
         "assistiveTechnologyVersion": "replace"
       },
       "results": {
-        "launch-simple": null,
-        "skip-and-navigation": null,
-        "task-state": null,
-        "approval-dialog": null,
-        "mode-and-tabs": null,
-        "graph-listbox": null,
-        "evidence": null,
-        "live-update": null,
-        "narrow-zoom-contrast": null,
-        "session-dialogs": null
+        "launch-simple": {
+          "decision": null,
+          "observation": ""
+        },
+        "skip-and-navigation": {
+          "decision": null,
+          "observation": ""
+        },
+        "task-state": {
+          "decision": null,
+          "observation": ""
+        },
+        "approval-dialog": {
+          "decision": null,
+          "observation": ""
+        },
+        "mode-and-tabs": {
+          "decision": null,
+          "observation": ""
+        },
+        "graph-listbox": {
+          "decision": null,
+          "observation": ""
+        },
+        "evidence": {
+          "decision": null,
+          "observation": ""
+        },
+        "live-update": {
+          "decision": null,
+          "observation": ""
+        },
+        "narrow-zoom-contrast": {
+          "decision": null,
+          "observation": ""
+        },
+        "session-dialogs": {
+          "decision": null,
+          "observation": ""
+        }
       },
       "blockingIssues": [],
       "completedAt": null,
@@ -81,22 +177,54 @@
     {
       "laneId": "firefox-nvda-windows",
       "status": "not-run",
+      "reviewerId": "replace-with-opaque-id",
+      "independentFromImplementation": false,
       "environment": {
         "browserVersion": "replace",
         "operatingSystemVersion": "replace",
         "assistiveTechnologyVersion": "replace"
       },
       "results": {
-        "launch-simple": null,
-        "skip-and-navigation": null,
-        "task-state": null,
-        "approval-dialog": null,
-        "mode-and-tabs": null,
-        "graph-listbox": null,
-        "evidence": null,
-        "live-update": null,
-        "narrow-zoom-contrast": null,
-        "session-dialogs": null
+        "launch-simple": {
+          "decision": null,
+          "observation": ""
+        },
+        "skip-and-navigation": {
+          "decision": null,
+          "observation": ""
+        },
+        "task-state": {
+          "decision": null,
+          "observation": ""
+        },
+        "approval-dialog": {
+          "decision": null,
+          "observation": ""
+        },
+        "mode-and-tabs": {
+          "decision": null,
+          "observation": ""
+        },
+        "graph-listbox": {
+          "decision": null,
+          "observation": ""
+        },
+        "evidence": {
+          "decision": null,
+          "observation": ""
+        },
+        "live-update": {
+          "decision": null,
+          "observation": ""
+        },
+        "narrow-zoom-contrast": {
+          "decision": null,
+          "observation": ""
+        },
+        "session-dialogs": {
+          "decision": null,
+          "observation": ""
+        }
       },
       "blockingIssues": [],
       "completedAt": null,
@@ -105,22 +233,54 @@
     {
       "laneId": "edge-forced-colors-windows",
       "status": "not-run",
+      "reviewerId": "replace-with-opaque-id",
+      "independentFromImplementation": false,
       "environment": {
         "browserVersion": "replace",
         "operatingSystemVersion": "replace",
         "assistiveTechnologyVersion": "forced-colors"
       },
       "results": {
-        "launch-simple": null,
-        "skip-and-navigation": null,
-        "task-state": null,
-        "approval-dialog": null,
-        "mode-and-tabs": null,
-        "graph-listbox": null,
-        "evidence": null,
-        "live-update": null,
-        "narrow-zoom-contrast": null,
-        "session-dialogs": null
+        "launch-simple": {
+          "decision": null,
+          "observation": ""
+        },
+        "skip-and-navigation": {
+          "decision": null,
+          "observation": ""
+        },
+        "task-state": {
+          "decision": null,
+          "observation": ""
+        },
+        "approval-dialog": {
+          "decision": null,
+          "observation": ""
+        },
+        "mode-and-tabs": {
+          "decision": null,
+          "observation": ""
+        },
+        "graph-listbox": {
+          "decision": null,
+          "observation": ""
+        },
+        "evidence": {
+          "decision": null,
+          "observation": ""
+        },
+        "live-update": {
+          "decision": null,
+          "observation": ""
+        },
+        "narrow-zoom-contrast": {
+          "decision": null,
+          "observation": ""
+        },
+        "session-dialogs": {
+          "decision": null,
+          "observation": ""
+        }
       },
       "blockingIssues": [],
       "completedAt": null,

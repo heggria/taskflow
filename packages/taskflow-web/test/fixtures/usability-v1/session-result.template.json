@@ -2,14 +2,19 @@
   "schemaVersion": "taskflow-usability-session.v1",
   "status": "template-not-evidence",
   "participantId": "replace-with-opaque-id",
+  "participantProfile": "replace",
+  "priorTaskflowExposure": "replace",
   "freshParticipant": false,
   "locale": "en",
   "buildCommit": "replace",
   "referenceManifestSha256": "replace",
   "renderEvidenceSha256": "replace",
   "environment": {
+    "browserVersion": "replace",
+    "operatingSystemVersion": "replace",
     "viewport": "replace",
     "zoomPercent": 100,
+    "theme": "light",
     "inputMethods": [
       "replace"
     ],
@@ -17,96 +22,146 @@
   },
   "tasks": [
     {
-      "taskId": 1,
-      "evidenceMode": "live-packaged",
-      "fixtureId": null,
+      "taskId": "find-attention",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": null
+        },
+        {
+          "mode": "fixture-render",
+          "fixtureId": "simple-home-partial-disconnected"
+        }
+      ],
+      "timeLimitSeconds": 30,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 2,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "simple-home-partial-disconnected",
+      "taskId": "explain-active-task",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": "active-task-result"
+        }
+      ],
+      "timeLimitSeconds": 60,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 3,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "active-task-result",
+      "taskId": "understand-approval",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": "needs-input-decision"
+        }
+      ],
+      "timeLimitSeconds": 60,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 4,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "needs-input-decision",
+      "taskId": "make-approval-decision",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": "needs-input-decision"
+        }
+      ],
+      "decisionVariant": "replace-with-allow-or-do-not-allow",
+      "timeLimitSeconds": 90,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 5,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "completed-verified + completed-verification-unavailable",
+      "taskId": "cancel-task",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": null
+        },
+        {
+          "mode": "fixture-render",
+          "fixtureId": "unknown-reconciling"
+        }
+      ],
+      "timeLimitSeconds": 90,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 6,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "unknown-reconciling",
+      "taskId": "find-assess-result",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": "completed-verified"
+        },
+        {
+          "mode": "fixture-render",
+          "fixtureId": "completed-verification-unavailable"
+        }
+      ],
+      "timeLimitSeconds": 60,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     },
     {
-      "taskId": 7,
-      "evidenceMode": "live-packaged",
-      "fixtureId": "pro-evidence-receipt",
+      "taskId": "open-technical-evidence",
+      "material": [
+        {
+          "mode": "live-packaged",
+          "fixtureId": "pro-evidence-receipt"
+        }
+      ],
+      "timeLimitSeconds": null,
+      "completionSeconds": null,
       "score": null,
       "primaryActionFound": null,
+      "confidence": null,
       "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
-    },
-    {
-      "taskId": 8,
-      "evidenceMode": "fixture-render",
-      "fixtureId": "error-command-outcome-unknown",
-      "score": null,
-      "primaryActionFound": null,
-      "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
-    },
-    {
-      "taskId": 9,
-      "evidenceMode": "live-packaged",
-      "fixtureId": "settings-session",
-      "score": null,
-      "primaryActionFound": null,
-      "participantWords": "",
-      "facilitatorIntervention": "",
-      "misunderstanding": ""
+      "wrongTurns": [],
+      "moderatorInterventions": [],
+      "errors": []
     }
   ],
+  "severity1Findings": [],
   "completedAt": null,
   "facilitatorAttestation": false
 }
