@@ -58,6 +58,22 @@ const nativeSafariTwoSessionRevocationPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/native-safari-two-session-revocation-smoke-v1.json",
 );
+const currentNativeSafariReadPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-current-read-smoke-v1.json",
+);
+const currentNativeSafariMutationPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-current-mutation-smoke-v1.json",
+);
+const currentNativeSafariRejectCurrentPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-current-reject-current-session-smoke-v1.json",
+);
+const currentNativeSafariCancelPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-current-cancel-smoke-v1.json",
+);
 const candidateSourceScopes = [
 	"packages/taskflow-core/src",
 	"packages/taskflow-core/package.json",
@@ -148,6 +164,10 @@ function assertNativeSafariRecord(
 		expectedCommit,
 		expectedResult,
 		currentCandidateCommit,
+		sourceCoverage = "historical",
+		expectedSourceDigest,
+		expectedManifestSha256,
+		expectedBuildId,
 	},
 ) {
 	assert.equal(record.schemaVersion, 1);
@@ -167,6 +187,27 @@ function assertNativeSafariRecord(
 		record.candidate.webBuildId,
 		/^sha256:[0-9a-f]{64}$/u,
 	);
+	if (expectedSourceDigest !== undefined) {
+		assert.equal(
+			record.candidate.webSourceDigest,
+			expectedSourceDigest,
+			`${label} source digest must match the immutable candidate`,
+		);
+	}
+	if (expectedManifestSha256 !== undefined) {
+		assert.equal(
+			record.candidate.webManifestSha256,
+			expectedManifestSha256,
+			`${label} manifest must match the immutable candidate`,
+		);
+	}
+	if (expectedBuildId !== undefined) {
+		assert.equal(
+			record.candidate.webBuildId,
+			expectedBuildId,
+			`${label} Web build must match the immutable candidate`,
+		);
+	}
 	assert.equal(record.environment.browser, "Safari");
 	const nativeAncestry = spawnSync(
 		"git",
@@ -195,11 +236,24 @@ function assertNativeSafariRecord(
 		],
 		{ cwd: repositoryRoot },
 	);
-	assert.equal(
-		sourceDriftAfterRecord.status,
-		1,
-		`${label} unexpectedly covers current source; record it as current evidence instead of historical evidence`,
-	);
+	if (sourceCoverage === "historical") {
+		assert.equal(
+			sourceDriftAfterRecord.status,
+			1,
+			`${label} unexpectedly covers current source; record it as current evidence instead of historical evidence`,
+		);
+	} else {
+		assert.equal(
+			sourceCoverage,
+			"current",
+			`${label} has an unsupported source coverage`,
+		);
+		assert.equal(
+			sourceDriftAfterRecord.status,
+			0,
+			`${label} is stale because candidate source drifted after the native Safari review`,
+		);
+	}
 	for (const [name, passed] of Object.entries(record.assertions)) {
 		assert.equal(passed, true, `${label} assertion failed: ${name}`);
 	}
@@ -449,6 +503,47 @@ assertNativeSafariRecord(nativeSafariTwoSessionRevocation, {
 	currentCandidateCommit: newBuild.gitCommit,
 });
 
+const currentNativeSafariRecords = [
+	{
+		label: "current native Safari read/keyboard record",
+		path: currentNativeSafariReadPath,
+		result: "native-current-read-keyboard-smoke-pass",
+	},
+	{
+		label: "current native Safari allow/revoke-all record",
+		path: currentNativeSafariMutationPath,
+		result:
+			"native-current-approval-and-revoke-all-smoke-pass",
+	},
+	{
+		label:
+			"current native Safari reject/current-session record",
+		path: currentNativeSafariRejectCurrentPath,
+		result:
+			"native-current-reject-and-current-session-smoke-pass",
+	},
+	{
+		label: "current native Safari cancel record",
+		path: currentNativeSafariCancelPath,
+		result: "native-current-cancel-run-smoke-pass",
+	},
+];
+for (const currentRecord of currentNativeSafariRecords) {
+	const bytes = fs.readFileSync(currentRecord.path, "utf8");
+	assertNoLocalPath(bytes, currentRecord.label);
+	assertNativeSafariRecord(JSON.parse(bytes), {
+		label: currentRecord.label,
+		expectedCommit:
+			"c04540019d99984366843536baa2b47771beb8fa",
+		expectedResult: currentRecord.result,
+		currentCandidateCommit: "HEAD",
+		sourceCoverage: "current",
+		expectedSourceDigest: benchmark.git.sourceDigest,
+		expectedManifestSha256: newBuild.manifestSha256,
+		expectedBuildId: benchmark.build.webBuildId,
+	});
+}
+
 const nodeMatrixBytes = fs.readFileSync(nodeMatrixPath, "utf8");
 assertNoLocalPath(nodeMatrixBytes, "Node matrix report");
 const nodeMatrix = JSON.parse(nodeMatrixBytes);
@@ -659,6 +754,7 @@ for (const file of [
 	nativeSafariCancelPath,
 	nativeSafariPeerRevocationPath,
 	nativeSafariTwoSessionRevocationPath,
+	...currentNativeSafariRecords.map(({ path: file }) => file),
 ]) {
 	assert.match(
 		ledger,
@@ -669,5 +765,5 @@ for (const file of [
 assertNoLocalPath(ledger, "candidate evidence ledger");
 
 process.stdout.write(
-	`automated Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes; native Safari records historical-only)\n`,
+	`automated Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes; ${currentNativeSafariRecords.length} current-source native Safari scoped records; peer-session records historical-only)\n`,
 );

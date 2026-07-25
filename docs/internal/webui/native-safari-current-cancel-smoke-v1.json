@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-25T14:44:21Z",
+  "candidate": {
+    "branch": "codex/0.3.0-beta.2",
+    "gitCommit": "c04540019d99984366843536baa2b47771beb8fa",
+    "trackedCandidateSourceDirty": false,
+    "webSourceDigest": "sha256:28142aa423b56628a67f9f38d2dbccf7ba985750a1ccca1d0cb4bc9e050a1682",
+    "webManifestSha256": "sha256:154fe609eb6bea194e6b241e1b3f7394ffcecbed7cf70352faf44b9eef08a9e6",
+    "webBuildId": "sha256:853edc81c345c5a06e105110c4f3cb0fabcfc79f0e73912f05fa636b56da624e"
+  },
+  "environment": {
+    "browser": "Safari",
+    "browserVersion": "26.3",
+    "operatingSystem": "macOS 26.3",
+    "operatingSystemBuild": "25D125",
+    "localeObserved": "zh-CN"
+  },
+  "method": {
+    "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
+    "authority": "fresh isolated live ControlStore backed by a cancellable provider process",
+    "interaction": "macOS accessibility tree plus native pointer activation",
+    "launchCapability": "independent one-time capability entered through native keyboard; value not retained",
+    "shutdownCheck": "the staged review hold was released after terminal review; the loopback listener was then closed"
+  },
+  "assertions": {
+    "oneTimeSessionExchangeCompleted": true,
+    "liveTaskWasShownAsStillBeingConfirmed": true,
+    "liveNodeWasShownAsInProgress": true,
+    "stopTaskActionWasActivated": true,
+    "cancelWasAuthoritativelySettled": true,
+    "taskWasShownAsStopped": true,
+    "stoppedDetailSaidWorkStoppedAndPriorResultsWerePreserved": true,
+    "zeroOfOneStepsWasShown": true,
+    "activeNodeWasSettledAsStopped": true,
+    "verificationUnavailableRemainedVisible": true,
+    "noResultWasInvented": true,
+    "listenerClosedAfterTheReviewHold": true
+  },
+  "excludedClaims": [
+    "VoiceOver speech order, announcements, rotor navigation, or verbosity",
+    "native Safari approval, reject, session invalidation, console, CSP, performance, or axe automation",
+    "human product, content, comprehension, or accessibility approval"
+  ],
+  "result": "native-current-cancel-run-smoke-pass"
+}

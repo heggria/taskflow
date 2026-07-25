@@ -43,7 +43,8 @@ full-envelope continuation fixtures; session, CSRF, Host/Origin, static
 delivery, SSE and bounded polling fallback tests; a packaged CLI → daemon →
 WebGateway → real browser path over multiple mounted ControlStores; durable
 cancel, approval recovery and lost-response handling; Receipt/artifact
-rendering; five scoped native Safari mutation smokes; and 149 hash-bound
+rendering; four current-source scoped native Safari read/mutation smokes plus
+five integrity-checked historical Safari records; and 149 hash-bound
 reference renders covering nine screen families, two locales, two themes,
 narrow/zoom conditions, and 36 serious/critical accessibility assessments.
 The reference set remains **draft/unapproved**, and the required
@@ -1446,36 +1447,28 @@ The executable implementation candidate now includes:
   the visual DAG, modal
   focus/Escape/restore behavior and Simple → Pro focus restoration, zero
   inline/runtime styles, 320 CSS-pixel layout, and Chromium axe checks. The
-  current `15c9b1f8` production build plus the `af40872f` evidence-harness tip
-  pass Chromium 149.0.7827.55, Firefox 151.0 and WebKit 26.5 from byte-identical
-  production assets on the first attempt of every matrix lane; all three have
+  current `130e1a3f` immutable packaged/evidence build passes Chromium
+  149.0.7827.55, Firefox 151.0, WebKit 26.5 and installed native Google Chrome
+  150.0.7871.184 from byte-identical production assets on the first attempt of
+  every matrix lane; all four have
   zero application console/page errors, CSP violations and runtime-style
-  findings, and all three pass the Receipt export, zero-write/zero-provider
+  findings, and all four pass the Receipt export, zero-write/zero-provider
   replay, graph-listbox keyboard parity, and sensitive-artifact
-  decline/acknowledgement contract. The
-  same packaged path separately
-  passes the installed native Google Chrome 150.0.7871.184 through Playwright's
-  `chrome` channel, including zero Chromium axe findings and the same
-  sensitive-artifact contract. Native Safari 26.3 has separately scoped
-  packaged read/keyboard/AX plus five historical mutation smokes; approval,
-  rejection and cancel observations were recorded on `60002c34`, HTTP-actor
-  peer invalidation on `e19dfd45`, and native normal/private Safari
-  two-cookie-jar revocation on `d6ac8877`. Production source changed after
-  those records, so they remain integrity-checked historical evidence for
-  `aa34369a` and do not count as current-source native Safari evidence.
-  Allow reaches completed 3/3 with honest partial verification and applies
-  listener-wide revocation. Reject reaches both choices through native Tab
-  focus, persists the approval node as blocked with downstream pending, and
-  applies current-session logout. Cancel settles both Run and the formerly
-  active node as stopped, retains unavailable verification, and invents no
-  result. Independent HTTP-actor peer invalidation makes a native Safari
-  target render the deterministic localized session-ended screen rather than
-  a generic page failure after a separate authenticated P17 client revokes all
-  sessions. A later native smoke exchanges
-  independent same-listener capabilities in normal and unlocked-private
-  Safari windows, commits listener-wide revocation from the normal window and
-  observes both localized revoked projections. Every passing hold verifies
-  listener close; Edge and assistive-technology review remain separate;
+  decline/acknowledgement contract. Chromium and native Chrome also report
+  zero axe findings on the tested Home and Task surfaces.
+  Native Safari 26.3 has four current-source scoped records bound to
+  `c0454001`, with no production-source drift from `130e1a3f`: packaged
+  Simple/Pro read, graph keyboard and Evidence; approval Allow plus
+  listener-wide revoke-all; approval Reject plus current-session logout; and
+  live cancel. Allow reaches completed 3/3 with honest partial verification,
+  Reject reaches both choices through native Tab focus and leaves the
+  downstream node pending, and Cancel settles both Run and the formerly active
+  node as stopped without inventing a result. All four passing holds verify
+  listener close. Five older records remain integrity-checked historical
+  evidence for `aa34369a`; only those older records cover independent
+  HTTP-actor peer invalidation and normal/private Safari two-cookie-jar
+  revocation. Current-source independent peer/two-cookie invalidation, Edge
+  and assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1496,9 +1489,12 @@ At minimum, conformance work must still add or verify:
   new-client/old-server harness at the final reviewed tip. The latest local
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
-- current-source native Safari, native Edge, assistive-technology and human
-  review of the approval-enhanced decision path. The retained native Safari
-  records bind older source `aa34369a` only. The exact checkpoint
+- current-source native Safari independent peer/two-cookie invalidation,
+  native Edge, assistive-technology and human review of the approval-enhanced
+  decision path. Current-source Safari read/keyboard, Allow/Reject, cancel,
+  current-session logout and listener-wide revoke-all are scoped local
+  evidence; they do not populate a VoiceOver or independent-review lane. The
+  exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
   post-dispatch ambiguity fail-closed fixtures are executable; automated or

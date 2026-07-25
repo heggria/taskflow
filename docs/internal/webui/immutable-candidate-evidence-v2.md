@@ -116,6 +116,51 @@ Evidence:
 - summary SHA-256:
   `9fddd7c088caf665d38bbdc223b42dddb81b137e612c7ba9ac4cc47988f38cf7`.
 
+## Current-source native Safari scoped records
+
+Native Safari 26.3 on macOS 26.3 exercised four scoped paths against
+tracked-clean candidate `c04540019d99984366843536baa2b47771beb8fa`.
+That candidate has no production-source drift from immutable build
+`130e1a3f7c0bf991c96d6e0192a2517be43ff827`; every record binds the same
+benchmark source digest, Web manifest and Web build identity listed above.
+
+The read/keyboard path proved:
+
+- one-time native Safari session exchange and Simple-by-default rendering;
+- Home attention/active/recent sections plus completed Task state, steps,
+  partial-verification limit and result;
+- Simple → Pro identity preservation and native tab semantics;
+- the two-node graph, accessible disclosure and single-selection list;
+- native Arrow Down selection changing both the selected node and inspector;
+- verification, Receipt manifest and artifact actions in Evidence.
+
+The three mutation paths proved:
+
+- keyboard-focused Allow, duplicate-safe pending copy, 3/3 completion,
+  partial verification, `published`, and listener-wide revoke-all;
+- keyboard traversal through both approval answers, authoritative Reject,
+  blocked/pending downstream state, `approval rejected`, and current-session
+  logout;
+- a live cancellable provider Task, visible in-progress node, Stop activation,
+  authoritative cancelled terminal, 0/1 steps, unavailable verification and
+  no invented result.
+
+Evidence:
+
+- `docs/internal/webui/native-safari-current-read-smoke-v1.json`,
+  `7f66ed19caf1e554a7945f3b3e24c89f091ce579ce52580d74e1588e105edce3`;
+- `docs/internal/webui/native-safari-current-mutation-smoke-v1.json`,
+  `c91d3dce9471745a4eed15154c035987fe3c3203b1b1c46f0464fad009572501`;
+- `docs/internal/webui/native-safari-current-reject-current-session-smoke-v1.json`,
+  `68558f9737c4edeb846a5c0323b7d7c3873dca786b1ec80419c81756c439f349`;
+- `docs/internal/webui/native-safari-current-cancel-smoke-v1.json`,
+  `f39bdf0ee777bfc4ab26b7c3af936fb976c335833204ad181566d58310f79fd9`.
+
+These are scoped native-browser observations, not a VoiceOver or independent
+reviewer attestation. A current-source two-session hold was reached, but macOS
+auto-locked before either one-time capability was exchanged; the hold was
+released cleanly and no peer-session pass is claimed.
+
 ## Historical native Safari records
 
 The following records remain integrity-checked historical evidence for the
@@ -141,7 +186,8 @@ The automated candidate evidence is current. It does not close:
 - product-owner reference approval;
 - five fresh English participant sessions;
 - two native Simplified-Chinese reviews;
-- current-source native Safari or Edge review;
+- current-source native Safari independent peer/two-cookie session
+  invalidation and native Edge review;
 - VoiceOver, Narrator, NVDA or forced-colors review;
 - the canonical Mac mini M2 / Node 24 performance run;
 - reviewed-tip evidence and the separate wire-freeze decision.
