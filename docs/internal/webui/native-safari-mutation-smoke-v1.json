@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "observedAt": "2026-07-24T07:58:52Z",
+  "observedAt": "2026-07-25T07:31:14Z",
   "candidate": {
     "branch": "codex/0.3.0-beta.2",
-    "gitCommit": "d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+    "gitCommit": "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
     "trackedCandidateSourceDirty": false,
-    "webSourceDigest": "sha256:648b778e4e316be5f93e4ef2b68c07ba45bea4d0d2731a9dc2d471ec3b18c0b3",
-    "webManifestSha256": "sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f",
-    "webBuildId": "sha256:9e9d28bc51e7fa294acdc23ef74e02c48911375ec172770c77fbbc564812546a"
+    "webSourceDigest": "sha256:f05e3aefb64dd3a5d115e4c975883ecf16e5830f7c9f225fb07962e317a40db4",
+    "webManifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+    "webBuildId": "sha256:30e11a646d8f2f8ffe5517236269112324605247312aa08c4b19dc6fc7abbb02"
   },
   "environment": {
     "browser": "Safari",
@@ -21,7 +21,7 @@
     "authority": "fresh isolated ControlStores seeded before the packaged browser scenario performed its automated mutations",
     "interaction": "macOS accessibility tree plus native keyboard and accessibility actions",
     "launchCapability": "independent one-time capability; value not retained",
-    "shutdownCheck": "manual-review process interrupted after revocation; loopback listener refused a subsequent connection"
+    "shutdownCheck": "the staged review hold was released after revocation; the loopback listener then refused a connection with curl exit 7"
   },
   "assertions": {
     "oneTimeSessionExchangeCompleted": true,

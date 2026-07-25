@@ -1449,8 +1449,9 @@ The executable implementation candidate now includes:
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
   has separately scoped packaged read/keyboard/AX plus four mutation smokes;
-  approval/cancel observations are ancestral, while peer invalidation was
-  rerun against the current session-revocation source.
+  approval, rejection and cancel observations were rerun on evidence tip
+  `60002c34`, while peer invalidation was rerun on `e19dfd45`; both tips
+  retain byte-identical `aa34369a` candidate source.
   Allow reaches completed 3/3 with honest partial verification and applies
   listener-wide revocation. Reject reaches both choices through native Tab
   focus, persists the approval node as blocked with downstream pending, and
@@ -1484,11 +1485,11 @@ At minimum, conformance work must still add or verify:
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
 - native Edge, assistive-technology and human review of the
-  approval-enhanced decision path. Native Safari has ancestral scoped allow,
-  reject, cancel, current-session and listener-wide revocation execution
-  evidence plus a current-source peer-invalidation rerun, but the peer actor
-  was an independent P17 HTTP session rather than a second unlocked Safari
-  cookie jar. The exact checkpoint
+  approval-enhanced decision path. Native Safari has current-source scoped
+  allow, reject, cancel, current-session and listener-wide revocation
+  execution evidence plus a current-source peer-invalidation rerun, but the
+  peer actor was an independent P17 HTTP session rather than a second unlocked
+  Safari cookie jar. The exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
   post-dispatch ambiguity fail-closed fixtures are executable; automated or

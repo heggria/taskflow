@@ -1,17 +1,13 @@
 {
   "schemaVersion": 1,
-  "observedWindowUtc": {
-    "after": "2026-07-24T08:41:53Z",
-    "before": "2026-07-24T08:54:24Z",
-    "precision": "bounded-by-adjacent-candidate-commits"
-  },
+  "observedAt": "2026-07-25T07:31:14Z",
   "candidate": {
     "branch": "codex/0.3.0-beta.2",
-    "gitCommit": "794c85f8a78d30c457ef63ad9a5f2b0c69d56356",
+    "gitCommit": "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
     "trackedCandidateSourceDirty": false,
-    "webSourceDigest": "sha256:17f8d7633ae2b7e2b3769f2547ef405b87a031c4adedcd435a0c6d2b25999576",
-    "webManifestSha256": "sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f",
-    "webBuildId": "sha256:9e9d28bc51e7fa294acdc23ef74e02c48911375ec172770c77fbbc564812546a"
+    "webSourceDigest": "sha256:f05e3aefb64dd3a5d115e4c975883ecf16e5830f7c9f225fb07962e317a40db4",
+    "webManifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+    "webBuildId": "sha256:30e11a646d8f2f8ffe5517236269112324605247312aa08c4b19dc6fc7abbb02"
   },
   "environment": {
     "browser": "Safari",
@@ -25,10 +21,6 @@
     "authority": "fresh isolated live ControlStore backed by a cancellable provider process",
     "interaction": "macOS accessibility tree plus native pointer activation",
     "launchCapability": "independent one-time capability entered through native keyboard; value not retained",
-    "discardedAttempts": [
-      "one earlier run used a 30-second task and ended before a reliable manual cancel could be reviewed",
-      "one earlier run inherited the 60-second phase timeout and was timed out by authority before the intended cancel review"
-    ],
     "shutdownCheck": "the staged review hold was released after terminal review; the loopback listener then refused a connection with curl exit 7"
   },
   "assertions": {
@@ -49,8 +41,7 @@
     "VoiceOver speech order, announcements, rotor navigation, or verbosity",
     "native Safari approval, reject, current-session logout, or independent peer-session invalidation",
     "native Safari console, CSP, performance, or axe automation",
-    "human product, content, or comprehension approval",
-    "passing evidence from either discarded harness attempt"
+    "human product, content, or comprehension approval"
   ],
   "result": "native-cancel-run-smoke-pass"
 }

@@ -352,7 +352,7 @@ assertNoLocalPath(
 const nativeSafariMutation = JSON.parse(nativeSafariMutationBytes);
 assertNativeSafariRecord(nativeSafariMutation, {
 	label: "native Safari allow/revoke-all record",
-	expectedCommit: "d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-approval-and-revoke-all-smoke-pass",
 	finalCandidateCommit: newBuild.gitCommit,
 });
@@ -370,7 +370,7 @@ const nativeSafariRejectCurrent = JSON.parse(
 );
 assertNativeSafariRecord(nativeSafariRejectCurrent, {
 	label: "native Safari reject/current-session record",
-	expectedCommit: "d8df9c650b68e4c0854aaad03e6da3ce0dc3352f",
+	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-reject-and-current-session-smoke-pass",
 	finalCandidateCommit: newBuild.gitCommit,
 });
@@ -386,7 +386,7 @@ assertNoLocalPath(
 const nativeSafariCancel = JSON.parse(nativeSafariCancelBytes);
 assertNativeSafariRecord(nativeSafariCancel, {
 	label: "native Safari cancel record",
-	expectedCommit: "794c85f8a78d30c457ef63ad9a5f2b0c69d56356",
+	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-cancel-run-smoke-pass",
 	finalCandidateCommit: newBuild.gitCommit,
 });

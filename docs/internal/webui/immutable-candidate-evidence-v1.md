@@ -159,11 +159,10 @@ result or approval is implied.
 ## Native Safari mutation smokes
 
 Native Safari 26.3 on macOS 26.3 exercised four scoped packaged mutation
-paths. Each record binds the exact source commit actually observed. The
-allow/revoke-all and reject/current-session records are ancestral evidence
-from `d8df9c65`; cancel was observed on `794c85f8`; peer invalidation was
-rerun on evidence tip `e19dfd45`, whose candidate source is byte-identical to
-the bound `aa34369a` source.
+paths. The allow/revoke-all, reject/current-session and cancel paths were
+rerun on evidence tip `60002c34`; peer invalidation was rerun on evidence tip
+`e19dfd45`. Both evidence tips retain candidate source byte-identical to the
+bound immutable `aa34369a` source.
 
 The allow/revoke-all run:
 
@@ -187,9 +186,7 @@ The cancel run:
 - started from a live cancellable provider task with its node visibly active;
 - activated Stop task and reached the authoritative cancelled terminal;
 - rendered `任务已停止`, 0/1 steps, the node as stopped, verification
-  unavailable, and no invented result;
-- discarded two earlier harness attempts that ended by short fixture duration
-  or phase timeout rather than treating them as cancel evidence.
+  unavailable, and no invented result.
 
 The current-source independent peer-invalidation run:
 
@@ -216,15 +213,15 @@ Evidence:
 - allow/revoke-all record:
   `docs/internal/webui/native-safari-mutation-smoke-v1.json`;
 - allow/revoke-all SHA-256:
-  `e949c3f3573c73dcf4d057245309f183917cfe25350025fe98a3a68c35a95540`;
+  `43bfad61e9669dcc71ccbaa2de16f4648ffb9ff3b9e292aca4f6bb1f555dda0d`;
 - reject/current-session record:
   `docs/internal/webui/native-safari-reject-current-session-smoke-v1.json`;
 - reject/current-session SHA-256:
-  `e3d9a1c26bcba19d5b2c6deaab28212420e3a61663fb991b5c6ab4eb8a07497c`;
+  `d109297db75edb2d0c800bd9b26f467123631f188601da094a7bca8f8b68a320`;
 - cancel record:
   `docs/internal/webui/native-safari-cancel-smoke-v1.json`;
 - cancel SHA-256:
-  `6cd6ca7e5148a3df11ed63d2b818742008912d2f88f2b5387ebce2f4c7c48174`;
+  `44f42094e75f1f0d5a2cbac50292f59b148e3c3bc705ee9cb39b6fb4f57accf0`;
 - peer-invalidation record:
   `docs/internal/webui/native-safari-peer-revocation-smoke-v1.json`;
 - peer-invalidation SHA-256:
@@ -234,8 +231,7 @@ Evidence:
 
 These local records close the exact-source immutable cross-build, pinned
 runtime, packaged browser, non-canonical performance and current-source native
-Safari peer-invalidation evidence gaps. The other native Safari mutation
-records remain useful ancestral evidence. They do not provide:
+Safari scoped-mutation evidence gaps. They do not provide:
 
 - human product/reference approval;
 - five fresh English participant results;
