@@ -23,6 +23,11 @@ const lanes = [
 			]
 		: []),
 ];
+const REQUIRED_SENSITIVE_ARTIFACT_ASSERTIONS = Object.freeze([
+	"sensitiveArtifactDisclosureVerified",
+	"sensitiveArtifactDeclineIssuedNoRequest",
+	"sensitiveArtifactAcknowledgementObserved",
+]);
 
 function run(command, args, env = process.env) {
 	const result = spawnSync(command, args, {
@@ -114,6 +119,13 @@ for (const lane of lanes) {
 			`${lane.browserEngine} E2E reported channel ${String(report.browserChannel)}`,
 		);
 	}
+	for (const field of REQUIRED_SENSITIVE_ARTIFACT_ASSERTIONS) {
+		if (report[field] !== true) {
+			throw new Error(
+				`${lane.browserEngine}${lane.browserChannel ? `:${lane.browserChannel}` : ""} E2E did not prove ${field}`,
+			);
+		}
+	}
 	reports.push({ ...report, matrixAttempts: attempts });
 }
 
@@ -142,7 +154,7 @@ const outputDir = path.join(
 );
 fs.mkdirSync(outputDir, { recursive: true });
 const matrix = {
-	schemaVersion: 2,
+	schemaVersion: 3,
 	status: "pass",
 	measuredAt: new Date().toISOString(),
 	candidate: firstReport.candidate,
@@ -219,6 +231,12 @@ const matrix = {
 			report.taskListPageVirtualizationVerified,
 		artifactDownloadPathObserved:
 			report.artifactDownloadPathObserved,
+		sensitiveArtifactDisclosureVerified:
+			report.sensitiveArtifactDisclosureVerified,
+		sensitiveArtifactDeclineIssuedNoRequest:
+			report.sensitiveArtifactDeclineIssuedNoRequest,
+		sensitiveArtifactAcknowledgementObserved:
+			report.sensitiveArtifactAcknowledgementObserved,
 		settingsSwitchAndSingleSelectionKeyboardVerified:
 			report.settingsSwitchAndSingleSelectionKeyboardVerified,
 		sessionSafetyDialogFocusAndDismissalVerified:
