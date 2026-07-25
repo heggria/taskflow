@@ -60,40 +60,51 @@ Legend:
 
 ## Latest local verification
 
-The following commands exited 0 on 2026-07-25 for source candidate
-`90df64c46695d70022228a08c2138a77b9f9ffe4` and its render evidence:
+The current evidence chain separates the implementation, immutable render/matrix
+build, and evidence-binding commit:
+
+- implementation source:
+  `6f18a4eff57f1774328808cdfea22e58178555e4`;
+- immutable render/matrix build:
+  `130e1a3f7c0bf991c96d6e0192a2517be43ff827`;
+- tracked-clean evidence-binding commit:
+  `3823c32d1e8992d86d568e54a69160b15c48f593`.
+
+`pnpm verify:web-candidate` exited 0 on 2026-07-25 at the exact
+evidence-binding commit. It ran the protocol, cursor, fixture, content, render,
+usability and candidate-evidence guards, then typecheck, the full unit suite,
+packed-package smoke and packaged browser E2E:
 
 ```text
-pnpm check:web-protocol-docs
-pnpm check:web-cursor-vector
-pnpm check:web-reference-fixtures
-pnpm check:web-content
-pnpm check:web-render-evidence
-pnpm check:web-usability-materials
-pnpm check:web-candidate-evidence
-pnpm typecheck
-pnpm test
-pnpm test:pack
-pnpm test:e2e-web-console
-pnpm test:web-node-matrix
-pnpm test:web-browser-matrix-native
-npx --yes node@24.18.0 scripts/bench-web.mjs --reuse-fixture
-TASKFLOW_WEB_REFERENCE_OUTPUT_ROOT=artifacts/web-reference/90df64c46695 pnpm render:web-reference
+pnpm verify:web-candidate
+pnpm test:control
+pnpm test:daemon
 git diff --check
 ```
 
+The following evidence producers also exited 0 against the exact immutable
+render/matrix build or its bound implementation source:
+
+```text
+pnpm test:web-node-matrix
+pnpm test:web-browser-matrix-native
+npx --yes node@24.18.0 scripts/bench-web.mjs --reuse-fixture
+TASKFLOW_WEB_REFERENCE_OUTPUT_ROOT=artifacts/web-reference/6f18a4eff57f pnpm render:web-reference
+```
+
 The schema-v2 compatibility report additionally cross-ran historical
-`aa34369a` and current build `15c9b1f8` under Node 24.18.0. The automated
+`aa34369a` and current build `130e1a3f` under Node 24.18.0. The automated
 candidate checker passes and explicitly classifies the older native Safari
-records as historical-only. `pnpm verify:web-candidate` exited 0 at exact
-tracked-clean candidate `76e71919cada9dbe6546c094943b5b461beaa88d`;
-`git diff --check` remains a separate working-tree check.
+records as historical-only. The retained 30-sample benchmark rerun is
+`structural-pass`; its human and JSON reports also disclose the preceding
+large-list timeout instead of treating the immediate successful smoke and
+rerun as if no failed attempt occurred.
 
 Observed counts:
 
-- control tests: 190/190;
-- daemon tests: 35/35;
-- full unit suite: 2312/2312;
+- control tests: 203/203;
+- daemon tests: 36/36;
+- full unit suite: 2324/2324;
 - pinned Node matrix: 63/63 on each of 22.19.0, 24.18.0 and 26.5.0;
 - packaged smoke: 12 packages, 27 explicit imports, 68 wildcard exports and
   package bins;
@@ -124,9 +135,9 @@ Observed counts:
 
 The production WebUI build is successful without a chunk-size warning. Stable
 TypeBox, React runtime, TanStack, React Aria and icon dependency boundaries
-reduce the largest minified chunk to 191.20 kB and the entry chunk to 163.40
+reduce the largest minified chunk to 191.20 kB and the entry chunk to 163.93
 kB. The production asset builder measures the modulepreloaded Simple shell at
-211,240 gzip bytes (206.29 KiB) and fails above the RFC's 220-KiB budget; the
+211,426 gzip bytes (206.47 KiB) and fails above the RFC's 220-KiB budget; the
 Pro panel remains a separate lazy chunk. The packaged browser E2E loads this
 exact manifest-bound split build rather than a Vite development server.
 
@@ -137,5 +148,8 @@ adversarial/compatibility hardening. It is **not** ready for a P17 wire-freeze
 claim because the external comprehension/content gates, canonical 30-sample
 performance evidence, native Edge/AT review, reviewed-tip
 evidence, and the remaining PARTIAL §15 matrices above are not complete.
+The current non-canonical M3 Pro run also measures event-to-visible p95 at
+291.8 ms, above the canonical 250-ms target; it is not presented as a
+performance pass.
 Capability-gated writes that are absent and unadvertised do not block beta.2
 by themselves.
