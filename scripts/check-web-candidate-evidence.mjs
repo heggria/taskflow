@@ -67,6 +67,7 @@ const candidateSourceScopes = [
 	"packages/taskflow-daemon/package.json",
 	"packages/taskflow-cli/src",
 	"packages/taskflow-cli/scripts",
+	"packages/taskflow-cli/test/e2e-web-console.mts",
 	"packages/taskflow-cli/package.json",
 	"packages/taskflow-web/src",
 	"packages/taskflow-web/scripts",
@@ -75,6 +76,9 @@ const candidateSourceScopes = [
 	"packages/taskflow-web/vite.config.ts",
 	"packages/taskflow-web/tsconfig.build.json",
 	"scripts/bench-web.mjs",
+	"scripts/test-web-browser-matrix.mjs",
+	"scripts/test-web-node-matrix.mjs",
+	"scripts/test-web-packaged-compatibility.mjs",
 	"scripts/web-runtime-versions.mjs",
 	"package.json",
 	"pnpm-lock.yaml",
@@ -82,11 +86,35 @@ const candidateSourceScopes = [
 	"tsconfig.base.json",
 	"tsconfig.json",
 ];
+const browserHarnessPaths = [
+	"packages/taskflow-cli/test/e2e-web-console.mts",
+	"scripts/test-web-browser-matrix.mjs",
+];
 
 function sha256File(file) {
 	return createHash("sha256")
 		.update(fs.readFileSync(file))
 		.digest("hex");
+}
+
+function sha256GitFile(commit, relativePath) {
+	const result = spawnSync(
+		"git",
+		["show", `${commit}:${relativePath}`],
+		{
+			cwd: repositoryRoot,
+			encoding: null,
+			maxBuffer: 64 * 1024 * 1024,
+		},
+	);
+	assert.equal(
+		result.status,
+		0,
+		`cannot read ${relativePath} from ${commit}`,
+	);
+	return `sha256:${createHash("sha256")
+		.update(result.stdout)
+		.digest("hex")}`;
 }
 
 function assertConcreteCommit(value, label) {
@@ -445,7 +473,11 @@ const browserMatrixBytes = fs.readFileSync(
 );
 assertNoLocalPath(browserMatrixBytes, "browser matrix report");
 const browserMatrix = JSON.parse(browserMatrixBytes);
-assert.equal(browserMatrix.schemaVersion, 3);
+assert.equal(
+	browserMatrix.schemaVersion,
+	4,
+	"browser matrix must bind its executable harness",
+);
 assert.equal(browserMatrix.status, "pass");
 assertConcreteCommit(
 	browserMatrix.candidate.gitCommit,
@@ -507,6 +539,28 @@ assert.equal(
 	browserMatrix.candidate.webBuildId,
 	benchmark.build.webBuildId,
 );
+assert.deepEqual(
+	browserMatrix.harness?.map((entry) => entry.path),
+	browserHarnessPaths,
+	"browser matrix harness inventory drifted",
+);
+for (const entry of browserMatrix.harness) {
+	assert.equal(
+		entry.sha256,
+		sha256GitFile(
+			browserMatrix.candidate.gitCommit,
+			entry.path,
+		),
+		`${entry.path} digest does not match the matrix candidate`,
+	);
+	assert.equal(
+		entry.sha256,
+		`sha256:${sha256File(
+			path.join(repositoryRoot, entry.path),
+		)}`,
+		`${entry.path} changed after browser evidence was recorded`,
+	);
+}
 assert.deepEqual(
 	browserMatrix.engines.map((engine) => [
 		engine.browserEngine,

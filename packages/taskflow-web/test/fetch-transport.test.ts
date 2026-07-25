@@ -145,7 +145,11 @@ test("fetch transport: sensitive artifact acknowledgement and redaction metadata
 		responseBudgetBytes: 100 * 1024 * 1024,
 		sensitiveArtifactAcknowledgement: "download",
 	})) as {
-		metadata: { redactionClass: string; digest: string };
+		metadata: {
+			redactionClass: string;
+			digest: string;
+			fileName?: string;
+		};
 		body: Uint8Array;
 	};
 	assert.equal(
@@ -154,6 +158,7 @@ test("fetch transport: sensitive artifact acknowledgement and redaction metadata
 	);
 	assert.equal(result.metadata.redactionClass, "sensitive");
 	assert.equal(result.metadata.digest, `sha256:${"a".repeat(64)}`);
+	assert.equal(result.metadata.fileName, "sensitive.bin");
 	assert.deepEqual([...result.body], [1, 2, 3]);
 });
 
@@ -201,6 +206,25 @@ test("fetch transport: artifact redaction metadata is exact and fail-closed", as
 		transport.request(artifactRequest),
 		/invalid artifact metadata/u,
 	);
+
+	globalThis.fetch = async () =>
+		new Response(new Uint8Array([7]), {
+			status: 200,
+			headers: {
+				"Content-Length": "1",
+				"Content-Type": "application/octet-stream",
+				ETag: `"sha256:${"b".repeat(64)}"`,
+				"Content-Disposition":
+					'attachment; filename="../unsafe.bin"',
+				"X-Taskflow-Redaction-Class": "project",
+			},
+		});
+	const unsafeName = (await transport.request(
+		artifactRequest,
+	)) as {
+		metadata: { fileName?: string };
+	};
+	assert.equal(unsafeName.metadata.fileName, undefined);
 
 	globalThis.fetch = async () =>
 		new Response(new Uint8Array([7]), {

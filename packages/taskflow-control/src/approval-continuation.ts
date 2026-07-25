@@ -22,6 +22,13 @@ const SettledPhaseAttemptSchema = Type.Object(
 			maxLength: 256,
 			pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
 		}),
+		nodeInstanceId: Type.Optional(
+			Type.String({
+				minLength: 1,
+				maxLength: 256,
+				pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+			}),
+		),
 		type: Type.String({ minLength: 1, maxLength: 128 }),
 		status: Type.Union([
 			Type.Literal("completed"),
@@ -114,23 +121,30 @@ function assertCheckpointSemantics(
 			"approval continuation identity is invalid",
 		);
 	}
-	const phaseIds = new Set<string>();
+	const nodeInstanceIds = new Set<string>();
+	const settledRootPhaseIds = new Set<string>();
 	for (const attempt of checkpoint.attempts) {
+		const nodeInstanceId =
+			attempt.nodeInstanceId ?? attempt.phaseId;
 		if (
 			!isSafeId(attempt.phaseId) ||
+			!isSafeId(nodeInstanceId) ||
 			!isSafeId(attempt.attemptId) ||
 			(attempt.status !== "completed" &&
 				attempt.status !== "skipped") ||
-			phaseIds.has(attempt.phaseId)
+			nodeInstanceIds.has(nodeInstanceId)
 		) {
 			throw new TypeError(
 				"approval continuation Attempts must be unique and settled",
 			);
 		}
-		phaseIds.add(attempt.phaseId);
+		nodeInstanceIds.add(nodeInstanceId);
+		if (nodeInstanceId === attempt.phaseId) {
+			settledRootPhaseIds.add(attempt.phaseId);
+		}
 	}
 	for (const phaseId of Object.keys(checkpoint.phaseOutputs)) {
-		if (!phaseIds.has(phaseId)) {
+		if (!settledRootPhaseIds.has(phaseId)) {
 			throw new TypeError(
 				"approval continuation output has no settled Attempt",
 			);
@@ -257,7 +271,9 @@ export function approvalContinuationMatchesRun(
 		const durable = byAttemptId.get(attempt.attemptId);
 		return (
 			durable !== undefined &&
-			durable.nodeInstanceId === attempt.phaseId &&
+			durable.nodeInstanceId ===
+				(attempt.nodeInstanceId ??
+					attempt.phaseId) &&
 			durable.status === attempt.status &&
 			durable.provider === attempt.providerName &&
 			durable.providerJobHandlePresent ===

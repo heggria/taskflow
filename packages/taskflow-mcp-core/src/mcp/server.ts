@@ -847,8 +847,9 @@ export function makeToolHandlers(
 						tryControlPlaneRun,
 						createHostLlmExecutionProvider,
 					} = await import("taskflow-control");
-					const llmProvider = createHostLlmExecutionProvider({
-						runTask: async (req) => {
+						const llmProvider = createHostLlmExecutionProvider({
+							signal: context?.signal,
+							runTask: async (req) => {
 							const result = await runner.runTask(
 								req.cwd,
 								agents,

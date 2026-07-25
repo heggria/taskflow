@@ -12,6 +12,7 @@ import * as path from "node:path";
 import {
 	createControlHost,
 	createHostLlmExecutionProvider,
+	createMockExecutionProvider,
 	createScriptExecutionProvider,
 	schedulePhases,
 } from "../src/index.ts";
@@ -213,6 +214,135 @@ test("adversarial: mixed agent+script executes both; agent cannot be skipped", a
 		assert.equal(scheduled.attempts.find((a) => a.phaseId === "ag")?.status, "completed");
 		assert.match(scheduled.finalOutput ?? "", /agent-out:do-work/);
 	} finally {
+		t.cleanup();
+	}
+});
+
+test("host LLM cancellation aborts the runner and settles only after exit", async () => {
+	let receivedSignal: AbortSignal | undefined;
+	let releaseRun:
+		| (() => void)
+		| undefined;
+	const runGate = new Promise<void>((resolve) => {
+		releaseRun = resolve;
+	});
+	const provider = createHostLlmExecutionProvider({
+		runTask: async ({ signal }) => {
+			receivedSignal = signal;
+			await runGate;
+			return signal?.aborted
+				? {
+						ok: false,
+						error: "aborted",
+						exitCode: 1,
+					}
+				: { ok: true, output: "late", exitCode: 0 };
+		},
+	});
+	const submitted = await provider.submit({
+		runId: "run-cancel-provider",
+		idempotencyKey: "cancel-provider",
+		cwd: ".",
+		program: {
+			name: "cancel-provider",
+			phases: [
+				{
+					id: "agent",
+					type: "agent",
+					task: "wait",
+				},
+			],
+		},
+	});
+	assert.equal(submitted.kind, "accepted");
+	if (submitted.kind !== "accepted") return;
+	const cancelling = provider.cancel(submitted.handle);
+	assert.equal(receivedSignal?.aborted, true);
+	assert.equal(provider.isLive?.(submitted.handle), true);
+	releaseRun?.();
+	assert.deepEqual(await cancelling, { kind: "cancelled" });
+	assert.equal(provider.isLive?.(submitted.handle), false);
+	assert.deepEqual(await provider.poll(submitted.handle), {
+		kind: "cancelled",
+	});
+});
+
+test("ControlHost routes agent cancellation to the owning LLM provider", async () => {
+	const t = tempProject();
+	let runStarted:
+		| (() => void)
+		| undefined;
+	const started = new Promise<void>((resolve) => {
+		runStarted = resolve;
+	});
+	let aborted = false;
+	const llm = createHostLlmExecutionProvider({
+		runTask: ({ signal }) =>
+			new Promise((resolve) => {
+				runStarted?.();
+				signal?.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						resolve({
+							ok: false,
+							error: "aborted",
+							exitCode: 1,
+						});
+					},
+					{ once: true },
+				);
+			}),
+	});
+	const scriptDelegate = createMockExecutionProvider();
+	let scriptCancelCalls = 0;
+	const script = {
+		...scriptDelegate,
+		async cancel(handle: string) {
+			scriptCancelCalls += 1;
+			return scriptDelegate.cancel(handle);
+		},
+	};
+	const host = createControlHost({
+		projectRoot: t.project,
+		env: t.env,
+		controlMode: "standalone",
+		skipSingleton: true,
+		scriptProvider: script,
+		llmProvider: llm,
+	});
+	try {
+		const admitted = host.admitAndRun({
+			commandId: "cmd-agent-cancel",
+			program: {
+				name: "agent-cancel",
+				phases: [
+					{
+						id: "agent",
+						type: "agent",
+						task: "wait",
+						final: true,
+					},
+				],
+			},
+		});
+		await started;
+		const running = host.store.listRuns()[0]!;
+		assert.equal(running.providerName, "host-llm");
+		const cancelled = await host.cancel(running.runId, {
+			commandId: "cmd-cancel-agent-run",
+			expectedRunVersion: running.runVersion,
+		});
+		assert.equal(cancelled.ok, true, cancelled.error?.message);
+		assert.equal(cancelled.run?.status, "cancelled");
+		assert.equal(cancelled.run?.stage, "terminal");
+		assert.equal(aborted, true);
+		assert.equal(scriptCancelCalls, 0);
+		const original = await admitted;
+		assert.equal(original.ok, false);
+		assert.equal(original.receipt, undefined);
+	} finally {
+		host.close();
 		t.cleanup();
 	}
 });

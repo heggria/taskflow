@@ -9,6 +9,14 @@ import {
 	loadApprovalRequest,
 } from "../src/approval.ts";
 import { createControlHost } from "../src/control-host.ts";
+import {
+	hashApproveCommandRequest,
+	hashCancelCommandRequest,
+	hashForceReleaseCommandRequest,
+	hashRejectCommandRequest,
+	hashRequest,
+	hashSetMaxActiveRunsCommandRequest,
+} from "../src/hash.ts";
 import { openUserCoordinatorStore } from "../src/store/coordinator.ts";
 import {
 	WEB_DEFAULT_ENABLED_COMMAND_KINDS,
@@ -27,6 +35,73 @@ import type {
 	ControlEvent,
 	RunProjection,
 } from "../src/types.ts";
+
+test("Web command request hashes share the canonical authority mapping", () => {
+	assert.equal(
+		hashApproveCommandRequest({
+			runId: "run-1",
+			expectedRunVersion: 3,
+			approvalRequestId: "approval-1",
+		}),
+		hashRequest({
+			kind: "approve",
+			runId: "run-1",
+			expectedRunVersion: 3,
+			approvalRequestId: "approval-1",
+		}),
+	);
+	assert.equal(
+		hashRejectCommandRequest({
+			runId: "run-1",
+			expectedRunVersion: 3,
+			approvalRequestId: "approval-1",
+			reason: "not safe",
+		}),
+		hashRequest({
+			kind: "reject",
+			runId: "run-1",
+			expectedRunVersion: 3,
+			approvalRequestId: "approval-1",
+			reason: "not safe",
+		}),
+	);
+	assert.equal(
+		hashCancelCommandRequest({
+			runId: "run-1",
+			expectedRunVersion: 3,
+			reason: "stop",
+		}),
+		hashRequest({
+			kind: "cancel-run",
+			runId: "run-1",
+			expectedRunVersion: 3,
+			reason: "stop",
+		}),
+	);
+	const capacity = {
+		value: 4,
+		expectedMaxActiveRuns: 2,
+		expectedCoordinatorEpoch: 8,
+	};
+	assert.equal(
+		hashSetMaxActiveRunsCommandRequest(capacity),
+		hashRequest(capacity),
+	);
+	const forceRelease = {
+		reservationId: "reservation-1",
+		expectedState: "orphan-suspect",
+		expectedRevision: 5,
+		expectedCoordinatorEpoch: 8,
+		expectedProjectId: "project-1",
+		expectedControlDomainId: "domain-1",
+		expectedRunId: "run-1",
+		acknowledgement: "I understand this may allow overlapping side effects",
+	};
+	assert.equal(
+		hashForceReleaseCommandRequest(forceRelease),
+		hashRequest(forceRelease),
+	);
+});
 
 function fixture() {
 	const root = fs.mkdtempSync(
@@ -768,6 +843,31 @@ test("Web commands: listener-global route claim prevents sequential and concurre
 				context(),
 			),
 			firstOutcome,
+		);
+		const authorityUnavailable =
+			createWebCommandHandlers(primary, {
+				supportedCommands: ["reject"],
+				resolveHost: () => null,
+				listHosts: () => [],
+			});
+		assert.throws(
+			() =>
+				authorityUnavailable.command(
+					{
+						params: {
+							commandId: first.commandId,
+						},
+						query: {},
+						body: {},
+					},
+					context(),
+				),
+			(error: unknown) =>
+				error instanceof WebReadServiceError &&
+				error.controlError.code ===
+					"TF_DURABILITY_FAILED" &&
+				error.controlError.sideEffects ===
+					"unknown",
 		);
 		assert.deepEqual(
 			openUserCoordinatorStore(testFixture.env).getCommandRoute(

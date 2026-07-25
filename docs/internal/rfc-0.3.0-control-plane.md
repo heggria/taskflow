@@ -358,6 +358,14 @@ boundFragmentHash, executionSemanticHash
 
 **Cache:** store fragment ArtifactRef, both hashes, event range, outputs. Re-Link/validate; reuse only if §11 predicate holds. No blind promotedPhases restore.
 
+`BoundFragmentLinked` proves only that the immutable child program and its
+authority were committed. It is not execution success. The scheduler must
+execute the linked descendants through their owning providers, persist their
+NodeInstance/Attempt identities, and complete the parent `expand` only after
+the required descendants settle successfully. A continuation may reuse the
+same exact Run-scoped link; it must not append a duplicate link or replay
+already settled descendants.
+
 ### 7.4 SpawnTemplate
 
 allowedAgentClasses, allowedProviderClasses, tool/effect ceilings, maxChildren, maxDepth, budgetShare.
@@ -587,6 +595,12 @@ buildInfo
 Compaction must not require mutating old Receipts; manifests/roots issued at receipt time remain valid, or Receipt embeds sufficient digests.
 Missing blob after retention → `artifactIntegrity: unknown`, not silent verify.
 
+The domain Receipt may retain the complete immutable arrays. Its bounded P17
+`WebReceiptDetail` carries at most the first 200 event/artifact references;
+`WebReceiptView` adds exact counts plus canonical digests and recovers complete
+event evidence through Receipt pagination. A short embedded array is never a
+completeness claim.
+
 ### 13.2 assurance
 
 ```text
@@ -643,6 +657,13 @@ interface ExecutionProvider {
 ```
 
 Discriminated unions for accepted | rejected | ambiguous.
+
+Every accepted Attempt persists the provider name and durable handle binding.
+`poll`, `cancel`, `collect`, and `reconcile` are routed back to that owning
+provider rather than to a process-wide default. An in-process host runner uses
+an abort signal for cancellation and may report `cancelled` only after the
+runner has actually settled; a bounded wait that expires remains ambiguous and
+follows §8.4 (`unknown/reconciling`, capacity held, no final Receipt).
 
 ---
 

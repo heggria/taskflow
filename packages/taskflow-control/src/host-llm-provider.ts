@@ -33,6 +33,7 @@ interface LlmJob {
 	output?: string;
 	error?: string;
 	startedAt: number;
+	controller: AbortController;
 	promise?: Promise<void>;
 }
 
@@ -56,6 +57,8 @@ export function createHostLlmExecutionProvider(opts: {
 	runTask: HostRunTask;
 	/** Default agent when phase omits agent. */
 	defaultAgent?: string;
+	/** Caller/request cancellation composed with ControlHost cancel. */
+	signal?: AbortSignal;
 }): ExecutionProvider {
 	const jobs = new Map<string, LlmJob>();
 	const defaultAgent = opts.defaultAgent ?? "default";
@@ -91,6 +94,13 @@ export function createHostLlmExecutionProvider(opts: {
 				};
 			}
 			const handle = newId("llmjob");
+			const controller = new AbortController();
+			const signal = opts.signal
+				? AbortSignal.any([
+						opts.signal,
+						controller.signal,
+					])
+				: controller.signal;
 			const job: LlmJob = {
 				runId: req.runId,
 				agent: extracted.agent || defaultAgent,
@@ -98,6 +108,7 @@ export function createHostLlmExecutionProvider(opts: {
 				cwd: req.cwd,
 				status: "running",
 				startedAt: Date.now(),
+				controller,
 			};
 			jobs.set(handle, job);
 
@@ -108,8 +119,12 @@ export function createHostLlmExecutionProvider(opts: {
 						agent: job.agent,
 						task: job.task,
 						runId: req.runId,
+						signal,
 					});
-					if (job.status === "cancelled") return;
+					if (signal.aborted) {
+						job.status = "cancelled";
+						return;
+					}
 					if (res.ok !== false && (res.exitCode === undefined || res.exitCode === 0)) {
 						job.status = "completed";
 						job.output = res.output ?? "ok";
@@ -118,7 +133,10 @@ export function createHostLlmExecutionProvider(opts: {
 						job.error = res.error ?? `llm exit ${res.exitCode ?? "nonzero"}`;
 					}
 				} catch (e) {
-					if (job.status === "cancelled") return;
+					if (signal.aborted) {
+						job.status = "cancelled";
+						return;
+					}
 					job.status = "failed";
 					job.error = e instanceof Error ? e.message : String(e);
 				}
@@ -150,8 +168,18 @@ export function createHostLlmExecutionProvider(opts: {
 			const job = jobs.get(handle);
 			if (!job) return { kind: "already-terminal" };
 			if (job.status !== "running") return { kind: "already-terminal" };
-			job.status = "cancelled";
-			return { kind: "cancelled" };
+			job.controller.abort();
+			if (job.promise) {
+				await Promise.race([
+					job.promise,
+					new Promise<void>((resolve) =>
+						setTimeout(resolve, 1_000),
+					),
+				]);
+			}
+			return jobs.get(handle)?.status === "cancelled"
+				? { kind: "cancelled" }
+				: { kind: "ambiguous" };
 		},
 
 		async reconcile(handle): Promise<ReconcileResult> {
@@ -184,7 +212,9 @@ export function createHostLlmExecutionProvider(opts: {
 
 		quiesceAll() {
 			for (const j of jobs.values()) {
-				if (j.status === "running") j.status = "cancelled";
+				if (j.status === "running") {
+					j.controller.abort();
+				}
 			}
 		},
 	};

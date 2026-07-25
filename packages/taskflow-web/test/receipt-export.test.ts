@@ -120,10 +120,15 @@ function receiptPage(input: {
 					state: "ok",
 				},
 			],
-			sourceObservation,
-		},
-		artifactCount: 1,
-		eventManifest: {
+				sourceObservation,
+			},
+			eventManifestCount: 2,
+			eventManifestDigest:
+				"sha256:0a5f2eb6578e8ffb36dbc53c576adddd133dbc6d57dc9dd6e9899b02e2b336ec",
+			artifactCount: 1,
+			artifactRefsDigest:
+				"sha256:20470f71802ad0366b4427e3785df0c9628166aa4cab83e5da4bcccedcaca1d6",
+			eventManifest: {
 			items: input.items,
 			...(input.nextCursor
 				? { nextCursor: input.nextCursor }
@@ -132,6 +137,19 @@ function receiptPage(input: {
 		},
 		sourceObservation,
 	};
+}
+
+function legacyReceiptPage(input: {
+	readonly items: ReceiptPage["eventManifest"]["items"];
+	readonly nextCursor?: string;
+}): ReceiptPage {
+	const legacy = {
+		...receiptPage(input),
+	} as unknown as Record<string, unknown>;
+	delete legacy.eventManifestCount;
+	delete legacy.eventManifestDigest;
+	delete legacy.artifactRefsDigest;
+	return legacy as unknown as ReceiptPage;
 }
 
 const firstEntry = {
@@ -196,6 +214,25 @@ test("Receipt export concatenates pages and serializes stable JSON", async () =>
 	);
 });
 
+test("Receipt export accepts the committed additive pre-count response", async () => {
+	const document = await collectWebReceiptExport({
+		client: {
+			async runReceipt() {
+				return legacyReceiptPage({
+					items: [firstEntry, secondEntry],
+				});
+			},
+		},
+		params,
+		expectedRunVersion: 3,
+		expectedReceiptId: "receipt-1",
+	});
+	assert.deepEqual(
+		document.eventManifest.map((entry) => entry.eventId),
+		["event-1", "event-2"],
+	);
+});
+
 test("Receipt export fails closed on missing, repeated, or changed evidence", async () => {
 	await assert.rejects(
 		collectWebReceiptExport({
@@ -225,6 +262,22 @@ test("Receipt export fails closed on missing, repeated, or changed evidence", as
 			expectedReceiptId: "receipt-1",
 		}),
 		/cursor repeated/u,
+	);
+	await assert.rejects(
+		collectWebReceiptExport({
+			client: {
+				async runReceipt() {
+					return receiptPage({
+						items: [],
+						nextCursor: "no-progress",
+					});
+				},
+			},
+			params,
+			expectedRunVersion: 3,
+			expectedReceiptId: "receipt-1",
+		}),
+		/did not make bounded progress/u,
 	);
 	let call = 0;
 	await assert.rejects(

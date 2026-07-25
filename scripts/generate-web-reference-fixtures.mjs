@@ -513,7 +513,18 @@ const receipt = {
 		buildInfo: { packageVersion: "0.3.0-beta.2", controlSchemaVersion: 1 },
 	},
 	verification: verifiedPresentation,
+	eventManifestCount: 1,
+	eventManifestDigest: sha256(
+		canonical(["event-1"]),
+	),
 	artifactCount: 3,
+	artifactRefsDigest: sha256(
+		canonical([
+			"artifact-1",
+			"artifact-2",
+			"artifact-3",
+		]),
+	),
 	eventManifest: {
 		items: [
 			{

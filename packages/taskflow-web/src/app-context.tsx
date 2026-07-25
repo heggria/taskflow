@@ -56,6 +56,7 @@ import {
 	type WebSessionLifecycleState,
 } from "./session-lifecycle.ts";
 import { refetchActiveWebQueries } from "./live-resync.ts";
+import { useWebBootRequest } from "./web-boot.ts";
 
 export type DisplayMode = "simple" | "pro";
 export type ThemeMode = "system" | "light" | "dark";
@@ -99,16 +100,6 @@ type AppContextValue = {
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
-
-function launchToken(): string | undefined {
-	const value = new URLSearchParams(window.location.hash.slice(1)).get("launch");
-	return value && /^[A-Za-z0-9_-]{43}$/u.test(value) ? value : undefined;
-}
-
-function stripLaunchFragment(): void {
-	if (!window.location.hash.includes("launch=")) return;
-	window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
-}
 
 function initialMode(): DisplayMode {
 	return new URLSearchParams(window.location.search).get("view") === "pro"
@@ -172,6 +163,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			),
 		[],
 	);
+	const requestBoot = useWebBootRequest(client, bootAttempt);
 	const dispatchLiveEvent = useCallback((event: WebLiveEvent) => {
 		const next = reduceWebLiveState(liveStateRef.current, event);
 		liveStateRef.current = next;
@@ -200,25 +192,10 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	useEffect(() => {
 		let cancelled = false;
 		setBoot({ status: "booting" });
+		const request = requestBoot();
 		void (async () => {
 			try {
-				const token = launchToken();
-				let session: WebSessionView | undefined;
-				if (token) {
-					session = await client.sessionExchange({
-						params: {},
-						query: {},
-						body: { launchToken: token },
-					});
-					csrfRef.current = session.csrfToken;
-					setCsrfToken(session.csrfToken);
-					stripLaunchFragment();
-				}
-				const bootstrap = await client.bootstrap({
-					params: {},
-					query: {},
-					body: {},
-				});
+				const { session, bootstrap } = await request;
 				csrfRef.current = bootstrap.csrfToken;
 				if (!cancelled) {
 					setCsrfToken(bootstrap.csrfToken);
@@ -238,7 +215,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		return () => {
 			cancelled = true;
 		};
-	}, [bootAttempt, client]);
+	}, [requestBoot]);
 
 	useEffect(() => applyTheme(theme), [theme]);
 	useEffect(() => {

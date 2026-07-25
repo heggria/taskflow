@@ -14,7 +14,14 @@ import type {
 	AdmitResult,
 	ControlHost,
 } from "./control-host.ts";
-import { hashRequest } from "./hash.ts";
+import {
+	hashApproveCommandRequest,
+	hashCancelCommandRequest,
+	hashForceReleaseCommandRequest,
+	hashRejectCommandRequest,
+	hashRequest,
+	hashSetMaxActiveRunsCommandRequest,
+} from "./hash.ts";
 import type {
 	CoordinatorCommandRouteAuthority,
 	CoordinatorCommandRouteClaim,
@@ -384,36 +391,33 @@ function legacyAuthorityRequestHash(
 ): string | null {
 	switch (request.kind) {
 		case "approve":
-			return hashRequest({
-				kind: request.kind,
+			return hashApproveCommandRequest({
 				runId: request.runId,
 				expectedRunVersion: request.expectedRunVersion,
 				approvalRequestId: request.approvalRequestId,
 			});
 		case "reject":
-			return hashRequest({
-				kind: request.kind,
+			return hashRejectCommandRequest({
 				runId: request.runId,
 				expectedRunVersion: request.expectedRunVersion,
 				approvalRequestId: request.approvalRequestId,
 				reason: request.reason,
 			});
 		case "cancel-run":
-			return hashRequest({
-				kind: request.kind,
+			return hashCancelCommandRequest({
 				runId: request.runId,
 				expectedRunVersion: request.expectedRunVersion,
 				reason: request.reason,
 			});
 		case "set-max-active-runs":
-			return hashRequest({
+			return hashSetMaxActiveRunsCommandRequest({
 				value: request.value,
 				expectedMaxActiveRuns: request.expectedMaxActiveRuns,
 				expectedCoordinatorEpoch:
 					request.expectedCoordinatorEpoch,
 			});
 		case "force-release":
-			return hashRequest({
+			return hashForceReleaseCommandRequest({
 				reservationId: request.reservationId,
 				expectedState: request.expectedState,
 				expectedRevision: request.expectedRevision,
@@ -845,8 +849,47 @@ export function createWebCommandHandlers(
 								authority.controlDomainId,
 					) ??
 					null;
-				record =
-					projectHost?.store.getCommand(commandId) ?? null;
+				if (!projectHost) {
+					throwControl(
+						protocolError(
+							"TF_DURABILITY_FAILED",
+							"The command authority is not mounted on this listener.",
+							{
+								commandId,
+								recoveryAction:
+									"operator",
+								sideEffects:
+									"unknown",
+								projectId:
+									authority.projectId,
+								controlDomainId:
+									authority.controlDomainId,
+							},
+						),
+					);
+				}
+				try {
+					record =
+						projectHost.store.getCommand(commandId);
+				} catch {
+					throwControl(
+						protocolError(
+							"TF_DURABILITY_FAILED",
+							"The command authority could not be read.",
+							{
+								commandId,
+								recoveryAction:
+									"operator",
+								sideEffects:
+									"unknown",
+								projectId:
+									authority.projectId,
+								controlDomainId:
+									authority.controlDomainId,
+							},
+						),
+					);
+				}
 			}
 			if (!record) {
 				return {

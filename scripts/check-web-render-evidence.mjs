@@ -107,19 +107,38 @@ if (sourceDrift.status !== 0) {
 		"rendered Web source differs from the recorded candidate commit",
 	);
 }
-if (fs.existsSync(webAssetManifestPath)) {
-	if (
-		sha256(webAssetManifestPath) !==
-		evidence.candidate.assetManifestSha256
-	) {
-		throw new Error("packaged Web asset manifest differs from render evidence");
-	}
-	const assetManifest = JSON.parse(
-		fs.readFileSync(webAssetManifestPath, "utf8"),
+if (!fs.existsSync(webAssetManifestPath)) {
+	const build = spawnSync(
+		"pnpm",
+		["--filter", "taskflow-web", "build"],
+		{
+			cwd: repoRoot,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+		},
 	);
-	if (assetManifest.webBuildId !== evidence.candidate.webBuildId) {
-		throw new Error("packaged Web build id differs from render evidence");
+	if (build.status !== 0) {
+		throw new Error(
+			`cannot rebuild the packaged Web asset manifest: ${build.stderr || build.stdout}`,
+		);
 	}
+}
+if (!fs.existsSync(webAssetManifestPath)) {
+	throw new Error(
+		"packaged Web asset manifest is missing after a successful build",
+	);
+}
+if (
+	sha256(webAssetManifestPath) !==
+	evidence.candidate.assetManifestSha256
+) {
+	throw new Error("packaged Web asset manifest differs from render evidence");
+}
+const assetManifest = JSON.parse(
+	fs.readFileSync(webAssetManifestPath, "utf8"),
+);
+if (assetManifest.webBuildId !== evidence.candidate.webBuildId) {
+	throw new Error("packaged Web build id differs from render evidence");
 }
 if (evidence.review?.approved !== false) {
 	throw new Error("unapproved reference evidence cannot claim approval");

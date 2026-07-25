@@ -11,7 +11,7 @@ import {
 	bindFragment,
 	bootstrapControl,
 	createControlHost,
-	createMockExecutionProvider,
+	createHostLlmExecutionProvider,
 	createScriptExecutionProvider,
 	fragmentSemanticMatch,
 	hashBoundFragment,
@@ -61,14 +61,29 @@ test("P7 dynamic path: ControlHost journals fragment body, link provenance, node
 	const home = path.join(root, "home");
 	fs.mkdirSync(project, { recursive: true });
 	fs.mkdirSync(home, { recursive: true });
+	let placeholderLlmCalls = 0;
 	const host = createControlHost({
 		projectRoot: project,
 		env: { ...process.env, TASKFLOW_HOME: home },
 		controlMode: "standalone",
 		skipSingleton: true,
-		allowMockProvider: true,
-		llmProvider: createMockExecutionProvider({
-			output: "dynamic-complete",
+		scriptProvider: createScriptExecutionProvider({
+			stateDir: path.join(
+				project,
+				".taskflow",
+				"control",
+				"provider-jobs",
+			),
+		}),
+		llmProvider: createHostLlmExecutionProvider({
+			runTask: async () => {
+				placeholderLlmCalls += 1;
+				return {
+					ok: true,
+					output: "placeholder",
+					exitCode: 0,
+				};
+			},
 		}),
 	});
 	try {
@@ -104,6 +119,12 @@ test("P7 dynamic path: ControlHost journals fragment body, link provenance, node
 			},
 		});
 		assert.equal(result.ok, true, JSON.stringify(result.error));
+		assert.equal(
+			placeholderLlmCalls,
+			0,
+			"expand must execute its linked children, not a placeholder LLM prompt",
+		);
+		assert.equal(result.run?.finalOutput, "b");
 		assert.match(
 			result.run?.boundFragmentHash ?? "",
 			/^bf:[a-f0-9]{64}$/u,
@@ -164,6 +185,8 @@ test("P7 dynamic path: ControlHost journals fragment body, link provenance, node
 		);
 		assert.deepEqual(
 			result.run?.attempts?.map((attempt) => ({
+				nodeInstanceId:
+					attempt.nodeInstanceId,
 				status: attempt.status,
 				provider: attempt.provider,
 				providerJobHandlePresent:
@@ -171,9 +194,32 @@ test("P7 dynamic path: ControlHost journals fragment body, link provenance, node
 			})),
 			[
 				{
+					nodeInstanceId:
+						result.run?.nodes?.find(
+							(node) =>
+								node.phaseId ===
+								"child-a",
+						)?.nodeInstanceId,
 					status: "completed",
-					provider: "mock",
+					provider: "script",
 					providerJobHandlePresent: true,
+				},
+				{
+					nodeInstanceId:
+						result.run?.nodes?.find(
+							(node) =>
+								node.phaseId ===
+								"child-b",
+						)?.nodeInstanceId,
+					status: "completed",
+					provider: "script",
+					providerJobHandlePresent: true,
+				},
+				{
+					nodeInstanceId: "grow",
+					status: "completed",
+					provider: undefined,
+					providerJobHandlePresent: false,
 				},
 			],
 		);
@@ -203,6 +249,256 @@ test("P7 dynamic path: ControlHost journals fragment body, link provenance, node
 	} finally {
 		host.close();
 		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("P7 dynamic path: nested descendant failure blocks the parent and Receipt", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-bound-fragment-fail-"),
+	);
+	const project = path.join(root, "project");
+	const home = path.join(root, "home");
+	const leaked = path.join(project, "must-not-run");
+	fs.mkdirSync(project, { recursive: true });
+	fs.mkdirSync(home, { recursive: true });
+	const host = createControlHost({
+		projectRoot: project,
+		env: { ...process.env, TASKFLOW_HOME: home },
+		controlMode: "standalone",
+		skipSingleton: true,
+		scriptProvider: createScriptExecutionProvider({
+			stateDir: path.join(
+				project,
+				".taskflow",
+				"control",
+				"provider-jobs",
+			),
+		}),
+	});
+	try {
+		const result = await host.admitAndRun({
+			commandId: "cmd-dynamic-fragment-fail",
+			program: {
+				name: "dynamic-failure",
+				phases: [
+					{
+						id: "grow",
+						type: "expand",
+						expandMode: "nested",
+						def: {
+							name: "nested-fragment",
+							phases: [
+								{
+									id: "real-failure",
+									type: "script",
+									run: "exit 29",
+								},
+								{
+									id: "must-not-run",
+									type: "script",
+									dependsOn: [
+										"real-failure",
+									],
+									run: `printf leaked > "${leaked}"`,
+									final: true,
+								},
+							],
+						},
+						final: true,
+					},
+				],
+			},
+		});
+		assert.equal(result.ok, false);
+		assert.equal(result.receipt, undefined);
+		assert.equal(result.run?.status, "failed");
+		assert.equal(fs.existsSync(leaked), false);
+		assert.deepEqual(
+			result.run?.nodes
+				?.filter(
+					(node) =>
+						node.origin ===
+						"bound-fragment",
+				)
+				.map((node) => [
+					node.phaseId,
+					node.status,
+				]),
+			[
+				["real-failure", "failed"],
+				["must-not-run", "blocked"],
+			],
+		);
+		assert.equal(
+			host.store.getReceiptForRun(
+				result.run!.runId,
+			),
+			null,
+		);
+	} finally {
+		host.close();
+		fs.rmSync(root, {
+			recursive: true,
+			force: true,
+		});
+	}
+});
+
+test("P7 dynamic path: settled descendants survive approval restart without replay", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-bound-fragment-approval-"),
+	);
+	const project = path.join(root, "project");
+	const home = path.join(root, "home");
+	const beforeMarker = path.join(project, "before");
+	const afterMarker = path.join(project, "after");
+	fs.mkdirSync(project, { recursive: true });
+	fs.mkdirSync(home, { recursive: true });
+	const env = { ...process.env, TASKFLOW_HOME: home };
+	let host: ReturnType<typeof createControlHost> | undefined;
+	try {
+		host = createControlHost({
+			projectRoot: project,
+			env,
+			controlMode: "standalone",
+			skipSingleton: true,
+		});
+		const parked = await host.admitAndRun({
+			commandId: "cmd-dynamic-approval-admit",
+			program: {
+				name: "dynamic-before-approval",
+				phases: [
+					{
+						id: "grow",
+						type: "expand",
+						expandMode: "graft",
+						def: {
+							name: "before-fragment",
+							phases: [
+								{
+									id: "before",
+									type: "script",
+									run: `test ! -e "${beforeMarker}" && printf once > "${beforeMarker}" && printf before`,
+									final: true,
+								},
+							],
+						},
+					},
+					{
+						id: "review",
+						type: "approval",
+						dependsOn: ["grow"],
+					},
+					{
+						id: "after",
+						type: "script",
+						dependsOn: ["review"],
+						run: `printf once > "${afterMarker}" && printf after`,
+						final: true,
+					},
+				],
+			},
+		});
+		assert.equal(parked.ok, true, JSON.stringify(parked.error));
+		assert.equal(parked.run?.status, "paused");
+		assert.equal(parked.run?.stage, "parked");
+		const runId = parked.run!.runId;
+		const expectedRunVersion = parked.run!.runVersion;
+		const approvalRequestId =
+			parked.run!.approvalRequestId!;
+		host.close();
+		host = createControlHost({
+			projectRoot: project,
+			env,
+			controlMode: "standalone",
+			skipSingleton: true,
+		});
+		const completed = await host.approve(runId, {
+			commandId: "cmd-dynamic-approval-approve",
+			principal: "local-user",
+			expectedRunVersion,
+			approvalRequestId,
+		});
+		assert.equal(
+			completed.ok,
+			true,
+			JSON.stringify(completed.error),
+		);
+		assert.equal(completed.run?.status, "completed");
+		assert.equal(completed.run?.finalOutput, "after");
+		assert.equal(
+			fs.readFileSync(beforeMarker, "utf8"),
+			"once",
+		);
+		assert.equal(
+			fs.readFileSync(afterMarker, "utf8"),
+			"once",
+		);
+		assert.deepEqual(
+			completed.run?.nodes
+				?.filter(
+					(node) =>
+						node.origin ===
+						"bound-fragment",
+				)
+				.map((node) => [
+					node.phaseId,
+					node.status,
+					node.attemptCount,
+				]),
+			[["before", "completed", 1]],
+		);
+		assert.equal(
+			completed.receipt?.assurance.provenance,
+			"ok",
+		);
+		assert.equal(
+			host.store.listBoundFragmentsForRun(runId).length,
+			1,
+			"approval continuation must reuse the exact linked fragment",
+		);
+		const dynamicNodeInstanceId =
+			completed.run?.nodes?.find(
+				(node) => node.phaseId === "before",
+			)?.nodeInstanceId;
+		const events = host.store.readEvents(
+			1,
+			host.store.nextCommitSeq(),
+		);
+		assert.equal(
+			events.filter(
+				(event) =>
+					event.payload.type ===
+					"BoundFragmentLinked",
+			).length,
+			1,
+			"approval continuation must not append a duplicate fragment link",
+		);
+		assert.ok(
+			events.some((event) => {
+				const payload = event.payload as {
+					type?: string;
+					kind?: string;
+					data?: {
+						nodeInstanceId?: string;
+					};
+				};
+				return (
+					payload.type === "Generic" &&
+					payload.kind ===
+						"PhaseAttemptStarted" &&
+					payload.data?.nodeInstanceId ===
+						dynamicNodeInstanceId
+				);
+			}),
+			"dynamic provider checkpoints must use the durable NodeInstance id",
+		);
+	} finally {
+		host?.close();
+		fs.rmSync(root, {
+			recursive: true,
+			force: true,
+		});
 	}
 });
 

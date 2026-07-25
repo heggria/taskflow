@@ -260,9 +260,9 @@
           "fixtureId": "pro-evidence-receipt",
           "state": "verified-receipt",
           "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/pro-evidence-receipt.json",
-          "sourceSha256": "sha256:d89dbf9527f1074fb15371225820e6613d194d7167be4803e6f1232a6fb52972",
+          "sourceSha256": "sha256:b279f7600a58c4e31169107b592eed1512da3022cf6ec7efcecd67aca7464fed",
           "projectionSha256": "sha256:7137a01ec2956a69fcf49ae8fa133ddecad1bf8d4c85e6ee74520c802aa0d49f",
-          "fixtureFileSha256": "sha256:dc3f136c256b069dc5838b215e09eb19b581ce2e0f08b33ccf6d96827ea15277",
+          "fixtureFileSha256": "sha256:64db6e78d1cff679771984f9b29fa74f58c9e0f3874ba9ea3623bb5003beb8b7",
           "contentKeys": [
             "artifact.download.action",
             "artifact.secret.detail",

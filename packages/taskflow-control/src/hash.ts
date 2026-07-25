@@ -4,7 +4,7 @@
  */
 import * as crypto from "node:crypto";
 
-export function sha256Hex(input: string | Buffer): string {
+export function sha256Hex(input: string | Uint8Array): string {
 	return crypto.createHash("sha256").update(input).digest("hex");
 }
 
@@ -73,6 +73,68 @@ export function extractExecutionSemantics(program: unknown): Record<string, unkn
 /** Request hash for CommandRecord idempotency. */
 export function hashRequest(body: unknown): string {
 	return sha256Hex(stableStringify(body));
+}
+
+export function hashApproveCommandRequest(input: {
+	runId: string;
+	expectedRunVersion?: number;
+	approvalRequestId?: string;
+}): string {
+	return hashRequest({
+		kind: "approve",
+		runId: input.runId,
+		expectedRunVersion: input.expectedRunVersion,
+		approvalRequestId: input.approvalRequestId,
+	});
+}
+
+export function hashRejectCommandRequest(input: {
+	runId: string;
+	expectedRunVersion?: number;
+	approvalRequestId?: string;
+	reason?: string;
+}): string {
+	return hashRequest({
+		kind: "reject",
+		runId: input.runId,
+		expectedRunVersion: input.expectedRunVersion,
+		approvalRequestId: input.approvalRequestId,
+		reason: input.reason,
+	});
+}
+
+export function hashCancelCommandRequest(input: {
+	runId: string;
+	expectedRunVersion?: number;
+	reason?: string;
+}): string {
+	return hashRequest({
+		kind: "cancel-run",
+		runId: input.runId,
+		expectedRunVersion: input.expectedRunVersion,
+		reason: input.reason,
+	});
+}
+
+export function hashSetMaxActiveRunsCommandRequest(input: {
+	value: number;
+	expectedMaxActiveRuns: number;
+	expectedCoordinatorEpoch: number;
+}): string {
+	return hashRequest(input);
+}
+
+export function hashForceReleaseCommandRequest(input: {
+	reservationId: string;
+	expectedState: string;
+	expectedRevision: number;
+	expectedCoordinatorEpoch: number;
+	expectedProjectId: string;
+	expectedControlDomainId: string;
+	expectedRunId: string;
+	acknowledgement: string;
+}): string {
+	return hashRequest(input);
 }
 
 export function newId(prefix = ""): string {

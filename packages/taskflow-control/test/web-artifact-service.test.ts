@@ -17,6 +17,7 @@ import {
 	WebReadServiceError,
 	type WebHandlerContext,
 } from "../src/index.ts";
+import { sha256Hex } from "../src/hash.ts";
 
 function context(): WebHandlerContext {
 	return {
@@ -74,6 +75,22 @@ test("artifact policy freezes the exact 5 MiB inline and 100 MiB download bounda
 	for (const invalid of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
 		assert.equal(webArtifactWithinDownloadBudget(invalid), false);
 	}
+});
+
+test("artifact integrity hashes Uint8Array bodies without a full-size Buffer copy", () => {
+	assert.equal(
+		sha256Hex(new Uint8Array([0x61, 0x62, 0x63])),
+		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+	);
+	const source = fs.readFileSync(
+		path.resolve(
+			import.meta.dirname,
+			"../src/web-artifact-service.ts",
+		),
+		"utf8",
+	);
+	assert.doesNotMatch(source, /sha256Hex\(Buffer\.from\(body\)\)/u);
+	assert.match(source, /sha256Hex\(body\)/u);
 });
 
 test("artifact service: current Receipt reachability, redaction, and pre-header integrity", async () => {

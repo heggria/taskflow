@@ -396,6 +396,24 @@ test("P17 committed additive points distinguish minor from breaking changes", ()
 	}
 });
 
+test("P17 Receipt counts extend the additive view without breaking the prior consumer shape", () => {
+	const current = synthesize(
+		WebReceiptViewSchema,
+	) as Record<string, unknown>;
+	const prior = structuredClone(current);
+	delete prior.eventManifestCount;
+	delete prior.eventManifestDigest;
+	delete prior.artifactRefsDigest;
+	assert.equal(
+		Value.Check(WebReceiptViewSchema, prior),
+		false,
+	);
+	assert.equal(
+		Value.Check(WebReceiptViewConsumerSchema, prior),
+		true,
+	);
+});
+
 test("P17 committed request/action/cursor/SSE unions cover every closed branch", () => {
 	const fixturePath = path.join(
 		path.dirname(fileURLToPath(import.meta.url)),

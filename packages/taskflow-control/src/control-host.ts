@@ -22,7 +22,13 @@ import {
 	type RunStage,
 	type RunStatus,
 } from "./types.ts";
-import { hashRequest, newId } from "./hash.ts";
+import {
+	hashApproveCommandRequest,
+	hashCancelCommandRequest,
+	hashRejectCommandRequest,
+	hashRequest,
+	newId,
+} from "./hash.ts";
 import { bindFragment } from "./bound-fragment.ts";
 import { openProjectControlStore, type ProjectControlStore } from "./store/project-store.ts";
 import {
@@ -75,6 +81,34 @@ import {
 import { buildControlReplayTrace } from "./replay-trace.ts";
 import * as path from "node:path";
 
+function boundFragmentNodeInstanceId(
+	boundFragmentHash: string,
+	ordinal: number,
+): string {
+	return `dyn-${boundFragmentHash.slice(3, 15)}-${ordinal}`;
+}
+
+function boundFragmentNodeInstanceIds(
+	boundFragmentHash: string,
+	phases: readonly Record<string, unknown>[],
+): Readonly<Record<string, string>> {
+	return Object.fromEntries(
+		phases.flatMap((phase, ordinal) =>
+			typeof phase.id === "string"
+				? [
+						[
+							phase.id,
+							boundFragmentNodeInstanceId(
+								boundFragmentHash,
+								ordinal,
+							),
+						],
+					]
+				: [],
+		),
+	);
+}
+
 function projectPhaseInventory(
 	phaseRecords: Array<Record<string, unknown>>,
 	phaseAttempts: readonly PhaseAttempt[],
@@ -86,15 +120,18 @@ function projectPhaseInventory(
 	nodes: RunNodeProjection[];
 	attempts: RunAttemptProjection[];
 } {
-	const attemptsByPhase = new Map<string, PhaseAttempt[]>();
+	const attemptsByNode = new Map<string, PhaseAttempt[]>();
 	for (const attempt of phaseAttempts) {
-		const bucket = attemptsByPhase.get(attempt.phaseId) ?? [];
+		const nodeInstanceId =
+			attempt.nodeInstanceId ?? attempt.phaseId;
+		const bucket =
+			attemptsByNode.get(nodeInstanceId) ?? [];
 		bucket.push(attempt);
-		attemptsByPhase.set(attempt.phaseId, bucket);
+		attemptsByNode.set(nodeInstanceId, bucket);
 	}
 	const staticNodes = phaseRecords.flatMap((phase, ordinal) => {
 		if (typeof phase.id !== "string") return [];
-		const attempts = attemptsByPhase.get(phase.id) ?? [];
+		const attempts = attemptsByNode.get(phase.id) ?? [];
 		const latest = attempts[attempts.length - 1];
 		const displayLabel =
 			typeof phase.name === "string" && phase.name.trim()
@@ -144,19 +181,31 @@ function projectPhaseInventory(
 							phases: Array<Record<string, unknown>>;
 						}).phases
 					: [];
-			const parentAttempt = (
-				attemptsByPhase.get(link.originPhaseId) ?? []
-			).at(-1);
-			const status: RunNodeProjection["status"] =
-				parentAttempt === undefined
-					? "waiting"
-					: parentAttempt.status === "still-running"
-						? "running"
-						: parentAttempt.status === "skipped"
-							? "blocked"
-							: parentAttempt.status;
 			return phases.flatMap((phase, ordinal) => {
 				if (typeof phase.id !== "string") return [];
+				const nodeInstanceId =
+					boundFragmentNodeInstanceId(
+						fragment.boundFragmentHash,
+						ordinal,
+					);
+				const attempts =
+					attemptsByNode.get(
+						nodeInstanceId,
+					) ?? [];
+				const latest = attempts.at(-1);
+				const status: RunNodeProjection["status"] =
+					latest === undefined
+						? "waiting"
+						: latest.status ===
+								"still-running"
+							? "running"
+							: latest.status ===
+									"skipped"
+								? latest.error ===
+									"upstream dependency failed"
+									? "blocked"
+									: "completed"
+								: latest.status;
 				const displayLabel =
 					typeof phase.name === "string" &&
 					phase.name.trim()
@@ -167,7 +216,7 @@ function projectPhaseInventory(
 								.slice(0, 512);
 				return [
 					{
-						nodeInstanceId: `dyn-${fragment.boundFragmentHash.slice(3, 15)}-${ordinal}`,
+						nodeInstanceId,
 						phaseId: phase.id,
 						phaseType:
 							typeof phase.type === "string"
@@ -177,7 +226,8 @@ function projectPhaseInventory(
 						boundFragmentHash:
 							fragment.boundFragmentHash,
 						status,
-						attemptCount: 0,
+						attemptCount:
+							attempts.length,
 						ordinal:
 							staticNodes.length +
 							fragmentOrdinal * 100 +
@@ -192,7 +242,9 @@ function projectPhaseInventory(
 	const attempts = phaseAttempts.map(
 		(attempt, attemptOrdinal): RunAttemptProjection => ({
 			attemptId: attempt.attemptId,
-			nodeInstanceId: attempt.phaseId,
+			nodeInstanceId:
+				attempt.nodeInstanceId ??
+				attempt.phaseId,
 			attemptOrdinal,
 			...(attempt.providerName
 				? { provider: attempt.providerName }
@@ -446,9 +498,12 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					stateDir: `${opts.projectRoot}/.taskflow/control/provider-jobs`,
 				}));
 	const llmProvider = opts.llmProvider;
-	/** @deprecated single-provider field — maps to script provider for cancel/reconcile. */
-	const provider = scriptProvider;
 	const reconcileBudget = opts.reconcileBudget ?? DEFAULT_RECONCILE_BUDGET;
+	const providersByName = new Map<string, ExecutionProvider>();
+	providersByName.set(scriptProvider.name, scriptProvider);
+	if (llmProvider) {
+		providersByName.set(llmProvider.name, llmProvider);
+	}
 
 	// Provider handles by runId (memory cache; durable copy on RunProjection.providerHandle)
 	const handles = new Map<string, string>();
@@ -463,6 +518,16 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return run.providerHandle;
 		}
 		return undefined;
+	}
+
+	function resolveRunProvider(
+		run: RunProjection,
+	): ExecutionProvider | undefined {
+		if (run.providerName) {
+			return providersByName.get(run.providerName);
+		}
+		// Legacy script Runs predate the persisted providerName field.
+		return scriptProvider;
 	}
 
 	function attachDenied(op: string): AdmitResult {
@@ -504,7 +569,10 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return true;
 		}
 
-		// isLive is authoritative when implemented (covers quiesceAll + pid liveness).
+		const provider = resolveRunProvider(run);
+		if (!provider) return false;
+
+		// isLive is authoritative when implemented (covers abort + pid liveness).
 		if (typeof provider.isLive === "function") {
 			return !provider.isLive(handle);
 		}
@@ -737,7 +805,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				(attempt) =>
 					attempt.status === "skipped" ||
 					(attempt.status === "completed" &&
-						attempt.type === "approval") ||
+						(attempt.type === "approval" ||
+							attempt.type === "expand")) ||
 					(attempt.status === "completed" &&
 						typeof attempt.providerName === "string" &&
 						attempt.providerName.length > 0 &&
@@ -951,6 +1020,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 								attemptId:
 									startedAttempt.attemptId,
 								nodeInstanceId:
+									startedAttempt.nodeInstanceId ??
 									startedAttempt.phaseId,
 								provider:
 									startedAttempt.providerName,
@@ -990,6 +1060,29 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							linkKind: resolved.linkKind,
 						},
 					});
+					const existing = linkedFragments.find(
+						(candidate) =>
+							candidate.fragment
+								.boundFragmentHash ===
+								fragment.boundFragmentHash &&
+							candidate.link
+								.parentNodeInstanceId ===
+								resolved.parentNodeInstanceId &&
+							candidate.link.originPhaseId ===
+								resolved.originPhaseId &&
+							candidate.link.linkKind ===
+								resolved.linkKind,
+					);
+					if (existing) {
+						return {
+							nodeInstanceIds:
+								boundFragmentNodeInstanceIds(
+									existing.fragment
+										.boundFragmentHash,
+									resolved.fragment.phases,
+								),
+						};
+					}
 					const nowLinked = Date.now();
 					const pendingLink: BoundFragmentLink = {
 						linkId: newId("bfl"),
@@ -1073,6 +1166,13 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						);
 					}
 					linkedFragments.push(durable);
+					return {
+						nodeInstanceIds:
+							boundFragmentNodeInstanceIds(
+								fragment.boundFragmentHash,
+								resolved.fragment.phases,
+							),
+					};
 				},
 			},
 		);
@@ -2106,6 +2206,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 								attemptId:
 									startedAttempt.attemptId,
 								nodeInstanceId:
+									startedAttempt.nodeInstanceId ??
 									startedAttempt.phaseId,
 								provider:
 									startedAttempt.providerName,
@@ -2144,6 +2245,29 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 								linkKind: resolved.linkKind,
 							},
 						});
+						const existing = linkedFragments.find(
+							(candidate) =>
+								candidate.fragment
+									.boundFragmentHash ===
+									fragment.boundFragmentHash &&
+								candidate.link
+									.parentNodeInstanceId ===
+									resolved.parentNodeInstanceId &&
+								candidate.link.originPhaseId ===
+									resolved.originPhaseId &&
+								candidate.link.linkKind ===
+									resolved.linkKind,
+						);
+						if (existing) {
+							return {
+								nodeInstanceIds:
+									boundFragmentNodeInstanceIds(
+										existing.fragment
+											.boundFragmentHash,
+										resolved.fragment.phases,
+									),
+							};
+						}
 						const nowLinked = Date.now();
 						const pendingLink: BoundFragmentLink = {
 							linkId: newId("bfl"),
@@ -2232,6 +2356,13 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 							);
 						}
 						linkedFragments.push(durable);
+						return {
+							nodeInstanceIds:
+								boundFragmentNodeInstanceIds(
+									fragment.boundFragmentHash,
+									resolved.fragment.phases,
+								),
+						};
 					},
 				},
 			);
@@ -2301,7 +2432,6 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			const lastHandle =
 				scheduled.stillRunning?.handle ??
 				[...scheduled.attempts].reverse().find((a) => a.handle)?.handle;
-			const activeProvider = scheduled.stillRunning?.provider ?? scriptProvider;
 			const finalInventory = projectPhaseInventory(
 				phaseRecords,
 				scheduled.attempts,
@@ -2311,13 +2441,6 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			const attemptInventory = finalInventory.attempts;
 			if (lastHandle) {
 				handles.set(runId, lastHandle);
-				// Keep cancel/reconcile on the provider that owns the live handle.
-				if (activeProvider !== scriptProvider) {
-					// Prefer LLM/script that submitted the live job for isLive/cancel.
-					// `provider` alias below still points at script for default paths;
-					// resolveHandle + cancel use handles map + provider.isLive — ensure
-					// cancel uses the right provider by storing name on the run.
-				}
 			}
 			run = {
 				...run,
@@ -2720,8 +2843,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				return casError("TF_INVALID_ARGUMENT", "unsafe commandId or runId");
 			}
 			const principal = opts.principal ?? "local";
-			const requestHash = hashRequest({
-				kind: "cancel-run",
+			const requestHash = hashCancelCommandRequest({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
 				reason: opts.reason,
@@ -2784,9 +2906,10 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 
 			const handle = resolveHandle(runId);
 			let cancellation: Awaited<ReturnType<ExecutionProvider["cancel"]>> | null = null;
-			if (handle) {
+			const owner = resolveRunProvider(requested.run);
+			if (handle && owner) {
 				try {
-					cancellation = await provider.cancel(handle);
+					cancellation = await owner.cancel(handle);
 				} catch {
 					cancellation = { kind: "ambiguous" };
 				}
@@ -3146,8 +3269,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				return casError("TF_INVALID_ARGUMENT", "unsafe commandId or runId");
 			}
 			const principal = opts.principal ?? "local";
-			const requestHash = hashRequest({
-				kind: "approve",
+			const requestHash = hashApproveCommandRequest({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
 				approvalRequestId: opts.approvalRequestId,
@@ -3633,8 +3755,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				return casError("TF_INVALID_ARGUMENT", "unsafe commandId or runId");
 			}
 			const principal = opts.principal ?? "local";
-			const requestHash = hashRequest({
-				kind: "reject",
+			const requestHash = hashRejectCommandRequest({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
 				approvalRequestId: opts.approvalRequestId,

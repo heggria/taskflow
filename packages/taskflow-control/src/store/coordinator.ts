@@ -18,7 +18,11 @@ import {
 	type ReservationState,
 	type SetMaxActiveRunsRequest,
 } from "../types.ts";
-import { hashRequest, newId } from "../hash.ts";
+import {
+	hashForceReleaseCommandRequest,
+	hashSetMaxActiveRunsCommandRequest,
+	newId,
+} from "../hash.ts";
 import { assertSafeId, isSafeId } from "../validate-ids.ts";
 import {
 	coordinatorDir,
@@ -399,7 +403,8 @@ export function openUserCoordinatorStore(
 			assertSafeId(request.expectedControlDomainId, "expectedControlDomainId");
 			assertSafeId(request.expectedRunId, "expectedRunId");
 			return mutate((data) => {
-				const requestHash = hashRequest(request);
+				const requestHash =
+					hashForceReleaseCommandRequest(request);
 				const prior = priorCommand(data, cmd, "forceRelease", requestHash);
 				if (prior) {
 					const reservation = data.reservations.find(
@@ -456,7 +461,10 @@ export function openUserCoordinatorStore(
 				throw new Error("TF_INVALID_ARGUMENT: maxActiveRuns must be integer >= 1");
 			}
 			return mutate((data) => {
-				const requestHash = hashRequest(request);
+				const requestHash =
+					hashSetMaxActiveRunsCommandRequest(
+						request,
+					);
 				const prior = priorCommand(data, cmd, "setMaxActiveRuns", requestHash);
 				if (prior) return prior;
 				if (

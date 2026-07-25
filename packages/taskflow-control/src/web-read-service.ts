@@ -619,43 +619,44 @@ export function createWebReadService(
 								a.controlDomainId.localeCompare(b.controlDomainId, "en"),
 						);
 		const boundedEntries = registryEntries.slice(0, 200);
-		const watermarkProbes: WatermarkProbe[] | undefined =
-			options.resolveHost
-				? boundedEntries.map((entry) => {
-							const mounted = options.resolveHost?.(
-								entry.projectId,
-							entry.controlDomainId,
-						);
-						return mounted
-							? {
-									projectId: entry.projectId,
-									controlDomainId:
-										entry.controlDomainId,
-									nextCommitSeq:
-										mounted.store.nextCommitSeq(),
-									minAvailableCommitSeq:
-										loadCompactionState(
-											mounted.store.projectRoot,
-										).minAvailableCommitSeq,
-								}
-							: {
-									projectId: entry.projectId,
-									controlDomainId:
-										entry.controlDomainId,
-										unavailable: true,
-									};
-						})
-				: undefined;
-		const watermarkFingerprint = watermarkProbes
-			? digestCanonical(watermarkProbes)
-			: undefined;
+		const watermarkProbes: WatermarkProbe[] =
+			boundedEntries.map((entry) => {
+				const mounted =
+					options.resolveHost?.(
+						entry.projectId,
+						entry.controlDomainId,
+					) ??
+					(entry.projectId === host.projectId &&
+					entry.controlDomainId === host.controlDomainId
+						? host
+						: null);
+				return mounted
+					? {
+							projectId: entry.projectId,
+							controlDomainId:
+								entry.controlDomainId,
+							nextCommitSeq:
+								mounted.store.nextCommitSeq(),
+							minAvailableCommitSeq:
+								loadCompactionState(
+									mounted.store.projectRoot,
+								).minAvailableCommitSeq,
+						}
+					: {
+							projectId: entry.projectId,
+							controlDomainId:
+								entry.controlDomainId,
+							unavailable: true,
+						};
+			});
+		const watermarkFingerprint =
+			digestCanonical(watermarkProbes);
 		if (
 			snapshotCacheMs > 0 &&
 			cachedContext &&
 			cachedContext.registryRevision === registryRevision &&
-			(watermarkFingerprint === undefined ||
-				cachedContext.watermarkFingerprint ===
-					watermarkFingerprint) &&
+			cachedContext.watermarkFingerprint ===
+				watermarkFingerprint &&
 			observedAt <= cachedContext.expiresAt
 		) {
 			return cachedContext.value;
@@ -1488,17 +1489,6 @@ export function createWebReadService(
 			).map((artifact) =>
 				projectWebArtifactRef(artifact, receipt.receiptId),
 			);
-			if (receipt.eventManifest.length > 200) {
-				throw new WebReadServiceError({
-					code: "TF_DURABILITY_FAILED",
-					message:
-						"Receipt identity manifest exceeds the Web receipt-detail bound",
-					recoveryAction: "none",
-					sideEffects: "none",
-					projectId: receipt.projectId,
-					controlDomainId: receipt.controlDomainId,
-				});
-			}
 			return {
 				receiptId: receipt.receiptId,
 				projectId: receipt.projectId,
@@ -1508,10 +1498,13 @@ export function createWebReadService(
 				...(receipt.boundFragmentHash
 					? { boundFragmentHash: receipt.boundFragmentHash }
 					: {}),
-				eventManifest: [...receipt.eventManifest],
+				eventManifest: receipt.eventManifest.slice(
+					0,
+					200,
+				),
 				startCommitSeq: receipt.startCommitSeq,
 				endCommitSeq: receipt.endCommitSeq,
-				artifactRefs,
+				artifactRefs: artifactRefs.slice(0, 200),
 				issuedAt: receipt.issuedAt,
 				assurance: receipt.assurance,
 				buildInfo: receipt.buildInfo,
@@ -3820,8 +3813,18 @@ export function createWebReadService(
 						),
 						verification:
 							projected.presentation.verification,
+						eventManifestCount:
+							receipt.eventManifest.length,
+						eventManifestDigest:
+							digestCanonical(
+								receipt.eventManifest,
+							),
 						artifactCount:
 							receipt.artifactRefs.length,
+						artifactRefsDigest:
+							digestCanonical(
+								receipt.artifactRefs,
+							),
 						eventManifest: {
 							items: pageEvents.map((event) => ({
 								eventId: event.eventId,

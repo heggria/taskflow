@@ -24,6 +24,8 @@ export type PhaseRecord = {
 
 export type PhaseAttempt = {
 	phaseId: string;
+	/** Stable runtime identity; differs from phaseId for BoundFragment nodes. */
+	nodeInstanceId?: string;
 	type: string;
 	status: "completed" | "failed" | "skipped" | "still-running";
 	output?: string;
@@ -90,6 +92,10 @@ export type ResolvedDynamicFragment = {
 		phases: Array<Record<string, unknown>>;
 		[key: string]: unknown;
 	};
+};
+
+export type ResolvedDynamicFragmentBinding = {
+	readonly nodeInstanceIds: Readonly<Record<string, string>>;
 };
 
 export interface PhaseSchedulerProviders {
@@ -185,6 +191,7 @@ function evalWhen(whenExpr: string | undefined, steps: Record<string, string>): 
 function resolveDynamicFragment(
 	phase: PhaseRecord,
 	steps: Record<string, string>,
+	parentNodeInstanceId: string,
 ): ResolvedDynamicFragment | { error: string } {
 	let value = phase.def;
 	if (typeof value === "string") {
@@ -247,7 +254,7 @@ function resolveDynamicFragment(
 	}
 	return {
 		originPhaseId: phase.id,
-		parentNodeInstanceId: phase.id,
+		parentNodeInstanceId,
 		linkKind:
 			phase.expandMode === "graft"
 				? "graft-promote"
@@ -318,7 +325,15 @@ export async function schedulePhases(
 		onFragmentResolved?: (
 			fragment: ResolvedDynamicFragment,
 			settledAttempts: readonly PhaseAttempt[],
-		) => void | Promise<void>;
+		) =>
+			| ResolvedDynamicFragmentBinding
+			| void
+			| Promise<ResolvedDynamicFragmentBinding | void>;
+		/**
+		 * Internal/runtime binding supplied after a BoundFragment link commit.
+		 * Root programs omit it and use phaseId as nodeInstanceId.
+		 */
+		nodeInstanceIds?: Readonly<Record<string, string>>;
 		/** Exact durable continuation loaded by ControlHost after approval. */
 		resume?: PhaseScheduleResume;
 	},
@@ -337,9 +352,12 @@ export async function schedulePhases(
 	if (
 		resumedAttempts.some(
 			(attempt) =>
-				!phaseIds.has(attempt.phaseId) ||
 				(attempt.status !== "completed" &&
-					attempt.status !== "skipped"),
+					attempt.status !== "skipped") ||
+				((attempt.nodeInstanceId === undefined ||
+					attempt.nodeInstanceId ===
+						attempt.phaseId) &&
+					!phaseIds.has(attempt.phaseId)),
 		)
 	) {
 		return {
@@ -352,6 +370,13 @@ export async function schedulePhases(
 	}
 	const resumedPhaseIds = new Set<string>();
 	for (const attempt of resumedAttempts) {
+		const nodeInstanceId =
+			attempt.nodeInstanceId ?? attempt.phaseId;
+		if (
+			nodeInstanceId !== attempt.phaseId
+		) {
+			continue;
+		}
 		if (resumedPhaseIds.has(attempt.phaseId)) {
 			return {
 				ok: false,
@@ -389,8 +414,13 @@ export async function schedulePhases(
 
 	for (const phase of ordered) {
 		const type = phase.type ?? "agent";
+		const nodeInstanceId =
+			opts.nodeInstanceIds?.[phase.id] ?? phase.id;
 		const resumed = attempts.find(
-			(attempt) => attempt.phaseId === phase.id,
+			(attempt) =>
+				(attempt.nodeInstanceId ??
+					attempt.phaseId) ===
+				nodeInstanceId,
 		);
 		if (resumed) {
 			if (resumed.status === "completed") {
@@ -406,12 +436,20 @@ export async function schedulePhases(
 
 		// Upstream deps failed → skip remaining (fail closed for success)
 		const depFailed = depsOf(phase).some((d) => {
-			const a = attempts.find((x) => x.phaseId === d);
+			const dependencyNodeInstanceId =
+				opts.nodeInstanceIds?.[d] ?? d;
+			const a = attempts.find(
+				(x) =>
+					(x.nodeInstanceId ??
+						x.phaseId) ===
+					dependencyNodeInstanceId,
+			);
 			return a?.status === "failed";
 		});
 		if (depFailed) {
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "skipped",
 				error: "upstream dependency failed",
@@ -424,6 +462,7 @@ export async function schedulePhases(
 		if (!evalWhen(phase.when, phaseOutputs)) {
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "skipped",
 				error: "when guard false",
@@ -454,6 +493,7 @@ export async function schedulePhases(
 				previous = output;
 				attempts.push({
 					phaseId: phase.id,
+					nodeInstanceId,
 					type,
 					status: "completed",
 					output,
@@ -482,10 +522,12 @@ export async function schedulePhases(
 			const resolved = resolveDynamicFragment(
 				phaseClone,
 				phaseOutputs,
+				nodeInstanceId,
 			);
 			if ("error" in resolved) {
 				attempts.push({
 					phaseId: phase.id,
+					nodeInstanceId,
 					type,
 					status: "failed",
 					error: resolved.error,
@@ -497,10 +539,122 @@ export async function schedulePhases(
 			}
 			phaseClone.def = resolved.fragment;
 			try {
-				await opts.onFragmentResolved?.(
-					resolved,
-					attempts,
+				const binding =
+					await opts.onFragmentResolved?.(
+						resolved,
+						attempts,
+					);
+				const childNodeInstanceIds =
+					binding?.nodeInstanceIds ??
+					Object.fromEntries(
+						resolved.fragment.phases.flatMap(
+							(child) =>
+								typeof child.id ===
+									"string"
+									? [
+											[
+												child.id,
+												`${nodeInstanceId}.${child.id}`,
+											],
+										]
+									: [],
+						),
+					);
+				const childScheduled =
+					await schedulePhases(
+						resolved.fragment,
+						providers,
+						{
+							runId: `${opts.runId}-${phase.id}`,
+							cwd: opts.cwd,
+							phaseDeadlineMs,
+							nodeInstanceIds:
+								childNodeInstanceIds,
+							onAttemptStarted:
+								opts.onAttemptStarted
+									? (
+											started,
+											settled,
+										) =>
+											opts.onAttemptStarted!(
+												started,
+												[
+													...attempts,
+													...settled,
+												],
+											)
+									: undefined,
+							onFragmentResolved:
+								opts.onFragmentResolved,
+						},
+					);
+				attempts.push(
+					...childScheduled.attempts,
 				);
+				if (
+					childScheduled.approvalRequired
+				) {
+					const error =
+						"approval inside a dynamic fragment is not resumable by this scheduler";
+					attempts.push({
+						phaseId: phase.id,
+						nodeInstanceId,
+						type,
+						status: "failed",
+						error,
+						attemptId,
+						endedAt: Date.now(),
+					});
+					return {
+						ok: false,
+						error,
+						attempts,
+						phaseOutputs,
+					};
+				}
+				if (childScheduled.stillRunning) {
+					return {
+						ok: false,
+						error:
+							childScheduled.error,
+						attempts,
+						phaseOutputs,
+						stillRunning:
+							childScheduled.stillRunning,
+					};
+				}
+				if (!childScheduled.ok) {
+					const error =
+						childScheduled.error ??
+						"dynamic fragment failed";
+					attempts.push({
+						phaseId: phase.id,
+						nodeInstanceId,
+						type,
+						status: "failed",
+						error,
+						attemptId,
+						endedAt: Date.now(),
+					});
+					lastFailed = error;
+					continue;
+				}
+				const output =
+					childScheduled.finalOutput ?? "";
+				phaseOutputs[phase.id] = output;
+				previous = output;
+				attempts.push({
+					phaseId: phase.id,
+					nodeInstanceId,
+					type,
+					status: "completed",
+					output,
+					attemptId,
+					startedAt:
+						attemptObservedAt,
+					endedAt: Date.now(),
+				});
+				continue;
 			} catch (cause) {
 				const error =
 					cause instanceof Error
@@ -508,6 +662,7 @@ export async function schedulePhases(
 						: "fragment checkpoint failed";
 				attempts.push({
 					phaseId: phase.id,
+					nodeInstanceId,
 					type,
 					status: "failed",
 					error,
@@ -548,6 +703,7 @@ export async function schedulePhases(
 				const err = `no LLM ExecutionProvider for phase type '${type}' (phase ${phase.id})`;
 				attempts.push({
 					phaseId: phase.id,
+					nodeInstanceId,
 					type,
 					status: "failed",
 					error: err,
@@ -563,6 +719,7 @@ export async function schedulePhases(
 			const err = `unsupported phase type '${type}' on ControlHost scheduler`;
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "failed",
 				error: err,
@@ -584,6 +741,7 @@ export async function schedulePhases(
 		if (submit.kind === "rejected") {
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "failed",
 				error: submit.reason,
@@ -601,6 +759,7 @@ export async function schedulePhases(
 			const err = "provider accepted without handle";
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "failed",
 				error: err,
@@ -619,6 +778,7 @@ export async function schedulePhases(
 
 		const startedAttempt: PhaseAttempt = {
 			phaseId: phase.id,
+			nodeInstanceId,
 			type,
 			status: "still-running",
 			providerName: provider.name,
@@ -657,6 +817,7 @@ export async function schedulePhases(
 			previous = out;
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "completed",
 				output: out,
@@ -671,6 +832,7 @@ export async function schedulePhases(
 			const err = collected.error ?? "phase failed";
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "failed",
 				error: err,
@@ -685,6 +847,7 @@ export async function schedulePhases(
 		} else if (collected.kind === "cancelled") {
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "failed",
 				error: "phase cancelled",
@@ -700,6 +863,7 @@ export async function schedulePhases(
 			// still-running after budget → hand off to ControlHost reconcile (do not fail-terminal)
 			attempts.push({
 				phaseId: phase.id,
+				nodeInstanceId,
 				type,
 				status: "still-running",
 				error: "phase still-running after deadline",

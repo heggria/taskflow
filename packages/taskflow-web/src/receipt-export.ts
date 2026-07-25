@@ -26,7 +26,6 @@ export type CollectWebReceiptExportInput = Readonly<{
 }>;
 
 const RECEIPT_EXPORT_PAGE_LIMIT = 200;
-const RECEIPT_EXPORT_MAX_PAGES = 200;
 
 function canonicalJsonValue(value: unknown): unknown {
 	if (Array.isArray(value)) {
@@ -69,18 +68,47 @@ function assertReceiptPageIdentity(
 		throw new Error("Receipt export identity changed while reading it");
 	}
 	if (
-		JSON.stringify(canonicalJsonValue(receipt)) !==
+		JSON.stringify(
+			canonicalJsonValue({
+				receipt,
+				eventManifestCount:
+					page.eventManifestCount ??
+					receipt.eventManifest.length,
+				eventManifestDigest:
+					page.eventManifestDigest ?? null,
+				artifactCount: page.artifactCount,
+				artifactRefsDigest:
+					page.artifactRefsDigest ?? null,
+			}),
+		) !==
 		firstReceiptCanonical
 	) {
 		throw new Error("Receipt export changed between pages");
 	}
 }
 
-function assertCompleteManifest(
+async function eventIdDigest(
+	eventIds: readonly string[],
+): Promise<string> {
+	const bytes = new TextEncoder().encode(
+		JSON.stringify(eventIds),
+	);
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		bytes,
+	);
+	return `sha256:${Array.from(new Uint8Array(digest))
+		.map((value) => value.toString(16).padStart(2, "0"))
+		.join("")}`;
+}
+
+async function assertCompleteManifest(
 	receipt: WebReceiptPage["receipt"],
 	entries: readonly WebReceiptManifestEntry[],
-): void {
-	if (entries.length !== receipt.eventManifest.length) {
+	expectedCount: number,
+	expectedDigest: string,
+): Promise<void> {
+	if (entries.length !== expectedCount) {
 		throw new Error("Receipt export is missing manifest entries");
 	}
 	const seen = new Set<string>();
@@ -88,7 +116,9 @@ function assertCompleteManifest(
 		const entry = entries[index]!;
 		if (
 			seen.has(entry.eventId) ||
-			entry.eventId !== receipt.eventManifest[index] ||
+			(index < receipt.eventManifest.length &&
+				entry.eventId !==
+					receipt.eventManifest[index]) ||
 			entry.commitSeq < receipt.startCommitSeq ||
 			entry.commitSeq > receipt.endCommitSeq ||
 			(index > 0 &&
@@ -100,6 +130,15 @@ function assertCompleteManifest(
 			);
 		}
 		seen.add(entry.eventId);
+	}
+	if (
+		(await eventIdDigest(
+			entries.map((entry) => entry.eventId),
+		)) !== expectedDigest
+	) {
+		throw new Error(
+			"Receipt export manifest digest does not match the Receipt",
+		);
 	}
 }
 
@@ -120,12 +159,10 @@ export async function collectWebReceiptExport(
 	let firstReceiptCanonical = "";
 	const seenCursors = new Set<string>();
 	const eventManifest: WebReceiptManifestEntry[] = [];
+	let pageCount = 0;
 
-	for (
-		let pageIndex = 0;
-		pageIndex < RECEIPT_EXPORT_MAX_PAGES;
-		pageIndex += 1
-	) {
+	while (true) {
+		pageCount += 1;
 		const page = await input.client.runReceipt({
 			params: input.params,
 			query: {
@@ -139,7 +176,21 @@ export async function collectWebReceiptExport(
 		if (!firstPage) {
 			firstPage = page;
 			firstReceiptCanonical = JSON.stringify(
-				canonicalJsonValue(page.receipt),
+				canonicalJsonValue({
+					receipt: page.receipt,
+					eventManifestCount:
+						page.eventManifestCount ??
+						page.receipt.eventManifest
+							.length,
+					eventManifestDigest:
+						page.eventManifestDigest ??
+						null,
+					artifactCount:
+						page.artifactCount,
+					artifactRefsDigest:
+						page.artifactRefsDigest ??
+						null,
+				}),
 			);
 		}
 		assertReceiptPageIdentity(
@@ -147,10 +198,26 @@ export async function collectWebReceiptExport(
 			input,
 			firstReceiptCanonical,
 		);
+		const expectedManifestCount =
+			page.eventManifestCount ??
+			page.receipt.eventManifest.length;
+		const expectedManifestDigest =
+			page.eventManifestDigest ??
+			(await eventIdDigest(
+				page.receipt.eventManifest,
+			));
+		if (
+			pageCount >
+			Math.max(1, expectedManifestCount)
+		) {
+			throw new Error(
+				"Receipt export cursor exceeded the manifest progress bound",
+			);
+		}
 		eventManifest.push(...page.eventManifest.items);
 		if (
 			eventManifest.length >
-			page.receipt.eventManifest.length
+			expectedManifestCount
 		) {
 			throw new Error(
 				"Receipt export contains more events than the Receipt",
@@ -158,13 +225,18 @@ export async function collectWebReceiptExport(
 		}
 		const nextCursor = page.eventManifest.nextCursor;
 		if (!nextCursor) {
-			assertCompleteManifest(page.receipt, eventManifest);
+			await assertCompleteManifest(
+				page.receipt,
+				eventManifest,
+				expectedManifestCount,
+				expectedManifestDigest,
+			);
 			if (
-				page.artifactCount !==
-				page.receipt.artifactRefs.length
+				page.receipt.artifactRefs.length >
+				page.artifactCount
 			) {
 				throw new Error(
-					"Receipt export artifact count is inconsistent",
+					"Receipt export artifact preview exceeds its count",
 				);
 			}
 			return {
@@ -175,13 +247,19 @@ export async function collectWebReceiptExport(
 				eventManifest,
 			};
 		}
+		if (
+			page.eventManifest.items.length === 0
+		) {
+			throw new Error(
+				"Receipt export cursor did not make bounded progress",
+			);
+		}
 		if (seenCursors.has(nextCursor)) {
 			throw new Error("Receipt export cursor repeated");
 		}
 		seenCursors.add(nextCursor);
 		cursor = nextCursor;
 	}
-	throw new Error("Receipt export exceeded its page bound");
 }
 
 export function serializeWebReceiptExport(

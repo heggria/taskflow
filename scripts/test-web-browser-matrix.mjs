@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,20 @@ const REQUIRED_SENSITIVE_ARTIFACT_ASSERTIONS = Object.freeze([
 	"sensitiveArtifactDeclineIssuedNoRequest",
 	"sensitiveArtifactAcknowledgementObserved",
 ]);
+const HARNESS_PATHS = Object.freeze([
+	"packages/taskflow-cli/test/e2e-web-console.mts",
+	"scripts/test-web-browser-matrix.mjs",
+]);
+
+function sha256File(relativePath) {
+	return `sha256:${createHash("sha256")
+		.update(
+			fs.readFileSync(
+				path.join(repositoryRoot, relativePath),
+			),
+		)
+		.digest("hex")}`;
+}
 
 function run(command, args, env = process.env) {
 	const result = spawnSync(command, args, {
@@ -154,7 +169,7 @@ const outputDir = path.join(
 );
 fs.mkdirSync(outputDir, { recursive: true });
 const matrix = {
-	schemaVersion: 3,
+	schemaVersion: 4,
 	status: "pass",
 	measuredAt: new Date().toISOString(),
 	candidate: firstReport.candidate,
@@ -163,6 +178,10 @@ const matrix = {
 		platform: process.platform,
 		arch: process.arch,
 	},
+	harness: HARNESS_PATHS.map((relativePath) => ({
+		path: relativePath,
+		sha256: sha256File(relativePath),
+	})),
 	engines: reports.map((report) => ({
 		browserEngine: report.browserEngine,
 		...(report.browserChannel

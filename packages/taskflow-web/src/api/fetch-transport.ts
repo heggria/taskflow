@@ -106,12 +106,17 @@ function artifactMetadata(response: Response): WebArtifactMetadata {
 	const size = Number(response.headers.get("content-length") ?? "0");
 	const digest =
 		response.headers.get("etag")?.replace(/^"|"$/gu, "") ?? "sha256:unknown";
-	const disposition = response.headers
-		.get("content-disposition")
-		?.toLowerCase()
+	const contentDisposition =
+		response.headers.get("content-disposition") ?? "";
+	const disposition = contentDisposition
+		.toLowerCase()
 		.startsWith("inline")
 		? "inline"
 		: "attachment";
+	const fileName =
+		contentDisposition.match(
+			/(?:^|;)\s*filename="([A-Za-z0-9._ -]{1,160})"\s*(?:;|$)/u,
+		)?.[1];
 	const redactionClass = response.headers.get(
 		"x-taskflow-redaction-class",
 	);
@@ -120,6 +125,7 @@ function artifactMetadata(response: Response): WebArtifactMetadata {
 		size,
 		mediaType:
 			response.headers.get("content-type") ?? "application/octet-stream",
+		...(fileName ? { fileName } : {}),
 		contentDisposition: disposition,
 		redactionClass,
 	};

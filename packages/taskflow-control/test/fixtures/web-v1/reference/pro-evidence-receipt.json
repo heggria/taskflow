@@ -181,7 +181,10 @@
         ]
       }
     },
+    "eventManifestCount": 1,
+    "eventManifestDigest": "sha256:34b2cb5e57cb2d7d297a1f534d560b3439c740c61adf09bc2178ff9a6eb0de19",
     "artifactCount": 3,
+    "artifactRefsDigest": "sha256:d42a3f0ec024ee140fb8dc7c8dcae4c91b9ac86423a4e7b9a9938e867bb93003",
     "eventManifest": {
       "items": [
         {

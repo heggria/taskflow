@@ -1457,7 +1457,10 @@ export const WebReceiptViewSchema = Type.Object(
 	{
 		receipt: WebReceiptDetailSchema,
 		verification: WebVerificationPresentationSchema,
+		eventManifestCount: NonNegativeIntSchema,
+		eventManifestDigest: DigestSchema,
 		artifactCount: NonNegativeIntSchema,
+		artifactRefsDigest: DigestSchema,
 		eventManifest: webPageSchema(WebReceiptManifestEntrySchema),
 		sourceObservation: WebSourceObservationSchema,
 	},
@@ -2063,7 +2066,13 @@ export const WebArtifactMetadataSchema = Type.Object(
 		digest: DigestSchema,
 		size: NonNegativeIntSchema,
 		mediaType: Type.String({ minLength: 1, maxLength: 512 }),
-		fileName: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+		fileName: Type.Optional(
+			Type.String({
+				minLength: 1,
+				maxLength: 160,
+				pattern: "^[A-Za-z0-9._ -]+$",
+			}),
+		),
 		redactionClass: webLiteralUnion([
 			"public",
 			"project",
@@ -2121,8 +2130,17 @@ export const WebApprovalDetailConsumerSchema = Type.Object(
 export const WebAttentionItemConsumerSchema = webAdditiveConsumerSchema(
 	WebAttentionItemSchema,
 );
-export const WebReceiptViewConsumerSchema =
-	webAdditiveConsumerSchema(WebReceiptViewSchema);
+export const WebReceiptViewConsumerSchema = Type.Object(
+	{
+		...WebReceiptViewSchema.properties,
+		eventManifestCount: Type.Optional(
+			NonNegativeIntSchema,
+		),
+		eventManifestDigest: Type.Optional(DigestSchema),
+		artifactRefsDigest: Type.Optional(DigestSchema),
+	},
+	{ additionalProperties: true, "x-web-additive": true },
+);
 export const WebPolicyExplanationConsumerSchema = webAdditiveConsumerSchema(
 	WebPolicyExplanationSchema,
 );
@@ -2893,15 +2911,28 @@ export class WebClientCodecError extends Error {
 	override readonly name = "WebClientCodecError";
 }
 
-export type WebClientRequestOptions = {
+type WebClientRequestOptionsBase = {
 	readonly signal?: AbortSignal;
+};
+
+export type WebClientRequestOptions<Id extends WebEndpointId> =
+	WebClientRequestOptionsBase &
+		(Id extends "artifact"
+			? {
+					readonly sensitiveArtifactAcknowledgement?: "download";
+				}
+			: {
+					readonly sensitiveArtifactAcknowledgement?: never;
+				});
+
+type WebClientRequestOptionsInternal = WebClientRequestOptionsBase & {
 	readonly sensitiveArtifactAcknowledgement?: "download";
 };
 
 export type WebGeneratedClient = {
 	[Id in WebEndpointId]: (
 		input: WebEndpointInput<(typeof WEB_ENDPOINTS)[Id]>,
-		options?: WebClientRequestOptions,
+		options?: WebClientRequestOptions<Id>,
 	) => Promise<WebEndpointResult<(typeof WEB_ENDPOINTS)[Id]>>;
 };
 
@@ -2913,7 +2944,7 @@ export function createWebClient(
 			const endpoint = WEB_ENDPOINTS[id];
 			const method = async (
 				input: WebEndpointInput<typeof endpoint>,
-				options: WebClientRequestOptions = {},
+				options: WebClientRequestOptionsInternal = {},
 			): Promise<unknown> => {
 				if (
 					options.sensitiveArtifactAcknowledgement !== undefined &&
@@ -2951,6 +2982,11 @@ export function createWebClient(
 							}
 						: {}),
 				});
+				if (Value.Check(WebApiErrorResponseSchema, response)) {
+					throw new WebClientFailureError(
+						response as WebApiErrorResponse,
+					);
+				}
 				if (endpoint.responseKind === "bytes") {
 					const byteResponse = response as {
 						metadata?: unknown;
@@ -2978,11 +3014,6 @@ export function createWebClient(
 				if (endpoint.responseKind === "event-stream") return response;
 				if (Value.Check(endpoint.consumerSuccessResponseSchema, response)) {
 					return (response as { data: unknown }).data;
-				}
-				if (Value.Check(WebApiErrorResponseSchema, response)) {
-					throw new WebClientFailureError(
-						response as WebApiErrorResponse,
-					);
 				}
 				throw new WebClientCodecError(
 					`${id} response did not match its P17 consumer codec`,

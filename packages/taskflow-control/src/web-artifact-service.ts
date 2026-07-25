@@ -218,7 +218,7 @@ export function createWebArtifactHandlers(
 				!body ||
 				body.byteLength !== expectedSize ||
 				!webArtifactWithinDownloadBudget(body.byteLength) ||
-				`sha256:${sha256Hex(Buffer.from(body))}` !==
+				`sha256:${sha256Hex(body)}` !==
 					params.digest ||
 				reachable.some(
 					(artifact) => artifact.size !== expectedSize,

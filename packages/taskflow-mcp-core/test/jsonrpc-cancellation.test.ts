@@ -274,7 +274,7 @@ test("a handler that rejects after cancellation is observed, never unhandled", a
 	}
 });
 
-test("taskflow_run forwards the JSON-RPC AbortSignal into the host runner", async () => {
+test("taskflow_run composes JSON-RPC cancellation into the host runner signal", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "taskflow-mcp-signal-"));
 	try {
 		const agentDir = join(cwd, ".pi", "agents");
@@ -300,10 +300,14 @@ test("taskflow_run forwards the JSON-RPC AbortSignal into the host runner", asyn
 				},
 			},
 			{ requestId: 1, signal: controller.signal },
-		)) as { isError?: boolean };
-		assert.equal(result.isError, false);
-		assert.equal(seenSignal, controller.signal);
-	} finally {
+			)) as { isError?: boolean };
+			assert.equal(result.isError, false);
+			const forwarded = seenSignal;
+			assert.ok(forwarded);
+			assert.equal(forwarded.aborted, false);
+			controller.abort();
+			assert.equal(forwarded.aborted, true);
+		} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
 });

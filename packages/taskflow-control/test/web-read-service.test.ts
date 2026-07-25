@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import { Value } from "typebox/value";
 import { createControlHost } from "../src/control-host.ts";
+import { linkProgram } from "../src/linker.ts";
 import {
 	createMockExecutionProvider,
 	type ExecutionProvider,
@@ -16,7 +17,11 @@ import {
 import {
 	createWebCursorCodec,
 } from "../src/web-cursor.ts";
-import type { ArtifactRecord, ControlEvent } from "../src/types.ts";
+import type {
+	ArtifactRecord,
+	ControlEvent,
+	Receipt,
+} from "../src/types.ts";
 import {
 	WebArtifactRefSchema,
 	WebArtifactPageSchema,
@@ -738,6 +743,193 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 				(target) => target.reuseDecision === "unavailable",
 			),
 		);
+	} finally {
+		host.close();
+		temp.cleanup();
+	}
+});
+
+test("Receipt core stays bounded while 205 durable events paginate completely", async () => {
+	const temp = tempWorkspace();
+	const observedAt = 1_800_000_050_000;
+	const context = handlerContext(observedAt);
+	const host = createControlHost({
+		projectRoot: temp.project,
+		controlMode: "standalone",
+		skipSingleton: true,
+		allowMockProvider: true,
+		env: temp.env,
+	});
+	try {
+		const linked = linkProgram({
+			program: {
+				name: "large-receipt",
+				phases: [
+					{
+						id: "main",
+						type: "script",
+						run: "printf done",
+						final: true,
+					},
+				],
+			},
+		});
+		assert.equal(linked.ok, true);
+		if (!linked.ok) return;
+		const runId = "run-large-receipt";
+		const receiptId = "receipt-large-receipt";
+		const eventIds = Array.from(
+			{ length: 205 },
+			(_, index) =>
+				`event-large-receipt-${String(index).padStart(3, "0")}`,
+		);
+		const events: ControlEvent[] = eventIds.map(
+			(eventId, index) => ({
+				eventId,
+				schemaVersion: 1,
+				controlDomainId:
+					host.controlDomainId,
+				streamId: runId,
+				streamSeq: index,
+				commitSeq: 0,
+				projectId: host.projectId,
+				recordedAt: observedAt + index,
+				payload:
+					index === 0
+						? {
+								type: "RunReceived",
+								runId,
+								boundPlanHash:
+									linked.boundPlan.boundPlanHash,
+							}
+						: index === eventIds.length - 1
+						? {
+								type: "RunStatusChanged",
+								runId,
+								status: "completed",
+								stage: "terminal",
+							}
+						: {
+								type: "Generic",
+								kind: `LargeReceipt${index}`,
+							},
+			}),
+		);
+		const receipt: Receipt = {
+			receiptId,
+			controlDomainId: host.controlDomainId,
+			projectId: host.projectId,
+			runId,
+			boundPlanHash:
+				linked.boundPlan.boundPlanHash,
+			eventManifest: eventIds,
+			startCommitSeq: 1,
+			endCommitSeq: 205,
+			artifactRefs: [],
+			assurance: {
+				journalContinuity: "ok",
+				providerOutcome: "ok",
+				artifactIntegrity: "ok",
+				provenance: "ok",
+			},
+			buildInfo: {
+				packageVersion: "0.3.0-beta.2",
+				controlSchemaVersion: 1,
+			},
+			issuedAt: observedAt + 205,
+		};
+		host.store.commit({
+			events,
+			boundPlan: linked.boundPlan,
+			receipt,
+			run: {
+				runId,
+				projectId: host.projectId,
+				controlDomainId:
+					host.controlDomainId,
+				status: "completed",
+				stage: "terminal",
+				boundPlanHash:
+					linked.boundPlan.boundPlanHash,
+				receiptId,
+				finalOutput: "done",
+				needsOperator: false,
+				createdAt: observedAt,
+				updatedAt: observedAt + 205,
+				runVersion: 1,
+			},
+		});
+		const run = host.store.getRun(runId)!;
+		const handlers = createInitialWebReadHandlers(host, {
+			now: () => observedAt + 300,
+			cursorCodec: createWebCursorCodec({
+				key: Buffer.alloc(32, 44),
+				listenerId: context.listenerId,
+				now: () => observedAt + 300,
+			}),
+		});
+		const params = {
+			projectId: host.projectId,
+			controlDomainId: host.controlDomainId,
+			runId,
+		};
+		const detail = await handlers.runDetail(
+			{ params, query: {}, body: {} },
+			context,
+		);
+		assert.equal(
+			Value.Check(WebRunDetailSchema, detail),
+			true,
+		);
+		assert.equal(
+			detail.receipt?.eventManifest.length,
+			200,
+		);
+
+		const pagedIds: string[] = [];
+		let cursor: string | undefined;
+		do {
+			const page = await handlers.runReceipt(
+				{
+					params,
+					query: {
+						expectedRunVersion:
+							run.runVersion,
+						expectedReceiptId:
+							receiptId,
+						limit: 100,
+						...(cursor
+							? { cursor }
+							: {}),
+					},
+					body: {},
+				},
+				context,
+			);
+			assert.equal(
+				Value.Check(
+					WebReceiptViewSchema,
+					page,
+				),
+				true,
+			);
+			assert.equal(
+				page.eventManifestCount,
+				205,
+			);
+			assert.match(
+				page.eventManifestDigest,
+				/^sha256:[a-f0-9]{64}$/u,
+			);
+			pagedIds.push(
+				...page.eventManifest.items.map(
+					(event) => event.eventId,
+				),
+			);
+			cursor =
+				page.eventManifest.nextCursor;
+		} while (cursor);
+		assert.deepEqual(pagedIds, eventIds);
 	} finally {
 		host.close();
 		temp.cleanup();
@@ -1528,11 +1720,6 @@ test("aggregate snapshot cache reuses unchanged watermarks and invalidates on co
 		const service = createInitialWebReadService(host, {
 			now: () => observedAt,
 			snapshotCacheMs: 10 * 60_000,
-			resolveHost: (projectId, controlDomainId) =>
-				projectId === host.projectId &&
-				controlDomainId === host.controlDomainId
-					? host
-					: null,
 		});
 		const first = service.readOverview();
 		observedAt = 2_000;
