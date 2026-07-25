@@ -23,6 +23,17 @@ export type WebSessionLifecycleEvent =
 export const INITIAL_WEB_SESSION_LIFECYCLE_STATE: WebSessionLifecycleState =
 	Object.freeze({});
 
+/**
+ * A bootstrap request can observe 401 and notify the session reducer before
+ * its rejected promise reaches the boot catch. The terminal session screen is
+ * authoritative and must not be overwritten by a generic boot failure.
+ */
+export function shouldSurfaceWebBootFailure(
+	state: WebSessionLifecycleState,
+): boolean {
+	return state.terminatedScope === undefined;
+}
+
 export function reduceWebSessionLifecycle(
 	state: WebSessionLifecycleState,
 	event: WebSessionLifecycleEvent,

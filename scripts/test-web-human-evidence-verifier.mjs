@@ -133,8 +133,9 @@ function completeZhReview(template, binding, manifest, role) {
     zhCN: manifest.contentCatalogs.catalogDigests["zh-CN"],
   };
   record.reviewedCoverage = {
-    projectedKeys: 149,
-    staticKeys: 188,
+    projectedKeys:
+      manifest.contentCatalogs.keyCounts.projected,
+    staticKeys: manifest.contentCatalogs.keyCounts.static,
     screenFamilies: record.screenResults.map(
       ({ screenId }) => screenId,
     ),
@@ -197,11 +198,14 @@ export function runWebHumanEvidenceVerifierSelfTest() {
     const zhRoot = path.join(temporaryRoot, "zh-cn-reviews");
     fs.mkdirSync(sessionsRoot);
     fs.mkdirSync(zhRoot);
-    const buildCommit = execFileSync(
-      "git",
-      ["rev-parse", "HEAD"],
-      { cwd: repositoryRoot, encoding: "utf8" },
-    ).trim();
+    const renderEvidence = cloneJson(
+      path.join(referenceRoot, "render-evidence.json"),
+    );
+    assert.equal(
+      renderEvidence.evidenceVersion,
+      "taskflow-web-reference-render.v2",
+    );
+    const buildCommit = renderEvidence.candidate.gitCommit;
     const binding = {
       buildCommit,
       referenceManifestSha256: sha256File(
@@ -273,6 +277,20 @@ export function runWebHumanEvidenceVerifierSelfTest() {
     assert.equal(verified.buildCommit, buildCommit);
     assert.equal(verified.sessionRecordSha256.length, 5);
     assert.equal(verified.zhCNReviewRecordSha256.length, 2);
+
+    const wrongAncestor = execFileSync(
+      "git",
+      ["rev-parse", `${buildCommit}^`],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    ).trim();
+    summary.buildCommit = wrongAncestor;
+    writeJson(summaryPath, summary);
+    assert.throws(
+      () => verifyWebHumanEvidence(temporaryRoot),
+      /exact rendered candidate commit/u,
+    );
+    summary.buildCommit = buildCommit;
+    writeJson(summaryPath, summary);
 
     const browserAt = cloneJson(
       path.join(

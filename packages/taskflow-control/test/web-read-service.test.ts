@@ -16,8 +16,9 @@ import {
 import {
 	createWebCursorCodec,
 } from "../src/web-cursor.ts";
-import type { ControlEvent } from "../src/types.ts";
+import type { ArtifactRecord, ControlEvent } from "../src/types.ts";
 import {
+	WebArtifactRefSchema,
 	WebArtifactPageSchema,
 	WebApprovalDetailSchema,
 	WebApprovalPageSchema,
@@ -43,6 +44,7 @@ import {
 	WebReadServiceError,
 	createInitialWebReadHandlers,
 	createInitialWebReadService,
+	projectWebArtifactRef,
 } from "../src/web-read-service.ts";
 import { WEB_ENDPOINTS } from "../src/web-protocol.ts";
 
@@ -59,6 +61,39 @@ function tempWorkspace() {
 		cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
 	};
 }
+
+test("Artifact projection makes direct, acknowledged, and blocked disclosure explicit", () => {
+	const base: ArtifactRecord = {
+		artifactId: "artifact-disclosure",
+		projectId: "project-disclosure",
+		controlDomainId: "domain-disclosure",
+		digest: `sha256:${"a".repeat(64)}`,
+		size: 12,
+		mediaType: "application/octet-stream",
+		role: "result",
+		storageClass: "control-store",
+		redactionClass: "project",
+		createdAt: 1_900_000_000_000,
+	};
+	const direct = projectWebArtifactRef(base);
+	const sensitive = projectWebArtifactRef({
+		...base,
+		redactionClass: "sensitive",
+	});
+	const secret = projectWebArtifactRef({
+		...base,
+		redactionClass: "secret",
+	});
+	assert.equal(Value.Check(WebArtifactRefSchema, direct), true);
+	assert.equal(Value.Check(WebArtifactRefSchema, sensitive), true);
+	assert.equal(Value.Check(WebArtifactRefSchema, secret), true);
+	assert.equal(direct.disclosure.access, "direct");
+	assert.equal(
+		sensitive.disclosure.access,
+		"acknowledgement-required",
+	);
+	assert.equal(secret.disclosure.access, "blocked");
+});
 
 function handlerContext(observedAt: number) {
 	return {
@@ -460,6 +495,18 @@ test("Run handler projects durable truth and paginates without loss or duplicati
 				.map((event) => event.commitSeq)
 				.sort((left, right) => left - right),
 		);
+		assert.ok(
+			timelineItems.every(
+				(event) =>
+					typeof (
+						event as {
+							summary?: {
+								key?: unknown;
+							};
+						}
+					).summary?.key === "string",
+			),
+		);
 	} finally {
 		host.close();
 		temp.cleanup();
@@ -637,6 +684,13 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 			(artifact) => artifact.role === "final-output",
 		);
 		assert.equal(finalArtifact?.integrity, "ok");
+		assert.equal(finalArtifact?.disclosure.access, "direct");
+		assert.equal(
+			finalArtifact?.disclosure.access === "direct"
+				? finalArtifact.disclosure.action.key
+				: undefined,
+			"artifact.download.action",
+		);
 		assert.equal(
 			finalArtifact?.receiptId,
 			receipt.receiptId,

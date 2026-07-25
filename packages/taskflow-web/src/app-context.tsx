@@ -42,12 +42,20 @@ import {
 	type WebJsonResponseObservation,
 } from "./api/fetch-transport.ts";
 import {
+	acceptWebAuthorityRefresh,
+	createWebAuthorityRefreshRegistry,
+	invalidateWebAuthorityRefresh,
+	webAuthorityRefreshStampFor,
+} from "./authority-refresh.ts";
+import {
 	INITIAL_WEB_SESSION_LIFECYCLE_STATE,
 	reduceWebSessionLifecycle,
+	shouldSurfaceWebBootFailure,
 	type WebSessionEndScope,
 	type WebSessionLifecycleEvent,
 	type WebSessionLifecycleState,
 } from "./session-lifecycle.ts";
+import { refetchActiveWebQueries } from "./live-resync.ts";
 
 export type DisplayMode = "simple" | "pro";
 export type ThemeMode = "system" | "light" | "dark";
@@ -79,6 +87,7 @@ type AppContextValue = {
 	readonly retryBoot: () => void;
 	readonly refreshStampFor: (
 		resource: WebAuthoritativeResourceIdentity,
+		response: object,
 	) => WebAuthorityRefreshStamp | undefined;
 	readonly t: (
 		key: WebStaticContentKey,
@@ -90,93 +99,6 @@ type AppContextValue = {
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function stringField(
-	value: Record<string, unknown>,
-	key: string,
-): string | undefined {
-	return typeof value[key] === "string" ? value[key] : undefined;
-}
-
-function resourceKey(resource: WebAuthoritativeResourceIdentity): string {
-	switch (resource.type) {
-		case "project":
-			return `project\u0000${resource.projectId}\u0000${resource.controlDomainId}`;
-		case "run":
-			return `run\u0000${resource.projectId}\u0000${resource.controlDomainId}\u0000${resource.runId}`;
-		case "approval":
-			return `approval\u0000${resource.projectId}\u0000${resource.controlDomainId}\u0000${resource.runId}\u0000${resource.approvalRequestId}`;
-		case "reservation":
-			return `reservation\u0000${resource.reservationId}`;
-	}
-}
-
-function responseRefreshStamp(
-	observation: WebJsonResponseObservation,
-	invalidationEpoch: number,
-): WebAuthorityRefreshStamp | undefined {
-	if (!isRecord(observation.envelope) || observation.envelope.ok !== true) {
-		return undefined;
-	}
-	const requestId = stringField(observation.envelope, "requestId");
-	const data = observation.envelope.data;
-	if (!requestId || !isRecord(data)) return undefined;
-	const sourceObservation = data.sourceObservation;
-	if (
-		!isRecord(sourceObservation) ||
-		sourceObservation.authority !== "verified" ||
-		typeof sourceObservation.observedAt !== "number"
-	) {
-		return undefined;
-	}
-
-	let resource: WebAuthoritativeResourceIdentity | undefined;
-	if (observation.endpointId === "projectDetail") {
-		const projectId = stringField(data, "projectId");
-		const controlDomainId = stringField(data, "controlDomainId");
-		if (projectId && controlDomainId) {
-			resource = { type: "project", projectId, controlDomainId };
-		}
-	} else if (observation.endpointId === "runDetail" && isRecord(data.run)) {
-		const projectId = stringField(data.run, "projectId");
-		const controlDomainId = stringField(data.run, "controlDomainId");
-		const runId = stringField(data.run, "runId");
-		if (projectId && controlDomainId && runId) {
-			resource = { type: "run", projectId, controlDomainId, runId };
-		}
-	} else if (
-		observation.endpointId === "approvalDetail" &&
-		isRecord(data.summary)
-	) {
-		const projectId = stringField(data.summary, "projectId");
-		const controlDomainId = stringField(data.summary, "controlDomainId");
-		const runId = stringField(data.summary, "runId");
-		const approvalRequestId = stringField(data.summary, "approvalRequestId");
-		if (projectId && controlDomainId && runId && approvalRequestId) {
-			resource = {
-				type: "approval",
-				projectId,
-				controlDomainId,
-				runId,
-				approvalRequestId,
-			};
-		}
-	} else if (observation.endpointId === "reservationDetail") {
-		const reservationId = stringField(data, "reservationId");
-		if (reservationId) resource = { type: "reservation", reservationId };
-	}
-	if (!resource) return undefined;
-	return {
-		resource,
-		invalidationEpoch,
-		requestId,
-		observedAt: sourceObservation.observedAt,
-	};
-}
 
 function launchToken(): string | undefined {
 	const value = new URLSearchParams(window.location.hash.slice(1)).get("launch");
@@ -216,9 +138,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	const sessionLifecycleRef = useRef<WebSessionLifecycleState>(
 		INITIAL_WEB_SESSION_LIFECYCLE_STATE,
 	);
-	const refreshStampsRef = useRef(
-		new Map<string, WebAuthorityRefreshStamp>(),
-	);
+	const authorityRefreshRef = useRef(createWebAuthorityRefreshRegistry());
 	const responseObserverRef = useRef<
 		((observation: WebJsonResponseObservation) => void) | undefined
 	>(undefined);
@@ -247,6 +167,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 					() => csrfRef.current,
 					(observation) => responseObserverRef.current?.(observation),
 					() => unauthorizedObserverRef.current(),
+					() => authorityRefreshRef.current.generation,
 				),
 			),
 		[],
@@ -256,24 +177,10 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		liveStateRef.current = next;
 		setLiveState(next);
 	}, []);
-	const clearRefreshStamps = useCallback(
-		(predicate?: (stamp: WebAuthorityRefreshStamp) => boolean) => {
-			const stamps = refreshStampsRef.current;
-			let changed = false;
-			if (!predicate) {
-				changed = stamps.size > 0;
-				stamps.clear();
-			} else {
-				for (const [key, stamp] of stamps) {
-					if (!predicate(stamp)) continue;
-					stamps.delete(key);
-					changed = true;
-				}
-			}
-			if (changed) setRefreshStampRevision((value) => value + 1);
-		},
-		[],
-	);
+	const invalidateAuthorityRefresh = useCallback(() => {
+		invalidateWebAuthorityRefresh(authorityRefreshRef.current);
+		setRefreshStampRevision((value) => value + 1);
+	}, []);
 	responseObserverRef.current = (observation) => {
 		if (observation.endpointId === "sessionLogout") {
 			sessionRevocationObserverRef.current("current");
@@ -282,13 +189,12 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		) {
 			sessionRevocationObserverRef.current("all");
 		}
-		const stamp = responseRefreshStamp(
+		const accepted = acceptWebAuthorityRefresh(
+			authorityRefreshRef.current,
 			observation,
 			liveStateRef.current.invalidationEpoch,
 		);
-		if (!stamp) return;
-		refreshStampsRef.current.set(resourceKey(stamp.resource), stamp);
-		setRefreshStampRevision((value) => value + 1);
+		if (accepted) setRefreshStampRevision((value) => value + 1);
 	};
 
 	useEffect(() => {
@@ -319,7 +225,14 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 					setBoot({ status: "ready", session, bootstrap });
 				}
 			} catch (error) {
-				if (!cancelled) setBoot({ status: "failed", error });
+				if (
+					!cancelled &&
+					shouldSurfaceWebBootFailure(
+						sessionLifecycleRef.current,
+					)
+				) {
+					setBoot({ status: "failed", error });
+				}
 			}
 		})();
 		return () => {
@@ -350,9 +263,8 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			if (disposed || resyncing) return;
 			resyncing = true;
 			dispatchLiveEvent({ type: "resync-started" });
-			clearRefreshStamps();
 			try {
-				await queryClient.refetchQueries({ type: "active" });
+				await refetchActiveWebQueries(queryClient);
 				if (!disposed) dispatchLiveEvent({ type: "resync-succeeded" });
 			} catch {
 				if (!disposed) dispatchLiveEvent({ type: "resync-failed" });
@@ -422,6 +334,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		};
 		const degradeToPolling = () => {
 			streamOpen = false;
+			invalidateAuthorityRefresh();
 			dispatchLiveEvent({
 				type: "stream-disconnected",
 				at: Date.now(),
@@ -438,6 +351,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		eventSource.onopen = () => {
 			streamOpen = true;
 			stopPolling();
+			invalidateAuthorityRefresh();
 			dispatchLiveEvent({
 				type: "stream-catching-up",
 				at: Date.now(),
@@ -479,14 +393,15 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 				at: frame.observedAt,
 			});
 			if (frame.type === "reset-required") {
+				invalidateAuthorityRefresh();
 				dispatchLiveEvent({
 					type: "reset-required",
 					at: frame.observedAt,
 				});
-				clearRefreshStamps();
 				return;
 			}
 			if (frame.type === "checkpoint") {
+				invalidateAuthorityRefresh();
 				void resync();
 				return;
 			}
@@ -503,17 +418,7 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 						},
 					},
 				);
-				if (frame.projectId && frame.controlDomainId) {
-					clearRefreshStamps((stamp) => {
-						if (stamp.resource.type === "reservation") return false;
-						return (
-							stamp.resource.projectId === frame.projectId &&
-							stamp.resource.controlDomainId === frame.controlDomainId
-						);
-					});
-				} else {
-					clearRefreshStamps();
-				}
+				invalidateAuthorityRefresh();
 				void queryClient.invalidateQueries();
 			}
 		};
@@ -530,9 +435,9 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 		boot.status === "ready"
 			? boot.bootstrap.pollingMinIntervalMs
 			: undefined,
-		clearRefreshStamps,
 		client,
 		dispatchLiveEvent,
+		invalidateAuthorityRefresh,
 		queryClient,
 	]);
 
@@ -582,14 +487,14 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 			if (!scope) return;
 			csrfRef.current = undefined;
 			setCsrfToken(undefined);
-			clearRefreshStamps();
+			invalidateAuthorityRefresh();
 			void queryClient.cancelQueries();
 			queryClient.clear();
 			liveStateRef.current = INITIAL_WEB_LIVE_STATE;
 			setLiveState(INITIAL_WEB_LIVE_STATE);
 			setBoot({ status: "terminated", scope });
 		},
-		[clearRefreshStamps, queryClient],
+		[invalidateAuthorityRefresh, queryClient],
 	);
 	const endSession = useCallback(
 		(scope: WebSessionEndScope) => {
@@ -605,8 +510,16 @@ export function AppProvider({ children }: PropsWithChildren): React.JSX.Element 
 	};
 	sessionRevocationObserverRef.current = endSession;
 	const refreshStampFor = useCallback(
-		(resource: WebAuthoritativeResourceIdentity) =>
-			refreshStampsRef.current.get(resourceKey(resource)),
+		(
+			resource: WebAuthoritativeResourceIdentity,
+			response: object,
+		) => {
+			return webAuthorityRefreshStampFor(
+				authorityRefreshRef.current,
+				resource,
+				response,
+			);
+		},
 		// Revision makes newly verified detail reads observable without exposing
 		// the mutable map as browser state.
 		[refreshStampRevision],

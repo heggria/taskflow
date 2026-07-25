@@ -18,10 +18,14 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 import {
 	Button,
+	Dialog,
+	DialogTrigger,
 	Disclosure,
 	DisclosurePanel,
 	ListBox,
 	ListBoxItem,
+	Modal,
+	ModalOverlay,
 } from "react-aria-components";
 import type {
 	WebGeneratedClient,
@@ -36,6 +40,14 @@ import {
 
 type GraphPosition = { readonly x: number; readonly y: number };
 type ArtifactRef = WebRunDetail["artifacts"][number];
+type ArtifactDownloadRequest = {
+	readonly artifact: ArtifactRef;
+	readonly acknowledgeSensitive: boolean;
+};
+type SensitiveArtifactDisclosure = Extract<
+	ArtifactRef["disclosure"],
+	{ readonly access: "acknowledgement-required" }
+>;
 type RunParams = {
 	readonly projectId: string;
 	readonly controlDomainId: string;
@@ -108,6 +120,80 @@ function LoadMore({
 			{pending ? <LoaderCircle className="spin" size={15} /> : null}
 			{t("action.load-more")}
 		</Button>
+	);
+}
+
+function SensitiveArtifactDownload({
+	artifactId,
+	disclosure,
+	isPending,
+	onConfirm,
+}: {
+	readonly artifactId: string;
+	readonly disclosure: SensitiveArtifactDisclosure;
+	readonly isPending: boolean;
+	readonly onConfirm: (close: () => void) => void;
+}): React.JSX.Element {
+	const { message } = useApp();
+	const titleId = `sensitive-artifact-${artifactId}`;
+	return (
+		<DialogTrigger>
+			<Button
+				className="icon-button"
+				aria-label={message(disclosure.question)}
+				isDisabled={isPending}
+			>
+				<Download size={15} />
+			</Button>
+			<ModalOverlay
+				className="modal-overlay"
+				isDismissable={!isPending}
+				isKeyboardDismissDisabled={isPending}
+			>
+				<Modal className="modal-shell">
+					<Dialog
+						className="decision-card standalone sensitive-artifact-dialog"
+						role="alertdialog"
+						aria-labelledby={titleId}
+					>
+						{({ close }) => (
+							<>
+								<h2 id={titleId}>
+									{message(disclosure.question)}
+								</h2>
+								<p>{message(disclosure.impact)}</p>
+								<div className="header-actions">
+									<Button
+										className="secondary-button"
+										isDisabled={isPending}
+										onPress={close}
+									>
+										{message(disclosure.decline)}
+									</Button>
+									<Button
+										className="danger-button"
+										isDisabled={isPending}
+										onPress={() =>
+											onConfirm(close)
+										}
+									>
+										{isPending ? (
+											<LoaderCircle
+												className="spin"
+												size={15}
+											/>
+										) : (
+											<Download size={15} />
+										)}
+										{message(disclosure.confirm)}
+									</Button>
+								</div>
+							</>
+						)}
+					</Dialog>
+				</Modal>
+			</ModalOverlay>
+		</DialogTrigger>
 	);
 }
 
@@ -556,7 +642,7 @@ function TimelinePanel({
 }: {
 	readonly detail: WebRunDetail;
 }): React.JSX.Element {
-	const { client, t } = useApp();
+	const { client, locale, message, t } = useApp();
 	const params = runParams(detail);
 	const timeline = useInfiniteQuery({
 		queryKey: [
@@ -598,7 +684,7 @@ function TimelinePanel({
 							<li key={event.eventId}>
 								<time>
 									{new Intl.DateTimeFormat(
-										undefined,
+										locale,
 										{
 											dateStyle: "medium",
 											timeStyle: "medium",
@@ -606,7 +692,7 @@ function TimelinePanel({
 									).format(event.recordedAt)}
 								</time>
 								<strong>{event.kind}</strong>
-								<p>{event.summary}</p>
+								<p>{message(event.summary)}</p>
 								<small>
 									{t("pro.timeline.commit", {
 										commitSeq:
@@ -694,7 +780,10 @@ function EvidencePanel({
 		receipt.data?.pages[0]?.verification ??
 		detail.presentation.verification;
 	const download = useMutation({
-		mutationFn: async (artifact: ArtifactRef) => {
+		mutationFn: async ({
+			artifact,
+			acknowledgeSensitive,
+		}: ArtifactDownloadRequest) => {
 			const result = await client.artifact({
 				params: {
 					projectId: params.projectId,
@@ -703,9 +792,31 @@ function EvidencePanel({
 				},
 				query: {},
 				body: {},
-			});
-			const bytes = new Uint8Array(result.body);
-			const blob = new Blob([bytes], {
+			}, acknowledgeSensitive
+				? {
+						sensitiveArtifactAcknowledgement:
+							"download",
+					}
+				: undefined);
+			let arrayBuffer: ArrayBuffer;
+			let byteOffset: number;
+			if (result.body.buffer instanceof ArrayBuffer) {
+				arrayBuffer = result.body.buffer;
+				byteOffset = result.body.byteOffset;
+			} else {
+				arrayBuffer =
+					Uint8Array.from(result.body).buffer;
+				byteOffset = 0;
+			}
+			const blobPart =
+				byteOffset === 0 &&
+				result.body.byteLength === arrayBuffer.byteLength
+					? arrayBuffer
+					: arrayBuffer.slice(
+							byteOffset,
+							byteOffset + result.body.byteLength,
+						);
+			const blob = new Blob([blobPart], {
 				type: result.metadata.mediaType,
 			});
 			const url = URL.createObjectURL(blob);
@@ -900,22 +1011,66 @@ function EvidencePanel({
 								<code>
 									{artifact.digest.slice(0, 22)}…
 								</code>
-								<Button
-									className="icon-button"
-									aria-label={t(
-										"action.download-artifact",
-										{
-											artifactId:
-												artifact.artifactId,
-										},
-									)}
-									isDisabled={download.isPending}
-									onPress={() =>
-										download.mutate(artifact)
-									}
-								>
-									<Download size={15} />
-								</Button>
+								{artifact.disclosure.access ===
+								"direct" ? (
+									<Button
+										className="icon-button"
+										aria-label={message(
+											artifact.disclosure
+												.action,
+										)}
+										isDisabled={
+											download.isPending
+										}
+										onPress={() =>
+											download.mutate({
+												artifact,
+												acknowledgeSensitive:
+													false,
+											})
+										}
+									>
+										<Download size={15} />
+									</Button>
+								) : artifact.disclosure.access ===
+								  "acknowledgement-required" ? (
+									<SensitiveArtifactDownload
+										artifactId={
+											artifact.artifactId
+										}
+										disclosure={
+											artifact.disclosure
+										}
+										isPending={
+											download.isPending
+										}
+										onConfirm={(close) =>
+											download.mutate(
+												{
+													artifact,
+													acknowledgeSensitive:
+														true,
+												},
+												{ onSuccess: close },
+											)
+										}
+									/>
+								) : (
+									<div className="artifact-disclosure-blocked">
+										<strong>
+											{message(
+												artifact.disclosure
+													.headline,
+											)}
+										</strong>
+										<small>
+											{message(
+												artifact.disclosure
+													.detail,
+											)}
+										</small>
+									</div>
+								)}
 							</div>
 						))}
 				</div>

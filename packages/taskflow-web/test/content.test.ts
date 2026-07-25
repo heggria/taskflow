@@ -69,17 +69,17 @@ function visitContentMessages(
 
 test("content catalogs are complete, closed, bilingual, and startup-valid", () => {
 	assert.doesNotThrow(() => assertWebContentCatalogsValid());
-	assert.equal(Object.keys(WEB_PROJECTED_CONTENT_CATALOG).length, 149);
-	assert.equal(WEB_PROJECTED_CONTENT_KEYS.length, 149);
+	assert.equal(Object.keys(WEB_PROJECTED_CONTENT_CATALOG).length, 168);
+	assert.equal(WEB_PROJECTED_CONTENT_KEYS.length, 168);
 	assert.equal(WEB_STATIC_CONTENT_KEYS.length, 188);
-	assert.equal(WEB_COMBINED_CONTENT_KEYS.length, 337);
-	assert.equal(new Set(WEB_COMBINED_CONTENT_KEYS).size, 337);
+	assert.equal(WEB_COMBINED_CONTENT_KEYS.length, 356);
+	assert.equal(new Set(WEB_COMBINED_CONTENT_KEYS).size, 356);
 	assert.deepEqual(WEB_CONTENT_LOCALES, ["en", "zh-CN"]);
 	const material = webContentCanonicalMaterial();
-	assert.equal(material.projectedRegistry.length, 149);
+	assert.equal(material.projectedRegistry.length, 168);
 	assert.equal(material.staticRegistry.length, 188);
-	assert.equal(material.catalogs.en.length, 337);
-	assert.equal(material.catalogs["zh-CN"].length, 337);
+	assert.equal(material.catalogs.en.length, 356);
+	assert.equal(material.catalogs["zh-CN"].length, 356);
 });
 
 test("reference manifest binds exact registry and locale-catalog digests", () => {
@@ -88,6 +88,11 @@ test("reference manifest binds exact registry and locale-catalog digests", () =>
 	) as {
 		contentCatalogs: {
 			version: string;
+			keyCounts: {
+				projected: number;
+				static: number;
+				combined: number;
+			};
 			keysetDigests: {
 				projected: string;
 				static: string;
@@ -99,6 +104,11 @@ test("reference manifest binds exact registry and locale-catalog digests", () =>
 	};
 	const material = webContentCanonicalMaterial();
 	assert.equal(manifest.contentCatalogs.version, WEB_CONTENT_CATALOG_VERSION);
+	assert.deepEqual(manifest.contentCatalogs.keyCounts, {
+		projected: WEB_PROJECTED_CONTENT_KEYS.length,
+		static: WEB_STATIC_CONTENT_KEYS.length,
+		combined: WEB_COMBINED_CONTENT_KEYS.length,
+	});
 	assert.deepEqual(manifest.contentCatalogs.keysetDigests, {
 		projected: sha256(material.projectedRegistry),
 		static: sha256(material.staticRegistry),

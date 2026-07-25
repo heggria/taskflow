@@ -54,6 +54,40 @@ export interface CoordinatorCommandContext {
 	callerPrincipal: string;
 }
 
+export type CoordinatorCommandRouteAuthority =
+	| {
+			kind: "project";
+			projectId: string;
+			controlDomainId: string;
+	  }
+	| { kind: "coordinator" };
+
+/**
+ * Listener-global browser command namespace.
+ *
+ * Project ControlStores remain the mutation authority for project commands,
+ * while this coordinator claim makes command recovery unambiguous across all
+ * mounted projects. The claim is durable even when validation rejects the
+ * command before a project CommandRecord is written.
+ */
+export interface CoordinatorCommandRouteClaim {
+	commandId: string;
+	authority: CoordinatorCommandRouteAuthority;
+	callerPrincipal: string;
+	requestHash: string;
+	createdAt: number;
+}
+
+export type CoordinatorCommandRouteClaimResult =
+	| {
+			kind: "claimed" | "existing";
+			claim: CoordinatorCommandRouteClaim;
+	  }
+	| {
+			kind: "conflict";
+			claim: CoordinatorCommandRouteClaim;
+	  };
+
 export interface UserCoordinatorStore {
 	readonly maxActiveRuns: number;
 	getLease(): CoordinatorLease | null;
@@ -80,6 +114,13 @@ export interface UserCoordinatorStore {
 	): CoordinatorCommandRecord;
 	reclaimExpiredReserved(now?: number): number;
 	getCommand(commandId: string): CoordinatorCommandRecord | null;
+	claimCommandRoute(input: {
+		commandId: string;
+		authority: CoordinatorCommandRouteAuthority;
+		callerPrincipal: string;
+		requestHash: string;
+	}): CoordinatorCommandRouteClaimResult;
+	getCommandRoute(commandId: string): CoordinatorCommandRouteClaim | null;
 }
 
 interface CoordinatorFile {
@@ -88,16 +129,18 @@ interface CoordinatorFile {
 	lease: CoordinatorLease | null;
 	reservations: ConcurrencyReservation[];
 	commands: CoordinatorCommandRecord[];
+	commandRoutes: CoordinatorCommandRouteClaim[];
 	nextCommandSeq: number;
 }
 
 function emptyCoordinator(): CoordinatorFile {
 	return {
-		schemaVersion: 2,
+		schemaVersion: 3,
 		maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
 		lease: null,
 		reservations: [],
 		commands: [],
+		commandRoutes: [],
 		nextCommandSeq: 1,
 	};
 }
@@ -113,7 +156,7 @@ export function openUserCoordinatorStore(
 
 	function load(): CoordinatorFile {
 		const data = readJsonFile<CoordinatorFile>(file) ?? emptyCoordinator();
-		data.schemaVersion = Math.max(data.schemaVersion ?? 1, 2);
+		data.schemaVersion = Math.max(data.schemaVersion ?? 1, 3);
 		data.reservations = (data.reservations ?? []).map((reservation) => ({
 			...reservation,
 			revision:
@@ -122,6 +165,7 @@ export function openUserCoordinatorStore(
 					: 1,
 		}));
 		data.commands ??= [];
+		data.commandRoutes ??= [];
 		data.nextCommandSeq ??= 1;
 		const occupied = occupying(data);
 		if (data.maxActiveRuns < occupied) data.maxActiveRuns = occupied;
@@ -456,6 +500,59 @@ export function openUserCoordinatorStore(
 		getCommand(commandId) {
 			if (!isSafeId(commandId)) return null;
 			return load().commands.find((command) => command.commandId === commandId) ?? null;
+		},
+
+		claimCommandRoute(input) {
+			assertSafeId(input.commandId, "commandId");
+			if (input.authority.kind === "project") {
+				assertSafeId(input.authority.projectId, "projectId");
+				assertSafeId(input.authority.controlDomainId, "controlDomainId");
+			}
+			if (!input.callerPrincipal.trim()) {
+				throw new Error("TF_INVALID_ARGUMENT: callerPrincipal is required");
+			}
+			if (!/^[a-f0-9]{64}$/u.test(input.requestHash)) {
+				throw new Error("TF_INVALID_ARGUMENT: requestHash must be canonical sha256");
+			}
+			return mutate((data) => {
+				const prior = data.commandRoutes.find(
+					(candidate) => candidate.commandId === input.commandId,
+				);
+				if (prior) {
+					const sameAuthority =
+						prior.authority.kind === input.authority.kind &&
+						(prior.authority.kind === "coordinator" ||
+							(input.authority.kind === "project" &&
+								prior.authority.projectId === input.authority.projectId &&
+								prior.authority.controlDomainId ===
+									input.authority.controlDomainId));
+					return {
+						kind:
+							sameAuthority &&
+							prior.callerPrincipal === input.callerPrincipal &&
+							prior.requestHash === input.requestHash
+								? "existing"
+								: "conflict",
+						claim: prior,
+					};
+				}
+				const claim: CoordinatorCommandRouteClaim = {
+					...input,
+					authority: { ...input.authority },
+					createdAt: Date.now(),
+				};
+				data.commandRoutes.push(claim);
+				return { kind: "claimed", claim };
+			});
+		},
+
+		getCommandRoute(commandId) {
+			if (!isSafeId(commandId)) return null;
+			return (
+				load().commandRoutes.find(
+					(claim) => claim.commandId === commandId,
+				) ?? null
+			);
 		},
 	};
 }

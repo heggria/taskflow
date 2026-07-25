@@ -26,7 +26,73 @@
           "storageClass": "control-store",
           "redactionClass": "public",
           "receiptId": "receipt-1",
-          "integrity": "ok"
+          "integrity": "ok",
+          "disclosure": {
+            "access": "direct",
+            "action": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.download.action",
+              "args": []
+            }
+          }
+        },
+        {
+          "artifactId": "artifact-2",
+          "role": "replay-trace",
+          "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "size": 128,
+          "mediaType": "application/x-ndjson; charset=utf-8",
+          "storageClass": "control-store",
+          "redactionClass": "sensitive",
+          "receiptId": "receipt-1",
+          "integrity": "ok",
+          "disclosure": {
+            "access": "acknowledgement-required",
+            "question": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.sensitive.question",
+              "args": []
+            },
+            "impact": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.sensitive.impact",
+              "args": []
+            },
+            "confirm": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.sensitive.confirm",
+              "args": []
+            },
+            "decline": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.sensitive.decline",
+              "args": []
+            }
+          }
+        },
+        {
+          "artifactId": "artifact-3",
+          "role": "restricted-audit-material",
+          "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "size": 64,
+          "mediaType": "application/octet-stream",
+          "storageClass": "control-store",
+          "redactionClass": "secret",
+          "receiptId": "receipt-1",
+          "integrity": "ok",
+          "disclosure": {
+            "access": "blocked",
+            "headline": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.secret.headline",
+              "args": []
+            },
+            "detail": {
+              "catalogVersion": "taskflow-content.v1",
+              "key": "artifact.secret.detail",
+              "args": []
+            }
+          }
         }
       ],
       "issuedAt": 1800000000000,
@@ -115,7 +181,7 @@
         ]
       }
     },
-    "artifactCount": 1,
+    "artifactCount": 3,
     "eventManifest": {
       "items": [
         {

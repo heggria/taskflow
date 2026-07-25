@@ -8,14 +8,19 @@
   },
   "contentCatalogs": {
     "version": "taskflow-content.v1",
+    "keyCounts": {
+      "projected": 168,
+      "static": 188,
+      "combined": 356
+    },
     "keysetDigests": {
-      "projected": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+      "projected": "sha256:0ce2aacbe317e3aa170712dc918a6f333b5cd828449e487d89a61a5ec2cf2a79",
       "static": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
-      "combined": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
+      "combined": "sha256:f47871cd9ffe8934d72e44cc5b00f8d603d7fcf07c4564370b42747f2bfd72c2"
     },
     "catalogDigests": {
-      "en": "sha256:f54abecfbd770e162ba24101c64b49f8b60812fbaf44544b1a40caf1a2ae64c0",
-      "zh-CN": "sha256:8af0e1325cb91c7270d427810ba3136e380e6bb2124225c8e41ece52136a0805"
+      "en": "sha256:ebb5390183f8c017ed6b883dc4beebf5ffeff45fb0a9378c6482eb45945a6e80",
+      "zh-CN": "sha256:cd4a4715ab5d73b8cb67f6308c5b10aeeaf0e02abb96974b188f8f5b5c1367b4"
     }
   },
   "projectionVersions": {
@@ -64,9 +69,7 @@
           "sourceSha256": "sha256:338151f1936aa7c1cb6dc33a7323bd85fe6da30a5668830ae998463842cd4c7a",
           "projectionSha256": "sha256:c4eda58b55bbf3eb62c3387d20d762b4abc5637c1dc93be01ac94f2a049b3532",
           "fixtureFileSha256": "sha256:9f92aba13cbc403bb8d911bebf7d63f2d207571a5c66d2c1e9e061731769646c",
-          "contentKeys": [
-            "empty.home.no-tasks"
-          ]
+          "contentKeys": []
         },
         {
           "fixtureId": "simple-home-partial-disconnected",
@@ -257,10 +260,17 @@
           "fixtureId": "pro-evidence-receipt",
           "state": "verified-receipt",
           "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/pro-evidence-receipt.json",
-          "sourceSha256": "sha256:e4b0db84f53d31bef8097f09232f9396f7f1ccd271093e49b08e21120d44841a",
+          "sourceSha256": "sha256:d89dbf9527f1074fb15371225820e6613d194d7167be4803e6f1232a6fb52972",
           "projectionSha256": "sha256:7137a01ec2956a69fcf49ae8fa133ddecad1bf8d4c85e6ee74520c802aa0d49f",
-          "fixtureFileSha256": "sha256:ad1d2e076694d57b85e6f547c99a71a1ffcaf0669ef998839a1d8c70d8b32b37",
+          "fixtureFileSha256": "sha256:dc3f136c256b069dc5838b215e09eb19b581ce2e0f08b33ccf6d96827ea15277",
           "contentKeys": [
+            "artifact.download.action",
+            "artifact.secret.detail",
+            "artifact.secret.headline",
+            "artifact.sensitive.confirm",
+            "artifact.sensitive.decline",
+            "artifact.sensitive.impact",
+            "artifact.sensitive.question",
             "verification.verified",
             "verification.verified.detail"
           ]
@@ -284,9 +294,9 @@
           "fixtureId": "settings-session",
           "state": "simple-mode-session-active",
           "path": "../../../../packages/taskflow-control/test/fixtures/web-v1/reference/settings-session.json",
-          "sourceSha256": "sha256:e3d748637f322fa4942b73be3b48d762e75ead4958e71e3ee89bea4cfc9db854",
+          "sourceSha256": "sha256:60dd68f87fddf2e888a0be55dea288ba30199ad4f58abf8769a3351df959a214",
           "projectionSha256": "sha256:edf44338e4dafcb80f6a203e8f5bf2e72f15440cef1e7697caf408a1e21e21cf",
-          "fixtureFileSha256": "sha256:38d9db57d2cd0ce244f89e0fa18ee87ca8225a4d50574d34c2510e4833707927",
+          "fixtureFileSha256": "sha256:67f1f819fa33aba0ada2157f91c109f28b511d331c61f4ee0ff442f8c0e90c96",
           "contentKeys": []
         }
       ],

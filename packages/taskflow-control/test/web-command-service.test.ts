@@ -9,6 +9,7 @@ import {
 	loadApprovalRequest,
 } from "../src/approval.ts";
 import { createControlHost } from "../src/control-host.ts";
+import { openUserCoordinatorStore } from "../src/store/coordinator.ts";
 import {
 	WEB_DEFAULT_ENABLED_COMMAND_KINDS,
 	WEB_IMPLEMENTED_COMMAND_HANDLER_IDS,
@@ -50,6 +51,80 @@ function fixture() {
 			fs.rmSync(root, { recursive: true, force: true });
 		},
 	};
+}
+
+function multiProjectFixture() {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "tf-web-command-multi-"),
+	);
+	const home = path.join(root, "home");
+	const env = { ...process.env, TASKFLOW_HOME: home };
+	const create = (name: string) => {
+		const projectRoot = path.join(root, name);
+		fs.mkdirSync(projectRoot, { recursive: true });
+		return createControlHost({
+			projectRoot,
+			controlMode: "auto",
+			skipSingleton: true,
+			allowMockProvider: true,
+			env,
+		});
+	};
+	const hosts = [create("primary"), create("secondary")] as const;
+	return {
+		root,
+		home,
+		env,
+		hosts,
+		cleanup() {
+			for (const host of hosts) host.close();
+			fs.rmSync(root, { recursive: true, force: true });
+		},
+	};
+}
+
+function parkRejectableRun(host: ReturnType<typeof createControlHost>, runId: string) {
+	const approval = createApprovalRequest(host.store.projectRoot, {
+		runId,
+		projectId: host.projectId,
+		controlDomainId: host.controlDomainId,
+		expectedRunVersion: 1,
+		allowedDecisions: ["reject"],
+	});
+	const now = Date.now();
+	host.store.commit({
+		events: [
+			{
+				eventId: `event-${runId}-parked`,
+				schemaVersion: 1,
+				controlDomainId: host.controlDomainId,
+				streamId: runId,
+				streamSeq: 0,
+				commitSeq: 0,
+				projectId: host.projectId,
+				recordedAt: now,
+				payload: {
+					type: "ApprovalParked",
+					runId,
+					approvalRequestId: approval.approvalRequestId,
+				},
+			},
+		],
+		run: {
+			runId,
+			projectId: host.projectId,
+			controlDomainId: host.controlDomainId,
+			status: "paused",
+			stage: "parked",
+			boundPlanHash: `bp:${"d".repeat(64)}`,
+			needsOperator: false,
+			createdAt: now,
+			updatedAt: now,
+			runVersion: 1,
+			approvalRequestId: approval.approvalRequestId,
+		},
+	});
+	return approval;
 }
 
 function context(
@@ -570,5 +645,191 @@ test("Web commands: multi-project listener resolves the exact home authority", a
 	} finally {
 		primary.cleanup();
 		secondary.cleanup();
+	}
+});
+
+test("Web commands: listener-global route claim prevents sequential and concurrent cross-project reuse", async () => {
+	const testFixture = multiProjectFixture();
+	try {
+		const [primary, secondary] = testFixture.hosts;
+		const hosts = [...testFixture.hosts];
+		const handlers = createWebCommandHandlers(primary, {
+			supportedCommands: ["reject"],
+			resolveHost: (projectId, controlDomainId) =>
+				hosts.find(
+					(candidate) =>
+						candidate.projectId === projectId &&
+						candidate.controlDomainId === controlDomainId,
+				) ?? null,
+			listHosts: () => hosts,
+		});
+			const makeBody = (
+				host: ReturnType<typeof createControlHost>,
+				runId: string,
+			commandId: string,
+		) => {
+			const approval = parkRejectableRun(host, runId);
+			return {
+				commandId,
+				kind: "reject" as const,
+				projectId: host.projectId,
+				controlDomainId: host.controlDomainId,
+				runId,
+				expectedRunVersion: 1,
+				approvalRequestId: approval.approvalRequestId,
+				reason: "Do not continue.",
+				};
+			};
+
+			const legacy = makeBody(
+				primary,
+				"run-route-legacy-primary",
+				"cmd-route-legacy",
+			);
+			const legacyResult = await primary.reject(legacy.runId, {
+				commandId: legacy.commandId,
+				principal: "principal-web",
+				expectedRunVersion: legacy.expectedRunVersion,
+				approvalRequestId: legacy.approvalRequestId,
+				note: legacy.reason,
+			});
+			assert.equal(legacyResult.ok, true);
+			await assert.rejects(
+				async () =>
+					await handlers.commands(
+						{
+							params: {},
+							query: {},
+							body: {
+								...legacy,
+								reason: "Changed legacy body.",
+							},
+						},
+						context(),
+					),
+				(error: unknown) =>
+					error instanceof WebReadServiceError &&
+					error.controlError.code ===
+						"TF_IDEMPOTENCY_CONFLICT",
+			);
+			assert.equal(
+				openUserCoordinatorStore(
+					testFixture.env,
+				).getCommandRoute(legacy.commandId),
+				null,
+			);
+			assert.equal(
+				(
+					await handlers.commands(
+						{ params: {}, query: {}, body: legacy },
+						context(),
+					)
+				).status,
+				"completed",
+			);
+
+			const first = makeBody(
+				primary,
+			"run-route-sequential-primary",
+			"cmd-route-sequential",
+		);
+		const conflicting = makeBody(
+			secondary,
+			"run-route-sequential-secondary",
+			first.commandId,
+		);
+		const firstOutcome = await handlers.commands(
+			{ params: {}, query: {}, body: first },
+			context(),
+		);
+			await assert.rejects(
+				async () =>
+					await handlers.commands(
+						{ params: {}, query: {}, body: conflicting },
+						context(),
+					),
+			(error: unknown) =>
+				error instanceof WebReadServiceError &&
+				error.controlError.code ===
+					"TF_IDEMPOTENCY_CONFLICT",
+		);
+		assert.equal(
+			primary.store.getCommand(first.commandId)?.status,
+			"completed",
+		);
+		assert.equal(secondary.store.getCommand(first.commandId), null);
+		assert.deepEqual(
+			await handlers.command(
+				{
+					params: { commandId: first.commandId },
+					query: {},
+					body: {},
+				},
+				context(),
+			),
+			firstOutcome,
+		);
+		assert.deepEqual(
+			openUserCoordinatorStore(testFixture.env).getCommandRoute(
+				first.commandId,
+			)?.authority,
+			{
+				kind: "project",
+				projectId: primary.projectId,
+				controlDomainId: primary.controlDomainId,
+			},
+		);
+
+		const concurrentId = "cmd-route-concurrent";
+		const concurrent = [
+			makeBody(
+				primary,
+				"run-route-concurrent-primary",
+				concurrentId,
+			),
+			makeBody(
+				secondary,
+				"run-route-concurrent-secondary",
+				concurrentId,
+			),
+		] as const;
+		const settled = await Promise.allSettled(
+			concurrent.map((body) =>
+				handlers.commands(
+					{ params: {}, query: {}, body },
+					context(),
+				),
+			),
+		);
+		assert.equal(
+			settled.filter((result) => result.status === "fulfilled")
+				.length,
+			1,
+		);
+		assert.equal(
+			settled.filter(
+				(result) =>
+					result.status === "rejected" &&
+					result.reason instanceof WebReadServiceError &&
+					result.reason.controlError.code ===
+						"TF_IDEMPOTENCY_CONFLICT",
+			).length,
+			1,
+		);
+		assert.equal(
+			hosts.filter(
+				(candidate) =>
+					candidate.store.getCommand(concurrentId) !== null,
+			).length,
+			1,
+		);
+		const persisted =
+			openUserCoordinatorStore(
+				testFixture.env,
+			).getCommandRoute(concurrentId);
+		assert.ok(persisted);
+		assert.equal(persisted.commandId, concurrentId);
+	} finally {
+		testFixture.cleanup();
 	}
 });

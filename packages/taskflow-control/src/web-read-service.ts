@@ -161,6 +161,58 @@ function contentMessage(
 	};
 }
 
+export function projectWebArtifactRef(
+	artifact: ArtifactRecord,
+	receiptId?: string,
+) {
+	const disclosure =
+		artifact.redactionClass === "secret"
+			? {
+					access: "blocked" as const,
+					headline: contentMessage(
+						"artifact.secret.headline",
+					),
+					detail: contentMessage(
+						"artifact.secret.detail",
+					),
+				}
+			: artifact.redactionClass === "sensitive"
+				? {
+						access:
+							"acknowledgement-required" as const,
+						question: contentMessage(
+							"artifact.sensitive.question",
+						),
+						impact: contentMessage(
+							"artifact.sensitive.impact",
+						),
+						confirm: contentMessage(
+							"artifact.sensitive.confirm",
+						),
+						decline: contentMessage(
+							"artifact.sensitive.decline",
+						),
+					}
+				: {
+						access: "direct" as const,
+						action: contentMessage(
+							"artifact.download.action",
+						),
+					};
+	return {
+		artifactId: artifact.artifactId,
+		role: artifact.role,
+		digest: artifact.digest,
+		size: artifact.size,
+		mediaType: artifact.mediaType,
+		storageClass: artifact.storageClass,
+		redactionClass: artifact.redactionClass,
+		...(receiptId ? { receiptId } : {}),
+		integrity: "ok" as const,
+		disclosure,
+	};
+}
+
 type InspectedProject = {
 	entry: RegistryEntry;
 	result: InspectProjectControlStoreResult;
@@ -489,32 +541,32 @@ function webTimelineKind(
 
 function webTimelineSummary(
 	payload: import("./types.ts").ControlEvent["payload"],
-): string {
+): WebContentMessage {
 	switch (payload.type) {
 		case "RunReceived":
-			return "Task received.";
+			return contentMessage("timeline.run-received");
 		case "RunAdmitted":
-			return "Task admitted for execution.";
+			return contentMessage("timeline.run-admitted");
 		case "BoundFragmentLinked":
-			return "Dynamic task steps linked.";
+			return contentMessage("timeline.bound-fragment-linked");
 		case "RunStatusChanged":
-			return `Task state changed to ${payload.status}/${payload.stage}.`;
+			return contentMessage("timeline.run-status-changed");
 		case "ReconcileStarted":
-			return "Task execution check started.";
+			return contentMessage("timeline.reconcile-started");
 		case "ReconcileSettled":
-			return `Task execution check finished with ${payload.outcome}.`;
+			return contentMessage("timeline.reconcile-settled");
 		case "NeedsOperator":
-			return "Task requires operator review.";
+			return contentMessage("timeline.needs-operator");
 		case "ReceiptIssued":
-			return "Execution receipt issued.";
+			return contentMessage("timeline.receipt-issued");
 		case "ApprovalParked":
-			return "Task paused for a decision.";
+			return contentMessage("timeline.approval-parked");
 		case "ApprovalDecided":
-			return `Task decision recorded as ${payload.decision}.`;
+			return contentMessage("timeline.approval-decided");
 		case "CancelRequested":
-			return "Task cancellation requested.";
+			return contentMessage("timeline.cancel-requested");
 		case "Generic":
-			return "Execution progress recorded.";
+			return contentMessage("timeline.progress-recorded");
 	}
 }
 
@@ -840,23 +892,6 @@ export function createWebReadService(
 		});
 	}
 
-	function webArtifactRef(
-		artifact: ArtifactRecord,
-		receiptId?: string,
-	) {
-		return {
-			artifactId: artifact.artifactId,
-			role: artifact.role,
-			digest: artifact.digest,
-			size: artifact.size,
-			mediaType: artifact.mediaType,
-			storageClass: artifact.storageClass,
-			redactionClass: artifact.redactionClass,
-			...(receiptId ? { receiptId } : {}),
-			integrity: "ok" as const,
-		};
-	}
-
 	function replaySummary(
 		snapshot: ProjectControlReadSnapshot,
 		run: ProjectControlReadSnapshot["runs"][number],
@@ -890,7 +925,7 @@ export function createWebReadService(
 		}
 		return {
 			replayable: true as const,
-			traceArtifact: webArtifactRef(
+			traceArtifact: projectWebArtifactRef(
 				traceArtifact,
 				receipt.receiptId,
 			),
@@ -1451,7 +1486,7 @@ export function createWebReadService(
 				snapshot,
 				receipt,
 			).map((artifact) =>
-				webArtifactRef(artifact, receipt.receiptId),
+				projectWebArtifactRef(artifact, receipt.receiptId),
 			);
 			if (receipt.eventManifest.length > 200) {
 				throw new WebReadServiceError({
@@ -3464,7 +3499,7 @@ export function createWebReadService(
 			const refs = receipt
 				? resolveReceiptArtifacts(snapshot, receipt)
 						.map((artifact) =>
-							webArtifactRef(
+							projectWebArtifactRef(
 								artifact,
 								receipt.receiptId,
 							),

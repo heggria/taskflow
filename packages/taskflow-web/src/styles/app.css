@@ -1516,6 +1516,16 @@ a {
 	font-size: 9px;
 }
 
+.artifact-disclosure-blocked {
+	max-width: 260px;
+	color: var(--muted);
+	line-height: 1.45;
+}
+
+.artifact-disclosure-blocked strong {
+	color: var(--ink);
+}
+
 .pro-summary {
 	overflow: hidden;
 }
@@ -1664,6 +1674,12 @@ a {
 }
 
 .session-dialog.decision-card.standalone {
+	margin: 0;
+	background: var(--surface);
+	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+.sensitive-artifact-dialog.decision-card.standalone {
 	margin: 0;
 	background: var(--surface);
 	box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);

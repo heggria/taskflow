@@ -394,9 +394,11 @@ function PageHeader({
 function StatusStrip({
 	observation,
 	resource,
+	response,
 }: {
 	readonly observation: WebSourceObservation;
 	readonly resource?: WebAuthoritativeResourceIdentity;
+	readonly response?: object;
 }): React.JSX.Element | null {
 	const { liveState, message, refreshStampFor } = useApp();
 	const presentation = projectObservationPresentation({
@@ -406,7 +408,9 @@ function StatusStrip({
 			? {
 					kind: "authoritative-detail",
 					resource,
-					refreshStamp: refreshStampFor(resource),
+					refreshStamp: response
+						? refreshStampFor(resource, response)
+						: undefined,
 				}
 			: { kind: "aggregate" },
 	});
@@ -1059,12 +1063,16 @@ function WorkspacePage(): React.JSX.Element {
 	const { client, mode, t } = useApp();
 	const project = useQuery({
 		queryKey: ["project", projectId, controlDomainId],
-		queryFn: () =>
-			client.projectDetail({
-				params: { projectId, controlDomainId },
-				query: {},
-				body: {},
-			}),
+		queryFn: ({ signal }) =>
+			client.projectDetail(
+				{
+					params: { projectId, controlDomainId },
+					query: {},
+					body: {},
+				},
+				{ signal },
+			),
+		structuralSharing: false,
 	});
 	return (
 		<div className="page">
@@ -1082,6 +1090,7 @@ function WorkspacePage(): React.JSX.Element {
 						/>
 						<StatusStrip
 							observation={project.data.sourceObservation}
+							response={project.data}
 							resource={{
 								type: "project",
 								projectId: project.data.projectId,
@@ -1202,8 +1211,12 @@ function TaskDetailPage(): React.JSX.Element {
 	const queryClient = useQueryClient();
 	const detail = useQuery({
 		queryKey: ["run", params.projectId, params.controlDomainId, params.runId],
-		queryFn: () =>
-			client.runDetail({ params, query: {}, body: {} }),
+		queryFn: ({ signal }) =>
+			client.runDetail(
+				{ params, query: {}, body: {} },
+				{ signal },
+			),
+		structuralSharing: false,
 	});
 	const [tab, setTab] = useState<ProTaskTab>(initialProTaskTab);
 	const [focusProTabs, setFocusProTabs] = useState(false);
@@ -1222,7 +1235,7 @@ function TaskDetailPage(): React.JSX.Element {
 					detail.data.sourceObservation,
 					runResource,
 					liveState,
-					refreshStampFor(runResource),
+					refreshStampFor(runResource, detail.data),
 					csrfToken !== undefined,
 				)
 			: false;
@@ -1332,6 +1345,7 @@ function TaskDetailPage(): React.JSX.Element {
 						/>
 						<StatusStrip
 							observation={detail.data.sourceObservation}
+							response={detail.data}
 							resource={runResource}
 						/>
 						<div className="task-story-grid">
@@ -1500,7 +1514,7 @@ function DecisionCard({
 		detail.sourceObservation,
 		resource,
 		liveState,
-		refreshStampFor(resource),
+		refreshStampFor(resource, detail),
 		csrfToken !== undefined,
 	);
 	const decision = detail.presentation.decisionSet;
@@ -1564,8 +1578,12 @@ function ApprovalDetailPage(): React.JSX.Element {
 	const queryClient = useQueryClient();
 	const approval = useQuery({
 		queryKey: ["approval", ...Object.values(params)],
-		queryFn: () =>
-			client.approvalDetail({ params, query: {}, body: {} }),
+		queryFn: ({ signal }) =>
+			client.approvalDetail(
+				{ params, query: {}, body: {} },
+				{ signal },
+			),
+		structuralSharing: false,
 	});
 	const command = useDurableCommand({
 		client,
@@ -1591,7 +1609,7 @@ function ApprovalDetailPage(): React.JSX.Element {
 					approval.data.sourceObservation,
 					approvalResource,
 					liveState,
-					refreshStampFor(approvalResource),
+					refreshStampFor(approvalResource, approval.data),
 					csrfToken !== undefined,
 				)
 			: false;
@@ -1615,6 +1633,7 @@ function ApprovalDetailPage(): React.JSX.Element {
 						/>
 						<StatusStrip
 							observation={approval.data.sourceObservation}
+							response={approval.data}
 							resource={approvalResource}
 						/>
 						{approval.data.decisionPresentation ? (

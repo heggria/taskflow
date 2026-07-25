@@ -15,6 +15,7 @@ import {
 	WebFailurePresentationSchema,
 	WebObservationPresentationInputSchema,
 	WebObservationPresentationSchema,
+	WEB_CONTENT_CATALOG_VERSION,
 	WebContentMessageSchema,
 	WebTaskPresentationSchema,
 	WebTaskProjectionInputSchema,
@@ -49,6 +50,8 @@ const renderEvidencePath = path.join(
 );
 const shouldWrite = process.argv.includes("--write");
 const digest = `sha256:${"1".repeat(64)}`;
+const sensitiveDigest = `sha256:${"2".repeat(64)}`;
+const secretDigest = `sha256:${"3".repeat(64)}`;
 const at = 1_800_000_000_000;
 const contentMaterial = webContentCanonicalMaterial();
 const contentKeysetDigests = {
@@ -424,6 +427,80 @@ const receipt = {
 				redactionClass: "public",
 				receiptId: "receipt-1",
 				integrity: "ok",
+				disclosure: {
+					access: "direct",
+					action: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.download.action",
+						args: [],
+					},
+				},
+			},
+			{
+				artifactId: "artifact-2",
+				role: "replay-trace",
+				digest: sensitiveDigest,
+				size: 128,
+				mediaType:
+					"application/x-ndjson; charset=utf-8",
+				storageClass: "control-store",
+				redactionClass: "sensitive",
+				receiptId: "receipt-1",
+				integrity: "ok",
+				disclosure: {
+					access: "acknowledgement-required",
+					question: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.sensitive.question",
+						args: [],
+					},
+					impact: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.sensitive.impact",
+						args: [],
+					},
+					confirm: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.sensitive.confirm",
+						args: [],
+					},
+					decline: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.sensitive.decline",
+						args: [],
+					},
+				},
+			},
+			{
+				artifactId: "artifact-3",
+				role: "restricted-audit-material",
+				digest: secretDigest,
+				size: 64,
+				mediaType: "application/octet-stream",
+				storageClass: "control-store",
+				redactionClass: "secret",
+				receiptId: "receipt-1",
+				integrity: "ok",
+				disclosure: {
+					access: "blocked",
+					headline: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.secret.headline",
+						args: [],
+					},
+					detail: {
+						catalogVersion:
+							WEB_CONTENT_CATALOG_VERSION,
+						key: "artifact.secret.detail",
+						args: [],
+					},
+				},
 			},
 		],
 		issuedAt: at,
@@ -436,7 +513,7 @@ const receipt = {
 		buildInfo: { packageVersion: "0.3.0-beta.2", controlSchemaVersion: 1 },
 	},
 	verification: verifiedPresentation,
-	artifactCount: 1,
+	artifactCount: 3,
 	eventManifest: {
 		items: [
 			{
@@ -835,6 +912,11 @@ const manifest = {
 	protocol: { major: 1, minor: 0, schemaVersion: "web.v1" },
 	contentCatalogs: {
 		version: contentMaterial.version,
+		keyCounts: {
+			projected: contentMaterial.projectedRegistry.length,
+			static: contentMaterial.staticRegistry.length,
+			combined: contentMaterial.combinedKeys.length,
+		},
 		keysetDigests: contentKeysetDigests,
 		catalogDigests: contentCatalogDigests,
 	},
@@ -872,9 +954,14 @@ const manifest = {
 					fixtureFileSha256: sha256(body),
 					contentKeys: Array.from(
 						new Set(
-							JSON.stringify(fixture.projection).match(
-								/(?:task|verification|decision|observation|error|recovery|risk|empty|system)\.[A-Za-z0-9_.-]+/g,
-							) ?? [],
+							[
+								...collectRenderedContent(
+									fixture.source,
+								),
+								...collectRenderedContent(
+									fixture.projection,
+								),
+							].map((entry) => entry.key),
 						),
 					).sort(),
 				};

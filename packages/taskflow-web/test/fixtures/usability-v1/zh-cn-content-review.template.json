@@ -13,9 +13,9 @@
     "zhCN": "replace"
   },
   "requiredCoverage": {
-    "projectedKeys": 149,
+    "projectedKeys": 168,
     "staticKeys": 188,
-    "totalKeys": 337,
+    "totalKeys": 356,
     "screenFamilies": 9,
     "renderEntries": 149
   },

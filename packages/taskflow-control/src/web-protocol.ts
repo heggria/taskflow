@@ -7,7 +7,6 @@
 import { type Static, type TLiteral, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
 import {
-	ControlErrorSchema,
 	FORCE_RELEASE_ACKNOWLEDGEMENT,
 	RunStageSchema,
 	RunStatusSchema,
@@ -25,6 +24,7 @@ import {
 	type WebFeatureId,
 	WebAvailableActionSchema,
 	WebCommandKindSchema,
+	WebControlErrorSchema,
 	WebContentMessageSchema,
 	WebDecisionPresentationSchema,
 	WebFeatureIdSchema,
@@ -38,6 +38,12 @@ import {
 	WebVerificationPresentationSchema,
 	webAdditiveConsumerSchema,
 } from "./web-presentation-schema.ts";
+import {
+	WebCommitSeqSchema,
+	WebNonNegativeSafeIntegerSchema,
+	WebPositiveSafeIntegerSchema,
+	WebTimestampSchema,
+} from "./web-schema-primitives.ts";
 
 export { FORCE_RELEASE_ACKNOWLEDGEMENT } from "./types.ts";
 export * from "./web-presentation-schema.ts";
@@ -90,10 +96,10 @@ export const WebSafeIdSchema = Type.String({
 	pattern: SAFE_ID_PATTERN,
 });
 const IdSchema = WebSafeIdSchema;
-const TimestampSchema = Type.Integer({ minimum: 0 });
-const CommitSeqSchema = Type.Integer({ minimum: 0 });
-const NonNegativeIntSchema = Type.Integer({ minimum: 0 });
-const PositiveIntSchema = Type.Integer({ minimum: 1 });
+const TimestampSchema = WebTimestampSchema;
+const CommitSeqSchema = WebCommitSeqSchema;
+const NonNegativeIntSchema = WebNonNegativeSafeIntegerSchema;
+const PositiveIntSchema = WebPositiveSafeIntegerSchema;
 const WEB_DIGEST_PATTERN = "^[a-z0-9][a-z0-9+.-]*:[A-Fa-f0-9]{16,}$";
 const DigestSchema = Type.String({
 	minLength: 18,
@@ -119,7 +125,7 @@ export const WebApiErrorResponseSchema = Type.Object(
 		ok: Type.Literal(false),
 		requestId: IdSchema,
 		schemaVersion: Type.Literal(WEB_SCHEMA_VERSION),
-		error: ControlErrorSchema,
+		error: WebControlErrorSchema,
 	},
 	{ additionalProperties: false },
 );
@@ -639,6 +645,34 @@ export const WebBoundFragmentProvenanceSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
+export const WebArtifactDisclosureSchema = Type.Union([
+	Type.Object(
+		{
+			access: Type.Literal("direct"),
+			action: WebContentMessageSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			access: Type.Literal("acknowledgement-required"),
+			question: WebContentMessageSchema,
+			impact: WebContentMessageSchema,
+			confirm: WebContentMessageSchema,
+			decline: WebContentMessageSchema,
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			access: Type.Literal("blocked"),
+			headline: WebContentMessageSchema,
+			detail: WebContentMessageSchema,
+		},
+		{ additionalProperties: false },
+	),
+]);
+
 export const WebArtifactRefSchema = Type.Object(
 	{
 		artifactId: IdSchema,
@@ -655,6 +689,7 @@ export const WebArtifactRefSchema = Type.Object(
 		]),
 		receiptId: Type.Optional(IdSchema),
 		integrity: WebVerificationCheckStateSchema,
+		disclosure: WebArtifactDisclosureSchema,
 	},
 	{ additionalProperties: false },
 );
@@ -668,7 +703,7 @@ export const WebTimelineEventSchema = Type.Object(
 		commandId: Type.Optional(IdSchema),
 		recordedAt: TimestampSchema,
 		kind: Type.String({ minLength: 1, maxLength: 256 }),
-		summary: Type.String({ maxLength: 32_768 }),
+		summary: WebContentMessageSchema,
 		artifactRefs: Type.Array(WebArtifactRefSchema, { maxItems: 200 }),
 	},
 	{ additionalProperties: false },
@@ -1882,7 +1917,7 @@ export const WebFailedCommandOutcomeSchema = Type.Object(
 	{
 		...WebKnownCommandIdentity,
 		status: Type.Literal("failed"),
-		error: ControlErrorSchema,
+		error: WebControlErrorSchema,
 		run: Type.Optional(WebRunSummarySchema),
 	},
 	{ additionalProperties: false },
@@ -1892,7 +1927,7 @@ export const WebRejectedCommandOutcomeSchema = Type.Object(
 	{
 		...WebKnownCommandIdentity,
 		status: Type.Literal("rejected"),
-		error: ControlErrorSchema,
+		error: WebControlErrorSchema,
 	},
 	{ additionalProperties: false },
 );
@@ -2002,7 +2037,7 @@ export const WebStreamResetFrameSchema = Type.Object(
 	{
 		...WebStreamFrameBase,
 		type: Type.Literal("reset-required"),
-		error: ControlErrorSchema,
+		error: WebControlErrorSchema,
 	},
 	{ additionalProperties: false },
 );
@@ -2836,6 +2871,8 @@ export type WebClientTransportRequest = {
 	responseKind: WebEndpointResponseKind;
 	successResponseSchema: TSchema;
 	responseBudgetBytes: number;
+	signal?: AbortSignal;
+	sensitiveArtifactAcknowledgement?: "download";
 };
 
 export interface WebClientTransport {
@@ -2856,9 +2893,15 @@ export class WebClientCodecError extends Error {
 	override readonly name = "WebClientCodecError";
 }
 
+export type WebClientRequestOptions = {
+	readonly signal?: AbortSignal;
+	readonly sensitiveArtifactAcknowledgement?: "download";
+};
+
 export type WebGeneratedClient = {
 	[Id in WebEndpointId]: (
 		input: WebEndpointInput<(typeof WEB_ENDPOINTS)[Id]>,
+		options?: WebClientRequestOptions,
 	) => Promise<WebEndpointResult<(typeof WEB_ENDPOINTS)[Id]>>;
 };
 
@@ -2870,7 +2913,16 @@ export function createWebClient(
 			const endpoint = WEB_ENDPOINTS[id];
 			const method = async (
 				input: WebEndpointInput<typeof endpoint>,
+				options: WebClientRequestOptions = {},
 			): Promise<unknown> => {
+				if (
+					options.sensitiveArtifactAcknowledgement !== undefined &&
+					id !== "artifact"
+				) {
+					throw new TypeError(
+						"Sensitive artifact acknowledgement is valid only for artifact downloads",
+					);
+				}
 				const path =
 					compileWebEndpointPath(
 						id,
@@ -2885,10 +2937,45 @@ export function createWebClient(
 					path,
 					body: input.body,
 					responseKind: endpoint.responseKind,
-					successResponseSchema: endpoint.consumerSuccessResponseSchema,
+					successResponseSchema:
+						endpoint.responseKind ===
+						"bytes"
+							? endpoint.consumerSuccessDataSchema
+							: endpoint.consumerSuccessResponseSchema,
 					responseBudgetBytes: endpoint.responseBudgetBytes,
+					...(options.signal ? { signal: options.signal } : {}),
+					...(options.sensitiveArtifactAcknowledgement
+						? {
+								sensitiveArtifactAcknowledgement:
+									options.sensitiveArtifactAcknowledgement,
+							}
+						: {}),
 				});
-				if (endpoint.responseKind !== "json") return response;
+				if (endpoint.responseKind === "bytes") {
+					const byteResponse = response as {
+						metadata?: unknown;
+						body?: unknown;
+					};
+					if (
+						response === null ||
+						typeof response !== "object" ||
+						!Value.Check(
+							endpoint.consumerSuccessDataSchema,
+							byteResponse.metadata,
+						) ||
+						!(byteResponse.body instanceof Uint8Array) ||
+						byteResponse.body.byteLength !==
+							(
+								byteResponse.metadata as unknown as WebArtifactMetadata
+							).size
+					) {
+						throw new WebClientCodecError(
+							`${id} response did not match its P17 byte codec`,
+						);
+					}
+					return response;
+				}
+				if (endpoint.responseKind === "event-stream") return response;
 				if (Value.Check(endpoint.consumerSuccessResponseSchema, response)) {
 					return (response as { data: unknown }).data;
 				}

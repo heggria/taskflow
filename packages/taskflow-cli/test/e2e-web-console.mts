@@ -677,10 +677,20 @@ async function main(): Promise<void> {
 				);
 			});
 			const requestedApiPaths = new Set<string>();
+			let sensitiveArtifactAcknowledgementObserved = false;
 			page.on("request", (request) => {
 				const url = new URL(request.url());
 				if (url.pathname.startsWith("/api/v1/")) {
 					requestedApiPaths.add(url.pathname);
+				}
+				if (
+					url.pathname.includes("/artifacts/") &&
+					request.headers()[
+						"x-taskflow-sensitive-ack"
+					] === "download"
+				) {
+					sensitiveArtifactAcknowledgementObserved =
+						true;
 				}
 			});
 		page.on("console", (message) => {
@@ -1721,6 +1731,83 @@ async function main(): Promise<void> {
 					),
 				)
 				.not.toBe("");
+			const directArtifactFileName = await page.evaluate(
+				() =>
+					(
+						window as typeof window & {
+							__taskflowDownloadFileName?: string;
+						}
+					).__taskflowDownloadFileName ?? "",
+			);
+			const sensitiveArtifactTrigger = page.getByRole(
+				"button",
+				{
+					name: "Download this sensitive artifact?",
+				},
+			);
+			await expect(sensitiveArtifactTrigger).toBeVisible();
+			await sensitiveArtifactTrigger.click();
+			const sensitiveArtifactDialog = page.getByRole(
+				"alertdialog",
+				{
+					name: "Download this sensitive artifact?",
+				},
+			);
+			await expect(sensitiveArtifactDialog).toContainText(
+				"This file may contain sensitive workspace information.",
+			);
+			await sensitiveArtifactDialog
+				.getByRole("button", {
+					name: "Do not download",
+				})
+				.click();
+			await expect(sensitiveArtifactDialog).toBeHidden();
+			assert.equal(
+				sensitiveArtifactAcknowledgementObserved,
+				false,
+				"declining a sensitive artifact must not send an acknowledgement",
+			);
+
+			await sensitiveArtifactTrigger.click();
+			const sensitiveArtifactResponsePromise =
+				page.waitForResponse(
+					(response) =>
+						new URL(
+							response.url(),
+						).pathname.includes("/artifacts/") &&
+						response.status() === 200 &&
+						response.headers()[
+							"x-taskflow-redaction-class"
+						] === "sensitive",
+				);
+			await sensitiveArtifactDialog
+				.getByRole("button", {
+					name: "Download sensitive artifact",
+				})
+				.click();
+			await sensitiveArtifactResponsePromise;
+			await expect(sensitiveArtifactDialog).toBeHidden();
+			assert.equal(
+				sensitiveArtifactAcknowledgementObserved,
+				true,
+				"sensitive artifact download must carry the explicit acknowledgement",
+			);
+			await expect
+				.poll(() =>
+					page.evaluate(
+						() =>
+							(
+								window as typeof window & {
+									__taskflowDownloadFileName?: string;
+								}
+							).__taskflowDownloadFileName ??
+							"",
+					),
+				)
+				.not.toBe(directArtifactFileName);
+			trace(
+				"sensitive artifact disclosure and acknowledged download verified",
+			);
 			for (const suffix of [
 				"/graph",
 				"/attempts",
@@ -2460,6 +2547,9 @@ async function main(): Promise<void> {
 			proGraphListboxKeyboardParityVerified: true,
 			taskListPageVirtualizationVerified: true,
 			artifactDownloadPathObserved: true,
+			sensitiveArtifactDisclosureVerified: true,
+			sensitiveArtifactDeclineIssuedNoRequest: true,
+			sensitiveArtifactAcknowledgementObserved: true,
 			receiptJsonExported: true,
 			receiptJsonLocallyChecked: true,
 			whyStaleDistinctFromReplay: true,

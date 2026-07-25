@@ -90,12 +90,12 @@ export function useDurableCommand({
 	stateRef.current = state;
 	onSettledRef.current = onSettled;
 
-	useEffect(
-		() => () => {
+	useEffect(() => {
+		mountedRef.current = true;
+		return () => {
 			mountedRef.current = false;
-		},
-		[],
-	);
+		};
+	}, []);
 
 	const settle = useCallback(
 		async (

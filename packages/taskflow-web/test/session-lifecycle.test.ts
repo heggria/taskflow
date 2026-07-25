@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
 	INITIAL_WEB_SESSION_LIFECYCLE_STATE,
 	reduceWebSessionLifecycle,
+	shouldSurfaceWebBootFailure,
 } from "../src/session-lifecycle.ts";
 
 test("session lifecycle: pending local scope is cleared only by its matching request", () => {
@@ -71,5 +72,19 @@ test("session lifecycle: later successful revoke-all upgrades a raced current-ta
 			scope: "all",
 		}),
 		{ terminatedScope: "all" },
+	);
+});
+
+test("session lifecycle: cold-bootstrap 401 cannot be overwritten by generic boot failure", () => {
+	const terminated = reduceWebSessionLifecycle(
+		INITIAL_WEB_SESSION_LIFECYCLE_STATE,
+		{ type: "unauthorized" },
+	);
+	assert.equal(shouldSurfaceWebBootFailure(terminated), false);
+	assert.equal(
+		shouldSurfaceWebBootFailure(
+			INITIAL_WEB_SESSION_LIFECYCLE_STATE,
+		),
+		true,
 	);
 });

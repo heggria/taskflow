@@ -1,5 +1,6 @@
 import {
 	type WebArtifactMetadata,
+	WebArtifactMetadataSchema,
 	WebClientCodecError,
 	type WebClientTransport,
 	type WebClientTransportRequest,
@@ -11,6 +12,7 @@ export type WebJsonResponseObservation = {
 	readonly endpointId: WebClientTransportRequest["endpointId"];
 	readonly path: string;
 	readonly envelope: unknown;
+	readonly authorityGeneration: number;
 };
 export type WebJsonResponseObserver = (
 	observation: WebJsonResponseObservation,
@@ -27,25 +29,69 @@ async function readBounded(
 	maxBytes: number,
 ): Promise<Uint8Array> {
 	const declared = response.headers.get("content-length");
-	if (declared !== null && Number(declared) > maxBytes) {
-		throw new WebClientCodecError("Taskflow response exceeded its byte budget");
+	let declaredLength: number | undefined;
+	if (declared !== null) {
+		if (!/^(0|[1-9][0-9]*)$/u.test(declared)) {
+			throw new WebClientCodecError(
+				"Taskflow returned an invalid content length",
+			);
+		}
+		declaredLength = Number(declared);
+		if (
+			!Number.isSafeInteger(declaredLength) ||
+			declaredLength > maxBytes
+		) {
+			throw new WebClientCodecError(
+				"Taskflow response exceeded its byte budget",
+			);
+		}
 	}
 	const reader = response.body?.getReader();
-	if (!reader) return new Uint8Array();
+	if (!reader) {
+		if (declaredLength && declaredLength > 0) {
+			throw new WebClientCodecError(
+				"Taskflow response ended before its declared length",
+			);
+		}
+		return new Uint8Array();
+	}
 	const chunks: Uint8Array[] = [];
+	const declaredResult =
+		declaredLength === undefined
+			? undefined
+			: new Uint8Array(declaredLength);
 	let length = 0;
 	for (;;) {
 		const { done, value } = await reader.read();
 		if (done) break;
 		if (!value) continue;
 		length += value.byteLength;
-		if (length > maxBytes) {
+		if (
+			length > maxBytes ||
+			(declaredResult !== undefined &&
+				length > declaredResult.byteLength)
+		) {
 			await reader.cancel();
 			throw new WebClientCodecError(
 				"Taskflow response exceeded its byte budget",
 			);
 		}
-		chunks.push(value);
+		if (declaredResult) {
+			declaredResult.set(
+				value,
+				length - value.byteLength,
+			);
+		} else {
+			chunks.push(value);
+		}
+	}
+	if (declaredResult) {
+		if (length !== declaredResult.byteLength) {
+			throw new WebClientCodecError(
+				"Taskflow response ended before its declared length",
+			);
+		}
+		return declaredResult;
 	}
 	const result = new Uint8Array(length);
 	let offset = 0;
@@ -66,23 +112,33 @@ function artifactMetadata(response: Response): WebArtifactMetadata {
 		.startsWith("inline")
 		? "inline"
 		: "attachment";
-	return {
+	const redactionClass = response.headers.get(
+		"x-taskflow-redaction-class",
+	);
+	const metadata = {
 		digest,
 		size,
 		mediaType:
 			response.headers.get("content-type") ?? "application/octet-stream",
 		contentDisposition: disposition,
-		redactionClass:
-			response.headers.get("x-taskflow-redaction-class") === "sensitive"
-				? "sensitive"
-				: "project",
+		redactionClass,
 	};
+	if (
+		!Value.Check(WebArtifactMetadataSchema, metadata) ||
+		metadata.redactionClass === "secret"
+	) {
+		throw new WebClientCodecError(
+			"Taskflow returned invalid artifact metadata",
+		);
+	}
+	return metadata;
 }
 
 export function createFetchWebTransport(
 	readCsrfToken: CsrfTokenReader,
 	observeJsonResponse?: WebJsonResponseObserver,
 	observeUnauthorized?: WebUnauthorizedObserver,
+	readAuthorityGeneration: () => number = () => 0,
 ): WebClientTransport {
 	return {
 		async request(request: WebClientTransportRequest): Promise<unknown> {
@@ -91,12 +147,20 @@ export function createFetchWebTransport(
 					"Event streams use the browser EventSource transport",
 				);
 			}
+			const authorityGeneration = readAuthorityGeneration();
 			const headers = new Headers({ Accept: "application/json" });
+			if (request.sensitiveArtifactAcknowledgement) {
+				headers.set(
+					"X-Taskflow-Sensitive-Ack",
+					request.sensitiveArtifactAcknowledgement,
+				);
+			}
 			const init: RequestInit = {
 				method: request.method,
 				headers,
 				credentials: "same-origin",
 				cache: "no-store",
+				...(request.signal ? { signal: request.signal } : {}),
 			};
 			if (request.method === "POST") {
 				headers.set("Content-Type", "application/json");
@@ -144,6 +208,7 @@ export function createFetchWebTransport(
 					endpointId: request.endpointId,
 					path: request.path,
 					envelope: value,
+					authorityGeneration,
 				});
 			}
 			return value;

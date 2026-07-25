@@ -820,6 +820,93 @@ add(
 	"You do not need to do anything right now.",
 	"你目前不需要操作。",
 );
+add("artifact.download.action", "Download artifact", "下载产物");
+add(
+	"artifact.sensitive.question",
+	"Download this sensitive artifact?",
+	"要下载这个敏感产物吗？",
+);
+add(
+	"artifact.sensitive.impact",
+	"This file may contain sensitive workspace information. Keep it in an approved location and share it only with authorized people.",
+	"此文件可能包含工作区敏感信息。请仅保存到获准位置，并只与有权限的人员共享。",
+);
+add(
+	"artifact.sensitive.confirm",
+	"Download sensitive artifact",
+	"下载敏感产物",
+);
+add(
+	"artifact.sensitive.decline",
+	"Do not download",
+	"不下载",
+);
+add(
+	"artifact.secret.headline",
+	"Browser download is not available",
+	"无法通过浏览器下载",
+);
+add(
+	"artifact.secret.detail",
+	"This artifact is classified as secret. Taskflow will not disclose it through the Web Console.",
+	"此产物被标记为机密。Taskflow 不会通过 Web 控制台披露它。",
+);
+add("timeline.run-received", "Task received.", "已收到任务。");
+add(
+	"timeline.run-admitted",
+	"Task admitted for execution.",
+	"任务已进入执行队列。",
+);
+add(
+	"timeline.bound-fragment-linked",
+	"Dynamic task steps linked.",
+	"已关联动态任务步骤。",
+);
+add(
+	"timeline.run-status-changed",
+	"Task state changed.",
+	"任务状态已更新。",
+);
+add(
+	"timeline.reconcile-started",
+	"Task execution check started.",
+	"已开始检查任务执行情况。",
+);
+add(
+	"timeline.reconcile-settled",
+	"Task execution check finished.",
+	"任务执行情况检查已完成。",
+);
+add(
+	"timeline.needs-operator",
+	"Task requires operator review.",
+	"任务需要管理员检查。",
+);
+add(
+	"timeline.receipt-issued",
+	"Execution record issued.",
+	"已生成执行记录。",
+);
+add(
+	"timeline.approval-parked",
+	"Task paused for a decision.",
+	"任务已暂停，正在等待决定。",
+);
+add(
+	"timeline.approval-decided",
+	"Task decision recorded.",
+	"任务决定已记录。",
+);
+add(
+	"timeline.cancel-requested",
+	"Task cancellation requested.",
+	"已请求停止任务。",
+);
+add(
+	"timeline.progress-recorded",
+	"Execution progress recorded.",
+	"执行进度已记录。",
+);
 
 const actualKeys = Object.keys(catalog).sort((a, b) => a.localeCompare(b, "en"));
 const expectedKeys = [...WEB_PROJECTED_CONTENT_KEYS].sort((a, b) =>

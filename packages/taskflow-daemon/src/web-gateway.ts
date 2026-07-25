@@ -77,6 +77,7 @@ const REQUEST_BODY_TIMEOUT_MS = 30_000;
 const SESSION_COOKIE_MAX_AGE_SECONDS = 8 * 60 * 60;
 const ARTIFACT_STALL_TIMEOUT_MS = 30_000;
 export const WEB_ARTIFACT_ABSOLUTE_TIMEOUT_MS = 5 * 60_000;
+export const WEB_ARTIFACT_IN_FLIGHT_BYTE_BUDGET = 100 * 1024 * 1024;
 const ARTIFACT_WRITE_CHUNK_BYTES = 64 * 1024;
 const SSE_MAX_QUEUED_FRAMES = 256;
 const SSE_MAX_QUEUED_BYTES = 1024 * 1024;
@@ -939,6 +940,13 @@ export async function startWebGateway(
 		options.supportedCommands ??
 		WEB_DEFAULT_ENABLED_COMMAND_KINDS;
 	assertProductionWebCommandCapabilities(supportedCommands);
+	const supportedFeatures = [
+		...new Set(
+			options.supportedFeatures ??
+				WEB_DEFAULT_IMPLEMENTED_FEATURES,
+		),
+	].sort((left, right) => left.localeCompare(right, "en"));
+	const supportedFeatureSet = new Set(supportedFeatures);
 	const cursorCodec = createWebCursorCodec({
 		key: randomBytes(32),
 		listenerId,
@@ -1075,6 +1083,25 @@ export async function startWebGateway(
 	}
 	let expectedAuthority = "";
 	let origin = "";
+	let artifactBytesReserved = 0;
+
+	function acquireArtifactBytes(byteBudget: number): (() => void) | null {
+		if (
+			!Number.isSafeInteger(byteBudget) ||
+			byteBudget < 0 ||
+			artifactBytesReserved + byteBudget >
+				WEB_ARTIFACT_IN_FLIGHT_BYTE_BUDGET
+		) {
+			return null;
+		}
+		artifactBytesReserved += byteBudget;
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			artifactBytesReserved -= byteBudget;
+		};
+	}
 
 	const server = http.createServer(
 		{
@@ -1085,6 +1112,7 @@ export async function startWebGateway(
 		async (request, response) => {
 			const id = requestId();
 			let releaseRequest: (() => void) | undefined;
+			let releaseArtifactBytes: (() => void) | undefined;
 			try {
 				if (request.rawHeaders.length / 2 > 64) {
 					response.setHeader("Connection", "close");
@@ -1811,12 +1839,7 @@ export async function startWebGateway(
 								: {}),
 							controlSchemaVersion: 1,
 						},
-						supportedFeatures: [
-							...(options.supportedFeatures ??
-								WEB_DEFAULT_IMPLEMENTED_FEATURES),
-						].sort((left, right) =>
-							left.localeCompare(right, "en"),
-						),
+						supportedFeatures,
 						supportedCommands: [
 							...supportedCommands,
 						].sort((left, right) =>
@@ -1844,6 +1867,24 @@ export async function startWebGateway(
 						schemaVersion: WEB_SCHEMA_VERSION,
 						data,
 					});
+					return;
+				}
+
+				if (
+					endpoint.capability !== null &&
+					!supportedFeatureSet.has(endpoint.capability)
+				) {
+					sendJson(
+						response,
+						409,
+						failure(
+							id,
+							protocolError(
+								"TF_FEATURE_REQUIRED",
+								`Endpoint requires the unadvertised ${endpoint.capability} capability.`,
+							),
+						),
+					);
 					return;
 				}
 
@@ -2051,6 +2092,29 @@ export async function startWebGateway(
 					);
 					return;
 				}
+				if (endpointId === "artifact") {
+					const acquired = acquireArtifactBytes(
+						endpoint.responseBudgetBytes,
+					);
+					if (!acquired) {
+						sendJson(
+							response,
+							429,
+							failure(
+								id,
+								protocolError(
+									"TF_CAPACITY_EXCEEDED",
+									"Artifact download capacity is currently full.",
+									"none",
+									"none",
+								),
+							),
+							{ "Retry-After": "1" },
+						);
+						return;
+					}
+					releaseArtifactBytes = acquired;
+				}
 				const observedAt = now();
 				const timeoutCommandId =
 					endpointId === "commands" &&
@@ -2160,7 +2224,7 @@ export async function startWebGateway(
 							| "inline"
 							| "attachment";
 					};
-					const bytes = Buffer.from(result.body);
+					const bytes = result.body;
 					const digest = `sha256:${createHash(
 						"sha256",
 					)
@@ -2235,8 +2299,9 @@ export async function startWebGateway(
 						"Content-Length": String(
 							bytes.byteLength,
 						),
-						"Content-Disposition":
-							disposition,
+						"Content-Disposition": disposition,
+						"X-Taskflow-Redaction-Class":
+							metadata.redactionClass,
 						ETag: `"${metadata.digest}"`,
 						"Accept-Ranges": "none",
 					});
@@ -2294,6 +2359,7 @@ export async function startWebGateway(
 					response.destroy();
 				}
 			} finally {
+				releaseArtifactBytes?.();
 				releaseRequest?.();
 			}
 		},

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { JSDOM } from "jsdom";
+import {
+	createElement,
+	StrictMode,
+	type PropsWithChildren,
+} from "react";
 import type {
 	WebCommandOutcome,
 	WebCommandRequest,
@@ -143,4 +148,25 @@ test("reload recovery checks the durable command without inventing a request bod
 	if (result.current.state.status === "unknown") {
 		assert.equal(result.current.state.request, undefined);
 	}
+});
+
+test("durable command settles after the StrictMode setup-cleanup-setup cycle", async () => {
+	installDom();
+	const client = {
+		async commands(input: { body: WebCommandRequest }) {
+			return completed(input.body.commandId);
+		},
+	} as unknown as WebGeneratedClient;
+	const wrapper = ({ children }: PropsWithChildren) => (
+		createElement(StrictMode, null, children)
+	);
+	const { result } = renderHook(
+		() => useDurableCommand({ client, onSettled: () => undefined }),
+		{ wrapper },
+	);
+
+	await act(async () => {
+		await result.current.execute(cancelBase);
+	});
+	assert.equal(result.current.state.status, "settled");
 });

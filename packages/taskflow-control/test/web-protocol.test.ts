@@ -143,6 +143,13 @@ test("P17 command union is closed and policy mutation is absent", () => {
 			`unsafe commandId accepted: ${JSON.stringify(unsafe)}`,
 		);
 	}
+	assert.equal(
+		Value.Check(WebCommandRequestSchema, {
+			...cancel,
+			expectedRunVersion: Number.MAX_SAFE_INTEGER + 1,
+		}),
+		false,
+	);
 });
 
 test("P17 force-release requires complete observed CAS state and exact acknowledgement", () => {
@@ -309,8 +316,7 @@ test("P17 authoritative DTOs require source observation and reject pre-v5 Run de
 });
 
 test("P17 page cursor binds keyset while stream cursor has no page state", () => {
-	assert.equal(
-		Value.Check(WebPageCursorPayloadSchema, {
+	const pageCursor = {
 			version: 1,
 			kind: "page",
 			collection: "runs",
@@ -332,9 +338,20 @@ test("P17 page cursor binds keyset while stream cursor has no page state", () =>
 			},
 			issuedAt: 1,
 			expiresAt: 2,
-		}),
-		true,
-	);
+		};
+	assert.equal(Value.Check(WebPageCursorPayloadSchema, pageCursor), true);
+	for (const unsafe of [
+		{ ...pageCursor, issuedAt: Number.MAX_SAFE_INTEGER + 1 },
+		{
+			...pageCursor,
+			after: {
+				...pageCursor.after,
+				sortValue: Number.MAX_SAFE_INTEGER + 1,
+			},
+		},
+	]) {
+		assert.equal(Value.Check(WebPageCursorPayloadSchema, unsafe), false);
+	}
 	const streamCursor = {
 		version: 1,
 		kind: "stream",
@@ -350,6 +367,13 @@ test("P17 page cursor binds keyset while stream cursor has no page state", () =>
 		expiresAt: 2,
 	};
 	assert.equal(Value.Check(WebStreamCursorPayloadSchema, streamCursor), true);
+	assert.equal(
+		Value.Check(WebStreamCursorPayloadSchema, {
+			...streamCursor,
+			projectPositions: [Number.MAX_SAFE_INTEGER + 1],
+		}),
+		false,
+	);
 	assert.equal(
 		Value.Check(WebStreamCursorPayloadSchema, {
 			...streamCursor,

@@ -14,6 +14,11 @@ import type {
 	AdmitResult,
 	ControlHost,
 } from "./control-host.ts";
+import { hashRequest } from "./hash.ts";
+import type {
+	CoordinatorCommandRouteAuthority,
+	CoordinatorCommandRouteClaim,
+} from "./store/coordinator.ts";
 import {
 	WEB_COMMAND_KINDS,
 	type WebCommandKind,
@@ -337,33 +342,189 @@ function resolveHomeProject(
 	return resolved;
 }
 
-function assertNoCrossAuthorityCollision(
-	host: ControlHost,
+function sameCommandAuthority(
+	left: CoordinatorCommandRouteAuthority,
+	right: CoordinatorCommandRouteAuthority,
+): boolean {
+	return (
+		left.kind === right.kind &&
+		(left.kind === "coordinator" ||
+			(right.kind === "project" &&
+				left.projectId === right.projectId &&
+				left.controlDomainId === right.controlDomainId))
+	);
+}
+
+function commandAuthorityConflict(
 	commandId: string,
-	target: "project" | "coordinator",
+	code:
+		| "TF_IDEMPOTENCY_CONFLICT"
+		| "TF_CROSS_PRINCIPAL_COMMAND",
+): never {
+	throwControl(
+		protocolError(
+			code,
+			code === "TF_CROSS_PRINCIPAL_COMMAND"
+				? "The command belongs to another principal."
+				: "The command id is already bound to another request or authority.",
+			{
+				recoveryAction:
+					code === "TF_IDEMPOTENCY_CONFLICT"
+						? "retry-new-command"
+						: "none",
+				sideEffects: "none",
+				commandId,
+			},
+		),
+	);
+}
+
+function legacyAuthorityRequestHash(
+	request: WebCommandRequest,
+): string | null {
+	switch (request.kind) {
+		case "approve":
+			return hashRequest({
+				kind: request.kind,
+				runId: request.runId,
+				expectedRunVersion: request.expectedRunVersion,
+				approvalRequestId: request.approvalRequestId,
+			});
+		case "reject":
+			return hashRequest({
+				kind: request.kind,
+				runId: request.runId,
+				expectedRunVersion: request.expectedRunVersion,
+				approvalRequestId: request.approvalRequestId,
+				reason: request.reason,
+			});
+		case "cancel-run":
+			return hashRequest({
+				kind: request.kind,
+				runId: request.runId,
+				expectedRunVersion: request.expectedRunVersion,
+				reason: request.reason,
+			});
+		case "set-max-active-runs":
+			return hashRequest({
+				value: request.value,
+				expectedMaxActiveRuns: request.expectedMaxActiveRuns,
+				expectedCoordinatorEpoch:
+					request.expectedCoordinatorEpoch,
+			});
+		case "force-release":
+			return hashRequest({
+				reservationId: request.reservationId,
+				expectedState: request.expectedState,
+				expectedRevision: request.expectedRevision,
+				expectedCoordinatorEpoch:
+					request.expectedCoordinatorEpoch,
+				expectedProjectId: request.expectedProjectId,
+				expectedControlDomainId:
+					request.expectedControlDomainId,
+				expectedRunId: request.expectedRunId,
+				acknowledgement: request.acknowledgement,
+			});
+		case "edit-approval":
+		case "resume-run":
+		case "recompute-run":
+		case "reconcile-run":
+			return null;
+	}
+}
+
+function claimCommandRoute(
+	host: ControlHost,
+	request: WebCommandRequest,
+	principalId: string,
+	authority: CoordinatorCommandRouteAuthority,
 	listHosts: () => readonly ControlHost[],
-): void {
-	const collision =
-		target === "project"
-			? host.coordinator.getCommand(commandId)
-			: listHosts().find(
-					(candidate) =>
-						candidate.store.getCommand(commandId) !==
-						null,
-				);
-	if (collision) {
+): CoordinatorCommandRouteClaim {
+	const projectRecords = listHosts().flatMap((candidate) => {
+		const record = candidate.store.getCommand(request.commandId);
+		return record
+			? [
+					{
+						record,
+						authority: {
+							kind: "project" as const,
+							projectId: candidate.projectId,
+							controlDomainId:
+								candidate.controlDomainId,
+						},
+					},
+				]
+			: [];
+	});
+	const coordinator = host.coordinator.getCommand(request.commandId);
+	const existing = [
+		...projectRecords,
+		...(coordinator
+			? [
+					{
+						record: coordinator,
+						authority: {
+							kind: "coordinator" as const,
+						},
+					},
+				]
+			: []),
+	];
+	if (existing.length > 1) {
 		throwControl(
 			protocolError(
-				"TF_IDEMPOTENCY_CONFLICT",
-				"The command id is already bound to another command authority.",
+				"TF_DURABILITY_FAILED",
+				"The command id is bound in more than one authority.",
 				{
-					recoveryAction: "retry-new-command",
-					sideEffects: "none",
-					commandId,
+					recoveryAction: "operator",
+					sideEffects: "unknown",
+					commandId: request.commandId,
 				},
 			),
 		);
 	}
+	const prior = existing[0];
+	if (prior) {
+		if (prior.record.callerPrincipal !== principalId) {
+			commandAuthorityConflict(
+				request.commandId,
+				"TF_CROSS_PRINCIPAL_COMMAND",
+			);
+		}
+		if (!sameCommandAuthority(prior.authority, authority)) {
+			commandAuthorityConflict(
+				request.commandId,
+				"TF_IDEMPOTENCY_CONFLICT",
+			);
+		}
+		const expectedLegacyHash =
+			legacyAuthorityRequestHash(request);
+		if (
+			expectedLegacyHash === null ||
+			browserCommandKind(prior.record) !== request.kind ||
+			prior.record.requestHash !== expectedLegacyHash
+		) {
+			commandAuthorityConflict(
+				request.commandId,
+				"TF_IDEMPOTENCY_CONFLICT",
+			);
+		}
+	}
+	const result = host.coordinator.claimCommandRoute({
+		commandId: request.commandId,
+		authority,
+		callerPrincipal: principalId,
+		requestHash: hashRequest(request),
+	});
+	if (result.kind === "conflict") {
+		commandAuthorityConflict(
+			request.commandId,
+			result.claim.callerPrincipal === principalId
+				? "TF_IDEMPOTENCY_CONFLICT"
+				: "TF_CROSS_PRINCIPAL_COMMAND",
+		);
+	}
+	return result.claim;
 }
 
 export function createWebCommandHandlers(
@@ -421,10 +582,16 @@ export function createWebCommandHandlers(
 					request,
 					options,
 				);
-				assertNoCrossAuthorityCollision(
-					projectHost,
-					request.commandId,
-					"project",
+				claimCommandRoute(
+					host,
+					request,
+					context.principalId,
+					{
+						kind: "project",
+						projectId: projectHost.projectId,
+						controlDomainId:
+							projectHost.controlDomainId,
+					},
 					listHosts,
 				);
 				const result = await projectHost.approve(request.runId, {
@@ -453,10 +620,16 @@ export function createWebCommandHandlers(
 					request,
 					options,
 				);
-				assertNoCrossAuthorityCollision(
-					projectHost,
-					request.commandId,
-					"project",
+				claimCommandRoute(
+					host,
+					request,
+					context.principalId,
+					{
+						kind: "project",
+						projectId: projectHost.projectId,
+						controlDomainId:
+							projectHost.controlDomainId,
+					},
 					listHosts,
 				);
 				const result = await projectHost.reject(request.runId, {
@@ -486,10 +659,16 @@ export function createWebCommandHandlers(
 					request,
 					options,
 				);
-				assertNoCrossAuthorityCollision(
-					projectHost,
-					request.commandId,
-					"project",
+				claimCommandRoute(
+					host,
+					request,
+					context.principalId,
+					{
+						kind: "project",
+						projectId: projectHost.projectId,
+						controlDomainId:
+							projectHost.controlDomainId,
+					},
 					listHosts,
 				);
 				const result = await projectHost.cancel(request.runId, {
@@ -512,12 +691,6 @@ export function createWebCommandHandlers(
 				throwControl(resultError(result));
 			}
 			case "set-max-active-runs": {
-				assertNoCrossAuthorityCollision(
-					host,
-					request.commandId,
-					"coordinator",
-					listHosts,
-				);
 				if (!host.canMutate) {
 					throwControl(
 						protocolError(
@@ -532,6 +705,13 @@ export function createWebCommandHandlers(
 						),
 					);
 				}
+				claimCommandRoute(
+					host,
+					request,
+					context.principalId,
+					{ kind: "coordinator" },
+					listHosts,
+				);
 				try {
 					const record =
 						host.coordinator.setMaxActiveRuns(
@@ -563,10 +743,11 @@ export function createWebCommandHandlers(
 				}
 			}
 			case "force-release": {
-				assertNoCrossAuthorityCollision(
+				claimCommandRoute(
 					host,
-					request.commandId,
-					"coordinator",
+					request,
+					context.principalId,
+					{ kind: "coordinator" },
 					listHosts,
 				);
 				const result = host.forceReleaseReservation(
@@ -638,6 +819,65 @@ export function createWebCommandHandlers(
 		commandId: string,
 		context: WebHandlerContext,
 	): WebCommandOutcome {
+		const route = host.coordinator.getCommandRoute(commandId);
+		if (route) {
+			if (route.callerPrincipal !== context.principalId) {
+				commandAuthorityConflict(
+					commandId,
+					"TF_CROSS_PRINCIPAL_COMMAND",
+				);
+			}
+			let record: CommandRecord | CoordinatorCommandRecord | null;
+			if (route.authority.kind === "coordinator") {
+				record = host.coordinator.getCommand(commandId);
+			} else {
+				const authority = route.authority;
+				const projectHost =
+					options.resolveHost?.(
+						authority.projectId,
+						authority.controlDomainId,
+					) ??
+					listHosts().find(
+						(candidate) =>
+							candidate.projectId ===
+								authority.projectId &&
+							candidate.controlDomainId ===
+								authority.controlDomainId,
+					) ??
+					null;
+				record =
+					projectHost?.store.getCommand(commandId) ?? null;
+			}
+			if (!record) {
+				return {
+					commandId,
+					status: "not-found",
+					observedAt: context.observedAt,
+				};
+			}
+			if (record.callerPrincipal !== route.callerPrincipal) {
+				throwControl(
+					protocolError(
+						"TF_DURABILITY_FAILED",
+						"The durable command route and record disagree.",
+						{
+							commandId,
+							recoveryAction: "operator",
+							sideEffects: "unknown",
+						},
+					),
+				);
+			}
+			return route.authority.kind === "project"
+				? projectOutcome(
+						record as CommandRecord,
+						context.observedAt,
+					)
+				: coordinatorOutcome(
+						record as CoordinatorCommandRecord,
+						context.observedAt,
+					);
+		}
 		const projectRecords = listHosts().flatMap((candidate) => {
 			const record = candidate.store.getCommand(commandId);
 			return record ? [record] : [];

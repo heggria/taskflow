@@ -6,6 +6,10 @@
  */
 import { type Static, type TLiteral, Type } from "typebox";
 import { SAFE_ID_MAX_LENGTH, SAFE_ID_PATTERN } from "./validate-ids.ts";
+import {
+	WebNonNegativeSafeIntegerSchema,
+	WebPositiveSafeIntegerSchema,
+} from "./web-schema-primitives.ts";
 
 const Sha256Schema = Type.String({
 	pattern: "^sha256:[a-f0-9]{64}$",
@@ -89,8 +93,8 @@ export const WebAssetManifestSchema = Type.Object(
 		protocolConsumer: Type.Object(
 			{
 				major: Type.Literal(1),
-				minMinor: Type.Integer({ minimum: 0 }),
-				maxMinor: Type.Integer({ minimum: 0 }),
+				minMinor: WebNonNegativeSafeIntegerSchema,
+				maxMinor: WebNonNegativeSafeIntegerSchema,
 			},
 			{ additionalProperties: false },
 		),
@@ -106,7 +110,7 @@ export const WebAssetManifestSchema = Type.Object(
 				{
 					path: RelativeAssetPathSchema,
 					sha256: Sha256Schema,
-					size: Type.Integer({ minimum: 0 }),
+					size: WebNonNegativeSafeIntegerSchema,
 					mediaType: WebStaticMediaTypeSchema,
 				},
 				{ additionalProperties: false },
@@ -141,7 +145,7 @@ export const WebAssetManifestSchema = Type.Object(
 							locale: Type.Literal("en"),
 							path: RelativeAssetPathSchema,
 							sha256: Sha256Schema,
-							size: Type.Integer({ minimum: 1 }),
+							size: WebPositiveSafeIntegerSchema,
 						},
 						{ additionalProperties: false },
 					),
@@ -150,7 +154,7 @@ export const WebAssetManifestSchema = Type.Object(
 							locale: Type.Literal("zh-CN"),
 							path: RelativeAssetPathSchema,
 							sha256: Sha256Schema,
-							size: Type.Integer({ minimum: 1 }),
+							size: WebPositiveSafeIntegerSchema,
 						},
 						{ additionalProperties: false },
 					),

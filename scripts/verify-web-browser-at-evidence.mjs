@@ -97,10 +97,26 @@ export function verifyWebBrowserAtEvidence(evidenceFile) {
     "browser/AT evidence contains an email address",
   );
   const record = JSON.parse(text);
+  const renderEvidence = JSON.parse(
+    fs.readFileSync(
+      path.join(referenceRoot, "render-evidence.json"),
+      "utf8",
+    ),
+  );
   assertNoPlaceholders(record, "browser/AT evidence");
   assert.equal(record.schemaVersion, "taskflow-browser-at-review.v1");
   assert.equal(record.status, "complete");
   assert.match(record.buildCommit, commitPattern);
+  assert.equal(
+    renderEvidence.evidenceVersion,
+    "taskflow-web-reference-render.v2",
+  );
+  assert.equal(renderEvidence.candidate?.trackedSourceClean, true);
+  assert.equal(
+    record.buildCommit,
+    renderEvidence.candidate?.gitCommit,
+    "browser/AT evidence must name the exact rendered candidate commit",
+  );
   assert.equal(
     record.referenceManifestSha256,
     sha256File(path.join(referenceRoot, "manifest.json")),

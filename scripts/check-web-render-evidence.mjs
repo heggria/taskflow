@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +21,21 @@ const fixtureRoot = path.join(
 	repoRoot,
 	"packages/taskflow-control/test/fixtures/web-v1/reference",
 );
+const webAssetManifestPath = path.join(
+	repoRoot,
+	"packages/taskflow-web/dist/app/taskflow-web-assets.json",
+);
+const renderSourceScopes = [
+	"package.json",
+	"pnpm-lock.yaml",
+	"tsconfig.base.json",
+	"packages/taskflow-web",
+	"packages/taskflow-control/src",
+	"packages/taskflow-daemon/src",
+	"packages/taskflow-cli/src",
+	"packages/taskflow-cli/test/render-web-reference.mts",
+	"scripts/generate-web-reference-fixtures.mjs",
+];
 
 function sha256(filePath) {
 	return `sha256:${createHash("sha256")
@@ -34,8 +50,76 @@ const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
 const reviewTemplate = JSON.parse(
 	fs.readFileSync(reviewTemplatePath, "utf8"),
 );
+if (evidence.evidenceVersion !== "taskflow-web-reference-render.v2") {
+	throw new Error(`unexpected render evidence version: ${evidence.evidenceVersion}`);
+}
 if (evidence.status !== "rendered-awaiting-human-approval") {
 	throw new Error(`unexpected render evidence status: ${evidence.status}`);
+}
+if (
+	!evidence.candidate ||
+	!/^[0-9a-f]{40}$/u.test(evidence.candidate.gitCommit) ||
+	evidence.candidate.trackedSourceClean !== true ||
+	!/^sha256:[0-9a-f]{64}$/u.test(evidence.candidate.webBuildId) ||
+	!/^sha256:[0-9a-f]{64}$/u.test(
+		evidence.candidate.assetManifestSha256,
+	)
+) {
+	throw new Error("render evidence candidate provenance is incomplete");
+}
+const candidateCheck = spawnSync(
+	"git",
+	["cat-file", "-e", `${evidence.candidate.gitCommit}^{commit}`],
+	{ cwd: repoRoot, encoding: "utf8" },
+);
+if (candidateCheck.status !== 0) {
+	throw new Error(
+		`render candidate commit is unavailable: ${candidateCheck.stderr}`,
+	);
+}
+const ancestryCheck = spawnSync(
+	"git",
+	[
+		"merge-base",
+		"--is-ancestor",
+		evidence.candidate.gitCommit,
+		"HEAD",
+	],
+	{ cwd: repoRoot },
+);
+if (ancestryCheck.status !== 0) {
+	throw new Error("render candidate must be an ancestor of the evidence tip");
+}
+const sourceDrift = spawnSync(
+	"git",
+	[
+		"diff",
+		"--quiet",
+		evidence.candidate.gitCommit,
+		"HEAD",
+		"--",
+		...renderSourceScopes,
+	],
+	{ cwd: repoRoot },
+);
+if (sourceDrift.status !== 0) {
+	throw new Error(
+		"rendered Web source differs from the recorded candidate commit",
+	);
+}
+if (fs.existsSync(webAssetManifestPath)) {
+	if (
+		sha256(webAssetManifestPath) !==
+		evidence.candidate.assetManifestSha256
+	) {
+		throw new Error("packaged Web asset manifest differs from render evidence");
+	}
+	const assetManifest = JSON.parse(
+		fs.readFileSync(webAssetManifestPath, "utf8"),
+	);
+	if (assetManifest.webBuildId !== evidence.candidate.webBuildId) {
+		throw new Error("packaged Web build id differs from render evidence");
+	}
 }
 if (evidence.review?.approved !== false) {
 	throw new Error("unapproved reference evidence cannot claim approval");
@@ -77,7 +161,11 @@ for (const [fixtureId, digest] of Object.entries(
 	}
 }
 for (const screenshot of evidence.screenshots) {
-	const filePath = path.join(repoRoot, screenshot.path);
+	const filePath = path.resolve(repoRoot, screenshot.path);
+	const relative = path.relative(repoRoot, filePath);
+	if (relative.startsWith("..") || path.isAbsolute(relative)) {
+		throw new Error(`${screenshot.path}: screenshot escaped the repository`);
+	}
 	if (!fs.existsSync(filePath)) {
 		throw new Error(`${screenshot.path}: screenshot is missing`);
 	}

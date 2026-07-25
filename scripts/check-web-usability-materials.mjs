@@ -34,6 +34,10 @@ const browserAt = readJson(
   reviewRoot,
   "browser-at-result.template.json",
 );
+const referenceManifest = readJson(
+  path.join(reviewRoot, "reference-set-v1"),
+  "manifest.json",
+);
 const protocol = readFileSync(
   path.join(reviewRoot, "usability-script-v1.md"),
   "utf8",
@@ -237,9 +241,10 @@ assert.equal(
 assert.equal(zhReview.nativeSimplifiedChineseReviewer, false);
 assert.equal(zhReview.independentFromImplementation, false);
 assert.deepEqual(zhReview.requiredCoverage, {
-  projectedKeys: 149,
-  staticKeys: 188,
-  totalKeys: 337,
+  projectedKeys:
+    referenceManifest.contentCatalogs.keyCounts.projected,
+  staticKeys: referenceManifest.contentCatalogs.keyCounts.static,
+  totalKeys: referenceManifest.contentCatalogs.keyCounts.combined,
   screenFamilies: 9,
   renderEntries: 149,
 });
@@ -312,5 +317,5 @@ assert.equal(browserAt.reviewerAttestation, false);
 runWebHumanEvidenceVerifierSelfTest();
 
 console.log(
-  "web usability materials valid (7 RFC tasks + 8 severity-1 codes + 337 zh-CN keys + 5 observed AT lanes; completed-evidence verifier self-test passed)",
+  `web usability materials valid (7 RFC tasks + 8 severity-1 codes + ${referenceManifest.contentCatalogs.keyCounts.combined} zh-CN keys + 5 observed AT lanes; completed-evidence verifier self-test passed)`,
 );

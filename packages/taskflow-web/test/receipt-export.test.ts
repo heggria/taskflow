@@ -60,6 +60,14 @@ function receiptPage(input: {
 					redactionClass: "project",
 					receiptId: "receipt-1",
 					integrity: "ok",
+					disclosure: {
+						access: "direct",
+						action: {
+							catalogVersion: "taskflow-content.v1",
+							key: "artifact.download.action",
+							args: [],
+						},
+					},
 				},
 			],
 			issuedAt: 1_750_000_000_000,

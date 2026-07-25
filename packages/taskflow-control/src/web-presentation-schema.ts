@@ -22,24 +22,20 @@ import {
 	TF_ERROR_CODES,
 } from "./types.ts";
 import { SAFE_ID_MAX_LENGTH, SAFE_ID_PATTERN } from "./validate-ids.ts";
+import {
+	WebNonNegativeSafeIntegerSchema,
+	WebPositiveSafeIntegerSchema,
+	WebTimestampSchema,
+} from "./web-schema-primitives.ts";
 
 const IdSchema = Type.String({
 	minLength: 1,
 	maxLength: SAFE_ID_MAX_LENGTH,
 	pattern: SAFE_ID_PATTERN,
 });
-const TimestampSchema = Type.Integer({
-	minimum: 0,
-	maximum: Number.MAX_SAFE_INTEGER,
-});
-const NonNegativeIntSchema = Type.Integer({
-	minimum: 0,
-	maximum: Number.MAX_SAFE_INTEGER,
-});
-const PositiveIntSchema = Type.Integer({
-	minimum: 1,
-	maximum: Number.MAX_SAFE_INTEGER,
-});
+const TimestampSchema = WebTimestampSchema;
+const NonNegativeIntSchema = WebNonNegativeSafeIntegerSchema;
+const PositiveIntSchema = WebPositiveSafeIntegerSchema;
 const DigestSchema = Type.String({
 	minLength: 16,
 	maxLength: 256,
@@ -69,7 +65,7 @@ export function webAdditiveConsumerSchema<const Properties extends TProperties>(
 	});
 }
 
-const WebControlErrorSchema = Type.Object(
+export const WebControlErrorSchema = Type.Object(
 	{
 		code: literalUnion(TF_ERROR_CODES),
 		message: Type.String({ maxLength: 8_192 }),
@@ -328,6 +324,29 @@ export const WEB_EMPTY_SYSTEM_CONTENT_KEYS = [
 	"system.partial-workspaces",
 	"system.no-action-required",
 ] as const;
+export const WEB_ARTIFACT_DISCLOSURE_CONTENT_KEYS = [
+	"artifact.download.action",
+	"artifact.sensitive.question",
+	"artifact.sensitive.impact",
+	"artifact.sensitive.confirm",
+	"artifact.sensitive.decline",
+	"artifact.secret.headline",
+	"artifact.secret.detail",
+] as const;
+export const WEB_TIMELINE_CONTENT_KEYS = [
+	"timeline.run-received",
+	"timeline.run-admitted",
+	"timeline.bound-fragment-linked",
+	"timeline.run-status-changed",
+	"timeline.reconcile-started",
+	"timeline.reconcile-settled",
+	"timeline.needs-operator",
+	"timeline.receipt-issued",
+	"timeline.approval-parked",
+	"timeline.approval-decided",
+	"timeline.cancel-requested",
+	"timeline.progress-recorded",
+] as const;
 
 export const WEB_PROJECTED_CONTENT_KEYS = [
 	...WEB_TASK_HEADLINE_KEYS,
@@ -340,6 +359,8 @@ export const WEB_PROJECTED_CONTENT_KEYS = [
 	...WEB_RISK_CONTENT_KEYS,
 	...WEB_ATTENTION_CONTENT_KEYS,
 	...WEB_EMPTY_SYSTEM_CONTENT_KEYS,
+	...WEB_ARTIFACT_DISCLOSURE_CONTENT_KEYS,
+	...WEB_TIMELINE_CONTENT_KEYS,
 ] as const;
 export type WebProjectedContentKey =
 	(typeof WEB_PROJECTED_CONTENT_KEYS)[number];

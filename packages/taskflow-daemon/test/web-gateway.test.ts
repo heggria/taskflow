@@ -25,6 +25,7 @@ import {
 import { Value } from "typebox/value";
 import {
 	WEB_ARTIFACT_ABSOLUTE_TIMEOUT_MS,
+	WEB_ARTIFACT_IN_FLIGHT_BYTE_BUDGET,
 	WEB_DEFAULT_IMPLEMENTED_FEATURES,
 	WEB_IMPLEMENTED_GATEWAY_ENDPOINT_IDS,
 	pumpWebSseFrames,
@@ -1316,6 +1317,99 @@ test("WebGateway: artifact writer honors drain and destroys a stalled transport"
 	assert.ok(Date.now() - absoluteStartedAt < 500);
 });
 
+test("WebGateway: listener-wide artifact byte budget admits only one maximum-size disclosure", async () => {
+	assert.equal(
+		WEB_ARTIFACT_IN_FLIGHT_BYTE_BUDGET,
+		WEB_MAX_ARTIFACT_BYTES,
+	);
+	const fixture = setup();
+	const listenerId = "listener-artifact-byte-budget";
+	const keysetDigest = digest("artifact-byte-budget-keyset");
+	const body = Buffer.from("bounded artifact", "utf8");
+	const artifactDigest = digest(body);
+	let enterFirst: (() => void) | undefined;
+	const firstEntered = new Promise<void>((resolve) => {
+		enterFirst = resolve;
+	});
+	let releaseFirst: (() => void) | undefined;
+	const firstReleased = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	let calls = 0;
+	let gateway: WebGatewayHandle | undefined;
+	try {
+		gateway = await startWebGateway({
+			host: fixture.host,
+			listenerId,
+			contentKeysetDigests: {
+				projected: keysetDigest,
+				static: keysetDigest,
+				combined: keysetDigest,
+			},
+			handlers: {
+				artifact: async () => {
+					calls += 1;
+					if (calls === 1) {
+						enterFirst?.();
+						await firstReleased;
+					}
+					return {
+						metadata: {
+							digest: artifactDigest,
+							size: body.byteLength,
+							mediaType: "application/octet-stream",
+							fileName: "bounded.bin",
+							redactionClass: "project",
+							contentDisposition: "attachment",
+						},
+						body,
+					};
+				},
+			},
+		});
+		const exchange = await request(gateway, {
+			method: "POST",
+			path: "/api/v1/session/exchange",
+			origin: gateway.origin,
+			body: { launchToken: gateway.launchToken },
+		});
+		const cookie = exchange.headers["set-cookie"]?.[0]?.split(";")[0];
+		assert.ok(cookie);
+		const artifactPath =
+			`/api/v1/projects/${fixture.host.projectId}` +
+			`/domains/${fixture.host.controlDomainId}` +
+			`/artifacts/${encodeURIComponent(artifactDigest)}`;
+		const first = requestBytes(gateway, {
+			path: artifactPath,
+			cookie,
+		});
+		await firstEntered;
+		const rejected = await requestBytes(gateway, {
+			path: artifactPath,
+			cookie,
+		});
+		assert.equal(rejected.status, 429);
+		assert.equal(rejected.headers["retry-after"], "1");
+		assert.equal(calls, 1);
+		releaseFirst?.();
+		assert.equal((await first).status, 200);
+		assert.equal(
+			(
+				await requestBytes(gateway, {
+					path: artifactPath,
+					cookie,
+				})
+			).status,
+			200,
+		);
+		assert.equal(calls, 2);
+	} finally {
+		releaseFirst?.();
+		await gateway?.stop();
+		fixture.cleanup();
+	}
+});
+
 test("WebGateway: real artifact transport abort does not retain the connection or request slot", async () => {
 	const fixture = setup();
 	const listenerId = "listener-artifact-abort";
@@ -1669,7 +1763,15 @@ test("WebGateway: exact launch exchange, authenticated bootstrap/read, and logou
 				overrides: [],
 			},
 		});
-		assert.equal(missingRun.status, 404);
+			assert.equal(missingRun.status, 409);
+			assert.equal(
+				(
+					missingRun.body as {
+						error: { code: string };
+					}
+				).error.code,
+				"TF_FEATURE_REQUIRED",
+			);
 
 		const badCsrf = await request(gateway, {
 			method: "POST",
@@ -2665,18 +2767,26 @@ test("WebGateway: generated query decoding rejects unknown/scalar duplicates and
 			cookie,
 		});
 		assert.equal(duplicateScalar.status, 400);
-		const unknown = await request(gateway, {
-			path: "/api/v1/runs?rawPath=%2Fetc%2Fpasswd",
-			cookie,
-		});
-		assert.equal(unknown.status, 400);
-	} finally {
+			const unknown = await request(gateway, {
+				path: "/api/v1/runs?rawPath=%2Fetc%2Fpasswd",
+				cookie,
+			});
+			assert.equal(unknown.status, 400);
+			const unsafeInteger = await request(gateway, {
+				path:
+					`/api/v1/projects/${fixture.host.projectId}` +
+					`/domains/${fixture.host.controlDomainId}` +
+					"/runs/run-1/timeline?expectedRunVersion=9007199254740992",
+				cookie,
+			});
+			assert.equal(unsafeInteger.status, 400);
+		} finally {
 		await gateway?.stop();
 		fixture.cleanup();
 	}
 });
 
-test("WebGateway: all 29 real endpoints and explicitly enabled durable command recovery", async () => {
+test("WebGateway: all 29 registered route slots and explicitly enabled durable command recovery", async () => {
 	const fixture = setup();
 	const digest = `sha256:${"c".repeat(64)}`;
 	let gateway: WebGatewayHandle | undefined;
@@ -2905,6 +3015,10 @@ test("WebGateway: artifact bytes require current reachability, redaction acknowl
 			disclosed.headers["content-security-policy"],
 			"default-src 'none'; sandbox",
 		);
+		assert.equal(
+			disclosed.headers["x-taskflow-redaction-class"],
+			"project",
+		);
 
 		const range = await requestBytes(gateway, {
 			path: artifactPath,
@@ -2944,6 +3058,12 @@ test("WebGateway: artifact bytes require current reachability, redaction acknowl
 			sensitiveAck: "download",
 		});
 		assert.equal(acknowledged.status, 200);
+			assert.equal(
+				acknowledged.headers[
+					"x-taskflow-redaction-class"
+				],
+				"sensitive",
+			);
 			assert.match(
 				acknowledged.headers["content-disposition"] ?? "",
 				/^attachment;/u,

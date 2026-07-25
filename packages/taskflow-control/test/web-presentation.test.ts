@@ -131,6 +131,57 @@ test("generated client compiles typed routes and canonical query without route c
 	);
 });
 
+test("generated client validates byte metadata and body length", async () => {
+	let body = new Uint8Array([1]);
+	const client = createWebClient({
+		async request(request) {
+			assert.equal(
+				Value.Check(request.successResponseSchema, {
+					digest: `sha256:${"a".repeat(64)}`,
+					size: 1,
+					mediaType: "application/octet-stream",
+					redactionClass: "project",
+					contentDisposition: "attachment",
+				}),
+				true,
+			);
+			return {
+				metadata: {
+					digest: `sha256:${"a".repeat(64)}`,
+					size: 1,
+					mediaType: "application/octet-stream",
+					redactionClass: "project",
+					contentDisposition: "attachment",
+				},
+				body,
+			};
+		},
+	});
+	const valid = await client.artifact({
+		params: {
+			projectId: "project-1",
+			controlDomainId: "domain-1",
+			digest: `sha256:${"a".repeat(64)}`,
+		},
+		query: {},
+		body: {},
+	});
+	assert.deepEqual([...valid.body], [1]);
+	body = new Uint8Array();
+	await assert.rejects(
+		client.artifact({
+			params: {
+				projectId: "project-1",
+				controlDomainId: "domain-1",
+				digest: `sha256:${"a".repeat(64)}`,
+			},
+			query: {},
+			body: {},
+		}),
+		/did not match its P17 byte codec/u,
+	);
+});
+
 test("generated handler routes remain bijective with WEB_ENDPOINTS", () => {
 	const handler = async () => ({});
 	const handlers = Object.fromEntries(

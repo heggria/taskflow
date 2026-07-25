@@ -78,6 +78,7 @@ The schema module is browser-safe and may import only TypeBox plus browser-safe 
 - Request/response character encoding: UTF-8.
 - Browser timestamps: Unix milliseconds.
 - Project `commitSeq`: non-negative project-local integer; never a global sequence.
+- Every integer on the browser wire—including timestamps, sequence/version/CAS values, sizes, counts, limits, revisions, epochs, and static-manifest fields—is bounded by `Number.MAX_SAFE_INTEGER`; producer schemas reject larger JSON numbers rather than accepting rounded authority.
 - Request, security, session, cursor, command, action/CAS, replay override, recompute-preview, error, content-message, and SSE producer schemas are strict closed; unknown properties and unknown discriminants fail validation.
 - Every server presentation **producer** schema is strict closed, preventing accidental field leakage. Every browser presentation **consumer** schema requires all known required fields but permits unknown properties only at explicit additive extension points marked in the TypeBox metadata as `x-web-additive:true`; the consumer ignores those fields and never uses them for authority, actions, verification, security, cursors, or command construction.
 - Adding an optional presentation property at a marked extension point is minor-compatible only after old-client/new-server and new-client/old-server fixtures pass. Removing/changing a required field, changing a default or meaning, or adding/changing an enum/discriminated-union branch is breaking and requires a new protocol major unless this document already defines an explicit safe unknown branch.
@@ -444,7 +445,7 @@ The 2,000-node/4,000-edge limits are the sole `WebRunDetail` embedded-array exce
 
 `WebNodeDetail` requires Run identity/version, node identity and definition/instance provenance, dependency identities, status, `attemptCount`, the first `WebPage<WebAttemptSummary>` using default 50/maximum 200, current provider/job-handle/outcome observation, optional start/end timing, safe input/output artifact references, bounded cache explanation, linked fragment/child identities, relevant timeline event ids, `sourceObservation`, and actions when any are valid. Complete Attempt history is recovered only through the bound attempts continuation endpoint.
 
-`WebTimelineEvent` requires project-local `commitSeq`, timestamp, event kind/version, resource identity, causation/correlation ids when present, safe summary, typed/redacted details, and compaction provenance. It never claims cross-project order.
+`WebTimelineEvent` requires project-local `commitSeq`, timestamp, event kind/version, resource identity, causation/correlation ids when present, a projected `WebContentMessage` summary, typed/redacted details, and compaction provenance. It never claims cross-project order. The browser formats the complete summary from the selected application locale and formats its timestamp with that same locale; the server does not serialize English prose or choose a host-process locale.
 
 ### 5.3 Deterministic Task presentation and verification
 
@@ -1097,7 +1098,7 @@ Because browser `EventSource` does not expose the HTTP status of a failed reconn
 | `set-max-active-runs` | value, expected current value, expected coordinator epoch |
 | `force-release` | reservation id, observed state, revision, coordinator epoch, project/domain/Run binding, exact P16 acknowledgement |
 
-No `payload:unknown` branch exists. Same `commandId` + same canonical request hash is idempotent; a different hash is `TF_IDEMPOTENCY_CONFLICT`; a different principal is `TF_CROSS_PRINCIPAL_COMMAND`. `GET /commands/:commandId` performs live re-authorization before disclosure.
+No `payload:unknown` branch exists. The browser command namespace is listener-global, not project-local. Before any mutation, the daemon atomically claims the `commandId` in the coordinator with the exact authority project/domain, current principal, and canonical Web request hash. The same tuple is idempotent; a different authority or hash is `TF_IDEMPOTENCY_CONFLICT`, and a different principal is `TF_CROSS_PRINCIPAL_COMMAND`. A simultaneous cross-project reuse has exactly one winner. `GET /commands/:commandId` resolves the durable claim to one authority and performs live re-authorization before disclosure. A bounded legacy project scan is migration-only when no coordinator claim exists; multiple legacy matches fail closed as corrupt authority.
 
 `approve` is advertised for a resource only when its home authority has a current P15 ApprovalRequest, exact Run CAS inputs, the original immutable BoundPlan, and a private digest-verified continuation checkpoint for the unconsumed approval node. The checkpoint contains settled Attempt/output state, is never a P17 DTO or browser artifact, and is not Receipt-reachable. The resumed scheduler consumes only that approval and must not replay prior phases. Missing or mismatched continuation evidence removes the available action or fails closed with `TF_RECONCILE_REQUIRED`; it never degrades to whole-plan rerun.
 
@@ -1176,6 +1177,8 @@ Artifact access requires all of:
 | `sensitive` | Never inline; explicit user download with `X-Taskflow-Sensitive-Ack: download` |
 | `secret` | Never served; metadata remains redacted |
 
+Every reference also carries a closed, projected `disclosure` branch. `direct` supplies the deterministic download action message for `public|project`; `acknowledgement-required` supplies the question, impact, confirm, and decline messages for `sensitive`; `blocked` supplies the explanation for `secret` and exposes no download action. The browser sends `X-Taskflow-Sensitive-Ack: download` only after the user answers the acknowledgement dialog; metadata rendering alone never sends it.
+
 Inline allowlist:
 
 ```text
@@ -1187,11 +1190,11 @@ image/gif
 image/webp
 ```
 
-SVG, HTML, XHTML, JavaScript, XML, and PDF are never inline in beta.2. Authorized non-secret types may download as attachment; unrecognized types use `application/octet-stream`. Inline is capped at 5 MiB and all browser downloads at 100 MiB. `Range` is unsupported and returns 416.
+SVG, HTML, XHTML, JavaScript, XML, and PDF are never inline in beta.2. Authorized non-secret types may download as attachment; unrecognized types use `application/octet-stream`. Inline is capped at 5 MiB and all browser downloads at 100 MiB. `Range` is unsupported and returns 416. The listener reserves a pessimistic 100 MiB in-flight byte permit before entering an artifact handler, so at most one maximum-sized artifact body is materialized across all sessions at once; excess disclosure attempts fail before loading bytes with 429 and `Retry-After`. The verified body is transferred without a second full-size buffer copy.
 
 Before a success response, WebGateway either opens an immutable content-addressed blob whose digest/size was verified at ingest and rechecks it before disclosure, or copies the authorized source into a listener-private temporary spool created with exclusive `0600` permissions. The spool path is server-generated under a canonical private runtime directory. The gateway enforces the 100 MiB limit while copying, hashes all bytes, verifies exact digest/length, rewinds the now-immutable snapshot, and only then sends success headers/body. Mismatch or source mutation deletes the spool and returns a JSON failure because headers have not been sent. The spool is deleted on finish, abort, error, and startup cleanup.
 
-Successful responses set canonical `Content-Type`, exact `Content-Length`, digest `ETag`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: same-origin`, `Content-Security-Policy: default-src 'none'; sandbox`, and sanitized ASCII `Content-Disposition`. Filename metadata is advisory, stripped of separators/control/bidi characters, length-bounded, and never used as a filesystem path.
+Successful responses set canonical `Content-Type`, exact `Content-Length`, digest `ETag`, `X-Taskflow-Redaction-Class`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `Cross-Origin-Resource-Policy: same-origin`, `Content-Security-Policy: default-src 'none'; sandbox`, and sanitized ASCII `Content-Disposition`. Filename metadata is advisory, stripped of separators/control/bidi characters, length-bounded, and never used as a filesystem path.
 
 Artifact bytes, SecretRefs, arbitrary paths, spool paths, and sensitive acknowledgements never enter URLs, logs, telemetry, or browser persistent storage. Backpressure/transport failure may truncate a response but can never expose bytes that failed integrity verification.
 
@@ -1326,16 +1329,17 @@ P17 v5 cannot be wire-frozen without:
 - reachable-state fixtures cover every safety-distinct RunStatus × RunStage × verification × observation × decision-disposition interaction, while negative fixtures reject impossible/contradictory combinations;
 - complete `en`/`zh-CN` projected/static/combined keyset, argument and digest parity; locale-aware plural/date/number formatting; whole-message/no-fragment tests; inline unregistered static-string lint; missing-key fail-closed tests; and mixed catalog/daemon startup rejection;
 - strict `docs/internal/webui/reference-set-v1/manifest.json` validation binding each screen/state to exact source/presentation/content fixture hashes, fields, authority/provenance, locale/theme/viewport/zoom, focus order, unavailable behavior, and comprehension facts;
+- version-2 render evidence binding an exact tracked-clean Git commit to its Web build id and asset-manifest digest. Verification rejects relevant source drift between that candidate and the evidence tip; human, linguistic, browser, and assistive-technology records must name that exact render candidate rather than any convenient ancestor;
 - Simple primary and accessibility content lint rejects the RFC v7 §10A.4 internal vocabulary, raw `ControlError.message`/stack output, generic decision labels, anthropomorphic emotion/intent, unsupported reassurance, and unbounded time promises;
 - DOM/screenshot/accessibility fixtures prove state, risk, verification limits, decisions, and primary actions remain complete at 320 CSS px and 200% zoom without ellipsis, clipping, hover-only disclosure, or technical-detail reordering;
 - browser-safe import guard;
 - cursor known-answer byte vectors plus tamper, cross-kind, length, expiry, restart, query, principal, auto/standalone registry context, mount-set, and compaction tests;
 - every JSON endpoint passes full-envelope byte-budget tests; fragment, graph, timeline, Attempt, artifact, and Receipt pages pass row + encoded-byte boundary, one-oversized-element, version-binding, and concatenate-all-pages exactness tests. A committed exact-boundary fixture makes element N plus the required `nextCursor` bring the full envelope to exactly the budget, proves N is returned, binds `after` to N, and proves N+1 appears exactly once on the next page;
-- command lost-response, reload, restart, idempotency, cross-principal, stale-version, and live-reauthorization tests;
+- command lost-response, reload, restart, listener-global cross-project collision (including a simultaneous race), idempotency, cross-principal, stale-version, and live-reauthorization tests;
 - launch-token single-use/expiry tests and hostile `localhost`, duplicate/malformed Host, DNS rebinding, cross-port cookie, Origin, CSRF, CORS, and revoke-all tests;
 - header/count/timeout, slow-body, duplicate CL, CL/TE, Expect/Upgrade, 404/405/Allow, keep-alive, artifact-stall, and SSE-lifetime tests on Node 22.19/24/26;
 - SSE line-injection, closed-enum, query-cursor/`Last-Event-ID` equality/conflict/limit, max-frame, heartbeat, four-stream, queue-overflow/reset, reconnect, compaction, restart, and polling-equivalence tests;
-- artifact authorization, reachability, pre-header immutable-snapshot digest/length, redaction class, MIME, disposition, bidi/traversal, size, Range, source mutation, spool cleanup, and transport-abort tests;
+- artifact authorization, reachability, pre-header immutable-snapshot digest/length, projected disclosure state, explicit sensitive acknowledgement, secret-action absence, response redaction header, listener-wide in-flight byte permit, MIME, disposition, bidi/traversal, size, Range, source mutation, spool cleanup, and transport-abort tests;
 - static API/fallback partition, route SafeId, exact asset manifest, cache/MIME/header, canonical containment, traversal, source-map absence, unauthenticated-shell data scan, incompatible-build, and exact absent/multiple/wildcard/quality-zero/malformed `Accept` tests;
 - handler/source tests proving every RFC v7 §7.5 field comes from current authority rather than browser cache or fixtures;
 - a versioned five-fresh-participant `en` comprehension record proving at least 4/5 complete each ordinary task, plus zero severity-1 safety misunderstandings; any severity-1 finding blocks the candidate and the affected task is rerun after the fix with five fresh participants;
@@ -1474,7 +1478,7 @@ The executable implementation candidate now includes:
   Human product/content approval and comprehension evidence remain absent, so
   the manifest deliberately stays `draft-unapproved`.
 - the exact seven-task RFC v7 §19.4 usability script, timing/moderator/privacy
-  rules, eight closed severity-1 classes, corrected 149 + 188 = 337-key
+  rules, eight closed severity-1 classes, corrected 168 + 188 = 356-key
   Simplified-Chinese review coverage, observed-behavior native/AT template,
   and a completed-evidence verifier. The verifier recomputes every 4/5 gate,
   binds immutable source-record hashes, rejects fabricated template state and

@@ -480,12 +480,12 @@ test("P17 every nested endpoint union branch is independently executable", () =>
 			unionOccurrences: occurrences.length,
 			unionBranches: branchCount,
 		},
-			{
-				roots: 117,
-				unionOccurrences: 1_063,
-				unionBranches: 14_138,
-			},
-		);
+				{
+					roots: 117,
+					unionOccurrences: 2_225,
+					unionBranches: 39_707,
+				},
+			);
 });
 
 test("P17 all 29 endpoint codecs have strict JSON-round-trip samples", () => {

@@ -32,13 +32,22 @@ const fixtureRoot = path.join(
 	repositoryRoot,
 	"packages/taskflow-control/test/fixtures/web-v1/reference",
 );
-const outputRoot = path.join(
-	repositoryRoot,
-	"output/playwright/beta2-reference",
-);
+const outputRoot = process.env.TASKFLOW_WEB_REFERENCE_OUTPUT_ROOT
+	? path.resolve(
+			repositoryRoot,
+			process.env.TASKFLOW_WEB_REFERENCE_OUTPUT_ROOT,
+		)
+	: path.join(
+			repositoryRoot,
+			"output/playwright/beta2-reference",
+		);
 const evidencePath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/reference-set-v1/render-evidence.json",
+);
+const webAssetManifestPath = path.join(
+	repositoryRoot,
+	"packages/taskflow-web/dist/app/taskflow-web-assets.json",
 );
 
 type Fixture = {
@@ -156,6 +165,19 @@ function sha256File(filePath: string): string {
 	return `sha256:${createHash("sha256")
 		.update(fs.readFileSync(filePath))
 		.digest("hex")}`;
+}
+
+function gitOutput(args: readonly string[]): string {
+	const result = spawnSync("git", args, {
+		cwd: repositoryRoot,
+		encoding: "utf8",
+	});
+	assert.equal(
+		result.status,
+		0,
+		`git ${args.join(" ")} failed\n${result.stderr}`,
+	);
+	return result.stdout.trim();
 }
 
 function loadFixture(id: string): Fixture {
@@ -367,7 +389,24 @@ async function settleScenario(
 		);
 	}
 	if (scenario.fixtureId === "pro-evidence-receipt") {
-		await expect(page.locator(".artifact-row").first()).toBeVisible();
+		await expect(page.locator(".artifact-row")).toHaveCount(3);
+		await expect(
+			page.locator(".artifact-disclosure-blocked"),
+		).toBeVisible();
+		const sensitiveArtifactRow = page
+			.locator(".artifact-row")
+			.filter({ hasText: "replay-trace" });
+		await sensitiveArtifactRow
+			.getByRole("button")
+			.click();
+		const sensitiveArtifactDialog = page.locator(
+			".sensitive-artifact-dialog",
+		);
+		await expect(sensitiveArtifactDialog).toBeVisible();
+		await sensitiveArtifactDialog
+			.locator(".secondary-button")
+			.click();
+		await expect(sensitiveArtifactDialog).toBeHidden();
 		await expect(page.locator(".technical-card").first()).toBeVisible();
 	}
 	if (scenario.fixtureId === "error-command-outcome-unknown") {
@@ -379,6 +418,48 @@ async function settleScenario(
 }
 
 async function main(): Promise<void> {
+	const outputRelative = path.relative(repositoryRoot, outputRoot);
+	assert.equal(
+		outputRelative.startsWith("..") || path.isAbsolute(outputRelative),
+		false,
+		"reference render output must remain inside the repository",
+	);
+	assert.ok(
+		outputRelative.length > 0 &&
+			outputRelative.split(path.sep).filter(Boolean).length >= 2,
+		"reference render output must be a dedicated nested directory",
+	);
+	assert.ok(
+		["artifacts", "output"].includes(
+			outputRelative.split(path.sep)[0] ?? "",
+		),
+		"reference render output must live under artifacts/ or output/",
+	);
+	const trackedStatus = gitOutput([
+		"status",
+		"--porcelain",
+		"--untracked-files=no",
+	]);
+	assert.equal(
+		trackedStatus,
+		"",
+		"reference renders require a tracked-clean source candidate",
+	);
+	const gitCommit = gitOutput(["rev-parse", "HEAD"]);
+	assert.match(gitCommit, /^[0-9a-f]{40}$/u);
+	assert.equal(
+		fs.existsSync(webAssetManifestPath),
+		true,
+		"packaged Web asset manifest is missing; run the full build before rendering",
+	);
+	const webAssetManifest = JSON.parse(
+		fs.readFileSync(webAssetManifestPath, "utf8"),
+	) as { webBuildId?: unknown };
+	assert.equal(typeof webAssetManifest.webBuildId, "string");
+	assert.match(
+		webAssetManifest.webBuildId as string,
+		/^sha256:[0-9a-f]{64}$/u,
+	);
 	fs.rmSync(outputRoot, { recursive: true, force: true });
 	fs.mkdirSync(outputRoot, { recursive: true });
 	const tempRoot = fs.mkdtempSync(
@@ -1181,8 +1262,15 @@ async function main(): Promise<void> {
 		);
 		const evidence = {
 			evidenceVersion:
-				"taskflow-web-reference-render.v1",
+				"taskflow-web-reference-render.v2",
 			status: "rendered-awaiting-human-approval",
+			candidate: {
+				gitCommit,
+				trackedSourceClean: true,
+				webBuildId: webAssetManifest.webBuildId,
+				assetManifestSha256:
+					sha256File(webAssetManifestPath),
+			},
 			renderer: {
 				engine: "chromium",
 				playwrightVersion: "1.61.1",

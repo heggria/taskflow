@@ -391,15 +391,15 @@ function validateZhReview(record, binding, label) {
     zhCN: binding.zhCNCatalogSha256,
   });
   assert.deepEqual(record.requiredCoverage, {
-    projectedKeys: 149,
-    staticKeys: 188,
-    totalKeys: 337,
+    projectedKeys: binding.projectedKeyCount,
+    staticKeys: binding.staticKeyCount,
+    totalKeys: binding.combinedKeyCount,
     screenFamilies: 9,
     renderEntries: 149,
   });
   assert.deepEqual(record.reviewedCoverage, {
-    projectedKeys: 149,
-    staticKeys: 188,
+    projectedKeys: binding.projectedKeyCount,
+    staticKeys: binding.staticKeyCount,
     screenFamilies: screenIds,
     renderEntries: 149,
   });
@@ -530,6 +530,9 @@ export function verifyWebHumanEvidence(evidenceDirectory) {
   const referenceManifest = JSON.parse(
     fs.readFileSync(referenceManifestPath, "utf8"),
   );
+  const renderEvidence = JSON.parse(
+    fs.readFileSync(renderEvidencePath, "utf8"),
+  );
   const referenceReview = readJsonRecord(
     path.join(evidenceRoot, "reference-review.json"),
   );
@@ -547,7 +550,13 @@ export function verifyWebHumanEvidence(evidenceDirectory) {
     "zh-CN review",
   );
   const binding = {
-    buildCommit: summary.record.buildCommit,
+    buildCommit: renderEvidence.candidate?.gitCommit,
+    projectedKeyCount:
+      referenceManifest.contentCatalogs.keyCounts.projected,
+    staticKeyCount:
+      referenceManifest.contentCatalogs.keyCounts.static,
+    combinedKeyCount:
+      referenceManifest.contentCatalogs.keyCounts.combined,
     combinedKeysetSha256:
       referenceManifest.contentCatalogs.keysetDigests.combined,
     referenceManifestSha256: sha256File(referenceManifestPath),
@@ -555,7 +564,17 @@ export function verifyWebHumanEvidence(evidenceDirectory) {
     zhCNCatalogSha256:
       referenceManifest.contentCatalogs.catalogDigests["zh-CN"],
   };
+  assert.equal(
+    renderEvidence.evidenceVersion,
+    "taskflow-web-reference-render.v2",
+  );
+  assert.equal(renderEvidence.candidate?.trackedSourceClean, true);
   assert.match(binding.buildCommit, commitPattern);
+  assert.equal(
+    summary.record.buildCommit,
+    binding.buildCommit,
+    "human evidence must name the exact rendered candidate commit",
+  );
   const commitCheck = spawnSync(
     "git",
     ["cat-file", "-e", `${binding.buildCommit}^{commit}`],
