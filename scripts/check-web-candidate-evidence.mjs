@@ -146,11 +146,40 @@ function assertNativeSafariRecord(
 		],
 		{ cwd: repositoryRoot },
 	);
-	assert.equal(
-		nativeAncestry.status,
-		0,
-		`${label} commit must be an ancestor of the immutable candidate`,
-	);
+	if (nativeAncestry.status !== 0) {
+		const evidenceDescendsCandidate = spawnSync(
+			"git",
+			[
+				"merge-base",
+				"--is-ancestor",
+				finalCandidateCommit,
+				record.candidate.gitCommit,
+			],
+			{ cwd: repositoryRoot },
+		);
+		assert.equal(
+			evidenceDescendsCandidate.status,
+			0,
+			`${label} commit must be in the immutable candidate lineage`,
+		);
+		const sourceDriftAfterCandidate = spawnSync(
+			"git",
+			[
+				"diff",
+				"--quiet",
+				finalCandidateCommit,
+				record.candidate.gitCommit,
+				"--",
+				...candidateSourceScopes,
+			],
+			{ cwd: repositoryRoot },
+		);
+		assert.equal(
+			sourceDriftAfterCandidate.status,
+			0,
+			`${label} descendant evidence changed candidate source`,
+		);
+	}
 	for (const [name, passed] of Object.entries(record.assertions)) {
 		assert.equal(passed, true, `${label} assertion failed: ${name}`);
 	}
@@ -375,22 +404,22 @@ const nativeSafariPeerRevocation = JSON.parse(
 );
 assertNativeSafariRecord(nativeSafariPeerRevocation, {
 	label: "native Safari peer-revocation record",
-	expectedCommit: "7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
+	expectedCommit: "e19dfd4511a0c53375990bd07490066eb62a7d81",
 	expectedResult:
 		"native-safari-peer-session-invalidation-smoke-pass",
 	finalCandidateCommit: newBuild.gitCommit,
 });
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webSourceDigest,
-	"sha256:97076ba3daf5d08a405515cb89132f610a9b4fd04f7307d3b04d6e5123dc3e1c",
+	benchmark.git.sourceDigest,
 );
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webManifestSha256,
-	"sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e",
+	newBuild.manifestSha256,
 );
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webBuildId,
-	"sha256:dcc581791f65e251e94e7fadbd4c9b67ea2ff40e8f4d61820035dfc828fb7081",
+	benchmark.build.webBuildId,
 );
 
 const nodeMatrixBytes = fs.readFileSync(nodeMatrixPath, "utf8");

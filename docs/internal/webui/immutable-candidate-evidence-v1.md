@@ -134,10 +134,11 @@ assistive-technology or human-comprehension review.
 ## Native Safari mutation smokes
 
 Native Safari 26.3 on macOS 26.3 exercised four scoped packaged mutation
-paths on ancestral source states. Each record binds the exact source commit
-actually observed. The allow/revoke-all and reject/current-session records
-are from `d8df9c65`; cancel was observed on `794c85f8`; peer invalidation was
-observed on `7e555c7d`.
+paths. Each record binds the exact source commit actually observed. The
+allow/revoke-all and reject/current-session records are ancestral evidence
+from `d8df9c65`; cancel was observed on `794c85f8`; peer invalidation was
+rerun on evidence tip `e19dfd45`, whose candidate source is byte-identical to
+the bound `aa34369a` source.
 
 The allow/revoke-all run:
 
@@ -165,7 +166,7 @@ The cancel run:
 - discarded two earlier harness attempts that ended by short fixture duration
   or phase timeout rather than treating them as cancel evidence.
 
-The ancestral independent peer-invalidation run:
+The current-source independent peer-invalidation run:
 
 - kept the native Safari tab as the target peer;
 - exchanged a fresh, independent second session from a packaged CLI launch and
@@ -175,13 +176,11 @@ The ancestral independent peer-invalidation run:
 - made the Safari peer lose authorization and render the localized
   current-tab session-ended screen instead of a generic page failure.
 
-The peer mutation actor was not an unlocked Safari private window. A private
-window attempt was discarded when Safari required local authentication, and
-an expired capability attempt was also discarded after its expected 401.
-This record proves native Safari peer invalidation and presentation, not a
-two-Safari-cookie-jar usability path. Because `aa34369a` includes later
-session-revocation recovery changes, it is not current-source native Safari
-evidence and a new native Safari invalidation run remains required.
+The peer mutation actor was not an unlocked Safari private window. The staged
+actor capability expired during native setup and returned 401 before creating
+a session; a fresh same-listener capability was minted and consumed for the
+passing run. This record proves current-source native Safari peer invalidation
+and presentation, not a two-Safari-cookie-jar usability path.
 
 All four passing holds ended with their loopback listener refusing a
 subsequent connection. None of these records claim VoiceOver behavior,
@@ -204,20 +203,19 @@ Evidence:
 - peer-invalidation record:
   `docs/internal/webui/native-safari-peer-revocation-smoke-v1.json`;
 - peer-invalidation SHA-256:
-  `59fc96d59d12e0fdc141f840fbab7dc95fadf305a6c7d163741e054c095d25e2`.
+  `0cee196d4f5db8681cdd2b84e6a39f1101d5bacf3ae7241ed0e0f899af4aef4a`.
 
 ## Remaining interpretation boundary
 
 These local records close the exact-source immutable cross-build, pinned
-runtime, packaged browser and non-canonical performance evidence gaps. The
-native Safari records remain useful ancestral evidence, but no longer prove
-the current session-revocation source. They do not provide:
+runtime, packaged browser, non-canonical performance and current-source native
+Safari peer-invalidation evidence gaps. The other native Safari mutation
+records remain useful ancestral evidence. They do not provide:
 
 - human product/reference approval;
 - five fresh English participant results;
 - two native Simplified-Chinese reviews;
 - native Edge or any VoiceOver, Narrator, or NVDA evidence;
-- a current-source native Safari session-revocation run;
 - a two-unlocked-Safari-session usability run;
 - the canonical M2 performance report;
 - reviewed-tip evidence or a wire-freeze decision.

@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "observedAt": "2026-07-24T09:02:20Z",
+  "observedAt": "2026-07-25T05:40:49Z",
   "candidate": {
     "branch": "codex/0.3.0-beta.2",
-    "gitCommit": "7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
+    "gitCommit": "e19dfd4511a0c53375990bd07490066eb62a7d81",
     "trackedCandidateSourceDirty": false,
-    "webSourceDigest": "sha256:97076ba3daf5d08a405515cb89132f610a9b4fd04f7307d3b04d6e5123dc3e1c",
-    "webManifestSha256": "sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e",
-    "webBuildId": "sha256:dcc581791f65e251e94e7fadbd4c9b67ea2ff40e8f4d61820035dfc828fb7081"
+    "webSourceDigest": "sha256:f05e3aefb64dd3a5d115e4c975883ecf16e5830f7c9f225fb07962e317a40db4",
+    "webManifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+    "webBuildId": "sha256:30e11a646d8f2f8ffe5517236269112324605247312aa08c4b19dc6fc7abbb02"
   },
   "environment": {
     "browser": "Safari",
@@ -20,14 +20,13 @@
     "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
     "authority": "fresh isolated ControlStores and two independently authenticated sessions under one listener",
     "safariRole": "revoked peer session and visible session-ended projection",
-    "mutationActor": "a second packaged-CLI launch was exchanged by a closed P17 HTTP client and invoked CSRF-protected revoke-all; it was not a Safari private-window actor",
+    "mutationActor": "a fresh same-listener packaged-CLI launch was exchanged by a closed P17 HTTP client and invoked CSRF-protected revoke-all; it was not a Safari private-window actor",
     "interaction": "macOS accessibility tree for the native Safari target plus an independent protocol client for the peer mutation",
     "launchCapabilities": "two independent one-time capabilities; values not retained",
     "discardedAttempts": [
-      "an earlier private-window route was discarded after Safari locked Private Browsing behind local authentication",
-      "one peer launch capability expired before exchange and returned 401; a fresh capability was minted and exchanged once for the passing run"
+      "the staged peer launch capability expired during native Safari setup and returned 401 before any actor session or mutation existed; a fresh same-listener capability was minted and exchanged once for the passing run"
     ],
-    "shutdownCheck": "the staged review hold was released after Safari rendered the peer-ended state; the loopback listener then refused a connection with curl exit 7"
+    "shutdownCheck": "the staged review hold was released after Safari rendered the peer-ended state; a fresh post-release fetch then failed because the loopback listener was closed"
   },
   "assertions": {
     "safariOneTimeSessionExchangeCompleted": true,
@@ -36,6 +35,7 @@
     "revokeAllReportedThreeRevokedSessions": true,
     "safariPeerLostAuthorization": true,
     "safariRenderedSessionEndedInsteadOfGenericPageFailure": true,
+    "currentSourceSessionRevocationRecoveryObserved": true,
     "signedOutDocumentTitleWasLocalized": true,
     "signedOutHeadingWasBrowserAccessEnded": true,
     "signedOutDetailSaidCurrentTabLostAccessAndTasksWereUnchanged": true,

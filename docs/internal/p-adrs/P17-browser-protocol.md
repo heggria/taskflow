@@ -1448,8 +1448,9 @@ The executable implementation candidate now includes:
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has separately scoped ancestral packaged read/keyboard/AX plus four mutation
-  smokes.
+  has separately scoped packaged read/keyboard/AX plus four mutation smokes;
+  approval/cancel observations are ancestral, while peer invalidation was
+  rerun against the current session-revocation source.
   Allow reaches completed 3/3 with honest partial verification and applies
   listener-wide revocation. Reject reaches both choices through native Tab
   focus, persists the approval node as blocked with downstream pending, and
@@ -1458,10 +1459,9 @@ The executable implementation candidate now includes:
   result. Independent peer invalidation makes a native Safari target render
   the deterministic localized session-ended screen rather than a generic page
   failure after a separate authenticated P17 client revokes all sessions. The
-  latter was observed on `7e555c7d`, does not claim an unlocked Safari
-  private-window actor, and no longer proves the later `aa34369a`
-  session-revocation recovery source. Every passing hold verifies listener
-  close; a current-source native Safari rerun, Edge and
+  latter was rerun on evidence tip `e19dfd45` with the byte-identical
+  `aa34369a` candidate source and does not claim an unlocked Safari
+  private-window actor. Every passing hold verifies listener close; Edge and
   assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
@@ -1478,11 +1478,10 @@ At minimum, conformance work must still add or verify:
   reviewed-tip verification;
 - native Edge, assistive-technology and human review of the
   approval-enhanced decision path. Native Safari has ancestral scoped allow,
-  reject, cancel, current-session, listener-wide revocation and
-  peer-invalidation execution evidence, but the peer actor was an independent
-  P17 HTTP session rather than a second unlocked Safari cookie jar and the
-  session-revocation source changed afterward. A current-source native Safari
-  invalidation rerun remains required. The exact checkpoint
+  reject, cancel, current-session and listener-wide revocation execution
+  evidence plus a current-source peer-invalidation rerun, but the peer actor
+  was an independent P17 HTTP session rather than a second unlocked Safari
+  cookie jar. The exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
   post-dispatch ambiguity fail-closed fixtures are executable; automated or
