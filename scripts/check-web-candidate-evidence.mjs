@@ -4,7 +4,10 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WEB_PRIMARY_NODE_VERSION } from "./web-runtime-versions.mjs";
+import {
+	WEB_NODE_MATRIX_VERSIONS,
+	WEB_PRIMARY_NODE_VERSION,
+} from "./web-runtime-versions.mjs";
 
 const repositoryRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -12,16 +15,24 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/d8df9c65-to-7e555c7d/report.json",
+	"artifacts/web-compat/7e555c7d-to-aa34369a/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
+	"artifacts/web-bench/aa34369a5958ce34bbdad3eab973434a001d0738",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
 	benchmarkRoot,
 	"web-perf-v1.md",
+);
+const nodeMatrixPath = path.join(
+	repositoryRoot,
+	"artifacts/web-node-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json",
+);
+const browserMatrixPath = path.join(
+	repositoryRoot,
+	"artifacts/web-browser-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json",
 );
 const ledgerPath = path.join(
 	repositoryRoot,
@@ -364,29 +375,150 @@ const nativeSafariPeerRevocation = JSON.parse(
 );
 assertNativeSafariRecord(nativeSafariPeerRevocation, {
 	label: "native Safari peer-revocation record",
-	expectedCommit: newBuild.gitCommit,
+	expectedCommit: "7e555c7d7f39109ee89a502f0d818cc34f1ce7fa",
 	expectedResult:
 		"native-safari-peer-session-invalidation-smoke-pass",
 	finalCandidateCommit: newBuild.gitCommit,
 });
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webSourceDigest,
-	benchmark.git.sourceDigest,
+	"sha256:97076ba3daf5d08a405515cb89132f610a9b4fd04f7307d3b04d6e5123dc3e1c",
 );
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webManifestSha256,
-	newBuild.manifestSha256,
+	"sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e",
 );
 assert.equal(
 	nativeSafariPeerRevocation.candidate.webBuildId,
+	"sha256:dcc581791f65e251e94e7fadbd4c9b67ea2ff40e8f4d61820035dfc828fb7081",
+);
+
+const nodeMatrixBytes = fs.readFileSync(nodeMatrixPath, "utf8");
+assertNoLocalPath(nodeMatrixBytes, "Node matrix report");
+const nodeMatrix = JSON.parse(nodeMatrixBytes);
+assert.equal(nodeMatrix.schemaVersion, 1);
+assert.equal(nodeMatrix.status, "pass");
+assert.equal(nodeMatrix.candidate.gitCommit, newBuild.gitCommit);
+assert.equal(nodeMatrix.candidate.trackedDirty, false);
+assert.deepEqual(
+	nodeMatrix.runtimes.map((runtime) => runtime.node),
+	WEB_NODE_MATRIX_VERSIONS,
+);
+for (const runtime of nodeMatrix.runtimes) {
+	assert.equal(runtime.suiteFiles, 8);
+	assert.equal(runtime.testCount, 62);
+	assert.equal(runtime.passCount, runtime.testCount);
+	assert.equal(runtime.failCount, 0);
+}
+
+const browserMatrixBytes = fs.readFileSync(
+	browserMatrixPath,
+	"utf8",
+);
+assertNoLocalPath(browserMatrixBytes, "browser matrix report");
+const browserMatrix = JSON.parse(browserMatrixBytes);
+assert.equal(browserMatrix.schemaVersion, 2);
+assert.equal(browserMatrix.status, "pass");
+assert.equal(browserMatrix.candidate.gitCommit, newBuild.gitCommit);
+assert.equal(browserMatrix.candidate.trackedDirty, false);
+assert.equal(
+	browserMatrix.candidate.manifestSha256,
+	newBuild.manifestSha256,
+);
+assert.equal(
+	browserMatrix.candidate.webBuildId,
 	benchmark.build.webBuildId,
 );
+assert.deepEqual(
+	browserMatrix.engines.map((engine) => [
+		engine.browserEngine,
+		engine.browserChannel ?? null,
+	]),
+	[
+		["chromium", null],
+		["firefox", null],
+		["webkit", null],
+		["chromium", "chrome"],
+	],
+);
+const browserBooleanAssertions = [
+	"packagedCli",
+	"multiProject",
+	"listenerReused",
+	"independentLaunchCapabilities",
+	"crossPortBrowserCookieIsolation",
+	"sseConnected",
+	"pollingFallbackObserved",
+	"pollingProjectionEquivalent",
+	"pollingGetSurfaceInventoryCovered",
+	"simpleAttentionCopyVerified",
+	"approvalDecisionCommitted",
+	"approvalContinuationAfterRestartSafe",
+	"approvalSettledAttemptsNotReplayed",
+	"approvalPrivateCheckpointNotReceiptReachable",
+	"cancelCommandCommitted",
+	"completedReceiptAndArtifactRendered",
+	"proGraphTimelineAndNodeDetailRendered",
+	"proTabsKeyboardAndFocusVerified",
+	"proGraphDisclosureKeyboardVerified",
+	"receiptJsonExported",
+	"receiptJsonLocallyChecked",
+	"whyStaleDistinctFromReplay",
+	"zeroTokenReplayExecuted",
+	"proGraphListboxKeyboardParityVerified",
+	"taskListPageVirtualizationVerified",
+	"artifactDownloadPathObserved",
+	"settingsSwitchAndSingleSelectionKeyboardVerified",
+	"sessionSafetyDialogFocusAndDismissalVerified",
+	"currentSessionLogoutCommitted",
+	"listenerWideSessionRevocationCommitted",
+	"listenerWideSessionRevocationInvalidatedPeer",
+];
+for (const engine of browserMatrix.engines) {
+	const label = `${engine.browserEngine}:${engine.browserChannel ?? "bundled"}`;
+	assert.equal(engine.attempts, 1, `${label} required a retry`);
+	assert.match(engine.browserVersion, /^\d/u);
+	for (const field of browserBooleanAssertions) {
+		assert.equal(
+			engine[field],
+			true,
+			`${label} assertion failed: ${field}`,
+		);
+	}
+	for (const field of [
+		"consoleErrors",
+		"pageErrors",
+		"cspViolations",
+		"runtimeStyleInsertions",
+		"inlineStyleAttributes",
+		"runtimeStyleElements",
+		"zeroTokenReplayProviderCalls",
+		"zeroTokenReplayDurableWrites",
+	]) {
+		assert.equal(engine[field], 0, `${label} emitted ${field}`);
+	}
+	assert.equal(engine.mobileWidth, 320);
+	assert.equal(engine.horizontalOverflow, false);
+	if (engine.browserEngine === "firefox") {
+		assert.equal(engine.browserTransportDiagnostics, 6);
+	} else {
+		assert.equal(engine.browserTransportDiagnostics, 0);
+	}
+	if (engine.browserEngine === "chromium") {
+		assert.deepEqual(engine.a11yViolationCounts, {
+			home: 0,
+			task: 0,
+		});
+	}
+}
 
 const ledger = fs.readFileSync(ledgerPath, "utf8");
 for (const file of [
 	compatibilityPath,
 	benchmarkPath,
 	benchmarkSummaryPath,
+	nodeMatrixPath,
+	browserMatrixPath,
 	nativeSafariMutationPath,
 	nativeSafariRejectCurrentPath,
 	nativeSafariCancelPath,
@@ -401,5 +533,5 @@ for (const file of [
 assertNoLocalPath(ledger, "candidate evidence ledger");
 
 process.stdout.write(
-	`immutable Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples)\n`,
+	`immutable Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes)\n`,
 );

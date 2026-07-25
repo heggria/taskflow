@@ -189,8 +189,8 @@ async function runPair(serverBuild, clientBuild, label) {
 		});
 		const bootstrapResponsePromise = page.waitForResponse(
 			(response) =>
-				new URL(response.url()).pathname ===
-				"/api/v1/bootstrap",
+				new URL(response.url()).pathname === "/api/v1/bootstrap" &&
+				response.status() === 200,
 			{ timeout: 15_000 },
 		);
 		const navigation = await page.goto(gateway.launchUrl, {

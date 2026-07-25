@@ -7,8 +7,8 @@ release evidence.
 
 | Role | Git commit | Web manifest SHA-256 |
 |---|---|---|
-| old | `d8df9c650b68e4c0854aaad03e6da3ce0dc3352f` | `sha256:e14f395eaec7b29cbae07f8ba89dca2c21f9f1b82766d0cb01d0580b1db1f13f` |
-| new | `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` | `sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e` |
+| old | `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` | `sha256:252a851c67aac16f53c57d57cb374d7647bfbca788328b4d17670ae67408ca1e` |
+| new | `aa34369a5958ce34bbdad3eab973434a001d0738` | `sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69` |
 
 Both builds were produced from detached worktrees with
 `pnpm install --offline --frozen-lockfile` followed by `pnpm run build`.
@@ -22,9 +22,9 @@ Reproduction command:
 
 ```text
 npx --yes node@24.18.0 scripts/test-web-packaged-compatibility.mjs \
-  --old-root <built-d8df9c65-root> \
-  --new-root <built-7e555c7d-root> \
-  --output artifacts/web-compat/d8df9c65-to-7e555c7d/report.json
+  --old-root <built-7e555c7d-root> \
+  --new-root <built-aa34369a-root> \
+  --output artifacts/web-compat/7e555c7d-to-aa34369a/report.json
 ```
 
 Result:
@@ -39,9 +39,9 @@ Result:
 Evidence:
 
 - report:
-  `artifacts/web-compat/d8df9c65-to-7e555c7d/report.json`;
+  `artifacts/web-compat/7e555c7d-to-aa34369a/report.json`;
 - report SHA-256:
-  `15911df02a9fd53654184cc2c4d99c97d67ad087b5b1559a389eb88a0651a119`.
+  `1bda883ebda78e104d2b721947c3f4b29d987d1d47e0ee0e98fd284a312ad15d`.
 
 The report deliberately contains build identities rather than local absolute
 paths. The harness rejects an identical manifest or an identical stamped
@@ -54,7 +54,7 @@ source commit; a source change requires a new immutable build and rerun.
 
 ## Performance and large-data evidence
 
-Reproduction command from the clean `7e555c7d` source state:
+Reproduction command from the clean `aa34369a` source state:
 
 ```text
 npx --yes node@24.18.0 scripts/bench-web.mjs
@@ -63,43 +63,81 @@ npx --yes node@24.18.0 scripts/bench-web.mjs
 Evidence:
 
 - JSON:
-  `artifacts/web-bench/7e555c7d7f39109ee89a502f0d818cc34f1ce7fa/web-perf-v1.json`;
+  `artifacts/web-bench/aa34369a5958ce34bbdad3eab973434a001d0738/web-perf-v1.json`;
 - human summary:
-  `artifacts/web-bench/7e555c7d7f39109ee89a502f0d818cc34f1ce7fa/web-perf-v1.md`;
+  `artifacts/web-bench/aa34369a5958ce34bbdad3eab973434a001d0738/web-perf-v1.md`;
 - JSON SHA-256:
-  `183f35222fdfc35d40a965e4cd9f339df81d33cfe6f67ace91032a907d809ca5`;
+  `14515e88518505f4e438b8fc765e9ea16a03eb158e07e4453923df1eb1c88004`;
 - summary SHA-256:
-  `006db7d1210e51c100f507c063751e4121b0571a67c2a918c37fc3f61ac1c61b`.
+  `5bb928a2ebd7e22bb8b896814decff0bec92aa86592de4dae77ed19ddfee954d`.
 
 The schema-v4 report records:
 
-- exact commit `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa`;
+- exact commit `aa34369a5958ce34bbdad3eab973434a001d0738`;
 - `git.dirty:false`;
 - source digest
-  `sha256:97076ba3daf5d08a405515cb89132f610a9b4fd04f7307d3b04d6e5123dc3e1c`;
+  `sha256:f05e3aefb64dd3a5d115e4c975883ecf16e5830f7c9f225fb07962e317a40db4`;
 - Node 24.18.0 and Chromium 149.0.7827.55;
 - MacBook Pro / Apple M3 Pro / AC power;
 - no recorded thermal or performance warning;
 - 30 raw samples, 100 projects, 10,000 Runs and 2,000 graph nodes;
-- a 209,410-byte gzip Simple shell;
+- a 209,803-byte gzip Simple shell;
 - `structural-pass`.
 
 This is not the RFC's canonical Mac mini M2 / 16 GiB profile. Its latency
 numbers are informational even when they are below the numerical budgets.
 The canonical M2 run remains a release gate. The non-canonical p95s were
-1,137.5 ms cold Home, 918.5 ms warm Home, 50.3 ms cached Pro, 178.1 ms
-event-to-visible, 78.3 ms commit-to-receipt, 105.3 ms receipt-to-visible,
-6.7 ms list response, and 0.0805 CLS. Owner-ready and launch-to-useful p95s
-were 8.779 s and 9.772 s. The report records a high pre-run load average of
-9.75/8.42/7.44, so an unloaded canonical-profile rerun remains mandatory.
+511.8 ms cold Home, 887.4 ms warm Home, 55.7 ms cached Pro, 344.6 ms
+event-to-visible, 123.8 ms commit-to-receipt, 281.4 ms receipt-to-visible,
+13 ms list response, and 0.0616 CLS. Owner-ready and launch-to-useful p95s
+were 4.977 s and 5.556 s. Event-to-visible is above the 250-ms canonical
+budget in this non-canonical run; it is recorded as informational, not
+silently passed. Load average rose from 5.54/6.51/7.58 to 9.70/8.09/7.94,
+so an unloaded canonical-profile rerun remains mandatory.
+
+## Pinned runtime and packaged browser matrices
+
+The exact `aa34369a` source candidate also has candidate-bound aggregate
+reports rather than console-only green runs.
+
+Pinned Node evidence:
+
+- Node 22.19.0, 24.18.0 and 26.5.0;
+- eight protocol/transport suites and 62/62 tests per runtime;
+- report:
+  `artifacts/web-node-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json`;
+- report SHA-256:
+  `fa076b24843f1ebae5117b394284c3af168a8b4564d8edc6e90a7ea64b4fc893`.
+
+Packaged browser evidence:
+
+- bundled Chromium 149.0.7827.55, Firefox 151.0 and WebKit 26.5 plus native
+  Chrome 150.0.7871.184;
+- all four lanes passed on their first attempt with zero application
+  console/page errors, CSP violations, runtime style insertion, inline style
+  attributes or horizontal overflow at 320 CSS pixels;
+- all four lanes proved SSE plus polling equivalence, contextual approval,
+  live cancel, Receipt/artifact/export, zero-provider/zero-write replay,
+  keyboard/focus paths, current-session logout and listener-wide peer-session
+  invalidation;
+- Chromium and native Chrome recorded zero axe violations on Home and Task;
+- Firefox retained six classified navigation-time EventSource diagnostics,
+  not application errors;
+- report:
+  `artifacts/web-browser-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json`;
+- report SHA-256:
+  `395e7a9048626e37a4390e41c25ccb65a67f2753281505a6c4eeda764940ac20`.
+
+These automated reports do not substitute for native Safari/Edge,
+assistive-technology or human-comprehension review.
 
 ## Native Safari mutation smokes
 
 Native Safari 26.3 on macOS 26.3 exercised four scoped packaged mutation
-paths. Each record binds the exact source commit actually observed. The
-allow/revoke-all and reject/current-session records are ancestral evidence
-from `d8df9c65`; cancel was observed on `794c85f8`; peer invalidation was
-observed on the final immutable source commit `7e555c7d`.
+paths on ancestral source states. Each record binds the exact source commit
+actually observed. The allow/revoke-all and reject/current-session records
+are from `d8df9c65`; cancel was observed on `794c85f8`; peer invalidation was
+observed on `7e555c7d`.
 
 The allow/revoke-all run:
 
@@ -127,7 +165,7 @@ The cancel run:
 - discarded two earlier harness attempts that ended by short fixture duration
   or phase timeout rather than treating them as cancel evidence.
 
-The independent peer-invalidation run:
+The ancestral independent peer-invalidation run:
 
 - kept the native Safari tab as the target peer;
 - exchanged a fresh, independent second session from a packaged CLI launch and
@@ -141,7 +179,9 @@ The peer mutation actor was not an unlocked Safari private window. A private
 window attempt was discarded when Safari required local authentication, and
 an expired capability attempt was also discarded after its expected 401.
 This record proves native Safari peer invalidation and presentation, not a
-two-Safari-cookie-jar usability path.
+two-Safari-cookie-jar usability path. Because `aa34369a` includes later
+session-revocation recovery changes, it is not current-source native Safari
+evidence and a new native Safari invalidation run remains required.
 
 All four passing holds ended with their loopback listener refusing a
 subsequent connection. None of these records claim VoiceOver behavior,
@@ -168,14 +208,16 @@ Evidence:
 
 ## Remaining interpretation boundary
 
-These local records close the latest immutable cross-build execution gap,
-replace the superseded performance report, and cover the scoped native Safari
-cancel and peer-invalidation cases. They do not provide:
+These local records close the exact-source immutable cross-build, pinned
+runtime, packaged browser and non-canonical performance evidence gaps. The
+native Safari records remain useful ancestral evidence, but no longer prove
+the current session-revocation source. They do not provide:
 
 - human product/reference approval;
 - five fresh English participant results;
 - two native Simplified-Chinese reviews;
 - native Edge or any VoiceOver, Narrator, or NVDA evidence;
+- a current-source native Safari session-revocation run;
 - a two-unlocked-Safari-session usability run;
 - the canonical M2 performance report;
 - reviewed-tip evidence or a wire-freeze decision.
