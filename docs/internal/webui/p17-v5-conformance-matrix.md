@@ -85,8 +85,9 @@ git diff --check
 The schema-v2 compatibility report additionally cross-ran historical
 `aa34369a` and current build `15c9b1f8` under Node 24.18.0. The automated
 candidate checker passes and explicitly classifies the older native Safari
-records as historical-only. `pnpm verify:web-candidate` is rerun after the
-ledger commit below; `git diff --check` remains a separate working-tree check.
+records as historical-only. `pnpm verify:web-candidate` exited 0 at exact
+tracked-clean candidate `76e71919cada9dbe6546c094943b5b461beaa88d`;
+`git diff --check` remains a separate working-tree check.
 
 Observed counts:
 
