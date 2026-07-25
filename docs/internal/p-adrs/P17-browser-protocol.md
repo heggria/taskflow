@@ -1376,14 +1376,14 @@ The executable implementation candidate now includes:
   exact-boundary continuation fixtures;
 - committed compatibility vectors for all 13 approved additive presentation
   roots, every command/action/outcome/page-cursor/SSE branch, all 29 endpoint
-  codec samples, every closed `ControlError` code, and all 14,138 branches
-  recursively found across 1,063 nested union occurrences; these distinguish
+  codec samples, every closed `ControlError` code, and all 39,707 branches
+  recursively found across 2,225 nested union occurrences; these distinguish
   an ignored top-level additive field from required-field and nested-authority
   breaking changes;
 - a real packaged cross-build harness that rejects identical asset manifests
-  or stamped commits. Immutable candidates
-  `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` and
-  `aa34369a5958ce34bbdad3eab973434a001d0738` pass both
+  or stamped commits. Historical build
+  `aa34369a5958ce34bbdad3eab973434a001d0738` and current build
+  `15c9b1f85b847735ba803e5c093fe906ad85d3bf` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
   contains immutable build identities and no local absolute paths. The
@@ -1421,12 +1421,12 @@ The executable implementation candidate now includes:
   metadata and pass empty, single, exact N/N+1 full-envelope,
   concatenate-all-pages, one-oversized-element, and strict response-schema
   cases;
-- a pinned Node 22.19.0/24.18.0/26.5.0 protocol/gateway matrix (62 tests per
+- a pinned Node 22.19.0/24.18.0/26.5.0 protocol/gateway matrix (63 tests per
   runtime), including the cross-version 65-header parser sentinel required to
   enforce the 64-header application maximum without silent truncation and the
   combined event-cursor restart/query/authorization/listener/key/mount/
-  compaction matrix. The checked report binds clean source candidate
-  `aa34369a5958ce34bbdad3eab973434a001d0738`;
+  compaction matrix. The checked report binds clean current build
+  `15c9b1f85b847735ba803e5c093fe906ad85d3bf`;
 - a packaged CLI → daemon → WebGateway → real browser E2E using multiple
   project stores, two independent nonce-host listeners in one browser context,
   a live cancellable provider process, SSE and polling fallback with
@@ -1444,19 +1444,23 @@ The executable implementation candidate now includes:
   the visual DAG, modal
   focus/Escape/restore behavior and Simple → Pro focus restoration, zero
   inline/runtime styles, 320 CSS-pixel layout, and Chromium axe checks. The
-  approval-enhanced `aa34369a` path passes Chromium 149.0.7827.55, Firefox 151.0 and
-  WebKit 26.5 from the same source state on the first attempt of every matrix
-  lane; all three have zero application console/page errors, CSP violations
-  and runtime-style findings, and all three pass the Receipt export and
-  zero-write/zero-provider replay checks and graph-listbox keyboard parity. The
+  current `15c9b1f8` production build plus the `af40872f` evidence-harness tip
+  pass Chromium 149.0.7827.55, Firefox 151.0 and WebKit 26.5 from byte-identical
+  production assets on the first attempt of every matrix lane; all three have
+  zero application console/page errors, CSP violations and runtime-style
+  findings, and all three pass the Receipt export, zero-write/zero-provider
+  replay, graph-listbox keyboard parity, and sensitive-artifact
+  decline/acknowledgement contract. The
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
-  `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has separately scoped packaged read/keyboard/AX plus five mutation smokes;
-  approval, rejection and cancel observations were rerun on evidence tip
-  `60002c34`, HTTP-actor peer invalidation on `e19dfd45`, and native
-  normal/private Safari two-cookie-jar revocation on `d6ac8877`; all three
-  evidence tips retain byte-identical `aa34369a` candidate source.
+  `chrome` channel, including zero Chromium axe findings and the same
+  sensitive-artifact contract. Native Safari 26.3 has separately scoped
+  packaged read/keyboard/AX plus five historical mutation smokes; approval,
+  rejection and cancel observations were recorded on `60002c34`, HTTP-actor
+  peer invalidation on `e19dfd45`, and native normal/private Safari
+  two-cookie-jar revocation on `d6ac8877`. Production source changed after
+  those records, so they remain integrity-checked historical evidence for
+  `aa34369a` and do not count as current-source native Safari evidence.
   Allow reaches completed 3/3 with honest partial verification and applies
   listener-wide revocation. Reject reaches both choices through native Tab
   focus, persists the approval node as blocked with downstream pending, and
@@ -1465,8 +1469,7 @@ The executable implementation candidate now includes:
   result. Independent HTTP-actor peer invalidation makes a native Safari
   target render the deterministic localized session-ended screen rather than
   a generic page failure after a separate authenticated P17 client revokes all
-  sessions. The latter was rerun on evidence tip `e19dfd45` with the
-  byte-identical `aa34369a` candidate source. A later native smoke exchanges
+  sessions. A later native smoke exchanges
   independent same-listener capabilities in normal and unlocked-private
   Safari windows, commits listener-wide revocation from the normal window and
   observes both localized revoked projections. Every passing hold verifies
@@ -1491,12 +1494,9 @@ At minimum, conformance work must still add or verify:
   new-client/old-server harness at the final reviewed tip. The latest local
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
-- native Edge, assistive-technology and human review of the
-  approval-enhanced decision path. Native Safari has current-source scoped
-  allow, reject, cancel, current-session and listener-wide revocation
-  execution evidence, a current-source HTTP-actor peer-invalidation rerun and
-  a current-source normal/private Safari two-cookie-jar revocation smoke. The
-  exact checkpoint
+- current-source native Safari, native Edge, assistive-technology and human
+  review of the approval-enhanced decision path. The retained native Safari
+  records bind older source `aa34369a` only. The exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
   post-dispatch ambiguity fail-closed fixtures are executable; automated or
@@ -1506,12 +1506,11 @@ At minimum, conformance work must still add or verify:
   100-project/10,000-run/2,000-node packaged harness, project-local rebuildable
   read indexes, startup snapshot prewarm, commit-woken SSE invalidation,
   browser receipt/paint marks, standard CLS session-window measurement, and
-  JSON plus human summaries are implemented. Clean immutable commit
-  `aa34369a5958ce34bbdad3eab973434a001d0738` has a checked-in M3 Pro/
-  Node 24 30-sample structural pass. Its event-to-visible p95 is 344.6 ms,
-  above the 250-ms canonical budget, but the non-canonical report correctly
-  records it as informational rather than passed. Load also rose during the
-  run. It remains informational;
+  JSON plus human summaries are implemented. Clean immutable build
+  `15c9b1f85b847735ba803e5c093fe906ad85d3bf` has a checked-in M3 Pro/
+  Node 24 30-sample structural pass. Its event-to-visible p95 is 187.0 ms,
+  below the numerical budget, but the non-canonical report correctly records
+  it as informational rather than release evidence;
 - human approval of the 149 reference renders, the five-fresh-participant
   English comprehension record, and both native Simplified-Chinese content
   reviews using the frozen study protocol and hash-bound evidence;

@@ -15,11 +15,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/7e555c7d-to-aa34369a/report.json",
+	"artifacts/web-compat/aa34369a-to-15c9b1f8/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/aa34369a5958ce34bbdad3eab973434a001d0738",
+	"artifacts/web-bench/15c9b1f85b847735ba803e5c093fe906ad85d3bf",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -28,15 +28,15 @@ const benchmarkSummaryPath = path.join(
 );
 const nodeMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-node-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json",
+	"artifacts/web-node-matrix/15c9b1f85b847735ba803e5c093fe906ad85d3bf/report.json",
 );
 const browserMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-browser-matrix/aa34369a5958ce34bbdad3eab973434a001d0738/report.json",
+	"artifacts/web-browser-matrix/af40872f015d7592f949dc95dfe8905cc0b07d76/report.json",
 );
 const ledgerPath = path.join(
 	repositoryRoot,
-	"docs/internal/webui/immutable-candidate-evidence-v1.md",
+	"docs/internal/webui/immutable-candidate-evidence-v2.md",
 );
 const nativeSafariMutationPath = path.join(
 	repositoryRoot,
@@ -119,7 +119,7 @@ function assertNativeSafariRecord(
 		label,
 		expectedCommit,
 		expectedResult,
-		finalCandidateCommit,
+		currentCandidateCommit,
 	},
 ) {
 	assert.equal(record.schemaVersion, 1);
@@ -146,44 +146,32 @@ function assertNativeSafariRecord(
 			"merge-base",
 			"--is-ancestor",
 			record.candidate.gitCommit,
-			finalCandidateCommit,
+			currentCandidateCommit,
 		],
 		{ cwd: repositoryRoot },
 	);
-	if (nativeAncestry.status !== 0) {
-		const evidenceDescendsCandidate = spawnSync(
-			"git",
-			[
-				"merge-base",
-				"--is-ancestor",
-				finalCandidateCommit,
-				record.candidate.gitCommit,
-			],
-			{ cwd: repositoryRoot },
-		);
-		assert.equal(
-			evidenceDescendsCandidate.status,
-			0,
-			`${label} commit must be in the immutable candidate lineage`,
-		);
-		const sourceDriftAfterCandidate = spawnSync(
-			"git",
-			[
-				"diff",
-				"--quiet",
-				finalCandidateCommit,
-				record.candidate.gitCommit,
-				"--",
-				...candidateSourceScopes,
-			],
-			{ cwd: repositoryRoot },
-		);
-		assert.equal(
-			sourceDriftAfterCandidate.status,
-			0,
-			`${label} descendant evidence changed candidate source`,
-		);
-	}
+	assert.equal(
+		nativeAncestry.status,
+		0,
+		`${label} commit must be an ancestor of the current candidate`,
+	);
+	const sourceDriftAfterRecord = spawnSync(
+		"git",
+		[
+			"diff",
+			"--quiet",
+			record.candidate.gitCommit,
+			currentCandidateCommit,
+			"--",
+			...candidateSourceScopes,
+		],
+		{ cwd: repositoryRoot },
+	);
+	assert.equal(
+		sourceDriftAfterRecord.status,
+		1,
+		`${label} unexpectedly covers current source; record it as current evidence instead of historical evidence`,
+	);
 	for (const [name, passed] of Object.entries(record.assertions)) {
 		assert.equal(passed, true, `${label} assertion failed: ${name}`);
 	}
@@ -358,7 +346,7 @@ assertNativeSafariRecord(nativeSafariMutation, {
 	label: "native Safari allow/revoke-all record",
 	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-approval-and-revoke-all-smoke-pass",
-	finalCandidateCommit: newBuild.gitCommit,
+	currentCandidateCommit: newBuild.gitCommit,
 });
 
 const nativeSafariRejectCurrentBytes = fs.readFileSync(
@@ -376,7 +364,7 @@ assertNativeSafariRecord(nativeSafariRejectCurrent, {
 	label: "native Safari reject/current-session record",
 	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-reject-and-current-session-smoke-pass",
-	finalCandidateCommit: newBuild.gitCommit,
+	currentCandidateCommit: newBuild.gitCommit,
 });
 
 const nativeSafariCancelBytes = fs.readFileSync(
@@ -392,7 +380,7 @@ assertNativeSafariRecord(nativeSafariCancel, {
 	label: "native Safari cancel record",
 	expectedCommit: "60002c343ee4ab476bded389bf7bf34bfd9d4f13",
 	expectedResult: "native-cancel-run-smoke-pass",
-	finalCandidateCommit: newBuild.gitCommit,
+	currentCandidateCommit: newBuild.gitCommit,
 });
 
 const nativeSafariPeerRevocationBytes = fs.readFileSync(
@@ -411,20 +399,8 @@ assertNativeSafariRecord(nativeSafariPeerRevocation, {
 	expectedCommit: "e19dfd4511a0c53375990bd07490066eb62a7d81",
 	expectedResult:
 		"native-safari-peer-session-invalidation-smoke-pass",
-	finalCandidateCommit: newBuild.gitCommit,
+	currentCandidateCommit: newBuild.gitCommit,
 });
-assert.equal(
-	nativeSafariPeerRevocation.candidate.webSourceDigest,
-	benchmark.git.sourceDigest,
-);
-assert.equal(
-	nativeSafariPeerRevocation.candidate.webManifestSha256,
-	newBuild.manifestSha256,
-);
-assert.equal(
-	nativeSafariPeerRevocation.candidate.webBuildId,
-	benchmark.build.webBuildId,
-);
 
 const nativeSafariTwoSessionRevocationBytes = fs.readFileSync(
 	nativeSafariTwoSessionRevocationPath,
@@ -442,20 +418,8 @@ assertNativeSafariRecord(nativeSafariTwoSessionRevocation, {
 	expectedCommit: "d6ac8877ae805bc0b56f819116bcbc3a354c2588",
 	expectedResult:
 		"native-safari-two-cookie-jar-revocation-smoke-pass",
-	finalCandidateCommit: newBuild.gitCommit,
+	currentCandidateCommit: newBuild.gitCommit,
 });
-assert.equal(
-	nativeSafariTwoSessionRevocation.candidate.webSourceDigest,
-	benchmark.git.sourceDigest,
-);
-assert.equal(
-	nativeSafariTwoSessionRevocation.candidate.webManifestSha256,
-	newBuild.manifestSha256,
-);
-assert.equal(
-	nativeSafariTwoSessionRevocation.candidate.webBuildId,
-	benchmark.build.webBuildId,
-);
 
 const nodeMatrixBytes = fs.readFileSync(nodeMatrixPath, "utf8");
 assertNoLocalPath(nodeMatrixBytes, "Node matrix report");
@@ -470,7 +434,7 @@ assert.deepEqual(
 );
 for (const runtime of nodeMatrix.runtimes) {
 	assert.equal(runtime.suiteFiles, 8);
-	assert.equal(runtime.testCount, 62);
+	assert.equal(runtime.testCount, 63);
 	assert.equal(runtime.passCount, runtime.testCount);
 	assert.equal(runtime.failCount, 0);
 }
@@ -481,9 +445,59 @@ const browserMatrixBytes = fs.readFileSync(
 );
 assertNoLocalPath(browserMatrixBytes, "browser matrix report");
 const browserMatrix = JSON.parse(browserMatrixBytes);
-assert.equal(browserMatrix.schemaVersion, 2);
+assert.equal(browserMatrix.schemaVersion, 3);
 assert.equal(browserMatrix.status, "pass");
-assert.equal(browserMatrix.candidate.gitCommit, newBuild.gitCommit);
+assertConcreteCommit(
+	browserMatrix.candidate.gitCommit,
+	"browser matrix commit",
+);
+const browserCandidateAncestry = spawnSync(
+	"git",
+	[
+		"merge-base",
+		"--is-ancestor",
+		newBuild.gitCommit,
+		browserMatrix.candidate.gitCommit,
+	],
+	{ cwd: repositoryRoot },
+);
+assert.equal(
+	browserCandidateAncestry.status,
+	0,
+	"browser matrix must descend from the immutable source build",
+);
+const browserEvidenceAncestry = spawnSync(
+	"git",
+	[
+		"merge-base",
+		"--is-ancestor",
+		browserMatrix.candidate.gitCommit,
+		"HEAD",
+	],
+	{ cwd: repositoryRoot },
+);
+assert.equal(
+	browserEvidenceAncestry.status,
+	0,
+	"current evidence tip must descend from the browser matrix candidate",
+);
+const browserSourceDrift = spawnSync(
+	"git",
+	[
+		"diff",
+		"--quiet",
+		newBuild.gitCommit,
+		browserMatrix.candidate.gitCommit,
+		"--",
+		...candidateSourceScopes,
+	],
+	{ cwd: repositoryRoot },
+);
+assert.equal(
+	browserSourceDrift.status,
+	0,
+	"browser matrix candidate changed immutable production source",
+);
 assert.equal(browserMatrix.candidate.trackedDirty, false);
 assert.equal(
 	browserMatrix.candidate.manifestSha256,
@@ -532,6 +546,9 @@ const browserBooleanAssertions = [
 	"proGraphListboxKeyboardParityVerified",
 	"taskListPageVirtualizationVerified",
 	"artifactDownloadPathObserved",
+	"sensitiveArtifactDisclosureVerified",
+	"sensitiveArtifactDeclineIssuedNoRequest",
+	"sensitiveArtifactAcknowledgementObserved",
 	"settingsSwitchAndSingleSelectionKeyboardVerified",
 	"sessionSafetyDialogFocusAndDismissalVerified",
 	"currentSessionLogoutCommitted",
@@ -598,5 +615,5 @@ for (const file of [
 assertNoLocalPath(ledger, "candidate evidence ledger");
 
 process.stdout.write(
-	`immutable Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes)\n`,
+	`automated Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes; native Safari records historical-only)\n`,
 );

@@ -1449,22 +1449,21 @@ The canonical local benchmark profile is an Apple M2 Mac mini (8-core CPU, 16 Gi
 
 Node 26 forward CI runs correctness, protocol, static-delivery, and smoke-performance suites; Node 22.19 remains a compatibility floor. The normative release budget is measured on Node 24 LTS. If a budget proves unrealistic, change it with raw evidence and a reviewed RFC update rather than silently changing fixtures, hardware, percentile math, or dropping the test.
 
-The latest local report binds clean immutable commit
-`aa34369a5958ce34bbdad3eab973434a001d0738` and source digest
-`sha256:f05e3aefb64dd3a5d115e4c975883ecf16e5830f7c9f225fb07962e317a40db4`.
+The latest local report binds clean immutable build commit
+`15c9b1f85b847735ba803e5c093fe906ad85d3bf` and source digest
+`sha256:bc67e72d8308cd3ef4cd0852df809a53f5889ce79127d2d3a38c1eabc32f8c8e`.
 It is a **non-canonical structural pass**, not release performance evidence:
 MacBook Pro M3 Pro, Node 24.18.0, Chromium 149.0.7827.55, 30 samples,
-511.8 ms cold-Home p95, 887.4 ms warm-Home p95, 55.7 ms cached-Pro p95,
-344.6 ms event-to-painted-detail p95 (123.8 ms commit→receipt and 281.4 ms
-receipt→paint diagnostic p95s), 13 ms list response, and 0.0616 maximum CLS
+419.3 ms cold-Home p95, 464.1 ms warm-Home p95, 25.7 ms cached-Pro p95,
+187.0 ms event-to-painted-detail p95 (68.2 ms commit→Receipt and 129.8 ms
+Receipt→paint diagnostic p95s), 2.7 ms list response, and 0.0439 maximum CLS
 session window. Owner-ready and launch-to-useful p95s are retained separately
-as 4.977 s and 5.556 s. The Simple shell is 209,803 gzip bytes. The schema-v4
+as 4.678 s and 5.130 s. The Simple shell is 211,240 gzip bytes. The schema-v4
 report proves `git.dirty:false`, the exact primary Node version, AC power, no
-recorded thermal/performance warning, and pre/post load averages of
-5.54/6.51/7.58 and 9.70/8.09/7.94. Because this is not the canonical M2 Mac
-mini profile, every latency result remains informational. In particular,
-event-to-painted-detail is above the 250-ms canonical budget and is not
-represented as passed. The unloaded canonical gate stays open.
+recorded thermal/performance warning, and pre/post load averages. Because this
+is not the canonical M2 Mac mini profile, every latency result remains
+informational even though the recorded values are below the numerical
+budgets. The unloaded canonical gate stays open.
 
 ---
 
@@ -1645,29 +1644,15 @@ Policy editing is not in this table: it is out of scope, not a hidden capability
   nodes and passes its structural/budget plumbing, but the checkbox remains
   open because the canonical M2/Node 24 performance evidence is absent.
 - [ ] Cross-browser matrix on supported current Chrome/Edge, Firefox, and
-  Safari. Native Google Chrome 150.0.7871.184 now passes the complete packaged
-  path. Native Safari 26.3 on macOS 26.3 passes a packaged read/keyboard smoke
-  covering one-time exchange, Simple home/task, Simple → Pro, native
-  accessibility-tree tab/list semantics, graph selection/inspector parity and
-  Evidence/Receipt/artifact rendering. A second native Safari smoke activates
-  Allow from keyboard focus, reaches a completed 3/3 task with partial
-  verification and result `published`, applies listener-wide revocation,
-  renders the localized deterministic signed-out screen, and verifies listener
-  close. A third native Safari smoke reaches Reject through Tab focus, proves
-  the approval node is blocked while downstream stays pending, applies
-  current-session logout, renders the current-tab signed-out screen, and
-  verifies listener close. A fourth native Safari smoke cancels a live
-  provider task and proves both the Run and its formerly active node settle as
-  stopped without inventing a result. A fifth scoped session smoke keeps
-  Safari as the revoked peer target while an independent authenticated P17
-  HTTP session invokes revoke-all; Safari renders the localized current-tab
-  session-ended state instead of a generic failure. A sixth native session
-  smoke independently exchanges same-listener capabilities in one normal
-  Safari window and one unlocked private window, then proves revoke-all from
-  the normal window invalidates both cookie jars with localized task-preserving
-  guidance. Native Edge, VoiceOver and the remaining manual matrix remain
-  outstanding. The automated Firefox 151.0 and WebKit 26.5 lanes remain
-  supporting evidence, not substitutes for those native-product lanes.
+  Safari. The current production build passes bundled Chromium 149.0.7827.55,
+  Firefox 151.0, WebKit 26.5 and native Google Chrome 150.0.7871.184 on the
+  first attempt of every packaged lane, including the sensitive-artifact
+  decline/acknowledgement contract. The retained native Safari 26.3
+  read/keyboard and mutation smokes bind older source `aa34369a` only; they
+  remain historical evidence, not current-source coverage. Current-source
+  native Safari, native Edge, VoiceOver and the remaining manual matrix stay
+  outstanding. Automated WebKit remains supporting evidence, not a substitute
+  for a native Safari product/assistive-technology lane.
 - [x] Why-stale and zero-token replay remain visibly distinct from live
   execution. The packaged browser selects the Replay surface independently,
   executes the Receipt-bound trace, renders the explicit simulation proof, and
@@ -1766,9 +1751,9 @@ Authority model: Inherited/frozen from control-plane RFC v7.7+
 Browser wire: P17 v5 is the provisional target; protocol remains web.v1 and is not wire-frozen
 Executable schema: P17 v5 implementation candidate exists — 29-row WEB_ENDPOINTS, strict/additive TypeBox codecs, key-specific content-message argument tuples, fixed server/browser projections, generated handler/client adapters, complete projected/static en + zh-CN catalogs, locale/formatter/Simple-language guards, exact signed cursor codec/known-answer fixtures, and protocol/content/reference drift guards. P17 remains provisional until the complete §15 compatibility/adversarial matrix and reviewed-tip evidence are green.
 Read model: §7.5 remains normative. Durable BoundPlan, ApprovalRequest, conservative node/Attempt metadata, and nineteen explicitly enumerated ControlStore/Coordinator read handlers back the current browser reads. Dynamic `expand` Runs now atomically journal content-addressed BoundFragment bodies, Run-scoped link/causation/commit provenance, projected descendants and Receipt identity; recovery and fragment/graph/timeline reads are executable. Provider evidence covers checkpointed running/completed work, collection failure, rejection without a handle, settled cancellation, authoritative ambiguous reconcile, checkpoint-write failure, recovered completion without a terminal Attempt checkpoint, and projection-loss recovery. Node enrichment reaches every closed provider outcome, while Receipt provenance is `ok` only with complete durable evidence and otherwise remains `unknown`. All 29 WebGateway route slots are composed from session/bootstrap, read, pure-analysis, artifact, replay, durable-command, and event services. The packaged default now advertises the independently proven `approve`, `reject`, and `cancel-run` commands. Approve binds the ApprovalRequest to a secret digest-verified continuation artifact and original BoundPlan, survives writer restart, consumes one exact approval boundary, preserves prior Attempts/outputs, dispatches only downstream work and keeps the private checkpoint outside Receipt/browser reachability. Daemon startup recovers the four durable `running/queued` saga prefixes before exposing transport; an interrupted `running/executing` provider boundary fails closed as unknown rather than replaying. Reject remains a terminal no-dispatch decision and, like expiration, persists the exact approval NodeInstance as blocked while leaving downstream nodes pending. Edit and recovery/capacity commands remain unadvertised unless their separate gates pass; handler presence alone is still not a capability.
-Implementation: The React WebUI, loopback WebGateway, session/CSRF/static delivery, SSE plus bounded polling fallback, generated client, Simple/Pro projections, durable command recovery, Pro graph/timeline/evidence/replay/technical panels, and session revocation controls are executable. Packaged CLI → daemon → multi-project real-browser E2E covers independent nonce-host listeners, live cancel, restart-safe contextual approval and downstream Receipt, private-checkpoint non-reachability, deterministic Receipt export, zero-write/zero-provider replay, SSE/polling projection equivalence, every current GET polling surface, keyboard/focus semantics, 320px layout, CSP/runtime-style guards and Chromium axe. Exact source candidate `aa34369a5958ce34bbdad3eab973434a001d0738` passes Chromium 149.0.7827.55, Firefox 151.0 and WebKit 26.5 with zero application console/page errors; native Chrome 150.0.7871.184 passes the same complete path. Native Safari 26.3 on macOS 26.3 has separately scoped read/keyboard plus allow, reject, cancel, current-session, listener-wide revocation and peer-invalidation smokes. Allow, reject and cancel were rerun on evidence tip `60002c34`; HTTP-actor peer invalidation on `e19dfd45`; and native normal/private Safari two-cookie-jar revocation on `d6ac8877`. All three tips retain the byte-identical `aa34369a` candidate source. Cancel proves the formerly active node settles as stopped. Current-source peer invalidation proves a Safari target renders the localized session-ended state after a separate authenticated P17 session revokes all, and the later two-cookie-jar smoke proves listener-wide invalidation across independently authenticated normal and unlocked-private Safari windows. These AX/native-input smokes do not replace VoiceOver or other assistive-technology review. All ten paged surfaces, recursive schema branches, exact 100-MiB artifact transport, the five-minute absolute deadline, real SSE backpressure, cross-runtime cursor invalidation, canonical static-path/hostile-package and singleton/control-header corpora pass. The exact seven §19.4 usability tasks, timing/moderator/privacy rules, eight severity-1 classes, historical 337-key `zh-CN` coverage, observed-behavior native/AT template, and immutable completed-evidence verifier are executable and self-tested without fabricating human results. Immutable source `aa34369a5958ce34bbdad3eab973434a001d0738` produces a 209,803-byte gzip Simple shell and a schema-v4 M3 Pro/Node 24 clean-source 30-sample structural pass over 100 projects, 10,000 Runs and 2,000 graph nodes. Its non-canonical 344.6-ms event-to-visible p95 is above the canonical 250-ms budget and remains informational; the M2/Node 24 gate is still required. Distinct immutable candidates `7e555c7d7f39109ee89a502f0d818cc34f1ce7fa` and `aa34369a5958ce34bbdad3eab973434a001d0738` pass old-client/new-server and new-client/old-server with Web v1 bootstrap and zero application console/page errors.
+Implementation: The React WebUI, loopback WebGateway, session/CSRF/static delivery, SSE plus bounded polling fallback, generated client, Simple/Pro projections, durable command recovery, Pro graph/timeline/evidence/replay/technical panels, and session revocation controls are executable. Packaged CLI → daemon → multi-project real-browser E2E covers independent nonce-host listeners, live cancel, restart-safe contextual approval and downstream Receipt, private-checkpoint non-reachability, deterministic Receipt export, zero-write/zero-provider replay, SSE/polling projection equivalence, every current GET polling surface, keyboard/focus semantics, 320px layout, CSP/runtime-style guards and Chromium axe. Current production build `15c9b1f85b847735ba803e5c093fe906ad85d3bf` plus evidence-harness tip `af40872f015d7592f949dc95dfe8905cc0b07d76` passes bundled Chromium 149.0.7827.55, Firefox 151.0, WebKit 26.5 and native Chrome 150.0.7871.184 on the first attempt of every lane with zero application console/page errors. Every lane proves sensitive-artifact disclosure, decline-without-request, exact acknowledgement on confirm, SSE/polling equivalence, approval/cancel, Receipt/export/replay, session invalidation and 320px behavior. All ten paged surfaces, recursive schema branches, exact 100-MiB artifact transport, the five-minute absolute deadline, real SSE backpressure, cross-runtime cursor invalidation, canonical static-path/hostile-package and singleton/control-header corpora pass. The pinned Node 22.19/24.18/26.5 matrix passes 63/63 tests per runtime. Historical build `aa34369a` and current build `15c9b1f8` pass real old-client/new-server and new-client/old-server packaged compatibility with Web v1 bootstrap and zero application console/page errors. The exact seven §19.4 usability tasks, timing/moderator/privacy rules, eight severity-1 classes, 356-key `zh-CN` coverage, observed-behavior native/AT template, and immutable completed-evidence verifier are executable and self-tested without fabricating human results. Current build `15c9b1f8` produces a 211,240-byte gzip Simple shell and a schema-v4 M3 Pro/Node 24 clean-source 30-sample structural pass over 100 projects, 10,000 Runs and 2,000 graph nodes; its non-canonical 187.0-ms event-to-visible p95 is informational and the M2/Node 24 gate is still required. The retained native Safari records cover only older source `aa34369a` and do not count as current-source or VoiceOver evidence.
 
-Current source candidate `90df64c46695d70022228a08c2138a77b9f9ffe4` closes stale-detail response stamping, catch-up refetch failure propagation, cold-session and React StrictMode lifecycle races, endpoint capability enforcement, safe wire-integer bounds, listener-global command routing, deterministic artifact disclosure, listener-wide artifact memory bounds, selected-locale timeline content, and exact render/build provenance. Its catalogs contain 168 projected + 188 static = 356 bilingual keys. A tracked-clean build produced render-evidence v2 with 149 retained screenshots under `artifacts/web-reference/90df64c46695/`, bound to the exact Web build and asset-manifest hashes; automated render and usability-material checks pass, while the record remains explicitly unapproved. The exact-source packaged Chromium E2E also passes the complete path and proves that sensitive-artifact decline sends no request and confirmation sends the explicit acknowledgement. The `aa34369a` cross-browser, performance, compatibility, native, and 337-key evidence remains historical evidence for that older immutable source only. Human product/content approval, five fresh English participant records, two native zh-CN reviews, current-source Firefox/WebKit/native lanes, native Edge/assistive-technology evidence, canonical performance evidence, new reviewed-tip compatibility/candidate evidence, edited approval and separately gated recovery dispatch where required for GA, and a separate wire-freeze review remain mandatory.
+Current source commit `90df64c46695d70022228a08c2138a77b9f9ffe4` closes stale-detail response stamping, catch-up refetch failure propagation, cold-session and React StrictMode lifecycle races, endpoint capability enforcement, safe wire-integer bounds, listener-global command routing, deterministic artifact disclosure, listener-wide artifact memory bounds, selected-locale timeline content, and exact render/build provenance. Its catalogs contain 168 projected + 188 static = 356 bilingual keys. Render-evidence v2 retains 149 screenshots under `artifacts/web-reference/90df64c46695/`, bound to the exact Web build and asset-manifest hashes; automated render and usability-material checks pass, while the record remains explicitly unapproved. `docs/internal/webui/immutable-candidate-evidence-v2.md` binds the current compatibility, Node, browser and non-canonical performance reports. Human product/content approval, five fresh English participant records, two native zh-CN reviews, current-source native Safari, native Edge/assistive-technology evidence, canonical performance evidence, reviewed-tip evidence, edited approval and separately gated recovery dispatch where required for GA, and a separate wire-freeze review remain mandatory.
 ```
 
 ---

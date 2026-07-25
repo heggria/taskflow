@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 2,
+  "status": "pass",
+  "measuredAt": "2026-07-25T11:39:35.819Z",
+  "runtime": {
+    "node": "v24.18.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "builds": {
+    "old": {
+      "gitCommit": "aa34369a5958ce34bbdad3eab973434a001d0738",
+      "buildTime": 1784956063000,
+      "packageVersion": "0.3.0-beta.2",
+      "manifestVersion": "taskflow-web-assets.v1",
+      "manifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+      "entrypointSha256": "sha256:65c23d00fb4b051124efe7338cae355b4b2ee27e544970458c63d47628d4d7af",
+      "projectedKeysetSha256": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+      "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+      "combinedKeysetSha256": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
+    },
+    "new": {
+      "gitCommit": "15c9b1f85b847735ba803e5c093fe906ad85d3bf",
+      "buildTime": 1784978663000,
+      "packageVersion": "0.3.0-beta.2",
+      "manifestVersion": "taskflow-web-assets.v1",
+      "manifestSha256": "sha256:fbf7570dc3b5e1a4ebc848015e30d7438dad42599055c635b0e30f654187d10e",
+      "entrypointSha256": "sha256:41c65488750fc0f22c13a8fcfdd5cf107ed3dd1a50f34fc2984d9661ee813cc9",
+      "projectedKeysetSha256": "sha256:0ce2aacbe317e3aa170712dc918a6f333b5cd828449e487d89a61a5ec2cf2a79",
+      "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+      "combinedKeysetSha256": "sha256:f47871cd9ffe8934d72e44cc5b00f8d603d7fcf07c4564370b42747f2bfd72c2"
+    }
+  },
+  "pairs": [
+    {
+      "label": "old-client/new-server",
+      "pass": true,
+      "server": {
+        "gitCommit": "15c9b1f85b847735ba803e5c093fe906ad85d3bf",
+        "buildTime": 1784978663000,
+        "packageVersion": "0.3.0-beta.2",
+        "manifestVersion": "taskflow-web-assets.v1",
+        "manifestSha256": "sha256:fbf7570dc3b5e1a4ebc848015e30d7438dad42599055c635b0e30f654187d10e",
+        "entrypointSha256": "sha256:41c65488750fc0f22c13a8fcfdd5cf107ed3dd1a50f34fc2984d9661ee813cc9",
+        "projectedKeysetSha256": "sha256:0ce2aacbe317e3aa170712dc918a6f333b5cd828449e487d89a61a5ec2cf2a79",
+        "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+        "combinedKeysetSha256": "sha256:f47871cd9ffe8934d72e44cc5b00f8d603d7fcf07c4564370b42747f2bfd72c2"
+      },
+      "client": {
+        "gitCommit": "aa34369a5958ce34bbdad3eab973434a001d0738",
+        "buildTime": 1784956063000,
+        "packageVersion": "0.3.0-beta.2",
+        "manifestVersion": "taskflow-web-assets.v1",
+        "manifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+        "entrypointSha256": "sha256:65c23d00fb4b051124efe7338cae355b4b2ee27e544970458c63d47628d4d7af",
+        "projectedKeysetSha256": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+        "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+        "combinedKeysetSha256": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
+      },
+      "navigationStatus": 200,
+      "bootstrapStatus": 200,
+      "bootstrapSchemaVersion": "web.v1",
+      "bootstrapPackageVersion": "0.3.0-beta.2",
+      "pageErrorCount": 0,
+      "consoleErrorCount": 0,
+      "pageErrors": [],
+      "consoleErrors": []
+    },
+    {
+      "label": "new-client/old-server",
+      "pass": true,
+      "server": {
+        "gitCommit": "aa34369a5958ce34bbdad3eab973434a001d0738",
+        "buildTime": 1784956063000,
+        "packageVersion": "0.3.0-beta.2",
+        "manifestVersion": "taskflow-web-assets.v1",
+        "manifestSha256": "sha256:d7b3c3930587c697779fcc37261dd87ce574316fae6c848248ce45650a9dbd69",
+        "entrypointSha256": "sha256:65c23d00fb4b051124efe7338cae355b4b2ee27e544970458c63d47628d4d7af",
+        "projectedKeysetSha256": "sha256:d5de767d0ab0eae7d974544d44461ffca6347af65f4467db11bb6fd0a2bbd287",
+        "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+        "combinedKeysetSha256": "sha256:07775df35e6c8e73cf2e4d00b3e0de705cc7c2792951c6ebe52b6e78d960656d"
+      },
+      "client": {
+        "gitCommit": "15c9b1f85b847735ba803e5c093fe906ad85d3bf",
+        "buildTime": 1784978663000,
+        "packageVersion": "0.3.0-beta.2",
+        "manifestVersion": "taskflow-web-assets.v1",
+        "manifestSha256": "sha256:fbf7570dc3b5e1a4ebc848015e30d7438dad42599055c635b0e30f654187d10e",
+        "entrypointSha256": "sha256:41c65488750fc0f22c13a8fcfdd5cf107ed3dd1a50f34fc2984d9661ee813cc9",
+        "projectedKeysetSha256": "sha256:0ce2aacbe317e3aa170712dc918a6f333b5cd828449e487d89a61a5ec2cf2a79",
+        "staticKeysetSha256": "sha256:faa28af88738a4212f3088f38f7977cf7d1ef04f4c7606acb8d55a97cbd883bf",
+        "combinedKeysetSha256": "sha256:f47871cd9ffe8934d72e44cc5b00f8d603d7fcf07c4564370b42747f2bfd72c2"
+      },
+      "navigationStatus": 200,
+      "bootstrapStatus": 200,
+      "bootstrapSchemaVersion": "web.v1",
+      "bootstrapPackageVersion": "0.3.0-beta.2",
+      "pageErrorCount": 0,
+      "consoleErrorCount": 0,
+      "pageErrors": [],
+      "consoleErrors": []
+    }
+  ]
+}
