@@ -54,6 +54,10 @@ const nativeSafariPeerRevocationPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/native-safari-peer-revocation-smoke-v1.json",
 );
+const nativeSafariTwoSessionRevocationPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-two-session-revocation-smoke-v1.json",
+);
 const candidateSourceScopes = [
 	"packages/taskflow-core/src",
 	"packages/taskflow-core/package.json",
@@ -422,6 +426,37 @@ assert.equal(
 	benchmark.build.webBuildId,
 );
 
+const nativeSafariTwoSessionRevocationBytes = fs.readFileSync(
+	nativeSafariTwoSessionRevocationPath,
+	"utf8",
+);
+assertNoLocalPath(
+	nativeSafariTwoSessionRevocationBytes,
+	"native Safari two-session revocation record",
+);
+const nativeSafariTwoSessionRevocation = JSON.parse(
+	nativeSafariTwoSessionRevocationBytes,
+);
+assertNativeSafariRecord(nativeSafariTwoSessionRevocation, {
+	label: "native Safari two-session revocation record",
+	expectedCommit: "d6ac8877ae805bc0b56f819116bcbc3a354c2588",
+	expectedResult:
+		"native-safari-two-cookie-jar-revocation-smoke-pass",
+	finalCandidateCommit: newBuild.gitCommit,
+});
+assert.equal(
+	nativeSafariTwoSessionRevocation.candidate.webSourceDigest,
+	benchmark.git.sourceDigest,
+);
+assert.equal(
+	nativeSafariTwoSessionRevocation.candidate.webManifestSha256,
+	newBuild.manifestSha256,
+);
+assert.equal(
+	nativeSafariTwoSessionRevocation.candidate.webBuildId,
+	benchmark.build.webBuildId,
+);
+
 const nodeMatrixBytes = fs.readFileSync(nodeMatrixPath, "utf8");
 assertNoLocalPath(nodeMatrixBytes, "Node matrix report");
 const nodeMatrix = JSON.parse(nodeMatrixBytes);
@@ -552,6 +587,7 @@ for (const file of [
 	nativeSafariRejectCurrentPath,
 	nativeSafariCancelPath,
 	nativeSafariPeerRevocationPath,
+	nativeSafariTwoSessionRevocationPath,
 ]) {
 	assert.match(
 		ledger,

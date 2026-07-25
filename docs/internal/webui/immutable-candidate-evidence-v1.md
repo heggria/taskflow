@@ -158,11 +158,12 @@ result or approval is implied.
 
 ## Native Safari mutation smokes
 
-Native Safari 26.3 on macOS 26.3 exercised four scoped packaged mutation
+Native Safari 26.3 on macOS 26.3 exercised five scoped packaged mutation
 paths. The allow/revoke-all, reject/current-session and cancel paths were
 rerun on evidence tip `60002c34`; peer invalidation was rerun on evidence tip
-`e19dfd45`. Both evidence tips retain candidate source byte-identical to the
-bound immutable `aa34369a` source.
+`e19dfd45`; and the two-Safari-cookie-jar revocation path ran on evidence tip
+`d6ac8877`. All three evidence tips retain candidate source byte-identical to
+the bound immutable `aa34369a` source.
 
 The allow/revoke-all run:
 
@@ -198,13 +199,23 @@ The current-source independent peer-invalidation run:
 - made the Safari peer lose authorization and render the localized
   current-tab session-ended screen instead of a generic page failure.
 
-The peer mutation actor was not an unlocked Safari private window. The staged
-actor capability expired during native setup and returned 401 before creating
-a session; a fresh same-listener capability was minted and consumed for the
-passing run. This record proves current-source native Safari peer invalidation
-and presentation, not a two-Safari-cookie-jar usability path.
+That record's peer mutation actor was not an unlocked Safari private window.
+The staged actor capability expired during native setup and returned 401
+before creating a session; a fresh same-listener capability was minted and
+consumed for the passing run.
 
-All four passing holds ended with their loopback listener refusing a
+The later two-Safari-cookie-jar run:
+
+- exchanged two fresh same-listener launch capabilities independently in one
+  normal Safari window and one unlocked Safari private window;
+- showed authenticated Home in both distinct cookie jars;
+- exposed the listener-wide consequence before committing revoke-all from the
+  normal window;
+- rendered the localized all-listener-tabs session-ended state in the normal
+  window and the localized current-tab peer-ended state in the private window,
+  with task-preservation and restart guidance in both.
+
+All five passing holds ended with their loopback listener refusing a
 subsequent connection. None of these records claim VoiceOver behavior,
 automated Safari console/CSP coverage, or human comprehension.
 
@@ -225,7 +236,11 @@ Evidence:
 - peer-invalidation record:
   `docs/internal/webui/native-safari-peer-revocation-smoke-v1.json`;
 - peer-invalidation SHA-256:
-  `0cee196d4f5db8681cdd2b84e6a39f1101d5bacf3ae7241ed0e0f899af4aef4a`.
+  `0cee196d4f5db8681cdd2b84e6a39f1101d5bacf3ae7241ed0e0f899af4aef4a`;
+- two-Safari-cookie-jar revocation record:
+  `docs/internal/webui/native-safari-two-session-revocation-smoke-v1.json`;
+- two-Safari-cookie-jar revocation SHA-256:
+  `dae0dc546150bf1f707e9bdae0fc7e74bb210a472224e08240c72e54d41f8fe4`.
 
 ## Remaining interpretation boundary
 
@@ -237,6 +252,5 @@ Safari scoped-mutation evidence gaps. They do not provide:
 - five fresh English participant results;
 - two native Simplified-Chinese reviews;
 - native Edge or any VoiceOver, Narrator, or NVDA evidence;
-- a two-unlocked-Safari-session usability run;
 - the canonical M2 performance report;
 - reviewed-tip evidence or a wire-freeze decision.

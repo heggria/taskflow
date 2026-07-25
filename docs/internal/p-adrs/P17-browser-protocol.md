@@ -43,7 +43,7 @@ full-envelope continuation fixtures; session, CSRF, Host/Origin, static
 delivery, SSE and bounded polling fallback tests; a packaged CLI → daemon →
 WebGateway → real browser path over multiple mounted ControlStores; durable
 cancel, approval recovery and lost-response handling; Receipt/artifact
-rendering; four scoped native Safari mutation smokes; and 149 hash-bound
+rendering; five scoped native Safari mutation smokes; and 149 hash-bound
 reference renders covering nine screen families, two locales, two themes,
 narrow/zoom conditions, and 36 serious/critical accessibility assessments.
 The reference set remains **draft/unapproved**, and the required
@@ -1448,22 +1448,25 @@ The executable implementation candidate now includes:
   same packaged path separately
   passes the installed native Google Chrome 150.0.7871.184 through Playwright's
   `chrome` channel, including zero Chromium axe findings. Native Safari 26.3
-  has separately scoped packaged read/keyboard/AX plus four mutation smokes;
+  has separately scoped packaged read/keyboard/AX plus five mutation smokes;
   approval, rejection and cancel observations were rerun on evidence tip
-  `60002c34`, while peer invalidation was rerun on `e19dfd45`; both tips
-  retain byte-identical `aa34369a` candidate source.
+  `60002c34`, HTTP-actor peer invalidation on `e19dfd45`, and native
+  normal/private Safari two-cookie-jar revocation on `d6ac8877`; all three
+  evidence tips retain byte-identical `aa34369a` candidate source.
   Allow reaches completed 3/3 with honest partial verification and applies
   listener-wide revocation. Reject reaches both choices through native Tab
   focus, persists the approval node as blocked with downstream pending, and
   applies current-session logout. Cancel settles both Run and the formerly
   active node as stopped, retains unavailable verification, and invents no
-  result. Independent peer invalidation makes a native Safari target render
-  the deterministic localized session-ended screen rather than a generic page
-  failure after a separate authenticated P17 client revokes all sessions. The
-  latter was rerun on evidence tip `e19dfd45` with the byte-identical
-  `aa34369a` candidate source and does not claim an unlocked Safari
-  private-window actor. Every passing hold verifies listener close; Edge and
-  assistive-technology review remain separate;
+  result. Independent HTTP-actor peer invalidation makes a native Safari
+  target render the deterministic localized session-ended screen rather than
+  a generic page failure after a separate authenticated P17 client revokes all
+  sessions. The latter was rerun on evidence tip `e19dfd45` with the
+  byte-identical `aa34369a` candidate source. A later native smoke exchanges
+  independent same-listener capabilities in normal and unlocked-private
+  Safari windows, commits listener-wide revocation from the normal window and
+  observes both localized revoked projections. Every passing hold verifies
+  listener close; Edge and assistive-technology review remain separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1487,9 +1490,9 @@ At minimum, conformance work must still add or verify:
 - native Edge, assistive-technology and human review of the
   approval-enhanced decision path. Native Safari has current-source scoped
   allow, reject, cancel, current-session and listener-wide revocation
-  execution evidence plus a current-source peer-invalidation rerun, but the
-  peer actor was an independent P17 HTTP session rather than a second unlocked
-  Safari cookie jar. The exact checkpoint
+  execution evidence, a current-source HTTP-actor peer-invalidation rerun and
+  a current-source normal/private Safari two-cookie-jar revocation smoke. The
+  exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and
   post-dispatch ambiguity fail-closed fixtures are executable; automated or
