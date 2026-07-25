@@ -5,21 +5,21 @@ wire-frozen, or release evidence.
 
 ## Candidate lineage
 
-The current production source is the tracked-clean build at
-`15c9b1f85b847735ba803e5c093fe906ad85d3bf`. It contains source commit
-`90df64c46695d70022228a08c2138a77b9f9ffe4` plus the exact-source reference
-evidence commit. The later
-`af40872f015d7592f949dc95dfe8905cc0b07d76` changes only the browser-matrix
-evidence harness and is the tracked-clean browser-matrix candidate.
+The current immutable packaged/evidence build is the tracked-clean commit
+`130e1a3f7c0bf991c96d6e0192a2517be43ff827`. It contains implementation source
+`6f18a4eff57f1774328808cdfea22e58178555e4` plus the exact-source reference
+renders. The compatibility, Node, performance and four-lane browser reports
+all bind this same packaged/evidence build; the reference render itself remains
+bound to the implementation source commit.
 
 The production build identity is:
 
 - Web build:
-  `sha256:0ae85fbdcbe3d477b8ecb37fdee6aa91bb45c176e93c2085f269285bb3d7f351`;
+  `sha256:853edc81c345c5a06e105110c4f3cb0fabcfc79f0e73912f05fa636b56da624e`;
 - Web manifest:
-  `sha256:fbf7570dc3b5e1a4ebc848015e30d7438dad42599055c635b0e30f654187d10e`;
+  `sha256:154fe609eb6bea194e6b241e1b3f7394ffcecbed7cf70352faf44b9eef08a9e6`;
 - benchmark source digest:
-  `sha256:bc67e72d8308cd3ef4cd0852df809a53f5889ce79127d2d3a38c1eabc32f8c8e`.
+  `sha256:28142aa423b56628a67f9f38d2dbccf7ba985750a1ccca1d0cb4bc9e050a1682`.
 
 The evidence checker requires every evidence commit to be in this lineage and
 rejects production or benchmark source drift after the immutable build.
@@ -28,7 +28,7 @@ rejects production or benchmark source drift after the immutable build.
 
 The browser harness cross-ran the independently built historical
 `aa34369a5958ce34bbdad3eab973434a001d0738` package and the current
-`15c9b1f85b847735ba803e5c093fe906ad85d3bf` package under Node 24.18.0:
+`130e1a3f7c0bf991c96d6e0192a2517be43ff827` package under Node 24.18.0:
 
 - old browser assets with the current gateway: pass;
 - current browser assets with the old gateway: pass;
@@ -38,9 +38,9 @@ The browser harness cross-ran the independently built historical
 
 Evidence:
 
-- `artifacts/web-compat/aa34369a-to-15c9b1f8/report.json`;
+- `artifacts/web-compat/aa34369a-to-130e1a3f/report.json`;
 - SHA-256:
-  `a1bd5087b82fe73344dafea3c726527d1d5d3c0229ba14d5e2c5980e5a69ec70`.
+  `3ec3ad43695ad52fa711deb517f2934c5cd6340494b8aafc1a9ece27bffa6ea4`.
 
 This is real code/assets/gateway compatibility, not a DTO replay.
 
@@ -51,13 +51,14 @@ The exact current source passed the eight protocol/transport suites on Node
 
 Evidence:
 
-- `artifacts/web-node-matrix/15c9b1f85b847735ba803e5c093fe906ad85d3bf/report.json`;
+- `artifacts/web-node-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json`;
 - SHA-256:
-  `98ba5eee96f03682267af22768c9f42bff051fb888dc48285af9a540ad0ed096`.
+  `752c9635c8d98e10bb0a62573a54379c1fe414e99011af237e88428afc040c65`.
 
 ## Packaged browser matrix
 
-The schema-v3 matrix ran bundled Chromium 149.0.7827.55, Firefox 151.0,
+The schema-v4 matrix, which also binds the executable browser harness bytes,
+ran bundled Chromium 149.0.7827.55, Firefox 151.0,
 WebKit 26.5 and native Chrome 150.0.7871.184. All four lanes passed on their
 first attempt with:
 
@@ -76,9 +77,9 @@ violations on the tested Home and Task surfaces.
 
 Evidence:
 
-- `artifacts/web-browser-matrix/af40872f015d7592f949dc95dfe8905cc0b07d76/report.json`;
+- `artifacts/web-browser-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json`;
 - SHA-256:
-  `a3cbdbe8f2f982ed400144282cbbfff43cc2ad4a2520cc566a3cd34baf124772`.
+  `7e0eb6071810a6e229cef2c6ebbfa910497a9224e024b7e2b0a4a403215eb680`.
 
 ## Performance and large-data evidence
 
@@ -88,28 +89,32 @@ with Apple M3 Pro, AC power, and no recorded thermal or performance warning.
 
 The current non-canonical measurements are:
 
-- Simple shell: 211,240 gzip bytes (limit 225,280);
-- cold Home p95: 419.3 ms;
-- warm Home p95: 464.1 ms;
-- cached Pro p95: 25.7 ms;
-- event to visible p95: 187.0 ms;
-- event commit to Receipt p95: 68.2 ms;
-- Receipt to visible p95: 129.8 ms;
-- list response: 2.7 ms;
-- CLS: 0.0439.
+- Simple shell: 211,426 gzip bytes (limit 225,280);
+- cold Home p95: 405.7 ms;
+- warm Home p95: 453.3 ms;
+- cached Pro p95: 24.4 ms;
+- event to visible p95: 291.8 ms;
+- event commit to Receipt p95: 66.4 ms;
+- Receipt to visible p95: 225.0 ms;
+- list response: 3.6 ms;
+- CLS: 0.0397.
 
-Owner-ready and launch-to-useful p95 are retained separately at 4.678 s and
-5.130 s. These numbers are informational because this machine is not the RFC's
-canonical Mac mini M2 / 16 GiB environment.
+Owner-ready and launch-to-useful p95 are retained separately at 3.075 s and
+3.509 s. These numbers are informational because this machine is not the RFC's
+canonical Mac mini M2 / 16 GiB environment. In particular, the 291.8-ms event
+measurement is above the canonical 250-ms budget and is not presented as a
+pass. One preliminary run timed out while loading the 10,000-row list; an
+immediate smoke and the retained 30-sample rerun completed. The canonical
+unloaded-machine run remains the release gate.
 
 Evidence:
 
-- `artifacts/web-bench/15c9b1f85b847735ba803e5c093fe906ad85d3bf/web-perf-v1.json`;
+- `artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827/web-perf-v1.json`;
 - JSON SHA-256:
-  `c4521ffff96a733c71e57fc63876bdb1da7e0df7ba76ac23664ff62fc0ad0908`;
-- `artifacts/web-bench/15c9b1f85b847735ba803e5c093fe906ad85d3bf/web-perf-v1.md`;
+  `d8787cc2d0985f2b5bb04f6c8d3d62cbdf6d59c44ab9c887014496586ea3743e`;
+- `artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827/web-perf-v1.md`;
 - summary SHA-256:
-  `6e4c12006db3718540ea3f16cdded34306a1b22dcc18365432853d0a868e6cc1`.
+  `9fddd7c088caf665d38bbdc223b42dddb81b137e612c7ba9ac4cc47988f38cf7`.
 
 ## Historical native Safari records
 
@@ -140,4 +145,3 @@ The automated candidate evidence is current. It does not close:
 - VoiceOver, Narrator, NVDA or forced-colors review;
 - the canonical Mac mini M2 / Node 24 performance run;
 - reviewed-tip evidence and the separate wire-freeze decision.
-

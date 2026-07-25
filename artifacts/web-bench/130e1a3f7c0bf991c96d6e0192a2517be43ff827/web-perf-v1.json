@@ -1,0 +1,539 @@
+{
+  "schemaVersion": 4,
+  "profile": "web-perf-v1",
+  "status": "structural-pass",
+  "measuredAt": "2026-07-25T13:14:32.429Z",
+  "git": {
+    "commit": "130e1a3f7c0bf991c96d6e0192a2517be43ff827",
+    "dirty": false,
+    "sourceDigest": "sha256:28142aa423b56628a67f9f38d2dbccf7ba985750a1ccca1d0cb4bc9e050a1682"
+  },
+  "fixture": {
+    "activeRuns": 200,
+    "approvals": 50,
+    "artifacts": 1000,
+    "attentionItems": 100,
+    "graphNodes": 2000,
+    "projects": 100,
+    "receipts": 1000,
+    "runs": 10000,
+    "schemaVersion": 2,
+    "seed": 1413894961
+  },
+  "procedure": {
+    "warmups": 3,
+    "samples": 30,
+    "percentile": "nearest-rank",
+    "scenarioOrder": [
+      "cold-home",
+      "warm-home",
+      "cached-pro",
+      "large-graph",
+      "large-task-list",
+      "event-to-visible"
+    ],
+    "cold": "fresh daemon/listener and browser context; the normative cold threshold applies to first navigation after session exchange, while owner-ready and launch-to-useful timings are retained separately",
+    "warm": "same daemon and browser context after one complete bootstrap/Home load",
+    "timing": "navigation and interaction samples use browser monotonic performance marks; event samples retain server commit wall time plus browser receipt/render marks",
+    "layoutShift": "maximum standard CLS session window: gaps <=1 second and total window <=5 seconds",
+    "thresholdApplicability": "Latency budgets are normative only on the RFC canonical Mac mini M2 / 16 GiB profile. Raw values are always retained; non-canonical runs are informational, never silently passed."
+  },
+  "environment": {
+    "modelName": "MacBook Pro",
+    "chip": "Apple M3 Pro",
+    "logicalCores": 11,
+    "ramBytes": 19327352832,
+    "os": "darwin 25.3.0",
+    "node": "v24.18.0",
+    "expectedNode": "v24.18.0",
+    "nodeVersionMatches": true,
+    "v8": "13.6.233.17-node.50",
+    "browser": "Chromium 149.0.7827.55",
+    "powerSource": "AC Power",
+    "noThermalWarning": true,
+    "noPerformanceWarning": true,
+    "loadAverage": [
+      3.1181640625,
+      4.58740234375,
+      5.4619140625
+    ],
+    "canonicalProfile": false,
+    "loadAverageBefore": [
+      3.05712890625,
+      6.5263671875,
+      6.265625
+    ],
+    "loadAverageAfter": [
+      3.1181640625,
+      4.58740234375,
+      5.4619140625
+    ]
+  },
+  "build": {
+    "webBuildId": "sha256:853edc81c345c5a06e105110c4f3cb0fabcfc79f0e73912f05fa636b56da624e",
+    "manifestSha256": "sha256:154fe609eb6bea194e6b241e1b3f7394ffcecbed7cf70352faf44b9eef08a9e6",
+    "assetHashes": [
+      {
+        "path": "assets/app-GLvvXRCs.js",
+        "sha256": "sha256:e9872906a7d1b863f8df0e7a45e9071abe232c35c1e5205cfab5c3208d528029",
+        "size": 163932
+      },
+      {
+        "path": "assets/chunk-BRDuN9TU.js",
+        "sha256": "sha256:4ad4ecfb7572d81591f68ea8c2cca178c76cb027978e7c2f8c6998e797727c08",
+        "size": 89902
+      },
+      {
+        "path": "assets/chunk-BtDeC63y.js",
+        "sha256": "sha256:3cb429ade6807f08f2c9c2e3dae2fc5baa307c3b44ab5f06e462da724af69b97",
+        "size": 22250
+      },
+      {
+        "path": "assets/chunk-CMMmiXJV.js",
+        "sha256": "sha256:1afb6f473f4704a8550fb5631c39ba697a71c08bb33b38e20a5c05769e8f0223",
+        "size": 116526
+      },
+      {
+        "path": "assets/chunk-DYkNNwpu.js",
+        "sha256": "sha256:874f8d69433f3004676d1a204b1bb3aadf179586464ec2578bb5bdfe5bbf86b2",
+        "size": 148629
+      },
+      {
+        "path": "assets/chunk-QTnfLwEv.js",
+        "sha256": "sha256:5db5ba82eef00d1dee7e86e663098c9427d01183a88d357437daff295aec3e75",
+        "size": 694
+      },
+      {
+        "path": "assets/chunk-WsNqBMI1.js",
+        "sha256": "sha256:aae2d2a80a69dc4d35edd296a7fa8263d8146f5bbdda502fe64abd31d64e412b",
+        "size": 191201
+      },
+      {
+        "path": "assets/chunk-YofPXVxB.js",
+        "sha256": "sha256:e532e105cd79714dcf3ebdc42144475ffc24517d6450dbb1bac86ca9e5b44b24",
+        "size": 6871
+      },
+      {
+        "path": "assets/content-en-e36245a1a6b0dc3a.json",
+        "sha256": "sha256:e36245a1a6b0dc3a27c17d44731bd842a2513f9a50fa36167f77e037162a3a81",
+        "size": 49257
+      },
+      {
+        "path": "assets/content-zh-cn-ceabd61cb3746b4e.json",
+        "sha256": "sha256:ceabd61cb3746b4e255957fcd03a6884f4f2ae75d21e45d4fa8b931ebb340a35",
+        "size": 46860
+      },
+      {
+        "path": "assets/index-WLeWCpmJ.css",
+        "sha256": "sha256:23730d96abf28992a4777e8f4bcd61768057e71c569066b065e6706360eee38c",
+        "size": 34947
+      }
+    ],
+    "initialJavaScript": [
+      "assets/app-GLvvXRCs.js",
+      "assets/chunk-QTnfLwEv.js",
+      "assets/chunk-WsNqBMI1.js",
+      "assets/chunk-CMMmiXJV.js",
+      "assets/chunk-BRDuN9TU.js",
+      "assets/chunk-YofPXVxB.js",
+      "assets/chunk-DYkNNwpu.js"
+    ],
+    "simpleShellJsGzipBytes": 211426,
+    "simpleShellJsBudgetBytes": 225280
+  },
+  "raw": {
+    "coldHomeUsefulMs": [
+      398.30000001192093,
+      402.5,
+      395.2999999821186,
+      405.69999998807907,
+      398.39999997615814,
+      393.80000001192093,
+      398.59999999403954,
+      396.30000001192093,
+      394.69999998807907,
+      396.40000000596046,
+      399.69999998807907,
+      394.80000001192093,
+      394.90000000596046,
+      395.69999998807907,
+      396.90000000596046,
+      398.40000000596046,
+      402,
+      393.19999998807907,
+      399.40000000596046,
+      397.5,
+      396,
+      395.7000000178814,
+      392.7000000178814,
+      399.59999999403954,
+      398.59999999403954,
+      394.69999998807907,
+      409.90000000596046,
+      391.7999999821186,
+      404.10000002384186,
+      401.10000002384186
+    ],
+    "coldOwnerReadyMs": [
+      2549.6490000000003,
+      2525.6496669999997,
+      2514.493208,
+      2465.352583,
+      2515.4401660000003,
+      2474.8982920000017,
+      2471.3354590000017,
+      2738.571832999998,
+      2947.018208999998,
+      2444.949916999998,
+      2580.7030410000007,
+      2593.045167000004,
+      2828.5956250000017,
+      2562.8276250000054,
+      2773.7631669999973,
+      2863.576584000002,
+      3074.6596250000002,
+      2504.457874999993,
+      2472.377041999993,
+      2438.7514999999985,
+      2451.279834000001,
+      2467.0308749999967,
+      4140.256709000008,
+      2536.601165999993,
+      2498.8475830000098,
+      2529.6174579999933,
+      2564.115208000003,
+      2435.1847500000003,
+      2560.2401249999966,
+      2477.033500000005
+    ],
+    "coldLaunchToUsefulMs": [
+      2995.0425830000004,
+      2960.0373340000006,
+      2946.7571669999998,
+      2902.627666999999,
+      2943.8243330000005,
+      2897.906833000001,
+      2900.309874999999,
+      3170.8546669999996,
+      3376.215416999996,
+      2875.534833999998,
+      3016.011249999996,
+      3019.8280840000007,
+      3260.3008340000015,
+      2991.7434580000045,
+      3209.5829169999997,
+      3301.964667,
+      3509.382958000002,
+      2927.2970829999977,
+      2901.5212499999907,
+      2869.9784579999978,
+      2878.457666999995,
+      2893.2131660000014,
+      4562.720375000004,
+      2973.037540999998,
+      2926.695833000005,
+      2960.153291999988,
+      3004.1176660000056,
+      2858.0688329999975,
+      2995.202707999997,
+      2913.396041
+    ],
+    "warmHomeInteractiveMs": [
+      416.19999998807907,
+      317.30000001192093,
+      327.19999998807907,
+      350.90000000596046,
+      327.90000000596046,
+      354.60000002384186,
+      377.59999999403954,
+      453.30000001192093,
+      278.40000000596046,
+      449.2999999821186,
+      380.60000002384186,
+      364.09999999403954,
+      356.19999998807907,
+      369.5,
+      391.7000000178814,
+      364.89999997615814,
+      368.5,
+      363.59999999403954,
+      365.90000000596046,
+      366.69999998807907,
+      321.90000000596046,
+      381.30000001192093,
+      383,
+      353.2000000178814,
+      394.7000000178814,
+      379,
+      458,
+      408.69999998807907,
+      352.09999999403954,
+      367.59999999403954
+    ],
+    "cachedProInteractionMs": [
+      19.599999994039536,
+      20.900000005960464,
+      27.30000001192093,
+      19.299999982118607,
+      20.299999982118607,
+      21.30000001192093,
+      19.799999982118607,
+      19.80000001192093,
+      19.700000017881393,
+      20.400000005960464,
+      19.400000005960464,
+      20.599999994039536,
+      19.399999976158142,
+      20.099999994039536,
+      19.599999994039536,
+      19.900000005960464,
+      19.599999994039536,
+      20.299999982118607,
+      24.399999976158142,
+      17.900000005960464,
+      19.5,
+      19.099999994039536,
+      20.099999994039536,
+      18.299999982118607,
+      17.900000005960464,
+      18.19999998807907,
+      19.19999998807907,
+      19.80000001192093,
+      21,
+      19.30000001192093
+    ],
+    "firstProUsefulMs": 55.80000001192093,
+    "eventToVisibleMs": [
+      207.89995115995407,
+      197.49995118379593,
+      204.29995116591454,
+      189.49995118379593,
+      204.29995116591454,
+      282.99995118379593,
+      253.699951171875,
+      274.09995117783546,
+      265.09995117783546,
+      262.09995117783546,
+      253.49995118379593,
+      250.49995118379593,
+      263.699951171875,
+      269.199951171875,
+      291.79995116591454,
+      236.49995118379593,
+      262.29995116591454,
+      262.29995116591454,
+      262.99995118379593,
+      283.59995117783546,
+      323.39995115995407,
+      261.699951171875,
+      259.59995117783546,
+      256.99995118379593,
+      258.89995115995407,
+      286.89995115995407,
+      258.699951171875,
+      283.09995117783546,
+      271.199951171875,
+      267.79995116591454
+    ],
+    "eventCommitToReceiptMs": [
+      63.799951165914536,
+      60.49995118379593,
+      62.99995118379593,
+      56.599951177835464,
+      63.199951171875,
+      66.39995115995407,
+      59.49995118379593,
+      59.799951165914536,
+      56.599951177835464,
+      54.39995115995407,
+      49.99995118379593,
+      49.49995118379593,
+      60.599951177835464,
+      66.199951171875,
+      61.299951165914536,
+      45.599951177835464,
+      54.89995115995407,
+      58.299951165914536,
+      61.199951171875,
+      58.599951177835464,
+      119.99995118379593,
+      54.799951165914536,
+      59.99995118379593,
+      61.599951177835464,
+      50.89995115995407,
+      63.099951177835464,
+      52.799951165914536,
+      60.49995118379593,
+      59.199951171875,
+      64.79995116591454
+    ],
+    "eventReceiptToVisibleMs": [
+      144.09999999403954,
+      137,
+      141.2999999821186,
+      132.90000000596046,
+      141.09999999403954,
+      216.60000002384186,
+      194.19999998807907,
+      214.30000001192093,
+      208.5,
+      207.7000000178814,
+      203.5,
+      201,
+      203.09999999403954,
+      203,
+      230.5,
+      190.90000000596046,
+      207.40000000596046,
+      204,
+      201.80000001192093,
+      225,
+      203.39999997615814,
+      206.90000000596046,
+      199.59999999403954,
+      195.40000000596046,
+      208,
+      223.7999999821186,
+      205.90000000596046,
+      222.59999999403954,
+      212,
+      203
+    ],
+    "cls": 0.0397122879342287,
+    "largeData": {
+      "taskRows": 10000,
+      "taskSegments": 50,
+      "taskAllPagesMs": 59398.84150000001,
+      "listScrollResponseMs": 3.5999999940395355,
+      "contentVisibility": "auto",
+      "graphNodes": 2000,
+      "graphAllPagesMs": 3062.6540830000013
+    }
+  },
+  "aggregates": {
+    "coldHomeUsefulMs": {
+      "count": 30,
+      "p50": 396.90000000596046,
+      "p95": 405.69999998807907,
+      "min": 391.7999999821186,
+      "max": 409.90000000596046
+    },
+    "coldOwnerReadyMs": {
+      "count": 30,
+      "p50": 2525.6496669999997,
+      "p95": 3074.6596250000002,
+      "min": 2435.1847500000003,
+      "max": 4140.256709000008
+    },
+    "coldLaunchToUsefulMs": {
+      "count": 30,
+      "p50": 2960.0373340000006,
+      "p95": 3509.382958000002,
+      "min": 2858.0688329999975,
+      "max": 4562.720375000004
+    },
+    "warmHomeInteractiveMs": {
+      "count": 30,
+      "p50": 366.69999998807907,
+      "p95": 453.30000001192093,
+      "min": 278.40000000596046,
+      "max": 458
+    },
+    "cachedProInteractionMs": {
+      "count": 30,
+      "p50": 19.700000017881393,
+      "p95": 24.399999976158142,
+      "min": 17.900000005960464,
+      "max": 27.30000001192093
+    },
+    "eventToVisibleMs": {
+      "count": 30,
+      "p50": 262.09995117783546,
+      "p95": 291.79995116591454,
+      "min": 189.49995118379593,
+      "max": 323.39995115995407
+    },
+    "eventCommitToReceiptMs": {
+      "count": 30,
+      "p50": 59.799951165914536,
+      "p95": 66.39995115995407,
+      "min": 45.599951177835464,
+      "max": 119.99995118379593
+    },
+    "eventReceiptToVisibleMs": {
+      "count": 30,
+      "p50": 203.39999997615814,
+      "p95": 225,
+      "min": 132.90000000596046,
+      "max": 230.5
+    }
+  },
+  "checks": {
+    "simpleShellJs": {
+      "status": "pass",
+      "applicable": true,
+      "actual": 211426,
+      "maximum": 225280,
+      "unit": "gzip-bytes"
+    },
+    "coldHome": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 405.69999998807907,
+      "maximum": 2000,
+      "unit": "milliseconds-p95"
+    },
+    "warmHome": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 453.30000001192093,
+      "maximum": 1200,
+      "unit": "milliseconds-p95"
+    },
+    "cachedPro": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 24.399999976158142,
+      "maximum": 250,
+      "unit": "milliseconds-p95"
+    },
+    "firstProUseful": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 55.80000001192093,
+      "maximum": 1500,
+      "unit": "milliseconds"
+    },
+    "eventToVisible": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 291.79995116591454,
+      "maximum": 250,
+      "unit": "milliseconds"
+    },
+    "listResponsive": {
+      "status": "informational",
+      "applicable": false,
+      "actual": 3.5999999940395355,
+      "maximum": 250,
+      "unit": "milliseconds"
+    },
+    "layoutShift": {
+      "status": "pass",
+      "applicable": true,
+      "actual": 0.0397122879342287,
+      "maximum": 0.1,
+      "unit": "cls"
+    },
+    "cspClean": {
+      "status": "pass",
+      "applicable": true,
+      "passed": true,
+      "evidence": {
+        "cspViolationCount": 0,
+        "inlineStyleAttributes": 0,
+        "runtimeStyleElements": 0
+      }
+    }
+  }
+}

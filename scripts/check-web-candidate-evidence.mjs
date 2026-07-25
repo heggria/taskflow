@@ -15,11 +15,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/aa34369a-to-15c9b1f8/report.json",
+	"artifacts/web-compat/aa34369a-to-130e1a3f/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/15c9b1f85b847735ba803e5c093fe906ad85d3bf",
+	"artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -28,11 +28,11 @@ const benchmarkSummaryPath = path.join(
 );
 const nodeMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-node-matrix/15c9b1f85b847735ba803e5c093fe906ad85d3bf/report.json",
+	"artifacts/web-node-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json",
 );
 const browserMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-browser-matrix/af40872f015d7592f949dc95dfe8905cc0b07d76/report.json",
+	"artifacts/web-browser-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json",
 );
 const ledgerPath = path.join(
 	repositoryRoot,
