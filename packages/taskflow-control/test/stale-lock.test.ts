@@ -1,10 +1,10 @@
 /**
  * Singleton stale-owner safety (P13 / §23).
  *
- * A dead-looking PID is not a compare-and-delete capability: PID reuse and
- * pathname replacement can occur after observation. Until an OS-backed
- * holder-identity/atomic-replacement protocol exists, automatic stale steal
- * must fail closed rather than unlinking a pathname it no longer proves owns.
+ * Singleton dead-PID takeover remains fail-closed on this base (no OS-backed
+ * holder-identity protocol for the lock *file*). Exclusive-lock reclaim is
+ * claim-serialized and identity-bound in paths.ts — covered by p13-*.test.ts
+ * and the exclusive-lock cases below.
  */
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -44,7 +44,7 @@ function assertAuthorityRevoked(error: unknown): boolean {
 	return true;
 }
 
-test("exclusive lock: a stale-looking directory is never auto-reclaimed", () => {
+test("exclusive lock: a stale dead-owner directory is identity-bound reclaimed", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-safe-lock-"));
 	const lockPath = path.join(root, "critical.lock");
 	const ownerPath = path.join(lockPath, "owner.json");
@@ -52,7 +52,48 @@ test("exclusive lock: a stale-looking directory is never auto-reclaimed", () => 
 		fs.mkdirSync(lockPath);
 		fs.writeFileSync(
 			ownerPath,
-			JSON.stringify({ pid: 2_147_483_646, at: Date.now() - 60_000 }),
+			JSON.stringify({
+				lockId: "dead-stale-token",
+				token: "dead-stale-token",
+				pid: 2_147_483_646,
+				at: Date.now() - 60_000,
+			}),
+			"utf-8",
+		);
+		const old = new Date(Date.now() - 60_000);
+		fs.utimesSync(lockPath, old, old);
+		fs.utimesSync(ownerPath, old, old);
+		let entered = false;
+
+		withExclusiveLockFile(
+			lockPath,
+			() => {
+				entered = true;
+			},
+			{ maxAttempts: 40, timeoutMs: 5_000, staleMs: 0 },
+		);
+		assert.equal(entered, true);
+		assert.equal(fs.existsSync(lockPath), false, "successful reclaim release removes the lock");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("exclusive lock: a live-owner directory is never stolen", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-live-lock-"));
+	const lockPath = path.join(root, "critical.lock");
+	const ownerPath = path.join(lockPath, "owner.json");
+	try {
+		fs.mkdirSync(lockPath);
+		const liveToken = "live-owner-token";
+		fs.writeFileSync(
+			ownerPath,
+			JSON.stringify({
+				lockId: liveToken,
+				token: liveToken,
+				pid: process.pid,
+				at: Date.now() - 60_000,
+			}),
 			"utf-8",
 		);
 		const old = new Date(Date.now() - 60_000);
@@ -67,7 +108,7 @@ test("exclusive lock: a stale-looking directory is never auto-reclaimed", () => 
 					() => {
 						entered = true;
 					},
-					{ maxAttempts: 2, staleMs: 0 },
+					{ maxAttempts: 8, timeoutMs: 200, staleMs: 0 },
 				),
 			assertDurabilityFailure,
 		);

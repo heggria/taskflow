@@ -380,14 +380,49 @@ export function readJsonFile<T>(filePath: string): T | null {
 /**
  * Cross-process exclusive critical section via atomic `mkdir`.
  *
- * A pathname lock cannot safely perform automatic stale reclamation: after one
- * contender observes a dead-looking directory, another may replace it before
- * the first calls `rm`. Deleting by pathname would evict the new owner and
- * admit two critical sections. This primitive therefore never reclaims a
- * contended path; it waits for normal release and then fails closed.
+ * ## Cooperative reclaim protocol (stale steal + incomplete abandon)
  *
- * An operator-mediated or OS-backed recovery protocol must prove
- * compare-and-delete semantics before stale recovery is enabled.
+ * Blind pathname `rm(lockPath)` after observing a dead/incomplete generation is
+ * not a compare-and-swap: two contenders can both observe generation G, both
+ * remove, and — when the second removal hits a successor already in the
+ * critical section — both run `fn` (dual critical sections). Checking
+ * dev/ino/token then unlinking is still TOCTOU; every actor that creates,
+ * replaces, steals, or abandons the lock must participate in one serialized
+ * identity-bound transition.
+ *
+ * Protocol (directories cannot hard-link the lock dir itself):
+ * 1. Fixed claim **file** `${lockPath}.reclaim-claim` created with `O_CREAT|
+ *    O_EXCL` and body = observed `{dev,ino,token,hasOwner,pid,at}`. Only one
+ *    contender becomes the reclaimer for that observation.
+ * 2. Any actor that sees the claim waits for that claim to clear (or for the
+ *    claim to become orphaned — dead claimant, or live claimant whose observed
+ *    generation no longer matches after a grace so mid-reclaim free-path is
+ *    preserved). Never publish a successor while a live reclaim is in flight.
+ *    After a successful `mkdir`, re-check the claim and yield (remove our empty
+ *    dir) if a reclaim appeared.
+ * 3. Reclaimer re-validates that `lockPath` still names the observed generation,
+ *    then renames that exact directory to a private discard path (identity-bound
+ *    unpublish), publishes `mkdir`+owner under the claim fence, then clears the
+ *    claim and destroys the discard. A mismatched generation is restored rather
+ *    than destroyed, and the claim is dropped.
+ *
+ * ## Cooperative liveness (bounded progress under N contenders)
+ *
+ * Waiters must not burn the attempt budget with fixed micro-spins while a peer
+ * holds a claim or a live generation. Blocking waits are **generation-aware**:
+ * sleep (via `Atomics.wait`) until the observed claim/lock generation ends.
+ * Mutual exclusion (claim fence + mkdir exclusivity) is preserved while N
+ * sequential critical sections complete under a modest wall budget.
+ *
+ * Release is compare-and-delete against the acquire-time directory inode and a
+ * random owner token. A finally block must never pathname-rm a successor that
+ * replaced the lock while this critical section was still running.
+ *
+ * ## Same-UID non-cooperative lower bound (explicit, not closed)
+ *
+ * This protocol serializes cooperative taskflow contenders only. A same-UID
+ * process that bypasses the claim (raw `rm -rf` / foreign `mkdir`) can still
+ * displace a live holder; that is an OS/credentials bound, not a P13 close.
  */
 export function withExclusiveLockFile<T>(
 	lockPath: string,
@@ -395,8 +430,10 @@ export function withExclusiveLockFile<T>(
 	opts?: {
 		maxAttempts?: number;
 		timeoutMs?: number;
-		/** @deprecated Ignored: pathname stale reclamation is unsafe without CAS. */
+		/** Age after which a dead-owner lock dir is reclaim-eligible. */
 		staleMs?: number;
+		/** Age after which an incomplete (no owner.json) lock dir is abandon-eligible. */
+		abandonIncompleteMs?: number;
 	},
 ): T {
 	try {
@@ -410,68 +447,435 @@ export function withExclusiveLockFile<T>(
 	}
 	const maxAttempts = opts?.maxAttempts ?? Number.MAX_SAFE_INTEGER;
 	const timeoutMs = opts?.timeoutMs ?? 30_000;
-	const deadline = Date.now() + timeoutMs;
+	const staleMs = opts?.staleMs ?? 30_000;
+	const abandonIncompleteMs = opts?.abandonIncompleteMs ?? 5_000;
 	const ownerFile = path.join(lockPath, "owner.json");
-	const lockId = randomUUID();
+	/** Fixed claim file: serializes every cooperative reclaim of this lock. */
+	const reclaimClaimPath = `${lockPath}.reclaim-claim`;
+	/** Grace before treating a malformed/empty claim as abandoned (wx→write race). */
+	const CLAIM_BODY_GRACE_MS = 1_000;
+	/**
+	 * Grace before treating a live-PID claim whose observed generation is gone
+	 * as orphaned. Must exceed the mid-reclaim free-path window (rename → publish).
+	 */
+	const CLAIM_ORPHAN_MS = 2_000;
+	/** Max wall time spent in one progress-wait slice before re-checking the loop. */
+	const PROGRESS_WAIT_SLICE_MS = 64;
 
-	function releaseOwnedLock(ownerWritten: boolean): void {
-		let ours = !ownerWritten;
+	type ObservedLock = {
+		device: number;
+		inode: number;
+		hasOwner: boolean;
+		pid: number;
+		token: string;
+		age: number;
+	};
+
+	type HeldLock = { device: number; inode: number; token: string };
+
+	type ClaimBody = {
+		pid: number;
+		device: number;
+		inode: number;
+		hasOwner: boolean;
+		token: string;
+		at: number;
+	};
+
+	function sleepMs(ms: number): void {
+		if (ms <= 0) return;
+		Atomics.wait(LOCK_RETRY_SIGNAL, 0, 0, ms);
+	}
+
+	/**
+	 * Wait while `blocked()` stays true. Exponential backoff up to 32ms slices.
+	 * Returns true if unblocked before `maxWaitMs`, false if still blocked.
+	 */
+	function waitWhileBlocked(blocked: () => boolean, maxWaitMs: number): boolean {
+		const waitDeadline = Date.now() + maxWaitMs;
+		let slice = 1;
+		while (blocked()) {
+			const now = Date.now();
+			if (now >= waitDeadline) return false;
+			sleepMs(Math.min(slice, waitDeadline - now, 32));
+			slice = Math.min(slice * 2, 32);
+		}
+		return true;
+	}
+
+	function reclaimClaimPresent(): boolean {
 		try {
-			if (ownerWritten) {
-				const raw = fs.readFileSync(ownerFile, "utf-8");
-				const record = JSON.parse(raw) as { lockId?: unknown };
-				ours = record.lockId === lockId;
+			fs.lstatSync(reclaimClaimPath);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	function destroyTree(target: string): void {
+		try {
+			fs.rmSync(target, { recursive: true, force: true });
+		} catch {
+			try {
+				fs.unlinkSync(target);
+			} catch {
+				/* ignore private discard cleanup */
 			}
+		}
+	}
+
+	/** Intentional claim removal — surface non-ENOENT failures (D3). */
+	function unlinkClaimStrict(): void {
+		try {
+			fs.unlinkSync(reclaimClaimPath);
 		} catch (error) {
-			// A failed owner write is ours to clean up. Once a complete record was
-			// written, missing/corrupt metadata is not permission to delete a path.
-			if (ownerWritten) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw new ControlStoreDurabilityError(
+				`cannot remove exclusive-lock reclaim-claim: ${readFailureDetail(error)}`,
+				reclaimClaimPath,
+				error,
+			);
+		}
+	}
+
+	/** Best-effort claim drop on local reclaim failure paths only. */
+	function unlinkClaimBestEffort(): void {
+		try {
+			fs.unlinkSync(reclaimClaimPath);
+		} catch {
+			/* local cleanup; a later cleanupAbandonedClaim will recover or surface */
+		}
+	}
+
+	function readClaimBody(): ClaimBody | "malformed" | null {
+		try {
+			const raw = fs.readFileSync(reclaimClaimPath, "utf-8");
+			if (!raw.trim()) return "malformed";
+			const parsed = JSON.parse(raw) as Partial<ClaimBody>;
+			if (
+				typeof parsed.pid !== "number" ||
+				typeof parsed.device !== "number" ||
+				typeof parsed.inode !== "number" ||
+				typeof parsed.hasOwner !== "boolean" ||
+				typeof parsed.token !== "string" ||
+				typeof parsed.at !== "number"
+			) {
+				return "malformed";
+			}
+			return {
+				pid: parsed.pid,
+				device: parsed.device,
+				inode: parsed.inode,
+				hasOwner: parsed.hasOwner,
+				token: parsed.token,
+				at: parsed.at,
+			};
+		} catch (error) {
+			const err = error as NodeJS.ErrnoException;
+			if (err.code === "ENOENT") return null;
+			return "malformed";
+		}
+	}
+
+	function ownerTokenFromRecord(record: { lockId?: unknown; token?: unknown }): string {
+		if (typeof record.token === "string" && record.token.length > 0) return record.token;
+		if (typeof record.lockId === "string" && record.lockId.length > 0) return record.lockId;
+		return "";
+	}
+
+	function observeLockDir(): ObservedLock | null {
+		try {
+			const st = fs.lstatSync(lockPath);
+			if (st.isSymbolicLink() || !st.isDirectory()) {
 				throw new ControlStoreDurabilityError(
-					`cannot inspect exclusive lock owner while releasing; leaving ${lockPath} intact: ${readFailureDetail(error)}`,
+					`exclusive lock path is not a real directory; refusing destructive migration: ${lockPath}`,
 					lockPath,
-					error,
 				);
 			}
-			ours = true;
-		}
-		if (!ours) {
-			throw new ControlStoreDurabilityError(
-				`cannot prove ownership while releasing exclusive lock; leaving ${lockPath} intact`,
-				lockPath,
-			);
-		}
-		try {
-			fs.unlinkSync(ownerFile);
+			let hasOwner = false;
+			let pid = 0;
+			let token = "";
+			try {
+				const raw = fs.readFileSync(ownerFile, "utf-8");
+				hasOwner = true;
+				const parsed = JSON.parse(raw) as { pid?: number; lockId?: string; token?: string };
+				pid = typeof parsed.pid === "number" ? parsed.pid : 0;
+				token = ownerTokenFromRecord(parsed);
+			} catch {
+				/* owner not written yet */
+			}
+			return {
+				device: st.dev,
+				inode: st.ino,
+				hasOwner,
+				pid,
+				token,
+				age: Date.now() - st.mtimeMs,
+			};
 		} catch (error) {
+			if (error instanceof ControlStoreDurabilityError) throw error;
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
 			throw new ControlStoreDurabilityError(
-				`cannot remove exclusive lock owner record: ${readFailureDetail(error)}`,
-				ownerFile,
+				`cannot inspect contended exclusive lock: ${readFailureDetail(error)}`,
+				lockPath,
 				error,
 			);
 		}
+	}
+
+	function isPidAlive(pid: number): boolean {
+		if (!Number.isSafeInteger(pid) || pid <= 0) return false;
 		try {
-			fs.rmdirSync(lockPath);
+			process.kill(pid, 0);
+			return true;
 		} catch (error) {
-			throw new ControlStoreDurabilityError(
-				`cannot remove exclusive lock directory: ${readFailureDetail(error)}`,
-				lockPath,
-				error,
-			);
+			// EPERM: process exists but is not probeable — treat as live.
+			return (error as NodeJS.ErrnoException).code === "EPERM";
 		}
-		// Deletion is visible but not durable until the parent directory sync
-		// succeeds. Propagate that uncertainty to the caller instead of reporting
-		// a clean critical-section completion.
+	}
+
+	/**
+	 * Remove an abandoned / orphaned reclaim claim only (never the lock dir).
+	 *
+	 * - Dead claimant → claim is removed (strict; errors surface).
+	 * - Malformed claim after CLAIM_BODY_GRACE_MS → removed.
+	 * - Live claimant whose observed generation no longer matches the path, after
+	 *   CLAIM_ORPHAN_MS, is recoverable (D3): otherwise a leftover claim with a
+	 *   still-alive PID fences all successors unboundedly.
+	 * - Live claimant with matching generation still present → leave claim.
+	 */
+	function cleanupAbandonedClaim(): void {
+		if (!reclaimClaimPresent()) return;
+		const body = readClaimBody();
+		if (body === null) return;
+		if (body === "malformed") {
+			try {
+				const st = fs.lstatSync(reclaimClaimPath);
+				if (Date.now() - st.mtimeMs < CLAIM_BODY_GRACE_MS) return;
+			} catch {
+				return;
+			}
+			unlinkClaimStrict();
+			return;
+		}
+		if (!isPidAlive(body.pid)) {
+			unlinkClaimStrict();
+			return;
+		}
+
+		// Live claimant: only reclaim ownership of the claim when it is orphaned.
+		let current: ObservedLock | null;
+		try {
+			current = observeLockDir();
+		} catch (error) {
+			if (error instanceof ControlStoreDurabilityError) throw error;
+			return;
+		}
+		const claimAge = Date.now() - body.at;
+		if (current === null) {
+			// Mid-reclaim free-path window is short; only treat as orphan after grace.
+			if (claimAge >= CLAIM_ORPHAN_MS) unlinkClaimStrict();
+			return;
+		}
+		const generationMatches =
+			current.device === body.device &&
+			current.inode === body.inode &&
+			(!body.hasOwner || !body.token || current.token === body.token || !current.hasOwner);
+		if (!generationMatches && claimAge >= CLAIM_ORPHAN_MS) {
+			unlinkClaimStrict();
+		}
+	}
+
+	/**
+	 * Abandon a generation we just published (or partially published) when we
+	 * cannot hand it to enterWithHeld. Identity-bound on device/inode; token is
+	 * preferred when present but a partial owner.json must not leave our inode.
+	 */
+	function abandonPublishedHeld(held: HeldLock): void {
+		try {
+			releaseHeldLock(held, true);
+		} catch {
+			/* fall through to inode drop */
+		}
+		try {
+			const st = fs.lstatSync(lockPath);
+			if (!st.isDirectory() || st.dev !== held.device || st.ino !== held.inode) return;
+			const drop = `${lockPath}.abandon.${process.pid}.${held.token.slice(0, 12)}`;
+			try {
+				fs.renameSync(lockPath, drop);
+			} catch {
+				return;
+			}
+			try {
+				const dropped = fs.lstatSync(drop);
+				if (!dropped.isDirectory() || dropped.dev !== held.device || dropped.ino !== held.inode) {
+					try {
+						fs.renameSync(drop, lockPath);
+					} catch {
+						/* ignore */
+					}
+					return;
+				}
+				destroyTree(drop);
+			} catch {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* ignore */
+				}
+			}
+		} catch {
+			/* already gone or replaced */
+		}
+	}
+
+	/**
+	 * Remove only the acquire-time generation. Requires matching device/inode +
+	 * token, then rename to a private drop path and re-verify before destroy.
+	 * A displaced successor is left intact (L1). Mismatch is not a throw: the
+	 * finally of a deposed critical section must not fail the whole process.
+	 * Once identity is proven and the drop is ours, fsync/directory durability
+	 * failures must surface (not swallowed).
+	 */
+	function releaseHeldLock(held: HeldLock, ownerWritten: boolean): void {
+		if (!ownerWritten) {
+			dropIncompleteHeld(held);
+			return;
+		}
+		let drop: string | undefined;
+		try {
+			const st = fs.lstatSync(lockPath);
+			if (!st.isDirectory() || st.dev !== held.device || st.ino !== held.inode) return;
+			let token = "";
+			try {
+				const raw = fs.readFileSync(ownerFile, "utf-8");
+				token = ownerTokenFromRecord(JSON.parse(raw) as { lockId?: string; token?: string });
+			} catch {
+				return;
+			}
+			if (token !== held.token) return;
+			const again = fs.lstatSync(lockPath);
+			if (!again.isDirectory() || again.dev !== held.device || again.ino !== held.inode) return;
+			drop = `${lockPath}.release.${process.pid}.${held.token.slice(0, 12)}`;
+			try {
+				fs.renameSync(lockPath, drop);
+			} catch {
+				return;
+			}
+			const dropped = fs.lstatSync(drop);
+			if (!dropped.isDirectory() || dropped.dev !== held.device || dropped.ino !== held.inode) {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* non-cooperative race */
+				}
+				return;
+			}
+			let dropToken = "";
+			try {
+				dropToken = ownerTokenFromRecord(
+					JSON.parse(fs.readFileSync(path.join(drop, "owner.json"), "utf-8")) as {
+						lockId?: string;
+						token?: string;
+					},
+				);
+			} catch {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* ignore */
+				}
+				return;
+			}
+			if (dropToken !== held.token) {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* ignore */
+				}
+				return;
+			}
+		} catch (error) {
+			// Inspection / identity-proof failures: never delete another owner's lock.
+			if (drop !== undefined) {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* ignore */
+				}
+			}
+			if (error instanceof ControlStoreDurabilityError) throw error;
+			return;
+		}
+		// Identity proven — destroy and make parent durable; surface failures.
+		destroyTree(drop!);
 		fsyncDirectory(path.dirname(lockPath));
 	}
 
-	function writeOwnerRecord(): void {
+	/** Drop an incomplete dir we created (no owner yet) if still our inode. */
+	function dropIncompleteHeld(held: HeldLock): void {
+		try {
+			const st = fs.lstatSync(lockPath);
+			if (!st.isDirectory() || st.dev !== held.device || st.ino !== held.inode) return;
+			try {
+				fs.accessSync(ownerFile);
+				return; // owner landed — releaseHeldLock owns cleanup
+			} catch {
+				/* incomplete */
+			}
+			const drop = `${lockPath}.incomplete-drop.${process.pid}.${randomUUID().slice(0, 12)}`;
+			try {
+				fs.renameSync(lockPath, drop);
+			} catch {
+				return;
+			}
+			try {
+				const dropped = fs.lstatSync(drop);
+				if (!dropped.isDirectory() || dropped.dev !== held.device || dropped.ino !== held.inode) {
+					try {
+						fs.renameSync(drop, lockPath);
+					} catch {
+						/* ignore */
+					}
+					return;
+				}
+				destroyTree(drop);
+			} catch {
+				try {
+					fs.renameSync(drop, lockPath);
+				} catch {
+					/* ignore */
+				}
+			}
+		} catch {
+			/* already released or replaced */
+		}
+	}
+
+	function matchesObservation(observed: ObservedLock, current: ObservedLock): boolean {
+		if (current.device !== observed.device || current.inode !== observed.inode) return false;
+		if (current.hasOwner !== observed.hasOwner) return false;
+		if (observed.hasOwner) {
+			if (observed.token && current.token !== observed.token) return false;
+			if (!observed.token && current.token) return false;
+		}
+		return true;
+	}
+
+	function writeOwnerRecord(token: string): void {
 		let fd: number | undefined;
 		let failure: unknown;
 		try {
 			fd = fs.openSync(ownerFile, "wx", 0o600);
 			fs.writeFileSync(
 				fd,
-				JSON.stringify({ lockId, pid: process.pid, acquiredAt: Date.now() }),
+				JSON.stringify({
+					lockId: token,
+					token,
+					pid: process.pid,
+					acquiredAt: Date.now(),
+					at: Date.now(),
+				}),
 				"utf-8",
 			);
 			fs.fsyncSync(fd);
@@ -483,7 +887,6 @@ export function withExclusiveLockFile<T>(
 			try {
 				fs.closeSync(fd);
 			} catch (error) {
-				// Do not let a close failure hide the earlier owner-publication fault.
 				if (failure === undefined) failure = error;
 			}
 		}
@@ -496,63 +899,414 @@ export function withExclusiveLockFile<T>(
 		}
 	}
 
-	for (let attempt = 0; attempt < maxAttempts && Date.now() <= deadline; attempt++) {
-		let contended = false;
+	/**
+	 * Identity-bound reclaim of the observed generation. On success the caller
+	 * holds a freshly published lock at `lockPath` and must run `fn` + release.
+	 * Returns the held identity, or null if this contender must retry.
+	 */
+	function reclaimObservedGeneration(observed: ObservedLock): HeldLock | null {
+		const claimBody = JSON.stringify({
+			pid: process.pid,
+			device: observed.device,
+			inode: observed.inode,
+			hasOwner: observed.hasOwner,
+			token: observed.token,
+			at: Date.now(),
+		});
 		try {
-			fs.mkdirSync(lockPath); // atomic exclusive create
+			const fd = fs.openSync(reclaimClaimPath, "wx", 0o600);
+			try {
+				fs.writeFileSync(fd, claimBody);
+				try {
+					fs.fsyncSync(fd);
+				} catch {
+					/* best-effort durability of claim body */
+				}
+			} finally {
+				fs.closeSync(fd);
+			}
 		} catch (error) {
 			const err = error as NodeJS.ErrnoException;
-			if (err.code !== "EEXIST") {
-				throw new ControlStoreDurabilityError(
-					`cannot create exclusive lock directory: ${readFailureDetail(error)}`,
-					lockPath,
-					error,
-				);
-			}
-			contended = true;
+			if (err.code === "EEXIST") return null;
+			unlinkClaimBestEffort();
+			throw new ControlStoreDurabilityError(
+				`cannot create exclusive-lock reclaim-claim: ${readFailureDetail(error)}`,
+				reclaimClaimPath,
+				error,
+			);
 		}
-		if (!contended) {
-			let ownerWritten = false;
-			let hasPrimaryFailure = false;
+
+		const discard = `${lockPath}.reclaim-discard.${process.pid}.${randomUUID().slice(0, 12)}`;
+		// Tracks a publish that must be returned to the caller or abandoned.
+		let held: HeldLock | null = null;
+		try {
+			const current = observeLockDir();
+			if (!current || !matchesObservation(observed, current)) {
+				unlinkClaimStrict();
+				return null;
+			}
+
 			try {
-				writeOwnerRecord();
-				ownerWritten = true;
-				return fn();
-			} catch (error) {
-				hasPrimaryFailure = true;
-				throw error;
-			} finally {
+				fs.renameSync(lockPath, discard);
+			} catch {
+				unlinkClaimStrict();
+				return null;
+			}
+
+			try {
+				const discarded = fs.lstatSync(discard);
+				if (
+					!discarded.isDirectory() ||
+					discarded.dev !== observed.device ||
+					discarded.ino !== observed.inode
+				) {
+					// TOCTOU: path held a different generation — restore it.
+					try {
+						fs.renameSync(discard, lockPath);
+					} catch {
+						/* peer may hold path — do not destroy unknown */
+					}
+					unlinkClaimStrict();
+					return null;
+				}
+				if (observed.hasOwner) {
+					let discardToken = "";
+					try {
+						discardToken = ownerTokenFromRecord(
+							JSON.parse(fs.readFileSync(path.join(discard, "owner.json"), "utf-8")) as {
+								lockId?: string;
+								token?: string;
+							},
+						);
+					} catch {
+						try {
+							fs.renameSync(discard, lockPath);
+						} catch {
+							/* ignore */
+						}
+						unlinkClaimStrict();
+						return null;
+					}
+					if (observed.token && discardToken !== observed.token) {
+						try {
+							fs.renameSync(discard, lockPath);
+						} catch {
+							/* ignore */
+						}
+						unlinkClaimStrict();
+						return null;
+					}
+				} else {
+					try {
+						fs.accessSync(path.join(discard, "owner.json"));
+						// Became complete after observation — restore.
+						try {
+							fs.renameSync(discard, lockPath);
+						} catch {
+							/* ignore */
+						}
+						unlinkClaimStrict();
+						return null;
+					} catch {
+						/* still incomplete */
+					}
+				}
+			} catch {
 				try {
-					releaseOwnedLock(ownerWritten);
-				} catch (releaseError) {
-					// A failed body already makes the operation fail closed. Preserve
-					// that primary causal error rather than masking it with cleanup
-					// uncertainty; a successful body must surface release failure.
-					if (!hasPrimaryFailure) throw releaseError;
+					fs.renameSync(discard, lockPath);
+				} catch {
+					/* ignore */
+				}
+				unlinkClaimStrict();
+				return null;
+			}
+
+			// Publish successor under the claim fence.
+			// Once `held` is set, every exit path must either return it to the
+			// caller (enterWithHeld/releaseHeldLock) or abandon the published
+			// generation. A thrown claim-cleanup error must never strand a
+			// live-PID owner lock that fences successors for process lifetime.
+			const publishDeadline = Date.now() + 2_000;
+			let publishBackoff = 1;
+			while (Date.now() < publishDeadline) {
+				try {
+					fs.mkdirSync(lockPath);
+					const heldStat = fs.lstatSync(lockPath);
+					const token = randomUUID();
+					held = { device: heldStat.dev, inode: heldStat.ino, token };
+					writeOwnerRecord(token);
+					break;
+				} catch (error) {
+					if (held) {
+						// mkdir succeeded but owner publish failed — drop our inode.
+						abandonPublishedHeld(held);
+						held = null;
+					}
+					const err = error as NodeJS.ErrnoException;
+					if (err.code !== "EEXIST") throw error;
+					waitWhileBlocked(() => {
+						try {
+							fs.lstatSync(lockPath);
+							return true;
+						} catch {
+							return false;
+						}
+					}, Math.min(publishBackoff, publishDeadline - Date.now()));
+					publishBackoff = Math.min(publishBackoff * 2, 32);
 				}
 			}
+			if (!held) {
+				try {
+					if (!fs.existsSync(lockPath)) fs.renameSync(discard, lockPath);
+				} catch {
+					/* ignore */
+				}
+				unlinkClaimStrict();
+				if (fs.existsSync(discard)) destroyTree(discard);
+				return null;
+			}
+
+			// Publish succeeded. Claim cleanup failure must not leave `held` standing.
+			try {
+				unlinkClaimStrict();
+			} catch (claimError) {
+				abandonPublishedHeld(held);
+				held = null;
+				try {
+					destroyTree(discard);
+				} catch {
+					/* private discard */
+				}
+				throw claimError;
+			}
+			destroyTree(discard);
+			return held;
+		} catch (error) {
+			if (held) {
+				abandonPublishedHeld(held);
+				held = null;
+			}
+			unlinkClaimBestEffort();
+			try {
+				if (fs.existsSync(discard) && !fs.existsSync(lockPath)) {
+					fs.renameSync(discard, lockPath);
+				} else if (fs.existsSync(discard)) {
+					destroyTree(discard);
+				}
+			} catch {
+				try {
+					destroyTree(discard);
+				} catch {
+					/* ignore */
+				}
+			}
+			throw error;
 		}
+	}
+
+	function enterWithHeld(held: HeldLock): T {
+		let ownerWritten = true;
+		let hasPrimaryFailure = false;
+		try {
+			return fn();
+		} catch (error) {
+			hasPrimaryFailure = true;
+			throw error;
+		} finally {
+			try {
+				releaseHeldLock(held, ownerWritten);
+			} catch (releaseError) {
+				if (!hasPrimaryFailure) throw releaseError;
+			}
+		}
+	}
+
+	/**
+	 * After exclusive mkdir, yield if a reclaim claim is in flight so we never
+	 * enter the critical section on a free-path race against a reclaimer.
+	 */
+	function yieldIfReclaimClaim(held: HeldLock): boolean {
+		if (!reclaimClaimPresent()) return false;
+		dropIncompleteHeld(held);
+		return true;
+	}
+
+	function sameGenerationPresent(gen: ObservedLock): boolean {
+		const cur = observeLockDir();
+		if (!cur) return false;
+		if (cur.device !== gen.device || cur.inode !== gen.inode) return false;
+		if (gen.hasOwner) {
+			if (gen.token) return cur.token === gen.token;
+			return cur.hasOwner;
+		}
+		return !cur.hasOwner;
+	}
+
+	function waitForClaimOrGeneration(gen: ObservedLock | null, maxWaitMs: number): void {
+		waitWhileBlocked(() => {
+			cleanupAbandonedClaim();
+			if (reclaimClaimPresent()) return true;
+			if (!gen) return false;
+			if (!gen.hasOwner) {
+				const cur = observeLockDir();
+				if (!cur) return false;
+				if (cur.device !== gen.device || cur.inode !== gen.inode) return false;
+				if (cur.hasOwner) return isPidAlive(cur.pid);
+				return cur.age <= abandonIncompleteMs;
+			}
+			if (!sameGenerationPresent(gen)) return false;
+			const cur = observeLockDir();
+			if (!cur) return false;
+			if (cur.hasOwner && !isPidAlive(cur.pid) && cur.age > staleMs) return false;
+			return true;
+		}, maxWaitMs);
+	}
+
+	// Wall-clock acquire budget from timeoutMs. maxAttempts is a hard bound on
+	// acquire passes (mkdir try / reclaim try / contended observe). Pure
+	// progress waits on an in-flight claim or live generation do **not** burn
+	// attempts — so N cooperative contenders complete under a tight budget
+	// while a micro-spin regression exhausts maxAttempts and fails closed.
+	const acquireDeadline = Date.now() + timeoutMs;
+	const attemptBudget =
+		Number.isFinite(maxAttempts) && maxAttempts > 0 ? maxAttempts : Number.MAX_SAFE_INTEGER;
+	let attempts = 0;
+
+	while (Date.now() < acquireDeadline && attempts < attemptBudget) {
+		const remaining = () => Math.max(0, acquireDeadline - Date.now());
+		const slice = () => Math.min(PROGRESS_WAIT_SLICE_MS, remaining());
+
+		cleanupAbandonedClaim();
+		if (reclaimClaimPresent()) {
+			// Waiting on a peer reclaim does not consume the attempt budget.
+			if (slice() === 0) break;
+			waitForClaimOrGeneration(null, slice());
+			continue;
+		}
+
+		// One acquire pass: free-path mkdir, or contended observe/reclaim/wait.
+		attempts += 1;
+
+		// Migrate leftover file locks from older builds (legacy path only).
 		try {
 			const st = fs.lstatSync(lockPath);
-			if (st.isSymbolicLink() || !st.isDirectory()) {
+			if (st.isFile()) {
+				try {
+					fs.unlinkSync(lockPath);
+				} catch {
+					/* race */
+				}
+			} else if (st.isSymbolicLink() || !st.isDirectory()) {
 				throw new ControlStoreDurabilityError(
 					`exclusive lock path is not a real directory; refusing destructive migration: ${lockPath}`,
 					lockPath,
 				);
 			}
-		} catch (inspectionError) {
-			if (inspectionError instanceof ControlStoreDurabilityError) throw inspectionError;
-			if ((inspectionError as NodeJS.ErrnoException).code === "ENOENT") {
-				// The contended path disappeared while inspecting; retry immediately.
+		} catch (error) {
+			if (error instanceof ControlStoreDurabilityError) throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				throw new ControlStoreDurabilityError(
+					`cannot inspect contended exclusive lock: ${readFailureDetail(error)}`,
+					lockPath,
+					error,
+				);
+			}
+		}
+
+		let contended = false;
+		try {
+			fs.mkdirSync(lockPath); // atomic exclusive create
+		} catch (e) {
+			const err = e as NodeJS.ErrnoException;
+			if (err.code !== "EEXIST") {
+				if (e instanceof ControlStoreDurabilityError) throw e;
+				throw new ControlStoreDurabilityError(
+					`cannot create exclusive lock directory: ${readFailureDetail(e)}`,
+					lockPath,
+					e,
+				);
+			}
+			contended = true;
+		}
+
+		if (!contended) {
+			const heldStat = fs.lstatSync(lockPath);
+			const token = randomUUID();
+			const held: HeldLock = { device: heldStat.dev, inode: heldStat.ino, token };
+			if (yieldIfReclaimClaim(held)) {
+				if (slice() === 0) break;
+				waitForClaimOrGeneration(null, slice());
 				continue;
 			}
+			try {
+				writeOwnerRecord(token);
+			} catch (writeErr) {
+				dropIncompleteHeld(held);
+				throw writeErr;
+			}
+			if (reclaimClaimPresent()) {
+				const stillOurs = (() => {
+					try {
+						const st = fs.lstatSync(lockPath);
+						return st.isDirectory() && st.dev === held.device && st.ino === held.inode;
+					} catch {
+						return false;
+					}
+				})();
+				if (!stillOurs) {
+					if (slice() === 0) break;
+					waitForClaimOrGeneration(null, slice());
+					continue;
+				}
+			}
+			// Critical-section body errors must propagate unchanged (e.g. TF_AUTHORITY_REVOKED).
+			return enterWithHeld(held);
+		}
+
+		// Contended, incomplete, or stale lock dir — never blind pathname rm.
+		cleanupAbandonedClaim();
+		if (reclaimClaimPresent()) {
+			if (slice() === 0) break;
+			waitForClaimOrGeneration(null, slice());
+			continue;
+		}
+
+		let observed: ObservedLock | null;
+		try {
+			observed = observeLockDir();
+		} catch (error) {
+			if (error instanceof ControlStoreDurabilityError) throw error;
 			throw new ControlStoreDurabilityError(
-				`cannot inspect contended exclusive lock: ${readFailureDetail(inspectionError)}`,
+				`cannot inspect contended exclusive lock: ${readFailureDetail(error)}`,
 				lockPath,
-				inspectionError,
+				error,
 			);
 		}
-		Atomics.wait(LOCK_RETRY_SIGNAL, 0, 0, 2 + (attempt % 5));
+		if (!observed) {
+			sleepMs(Math.min(1, remaining()));
+			continue;
+		}
+
+		let eligible = false;
+		if (!observed.hasOwner) {
+			// Do NOT reclaim during the mkdir→write window of a live holder.
+			eligible = observed.age > abandonIncompleteMs;
+		} else if (!isPidAlive(observed.pid) && observed.age > staleMs) {
+			eligible = true;
+		}
+
+		if (eligible) {
+			const held = reclaimObservedGeneration(observed);
+			if (held) return enterWithHeld(held);
+			if (slice() === 0) break;
+			waitForClaimOrGeneration(null, slice());
+			continue;
+		}
+
+		// Live owner or incomplete grace: progress-wait on this generation.
+		// Does not burn further attempts until this wait returns.
+		if (remaining() === 0) break;
+		waitForClaimOrGeneration(observed, remaining());
 	}
 	throw new ControlStoreDurabilityError(
 		`could not acquire exclusive lock within ${timeoutMs}ms; refusing unsafe stale reclamation`,

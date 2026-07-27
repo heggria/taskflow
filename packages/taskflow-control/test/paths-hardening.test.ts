@@ -465,46 +465,67 @@ test(
 );
 
 /**
- * P13 lower-bound counterexample. A pathname ownership token is only an
- * observation: after the holder reads it, another actor can replace the lock
- * directory. The old holder then unlinks the replacement's owner file and
- * rmdirs the replacement lock. `lstat` or a second token read would merely
- * move the same check-to-use interval; safe replacement needs an OS-backed
- * compare-and-delete/holder-identity primitive.
+ * P13 identity-bound release: a successor published at the lock path while
+ * the old holder still thinks it owns the critical section must survive the
+ * old holder's finally. Release renames only the acquire-time generation
+ * (dev/ino + owner token) and restores on mismatch — never pathname-rm of a
+ * replacement. Same-UID non-cooperative adversaries remain an open lower bound.
  */
 test(
-	"P13 counterexample: lock release can delete a replacement owner after token read",
+	"P13 exclusive lock: release leaves a mid-flight successor generation intact",
 	{ skip: process.platform === "win32", concurrency: false },
 	() => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-lock-release-replacement-race-"));
 		const lockPath = path.join(root, "critical.lock");
-		const ownerFile = path.join(lockPath, "owner.json");
-		const originalUnlinkSync = commonJsFs.unlinkSync;
+		const originalRenameSync = commonJsFs.renameSync;
 		let swapped = false;
-		const patchedUnlinkSync = ((candidate: fs.PathLike): void => {
-			if (!swapped && candidate === ownerFile) {
-				// Replace the observed owner and lock directory exactly between the
-				// old holder's ownership read and its pathname unlink.
-				originalUnlinkSync(ownerFile);
-				fs.rmdirSync(lockPath);
+		let successorToken = "";
+		let successorIno = 0;
+		const patchedRenameSync = ((...args: Parameters<typeof fs.renameSync>): void => {
+			const [from, to] = args;
+			if (
+				!swapped &&
+				typeof from === "string" &&
+				typeof to === "string" &&
+				from === lockPath &&
+				to.includes(".release.")
+			) {
+				// Between identity observation and rename: replace with a successor.
+				try {
+					fs.rmSync(lockPath, { recursive: true, force: true });
+				} catch {
+					/* ignore */
+				}
 				fs.mkdirSync(lockPath);
-				fs.writeFileSync(ownerFile, JSON.stringify({ lockId: "replacement-owner" }), "utf-8");
+				successorToken = "replacement-owner";
+				fs.writeFileSync(
+					path.join(lockPath, "owner.json"),
+					JSON.stringify({
+						lockId: successorToken,
+						token: successorToken,
+						pid: process.pid,
+						acquiredAt: Date.now(),
+					}),
+					"utf-8",
+				);
+				successorIno = fs.lstatSync(lockPath).ino;
 				swapped = true;
 			}
-			return originalUnlinkSync(candidate);
-		}) as typeof fs.unlinkSync;
+			return originalRenameSync(...args);
+		}) as typeof fs.renameSync;
 		try {
-			patchBuiltinFsMethod("unlinkSync", patchedUnlinkSync);
+			patchBuiltinFsMethod("renameSync", patchedRenameSync);
 			withExclusiveLockFile(lockPath, () => undefined);
 
-			assert.equal(swapped, true, "the test must replace the lock after the ownership read");
-			assert.equal(
-				fs.existsSync(lockPath),
-				false,
-				"current pathname release removes the replacement lock; this is an intentional NOT-GA counterexample",
-			);
+			assert.equal(swapped, true, "the test must replace the lock before release rename");
+			assert.equal(fs.existsSync(lockPath), true, "successor exclusive lock must survive release");
+			assert.equal(fs.lstatSync(lockPath).ino, successorIno);
+			const owner = JSON.parse(
+				fs.readFileSync(path.join(lockPath, "owner.json"), "utf-8"),
+			) as { lockId?: string; token?: string };
+			assert.equal(owner.token ?? owner.lockId, successorToken);
 		} finally {
-			patchBuiltinFsMethod("unlinkSync", originalUnlinkSync);
+			patchBuiltinFsMethod("renameSync", originalRenameSync);
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	},
