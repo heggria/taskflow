@@ -6,11 +6,12 @@ wire-frozen, or release evidence.
 ## Candidate lineage
 
 The current immutable packaged/evidence build is the tracked-clean commit
-`130e1a3f7c0bf991c96d6e0192a2517be43ff827`. It contains implementation source
-`6f18a4eff57f1774328808cdfea22e58178555e4` plus the exact-source reference
-renders. The compatibility, Node, performance and four-lane browser reports
-all bind this same packaged/evidence build; the reference render itself remains
-bound to the implementation source commit.
+`4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2`. It descends from the prior
+packaged candidate and adds request-scoped reuse of authoritative read
+snapshots for nested Run and Node detail reads. The compatibility, Node,
+performance and four-lane browser reports all bind this same packaged/evidence
+build. The UI assets and exact-source reference render remain unchanged and
+bound to the previously reviewed implementation source.
 
 The production build identity is:
 
@@ -19,7 +20,7 @@ The production build identity is:
 - Web manifest:
   `sha256:154fe609eb6bea194e6b241e1b3f7394ffcecbed7cf70352faf44b9eef08a9e6`;
 - benchmark source digest:
-  `sha256:28142aa423b56628a67f9f38d2dbccf7ba985750a1ccca1d0cb4bc9e050a1682`.
+  `sha256:6ca56cddda7ff711b41e16c23d8c1970d0fcfc1fb9c6d3b5110181843f2b0182`.
 
 The evidence checker requires every evidence commit to be in this lineage and
 rejects production or benchmark source drift after the immutable build.
@@ -28,7 +29,7 @@ rejects production or benchmark source drift after the immutable build.
 
 The browser harness cross-ran the independently built historical
 `aa34369a5958ce34bbdad3eab973434a001d0738` package and the current
-`130e1a3f7c0bf991c96d6e0192a2517be43ff827` package under Node 24.18.0:
+`4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2` package under Node 24.18.0:
 
 - old browser assets with the current gateway: pass;
 - current browser assets with the old gateway: pass;
@@ -38,9 +39,9 @@ The browser harness cross-ran the independently built historical
 
 Evidence:
 
-- `artifacts/web-compat/aa34369a-to-130e1a3f/report.json`;
+- `artifacts/web-compat/aa34369a-to-4c2b83c0/report.json`;
 - SHA-256:
-  `3ec3ad43695ad52fa711deb517f2934c5cd6340494b8aafc1a9ece27bffa6ea4`.
+  `ac2229f06a0b0396a2490f9e7b776d3e2541ea3458c5f5e575d6ffbe12ecd423`.
 
 This is real code/assets/gateway compatibility, not a DTO replay.
 
@@ -51,9 +52,9 @@ The exact current source passed the eight protocol/transport suites on Node
 
 Evidence:
 
-- `artifacts/web-node-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json`;
+- `artifacts/web-node-matrix/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/report.json`;
 - SHA-256:
-  `752c9635c8d98e10bb0a62573a54379c1fe414e99011af237e88428afc040c65`.
+  `b70413e91e87fff788887875310f38677f3f332c49f67af8ff79dae82c4f1cf5`.
 
 ## Packaged browser matrix
 
@@ -77,9 +78,9 @@ violations on the tested Home and Task surfaces.
 
 Evidence:
 
-- `artifacts/web-browser-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json`;
+- `artifacts/web-browser-matrix/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/report.json`;
 - SHA-256:
-  `7e0eb6071810a6e229cef2c6ebbfa910497a9224e024b7e2b0a4a403215eb680`.
+  `81a519ec614865fb6165bf581326d20911e09dc68c9147f9ee7522ef72107062`.
 
 ## Performance and large-data evidence
 
@@ -90,31 +91,30 @@ with Apple M3 Pro, AC power, and no recorded thermal or performance warning.
 The current non-canonical measurements are:
 
 - Simple shell: 211,426 gzip bytes (limit 225,280);
-- cold Home p95: 405.7 ms;
-- warm Home p95: 453.3 ms;
-- cached Pro p95: 24.4 ms;
-- event to visible p95: 291.8 ms;
-- event commit to Receipt p95: 66.4 ms;
-- Receipt to visible p95: 225.0 ms;
-- list response: 3.6 ms;
-- CLS: 0.0397.
+- cold Home p95: 628.1 ms;
+- warm Home p95: 558.8 ms;
+- cached Pro p95: 26.5 ms;
+- event to visible p95: 160.0 ms;
+- event commit to Receipt p95: 73.4 ms;
+- Receipt to visible p95: 102.4 ms;
+- list response: 23.6 ms;
+- CLS: 0.0690.
 
-Owner-ready and launch-to-useful p95 are retained separately at 3.075 s and
-3.509 s. These numbers are informational because this machine is not the RFC's
-canonical Mac mini M2 / 16 GiB environment. In particular, the 291.8-ms event
-measurement is above the canonical 250-ms budget and is not presented as a
-pass. One preliminary run timed out while loading the 10,000-row list; an
-immediate smoke and the retained 30-sample rerun completed. The canonical
-unloaded-machine run remains the release gate.
+Owner-ready and launch-to-useful p95 remain retained separately in the JSON.
+These numbers are informational because this machine is not the RFC's
+canonical Mac mini M2 / 16 GiB environment and the run recorded elevated host
+load. The exact candidate now measures 160.0 ms event-to-visible on this
+non-canonical host, below the nominal 250-ms budget, but only the canonical
+unloaded-machine run can close the release gate.
 
 Evidence:
 
-- `artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827/web-perf-v1.json`;
+- `artifacts/web-bench/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/web-perf-v1.json`;
 - JSON SHA-256:
-  `d8787cc2d0985f2b5bb04f6c8d3d62cbdf6d59c44ab9c887014496586ea3743e`;
-- `artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827/web-perf-v1.md`;
+  `987aba9f2e7cee870fbf8d0cf2e79f6ad0e2cd1ddd11f9ecd1ecf5615e1d8538`;
+- `artifacts/web-bench/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/web-perf-v1.md`;
 - summary SHA-256:
-  `9fddd7c088caf665d38bbdc223b42dddb81b137e612c7ba9ac4cc47988f38cf7`.
+  `f85201428ecab9eb5ffc913dd83dceac829fa617a1e63aee57233c55ae504d11`.
 
 ## Current-source native Safari scoped records
 
@@ -137,7 +137,7 @@ The read/keyboard path proved:
 
 The four mutation paths proved:
 
-- keyboard-focused Allow, duplicate-safe pending copy, 3/3 completion,
+- native Allow activation, duplicate-safe pending copy, 3/3 completion,
   partial verification, `published`, and listener-wide revoke-all;
 - keyboard traversal through both approval answers, authoritative Reject,
   blocked/pending downstream state, `approval rejected`, and current-session

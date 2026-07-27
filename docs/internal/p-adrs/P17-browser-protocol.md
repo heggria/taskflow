@@ -1386,7 +1386,7 @@ The executable implementation candidate now includes:
 - a real packaged cross-build harness that rejects identical asset manifests
   or stamped commits. Historical build
   `aa34369a5958ce34bbdad3eab973434a001d0738` and current build
-  `15c9b1f85b847735ba803e5c093fe906ad85d3bf` pass both
+  `4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2` pass both
   old-client/new-server and new-client/old-server with Web v1 bootstrap and
   zero application console/page errors; the checked-in schema-v2 report
   contains immutable build identities and no local absolute paths. The
@@ -1429,7 +1429,7 @@ The executable implementation candidate now includes:
   enforce the 64-header application maximum without silent truncation and the
   combined event-cursor restart/query/authorization/listener/key/mount/
   compaction matrix. The checked report binds clean current build
-  `15c9b1f85b847735ba803e5c093fe906ad85d3bf`;
+  `4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2`;
 - a packaged CLI → daemon → WebGateway → real browser E2E using multiple
   project stores, two independent nonce-host listeners in one browser context,
   a live cancellable provider process, SSE and polling fallback with
@@ -1447,7 +1447,7 @@ The executable implementation candidate now includes:
   the visual DAG, modal
   focus/Escape/restore behavior and Simple → Pro focus restoration, zero
   inline/runtime styles, 320 CSS-pixel layout, and Chromium axe checks. The
-  current `130e1a3f` immutable packaged/evidence build passes Chromium
+  current `4c2b83c0` immutable packaged/evidence build passes Chromium
   149.0.7827.55, Firefox 151.0, WebKit 26.5 and installed native Google Chrome
   150.0.7871.184 from byte-identical production assets on the first attempt of
   every matrix lane; all four have
@@ -1456,8 +1456,8 @@ The executable implementation candidate now includes:
   replay, graph-listbox keyboard parity, and sensitive-artifact
   decline/acknowledgement contract. Chromium and native Chrome also report
   zero axe findings on the tested Home and Task surfaces.
-  Native Safari 26.3 has five current-source scoped records bound to
-  `c0454001`/`f6dfc801`, with no production-source drift from `130e1a3f`:
+  Native Safari 26.3 current-source scoped records are being refreshed against
+  `4c2b83c0` before the final candidate checker may pass:
   packaged Simple/Pro read, graph keyboard and Evidence; approval Allow plus
   listener-wide revoke-all; approval Reject plus current-session logout; live
   cancel; and normal/private Safari two-cookie-jar listener-wide revocation.
@@ -1507,8 +1507,8 @@ At minimum, conformance work must still add or verify:
   read indexes, startup snapshot prewarm, commit-woken SSE invalidation,
   browser receipt/paint marks, standard CLS session-window measurement, and
   JSON plus human summaries are implemented. Clean immutable build
-  `15c9b1f85b847735ba803e5c093fe906ad85d3bf` has a checked-in M3 Pro/
-  Node 24 30-sample structural pass. Its event-to-visible p95 is 187.0 ms,
+  `4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2` has a checked-in M3 Pro/
+  Node 24 30-sample structural pass. Its event-to-visible p95 is 160.0 ms,
   below the numerical budget, but the non-canonical report correctly records
   it as informational rather than release evidence;
 - human approval of the 149 reference renders, the five-fresh-participant

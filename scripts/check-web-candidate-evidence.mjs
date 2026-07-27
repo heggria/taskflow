@@ -15,11 +15,11 @@ const repositoryRoot = path.resolve(
 );
 const compatibilityPath = path.join(
 	repositoryRoot,
-	"artifacts/web-compat/aa34369a-to-130e1a3f/report.json",
+	"artifacts/web-compat/aa34369a-to-4c2b83c0/report.json",
 );
 const benchmarkRoot = path.join(
 	repositoryRoot,
-	"artifacts/web-bench/130e1a3f7c0bf991c96d6e0192a2517be43ff827",
+	"artifacts/web-bench/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 );
 const benchmarkPath = path.join(benchmarkRoot, "web-perf-v1.json");
 const benchmarkSummaryPath = path.join(
@@ -28,11 +28,11 @@ const benchmarkSummaryPath = path.join(
 );
 const nodeMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-node-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json",
+	"artifacts/web-node-matrix/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/report.json",
 );
 const browserMatrixPath = path.join(
 	repositoryRoot,
-	"artifacts/web-browser-matrix/130e1a3f7c0bf991c96d6e0192a2517be43ff827/report.json",
+	"artifacts/web-browser-matrix/4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2/report.json",
 );
 const ledgerPath = path.join(
 	repositoryRoot,
@@ -512,14 +512,14 @@ const currentNativeSafariRecords = [
 		label: "current native Safari read/keyboard record",
 		path: currentNativeSafariReadPath,
 		commit:
-			"c04540019d99984366843536baa2b47771beb8fa",
+			"4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 		result: "native-current-read-keyboard-smoke-pass",
 	},
 	{
 		label: "current native Safari allow/revoke-all record",
 		path: currentNativeSafariMutationPath,
 		commit:
-			"c04540019d99984366843536baa2b47771beb8fa",
+			"4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 		result:
 			"native-current-approval-and-revoke-all-smoke-pass",
 	},
@@ -528,7 +528,7 @@ const currentNativeSafariRecords = [
 			"current native Safari reject/current-session record",
 		path: currentNativeSafariRejectCurrentPath,
 		commit:
-			"c04540019d99984366843536baa2b47771beb8fa",
+			"4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 		result:
 			"native-current-reject-and-current-session-smoke-pass",
 	},
@@ -536,7 +536,7 @@ const currentNativeSafariRecords = [
 		label: "current native Safari cancel record",
 		path: currentNativeSafariCancelPath,
 		commit:
-			"c04540019d99984366843536baa2b47771beb8fa",
+			"4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 		result: "native-current-cancel-run-smoke-pass",
 	},
 	{
@@ -544,7 +544,7 @@ const currentNativeSafariRecords = [
 			"current native Safari two-session revocation record",
 		path: currentNativeSafariTwoSessionRevocationPath,
 		commit:
-			"f6dfc8017b6bc18d7179a5bfec4b5bb42956e268",
+			"4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
 		result:
 			"native-current-safari-two-cookie-jar-revocation-smoke-pass",
 	},
