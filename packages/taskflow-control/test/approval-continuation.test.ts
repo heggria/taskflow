@@ -14,11 +14,34 @@ import {
 	createControlHost,
 	createScriptExecutionProvider,
 	openProjectControlStore,
+	projectCoordinatorDir,
 	SingletonAuthorityError,
 } from "../src/index.ts";
 import { parentReleaseStart } from "./helpers/mp-barrier.mts";
 
 const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
+
+/**
+ * P16 D1 — simulate reserved TTL expiry without forging reclaim(now).
+ * Elapse reservedExpiresAt on disk, then call the production reclaim path
+ * with no caller timestamp so store wall clock is the only authority.
+ */
+function expireReservedViaProductionReclaim(
+	coordinator: { reclaimExpiredReserved: (now?: number) => number },
+	stateDir: string,
+	reservationId: string,
+): void {
+	const statePath = path.join(stateDir, "state.json");
+	const state = JSON.parse(fs.readFileSync(statePath, "utf-8")) as {
+		reservations: Array<{ reservationId: string; reservedExpiresAt?: number }>;
+	};
+	const row = state.reservations.find((r) => r.reservationId === reservationId);
+	assert.ok(row, `reservation ${reservationId} must exist on disk to elapse`);
+	row.reservedExpiresAt = Date.now() - 1;
+	fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+	const n = coordinator.reclaimExpiredReserved();
+	assert.equal(n, 1, "production reclaim after on-disk expiry must free exactly one reserved slot");
+}
 
 function temp(): { env: NodeJS.ProcessEnv; project: string; cleanup: () => void } {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-approval-cont-home-"));
@@ -443,7 +466,11 @@ test("native approval: expired pre-commit reservation is structured and never re
 				const reservation = reserve(opts);
 				if (expireFirstApprovalReservation && reservation) {
 					expireFirstApprovalReservation = false;
-					host.coordinator.reclaimExpiredReserved(reservation.reservedExpiresAt!);
+					expireReservedViaProductionReclaim(
+						host.coordinator,
+						projectCoordinatorDir(t.project),
+						reservation.reservationId,
+					);
 				}
 				return reservation;
 			};
