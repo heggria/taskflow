@@ -2,7 +2,8 @@
 name: final-arbiter
 description: Makes final decisions when multiple plans, critiques, or reviews conflict
 tools: read, grep, find, ls
-model: "{{arbiter}}"
+model: "{{steward}}"
+legacy-model-role: arbiter
 thinking: xhigh
 ---
 

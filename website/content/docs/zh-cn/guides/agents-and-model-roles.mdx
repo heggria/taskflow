@@ -1,6 +1,6 @@
 ---
 title: Agents 与 Model Roles
-description: taskflow 如何从三层发现 agents、将它们映射到六个 model roles，并为每个 phase 解析出正确的 agent。
+description: taskflow 如何从三层发现 agents、将它们映射到四个语义 model roles，并为每个 phase 解析出正确的 agent。
 ---
 
 taskflow 中的每个 phase 都作为 subagent 运行——一个独立的 LLM 进程，拥有自己的 context window、system prompt 和工具集。正是这种隔离让中间的 transcript 不进入你的对话：只有最终的 phase 输出会返回。
@@ -65,10 +65,10 @@ taskflow 内置了 18 个 agent，按四类组织。每个 agent 都是一个带
 
 | Agent | Role | Thinking | 用途 |
 |---|---|---|---|
-| `analyst` | `{{thinker}}` | high | 分析需求，暴露歧义，识别隐藏约束。只读。 |
-| `critic` | `{{thinker}}` | xhigh | 挑战计划和结论，在承诺之前发现矛盾。只读。 |
-| `planner` | `{{strong}}` | high | 创建带文件级细节的具体实现计划。只读。 |
-| `plan-arbiter` | `{{arbiter}}` | high | 在执行开始之前审查并挑战计划。只读。 |
+| `analyst` | `{{expert}}` | high | 分析需求，暴露歧义，识别隐藏约束。只读。 |
+| `critic` | `{{expert}}` | xhigh | 挑战计划和结论，在承诺之前发现矛盾。只读。 |
+| `planner` | `{{steward}}` | high | 创建带文件级细节的具体实现计划。只读。 |
+| `plan-arbiter` | `{{expert}}` | high | 在执行开始之前审查并挑战计划。只读。 |
 
 `analyst` 在复杂流水线中率先运行以澄清需求。`planner` 把这些需求转化为可执行的计划。`critic` 和 `plan-arbiter` 充当质量门控——它们在昂贵的执行开始之前对薄弱的计划推回。
 
@@ -78,10 +78,10 @@ taskflow 内置了 18 个 agent，按四类组织。每个 agent 都是一个带
 
 | Agent | Role | Thinking | 用途 |
 |---|---|---|---|
-| `executor` | `{{fast}}` | high | 默认 executor，用于有清晰计划的 1–4 文件改动。 |
-| `executor-fast` | `{{fast}}` | off | 琐碎改动：≤2 文件、≤50 行、不涉及架构决策。 |
-| `executor-code` | `{{strong}}` | high | 复杂的多文件改动：≥5 文件、跨模块、结构性重构。 |
-| `executor-ui` | `{{vision}}` | high | UI/前端改动：组件、样式、布局、响应式设计。 |
+| `executor` | `{{builder}}` | high | 默认 executor，用于有清晰计划的 1–4 文件改动。 |
+| `executor-fast` | `{{scout}}` | off | 琐碎改动：≤2 文件、≤50 行、不涉及架构决策。 |
+| `executor-code` | `{{builder}}` | high | 复杂的多文件改动：≥5 文件、跨模块、结构性重构。 |
+| `executor-ui` | `{{builder}}` | high | UI/前端改动：组件、样式、布局、响应式设计。 |
 
 默认的 `executor` 处理大部分工作。机械清理用 `executor-fast`，结构性重构用 `executor-code`，当你需要视觉能力来理解设计意图时用 `executor-ui`。
 
@@ -91,10 +91,10 @@ taskflow 内置了 18 个 agent，按四类组织。每个 agent 都是一个带
 
 | Agent | Role | Thinking | 用途 |
 |---|---|---|---|
-| `reviewer` | `{{strong}}` | high | 通用代码审查：质量、架构、测试覆盖。 |
-| `risk-reviewer` | `{{reasoner}}` | high | 后端/基础设施风险：数据完整性、并发、迁移。 |
-| `security-reviewer` | `{{reasoner}}` | high | 安全漏洞：认证、注入、密钥、信任边界。 |
-| `final-arbiter` | `{{arbiter}}` | xhigh | 在多个审查者意见冲突时裁决。决胜者。 |
+| `reviewer` | `{{builder}}` | high | 通用代码审查：质量、架构、测试覆盖。 |
+| `risk-reviewer` | `{{expert}}` | high | 后端/基础设施风险：数据完整性、并发、迁移。 |
+| `security-reviewer` | `{{expert}}` | high | 安全漏洞：认证、注入、密钥、信任边界。 |
+| `final-arbiter` | `{{steward}}` | xhigh | 在多个审查者意见冲突时裁决。决胜者。 |
 
 `reviewer` 处理通用质量。`risk-reviewer` 和 `security-reviewer` 专注于高风险领域，并在领域边界处互相推让。`final-arbiter` 在审查冲突时打破平局。
 
@@ -104,44 +104,46 @@ taskflow 内置了 18 个 agent，按四类组织。每个 agent 都是一个带
 
 | Agent | Role | Thinking | 用途 |
 |---|---|---|---|
-| `test-engineer` | `{{fast}}` | high | 设计和实现测试策略，检测不稳定模式。 |
-| `verifier` | `{{fast}}` | off | 运行校验命令，复现失败，检查日志。只读。 |
-| `scout` | `{{fast}}` | off | 快速代码库探索，为其他 agent 返回结构化发现。 |
-| `doc-writer` | `{{fast}}` | off | 编写和编辑文档文件（README、指南、changelog）。 |
-| `visual-explorer` | `{{vision}}` | high | 分析 Figma 设计，提取颜色、token 和组件规格。 |
-| `recover` | `{{fast}}` | low | 在 context compaction 之后恢复工作，从交接文件接续。 |
+| `test-engineer` | `{{builder}}` | high | 设计和实现测试策略，检测不稳定模式。 |
+| `verifier` | `{{scout}}` | off | 运行校验命令，复现失败，检查日志。只读。 |
+| `scout` | `{{scout}}` | off | 快速代码库探索，为其他 agent 返回结构化发现。 |
+| `doc-writer` | `{{builder}}` | off | 编写和编辑文档文件（README、指南、changelog）。 |
+| `visual-explorer` | `{{builder}}` | high | 分析 Figma 设计，提取颜色、token 和组件规格。 |
+| `recover` | `{{builder}}` | low | 在 context compaction 之后恢复工作，从交接文件接续。 |
 
 `scout` 做快速侦察，让其他 agent 不必重新读取所有内容。`test-engineer` 和 `verifier` 处理验证。`visual-explorer` 解析设计文件。`recover` agent 在 context window 重置之后接续工作。
 
 ## Model roles
 
-每个内置 agent 在其 frontmatter 中指定一个 model role——不是具体的模型 ID，而是用双花括号包裹的角色名：`{{fast}}`、`{{strong}}`、`{{thinker}}`、`{{arbiter}}`、`{{vision}}` 或 `{{reasoner}}`。
+每个内置 agent 在其 frontmatter 中指定一个 model role——不是具体的模型 ID，而是用双花括号包裹的四种语义责任之一：`{{steward}}`、`{{expert}}`、`{{builder}}` 或 `{{scout}}`。
 
-这种间接存在是因为不同用户可用的模型不同。一个 role 是一个语义契约（"这个 agent 需要快速、廉价的推理"），它会在运行时根据你的配置解析为具体的模型 ID。
+这种间接层存在是因为不同用户可用的模型不同。role 描述 agent 承担的责任，具体模型只是可替换的绑定。模型厂商增加或重命名档位时，不需要修改 flow 定义。
 
-### 六个 roles
+### 四个 roles
 
 | Role | 语义契约 | 默认模型 | 使用者 |
 |---|---|---|---|
-| `{{fast}}` | 便宜且快速，高吞吐低风险 | `openrouter/deepseek/deepseek-v4-flash` | `executor`、`executor-fast`、`scout`、`verifier`、`doc-writer`、`test-engineer`、`recover` |
-| `{{strong}}` | 均衡能力，中等复杂度 | `openrouter/xiaomi/mimo-v2.5-pro` | `planner`、`reviewer`、`executor-code` |
-| `{{thinker}}` | 深度推理，高 thinking 预算 | `openrouter/deepseek/deepseek-v4-pro` | `analyst`、`critic` |
-| `{{arbiter}}` | 高风险判断，决胜 | `openrouter/qwen/qwen3.7-max` | `plan-arbiter`、`final-arbiter` |
-| `{{vision}}` | 多模态，图像理解 | `minimax/MiniMax-M3` | `executor-ui`、`visual-explorer` |
-| `{{reasoner}}` | 谨慎推理，安全敏感 | `z-ai/glm-5.1` | `risk-reviewer`、`security-reviewer` |
+| `{{steward}}` | 守住目标、长周期计划、跨阶段一致性与最终综合 | `openrouter/anthropic/claude-fable-5` | `planner`、`final-arbiter` |
+| `{{expert}}` | 深度专业推理与高风险局部判断 | `openrouter/anthropic/claude-opus-5` | `analyst`、`critic`、`plan-arbiter`、`risk-reviewer`、`security-reviewer` |
+| `{{builder}}` | 实现、审查、UI、测试、文档与恢复的通用默认执行者 | `openrouter/anthropic/claude-sonnet-5` | `executor`、`executor-code`、`executor-ui`、`reviewer`、`test-engineer`、`doc-writer`、`visual-explorer`、`recover` |
+| `{{scout}}` | 快速、高吞吐侦察与可机械验证的工作 | `openrouter/anthropic/claude-haiku-4.5` | `scout`、`executor-fast`、`verifier` |
 
-默认值开箱即用效果良好。但你可能想替换它们——例如，如果你有 Claude Pro 订阅，想把 `{{strong}}` 换成 `anthropic/claude-3.5-sonnet`。
+默认绑定构成能力阶梯，但 role 名刻意保持模型中立。未来如果出现更好的日常执行模型，只需重新绑定 `{{builder}}`；只有工作责任真的新增时才新增 role。
+
+<Callout type="info">
+  从 0.2.4 升级不会让现有设置失效。旧的 `fast`、`strong`、`thinker`、`arbiter`、`vision`、`reasoner` 键会保留；在新 role 尚未配置时，内置 agent 会精确回退到自己原来的键。新 role 始终优先。仍引用旧键的自定义 agent 也会继续正常解析。
+</Callout>
 
 ### Roles 如何解析
 
 当一个 phase 生成一个 subagent 时，运行时会检查 agent 的 `model` 字段。如果它匹配 `{{roleName}}` 模式，运行时会查找该 role 的设置并替换为具体的模型 ID。如果不存在映射，则 model 字段留空，并使用宿主的默认模型。
 
 ```text
-Agent frontmatter:  model: "{{strong}}"
+Agent frontmatter:  model: "{{builder}}"
                        ↓
-settings.json:      modelRoles: { "strong": "anthropic/claude-3.5-sonnet" }
+settings.json:      modelRoles: { "builder": "openrouter/anthropic/claude-sonnet-5" }
                        ↓
-Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
+Subagent spawns with: model: "openrouter/anthropic/claude-sonnet-5"
 ```
 
 带有字面模型 ID（无花括号）的 agent 完全绕过 role 解析。这对于必须始终使用特定模型的自定义 agent 很有用。
@@ -151,7 +153,7 @@ Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
 `/tf init` 命令会交互式地引导你完成 role 配置。它读取你当前的设置，从你的 provider registry 显示可用模型，并以原子方式写回你的选择。
 
 <Callout type="tip">
-  首次安装 taskflow 时运行 `/tf init`。推荐的默认值对大多数用户效果良好，但你可能想把 `vision` role 换成另一个多模态模型，或把 `arbiter` role 换成更强的推理模型。
+  安装或升级 taskflow 后运行 `/tf init`。用 `scout` 承担便宜的广度工作，以 `builder` 为默认；只有风险或时间跨度值得时才使用 `expert` 和 `steward`。
 </Callout>
 
 ### 操作菜单
@@ -159,7 +161,7 @@ Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
 当你运行 `/tf init` 时，会看到一个操作菜单：
 
 1. **使用推荐默认值** —— 应用上表中的默认模型。
-2. **逐个配置 role** —— 依次遍历全部六个 role。
+2. **逐个配置 role** —— 依次遍历全部四个 role。
 3. **编辑单个 role** —— 只改一个 role，不动其他。
 4. **配置 taskflow 偏好** —— 调整内置 agent 设置。
 5. **显示当前 roles** —— 不做改动地显示当前配置。
@@ -177,12 +179,10 @@ Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
 ```json title="settings.json"
 {
   "modelRoles": {
-    "fast": "openrouter/deepseek/deepseek-v4-flash",
-    "strong": "openrouter/xiaomi/mimo-v2.5-pro",
-    "thinker": "openrouter/deepseek/deepseek-v4-pro",
-    "arbiter": "openrouter/qwen/qwen3.7-max",
-    "vision": "minimax/MiniMax-M3",
-    "reasoner": "z-ai/glm-5.1"
+    "steward": "openrouter/anthropic/claude-fable-5",
+    "expert": "openrouter/anthropic/claude-opus-5",
+    "builder": "openrouter/anthropic/claude-sonnet-5",
+    "scout": "openrouter/anthropic/claude-haiku-4.5"
   },
   "taskflow": {
     "builtInAgents": true,
@@ -221,7 +221,7 @@ Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
 name: code-reviewer
 description: Review code for quality and best practices
 tools: read, grep, find, ls, bash
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 
@@ -243,7 +243,7 @@ Be specific and actionable. Don't just say "this could be better" — explain wh
 | `name` | 是 | 唯一标识符，用于在 flow 中引用该 agent。使用连字符。 |
 | `description` | 是 | 简短描述，显示在 agent 列表和选择器 UI 中。 |
 | `tools` | 否 | 逗号分隔的工具列表：`read`、`write`、`edit`、`bash`、`grep`、`find`、`ls`。省略时默认为全部工具。 |
-| `model` | 否 | 模型 ID 或 role 引用（如 `openai/gpt-4o` 或 `"{{strong}}"`）。回退到宿主默认模型。 |
+| `model` | 否 | 模型 ID 或 role 引用（如 `openai/gpt-4o` 或 `"{{builder}}"`）。回退到宿主默认模型。 |
 | `thinking` | 否 | Thinking 级别：`off`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`。回退到 `globalThinking`；非法值 fail-closed。各宿主映射不同。 |
 
 <Callout type="info">
@@ -259,7 +259,7 @@ Be specific and actionable. Don't just say "this could be better" — explain wh
 name: executor
 description: Custom executor with project-specific conventions
 tools: read, grep, find, ls, bash, edit, write
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 
@@ -341,7 +341,7 @@ Phase 可以覆盖 agent 的 model、thinking 级别和工具访问，而无需�
 
 | 覆盖 | 效果 |
 |---|---|
-| `model` | 替换该 phase 的 agent 模型。接受 role（`"{{strong}}"`）或字面模型 ID。 |
+| `model` | 替换该 phase 的 agent 模型。接受 role（`"{{builder}}"`）或字面模型 ID。 |
 | `thinking` | 用受支持值覆盖 thinking。Codex 映射到 `model_reasoning_effort`（`max`/`ultra` → `xhigh`）。 |
 | `tools` | 请求能力集合。Pi 使用白名单；Codex 仅映射只读/可写 sandbox，而不严格执行工具名。 |
 
@@ -427,7 +427,7 @@ Phase 可以覆盖 agent 的 model、thinking 级别和工具访问，而无需�
 name: api-designer
 description: Design RESTful APIs following OpenAPI 3.0 spec
 tools: read, grep, find, ls, write
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 

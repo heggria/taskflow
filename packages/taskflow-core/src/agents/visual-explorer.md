@@ -2,7 +2,8 @@
 name: visual-explorer
 description: Analyzes Figma design metadata, tokens, and specs from text-based context
 tools: read, grep, find, ls
-model: "{{vision}}"
+model: "{{builder}}"
+legacy-model-role: vision
 thinking: high
 ---
 

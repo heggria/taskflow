@@ -2,7 +2,8 @@
 name: doc-writer
 description: Author and edit documentation FILES on disk (README, guides, changelogs, docs)
 tools: read, grep, find, ls, bash, edit, write
-model: "{{fast}}"
+model: "{{builder}}"
+legacy-model-role: fast
 thinking: off
 ---
 

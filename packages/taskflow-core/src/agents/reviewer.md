@@ -2,7 +2,8 @@
 name: reviewer
 description: Reviews code, plans, architecture risk, and test gaps without editing files
 tools: read, grep, find, ls, bash
-model: "{{strong}}"
+model: "{{builder}}"
+legacy-model-role: strong
 thinking: high
 ---
 

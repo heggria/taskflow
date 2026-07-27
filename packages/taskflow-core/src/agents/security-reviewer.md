@@ -2,7 +2,8 @@
 name: security-reviewer
 description: Review changes for security vulnerabilities and trust-boundary issues
 tools: read, grep, find, ls, bash
-model: "{{reasoner}}"
+model: "{{expert}}"
+legacy-model-role: reasoner
 thinking: high
 ---
 

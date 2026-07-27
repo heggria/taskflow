@@ -30,7 +30,14 @@ function makeTmpDir(prefix = "agents-test-"): string {
 function writeAgent(
 	dir: string,
 	filename: string,
-	fields: { name?: string; description?: string; model?: string; thinking?: string; tools?: string },
+	fields: {
+		name?: string;
+		description?: string;
+		model?: string;
+		"legacy-model-role"?: string;
+		thinking?: string;
+		tools?: string;
+	},
 	body = "",
 ): string {
 	fs.mkdirSync(dir, { recursive: true });
@@ -644,19 +651,100 @@ test("F-001: defense-in-depth — exotic frontmatter shapes do not abort discove
 
 test("modelRoles: resolves {{role}} references from settings", () => {
 	const agentsDir = path.join(userAgentDir, "agents");
-	writeAgent(agentsDir, "fast.md", { name: "fast-agent", description: "fast", model: "{{fast}}" });
-	writeAgent(agentsDir, "strong.md", { name: "strong-agent", description: "strong", model: "{{strong}}" });
+	writeAgent(agentsDir, "scout.md", { name: "scout-agent", description: "scout", model: "{{scout}}" });
+	writeAgent(agentsDir, "builder.md", { name: "builder-agent", description: "builder", model: "{{builder}}" });
 	writeAgent(agentsDir, "literal.md", { name: "literal-agent", description: "literal", model: "openai/gpt-4o" });
 	writeAgent(agentsDir, "nomodel.md", { name: "nomodel-agent", description: "no model" });
 
-	const roles = { fast: "openrouter/deepseek/v4-flash", strong: "anthropic/claude-sonnet-4-20250514" };
+	const roles = {
+		scout: "openrouter/anthropic/claude-haiku-4.5",
+		builder: "openrouter/anthropic/claude-sonnet-5",
+	};
 	const { agents } = discoverAgents(projectCwd, "user", roles);
 
 	const byName = Object.fromEntries(agents.map(a => [a.name, a.model]));
-	assert.equal(byName["fast-agent"], "openrouter/deepseek/v4-flash");
-	assert.equal(byName["strong-agent"], "anthropic/claude-sonnet-4-20250514");
+	assert.equal(byName["scout-agent"], "openrouter/anthropic/claude-haiku-4.5");
+	assert.equal(byName["builder-agent"], "openrouter/anthropic/claude-sonnet-5");
 	assert.equal(byName["literal-agent"], "openai/gpt-4o");
 	assert.equal(byName["nomodel-agent"], undefined);
+});
+
+test("modelRoles: built-ins fall back to their exact 0.2.4 role mappings", () => {
+	const builtInDir = path.join(tmpRoot, "built-ins");
+	process.env[BUILTIN_DIR_ENV] = builtInDir;
+	const cases = [
+		["analyst", "expert", "thinker", "legacy-thinker"],
+		["plan-arbiter", "expert", "arbiter", "legacy-arbiter"],
+		["risk-reviewer", "expert", "reasoner", "legacy-reasoner"],
+		["executor-ui", "builder", "vision", "legacy-vision"],
+		["executor-code", "builder", "strong", "legacy-strong"],
+		["executor", "builder", "fast", "legacy-fast"],
+		["planner", "steward", "strong", "legacy-strong"],
+		["final-arbiter", "steward", "arbiter", "legacy-arbiter"],
+		["scout", "scout", "fast", "legacy-fast"],
+	] as const;
+	for (const [name, role, legacyRole] of cases) {
+		writeAgent(builtInDir, `${name}.md`, {
+			name,
+			description: name,
+			model: `{{${role}}}`,
+			"legacy-model-role": legacyRole,
+		});
+	}
+
+	const { agents } = discoverAgents(projectCwd, "user", {
+		fast: "legacy-fast",
+		strong: "legacy-strong",
+		thinker: "legacy-thinker",
+		arbiter: "legacy-arbiter",
+		vision: "legacy-vision",
+		reasoner: "legacy-reasoner",
+	});
+	const byName = Object.fromEntries(agents.map((agent) => [agent.name, agent.model]));
+	for (const [name, , , expected] of cases) assert.equal(byName[name], expected, name);
+});
+
+test("modelRoles: current semantic role wins over a built-in legacy fallback", () => {
+	const builtInDir = path.join(tmpRoot, "built-ins");
+	process.env[BUILTIN_DIR_ENV] = builtInDir;
+	writeAgent(builtInDir, "analyst.md", {
+		name: "analyst",
+		description: "built-in analyst",
+		model: "{{expert}}",
+		"legacy-model-role": "thinker",
+	});
+
+	const { agents } = discoverAgents(projectCwd, "user", {
+		expert: "current-opus",
+		thinker: "legacy-thinker",
+	});
+	assert.equal(agents[0].model, "current-opus");
+});
+
+test("modelRoles: a synced project copy retains its explicit legacy fallback", () => {
+	const projectAgentsDir = path.join(projectCwd, ".pi", "agents");
+	writeAgent(projectAgentsDir, "executor.md", {
+		name: "executor",
+		description: "synced executor",
+		model: "{{builder}}",
+		"legacy-model-role": "fast",
+	});
+
+	const { agents } = discoverAgents(projectCwd, "project", { fast: "legacy-fast" });
+	assert.equal(agents[0].source, "project");
+	assert.equal(agents[0].model, "legacy-fast");
+});
+
+test("modelRoles: user overrides never inherit a built-in legacy fallback", () => {
+	const agentsDir = path.join(userAgentDir, "agents");
+	writeAgent(agentsDir, "analyst.md", {
+		name: "analyst",
+		description: "user analyst",
+		model: "{{expert}}",
+	});
+
+	const { agents } = discoverAgents(projectCwd, "user", { thinker: "legacy-thinker" });
+	assert.equal(agents[0].model, undefined);
 });
 
 test("modelRoles: unmapped role resolves to undefined", () => {

@@ -170,6 +170,8 @@ export interface AgentConfig {
 	description: string;
 	tools?: string[];
 	model?: string;
+	/** 0.2.4 role used only when the current semantic role is not configured. */
+	legacyModelRole?: string;
 	thinking?: string;
 	systemPrompt: string;
 	source: "user" | "project" | "built-in";
@@ -235,6 +237,9 @@ function loadAgentsFromDir(dir: string, source: "user" | "project" | "built-in")
 				description: String(frontmatter.description),
 				tools: tools && tools.length > 0 ? tools : undefined,
 				model: frontmatter.model === undefined ? undefined : String(frontmatter.model),
+				...(frontmatter["legacy-model-role"] === undefined
+					? {}
+					: { legacyModelRole: String(frontmatter["legacy-model-role"]) }),
 				thinking: frontmatter.thinking === undefined ? undefined : String(frontmatter.thinking),
 				systemPrompt: body,
 				source,
@@ -300,11 +305,15 @@ export function discoverAgents(
 		for (const a of projectAgents) agentMap.set(a.name, a);
 	}
 
-	// Resolve {{role}} model references (e.g. {{fast}} → openrouter/deepseek/v4-flash)
+	// Resolve {{role}} model references (e.g. {{builder}} → Claude Sonnet).
 	// Clone before mutating, consistent with the overrides block above.
 	if (modelRoles) {
 		for (const [name, agent] of agentMap.entries()) {
-			const resolved = resolveModelRole(agent.model, modelRoles);
+			const resolved = resolveModelRole(
+				agent.model,
+				modelRoles,
+				agent.legacyModelRole,
+			);
 			if (resolved !== agent.model) {
 				const mutated: AgentConfig = { ...agent };
 				mutated.model = resolved;
@@ -324,20 +333,31 @@ export interface SubagentSettings {
 
 /**
  * Resolve `{{roleName}}` model references against a role→model mapping.
- * E.g. `{{fast}}` → `openrouter/deepseek/deepseek-v4-flash` if modelRoles.fast is set.
- * Returns undefined if the value is not a role reference or the role is unmapped.
- */
-/**
- * Resolve `{{roleName}}` model references against a role→model mapping.
- * E.g. `{{fast}}` → `openrouter/deepseek/deepseek-v4-flash` if modelRoles.fast is set.
+ * E.g. `{{builder}}` → `openrouter/anthropic/claude-sonnet-5`.
+ *
+ * Built-in agents renamed their six capability-specific roles to four semantic
+ * responsibilities in 0.2.5. If a user has not run `/tf init` since upgrading,
+ * fall back to the exact legacy role carried in the agent's migration metadata.
+ * New role keys always win. Synced built-in copies retain the metadata, while
+ * ordinary user/project agents keep exact-key resolution unless they opt in.
+ *
  * Returns undefined if the value is not a role reference or the role is unmapped.
  * @internal
  */
-function resolveModelRole(model: string | undefined, roles?: Record<string, string>): string | undefined {
+function resolveModelRole(
+	model: string | undefined,
+	roles?: Record<string, string>,
+	legacyModelRole?: string,
+): string | undefined {
 	if (!model || !roles) return model;
 	const match = model.match(/^\{\{(\w+)\}\}$/);
 	if (!match) return model;
-	return roles[match[1]] ?? undefined;
+	const role = match[1];
+	const direct = roles[role];
+	if (direct !== undefined) return direct;
+
+	if (legacyModelRole) return roles[legacyModelRole] ?? undefined;
+	return undefined;
 }
 
 /** Read subagent overrides from ~/.pi/agent/settings.json (shared with the subagent extension). */

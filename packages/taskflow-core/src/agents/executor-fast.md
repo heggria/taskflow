@@ -2,7 +2,8 @@
 name: executor-fast
 description: Fast executor for scanning, command runs, summaries, and low-risk small edits
 tools: read, grep, find, ls, bash, edit, write
-model: "{{fast}}"
+model: "{{scout}}"
+legacy-model-role: fast
 thinking: off
 ---
 

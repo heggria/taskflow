@@ -165,7 +165,7 @@ Children inherit only platform/proxy/CA, OpenCode configuration, and supported p
 
 OpenCode model ids are `provider/model` (e.g. `anthropic/claude-sonnet-4-5`). Because a valid OpenCode id contains a slash, the runner does **not** reuse the codex/claude "contains `/` ⇒ drop" rule. It drops only ids that clearly aren't OpenCode models:
 
-- An unresolved role placeholder (`{{fast}}`)
+- An unresolved role placeholder (`{{scout}}`)
 - A pi thinking suffix (`…:xhigh`)
 - A multi-segment openrouter path (`openrouter/vendor/model`, ≥ 2 slashes)
 

@@ -162,15 +162,13 @@ You'll get a picker that walks you through each role and recommends sensible def
 
 | Role | Purpose | Typical agents |
 |---|---|---|
-| `fast` | Cheap & quick — high-volume, low-stakes work. | executor, scout, verifier, doc-writer |
-| `strong` | Balanced planning and review. | planner, reviewer, executor-code |
-| `thinker` | Deep analysis and ambiguity detection. | analyst, critic |
-| `arbiter` | Final judgment and tiebreaks. | plan-arbiter, final-arbiter |
-| `vision` | Multimodal — UI work, design reading. | executor-ui, visual-explorer |
-| `reasoner` | Cautious reasoning — security and risk. | risk-reviewer, security-reviewer |
+| `steward` | Goal ownership, long-horizon planning, final synthesis. | planner, final-arbiter |
+| `expert` | Deep specialist reasoning and high-stakes judgment. | analyst, critic, plan-arbiter, risk-reviewer, security-reviewer |
+| `builder` | Versatile default execution, review, UI, tests, and docs. | executor, executor-code, executor-ui, reviewer, test-engineer, doc-writer |
+| `scout` | Fast reconnaissance and mechanically checkable work. | scout, executor-fast, verifier |
 
 <Callout type="tip">
-  If you skip this step, taskflow will hint that roles are unconfigured and agents will fall back to the default model. It works, but you're leaving cost and quality on the table — `fast` roles on a cheap model save a lot of tokens over time.
+  If you skip this step, taskflow will hint that roles are unconfigured and agents will fall back to the host's default model. Keep `builder` as the normal path, use `scout` for cheap breadth, and reserve `expert`/`steward` for work that justifies them.
 </Callout>
 
 The configuration is written to your Pi `settings.json` under `modelRoles`. You can re-run `/tf init` any time to change a single role or accept the recommended defaults.

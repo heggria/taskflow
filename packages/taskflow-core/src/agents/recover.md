@@ -2,7 +2,8 @@
 name: recover
 description: Continue from a compact handoff — finds latest SESSION_STATE_*.md and HANDOFF_*.md in .agent/, then acts on Next Actions
 tools: read, grep, find, ls, bash, edit, write
-model: "{{fast}}"
+model: "{{builder}}"
+legacy-model-role: fast
 thinking: low
 ---
 

@@ -162,15 +162,13 @@ taskflow 自带十八个内置 agent（scout、security-reviewer、writer 等等
 
 | 角色 | 用途 | 典型 agent |
 |---|---|---|
-| `fast` | 便宜且快速——大体积、低风险的工作。 | executor, scout, verifier, doc-writer |
-| `strong` | 平衡的规划和审查。 | planner, reviewer, executor-code |
-| `thinker` | 深度分析和歧义检测。 | analyst, critic |
-| `arbiter` | 最终判断和裁决。 | plan-arbiter, final-arbiter |
-| `vision` | 多模态——UI 工作、设计阅读。 | executor-ui, visual-explorer |
-| `reasoner` | 谨慎推理——安全和风险。 | risk-reviewer, security-reviewer |
+| `steward` | 目标守护、长周期规划与最终综合。 | planner, final-arbiter |
+| `expert` | 深度专业推理与高风险判断。 | analyst, critic, plan-arbiter, risk-reviewer, security-reviewer |
+| `builder` | 通用默认执行、审查、UI、测试与文档。 | executor, executor-code, executor-ui, reviewer, test-engineer, doc-writer |
+| `scout` | 快速侦察与可机械验证的工作。 | scout, executor-fast, verifier |
 
 <Callout type="tip">
-  如果你跳过这一步，taskflow 会提示角色未配置，agent 会回退到默认模型。它能用，但你把成本和质量留在桌上了——`fast` 角色用一个便宜模型，时间长了能省很多 token。
+  如果你跳过这一步，taskflow 会提示角色未配置，agent 会回退到宿主默认模型。以 `builder` 为常规路径，用 `scout` 承担便宜的广度工作，只在确有必要时使用 `expert`/`steward`。
 </Callout>
 
 配置写到你的 Pi `settings.json` 里的 `modelRoles` 下。你可以随时重新运行 `/tf init` 来改单个角色，或接受推荐的默认值。

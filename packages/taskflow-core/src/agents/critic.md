@@ -2,7 +2,8 @@
 name: critic
 description: Challenges planner and main-agent conclusions before risky decisions
 tools: read, grep, find, ls
-model: "{{thinker}}"
+model: "{{expert}}"
+legacy-model-role: thinker
 thinking: xhigh
 ---
 
