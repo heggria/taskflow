@@ -3,6 +3,12 @@
  * phase-level provider for agent/gate/reduce/… kinds (mandate 2 / D21).
  *
  * Production MCP/Pi inject this so agent phases never bypass ControlHost.
+ *
+ * Cancel / containment (B06 D4):
+ * - submit always creates an AbortController and passes `signal` to runTask
+ * - cancel aborts that signal and tracks in-flight work
+ * - isLive stays true until the runTask promise settles (fail closed for capacity)
+ * - flipping status alone never pretends work is quiescent while still running
  */
 import { newId } from "./hash.ts";
 import type {
@@ -33,7 +39,13 @@ interface LlmJob {
 	output?: string;
 	error?: string;
 	startedAt: number;
+	/** Present while the host task may still be executing. */
 	promise?: Promise<void>;
+	abort?: AbortController;
+	/** Cancel requested; terminal status waits for promise settlement. */
+	cancelRequested?: boolean;
+	/** True only while runTask has not settled (authoritative for isLive). */
+	inFlight: boolean;
 }
 
 function extractAgentPhase(program: unknown): { agent: string; task: string } | null {
@@ -47,6 +59,12 @@ function extractAgentPhase(program: unknown): { agent: string; task: string } | 
 	const task = typeof p.task === "string" ? p.task : "";
 	if (!task && p.type === "script") return null;
 	return { agent, task: task || `(phase type ${p.type ?? "agent"})` };
+}
+
+function isAbortError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const name = (error as { name?: unknown }).name;
+	return name === "AbortError" || name === "TimeoutError";
 }
 
 /**
@@ -90,60 +108,74 @@ export function createHostLlmExecutionProvider(opts: {
 					reason: "host-llm provider requires agent-shaped phase (agent + task)",
 				};
 			}
-				const start = (): SubmitResult => {
-					const handle = newId("llmjob");
-					const job: LlmJob = {
-						runId: req.runId,
-						agent: extracted.agent || defaultAgent,
-						task: extracted.task,
-						cwd: req.cwd,
-						status: "running",
-						startedAt: Date.now(),
-					};
-					jobs.set(handle, job);
-
-					// runTask may synchronously create a child process before returning its
-					// Promise. Keep that initiation inside the host-issued synchronous
-					// submission fence so CancelRequested cannot linearize between the
-					// final durable lease check and the LLM side effect.
-					job.promise = (async () => {
-						try {
-							const res = await opts.runTask({
-								cwd: req.cwd,
-								agent: job.agent,
-								task: job.task,
-								runId: req.runId,
-							});
-							if (job.status === "cancelled") return;
-							if (res.ok !== false && (res.exitCode === undefined || res.exitCode === 0)) {
-								job.status = "completed";
-								job.output = res.output ?? "ok";
-							} else {
-								job.status = "failed";
-								job.error = res.error ?? `llm exit ${res.exitCode ?? "nonzero"}`;
-							}
-						} catch (e) {
-							if (job.status === "cancelled") return;
-							job.status = "failed";
-							job.error = e instanceof Error ? e.message : String(e);
-						}
-					})();
-
-					return { kind: "accepted", handle, leaseEpoch: job.startedAt };
+			const start = (): SubmitResult => {
+				const handle = newId("llmjob");
+				const abort = new AbortController();
+				const job: LlmJob = {
+					runId: req.runId,
+					agent: extracted.agent || defaultAgent,
+					task: extracted.task,
+					cwd: req.cwd,
+					status: "running",
+					startedAt: Date.now(),
+					abort,
+					inFlight: true,
 				};
-				return req.submissionFence ? req.submissionFence.execute(start) : start();
-			},
+				jobs.set(handle, job);
+
+				// runTask may synchronously create a child process before returning its
+				// Promise. Keep that initiation inside the host-issued synchronous
+				// submission fence so CancelRequested cannot linearize between the
+				// final durable lease check and the LLM side effect.
+				job.promise = (async () => {
+					try {
+						const res = await opts.runTask({
+							cwd: req.cwd,
+							agent: job.agent,
+							task: job.task,
+							runId: req.runId,
+							signal: abort.signal,
+						});
+						if (job.cancelRequested || abort.signal.aborted) {
+							job.status = "cancelled";
+							return;
+						}
+						if (res.ok !== false && (res.exitCode === undefined || res.exitCode === 0)) {
+							job.status = "completed";
+							job.output = res.output ?? "ok";
+						} else {
+							job.status = "failed";
+							job.error = res.error ?? `llm exit ${res.exitCode ?? "nonzero"}`;
+						}
+					} catch (e) {
+						if (job.cancelRequested || abort.signal.aborted || isAbortError(e)) {
+							job.status = "cancelled";
+							job.error = e instanceof Error ? e.message : String(e);
+							return;
+						}
+						job.status = "failed";
+						job.error = e instanceof Error ? e.message : String(e);
+					} finally {
+						// Authoritative quiescence: only after the host task has returned.
+						job.inFlight = false;
+					}
+				})();
+
+				return { kind: "accepted", handle, leaseEpoch: job.startedAt };
+			};
+			return req.submissionFence ? req.submissionFence.execute(start) : start();
+		},
 
 		async poll(handle): Promise<CollectResult> {
 			const job = jobs.get(handle);
 			if (!job) return { kind: "failed", error: "unknown handle" };
-			if (job.promise && job.status === "running") {
+			if (job.promise && (job.status === "running" || job.inFlight)) {
 				await Promise.race([
 					job.promise,
 					new Promise<void>((r) => setTimeout(r, 5)),
 				]);
 			}
-			if (job.status === "running") return { kind: "still-running" };
+			if (job.inFlight || job.status === "running") return { kind: "still-running" };
 			if (job.status === "completed") return { kind: "completed", output: job.output ?? "ok" };
 			if (job.status === "cancelled") return { kind: "cancelled" };
 			return { kind: "failed", error: job.error ?? "llm failed" };
@@ -156,7 +188,24 @@ export function createHostLlmExecutionProvider(opts: {
 		async cancel(handle) {
 			const job = jobs.get(handle);
 			if (!job) return { kind: "already-terminal" };
-			if (job.status !== "running") return { kind: "already-terminal" };
+			if (!job.inFlight && job.status !== "running") {
+				return { kind: "already-terminal" };
+			}
+			job.cancelRequested = true;
+			job.abort?.abort();
+			// Brief cooperative wait: if runTask honors AbortSignal it settles
+			// quickly. If it ignores the signal, stay in-flight / isLive=true so
+			// ControlHost cannot release capacity on a false cancel claim.
+			if (job.promise) {
+				await Promise.race([
+					job.promise,
+					new Promise<void>((r) => setTimeout(r, 25)),
+				]);
+			}
+			if (job.inFlight) {
+				// Work still executing — fail closed. Do not flip isLive via status.
+				return { kind: "ambiguous" };
+			}
 			job.status = "cancelled";
 			return { kind: "cancelled" };
 		},
@@ -170,7 +219,13 @@ export function createHostLlmExecutionProvider(opts: {
 		},
 
 		isLive(handle) {
-			return jobs.get(handle)?.status === "running";
+			const job = jobs.get(handle);
+			if (!job) {
+				// Unknown handle is not proof of quiescence for capacity release.
+				return true;
+			}
+			// Fail closed: capacity may release only after the host task settles.
+			return job.inFlight || job.status === "running";
 		},
 
 		loadHandle(handle): ProviderJobHandle | null {
@@ -183,7 +238,7 @@ export function createHostLlmExecutionProvider(opts: {
 				leaseEpoch: job.startedAt,
 				cwd: job.cwd,
 				startedAt: job.startedAt,
-				status: job.status,
+				status: job.inFlight ? "running" : job.status,
 				stdout: job.output,
 				error: job.error,
 			};
@@ -191,6 +246,10 @@ export function createHostLlmExecutionProvider(opts: {
 
 		quiesceAll() {
 			for (const j of jobs.values()) {
+				j.cancelRequested = true;
+				j.abort?.abort();
+				// Tests may force quiescence without waiting for host runTask.
+				j.inFlight = false;
 				if (j.status === "running") j.status = "cancelled";
 			}
 		},
