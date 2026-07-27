@@ -2,7 +2,8 @@
 name: risk-reviewer
 description: Engineering risk review for backend, data, and infrastructure changes
 tools: read, grep, find, ls, bash
-model: "{{reasoner}}"
+model: "{{expert}}"
+legacy-model-role: reasoner
 thinking: high
 ---
 

@@ -2,7 +2,8 @@
 name: executor-ui
 description: UI-focused executor for frontend component, layout, and styling changes
 tools: read, grep, find, ls, bash, edit, write
-model: "{{vision}}"
+model: "{{builder}}"
+legacy-model-role: vision
 thinking: high
 ---
 

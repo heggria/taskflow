@@ -165,7 +165,7 @@ OpenCode 没有按运行的 tool-whitelist 标志，但它支持通过 `OPENCODE
 
 OpenCode 模型 id 是 `provider/model`（如 `anthropic/claude-sonnet-4-5`）。因为合法的 OpenCode id 包含斜杠，运行时**不会**复用 codex/claude 的"包含 `/` ⇒ 丢弃"规则。它只丢弃明显不是 OpenCode 模型的 id：
 
-- 未解析的 role 占位符（`{{fast}}`）
+- 未解析的 role 占位符（`{{scout}}`）
 - pi 的 thinking 后缀（`…:xhigh`）
 - 多段 openrouter 路径（`openrouter/vendor/model`，≥ 2 个斜杠）
 

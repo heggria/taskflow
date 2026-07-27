@@ -38,47 +38,31 @@ export interface InitRole {
 
 export const INIT_ROLES: readonly InitRole[] = [
 	{
-		role: "fast",
+		role: "steward",
 		description:
-			"Cheap & quick — high-volume, low-stakes tasks (executor, scout, recover, verifier, doc-writer, test-engineer)",
-		defaultModel: "openrouter/deepseek/deepseek-v4-flash",
-	},
-	{
-		role: "strong",
-		description:
-			"Balanced — planning, review, moderate complexity (planner, reviewer, executor-code)",
-		defaultModel: "openrouter/xiaomi/mimo-v2.5-pro",
-	},
-	{
-		role: "thinker",
-		description:
-			"Deep analysis — requirements, ambiguity detection, critique (analyst, critic)",
-		defaultModel: "openrouter/deepseek/deepseek-v4-pro",
+			"Goal stewardship — long-horizon planning, cross-phase coherence, final synthesis (planner, final-arbiter)",
+		defaultModel: "openrouter/anthropic/claude-fable-5",
 		preferReasoning: true,
-		sort: (a, b) => (a.reasoning === b.reasoning ? 0 : a.reasoning ? -1 : 1),
 	},
 	{
-		role: "arbiter",
+		role: "expert",
 		description:
-			"Final judgment — tiebreak, plan quality gates (plan-arbiter, final-arbiter)",
-		defaultModel: "openrouter/qwen/qwen3.7-max",
+			"Deep specialist judgment — analysis, critique, risk, security, plan gates (analyst, critic, plan-arbiter, risk-reviewer, security-reviewer)",
+		defaultModel: "openrouter/anthropic/claude-opus-5",
 		preferReasoning: true,
-		sort: (a, b) => (a.reasoning === b.reasoning ? 0 : a.reasoning ? -1 : 1),
 	},
 	{
-		role: "vision",
+		role: "builder",
 		description:
-			"Multimodal — UI work, design reading, Figma analysis (executor-ui, visual-explorer)",
-		defaultModel: "minimax/MiniMax-M3",
-		filter: (m) => m.input.includes("image"),
-	},
-	{
-		role: "reasoner",
-		description:
-			"Cautious reasoning — security, risk review, sensitive changes (risk-reviewer, security-reviewer)",
-		defaultModel: "z-ai/glm-5.1",
+			"Versatile default — implementation, UI, review, tests, docs, recovery (executor, executor-code, executor-ui, reviewer, test-engineer, doc-writer, visual-explorer, recover)",
+		defaultModel: "openrouter/anthropic/claude-sonnet-5",
 		preferReasoning: true,
-		sort: (a, b) => (a.reasoning === b.reasoning ? 0 : a.reasoning ? -1 : 1),
+	},
+	{
+		role: "scout",
+		description:
+			"Fast reconnaissance — discovery, extraction, classification, mechanical verification (scout, executor-fast, verifier)",
+		defaultModel: "openrouter/anthropic/claude-haiku-4.5",
 	},
 ];
 

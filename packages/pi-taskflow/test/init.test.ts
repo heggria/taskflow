@@ -140,6 +140,18 @@ test("INIT_ROLES: every role has non-empty description AND non-empty defaultMode
 	}
 });
 
+test("INIT_ROLES: exposes four semantic roles with pinned Claude defaults", () => {
+	assert.deepEqual(
+		INIT_ROLES.map(({ role, defaultModel }) => ({ role, defaultModel })),
+		[
+			{ role: "steward", defaultModel: "openrouter/anthropic/claude-fable-5" },
+			{ role: "expert", defaultModel: "openrouter/anthropic/claude-opus-5" },
+			{ role: "builder", defaultModel: "openrouter/anthropic/claude-sonnet-5" },
+			{ role: "scout", defaultModel: "openrouter/anthropic/claude-haiku-4.5" },
+		],
+	);
+});
+
 // ---------------------------------------------------------------------------
 // RECOMMENDED_DEFAULTS
 // ---------------------------------------------------------------------------
@@ -249,20 +261,16 @@ test("buildRoleOptions: includes separator, Custom, and Back entries", () => {
 	assert.ok(options.includes("Back to action menu"), "Back");
 });
 
-test("buildRoleOptions: vision role filters out text-only models", () => {
-	const visionRole = INIT_ROLES.find((r) => r.role === "vision")!;
-	const options = buildRoleOptions(visionRole, sampleModels, {});
-	// DeepSeek V4 Flash and V4 Pro are text-only, should be filtered
-	assert.ok(!options.some((o) => o.includes("v4-flash")), "text-only v4-flash filtered");
-	assert.ok(!options.some((o) => o.includes("v4-pro")), "text-only v4-pro filtered");
-	// Claude Sonnet and MiniMax M3 should be present
-	assert.ok(options.some((o) => o.includes("claude-sonnet-4-6")), "image model present");
-	assert.ok(options.some((o) => o.includes("MiniMax-M3")), "image model present");
+test("buildRoleOptions: semantic roles do not hard-code modality filters", () => {
+	const builderRole = INIT_ROLES.find((r) => r.role === "builder")!;
+	const options = buildRoleOptions(builderRole, sampleModels, {});
+	assert.ok(options.some((o) => o.includes("v4-flash")), "text-only model remains configurable");
+	assert.ok(options.some((o) => o.includes("claude-sonnet-4-6")), "image model remains configurable");
 });
 
-test("buildRoleOptions: thinker role sorts reasoning=true models first", () => {
-	const thinkerRole = INIT_ROLES.find((r) => r.role === "thinker")!;
-	const options = buildRoleOptions(thinkerRole, sampleModels, {});
+test("buildRoleOptions: expert role sorts reasoning=true models first", () => {
+	const expertRole = INIT_ROLES.find((r) => r.role === "expert")!;
+	const options = buildRoleOptions(expertRole, sampleModels, {});
 	// The first real option (before separator) should be a reasoning model
 	const firstOption = options[0];
 	assert.ok(firstOption.includes("reasoning ✓"), `first option should be reasoning: ${firstOption}`);
@@ -566,11 +574,11 @@ test("formatRolesReport: populated current shows all roles", () => {
 // ---------------------------------------------------------------------------
 
 test("formatDiffReport: shows all diff statuses", () => {
-	const before: Record<string, string> = { fast: "a/b", stale: "x/y" };
-	const after: Record<string, string> = { fast: "a/b", strong: "new/model" };
+	const before: Record<string, string> = { steward: "a/b", stale: "x/y" };
+	const after: Record<string, string> = { steward: "a/b", expert: "new/model" };
 	// Fill other roles with same value
 	for (const r of INIT_ROLES) {
-		if (r.role !== "fast" && r.role !== "strong") {
+		if (r.role !== "steward" && r.role !== "expert") {
 			before[r.role] = r.defaultModel;
 			after[r.role] = r.defaultModel;
 		}
@@ -775,6 +783,7 @@ test("runInteractiveInit: Esc on custom input → falls back to current, not can
 test("runInteractiveInit: 'Use recommended defaults' with stale keys → preserves stale keys", async () => {
 	const current: Record<string, string> = {
 		fast: "openrouter/anthropic/claude-sonnet-4-6",
+		steward: "openrouter/anthropic/claude-opus-4.8",
 		"old-role-1": "openrouter/x/y", // stale (not in INIT_ROLES)
 	};
 	const ui = createMockUI(["Use recommended defaults"]);
@@ -790,8 +799,10 @@ test("runInteractiveInit: 'Use recommended defaults' with stale keys → preserv
 	if (result.kind === "saved") {
 		// Stale key preserved
 		assert.equal(result.chosen["old-role-1"], "openrouter/x/y");
-		// Existing role overridden by recommended default
-		assert.equal(result.chosen.fast, RECOMMENDED_DEFAULTS.fast);
+		// Legacy role keys are retained for custom agents and built-in fallback.
+		assert.equal(result.chosen.fast, "openrouter/anthropic/claude-sonnet-4-6");
+		// Existing current role is overridden by the recommended default.
+		assert.equal(result.chosen.steward, RECOMMENDED_DEFAULTS.steward);
 	}
 });
 

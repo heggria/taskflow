@@ -2,6 +2,21 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.5] — 2026-07-27
+
+### Changed
+
+- **Four responsibility-based model roles.** The built-in agent roster now uses `steward`, `expert`, `builder`, and `scout` instead of coupling workflow responsibilities to six model capability labels. The recommended OpenRouter bindings are Claude Fable 5 for long-horizon goal stewardship, Claude Opus 5 for deep specialist judgment, Claude Sonnet 5 for default implementation and review, and Claude Haiku 4.5 for fast reconnaissance and mechanically checkable work.
+- **Role ownership is separate from expertise and authority.** Planning/final synthesis use `steward`; analysis, critique, plan gates, risk, and security use `expert`; implementation, UI, review, testing, docs, and recovery use `builder`; discovery, trivial execution, and mechanical verification use `scout`. Tool permissions, phase side effects, gates, budgets, and approvals remain runtime/agent concerns rather than model-tier concerns.
+
+### Compatibility
+
+- **Existing 0.2.4 model-role settings remain valid.** The legacy `fast`, `strong`, `thinker`, `arbiter`, `vision`, and `reasoner` keys are preserved. Until a new semantic role is configured, each built-in agent falls back to the exact legacy key it used in 0.2.4; new keys always take precedence. User and project agents that still reference legacy keys continue to resolve them normally.
+
+### Documentation
+
+- Updated generated host skills plus English and Chinese agent/model-role guides for the four-role contract, current defaults, upgrade behavior, and model-neutral rebinding guidance.
+
 ## [0.2.4] — 2026-07-20
 
 ### Added

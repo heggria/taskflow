@@ -2,7 +2,8 @@
 name: executor-code
 description: Full-capability code executor for complex multi-file changes
 tools: read, grep, find, ls, bash, edit, write
-model: "{{strong}}"
+model: "{{builder}}"
+legacy-model-role: strong
 thinking: high
 ---
 

@@ -385,7 +385,8 @@ taskflow { action: "version" }
 
 ## `init` — model roles setup
 
-`action: "init"` manages the `modelRoles` map (`{{fast}}` / `{{strong}}` / …
+`action: "init"` manages the `modelRoles` map (`{{steward}}` /
+`{{expert}}` / `{{builder}}` / `{{scout}}`
 placeholders in agent frontmatter → real model ids):
 
 - `mode: "show"` (default) — read-only report of current roles.
@@ -393,5 +394,5 @@ placeholders in agent frontmatter → real model ids):
   `force: true`** (destructive: overwrites `modelRoles` in settings.json).
 - `mode: "interactive"` — requires a UI session (`/tf init` is the human path).
 
-If phases fail with `Model metadata for {{fast}} not found`, roles are
+If phases fail with `Model metadata for {{scout}} not found`, roles are
 unconfigured — run `/tf init`.

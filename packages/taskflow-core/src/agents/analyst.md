@@ -2,7 +2,8 @@
 name: analyst
 description: Analyze requirements, ambiguity, and hidden constraints
 tools: read, grep, find, ls, bash
-model: "{{thinker}}"
+model: "{{expert}}"
+legacy-model-role: thinker
 thinking: high
 ---
 

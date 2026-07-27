@@ -2,7 +2,8 @@
 name: verifier
 description: Runs validation commands, reproduces failures, and checks logs without editing files
 tools: read, grep, find, ls, bash
-model: "{{fast}}"
+model: "{{scout}}"
+legacy-model-role: fast
 thinking: off
 ---
 

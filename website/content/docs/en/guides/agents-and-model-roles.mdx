@@ -1,6 +1,6 @@
 ---
 title: Agents and Model Roles
-description: How taskflow discovers agents from three layers, maps them to six model roles, and resolves the right agent for each phase.
+description: How taskflow discovers agents from three layers, maps them to four semantic model roles, and resolves the right agent for each phase.
 ---
 
 Every phase in a taskflow runs as a subagent — an isolated LLM process with its own context window, system prompt, and tool set. That isolation is what keeps intermediate transcripts out of your conversation: only the final phase output comes back.
@@ -65,10 +65,10 @@ These agents analyze requirements, create plans, and challenge assumptions befor
 
 | Agent | Role | Thinking | Purpose |
 |---|---|---|---|
-| `analyst` | `{{thinker}}` | high | Analyze requirements, surface ambiguity, identify hidden constraints. Read-only. |
-| `critic` | `{{thinker}}` | xhigh | Challenge plans and conclusions, find contradictions before commitment. Read-only. |
-| `planner` | `{{strong}}` | high | Create concrete implementation plans with file-level detail. Read-only. |
-| `plan-arbiter` | `{{arbiter}}` | high | Review and challenge plans before execution begins. Read-only. |
+| `analyst` | `{{expert}}` | high | Analyze requirements, surface ambiguity, identify hidden constraints. Read-only. |
+| `critic` | `{{expert}}` | xhigh | Challenge plans and conclusions, find contradictions before commitment. Read-only. |
+| `planner` | `{{steward}}` | high | Create concrete implementation plans with file-level detail. Read-only. |
+| `plan-arbiter` | `{{expert}}` | high | Review and challenge plans before execution begins. Read-only. |
 
 The `analyst` runs first in complex pipelines to clarify requirements. The `planner` turns those requirements into actionable plans. The `critic` and `plan-arbiter` act as quality gates — they push back on weak plans before expensive execution begins.
 
@@ -78,10 +78,10 @@ These agents write code. They differ in scope and complexity.
 
 | Agent | Role | Thinking | Purpose |
 |---|---|---|---|
-| `executor` | `{{fast}}` | high | Default executor for 1–4 files with a clear plan. |
-| `executor-fast` | `{{fast}}` | off | Trivial changes: ≤2 files, ≤50 lines, no architecture decisions. |
-| `executor-code` | `{{strong}}` | high | Complex multi-file changes: ≥5 files, cross-module, structural refactors. |
-| `executor-ui` | `{{vision}}` | high | UI/frontend changes: components, styling, layout, responsive design. |
+| `executor` | `{{builder}}` | high | Default executor for 1–4 files with a clear plan. |
+| `executor-fast` | `{{scout}}` | off | Trivial changes: ≤2 files, ≤50 lines, no architecture decisions. |
+| `executor-code` | `{{builder}}` | high | Complex multi-file changes: ≥5 files, cross-module, structural refactors. |
+| `executor-ui` | `{{builder}}` | high | UI/frontend changes: components, styling, layout, responsive design. |
 
 The default `executor` handles most work. Use `executor-fast` for mechanical cleanups, `executor-code` for structural refactors, and `executor-ui` when you need vision capabilities to understand design intent.
 
@@ -91,10 +91,10 @@ These agents review code, assess risk, and verify outcomes. None of them edit fi
 
 | Agent | Role | Thinking | Purpose |
 |---|---|---|---|
-| `reviewer` | `{{strong}}` | high | General code review: quality, architecture, test coverage. |
-| `risk-reviewer` | `{{reasoner}}` | high | Backend/infrastructure risk: data integrity, concurrency, migrations. |
-| `security-reviewer` | `{{reasoner}}` | high | Security vulnerabilities: auth, injection, secrets, trust boundaries. |
-| `final-arbiter` | `{{arbiter}}` | xhigh | Resolve conflicts when multiple reviewers disagree. Tiebreaker. |
+| `reviewer` | `{{builder}}` | high | General code review: quality, architecture, test coverage. |
+| `risk-reviewer` | `{{expert}}` | high | Backend/infrastructure risk: data integrity, concurrency, migrations. |
+| `security-reviewer` | `{{expert}}` | high | Security vulnerabilities: auth, injection, secrets, trust boundaries. |
+| `final-arbiter` | `{{steward}}` | xhigh | Resolve conflicts when multiple reviewers disagree. Tiebreaker. |
 
 The `reviewer` handles general quality. The `risk-reviewer` and `security-reviewer` specialize in high-stakes domains and defer to each other at domain boundaries. The `final-arbiter` breaks ties when reviews conflict.
 
@@ -104,44 +104,46 @@ These agents handle auxiliary tasks: testing, documentation, exploration, and re
 
 | Agent | Role | Thinking | Purpose |
 |---|---|---|---|
-| `test-engineer` | `{{fast}}` | high | Design and implement test strategies, detect flaky patterns. |
-| `verifier` | `{{fast}}` | off | Run validation commands, reproduce failures, check logs. Read-only. |
-| `scout` | `{{fast}}` | off | Fast codebase exploration, return structured findings for other agents. |
-| `doc-writer` | `{{fast}}` | off | Author and edit documentation files (READMEs, guides, changelogs). |
-| `visual-explorer` | `{{vision}}` | high | Analyze Figma designs, extract colors, tokens, and component specs. |
-| `recover` | `{{fast}}` | low | Resume work after context compaction, pick up from handoff files. |
+| `test-engineer` | `{{builder}}` | high | Design and implement test strategies, detect flaky patterns. |
+| `verifier` | `{{scout}}` | off | Run validation commands, reproduce failures, check logs. Read-only. |
+| `scout` | `{{scout}}` | off | Fast codebase exploration, return structured findings for other agents. |
+| `doc-writer` | `{{builder}}` | off | Author and edit documentation files (READMEs, guides, changelogs). |
+| `visual-explorer` | `{{builder}}` | high | Analyze Figma designs, extract colors, tokens, and component specs. |
+| `recover` | `{{builder}}` | low | Resume work after context compaction, pick up from handoff files. |
 
 The `scout` does quick recon so other agents don't have to re-read everything. The `test-engineer` and `verifier` handle validation. The `visual-explorer` parses design files. The `recover` agent picks up work after a context window reset.
 
 ## Model roles
 
-Each built-in agent specifies a model role in its frontmatter — not a concrete model ID, but a role name wrapped in double braces: `{{fast}}`, `{{strong}}`, `{{thinker}}`, `{{arbiter}}`, `{{vision}}`, or `{{reasoner}}`.
+Each built-in agent specifies a model role in its frontmatter — not a concrete model ID, but one of four semantic responsibilities wrapped in double braces: `{{steward}}`, `{{expert}}`, `{{builder}}`, or `{{scout}}`.
 
-This indirection exists because different users have different models available. A role is a semantic contract ("this agent needs fast, cheap inference") that gets resolved to a concrete model based on your configuration.
+This indirection exists because different users have different models available. A role describes the responsibility an agent carries, while the concrete model is a replaceable binding. Model vendors can add or rename tiers without changing your flow definitions.
 
-### The six roles
+### The four roles
 
 | Role | Semantic contract | Default model | Used by |
 |---|---|---|---|
-| `{{fast}}` | Cheap and quick, high-volume low-stakes | `openrouter/deepseek/deepseek-v4-flash` | `executor`, `executor-fast`, `scout`, `verifier`, `doc-writer`, `test-engineer`, `recover` |
-| `{{strong}}` | Balanced capability, moderate complexity | `openrouter/xiaomi/mimo-v2.5-pro` | `planner`, `reviewer`, `executor-code` |
-| `{{thinker}}` | Deep reasoning, high thinking budget | `openrouter/deepseek/deepseek-v4-pro` | `analyst`, `critic` |
-| `{{arbiter}}` | High-stakes judgment, tie-breaking | `openrouter/qwen/qwen3.7-max` | `plan-arbiter`, `final-arbiter` |
-| `{{vision}}` | Multimodal, image understanding | `minimax/MiniMax-M3` | `executor-ui`, `visual-explorer` |
-| `{{reasoner}}` | Cautious reasoning, security-sensitive | `z-ai/glm-5.1` | `risk-reviewer`, `security-reviewer` |
+| `{{steward}}` | Own the goal, long-horizon plan, cross-phase coherence, and final synthesis | `openrouter/anthropic/claude-fable-5` | `planner`, `final-arbiter` |
+| `{{expert}}` | Deep specialist reasoning and high-stakes local judgment | `openrouter/anthropic/claude-opus-5` | `analyst`, `critic`, `plan-arbiter`, `risk-reviewer`, `security-reviewer` |
+| `{{builder}}` | Versatile default for implementation, review, UI, tests, docs, and recovery | `openrouter/anthropic/claude-sonnet-5` | `executor`, `executor-code`, `executor-ui`, `reviewer`, `test-engineer`, `doc-writer`, `visual-explorer`, `recover` |
+| `{{scout}}` | Fast, high-volume reconnaissance and mechanically checkable work | `openrouter/anthropic/claude-haiku-4.5` | `scout`, `executor-fast`, `verifier` |
 
-The defaults work well out of the box. But you might want to swap them — for example, if you have a Claude Pro subscription and want to use `anthropic/claude-3.5-sonnet` for `{{strong}}` instead of the default.
+The defaults form a capability ladder, but the role names are deliberately model-neutral. If a future model is simply a better daily driver, rebind `{{builder}}`; add a new role only when the work carries a genuinely new responsibility.
+
+<Callout type="info">
+  Upgrading from 0.2.4 does not invalidate existing settings. The legacy `fast`, `strong`, `thinker`, `arbiter`, `vision`, and `reasoner` keys are preserved, and built-in agents use their exact former key until you configure the corresponding new role. New role keys always take precedence. Custom agents that still reference a legacy key continue to resolve it normally.
+</Callout>
 
 ### How roles are resolved
 
 When a phase spawns a subagent, the runtime checks the agent's `model` field. If it matches the pattern `{{roleName}}`, the runtime looks up that role in your settings and substitutes the concrete model ID. If no mapping exists, the model field is left empty and the host's default model is used.
 
 ```text
-Agent frontmatter:  model: "{{strong}}"
+Agent frontmatter:  model: "{{builder}}"
                        ↓
-settings.json:      modelRoles: { "strong": "anthropic/claude-3.5-sonnet" }
+settings.json:      modelRoles: { "builder": "openrouter/anthropic/claude-sonnet-5" }
                        ↓
-Subagent spawns with: model: "anthropic/claude-3.5-sonnet"
+Subagent spawns with: model: "openrouter/anthropic/claude-sonnet-5"
 ```
 
 An agent with a literal model ID (no braces) bypasses role resolution entirely. This is useful for custom agents that must always use a specific model.
@@ -151,7 +153,7 @@ An agent with a literal model ID (no braces) bypasses role resolution entirely. 
 The `/tf init` command walks you through role configuration interactively. It reads your current settings, shows you the available models from your provider's registry, and writes your choices back atomically.
 
 <Callout type="tip">
-  Run `/tf init` the first time you install taskflow. The recommended defaults work well for most users, but you may want to swap the `vision` role to a different multimodal model or the `arbiter` role to a stronger reasoning model.
+  Run `/tf init` after installing or upgrading taskflow. Use `scout` for cheap breadth, keep `builder` as the default, and reserve `expert` and `steward` for work whose risk or time horizon justifies them.
 </Callout>
 
 ### The action menu
@@ -159,7 +161,7 @@ The `/tf init` command walks you through role configuration interactively. It re
 When you run `/tf init`, you see an action menu:
 
 1. **Use recommended defaults** — Apply the default models from the table above.
-2. **Configure each role** — Walk through all six roles one by one.
+2. **Configure each role** — Walk through all four roles one by one.
 3. **Edit one role** — Change a single role without touching the others.
 4. **Configure taskflow preferences** — Adjust built-in agent settings.
 5. **Show current roles** — Display your current configuration without changes.
@@ -177,12 +179,10 @@ All configuration is saved to `~/.pi/agent/settings.json` (or the path set by `T
 ```json title="settings.json"
 {
   "modelRoles": {
-    "fast": "openrouter/deepseek/deepseek-v4-flash",
-    "strong": "openrouter/xiaomi/mimo-v2.5-pro",
-    "thinker": "openrouter/deepseek/deepseek-v4-pro",
-    "arbiter": "openrouter/qwen/qwen3.7-max",
-    "vision": "minimax/MiniMax-M3",
-    "reasoner": "z-ai/glm-5.1"
+    "steward": "openrouter/anthropic/claude-fable-5",
+    "expert": "openrouter/anthropic/claude-opus-5",
+    "builder": "openrouter/anthropic/claude-sonnet-5",
+    "scout": "openrouter/anthropic/claude-haiku-4.5"
   },
   "taskflow": {
     "builtInAgents": true,
@@ -221,7 +221,7 @@ Every agent file has three parts: YAML frontmatter between `---` delimiters, a b
 name: code-reviewer
 description: Review code for quality and best practices
 tools: read, grep, find, ls, bash
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 
@@ -243,7 +243,7 @@ Be specific and actionable. Don't just say "this could be better" — explain wh
 | `name` | Yes | Unique identifier, used to reference the agent in flows. Use hyphens. |
 | `description` | Yes | Brief description shown in agent listings and picker UIs. |
 | `tools` | No | Comma-separated tool list: `read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`. Defaults to all tools if omitted. |
-| `model` | No | Model ID or role reference (e.g., `openai/gpt-4o` or `"{{strong}}"`). Falls back to the host's default model. |
+| `model` | No | Model ID or role reference (e.g., `openai/gpt-4o` or `"{{builder}}"`). Falls back to the host's default model. |
 | `thinking` | No | Thinking level: `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`. Falls back to `globalThinking`; unsupported values fail closed. Host mappings differ. |
 
 <Callout type="info">
@@ -259,7 +259,7 @@ To override a built-in agent, create a custom agent with the same name in your u
 name: executor
 description: Custom executor with project-specific conventions
 tools: read, grep, find, ls, bash, edit, write
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 
@@ -341,7 +341,7 @@ These overrides apply only to this phase invocation. The agent's frontmatter set
 
 | Override | Effect |
 |---|---|
-| `model` | Replace the agent's model for this phase. Accepts a role (`"{{strong}}"`) or a literal model ID. |
+| `model` | Replace the agent's model for this phase. Accepts a role (`"{{builder}}"`) or a literal model ID. |
 | `thinking` | Override thinking with a supported value. Codex maps it to `model_reasoning_effort` (`max`/`ultra` → `xhigh`). |
 | `tools` | Requested capability set. Pi uses a whitelist; Codex maps read-only vs mutating sets to sandbox profiles rather than enforcing exact names. |
 
@@ -427,7 +427,7 @@ Create a specialized agent for your domain, then reference it in flows:
 name: api-designer
 description: Design RESTful APIs following OpenAPI 3.0 spec
 tools: read, grep, find, ls, write
-model: "{{strong}}"
+model: "{{builder}}"
 thinking: high
 ---
 

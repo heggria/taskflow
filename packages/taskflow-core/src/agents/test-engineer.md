@@ -2,7 +2,8 @@
 name: test-engineer
 description: Design and implement test strategy for a change
 tools: read, grep, find, ls, bash, edit, write
-model: "{{fast}}"
+model: "{{builder}}"
+legacy-model-role: fast
 thinking: high
 ---
 

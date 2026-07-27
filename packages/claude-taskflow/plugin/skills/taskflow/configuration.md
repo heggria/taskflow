@@ -335,8 +335,10 @@ Taskflow shares the subagent settings file at `~/.pi/agent/settings.json`:
 ```jsonc
 {
   "modelRoles": {
-    "fast": "openrouter/deepseek/deepseek-v4-flash",
-    "strong": "openrouter/xiaomi/mimo-v2.5-pro"
+    "steward": "openrouter/anthropic/claude-fable-5",
+    "expert": "openrouter/anthropic/claude-opus-5",
+    "builder": "openrouter/anthropic/claude-sonnet-5",
+    "scout": "openrouter/anthropic/claude-haiku-4.5"
   },
   "subagents": {
     "globalThinking": "medium"              // fallback thinking for all subagents
@@ -345,7 +347,11 @@ Taskflow shares the subagent settings file at `~/.pi/agent/settings.json`:
 }
 ```
 
-- `modelRoles` — maps `{{role}}` references in agent frontmatter to actual model identifiers.
+- `modelRoles` — maps the semantic `{{steward}}`, `{{expert}}`,
+  `{{builder}}`, and `{{scout}}` responsibilities in agent frontmatter to
+  concrete model identifiers. Legacy role keys from 0.2.4 remain valid for
+  custom agents and as exact built-in fallbacks until the corresponding new
+  role is configured.
 - `subagents.globalThinking` (or top-level `defaultThinkingLevel`) — global
   thinking fallback.
 

@@ -2,7 +2,8 @@
 name: planner
 description: Creates concrete implementation plans, risk analysis, and acceptance criteria without editing files
 tools: read, grep, find, ls
-model: "{{strong}}"
+model: "{{steward}}"
+legacy-model-role: strong
 thinking: high
 ---
 

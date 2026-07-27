@@ -2,7 +2,8 @@
 name: executor
 description: Implement planned code changes
 tools: read, grep, find, ls, bash, edit, write
-model: "{{fast}}"
+model: "{{builder}}"
+legacy-model-role: fast
 thinking: high
 ---
 

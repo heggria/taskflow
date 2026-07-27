@@ -2,7 +2,8 @@
 name: plan-arbiter
 description: Reviews and challenges implementation plans before execution on complex tasks
 tools: read, grep, find, ls
-model: "{{arbiter}}"
+model: "{{expert}}"
+legacy-model-role: arbiter
 thinking: high
 ---
 
