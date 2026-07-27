@@ -43,8 +43,8 @@ full-envelope continuation fixtures; session, CSRF, Host/Origin, static
 delivery, SSE and bounded polling fallback tests; a packaged CLI → daemon →
 WebGateway → real browser path over multiple mounted ControlStores; durable
 cancel, approval recovery and lost-response handling; Receipt/artifact
-rendering; four current-source scoped native Safari read/mutation smokes plus
-five integrity-checked historical Safari records; and 149 hash-bound
+rendering; five current-source scoped native Safari read/mutation/session
+smokes plus five integrity-checked historical Safari records; and 149 hash-bound
 reference renders covering nine screen families, two locales, two themes,
 narrow/zoom conditions, and 36 serious/critical accessibility assessments.
 The reference set remains **draft/unapproved**, and the required
@@ -1456,19 +1456,21 @@ The executable implementation candidate now includes:
   replay, graph-listbox keyboard parity, and sensitive-artifact
   decline/acknowledgement contract. Chromium and native Chrome also report
   zero axe findings on the tested Home and Task surfaces.
-  Native Safari 26.3 has four current-source scoped records bound to
-  `c0454001`, with no production-source drift from `130e1a3f`: packaged
-  Simple/Pro read, graph keyboard and Evidence; approval Allow plus
-  listener-wide revoke-all; approval Reject plus current-session logout; and
-  live cancel. Allow reaches completed 3/3 with honest partial verification,
+  Native Safari 26.3 has five current-source scoped records bound to
+  `c0454001`/`f6dfc801`, with no production-source drift from `130e1a3f`:
+  packaged Simple/Pro read, graph keyboard and Evidence; approval Allow plus
+  listener-wide revoke-all; approval Reject plus current-session logout; live
+  cancel; and normal/private Safari two-cookie-jar listener-wide revocation.
+  Allow reaches completed 3/3 with honest partial verification,
   Reject reaches both choices through native Tab focus and leaves the
   downstream node pending, and Cancel settles both Run and the formerly active
-  node as stopped without inventing a result. All four passing holds verify
+  node as stopped without inventing a result. The current two-session hold
+  proves two independent one-time exchanges with distinct Safari cookie jars,
+  then the actor's all-tabs consequence and the private peer's current-tab
+  consequence after authoritative revocation. All five passing holds verify
   listener close. Five older records remain integrity-checked historical
-  evidence for `aa34369a`; only those older records cover independent
-  HTTP-actor peer invalidation and normal/private Safari two-cookie-jar
-  revocation. Current-source independent peer/two-cookie invalidation, Edge
-  and assistive-technology review remain separate;
+  evidence for `aa34369a`; Edge and assistive-technology review remain
+  separate;
 - a nine-family, 14-state reference manifest with exact source/projection/file
   and catalog hashes plus 149 hash-bound rendered screenshots. The required
   desktop/narrow/zoom, `en`/`zh-CN`, and light/dark matrix is present, and 36
@@ -1489,11 +1491,11 @@ At minimum, conformance work must still add or verify:
   new-client/old-server harness at the final reviewed tip. The latest local
   immutable pair is checked in as evidence, but it does not substitute for
   reviewed-tip verification;
-- current-source native Safari independent peer/two-cookie invalidation,
-  native Edge, assistive-technology and human review of the approval-enhanced
+- native Edge, assistive-technology and human review of the approval-enhanced
   decision path. Current-source Safari read/keyboard, Allow/Reject, cancel,
-  current-session logout and listener-wide revoke-all are scoped local
-  evidence; they do not populate a VoiceOver or independent-review lane. The
+  current-session logout, listener-wide revoke-all and independent
+  peer/two-cookie invalidation are scoped local evidence; they do not populate
+  a VoiceOver or independent-review lane. The
   exact checkpoint
   dispatcher, HTTP approve/reject path, packaged Chromium/Firefox/WebKit
   decision flow, four-prefix startup recovery, settled-work non-replay, and

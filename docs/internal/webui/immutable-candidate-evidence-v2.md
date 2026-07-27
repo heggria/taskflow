@@ -118,9 +118,10 @@ Evidence:
 
 ## Current-source native Safari scoped records
 
-Native Safari 26.3 on macOS 26.3 exercised four scoped paths against
-tracked-clean candidate `c04540019d99984366843536baa2b47771beb8fa`.
-That candidate has no production-source drift from immutable build
+Native Safari 26.3 on macOS 26.3 exercised five scoped paths against
+tracked-clean candidates `c04540019d99984366843536baa2b47771beb8fa` and
+`f6dfc8017b6bc18d7179a5bfec4b5bb42956e268`. Neither candidate has
+production-source drift from immutable build
 `130e1a3f7c0bf991c96d6e0192a2517be43ff827`; every record binds the same
 benchmark source digest, Web manifest and Web build identity listed above.
 
@@ -134,7 +135,7 @@ The read/keyboard path proved:
 - native Arrow Down selection changing both the selected node and inspector;
 - verification, Receipt manifest and artifact actions in Evidence.
 
-The three mutation paths proved:
+The four mutation paths proved:
 
 - keyboard-focused Allow, duplicate-safe pending copy, 3/3 completion,
   partial verification, `published`, and listener-wide revoke-all;
@@ -143,7 +144,12 @@ The three mutation paths proved:
   logout;
 - a live cancellable provider Task, visible in-progress node, Stop activation,
   authoritative cancelled terminal, 0/1 steps, unavailable verification and
-  no invented result.
+  no invented result;
+- two independent one-time exchanges under one listener, using a normal Safari
+  window and an unlocked private Safari window with distinct cookie jars;
+  listener-wide revocation from the normal session ended both sessions, while
+  the actor projected the all-tabs consequence and the private peer projected
+  the current-tab consequence without changing Task state.
 
 Evidence:
 
@@ -154,12 +160,14 @@ Evidence:
 - `docs/internal/webui/native-safari-current-reject-current-session-smoke-v1.json`,
   `68558f9737c4edeb846a5c0323b7d7c3873dca786b1ec80419c81756c439f349`;
 - `docs/internal/webui/native-safari-current-cancel-smoke-v1.json`,
-  `f39bdf0ee777bfc4ab26b7c3af936fb976c335833204ad181566d58310f79fd9`.
+  `f39bdf0ee777bfc4ab26b7c3af936fb976c335833204ad181566d58310f79fd9`;
+- `docs/internal/webui/native-safari-current-two-session-revocation-smoke-v1.json`,
+  `ce3af2f4b9429d4b20ff898dc7f22f3f76bd473d7a43ed580b23d9b4004905ae`.
 
 These are scoped native-browser observations, not a VoiceOver or independent
-reviewer attestation. A current-source two-session hold was reached, but macOS
-auto-locked before either one-time capability was exchanged; the hold was
-released cleanly and no peer-session pass is claimed.
+reviewer attestation. The two-session record is current-source local evidence
+for independent peer/two-cookie invalidation; it is not an assistive-technology
+or human-product-review result.
 
 ## Historical native Safari records
 
@@ -186,8 +194,7 @@ The automated candidate evidence is current. It does not close:
 - product-owner reference approval;
 - five fresh English participant sessions;
 - two native Simplified-Chinese reviews;
-- current-source native Safari independent peer/two-cookie session
-  invalidation and native Edge review;
+- native Edge review;
 - VoiceOver, Narrator, NVDA or forced-colors review;
 - the canonical Mac mini M2 / Node 24 performance run;
 - reviewed-tip evidence and the separate wire-freeze decision.

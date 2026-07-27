@@ -74,6 +74,10 @@ const currentNativeSafariCancelPath = path.join(
 	repositoryRoot,
 	"docs/internal/webui/native-safari-current-cancel-smoke-v1.json",
 );
+const currentNativeSafariTwoSessionRevocationPath = path.join(
+	repositoryRoot,
+	"docs/internal/webui/native-safari-current-two-session-revocation-smoke-v1.json",
+);
 const candidateSourceScopes = [
 	"packages/taskflow-core/src",
 	"packages/taskflow-core/package.json",
@@ -507,11 +511,15 @@ const currentNativeSafariRecords = [
 	{
 		label: "current native Safari read/keyboard record",
 		path: currentNativeSafariReadPath,
+		commit:
+			"c04540019d99984366843536baa2b47771beb8fa",
 		result: "native-current-read-keyboard-smoke-pass",
 	},
 	{
 		label: "current native Safari allow/revoke-all record",
 		path: currentNativeSafariMutationPath,
+		commit:
+			"c04540019d99984366843536baa2b47771beb8fa",
 		result:
 			"native-current-approval-and-revoke-all-smoke-pass",
 	},
@@ -519,13 +527,26 @@ const currentNativeSafariRecords = [
 		label:
 			"current native Safari reject/current-session record",
 		path: currentNativeSafariRejectCurrentPath,
+		commit:
+			"c04540019d99984366843536baa2b47771beb8fa",
 		result:
 			"native-current-reject-and-current-session-smoke-pass",
 	},
 	{
 		label: "current native Safari cancel record",
 		path: currentNativeSafariCancelPath,
+		commit:
+			"c04540019d99984366843536baa2b47771beb8fa",
 		result: "native-current-cancel-run-smoke-pass",
+	},
+	{
+		label:
+			"current native Safari two-session revocation record",
+		path: currentNativeSafariTwoSessionRevocationPath,
+		commit:
+			"f6dfc8017b6bc18d7179a5bfec4b5bb42956e268",
+		result:
+			"native-current-safari-two-cookie-jar-revocation-smoke-pass",
 	},
 ];
 for (const currentRecord of currentNativeSafariRecords) {
@@ -533,8 +554,7 @@ for (const currentRecord of currentNativeSafariRecords) {
 	assertNoLocalPath(bytes, currentRecord.label);
 	assertNativeSafariRecord(JSON.parse(bytes), {
 		label: currentRecord.label,
-		expectedCommit:
-			"c04540019d99984366843536baa2b47771beb8fa",
+		expectedCommit: currentRecord.commit,
 		expectedResult: currentRecord.result,
 		currentCandidateCommit: "HEAD",
 		sourceCoverage: "current",
@@ -765,5 +785,5 @@ for (const file of [
 assertNoLocalPath(ledger, "candidate evidence ledger");
 
 process.stdout.write(
-	`automated Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes; ${currentNativeSafariRecords.length} current-source native Safari scoped records; peer-session records historical-only)\n`,
+	`automated Web candidate evidence valid (${oldBuild.gitCommit.slice(0, 8)} → ${newBuild.gitCommit.slice(0, 8)}; 30 benchmark samples; ${browserMatrix.engines.length} browser lanes; ${currentNativeSafariRecords.length} current-source native Safari scoped records including independent two-cookie revocation)\n`,
 );

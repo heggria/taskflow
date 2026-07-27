@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-07-27T03:01:46Z",
+  "candidate": {
+    "branch": "codex/0.3.0-beta.2",
+    "gitCommit": "f6dfc8017b6bc18d7179a5bfec4b5bb42956e268",
+    "trackedCandidateSourceDirty": false,
+    "webSourceDigest": "sha256:28142aa423b56628a67f9f38d2dbccf7ba985750a1ccca1d0cb4bc9e050a1682",
+    "webManifestSha256": "sha256:154fe609eb6bea194e6b241e1b3f7394ffcecbed7cf70352faf44b9eef08a9e6",
+    "webBuildId": "sha256:853edc81c345c5a06e105110c4f3cb0fabcfc79f0e73912f05fa636b56da624e"
+  },
+  "environment": {
+    "browser": "Safari",
+    "browserVersion": "26.3",
+    "operatingSystem": "macOS 26.3",
+    "operatingSystemBuild": "25D125",
+    "localeObserved": "zh-CN"
+  },
+  "method": {
+    "transport": "packaged CLI -> daemon -> loopback WebGateway -> native Safari",
+    "authority": "fresh isolated ControlStores and two independently authenticated Safari sessions under one listener",
+    "sessionIsolation": "one normal Safari window and one unlocked Safari private window with distinct cookie jars",
+    "interaction": "macOS accessibility tree plus native keyboard and accessibility actions",
+    "launchCapabilities": "two independent one-time capabilities from the same listener; values not retained",
+    "shutdownCheck": "the staged review hold was released after both Safari sessions rendered their revoked states; a fresh post-release fetch then failed with curl exit 7 because the loopback listener was closed"
+  },
+  "assertions": {
+    "normalSafariOneTimeSessionExchangeCompleted": true,
+    "privateSafariOneTimeSessionExchangeCompleted": true,
+    "normalAndPrivateWindowsShowedIndependentAuthenticatedHomeViews": true,
+    "revokeAllQuestionAndTaskPreservationConsequenceWereExposed": true,
+    "revokeAllWasAuthoritativelyApplied": true,
+    "normalSafariRenderedListenerWideSessionEndedState": true,
+    "normalSafariDetailSaidAllListenerTabsLostAccessAndTasksWereUnchanged": true,
+    "privateSafariPeerLostAuthorization": true,
+    "privateSafariRenderedSessionEndedInsteadOfGenericPageFailure": true,
+    "privateSafariDetailSaidCurrentTabLostAccessAndTasksWereUnchanged": true,
+    "bothSignedOutDocumentsUsedTheLocalizedBrowserAccessEndedHeading": true,
+    "bothSignedOutDocumentsSaidToCloseTheTabOrRestartTaskflow": true,
+    "listenerClosedAfterTheReviewHold": true
+  },
+  "excludedClaims": [
+    "VoiceOver speech order, announcements, rotor navigation, or verbosity",
+    "a third independent Safari session or a separate macOS user account",
+    "native Safari console, CSP, performance, or axe automation",
+    "human product, content, comprehension, or accessibility approval"
+  ],
+  "result": "native-current-safari-two-cookie-jar-revocation-smoke-pass"
+}
