@@ -425,20 +425,76 @@ type TerminalObservation =
 	| { kind: "result"; result: CollectResult }
 	| { kind: "error"; reason: string };
 
+/**
+ * Absolute wall-clock cap for a single phase observation. Independent of the
+ * ControlHost reconcile budget (B06 D1). Keep finite and safe.
+ */
+export const DEFAULT_PHASE_DEADLINE_MS = 60_000;
+/** Hard ceiling so a misconfigured phase.timeout cannot hang forever. */
+export const MAX_PHASE_DEADLINE_MS = 3_600_000;
+/**
+ * Idle watchdog: if observations remain still-running without a terminal result
+ * for this long *within* the absolute deadline, keep polling until the absolute
+ * budget expires (does not invent terminal; only paces the loop).
+ */
+export const DEFAULT_PHASE_IDLE_POLL_MS = 15;
+
+/**
+ * Clamp a raw phase budget into the finite safe band.
+ * @param minMs floor (host-injected budgets may be short for hang fixtures; DSL
+ *   phase.timeout policy uses ≥1000 via resolveProgramPhaseDeadlineMs).
+ */
+export function clampPhaseDeadlineMs(
+	raw: number | undefined,
+	fallback = DEFAULT_PHASE_DEADLINE_MS,
+	minMs = 1,
+): number {
+	const floor = Number.isSafeInteger(minMs) && minMs > 0 ? minMs : 1;
+	if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isSafeInteger(raw) || raw < floor) {
+		return Math.min(Math.max(floor, fallback), MAX_PHASE_DEADLINE_MS);
+	}
+	return Math.min(Math.max(raw, floor), MAX_PHASE_DEADLINE_MS);
+}
+
+/**
+ * Derive a host-level phase budget from program policy (max phase.timeout) with
+ * a finite safe default. Never reuse the reconcile deadline.
+ */
+export function resolveProgramPhaseDeadlineMs(program: unknown, fallback = DEFAULT_PHASE_DEADLINE_MS): number {
+	if (!program || typeof program !== "object") return clampPhaseDeadlineMs(fallback);
+	const phases = (program as { phases?: unknown }).phases;
+	if (!Array.isArray(phases)) return clampPhaseDeadlineMs(fallback);
+	let maxTimeout: number | undefined;
+	for (const raw of phases) {
+		if (!raw || typeof raw !== "object") continue;
+		const timeout = (raw as { timeout?: unknown }).timeout;
+		// DSL phase.timeout is validated ≥1000 elsewhere; honor that floor here.
+		if (typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout >= 1_000) {
+			maxTimeout = Math.max(maxTimeout ?? 0, timeout);
+		}
+	}
+	return clampPhaseDeadlineMs(maxTimeout ?? fallback);
+}
+
 async function waitTerminal(
 	provider: ExecutionProvider,
 	handle: string,
 	deadlineMs: number,
+	opts?: { idlePollMs?: number; now?: () => number },
 ): Promise<TerminalObservation> {
-	const deadline = Date.now() + deadlineMs;
+	const now = opts?.now ?? Date.now;
+	const absoluteDeadline = now() + clampPhaseDeadlineMs(deadlineMs);
+	const idlePollMs = opts?.idlePollMs ?? DEFAULT_PHASE_IDLE_POLL_MS;
 	// `collect` is the provider's terminal-observation alias. Prefer it when the
 	// adapter implements it so a remote provider cannot hide a terminal result in
 	// a second, unexamined observation path.
 	const observe = provider.collect?.bind(provider) ?? provider.poll.bind(provider);
 	try {
 		let c = await observe(handle);
-		while (c.kind === "still-running" && Date.now() < deadline) {
-			await new Promise((r) => setTimeout(r, 15));
+		// Absolute watchdog: stop waiting once the phase budget expires.
+		// Idle poll only paces re-observation; it never invents a terminal result.
+		while (c.kind === "still-running" && now() < absoluteDeadline) {
+			await new Promise((r) => setTimeout(r, idlePollMs));
 			c = await observe(handle);
 		}
 		return { kind: "result", result: c };
@@ -519,7 +575,8 @@ export async function schedulePhases(
 
 	const phaseOutputs: Record<string, string> = { ...(opts.continuation?.phaseOutputs ?? {}) };
 	const attempts: PhaseAttempt[] = (opts.continuation?.phaseAttempts ?? []).map(copyAttempt);
-	const phaseDeadlineMs = opts.phaseDeadlineMs ?? 60_000;
+	// Phase budget is independent of ControlHost reconcile deadline (B06 D1).
+	const phaseDeadlineMs = clampPhaseDeadlineMs(opts.phaseDeadlineMs ?? DEFAULT_PHASE_DEADLINE_MS);
 	let previous = "";
 	let lastFailed: string | undefined;
 	let activeAttempt = opts.continuation?.activeAttempt
@@ -794,7 +851,12 @@ export async function schedulePhases(
 			};
 		}
 
-		const observed = await waitTerminal(provider, handle, phaseDeadlineMs);
+		// Per-phase timeout policy wins over the host default when finite/safe.
+		const thisPhaseDeadline = clampPhaseDeadlineMs(
+			typeof phase.timeout === "number" ? phase.timeout : phaseDeadlineMs,
+			phaseDeadlineMs,
+		);
+		const observed = await waitTerminal(provider, handle, thisPhaseDeadline);
 		if (observed.kind === "error") {
 			attempts.push({
 				phaseId: phase.id,

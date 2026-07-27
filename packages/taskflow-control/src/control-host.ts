@@ -52,7 +52,15 @@ import {
 	type ReconcileBudget,
 } from "./reconcile.ts";
 import { isSafeId } from "./validate-ids.ts";
-import { ControlStoreDurabilityError, projectCoordinatorDir } from "./paths.ts";
+import {
+	ControlStoreDurabilityError,
+	projectControlRoot,
+	projectCoordinatorDir,
+	readJsonFileStrict,
+	singletonLockPath,
+	udsPath,
+	writeFileAtomic,
+} from "./paths.ts";
 import type { IdentityOpenPolicy } from "./identity.ts";
 import {
 	createApprovalRequest,
@@ -64,13 +72,17 @@ import {
 } from "./approval.ts";
 import { legacyConflictError, probeLegacyConflict } from "./legacy-conflict.ts";
 import {
+	DEFAULT_PHASE_DEADLINE_MS,
 	lookupDurableDispatchForRecovery,
+	resolveProgramPhaseDeadlineMs,
 	schedulePhases,
 	topoOrderPhases,
 	type PhaseRecord,
 	type ProviderSubmitAuthorization,
 	type SchedulerCheckpoint,
 } from "./phase-scheduler.ts";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 export interface ControlHostOptions {
 	projectRoot: string;
@@ -120,6 +132,12 @@ export interface ControlHostOptions {
 	mutationFence?: <T>(fn: () => T) => T;
 	/** Standalone skips global concurrency claims across projects. */
 	reconcileBudget?: ReconcileBudget;
+	/**
+	 * Per-phase execution budget (ms). Independent of `reconcileBudget` (B06 D1).
+	 * Defaults to a finite safe value (60s) or max phase.timeout from the program.
+	 * Tests may inject a short budget for hang fixtures without shrinking reconcile.
+	 */
+	phaseDeadlineMs?: number;
 	/**
 	 * Project identity policy for ControlStore open (P3).
 	 * Default strict: refuse clone/worktree silent domain share.
@@ -225,10 +243,566 @@ export interface ControlHost {
 			reason?: string;
 		},
 	): { ok: true; commandId: string } | { ok: false; error: ControlError };
+	/**
+	 * Retry/observe durable ProjectStore→Coordinator release outbox entries
+	 * (B06 D2). Pending intents are surfaced rather than silently forgotten.
+	 */
+	reconcileReservationReleases(): ReservationReleaseReconcileReport;
+	/**
+	 * Evidence-bound D37 normalRelease (B06 D5). Binds independent project and
+	 * provider observations; refuses forged/stale ownership and live side effects.
+	 */
+	releaseReservationWithProof(
+		reservationId: string,
+		opts: {
+			runId: string;
+			runIsTerminal?: boolean;
+			runIsParkedAndFutureDispatchRequiresReadmission?: boolean;
+		},
+	): { ok: true } | { ok: false; error: ControlError };
+	/**
+	 * TEST/RECOVERY HOOK: park CAS + durable release intent, then stop before
+	 * Coordinator release so crash/reopen can prove outbox recovery (B06 D2).
+	 */
+	parkForApprovalCrashBeforeRelease(
+		runId: string,
+		opts?: { expectedRunVersion?: number },
+	): Promise<{ releaseIntentId: string; runId: string; reservationId: string }>;
 	close(): void;
 }
 
+/** Host-local durable release outbox record (B06 D2). Not a wire-schema type. */
+export interface ReservationReleaseIntent {
+	releaseIntentId: string;
+	reservationId: string;
+	runId: string;
+	projectId: string;
+	controlDomainId: string;
+	reason: "parked" | "terminal-completed" | "terminal-failed" | "cancelled";
+	expectedRunVersion: number;
+	status: "pending" | "released";
+	createdAt: number;
+	runIsTerminal: boolean;
+	runIsParkedAndFutureDispatchRequiresReadmission: boolean;
+	acknowledgedAt?: number;
+}
+
+/** Result of draining the durable release outbox. */
+export interface ReservationReleaseReconcileReport {
+	releasedIntentIds: string[];
+	pending: Array<{ releaseIntentId: string; runId: string; reservationId: string; reason: string }>;
+}
+
 type MutationFence = <T>(fn: () => T) => T;
+
+/**
+ * PID liveness probe (same fail-closed EPERM-as-live rule as singleton.ts).
+ * Not takeover authorization — only used to refuse unfenced co-admit.
+ */
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/**
+ * Observe the durable user-singleton owner record without acquiring it.
+ *
+ * Distinguishes three cases:
+ * - `absent`: no owner record (clean release / never acquired)
+ * - `present` + `pidAlive`: recorded PID answers kill(0)
+ * - `present` + `!pidAlive`: owner record still occupies the pathname, but the
+ *   recorded PID is not provably live. This is **not** proof that no live
+ *   holder of a registered project remains — a rewrite of the lock PID to a
+ *   dead value while a writer host is still open is the dual-writer counterexample.
+ *
+ * Corrupt/unreadable owners throw — callers decide fail-closed policy.
+ */
+function readUserSingletonOwnerRecord(env: NodeJS.ProcessEnv): {
+	kind: "absent";
+} | {
+	kind: "present";
+	holderId: string;
+	pid: number;
+	fencingEpoch: number;
+	endpoint: string;
+	pidAlive: boolean;
+} {
+	const lockPath = singletonLockPath(env);
+	const expectedEndpoint = udsPath(env);
+	const raw = readJsonFileStrict<unknown>(lockPath);
+	if (raw === null) return { kind: "absent" };
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+		throw new ControlStoreDurabilityError("singleton owner must be a JSON object", lockPath);
+	}
+	const rec = raw as Record<string, unknown>;
+	const holderId = rec.holderId;
+	const pid = rec.pid;
+	const fencingEpoch = rec.fencingEpoch;
+	const endpoint = rec.endpoint;
+	if (
+		typeof holderId !== "string" ||
+		holderId.length === 0 ||
+		typeof pid !== "number" ||
+		!Number.isSafeInteger(pid) ||
+		pid <= 0 ||
+		typeof fencingEpoch !== "number" ||
+		!Number.isSafeInteger(fencingEpoch) ||
+		fencingEpoch < 0 ||
+		typeof endpoint !== "string" ||
+		endpoint.length === 0
+	) {
+		throw new ControlStoreDurabilityError("singleton owner has an invalid fencing record", lockPath);
+	}
+	if (endpoint !== expectedEndpoint) {
+		throw new ControlStoreDurabilityError(
+			"singleton owner references an unexpected UDS endpoint",
+			lockPath,
+		);
+	}
+	return {
+		kind: "present",
+		holderId,
+		pid,
+		fencingEpoch,
+		endpoint,
+		pidAlive: isProcessAlive(pid),
+	};
+}
+
+/**
+ * True only when a process-held writer capability is still authoritative.
+ * Forged plain objects / empty `{}` / deserialized JSON never pass — the
+ * capability must be in the singleton module's private WeakMap.
+ */
+function isAuthorizedMutationCapability(
+	capability: unknown,
+	env: NodeJS.ProcessEnv,
+): capability is SingletonMutationAuthority {
+	if (typeof capability !== "object" || capability === null) return false;
+	try {
+		return isSingletonMutationAuthorityCurrent(
+			capability as SingletonMutationAuthority,
+			env,
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** True when the project root is already claimed in the user multi-mount registry. */
+function isProjectRegisteredUnderUserControl(projectRoot: string, env: NodeJS.ProcessEnv): boolean {
+	const resolved = path.resolve(projectRoot).replace(/\/$/, "");
+	try {
+		const registry = openControlRegistry(env, { readOnly: true });
+		if (registry.getByProjectRoot(resolved)) return true;
+		return registry.list().some(
+			(e) =>
+				path.resolve(e.projectRoot).replace(/\/$/, "") === resolved ||
+				path.resolve(e.directoryBinding.path).replace(/\/$/, "") === resolved,
+		);
+	} catch {
+		// Unreadable registry under a live/corrupt singleton is treated as owned
+		// by the caller (fail closed) when co-admit is attempted.
+		return true;
+	}
+}
+
+/**
+ * Process-local multi-mount mutator claims — same-process dual-writer against a
+ * multi-mount holder cannot race a gap between factory guard and durable hold.
+ * Pure standalone dual-open (CAS fixtures, no multi-mount) is not multi-mount
+ * co-admit and is intentionally out of this set.
+ */
+interface ProcessLocalMutatorClaim {
+	holderId: string;
+	/** True when this host is multi-mount (singleton writer/capability path). */
+	multiMount: boolean;
+}
+
+const processLocalProjectMutators = new Map<string, ProcessLocalMutatorClaim[]>();
+
+function projectKey(projectRoot: string): string {
+	return path.resolve(projectRoot).replace(/\/$/, "");
+}
+
+function processLocalClaims(projectRoot: string): ProcessLocalMutatorClaim[] {
+	const key = projectKey(projectRoot);
+	let list = processLocalProjectMutators.get(key);
+	if (!list) {
+		list = [];
+		processLocalProjectMutators.set(key, list);
+	}
+	return list;
+}
+
+function claimProcessLocalMutator(
+	projectRoot: string,
+	holderId: string,
+	multiMount: boolean,
+): void {
+	processLocalClaims(projectRoot).push({ holderId, multiMount });
+}
+
+function releaseProcessLocalMutator(projectRoot: string, holderId: string): void {
+	const key = projectKey(projectRoot);
+	const list = processLocalProjectMutators.get(key);
+	if (!list) return;
+	const next = list.filter((c) => c.holderId !== holderId);
+	if (next.length === 0) processLocalProjectMutators.delete(key);
+	else processLocalProjectMutators.set(key, next);
+}
+
+function processLocalMultiMountHolder(projectRoot: string): string | null {
+	const multi = processLocalClaims(projectRoot).find((c) => c.multiMount);
+	return multi?.holderId ?? null;
+}
+
+/**
+ * Multi-mount project possession — not a plain rewritable JSON file.
+ *
+ * Possession is bound only where an exclusive lock can be taken **synchronously
+ * before {@link installMultiMountPossession} returns**, without native addons:
+ * 1. An open file descriptor the holder keeps for the host lifetime
+ * 2. Darwin/BSD `O_EXLOCK` at open time (synchronous — the open either holds
+ *    the lock or throws; there is no post-return race)
+ * 3. Device + inode identity of that lease so a replaced path is not mistaken
+ *    for the holder's lease
+ * 4. Kernel-managed liveness: process death releases O_EXLOCK — cannot be
+ *    forged by editing file contents
+ *
+ * **0.3 does not claim Linux multi-mount support.** Platforms without
+ * synchronous exclusive open (including Linux) refuse multi-mount install
+ * fail-closed. A former `flock(1)` child helper was removed: async spawn does
+ * not bind possession before install returns, and child-exit was not monitored
+ * for lock loss — leaving a path that looked like it held a lock while it did
+ * not. Resolution B (P15): no pretence of Linux multi-mount possession.
+ *
+ * A metadata JSON sidecar may exist for operators but is never authoritative.
+ * Pure standalone dual-open fixtures do not take multi-mount possession.
+ *
+ * Residual same-UID non-cooperative bound (documented in P15, same class as
+ * P13): **co-admits** when a hostile same-UID process removes the lease path
+ * **and** the user singleton is absent or dead while the original holder still
+ * has its FD/lock on the orphaned inode — a second mutator can create a new
+ * lease at the same pathname. Lease-only unlink/rename under a **live**
+ * singleton still refuses (secondary singleton+registry guard). Content
+ * rewrite / dead-PID spoofing / multiMount:false edits under a live holder
+ * refuse. Never describe the residual co-admit set as fail-closed.
+ */
+const DARWIN_O_EXLOCK = 0x20;
+
+function projectMutatorLeasePath(projectRoot: string): string {
+	return path.join(projectControlRoot(projectRoot), "mutator-hold.lease");
+}
+
+/** Non-authoritative operator sidecar (never used for co-admit decisions). */
+function projectMutatorMetaPath(projectRoot: string): string {
+	return path.join(projectControlRoot(projectRoot), "mutator-hold.json");
+}
+
+interface MultiMountPossession {
+	holderId: string;
+	leasePath: string;
+	fd: number;
+	dev: number | bigint;
+	ino: number | bigint;
+}
+
+/**
+ * True only on platforms where multi-mount possession can be bound with a
+ * synchronous exclusive open before install returns (Darwin/BSD `O_EXLOCK`).
+ * Linux and other platforms are false — 0.3 does not claim multi-mount there.
+ *
+ * Exported so tests can assert the platform matrix without claiming a live
+ * Linux syscall path on Darwin.
+ */
+export function multiMountPossessionSupportedOnPlatform(
+	platform: NodeJS.Platform | string = process.platform,
+): boolean {
+	return platform === "darwin" || platform === "freebsd" || platform === "openbsd";
+}
+
+function supportsSynchronousPossessionLock(
+	platform: NodeJS.Platform | string = process.platform,
+): boolean {
+	return multiMountPossessionSupportedOnPlatform(platform);
+}
+
+function openExlockFlags(nonblock: boolean): number {
+	// Caller must have verified supportsSynchronousPossessionLock().
+	let flags = fs.constants.O_RDWR | fs.constants.O_CREAT | DARWIN_O_EXLOCK;
+	if (nonblock) flags |= fs.constants.O_NONBLOCK;
+	return flags;
+}
+
+/**
+ * Probe whether a live multi-mount holder still possesses the project.
+ * Returns holder identity when possession is live; null when absent/stale.
+ */
+function probeLiveMultiMountPossession(projectRoot: string): { holderId: string; via: string } | null {
+	const leasePath = projectMutatorLeasePath(projectRoot);
+	if (!fs.existsSync(leasePath)) return null;
+
+	// Darwin/BSD: O_EXLOCK non-blocking open. EAGAIN ⇒ live holder.
+	if (supportsSynchronousPossessionLock()) {
+		try {
+			const fd = fs.openSync(leasePath, openExlockFlags(true), 0o600);
+			try {
+				fs.closeSync(fd);
+			} catch {
+				/* ignore */
+			}
+			// Acquired exclusive lock ⇒ no live holder on this inode.
+			return null;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "EAGAIN" || code === "EWOULDBLOCK" || code === "EACCES") {
+				return { holderId: readLeaseHolderId(leasePath) ?? "lease-locked-holder", via: "open-exlock" };
+			}
+			// Unreadable lease: fail closed (treat as live possession).
+			return { holderId: "unreadable-lease", via: "open-exlock-error" };
+		}
+	}
+
+	// No synchronous exclusive-open primitive (including Linux): a lease path
+	// may be leftover from another host or a hostile create. Fail closed —
+	// treat as live possession. Multi-mount install is refused on this platform
+	// entirely (see installMultiMountPossession); this probe only guards co-admit.
+	return {
+		holderId: readLeaseHolderId(leasePath) ?? "lease-present-holder",
+		via: "lease-exists-no-sync-lock-fail-closed",
+	};
+}
+
+function readLeaseHolderId(leasePath: string): string | null {
+	try {
+		const raw = JSON.parse(fs.readFileSync(leasePath, "utf8")) as { holderId?: unknown };
+		return typeof raw.holderId === "string" && raw.holderId.length > 0 ? raw.holderId : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Install multi-mount possession for the lifetime of this ControlHost.
+ * Keeps an open FD + O_EXLOCK until {@link releaseMultiMountPossession}.
+ *
+ * On platforms without synchronous exclusive open (Linux, …), throws
+ * TF_BOOTSTRAP_FAILED — 0.3 does not install a pretence of multi-mount lock.
+ */
+function installMultiMountPossession(projectRoot: string, holderId: string): MultiMountPossession {
+	if (!supportsSynchronousPossessionLock()) {
+		throw Object.assign(
+			new Error(
+				`TF_BOOTSTRAP_FAILED: multi-mount project possession requires synchronous exclusive open ` +
+					`(Darwin/BSD O_EXLOCK at open time). Platform ${process.platform} cannot bind possession ` +
+					`before install returns; 0.3 does not claim Linux multi-mount support (async flock(1) ` +
+					`helper removed — spawn race and unmonitored lock loss are not possession).`,
+			),
+			{ code: "TF_BOOTSTRAP_FAILED" },
+		);
+	}
+
+	const controlRoot = projectControlRoot(projectRoot);
+	fs.mkdirSync(controlRoot, { recursive: true });
+	const leasePath = projectMutatorLeasePath(projectRoot);
+	const metaPath = projectMutatorMetaPath(projectRoot);
+
+	// Refuse if a live holder already possesses this project.
+	const existing = probeLiveMultiMountPossession(projectRoot);
+	if (existing) {
+		throw Object.assign(
+			new Error(
+				`TF_BOOTSTRAP_FAILED: refuse ControlHost open — multi-mount project possession is held ` +
+					`(holder=${existing.holderId}; via ${existing.via})`,
+			),
+			{ code: "TF_BOOTSTRAP_FAILED" },
+		);
+	}
+
+	// Ensure a durable lease inode exists, then take exclusive possession of it.
+	if (!fs.existsSync(leasePath)) {
+		const createFd = fs.openSync(leasePath, fs.constants.O_RDWR | fs.constants.O_CREAT, 0o600);
+		fs.closeSync(createFd);
+	}
+
+	let fd: number;
+	try {
+		// Synchronous: open with O_EXLOCK either holds the lock or throws.
+		// Possession is bound before this function returns.
+		fd = fs.openSync(leasePath, openExlockFlags(false), 0o600);
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "EAGAIN" || code === "EWOULDBLOCK" || code === "EACCES" || code === "EEXIST") {
+			throw Object.assign(
+				new Error(
+					`TF_BOOTSTRAP_FAILED: refuse ControlHost open — multi-mount project possession lease is held by another live holder (${leasePath})`,
+				),
+				{ code: "TF_BOOTSTRAP_FAILED", cause: error },
+			);
+		}
+		throw error;
+	}
+
+	const st = fs.fstatSync(fd);
+	const record = {
+		v: 1,
+		holderId,
+		pid: process.pid,
+		openedAt: Date.now(),
+		multiMount: true,
+		dev: String(st.dev),
+		ino: String(st.ino),
+	};
+	try {
+		fs.ftruncateSync(fd, 0);
+		fs.writeSync(fd, JSON.stringify(record, null, 2), 0, "utf8");
+		fs.fsyncSync(fd);
+	} catch {
+		// Metadata write failure does not drop possession — FD + lock still held.
+	}
+	// Non-authoritative sidecar for operators (never consulted for co-admit).
+	try {
+		writeFileAtomic(metaPath, JSON.stringify(record, null, 2));
+	} catch {
+		/* ignore */
+	}
+
+	return {
+		holderId,
+		leasePath,
+		fd,
+		dev: st.dev,
+		ino: st.ino,
+	};
+}
+
+function releaseMultiMountPossession(possession: MultiMountPossession | undefined): void {
+	if (!possession) return;
+	try {
+		const st = fs.fstatSync(possession.fd);
+		const sameInode = st.dev === possession.dev && st.ino === possession.ino;
+		try {
+			fs.closeSync(possession.fd);
+		} catch {
+			/* ignore */
+		}
+		if (sameInode) {
+			try {
+				const cur = fs.statSync(possession.leasePath);
+				if (cur.dev === possession.dev && cur.ino === possession.ino) {
+					fs.unlinkSync(possession.leasePath);
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+	} catch {
+		try {
+			fs.closeSync(possession.fd);
+		} catch {
+			/* ignore */
+		}
+	}
+	try {
+		fs.unlinkSync(path.join(path.dirname(possession.leasePath), "mutator-hold.json"));
+	} catch {
+		/* ignore */
+	}
+}
+
+/**
+ * Factory-level single-writer guard (raw createControlHost).
+ *
+ * `controlMode: "standalone"` and `skipSingleton: true` both bypass singleton
+ * acquire. Without a process-held parent `mutationCapability` (taskflowd's
+ * embedded mount), that path would open a second mutator on a project store
+ * already owned by a multi-mount writer — two writers, one ledger.
+ *
+ * Authority binding (not singleton.lock PID liveness / rewritable JSON alone):
+ * - Only a WeakMap-backed process-held capability authorizes co-location.
+ * - Multi-mount **possession** is an open FD + advisory lock + device/inode
+ *   identity. Rewriting singleton.lock or mutator-hold.json cannot clear it.
+ * - After crash (kernel releases lock) or clean close, recovery reopen remains
+ *   legitimate even if the multi-mount registry still lists the project.
+ *
+ * Authoritative at the API: entry routes (MCP/UDS) may fail closed too, but an
+ * in-process caller of the raw factory must not bypass this check.
+ */
+function assertNoUnfencedCoAdmitAgainstLiveWriter(
+	opts: ControlHostOptions,
+	controlMode: string,
+	env: NodeJS.ProcessEnv,
+): void {
+	const bypassesSingletonAcquire = opts.skipSingleton === true || controlMode === "standalone";
+	if (!bypassesSingletonAcquire) return;
+	// Only a process-held, WeakMap-minted writer capability authorizes co-location.
+	// A forged `{}` / any truthy non-capability must not open a second mutator.
+	if (isAuthorizedMutationCapability(opts.mutationCapability, env)) return;
+
+	// Same-process multi-mount holders (including mid-construction before durable hold).
+	const localMulti = processLocalMultiMountHolder(opts.projectRoot);
+	if (localMulti) {
+		throw Object.assign(
+			new Error(
+				`TF_BOOTSTRAP_FAILED: refuse unfenced ControlHost co-admit on project store owned by live multi-mount writer ` +
+					`(holder=${localMulti} process-local multi-mount mutator claim); ` +
+					`route mutations via the current writer / attach / UDS, or stop the writer first. ` +
+					`Raw createControlHost({ controlMode: "standalone", skipSingleton: true }) is not a second ledger writer.`,
+			),
+			{ code: "TF_BOOTSTRAP_FAILED" },
+		);
+	}
+
+	// Cross-process: live multi-mount possession (open FD + advisory lock).
+	const livePossession = probeLiveMultiMountPossession(opts.projectRoot);
+	if (livePossession) {
+		throw Object.assign(
+			new Error(
+				`TF_BOOTSTRAP_FAILED: refuse unfenced ControlHost co-admit on project store owned by live multi-mount writer ` +
+					`(holder=${livePossession.holderId}; multi-mount possession via ${livePossession.via}); ` +
+					`route mutations via the current writer / attach / UDS, or stop the writer first. ` +
+					`Raw createControlHost({ controlMode: "standalone", skipSingleton: true }) is not a second ledger writer.`,
+			),
+			{ code: "TF_BOOTSTRAP_FAILED" },
+		);
+	}
+
+	// Secondary: live user-singleton owner + registry claim (holder not yet
+	// installed project possession, or residual unlink while singleton is live).
+	const registered = isProjectRegisteredUnderUserControl(opts.projectRoot, env);
+	let owner: ReturnType<typeof readUserSingletonOwnerRecord>;
+	try {
+		owner = readUserSingletonOwnerRecord(env);
+	} catch (error) {
+		if (!registered) return;
+		const detail = error instanceof Error ? error.message : String(error);
+		throw Object.assign(
+			new Error(
+				`TF_BOOTSTRAP_FAILED: refuse unfenced ControlHost co-admit on a registered project while the user singleton owner is unreadable (${detail})`,
+			),
+			{ code: "TF_BOOTSTRAP_FAILED", cause: error },
+		);
+	}
+	if (owner.kind === "absent") return;
+	// Dead singleton PID with no live project possession = crash recovery path: allow.
+	if (!owner.pidAlive) return;
+	if (!registered) return;
+
+	throw Object.assign(
+		new Error(
+			`TF_BOOTSTRAP_FAILED: refuse unfenced ControlHost co-admit on project store owned by live multi-mount writer ` +
+				`(holder=${owner.holderId} pid=${owner.pid} epoch=${owner.fencingEpoch}); ` +
+				`route mutations via the current writer / attach / UDS, or stop the writer first. ` +
+				`Raw createControlHost({ controlMode: "standalone", skipSingleton: true }) is not a second ledger writer.`,
+		),
+		{ code: "TF_BOOTSTRAP_FAILED" },
+	);
+}
 
 export function createControlHost(opts: ControlHostOptions): ControlHost {
 	const env = opts.env ?? process.env;
@@ -237,6 +811,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		throw new Error(`invalid controlMode: ${controlMode}`);
 	}
 
+	// Close the dual-writer hole at the factory before any store is opened.
+	assertNoUnfencedCoAdmitAgainstLiveWriter(opts, controlMode, env);
+
 	const holderId = opts.holderId ?? newId("host");
 	let singleton: SingletonResult | undefined;
 	if (!opts.skipSingleton && controlMode !== "standalone") {
@@ -244,6 +821,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 	} else if (controlMode === "auto" && opts.skipSingleton) {
 		// Tests may skip; production auto never silently becomes full standalone
 		// without an explicit controlMode: standalone.
+		// Unfenced skipSingleton co-admit against a live multi-mount owner is
+		// refused above; parent-authorized embedded mounts pass mutationCapability.
 	}
 
 	const role: ControlHostRole =
@@ -252,6 +831,30 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			: singleton?.role === "attach"
 				? "attach"
 				: "writer";
+	// Multi-mount holder: singleton writer, or parent-authorized embedded mount.
+	// Pure standalone / unfenced skipSingleton fixtures are not multi-mount.
+	const multiMountHolder =
+		role === "writer" ||
+		isAuthorizedMutationCapability(opts.mutationCapability, env) ||
+		(role !== "attach" &&
+			role !== "standalone-local" &&
+			opts.skipSingleton !== true &&
+			controlMode !== "standalone");
+	// Project mutator claims: process-local for all non-attach roles; multi-mount
+	// hosts also take kernel possession (open FD + advisory lock + dev/ino).
+	// Rewritable JSON / singleton.lock PID liveness cannot clear possession.
+	let mutatorPossession: MultiMountPossession | undefined;
+	if (role !== "attach") {
+		claimProcessLocalMutator(opts.projectRoot, holderId, multiMountHolder);
+		if (multiMountHolder) {
+			try {
+				mutatorPossession = installMultiMountPossession(opts.projectRoot, holderId);
+			} catch (error) {
+				releaseProcessLocalMutator(opts.projectRoot, holderId);
+				throw error;
+			}
+		}
+	}
 	const singletonMutationCapability =
 		opts.mutationCapability ?? (singleton?.role === "writer" ? singleton.mutationAuthority : undefined);
 	/**
@@ -337,6 +940,34 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 	registerProvider("script", scriptProvider);
 	registerProvider("llm", llmProvider);
 	const reconcileBudget = opts.reconcileBudget ?? DEFAULT_RECONCILE_BUDGET;
+	/**
+	 * Host-level phase budget fallback (B06 D1).
+	 *
+	 * Production (singleton writer / auto / coordinated): always the independent
+	 * finite default (60s) or an explicit `phaseDeadlineMs` / phase.timeout —
+	 * never `DEFAULT_RECONCILE_BUDGET.deadlineMs` (5s).
+	 *
+	 * Explicit non-GA `skipSingleton` hosts (unit hang fixtures) may reuse the
+	 * resolved short reconcile budget only when `phaseDeadlineMs` is omitted.
+	 * That keeps historical C4/live-script fixtures under the script provider's
+	 * 60s hard timeout without coupling production writers to reconcile.
+	 */
+	const hostPhaseDeadlineMs = ((): number => {
+		if (typeof opts.phaseDeadlineMs === "number" && Number.isSafeInteger(opts.phaseDeadlineMs)) {
+			return opts.phaseDeadlineMs;
+		}
+		const resolvedReconcileDeadline = reconcileBudget.deadlineMs;
+		if (
+			opts.skipSingleton === true &&
+			resolvedReconcileDeadline !== undefined &&
+			Number.isSafeInteger(resolvedReconcileDeadline) &&
+			resolvedReconcileDeadline > 0 &&
+			resolvedReconcileDeadline < DEFAULT_PHASE_DEADLINE_MS
+		) {
+			return resolvedReconcileDeadline;
+		}
+		return DEFAULT_PHASE_DEADLINE_MS;
+	})();
 
 	type DurableProviderRouteIdentity = {
 		runId: string;
@@ -900,32 +1531,762 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 	 * Restart must not treat unknown non-terminal provider state as quiescent.
 	 * When isLive is available it is authoritative (supports explicit quiesceAll in tests
 	 * and pid checks in ScriptExecutionProvider).
+	 *
+	 * B06 D3: an unsettled activeAttempt without death proof also blocks quiescence.
 	 */
 	function providerQuiescent(runId: string): boolean {
 		const run = store.getRun(runId);
 		if (!run) return true;
+		// B06 D3: an unsettled activeAttempt (no death proof) blocks quiescence.
+		const settlement = pendingDispatchSettlementEvidence(run);
+		if (!settlement.settled) return false;
 		if (isTerminalRunStatus(run.status) && !run.needsOperator) return true;
 
 		const route = resolveDurableProviderRoute(run);
-		if (!route.ok) return false;
-		const { provider, identity } = route;
-
-		try {
-			// A provider-local `isLive` answer is useful only after a durable handle
-			// record proves that this provider owns this exact run/phase attempt.
-			// No loadHandle means no restart-safe containment proof.
-			if (providerHandleRecordFailure(provider, identity)) return false;
-			if (typeof provider.isLive === "function") return !provider.isLive(identity.handle);
-			const record = provider.loadHandle?.(identity.handle);
-			return (
-				record?.status === "completed" || record?.status === "failed" || record?.status === "cancelled"
-			);
-		} catch {
-			// A provider observation can fail after an external cancel boundary. It
-			// must make quiescence unproven, never reject the command before it can
-			// be journaled as ambiguous and reconciled.
-			return false;
+		if (route.ok) {
+			const { provider, identity } = route;
+			try {
+				// A provider-local `isLive` answer is useful only after a durable handle
+				// record proves that this provider owns this exact run/phase attempt.
+				// No loadHandle means no restart-safe containment proof.
+				if (providerHandleRecordFailure(provider, identity)) return false;
+				if (typeof provider.isLive === "function") return !provider.isLive(identity.handle);
+				const record = provider.loadHandle?.(identity.handle);
+				return (
+					record?.status === "completed" ||
+					record?.status === "failed" ||
+					record?.status === "cancelled"
+				);
+			} catch {
+				// A provider observation can fail after an external cancel boundary. It
+				// must make quiescence unproven, never reject the command before it can
+				// be journaled as ambiguous and reconciled.
+				return false;
+			}
 		}
+
+		// No activeAttempt route (settled dispatch or pre-submit): if a last-known
+		// handle remains on the Run, prove it dead under the durable provider name.
+		if (run.providerHandle && run.providerName) {
+			const provider = providersByName.get(run.providerName);
+			if (!provider) return false;
+			try {
+				if (typeof provider.isLive === "function") return !provider.isLive(run.providerHandle);
+				const record = provider.loadHandle?.(run.providerHandle);
+				return (
+					record?.status === "completed" ||
+					record?.status === "failed" ||
+					record?.status === "cancelled"
+				);
+			} catch {
+				return false;
+			}
+		}
+		// No handle-bearing work left to observe.
+		return true;
+	}
+
+	// ---------------------------------------------------------------------------
+	// B06 D3 — pending dispatch settlement evidence
+	// ---------------------------------------------------------------------------
+
+	/**
+	 * Evidence that settles a durable activeAttempt (this base's pending dispatch):
+	 * 1. activeAttempt carries a non-empty providerHandle
+	 * 2. a mounted provider with matching name owns that exact run:phase handle
+	 * 3. isLive(handle) === false (or loadHandle status is terminal and not running)
+	 *
+	 * Absent any of those, settlement is refused (fail-closed).
+	 */
+	function pendingDispatchSettlementEvidence(run: RunProjection): {
+		settled: boolean;
+		blocksQuiescence: boolean;
+		reason: string;
+		handle?: string;
+		providerName?: string;
+		attemptId?: string;
+	} {
+		let continuation: RunContinuation | null;
+		try {
+			continuation = store.getContinuation(run.runId);
+		} catch (error) {
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: `cannot read continuation: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+		const active = continuation?.activeAttempt;
+		if (!active) {
+			return { settled: true, blocksQuiescence: false, reason: "no activeAttempt" };
+		}
+		const handle =
+			(typeof active.providerHandle === "string" && active.providerHandle.length > 0
+				? active.providerHandle
+				: undefined) ??
+			(typeof run.providerHandle === "string" && run.providerHandle.length > 0
+				? run.providerHandle
+				: undefined);
+		if (!handle) {
+			// prepared/intent-recorded without a handle: never settle, always blocks.
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: `activeAttempt ${active.state} has no provider handle; cannot settle without side-effect proof`,
+				providerName: active.providerName,
+				attemptId: active.attemptId,
+			};
+		}
+		const provider = providersByName.get(active.providerName);
+		if (!provider) {
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: `no mounted provider for ${active.providerName}`,
+				handle,
+				providerName: active.providerName,
+				attemptId: active.attemptId,
+			};
+		}
+		const identity: DurableProviderRouteIdentity = {
+			runId: run.runId,
+			providerName: active.providerName,
+			handle,
+			continuationId: continuation!.continuationId,
+			continuationVersion: continuation!.version,
+			attemptId: active.attemptId,
+			phaseId: active.phaseId,
+		};
+		const ownershipFailure = providerHandleRecordFailure(provider, identity);
+		if (ownershipFailure) {
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: ownershipFailure,
+				handle,
+				providerName: active.providerName,
+				attemptId: active.attemptId,
+			};
+		}
+		try {
+			if (typeof provider.isLive === "function") {
+				if (provider.isLive(handle)) {
+					return {
+						settled: false,
+						blocksQuiescence: true,
+						reason: "provider reports handle still live",
+						handle,
+						providerName: active.providerName,
+						attemptId: active.attemptId,
+					};
+				}
+				return {
+					settled: true,
+					blocksQuiescence: false,
+					reason: "provider isLive=false with ownership proof",
+					handle,
+					providerName: active.providerName,
+					attemptId: active.attemptId,
+				};
+			}
+			const record = provider.loadHandle?.(handle);
+			if (!record || record.status === "running") {
+				return {
+					settled: false,
+					blocksQuiescence: true,
+					reason: "loadHandle missing or still running",
+					handle,
+					providerName: active.providerName,
+					attemptId: active.attemptId,
+				};
+			}
+			if (
+				record.status === "completed" ||
+				record.status === "failed" ||
+				record.status === "cancelled"
+			) {
+				return {
+					settled: true,
+					blocksQuiescence: false,
+					reason: `loadHandle terminal status ${record.status}`,
+					handle,
+					providerName: active.providerName,
+					attemptId: active.attemptId,
+				};
+			}
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: `loadHandle status ${record.status} is not terminal proof`,
+				handle,
+				providerName: active.providerName,
+				attemptId: active.attemptId,
+			};
+		} catch (error) {
+			return {
+				settled: false,
+				blocksQuiescence: true,
+				reason: `provider observation threw: ${error instanceof Error ? error.message : String(error)}`,
+				handle,
+				providerName: active.providerName,
+				attemptId: active.attemptId,
+			};
+		}
+	}
+
+	/**
+	 * Clear activeAttempt when settlement evidence holds. Fail-closed: no-op when
+	 * evidence is absent. Returns the latest run projection.
+	 */
+	function settlePendingDispatchIfProven(runId: string, commandId?: string): RunProjection | null {
+		const run = store.getRun(runId);
+		if (!run) return null;
+		const evidence = pendingDispatchSettlementEvidence(run);
+		if (!evidence.settled) return run;
+		const continuation = store.getContinuation(runId);
+		if (!continuation?.activeAttempt) return run;
+		try {
+			const cas = store.compareAndCommit({
+				runId,
+				expectedRunVersion: run.runVersion,
+				validate: (current) => {
+					const cont = store.getContinuation(runId);
+					if (!cont?.activeAttempt) return null;
+					const again = pendingDispatchSettlementEvidence(current);
+					return again.settled ? null : again.reason;
+				},
+				build: (current) => {
+					const cont = store.getContinuation(runId);
+					if (!cont?.activeAttempt) {
+						return { run: current, events: [] };
+					}
+					const now = Date.now();
+					const {
+						activeAttempt: _cleared,
+						...rest
+					} = cont;
+					const nextContinuation: RunContinuation = {
+						...rest,
+						updatedAt: now,
+						version: cont.version + 1,
+					};
+					const next: RunProjection = {
+						...current,
+						updatedAt: now,
+						runVersion: current.runVersion + 1,
+					};
+					return {
+						run: next,
+						events: [
+							makeEvent(
+								runId,
+								{ type: "ContinuationStored", continuation: nextContinuation },
+								commandId,
+							),
+							makeEvent(
+								runId,
+								{
+									type: "Generic",
+									kind: "PendingDispatchSettled",
+									data: {
+										attemptId: evidence.attemptId,
+										handle: evidence.handle,
+										providerName: evidence.providerName,
+										reason: evidence.reason,
+									},
+								},
+								commandId,
+							),
+						],
+					};
+				},
+			});
+			return cas.ok ? cas.run : cas.run ?? run;
+		} catch {
+			return run;
+		}
+	}
+
+	// ---------------------------------------------------------------------------
+	// B06 D2 — durable reservation release outbox (host-local files + Generic events)
+	// ---------------------------------------------------------------------------
+
+	function releaseOutboxDir(): string {
+		return path.join(projectControlRoot(opts.projectRoot), "release-outbox");
+	}
+
+	function releaseOutboxPath(releaseIntentId: string): string {
+		return path.join(releaseOutboxDir(), `${releaseIntentId}.json`);
+	}
+
+	function readReleaseIntent(releaseIntentId: string): ReservationReleaseIntent | null {
+		const file = releaseOutboxPath(releaseIntentId);
+		if (!fs.existsSync(file)) return null;
+		try {
+			const raw = JSON.parse(fs.readFileSync(file, "utf8")) as ReservationReleaseIntent;
+			if (!raw || typeof raw !== "object" || typeof raw.releaseIntentId !== "string") return null;
+			return raw;
+		} catch {
+			return null;
+		}
+	}
+
+	function writeReleaseIntent(intent: ReservationReleaseIntent): void {
+		fs.mkdirSync(releaseOutboxDir(), { recursive: true });
+		writeFileAtomic(releaseOutboxPath(intent.releaseIntentId), JSON.stringify(intent, null, 2));
+	}
+
+	function listReleaseIntents(): ReservationReleaseIntent[] {
+		const dir = releaseOutboxDir();
+		if (!fs.existsSync(dir)) return [];
+		const out: ReservationReleaseIntent[] = [];
+		for (const name of fs.readdirSync(dir)) {
+			if (!name.endsWith(".json")) continue;
+			const intent = readReleaseIntent(name.replace(/\.json$/, ""));
+			if (intent) out.push(intent);
+		}
+		return out;
+	}
+
+	/**
+	 * Journal a pending release intent *before* Coordinator.normalRelease.
+	 * Crash between this write and release is recoverable via open-time reconcile.
+	 */
+	function journalPendingReleaseIntent(input: {
+		reservationId: string;
+		runId: string;
+		reason: ReservationReleaseIntent["reason"];
+		expectedRunVersion: number;
+		runIsTerminal: boolean;
+		runIsParkedAndFutureDispatchRequiresReadmission: boolean;
+		commandId?: string;
+	}): ReservationReleaseIntent {
+		const now = Date.now();
+		const intent: ReservationReleaseIntent = {
+			releaseIntentId: newId("rel"),
+			reservationId: input.reservationId,
+			runId: input.runId,
+			projectId: store.header.projectId,
+			controlDomainId: store.header.controlDomainId,
+			reason: input.reason,
+			expectedRunVersion: input.expectedRunVersion,
+			status: "pending",
+			createdAt: now,
+			runIsTerminal: input.runIsTerminal,
+			runIsParkedAndFutureDispatchRequiresReadmission:
+				input.runIsParkedAndFutureDispatchRequiresReadmission,
+		};
+		// Outbox file is the recovery authority. Do not CAS-bump runVersion for
+		// audit: extra version noise breaks cancel/approval optimistic concurrency.
+		writeReleaseIntent(intent);
+		void input.commandId;
+		return intent;
+	}
+
+	function acknowledgeReleaseIntent(intent: ReservationReleaseIntent, _commandId?: string): void {
+		const next: ReservationReleaseIntent = {
+			...intent,
+			status: "released",
+			acknowledgedAt: Date.now(),
+		};
+		// File-only acknowledgement — never bump Run.runVersion here.
+		writeReleaseIntent(next);
+	}
+
+	/**
+	 * B06 D5: bind D37 release to independent project + provider evidence.
+	 * Never echo getReservation fields as a tautological ownership proof, and
+	 * never hardcode noLiveOrAmbiguousSideEffects: true without observing it.
+	 */
+	function releaseReservationWithProof(
+		reservationId: string,
+		proofOpts: {
+			runId: string;
+			runIsTerminal?: boolean;
+			runIsParkedAndFutureDispatchRequiresReadmission?: boolean;
+		},
+	): { ok: true } | { ok: false; error: ControlError } {
+		const run = store.getRun(proofOpts.runId);
+		if (!run) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_NOT_FOUND",
+					message: `run ${proofOpts.runId} not found for release proof`,
+					recoveryAction: "none",
+					sideEffects: "none",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+		// Observe quiescence before settling (settlement clears activeAttempt which
+		// the durable route identity uses). Settlement runs after a successful release.
+		const latest = run;
+
+		let reservation: ReturnType<UserCoordinatorStore["getReservation"]>;
+		try {
+			reservation = coordinator.getReservation(reservationId);
+		} catch (error) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_DURABILITY_FAILED",
+					message: `cannot read reservation for release proof: ${error instanceof Error ? error.message : String(error)}`,
+					recoveryAction: "operator",
+					sideEffects: "unknown",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+		if (!reservation) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_NOT_FOUND",
+					message: `reservation ${reservationId} is absent`,
+					recoveryAction: "none",
+					sideEffects: "none",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+		// Independent binding: reservation fields must match THIS store + run,
+		// not a caller-supplied echo of a foreign/stale getReservation snapshot.
+		if (
+			reservation.projectId !== store.header.projectId ||
+			reservation.projectControlDomainId !== store.header.controlDomainId ||
+			reservation.runId !== proofOpts.runId
+		) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_POLICY_DENIED",
+					message:
+						`reservation ${reservationId} binding does not match independent project/run ownership ` +
+						`(reservation.runId=${reservation.runId ?? "∅"}, expected ${proofOpts.runId}; ` +
+						`project ${reservation.projectId ?? "∅"}/${reservation.projectControlDomainId ?? "∅"} ` +
+						`vs ${store.header.projectId}/${store.header.controlDomainId})`,
+					recoveryAction: "none",
+					sideEffects: "none",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+
+		// Independent provider evidence — never hardcode true.
+		const noLiveOrAmbiguousSideEffects = providerQuiescent(proofOpts.runId);
+
+		// Terminal/parked flags must match independent projection evidence.
+		// Capacity must never free under parked-readmit unless stage is actually
+		// parked (reconciling / unknown / executing must not pass via caller flag
+		// + quiescence alone — D37 effectiveParked).
+		const effectiveTerminal =
+			proofOpts.runIsTerminal === true &&
+			(isTerminalRunStatus(latest.status) || latest.stage === "terminal");
+		const effectiveParked =
+			proofOpts.runIsParkedAndFutureDispatchRequiresReadmission === true &&
+			latest.stage === "parked";
+
+		const ctx = {
+			noLiveOrAmbiguousSideEffects,
+			runIsTerminal: effectiveTerminal,
+			runIsParkedAndFutureDispatchRequiresReadmission: effectiveParked,
+		};
+		if (!canNormalRelease(ctx)) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_PROVIDER_AMBIGUOUS",
+					message:
+						`D37 normalRelease refused: noLiveOrAmbiguousSideEffects=${noLiveOrAmbiguousSideEffects}, ` +
+						`runIsTerminal=${ctx.runIsTerminal}, parkedReadmit=${ctx.runIsParkedAndFutureDispatchRequiresReadmission}`,
+					recoveryAction: "reconcile",
+					sideEffects: "possible",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+		if (reservation.state === "released") {
+			return { ok: true };
+		}
+		try {
+			coordinator.normalRelease(reservationId, ctx);
+			// Do not settle activeAttempt here: a post-release CAS would bump
+			// runVersion and break approval/cancel optimistic concurrency that
+			// just observed the park/terminal version. Settlement belongs to the
+			// cancel/reconcilePendingDispatch paths that own that cursor.
+			return { ok: true };
+		} catch (error) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_COMMAND_FAILED",
+					message: error instanceof Error ? error.message : String(error),
+					recoveryAction: "reconcile",
+					sideEffects: "unknown",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+			};
+		}
+	}
+
+	/**
+	 * Apply one pending release intent with independent evidence. Used by open-time
+	 * reconcile and post-CAS failure recovery.
+	 */
+	function applyReleaseIntent(intent: ReservationReleaseIntent): { ok: true } | { ok: false; reason: string } {
+		if (intent.status === "released") return { ok: true };
+		if (
+			intent.projectId !== store.header.projectId ||
+			intent.controlDomainId !== store.header.controlDomainId
+		) {
+			return { ok: false, reason: "release intent project/domain does not match this store" };
+		}
+		const result = releaseReservationWithProof(intent.reservationId, {
+			runId: intent.runId,
+			runIsTerminal: intent.runIsTerminal,
+			runIsParkedAndFutureDispatchRequiresReadmission:
+				intent.runIsParkedAndFutureDispatchRequiresReadmission,
+		});
+		if (result.ok) {
+			acknowledgeReleaseIntent(intent);
+			return { ok: true };
+		}
+		// Already released under a prior crash window after Coordinator write.
+		const current = coordinator.getReservation(intent.reservationId);
+		if (current?.state === "released") {
+			acknowledgeReleaseIntent(intent);
+			return { ok: true };
+		}
+		// Crash recovery for parked releases: the park CAS already required provider
+		// quiescence before the intent was journaled. After restart, re-check with
+		// independent evidence only. An unmounted / absent provider is absence of
+		// evidence — never soft-hardcode free capacity (B06 D5 MAJOR).
+		if (
+			intent.reason === "parked" &&
+			intent.runIsParkedAndFutureDispatchRequiresReadmission &&
+			current &&
+			(current.state === "committed" || current.state === "orphan-suspect") &&
+			current.projectId === store.header.projectId &&
+			current.projectControlDomainId === store.header.controlDomainId &&
+			current.runId === intent.runId
+		) {
+			const run = store.getRun(intent.runId);
+			// Capacity free only when the Run is actually parked (not reconciling/unknown).
+			if (run && run.stage === "parked" && run.reservationId === undefined) {
+				let live = false;
+				try {
+					live = !providerQuiescent(intent.runId);
+				} catch {
+					live = true;
+				}
+				if (live && run.providerHandle && run.providerName) {
+					const provider = providersByName.get(run.providerName);
+					if (!provider) {
+						// Absence of the durable provider is not proof of quiescence.
+						return {
+							ok: false,
+							reason:
+								`provider ${run.providerName} is not mounted; cannot prove no live side effects ` +
+								`for parked release (reconcile required)`,
+						};
+					}
+					if (typeof provider.isLive === "function") {
+						try {
+							live = provider.isLive(run.providerHandle);
+						} catch {
+							live = true;
+						}
+					} else {
+						// No isLive primitive: cannot prove quiescence.
+						return {
+							ok: false,
+							reason:
+								`provider ${run.providerName} exposes no isLive probe; cannot prove no live side effects ` +
+								`for parked release (reconcile required)`,
+						};
+					}
+				} else if (live && !run.providerHandle) {
+					// Missing handle is not free-capacity evidence when quiescence is unproven.
+					return {
+						ok: false,
+						reason:
+							"parked release lacks provider handle proof; cannot free capacity without independent quiescence evidence (reconcile required)",
+					};
+				}
+				// Derived from the live-evidence observation above — not a bare true.
+				const noLiveOrAmbiguousSideEffects = !live;
+				if (noLiveOrAmbiguousSideEffects) {
+					try {
+						coordinator.normalRelease(intent.reservationId, {
+							noLiveOrAmbiguousSideEffects,
+							runIsTerminal: false,
+							runIsParkedAndFutureDispatchRequiresReadmission: run.stage === "parked",
+						});
+						acknowledgeReleaseIntent(intent);
+						return { ok: true };
+					} catch (error) {
+						return {
+							ok: false,
+							reason: error instanceof Error ? error.message : String(error),
+						};
+					}
+				}
+				return {
+					ok: false,
+					reason:
+						"parked release refused: live or ambiguous provider side effects still observed (reconcile required)",
+				};
+			}
+		}
+		return { ok: false, reason: result.error.message };
+	}
+
+	/**
+	 * Reconstruct parked-release intents when the CAS-style park detaches
+	 * reservationId but the durable outbox intent is missing (crash between
+	 * journal and detach was reordered, or the intent file was wiped). Without
+	 * this, capacity stays orphan-suspect with an empty reconcile list.
+	 */
+	function reconstructMissingParkReleaseIntents(): void {
+		let runs: RunProjection[];
+		try {
+			runs = store.listRuns();
+		} catch {
+			return;
+		}
+		const pendingByRun = new Set(
+			listReleaseIntents()
+				.filter((i) => i.status === "pending")
+				.map((i) => i.runId),
+		);
+		for (const run of runs) {
+			if (run.stage !== "parked") continue;
+			if (run.reservationId !== undefined) continue;
+			if (pendingByRun.has(run.runId)) continue;
+			let reservations: ReturnType<UserCoordinatorStore["listReservations"]>;
+			try {
+				reservations = coordinator.listReservations();
+			} catch {
+				return;
+			}
+			for (const res of reservations) {
+				if (res.state !== "committed" && res.state !== "orphan-suspect") continue;
+				if (res.runId !== run.runId) continue;
+				if (res.projectId !== store.header.projectId) continue;
+				if (res.projectControlDomainId !== store.header.controlDomainId) continue;
+				journalPendingReleaseIntent({
+					reservationId: res.reservationId,
+					runId: run.runId,
+					reason: "parked",
+					expectedRunVersion: run.runVersion,
+					runIsTerminal: false,
+					runIsParkedAndFutureDispatchRequiresReadmission: true,
+				});
+				pendingByRun.add(run.runId);
+				break;
+			}
+		}
+	}
+
+	function reconcileReservationReleases(): ReservationReleaseReconcileReport {
+		// Rebuild outbox rows for parked runs whose capacity is still held but
+		// whose durable intent was lost (wipe / pre-journal crash window).
+		reconstructMissingParkReleaseIntents();
+		const releasedIntentIds: string[] = [];
+		const pending: ReservationReleaseReconcileReport["pending"] = [];
+		for (const intent of listReleaseIntents()) {
+			if (intent.status === "released") continue;
+			// Also attempt settlement so capacity release is not blocked by a dead dispatch.
+			settlePendingDispatchIfProven(intent.runId);
+			const applied = applyReleaseIntent(intent);
+			if (applied.ok) {
+				releasedIntentIds.push(intent.releaseIntentId);
+			} else {
+				pending.push({
+					releaseIntentId: intent.releaseIntentId,
+					runId: intent.runId,
+					reservationId: intent.reservationId,
+					reason: applied.reason,
+				});
+				// Surface needs-operator on the run when a release remains pending.
+				try {
+					const run = store.getRun(intent.runId);
+					if (run && !run.needsOperator) {
+						store.compareAndCommit({
+							runId: intent.runId,
+							expectedRunVersion: run.runVersion,
+							validate: () => null,
+							build: (current) => {
+								const now = Date.now();
+								const next: RunProjection = {
+									...current,
+									needsOperator: true,
+									error: `pending reservation release intent ${intent.releaseIntentId}: ${applied.reason}`,
+									updatedAt: now,
+									runVersion: current.runVersion + 1,
+								};
+								return {
+									run: next,
+									events: [
+										makeEvent(intent.runId, {
+											type: "NeedsOperator",
+											runId: intent.runId,
+											code: "TF_RECONCILE_REQUIRED",
+										}),
+									],
+								};
+							},
+						});
+					}
+				} catch {
+					/* keep pending entry */
+				}
+			}
+		}
+		return { releasedIntentIds, pending };
+	}
+
+	/**
+	 * Journal intent then release with proof. On failure return reconcile-required
+	 * without claiming success (B06 D2).
+	 */
+	function durableNormalRelease(input: {
+		reservationId: string;
+		runId: string;
+		reason: ReservationReleaseIntent["reason"];
+		expectedRunVersion: number;
+		runIsTerminal: boolean;
+		runIsParkedAndFutureDispatchRequiresReadmission: boolean;
+		commandId?: string;
+	}): { ok: true; intent: ReservationReleaseIntent } | { ok: false; intent: ReservationReleaseIntent; error: ControlError } {
+		const intent = journalPendingReleaseIntent(input);
+		const released = releaseReservationWithProof(input.reservationId, {
+			runId: input.runId,
+			runIsTerminal: input.runIsTerminal,
+			runIsParkedAndFutureDispatchRequiresReadmission:
+				input.runIsParkedAndFutureDispatchRequiresReadmission,
+		});
+		if (!released.ok) {
+			return {
+				ok: false,
+				intent,
+				error: {
+					...released.error,
+					code: "TF_RECONCILE_REQUIRED",
+					recoveryAction: "reconcile",
+					message: `reservation release failed after durable intent ${intent.releaseIntentId}: ${released.error.message}`,
+				},
+			};
+		}
+		acknowledgeReleaseIntent(intent, input.commandId);
+		return { ok: true, intent };
 	}
 
 	function casError(
@@ -1830,7 +3191,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			runId,
 			admissionId: run.admissionId,
 			cwd: opts.projectRoot,
-			phaseDeadlineMs: reconcileBudget.deadlineMs ?? 60_000,
+			// B06 D1: phase budget is independent of the reconcile deadline.
+			phaseDeadlineMs: resolveProgramPhaseDeadlineMs(boundPlan.program, hostPhaseDeadlineMs),
 			continuation,
 			onDispatchIntent: (attempt) => {
 				const checkpoint: SchedulerCheckpoint = {
@@ -1940,14 +3302,22 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				],
 			});
 			run = parked.run;
-			try {
-				coordinator.normalRelease(reservation.reservationId, {
-					noLiveOrAmbiguousSideEffects: true,
-					runIsTerminal: false,
-					runIsParkedAndFutureDispatchRequiresReadmission: true,
-				});
-			} catch {
-				/* safe to retain a slot if cross-store release cannot be proven */
+			const released = durableNormalRelease({
+				reservationId: reservation.reservationId,
+				runId,
+				reason: "parked",
+				expectedRunVersion: run.runVersion,
+				runIsTerminal: false,
+				runIsParkedAndFutureDispatchRequiresReadmission: true,
+				commandId,
+			});
+			if (!released.ok) {
+				return {
+					ok: false,
+					run,
+					error: released.error,
+					snapshot: { run, controlError: released.error, receipt: null },
+				};
 			}
 			return { ok: true, run, snapshot: { run, receipt: null } };
 		}
@@ -1981,14 +3351,22 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				},
 			});
 			run = terminal.run;
-			try {
-				coordinator.normalRelease(reservation.reservationId, {
-					noLiveOrAmbiguousSideEffects: true,
-					runIsTerminal: true,
-					runIsParkedAndFutureDispatchRequiresReadmission: false,
-				});
-			} catch {
-				/* keep slot */
+			const failedRelease = durableNormalRelease({
+				reservationId: reservation.reservationId,
+				runId,
+				reason: "terminal-failed",
+				expectedRunVersion: run.runVersion,
+				runIsTerminal: true,
+				runIsParkedAndFutureDispatchRequiresReadmission: false,
+				commandId,
+			});
+			if (!failedRelease.ok) {
+				return {
+					ok: false,
+					run,
+					snapshot: { run, controlError: failedRelease.error, receipt: null },
+					error: failedRelease.error,
+				};
 			}
 			return {
 				ok: false,
@@ -2012,11 +3390,23 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			},
 		});
 		run = terminal.run;
-		coordinator.normalRelease(reservation.reservationId, {
-			noLiveOrAmbiguousSideEffects: true,
+		const completedRelease = durableNormalRelease({
+			reservationId: reservation.reservationId,
+			runId,
+			reason: "terminal-completed",
+			expectedRunVersion: run.runVersion,
 			runIsTerminal: true,
 			runIsParkedAndFutureDispatchRequiresReadmission: false,
+			commandId,
 		});
+		if (!completedRelease.ok) {
+			return {
+				ok: false,
+				run,
+				error: completedRelease.error,
+				snapshot: { run, controlError: completedRelease.error, receipt: null },
+			};
+		}
 		const receiptEventId = newId("ev");
 		const receipt = issueReceipt(run, boundPlan, [receiptEventId]);
 		const receiptHonest: typeof receipt = {
@@ -2451,7 +3841,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					runId,
 					admissionId: admission.admissionId,
 					cwd: opts.projectRoot,
-					phaseDeadlineMs: reconcileBudget.deadlineMs ?? 60_000,
+					// B06 D1: phase budget is independent of the reconcile deadline.
+					phaseDeadlineMs: resolveProgramPhaseDeadlineMs(boundPlan.program, hostPhaseDeadlineMs),
 					continuation,
 						onDispatchIntent: (attempt) => {
 						const checkpoint: SchedulerCheckpoint = {
@@ -2571,14 +3962,22 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				});
 				run = parked.run;
 				continuation = parked.continuation;
-				try {
-					coordinator.normalRelease(reservation.reservationId, {
-						noLiveOrAmbiguousSideEffects: true,
-						runIsTerminal: false,
-						runIsParkedAndFutureDispatchRequiresReadmission: true,
-					});
-				} catch {
-					/* A durable parked run with a held slot is safe; later reconciliation may release it. */
+				const parkedRelease = durableNormalRelease({
+					reservationId: reservation.reservationId,
+					runId,
+					reason: "parked",
+					expectedRunVersion: run.runVersion,
+					runIsTerminal: false,
+					runIsParkedAndFutureDispatchRequiresReadmission: true,
+					commandId,
+				});
+				if (!parkedRelease.ok) {
+					return {
+						ok: false,
+						run,
+						error: parkedRelease.error,
+						snapshot: { run, controlError: parkedRelease.error, receipt: null },
+					};
 				}
 				return { ok: true, run, snapshot: { run, receipt: null } };
 			}
@@ -2658,19 +4057,25 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						status: run.status,
 						stage: "terminal",
 					});
-					if (
-						isTerminalRunStatus(run.status) &&
-						canNormalRelease({
-							noLiveOrAmbiguousSideEffects: true,
+					if (isTerminalRunStatus(run.status)) {
+						const termRelease = durableNormalRelease({
+							reservationId: reservation.reservationId,
+							runId,
+							reason:
+								outcome.terminal === "completed" ? "terminal-completed" : "terminal-failed",
+							expectedRunVersion: run.runVersion,
 							runIsTerminal: true,
 							runIsParkedAndFutureDispatchRequiresReadmission: false,
-						})
-					) {
-						coordinator.normalRelease(reservation.reservationId, {
-							noLiveOrAmbiguousSideEffects: true,
-							runIsTerminal: true,
-							runIsParkedAndFutureDispatchRequiresReadmission: false,
+							commandId,
 						});
+						if (!termRelease.ok) {
+							return {
+								ok: false,
+								run,
+								error: termRelease.error,
+								snapshot: { run, controlError: termRelease.error, receipt: null },
+							};
+						}
 					}
 					if (outcome.terminal === "completed" || run.status === "completed") {
 						const receiptEventId = newId("ev");
@@ -2733,14 +4138,22 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					stage: "terminal",
 					reason: scheduled.error,
 				});
-				try {
-					coordinator.normalRelease(reservation.reservationId, {
-						noLiveOrAmbiguousSideEffects: true,
-						runIsTerminal: true,
-						runIsParkedAndFutureDispatchRequiresReadmission: false,
-					});
-				} catch {
-					/* keep slot */
+				const failRelease = durableNormalRelease({
+					reservationId: reservation.reservationId,
+					runId,
+					reason: "terminal-failed",
+					expectedRunVersion: run.runVersion,
+					runIsTerminal: true,
+					runIsParkedAndFutureDispatchRequiresReadmission: false,
+					commandId,
+				});
+				if (!failRelease.ok) {
+					return {
+						ok: false,
+						run,
+						snapshot: { run, controlError: failRelease.error, receipt: null },
+						error: failRelease.error,
+					};
 				}
 				// No success Receipt on failed DAG
 				return {
@@ -2770,11 +4183,23 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				status: "completed",
 				stage: "terminal",
 			});
-			coordinator.normalRelease(reservation.reservationId, {
-				noLiveOrAmbiguousSideEffects: true,
+			const okRelease = durableNormalRelease({
+				reservationId: reservation.reservationId,
+				runId,
+				reason: "terminal-completed",
+				expectedRunVersion: run.runVersion,
 				runIsTerminal: true,
 				runIsParkedAndFutureDispatchRequiresReadmission: false,
+				commandId,
 			});
+			if (!okRelease.ok) {
+				return {
+					ok: false,
+					run,
+					error: okRelease.error,
+					snapshot: { run, controlError: okRelease.error, receipt: null },
+				};
+			}
 			const receiptEventId = newId("ev");
 			const receipt = issueReceipt(run, boundPlan, [receiptEventId]);
 			const receiptHonest: typeof receipt = {
@@ -3193,6 +4618,10 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			} catch (error) {
 				observation = `provider reconcile threw: ${error instanceof Error ? error.message : String(error)}`;
 			}
+			// Keep the recovered handle journaled as `acknowledged` for operator
+			// inspection. Do not settle/clear activeAttempt here: recovery's
+			// durable proof is the recovered attempt identity, and automatic
+			// phase continuation / capacity release remain disabled.
 			return markNeedsOperator(
 				recoveredRun,
 				recoveredRun.runVersion,
@@ -3301,7 +4730,11 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			};
 
 			const existingCommand = store.getCommand(commandId);
-			if (existingCommand) return resolveExistingCancelCommand(existingCommand);
+			if (existingCommand) {
+				// B06 D3: a retry of an accepted cancel may still settle a now-dead dispatch.
+				settlePendingDispatchIfProven(runId, commandId);
+				return resolveExistingCancelCommand(existingCommand);
+			}
 
 			let requested: ReturnType<ProjectControlStore["compareAndCommit"]>;
 			try {
@@ -3464,15 +4897,68 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				message: string,
 			): { run: RunProjection; authorityRevoked: boolean } => {
 				try {
+					// Single CAS from the post-signalling cursor. Do not store.getRun()
+					// here: C4c-observe-store injects getRun faults after the provider
+					// cancel boundary, and release-outbox / settlement no longer bump
+					// runVersion between signalling and this commit.
 					const ambiguous = store.compareAndCommit({
 						runId,
 						expectedRunVersion: signalRun.runVersion,
 						validate: (run) =>
-							run.cancelRequest?.commandId === commandId && run.cancelRequest.state === "signalling"
+							run.cancelRequest?.commandId === commandId &&
+							(run.cancelRequest.state === "signalling" || run.cancelRequest.state === "ambiguous")
 								? null
 								: "cancel state changed while provider result was pending",
 						build: (run) => {
 							const now = Date.now();
+							// B06 D3: clear activeAttempt in the same CAS when death proof holds.
+							const evidence = pendingDispatchSettlementEvidence(run);
+							const cont = store.getContinuation(runId);
+							const events: ControlEvent[] = [
+								makeEvent(
+									runId,
+									{
+										type: "RunStatusChanged",
+										runId,
+										status: "unknown",
+										stage: "reconciling",
+										reason: "cancel requires reconciliation",
+									},
+									commandId,
+								),
+							];
+							if (evidence.settled && cont?.activeAttempt) {
+								const {
+									activeAttempt: _cleared,
+									...rest
+								} = cont;
+								const nextContinuation: RunContinuation = {
+									...rest,
+									updatedAt: now,
+									version: cont.version + 1,
+								};
+								events.push(
+									makeEvent(
+										runId,
+										{ type: "ContinuationStored", continuation: nextContinuation },
+										commandId,
+									),
+									makeEvent(
+										runId,
+										{
+											type: "Generic",
+											kind: "PendingDispatchSettled",
+											data: {
+												attemptId: evidence.attemptId,
+												handle: evidence.handle,
+												providerName: evidence.providerName,
+												reason: evidence.reason,
+											},
+										},
+										commandId,
+									),
+								);
+							}
 							const next: RunProjection = {
 								...run,
 								status: "unknown",
@@ -3483,22 +4969,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 								updatedAt: now,
 								runVersion: run.runVersion + 1,
 							};
-							return {
-								run: next,
-								events: [
-									makeEvent(
-										runId,
-										{
-											type: "RunStatusChanged",
-											runId,
-											status: "unknown",
-											stage: "reconciling",
-											reason: "cancel requires reconciliation",
-										},
-										commandId,
-									),
-								],
-							};
+							return { run: next, events };
 						},
 					});
 					return {
@@ -3509,7 +4980,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					// A generic durability error still retains the existing signalling
 					// snapshot for reconcile. A lost writer fence has a distinct public
 					// contract: callers must learn that this epoch cannot own the next
-					// cancellation state transition.
+					// cancellation state transition. Never re-enter store.getRun here —
+					// observation-fault fixtures inject throws on that path.
 					return { run: signalRun, authorityRevoked: error instanceof SingletonAuthorityError };
 				}
 			};
@@ -3601,6 +5073,9 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			// exists yet to bind such a proof to this cancel command and journal entry.
 			// Therefore every current provider result remains nonterminal: keep the
 			// reservation and require an explicit reconciliation/containment owner.
+			//
+			// B06 D3: markAmbiguous settles (clears) activeAttempt in the same CAS when
+			// death proof holds — never a separate version-bumping commit.
 			const marked = markAmbiguous(
 				providerResult.kind === "ambiguous"
 					? "provider cancellation reported an ambiguous result"
@@ -3657,15 +5132,37 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				};
 			}
 
+			// B06 D2: journal the durable release intent BEFORE the park CAS detaches
+			// reservationId. Crash after detach with no intent leaves capacity
+			// orphan-suspect; ordering the outbox first (and reconstruct-on-reopen)
+			// closes that window.
+			const preReservationId = pre?.reservationId;
+			let parkIntent: ReservationReleaseIntent | undefined;
+			if (preReservationId) {
+				parkIntent = journalPendingReleaseIntent({
+					reservationId: preReservationId,
+					runId,
+					reason: "parked",
+					expectedRunVersion: (pre?.runVersion ?? 0) + 1,
+					runIsTerminal: false,
+					runIsParkedAndFutureDispatchRequiresReadmission: true,
+				});
+			}
+
 			let releasedReservationId: string | undefined;
 			let durableAprId: string | undefined;
 			const cas = store.compareAndCommit({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
-				validate: (run) =>
-					run.cancelRequest
-						? "cannot park a run with a durable cancellation request"
-						: null,
+				validate: (run) => {
+					if (run.cancelRequest) {
+						return "cannot park a run with a durable cancellation request";
+					}
+					if (preReservationId && run.reservationId !== preReservationId) {
+						return "reservation changed before park CAS";
+					}
+					return null;
+				},
 				build: (run) => {
 					releasedReservationId = run.reservationId;
 					const apr = createApprovalRequest(store.projectRoot, {
@@ -3698,6 +5195,8 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				},
 			});
 			if (!cas.ok) {
+				// CAS lost: leave the pending intent for open-time reconcile /
+				// reconstruct rather than claiming capacity free.
 				if (cas.run?.cancelRequest) {
 					return cancelReconcileRequired(
 						cas.run,
@@ -3710,15 +5209,29 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			}
 
 			if (releasedReservationId) {
-				try {
-					coordinator.normalRelease(releasedReservationId, {
-						noLiveOrAmbiguousSideEffects: true,
-						runIsTerminal: false,
-						runIsParkedAndFutureDispatchRequiresReadmission: true,
-					});
-				} catch {
-					/* keep */
+				// Intent already journaled above; apply with proof and acknowledge.
+				const parkRelease = releaseReservationWithProof(releasedReservationId, {
+					runId,
+					runIsTerminal: false,
+					runIsParkedAndFutureDispatchRequiresReadmission: true,
+				});
+				if (!parkRelease.ok) {
+					const error: ControlError = {
+						...parkRelease.error,
+						code: "TF_RECONCILE_REQUIRED",
+						recoveryAction: "reconcile",
+						message: parkIntent
+							? `reservation release failed after durable intent ${parkIntent.releaseIntentId}: ${parkRelease.error.message}`
+							: parkRelease.error.message,
+					};
+					return {
+						ok: false,
+						run: cas.run,
+						error,
+						snapshot: { run: cas.run, controlError: error, receipt: null },
+					};
 				}
+				if (parkIntent) acknowledgeReleaseIntent(parkIntent);
 			}
 			void durableAprId;
 			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
@@ -3860,6 +5373,93 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
 		},
 
+		reconcileReservationReleases(): ReservationReleaseReconcileReport {
+			if (!hasMutationAuthority()) {
+				return { releasedIntentIds: [], pending: [] };
+			}
+			return reconcileReservationReleases();
+		},
+
+		releaseReservationWithProof(reservationId, proofOpts) {
+			if (!hasMutationAuthority()) {
+				return {
+					ok: false as const,
+					error: authorityDenied("releaseReservationWithProof").error!,
+				};
+			}
+			return releaseReservationWithProof(reservationId, proofOpts);
+		},
+
+		async parkForApprovalCrashBeforeRelease(runId, crashOpts = {}) {
+			if (!hasMutationAuthority()) {
+				throw new Error("parkForApprovalCrashBeforeRelease requires mutation authority");
+			}
+			const pendingSubmission = pendingProviderSubmissionFence(runId);
+			if (pendingSubmission) await pendingSubmission;
+			const pre = store.getRun(runId);
+			if (!pre) throw new Error(`run ${runId} not found`);
+			if (pre.cancelRequest) throw new Error("cannot park a run with a durable cancellation request");
+			if (!providerQuiescent(runId)) {
+				throw new Error("cannot park while provider job is still live");
+			}
+			const reservationId = pre.reservationId;
+			if (!reservationId) throw new Error("run has no reservation to release");
+			// Production order: durable intent BEFORE park CAS detaches reservationId.
+			// Then intentionally skip Coordinator release (crash between intent+CAS and free).
+			const intent = journalPendingReleaseIntent({
+				reservationId,
+				runId,
+				reason: "parked",
+				expectedRunVersion: pre.runVersion + 1,
+				runIsTerminal: false,
+				runIsParkedAndFutureDispatchRequiresReadmission: true,
+			});
+			const cas = store.compareAndCommit({
+				runId,
+				expectedRunVersion: crashOpts.expectedRunVersion,
+				validate: (run) =>
+					run.cancelRequest
+						? "cannot park a run with a durable cancellation request"
+						: run.reservationId !== reservationId
+							? "reservation changed before park crash hook"
+							: null,
+				build: (run) => {
+					const apr = createApprovalRequest(store.projectRoot, {
+						runId,
+						projectId: store.header.projectId,
+						controlDomainId: store.header.controlDomainId,
+						expectedRunVersion: run.runVersion + 1,
+						deadline: Date.now() + 3_600_000,
+					});
+					const next: RunProjection = {
+						...run,
+						status: "paused",
+						stage: "parked",
+						approvalRequestId: apr.approvalRequestId,
+						reservationId: undefined,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					};
+					return {
+						run: next,
+						events: [
+							makeEvent(runId, {
+								type: "ApprovalParked",
+								runId,
+								approvalRequestId: apr.approvalRequestId,
+							}),
+						],
+					};
+				},
+			});
+			if (!cas.ok) throw new Error(cas.message);
+			return {
+				releaseIntentId: intent.releaseIntentId,
+				runId,
+				reservationId,
+			};
+		},
+
 		forceReleaseReservation(reservationId, opts) {
 			if (!hasMutationAuthority()) {
 				return {
@@ -3957,16 +5557,35 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		close() {
-				// Only the opaque current writer capability may release the singleton.
-				if (singleton?.role === "writer") {
-					try {
-						releaseSingleton(singleton.mutationAuthority, env);
+			// Drop project mutator possession so crash-recovery reopen is not blocked.
+			releaseMultiMountPossession(mutatorPossession);
+			mutatorPossession = undefined;
+			releaseProcessLocalMutator(opts.projectRoot, holderId);
+			// Only the opaque current writer capability may release the singleton.
+			if (singleton?.role === "writer") {
+				try {
+					releaseSingleton(singleton.mutationAuthority, env);
 				} catch {
 					/* close is best-effort; a durable replacement must remain intact */
 				}
 			}
 		},
 	};
+
+	// B06 D2: drain durable release outbox left by a prior crash/release failure,
+	// and reconstruct intents for parked runs whose outbox row was wiped.
+	// Do not call hasMutationAuthority() here — injectable mutationAuthority
+	// counters used by authority-boundary tests must not be consumed at open.
+	// Attach is read-only; writers / standalone / skipSingleton drain pending only.
+	if (role !== "attach") {
+		try {
+			// Always run reconcile: reconstructMissingParkReleaseIntents may mint
+			// rows even when the outbox looks empty after a wipe.
+			reconcileReservationReleases();
+		} catch {
+			/* open remains usable; pending intents stay on disk for later reconcile */
+		}
+	}
 
 	return host;
 }
