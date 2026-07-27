@@ -21,9 +21,32 @@ import {
 	canNormalRelease,
 	DEFAULT_CONTROL_MODE,
 	assertControlModeExplicit,
+	projectCoordinatorDir,
 	type ControlEvent,
 } from "../src/index.ts";
 import { parentReleaseStart } from "./helpers/mp-barrier.mts";
+
+/**
+ * P16 D1 — simulate reserved TTL expiry without forging reclaim(now).
+ * Elapse reservedExpiresAt on disk, then call the production reclaim path
+ * with no caller timestamp so store wall clock is the only authority.
+ */
+function expireReservedViaProductionReclaim(
+	coordinator: { reclaimExpiredReserved: (now?: number) => number },
+	stateDir: string,
+	reservationId: string,
+): void {
+	const statePath = path.join(stateDir, "state.json");
+	const state = JSON.parse(fs.readFileSync(statePath, "utf-8")) as {
+		reservations: Array<{ reservationId: string; reservedExpiresAt?: number }>;
+	};
+	const row = state.reservations.find((r) => r.reservationId === reservationId);
+	assert.ok(row, `reservation ${reservationId} must exist on disk to elapse`);
+	row.reservedExpiresAt = Date.now() - 1;
+	fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+	const n = coordinator.reclaimExpiredReserved();
+	assert.equal(n, 1, "production reclaim after on-disk expiry must free exactly one reserved slot");
+}
 
 const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
 
@@ -542,7 +565,11 @@ test("P16 admission: reserve-to-commit TTL expiry rebinds the same command exact
 			const reservation = reserve(opts);
 			if (expireFirstReservation && reservation?.admissionId) {
 				expireFirstReservation = false;
-				host.coordinator.reclaimExpiredReserved(reservation.reservedExpiresAt);
+				expireReservedViaProductionReclaim(
+					host.coordinator,
+					projectCoordinatorDir(t.project),
+					reservation.reservationId,
+				);
 			}
 			return reservation;
 		};
@@ -580,7 +607,11 @@ test("P16 admission: reserve-to-commit TTL expiry rebinds the same command exact
 			const reservation = secondReserve(opts);
 			if (expireSecondReservation && reservation?.admissionId) {
 				expireSecondReservation = false;
-				secondHost.coordinator.reclaimExpiredReserved(reservation.reservedExpiresAt);
+				expireReservedViaProductionReclaim(
+					secondHost.coordinator,
+					projectCoordinatorDir(t.project),
+					reservation.reservationId,
+				);
 			}
 			return reservation;
 		};
@@ -651,7 +682,8 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			runId: "r",
 			projectAdmitCommitSeq: 1,
 		});
-		coord.reclaimExpiredReserved(Date.now() + 120_000);
+		// Caller timestamps are not TTL authority; committed is never TTL-released.
+		coord.reclaimExpiredReserved();
 		const still = coord.getReservation(rsv!.reservationId);
 		assert.equal(still?.state, "committed");
 		assert.ok(CAPACITY_OCCUPYING_STATES.includes(still!.state));

@@ -47,11 +47,64 @@ const REQUEST_HASH = /^[a-f0-9]{64}$/;
 const MAX_CALLER_PRINCIPAL_LENGTH = 1_024;
 const MAX_FORCE_RELEASE_REASON_LENGTH = 4_096;
 
+/**
+ * Store-owned clock. Production always uses wall time.
+ * No injectable clock is exported from this module or the package barrel —
+ * callers cannot forge TTL via open options or reclaim timestamps.
+ * Tests simulate expiry by elapsing reservedExpiresAt on disk and calling the
+ * production reclaim/commit path with no caller timestamp.
+ */
+interface CoordinatorClock {
+	now(): number;
+}
+
+const WALL_CLOCK: CoordinatorClock = { now: () => Date.now() };
+
+/**
+ * Logical admission (projectId + projectControlDomainId + runId) is unique among
+ * capacity-occupying committed/orphan-suspect reservations under state.lock.
+ */
+export class CoordinatorAdmissionConflictError extends Error {
+	readonly code = "TF_ADMISSION_BINDING_CONFLICT" as const;
+	readonly existingReservationId: string;
+	readonly attemptedReservationId: string;
+
+	constructor(opts: {
+		existingReservationId: string;
+		attemptedReservationId: string;
+		projectId: string;
+		projectControlDomainId: string;
+		runId: string;
+	}) {
+		super(
+			`TF_ADMISSION_BINDING_CONFLICT: logical admission ` +
+				`projectId=${opts.projectId} projectControlDomainId=${opts.projectControlDomainId} ` +
+				`runId=${opts.runId} is already bound to reservation ${opts.existingReservationId}; ` +
+				`cannot commit reservation ${opts.attemptedReservationId}`,
+		);
+		this.name = "CoordinatorAdmissionConflictError";
+		this.existingReservationId = opts.existingReservationId;
+		this.attemptedReservationId = opts.attemptedReservationId;
+	}
+}
+
 export interface ReleaseContext {
 	/** Provider/isolation proves no live process tree AND no open ambiguous job. */
 	noLiveOrAmbiguousSideEffects: boolean;
 	runIsTerminal: boolean;
 	runIsParkedAndFutureDispatchRequiresReadmission: boolean;
+	/**
+	 * Optional coordinator-local ownership binding for D37 normalRelease.
+	 * When present it must match the durable project admission binding.
+	 * Host-side mandatory ownership binding is owned by another lane; this store
+	 * only enforces the match when the field is supplied.
+	 */
+	ownership?: {
+		projectId: string;
+		projectControlDomainId: string;
+		runId: string;
+		projectAdmitCommitSeq: number;
+	};
 }
 
 interface CoordinatorReservationBinding {
@@ -67,6 +120,33 @@ interface CoordinatorReservationBinding {
 export function canNormalRelease(ctx: ReleaseContext): boolean {
 	if (!ctx.noLiveOrAmbiguousSideEffects) return false;
 	return ctx.runIsTerminal || ctx.runIsParkedAndFutureDispatchRequiresReadmission;
+}
+
+/** Durable uniqueness key: projectId + projectControlDomainId + runId. */
+function admissionBindingKey(
+	binding: Pick<ConcurrencyReservation, "projectId" | "projectControlDomainId" | "runId">,
+): string | null {
+	if (
+		binding.projectId === undefined ||
+		binding.projectControlDomainId === undefined ||
+		binding.runId === undefined
+	) {
+		return null;
+	}
+	// Separator cannot appear in safe stored ids (no `/`).
+	return `${binding.projectId}/${binding.projectControlDomainId}/${binding.runId}`;
+}
+
+function ownershipEquals(
+	reservation: ConcurrencyReservation,
+	ownership: NonNullable<ReleaseContext["ownership"]>,
+): boolean {
+	return (
+		reservation.projectId === ownership.projectId &&
+		reservation.projectControlDomainId === ownership.projectControlDomainId &&
+		reservation.runId === ownership.runId &&
+		reservation.projectAdmitCommitSeq === ownership.projectAdmitCommitSeq
+	);
 }
 
 export interface UserCoordinatorStore {
@@ -120,7 +200,11 @@ export interface UserCoordinatorStore {
 		value: number,
 		cmd: { commandId: string; callerPrincipal: string; requestBody: unknown },
 	): CoordinatorCommandRecord;
-	/** Reclaim expired reserved (not committed) slots. */
+	/**
+	 * Reclaim expired reserved (not committed) slots using store clock authority.
+	 * Callers cannot pass a forgeable timestamp; the optional `now` argument is
+	 * retained only for signature compatibility and is always refused.
+	 */
 	reclaimExpiredReserved(now?: number): number;
 	getCommand(commandId: string): CoordinatorCommandRecord | null;
 }
@@ -259,6 +343,7 @@ function assertReleaseContext(value: unknown): asserts value is ReleaseContext {
 			"noLiveOrAmbiguousSideEffects",
 			"runIsTerminal",
 			"runIsParkedAndFutureDispatchRequiresReadmission",
+			"ownership",
 		],
 		"release context",
 	);
@@ -268,6 +353,19 @@ function assertReleaseContext(value: unknown): asserts value is ReleaseContext {
 		typeof value.runIsParkedAndFutureDispatchRequiresReadmission !== "boolean"
 	) {
 		failInvalidArgument("invalid release context");
+	}
+	if (value.ownership !== undefined) {
+		assertNoUnexpectedKeys(
+			value.ownership,
+			["projectId", "projectControlDomainId", "runId", "projectAdmitCommitSeq"],
+			"release ownership",
+		);
+		assertSafeIdentifier(value.ownership.projectId, "ownership.projectId");
+		assertSafeIdentifier(value.ownership.projectControlDomainId, "ownership.projectControlDomainId");
+		assertSafeIdentifier(value.ownership.runId, "ownership.runId");
+		if (!isPositiveSafeInteger(value.ownership.projectAdmitCommitSeq)) {
+			failInvalidArgument("invalid ownership.projectAdmitCommitSeq");
+		}
 	}
 }
 
@@ -529,6 +627,7 @@ function validateCoordinatorFile(value: unknown, filePath: string): CoordinatorF
 	const reservationIds = new Set<string>();
 	const reservationById = new Map<string, unknown>();
 	const liveAdmissionIds = new Set<string>();
+	const liveLogicalAdmissions = new Map<string, string>();
 	for (const reservation of value.reservations) {
 		validateReservation(reservation, filePath);
 		const reservationId = reservation.reservationId as string;
@@ -546,6 +645,23 @@ function validateCoordinatorFile(value: unknown, filePath: string): CoordinatorF
 				failCoordinatorDurability("state.json has duplicate live admission identities", filePath);
 			}
 			liveAdmissionIds.add(admissionId);
+		}
+		if (reservation.state === "committed" || reservation.state === "orphan-suspect") {
+			const key = admissionBindingKey(reservation as ConcurrencyReservation);
+			if (!key) {
+				failCoordinatorDurability(
+					"state.json reservation lacks a complete admission binding in a project-bound state",
+					filePath,
+				);
+			}
+			const prior = liveLogicalAdmissions.get(key);
+			if (prior !== undefined) {
+				failCoordinatorDurability(
+					`state.json has duplicate logical admission binding for ${key} (reservations ${prior} and ${reservationId})`,
+					filePath,
+				);
+			}
+			liveLogicalAdmissions.set(key, reservationId);
 		}
 	}
 	const occupyingReservations = value.reservations.filter((reservation) =>
@@ -622,37 +738,57 @@ function emptyCoordinator(): CoordinatorFile {
 	};
 }
 
+interface OpenCoordinatorStoreOptions {
+	/** Override on-disk directory (project-local standalone). */
+	baseDir?: string;
+	/**
+	 * Trusted ancestor for symlink rejection when baseDir is project-local.
+	 * Defaults to userHome for the user coordinator and baseDir's parent for
+	 * custom stores, so existing callers remain compatible.
+	 */
+	durabilityRoot?: string;
+	/** Optional host singleton fence around each durable coordinator mutation. */
+	mutationFence?: <T>(fn: () => T) => T;
+	/** Process-local capability held only by the singleton writer. */
+	mutationAuthority?: SingletonMutationAuthority;
+	/** Explicit non-GA escape hatch for test/embedded skipSingleton plumbing. */
+	allowUnfencedMutationForExplicitNonGaMode?: boolean;
+}
+
+/**
+ * Public (and only) coordinator open. Clock authority is wall time only —
+ * a `clock` option is refused so callers cannot forge TTL expiry through this
+ * entry point. There is no injectable-clock construction on the package barrel.
+ */
 export function openUserCoordinatorStore(
 	env: NodeJS.ProcessEnv = process.env,
-	opts?: {
-		/** Override on-disk directory (project-local standalone). */
-		baseDir?: string;
-		/**
-		 * Trusted ancestor for symlink rejection when baseDir is project-local.
-		 * Defaults to userHome for the user coordinator and baseDir's parent for
-		 * custom stores, so existing callers remain compatible.
-		 */
-		durabilityRoot?: string;
-		/** Optional host singleton fence around each durable coordinator mutation. */
-		mutationFence?: <T>(fn: () => T) => T;
-		/** Process-local capability held only by the singleton writer. */
-		mutationAuthority?: SingletonMutationAuthority;
-		/** Explicit non-GA escape hatch for test/embedded skipSingleton plumbing. */
-		allowUnfencedMutationForExplicitNonGaMode?: boolean;
-	},
+	opts?: OpenCoordinatorStoreOptions,
+): UserCoordinatorStore {
+	if (opts !== undefined && Object.prototype.hasOwnProperty.call(opts, "clock")) {
+		failInvalidArgument(
+			"clock is not accepted by openUserCoordinatorStore; TTL uses store wall time only",
+		);
+	}
+	return openCoordinatorStoreInternal(env, opts ?? {}, WALL_CLOCK);
+}
+
+function openCoordinatorStoreInternal(
+	env: NodeJS.ProcessEnv,
+	opts: OpenCoordinatorStoreOptions,
+	clock: CoordinatorClock,
 ): UserCoordinatorStore {
 	const globalCoordinatorDir = coordinatorDir(env);
 	if (
-		opts?.baseDir !== undefined &&
+		opts.baseDir !== undefined &&
 		path.resolve(opts.baseDir) === globalCoordinatorDir
 	) {
 		throw new SingletonAuthorityError(
 			"project-local coordinator baseDir must not alias the user-global coordinator",
 		);
 	}
-	const dir = opts?.baseDir ?? globalCoordinatorDir;
+	const dir = opts.baseDir ?? globalCoordinatorDir;
 	const durabilityRoot =
-		opts?.durabilityRoot ?? (opts?.baseDir === undefined ? userHome(env) : path.dirname(dir));
+		opts.durabilityRoot ?? (opts.baseDir === undefined ? userHome(env) : path.dirname(dir));
 	const file = path.join(dir, "state.json");
 	// Keep the initialization anchor beside (not inside) the mutable coordinator
 	// directory. Deleting `coordinator/` or `coordinator-local/` must not make a
@@ -724,7 +860,7 @@ export function openUserCoordinatorStore(
 						lastCommitSeq: data.nextCommandSeq,
 						status: "completed",
 						payload: { maxActiveRuns: data.maxActiveRuns },
-						recordedAt: Date.now(),
+						recordedAt: clock.now(),
 					}
 				: undefined;
 		const state: CoordinatorFile =
@@ -755,7 +891,7 @@ export function openUserCoordinatorStore(
 					{
 						schemaVersion: COORDINATOR_STATE_ANCHOR_SCHEMA_VERSION,
 						coordinatorId,
-						createdAt: Date.now(),
+						createdAt: clock.now(),
 					} satisfies CoordinatorStateAnchor,
 					null,
 					2,
@@ -781,18 +917,18 @@ export function openUserCoordinatorStore(
 				return result;
 			});
 		const fencedMutation = (coordinatorEpoch: number) =>
-			opts?.mutationFence
+			opts.mutationFence
 				? opts.mutationFence(() => mutateLocked(coordinatorEpoch))
 				: mutateLocked(coordinatorEpoch);
-		if (opts?.baseDir !== undefined) return fencedMutation(0);
-		if (opts?.mutationAuthority) {
+		if (opts.baseDir !== undefined) return fencedMutation(0);
+		if (opts.mutationAuthority) {
 			return withSingletonMutationAuthority(
 				opts.mutationAuthority,
 				() => fencedMutation(singletonMutationAuthorityEpoch(opts.mutationAuthority!)),
 				env,
 			);
 		}
-		if (opts?.allowUnfencedMutationForExplicitNonGaMode) return fencedMutation(0);
+		if (opts.allowUnfencedMutationForExplicitNonGaMode) return fencedMutation(0);
 		throw new SingletonAuthorityError(
 			"user-global coordinator mutation requires a live singleton capability or explicit non-GA mode",
 		);
@@ -808,10 +944,11 @@ export function openUserCoordinatorStore(
 		data: CoordinatorFile,
 		id: string,
 		patch: Partial<ConcurrencyReservation>,
+		at: number = clock.now(),
 	): ConcurrencyReservation {
 		const i = data.reservations.findIndex((r) => r.reservationId === id);
 		if (i < 0) throw new Error(`reservation not found: ${id}`);
-		const next = { ...data.reservations[i]!, ...patch, updatedAt: Date.now() };
+		const next = { ...data.reservations[i]!, ...patch, updatedAt: at };
 		data.reservations[i] = next;
 		return next;
 	}
@@ -850,7 +987,7 @@ export function openUserCoordinatorStore(
 		reserve(opts = {}) {
 			const normalizedOpts = normalizeReserveOptions(opts);
 			return mutate((data, coordinatorEpoch) => {
-				const now = Date.now();
+				const now = clock.now();
 				if (normalizedOpts.ttlMs > Number.MAX_SAFE_INTEGER - now) {
 					failInvalidArgument("reservation ttlMs exceeds safe timestamp range");
 				}
@@ -918,6 +1055,10 @@ export function openUserCoordinatorStore(
 		commitReservation(reservationId, binding) {
 			assertSafeIdentifier(reservationId, "reservationId");
 			const normalizedBinding = normalizeReservationBinding(binding);
+			const admissionKey = admissionBindingKey(normalizedBinding);
+			if (!admissionKey) {
+				failInvalidArgument("commitReservation binding is incomplete");
+			}
 			return mutate((data) => {
 				const r = data.reservations.find((x) => x.reservationId === reservationId);
 				if (!r) throw new Error(`reservation not found: ${reservationId}`);
@@ -938,20 +1079,42 @@ export function openUserCoordinatorStore(
 				if (r.state !== "reserved") {
 					throw new Error(`cannot commit reservation in state ${r.state}`);
 				}
-				const now = Date.now();
+				const now = clock.now();
 				if (r.reservedExpiresAt === undefined || r.reservedExpiresAt <= now) {
 					// The lock linearizes commit against TTL expiry. Persist the expiry
 					// before returning the rejection so a restart cannot reinterpret this
 					// elapsed unbound lease as admission authority.
-					updateRes(data, reservationId, { state: "expired" });
+					// Clock is store/injected only — never a caller opts.now.
+					updateRes(data, reservationId, { state: "expired" }, now);
 					save(data);
 					throw new Error(`cannot commit expired reservation ${reservationId}`);
 				}
-				return updateRes(data, reservationId, {
-					state: "committed",
-					...normalizedBinding,
-					reservedExpiresAt: undefined,
-				});
+				// Unique logical admission among capacity-occupying project-bound states.
+				const conflicting = data.reservations.find(
+					(other) =>
+						other.reservationId !== reservationId &&
+						(other.state === "committed" || other.state === "orphan-suspect") &&
+						admissionBindingKey(other) === admissionKey,
+				);
+				if (conflicting) {
+					throw new CoordinatorAdmissionConflictError({
+						existingReservationId: conflicting.reservationId,
+						attemptedReservationId: reservationId,
+						projectId: normalizedBinding.projectId,
+						projectControlDomainId: normalizedBinding.projectControlDomainId,
+						runId: normalizedBinding.runId,
+					});
+				}
+				return updateRes(
+					data,
+					reservationId,
+					{
+						state: "committed",
+						...normalizedBinding,
+						reservedExpiresAt: undefined,
+					},
+					now,
+				);
 			});
 		},
 
@@ -975,11 +1138,28 @@ export function openUserCoordinatorStore(
 					"D37 normalRelease denied: noLiveOrAmbiguousSideEffects and (terminal|parked-readmit) required",
 				);
 			}
+			const ownership = ctx.ownership;
 			return mutate((data) => {
 				const r = data.reservations.find((x) => x.reservationId === reservationId);
 				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				// Exact matching retry after a successful release: return prior
+				// released state without a second mutation. Ownership mismatch
+				// still fails (even when already released).
+				if (r.state === "released") {
+					if (ownership !== undefined && !ownershipEquals(r, ownership)) {
+						throw new Error(
+							"D37 normalRelease denied: ownership binding required and must match durable reservation",
+						);
+					}
+					return r;
+				}
 				if (r.state !== "committed" && r.state !== "orphan-suspect") {
 					throw new Error(`cannot normalRelease from state ${r.state}`);
+				}
+				if (ownership !== undefined && !ownershipEquals(r, ownership)) {
+					throw new Error(
+						"D37 normalRelease denied: ownership binding required and must match durable reservation",
+					);
 				}
 				return updateRes(data, reservationId, { state: "released", reservedExpiresAt: undefined });
 			});
@@ -1019,17 +1199,18 @@ export function openUserCoordinatorStore(
 						riskAcknowledged: true,
 						reason: normalizedCommand.requestBody.reason ?? null,
 					},
-					recordedAt: Date.now(),
+					recordedAt: clock.now(),
 				};
 				data.commands.push(command);
+				const at = clock.now();
 				const next =
 					r.state === "released"
-						? { ...r, operatorOverridden: true, updatedAt: Date.now() }
+						? { ...r, operatorOverridden: true, updatedAt: at }
 						: updateRes(data, reservationId, {
 								state: "released",
 								reservedExpiresAt: undefined,
 								operatorOverridden: true,
-							});
+							}, at);
 				if (r.state === "released") {
 					const i = data.reservations.findIndex((x) => x.reservationId === reservationId);
 					if (i >= 0) data.reservations[i] = next;
@@ -1062,7 +1243,7 @@ export function openUserCoordinatorStore(
 					lastCommitSeq: seq,
 					status: "completed",
 					payload: { maxActiveRuns: value },
-					recordedAt: Date.now(),
+					recordedAt: clock.now(),
 				};
 				data.commands.push(command);
 				data.maxActiveRuns = value;
@@ -1070,18 +1251,25 @@ export function openUserCoordinatorStore(
 			});
 		},
 
-		reclaimExpiredReserved(now = Date.now()) {
-			if (!isNonNegativeSafeInteger(now)) failInvalidArgument("invalid reclaim timestamp");
+		reclaimExpiredReserved(now?: number) {
+			// Signature retains optional `now` for wire compatibility with older
+			// callers, but a caller timestamp is never TTL authority (D1).
+			// Invalid values still fail closed; a forged future/past clock cannot
+			// free or resurrect slots because the store clock decides.
+			if (now !== undefined && !isNonNegativeSafeInteger(now)) {
+				failInvalidArgument("invalid reclaim timestamp");
+			}
 			return mutate((data) => {
+				const reclaimAt = clock.now();
 				let n = 0;
 				for (const r of data.reservations) {
 					if (
 						r.state === "reserved" &&
 						r.reservedExpiresAt !== undefined &&
-						r.reservedExpiresAt <= now
+						r.reservedExpiresAt <= reclaimAt
 					) {
 						r.state = "expired";
-						r.updatedAt = now;
+						r.updatedAt = reclaimAt;
 						n += 1;
 					}
 				}
