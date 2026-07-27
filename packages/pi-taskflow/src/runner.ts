@@ -239,6 +239,17 @@ function piCompletionPolicy(terminalGraceMs: number): CompletionPolicy<PiEventAc
 	};
 }
 
+const PI_AGENT_END_HISTORY_PREFIX = '{"type":"agent_end","messages":[';
+
+function canDiscardOversizedPiAgentEnd(acc: PiEventAccumulator, prefix: string): boolean {
+	return Boolean(
+		prefix.startsWith(PI_AGENT_END_HISTORY_PREFIX) &&
+			acc.finalText.trim() && acc.finalGeneration !== undefined &&
+			acc.finalGeneration === acc.generation && !acc.fatalError &&
+			acc.stopReason !== "error" && acc.stopReason !== "aborted" && acc.stopReason !== "toolUse",
+	);
+}
+
 function canonicalAllowlistedExtensions(settings: PiChildSettings): string[] {
 	if (settings.resourceProfile !== "allowlist") return [];
 	const canonical: string[] = [];
@@ -373,6 +384,7 @@ export async function runAgentTask(
 			acc,
 			foldLine: foldPiEventLine,
 			completionPolicy: piCompletionPolicy(piChild.terminalGraceMs),
+			canDiscardOversizedLine: canDiscardOversizedPiAgentEnd,
 			onTerminalCommit: opts.onTerminalCommit,
 			requireTerminalEvent: true,
 			terminalEventLabel: "Pi agent_end/agent_settled",

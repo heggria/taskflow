@@ -2,6 +2,23 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.6] — 2026-07-27
+
+### Fixed
+
+- **Pi oversized terminal history handling.** After a complete final assistant `message_end`, the Pi runner can now discard an oversized redundant `agent_end.messages` record without retaining its full history payload, then continue waiting for the compact authoritative `agent_settled` event. Oversized records still fail closed before a valid final message, for other event types, or when the discarded record is unterminated.
+- **Deterministic process-supervisor CI checks.** Replaced sub-second wall-clock assertions with outcome-based checks and wider watchdog windows, avoiding false failures on loaded Windows runners while preserving process-tree and terminal-grace coverage.
+
+### Security
+
+- Upgraded Next.js to 16.2.12 and forced patched transitive versions of `sharp` 0.35.3, `postcss` 8.5.23, and `brace-expansion` 5.0.8. The production dependency audit is clean.
+- Updated pinned GitHub Actions revisions to `actions/checkout` 7.0.1 and `github/codeql-action` 4.37.3.
+
+### Changed
+
+- Refreshed Pi development dependencies to 0.82.1, TypeBox to 1.3.8, React/React DOM to 19.2.8, Lucide React to 1.27.0, Tailwind CSS to 4.3.3, and Biome to 2.5.5.
+- Upgraded the repository package manager to pnpm 11.17.0 so root workspace overrides are enforced and recorded reproducibly in the lockfile.
+
 ## [0.2.5] — 2026-07-27
 
 ### Changed

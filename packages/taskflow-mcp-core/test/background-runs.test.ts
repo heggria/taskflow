@@ -48,6 +48,10 @@ function usePrivateAgentDir(cwd: string): () => void {
 	};
 }
 
+function removeTempDir(dir: string): void {
+	fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+}
+
 function inlineAgentFlow(name: string): Taskflow {
 	return {
 		name,
@@ -100,7 +104,7 @@ test("mcp background: run returns immediately and wait returns durable final out
 		assert.match(listed.content[0]!.text, new RegExp(runId));
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -121,7 +125,7 @@ test("mcp background: dot-leading flow names keep a durable run id", async () =>
 		assert.equal(loadRun(cwd, runId)?.status, "completed");
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -146,7 +150,7 @@ test("mcp background: cancel survives request boundaries and pauses the run", as
 		assert.equal(loadRun(cwd, runId)?.status, "paused");
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -175,7 +179,7 @@ test("mcp background: roster filters active runs and warns about uncoordinated c
 		await tools.taskflow_runs({ action: "wait", runId, timeoutMs: 5_000 });
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -199,7 +203,7 @@ test("mcp background: malformed historical state cannot turn a successful launch
 		assert.match(waited.content[0]!.text, /✓ completed/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -225,7 +229,7 @@ test("mcp background: malformed optional output cannot crash status formatting",
 		assert.match(status.content[0]!.text, /detached launch failed/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -243,7 +247,7 @@ test("mcp background: malformed phase definitions are rejected without crashing 
 		assert.match(status.content[0]!.text, /was not found/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -259,7 +263,7 @@ test("mcp background: legacy detached workers fail closed for cancel", async () 
 		assert.match(cancelled.content[0]!.text, /legacy detached worker/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -281,7 +285,7 @@ test("mcp background: dead current-protocol worker without a heartbeat becomes f
 		assert.equal(loadRun(cwd, state.runId)?.status, "failed");
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -309,7 +313,7 @@ test("mcp background: a live pid without an authenticated lease is not falsely t
 	} finally {
 		try { process.kill(process.platform === "win32" ? worker.pid! : -worker.pid!, "SIGKILL"); } catch { /* already gone */ }
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -350,7 +354,7 @@ test("mcp background: a stale authenticated lease kills its owner before termina
 	} finally {
 		try { process.kill(process.platform === "win32" ? worker.pid! : -worker.pid!, "SIGKILL"); } catch { /* already gone */ }
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -376,7 +380,7 @@ test("mcp background: sibling worktrees sharing an ancestor .pi remain isolated"
 		assert.match(statusB.content[0]!.text, /not found/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(root, { recursive: true, force: true });
+		removeTempDir(root);
 	}
 });
 
@@ -425,7 +429,7 @@ test("mcp background: foreground and background share agent scope and thinking",
 		assert.match(waited.content[0]!.text, /PROJECT AGENT MARKER\|high/);
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });
 
@@ -468,6 +472,6 @@ test("mcp background: hard-killed worker reaps its registered Host CLI tree", as
 		assert.equal(fs.statSync(heartbeat).size, sizeAfterReap, "workspace mutation stopped after terminal failure");
 	} finally {
 		restoreAgentDir();
-		fs.rmSync(cwd, { recursive: true, force: true });
+		removeTempDir(cwd);
 	}
 });

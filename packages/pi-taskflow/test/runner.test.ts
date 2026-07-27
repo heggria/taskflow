@@ -19,7 +19,7 @@ import {
 	TRANSPORT_ERROR_PLACEHOLDER,
 } from "../src/runner.ts";
 import type { AgentConfig } from "taskflow-core";
-import { emptyUsage } from "taskflow-core";
+import { emptyUsage, MAX_STDOUT_LINE_BYTES } from "taskflow-core";
 
 test("ctxExtensionPath resolves the executing source entry", () => {
 	const resolved = ctxExtensionPath();
@@ -751,6 +751,77 @@ test("Pi completion: final + agent_end + agent_settled with a leaky handle is re
 		assert.equal(result.output, "PHASE_ONE_DONE");
 		assert.equal(result.completionSource, "terminal-reap");
 		assert.equal(result.reapedAfterTerminal, true);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: oversized redundant agent_end history is discarded while waiting for agent_settled", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-oversized-agent-end-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"DONE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end",messages:[{role:"user",content:[{type:"text",text:"x".repeat(${MAX_STDOUT_LINE_BYTES + 4096})}]}],willRetry:false});\n` +
+			`emit({type:"agent_settled"});\n` +
+			`setInterval(()=>{},1000);\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 30,
+		}).runTask(dir, agents, "t", "large history", { idleTimeoutMs: 10_000 });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.output, "DONE");
+		assert.equal(result.completionSource, "terminal-reap");
+		assert.equal(result.reapedAfterTerminal, true);
+		assert.match(result.stderr, /Discarded an oversized redundant host record/);
+	} finally {
+		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = prevBin;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("Pi completion: oversized agent_end before a complete message_end still fails closed", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-pi-unsafe-agent-end-"));
+	const fakePi = path.join(dir, "fake-pi.mjs");
+	fs.writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"agent_end",messages:[{role:"user",content:[{type:"text",text:"x".repeat(${MAX_STDOUT_LINE_BYTES + 4096})}]}],willRetry:false});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"TOO_LATE"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_settled"});\n`,
+	);
+	fs.chmodSync(fakePi, 0o755);
+	const prevBin = process.env.PI_TASKFLOW_PI_BIN;
+	process.env.PI_TASKFLOW_PI_BIN = fakePi;
+	try {
+		const agents: AgentConfig[] = [
+			{ name: "t", description: "t", systemPrompt: "", source: "user", filePath: "" },
+		];
+		const result = await createPiSubagentRunner({
+			resourceProfile: "isolated",
+			extensions: [],
+			terminalGraceMs: 30,
+		}).runTask(dir, agents, "t", "unsafe history", { idleTimeoutMs: 10_000 });
+		assert.equal(isFailed(result), true);
+		assert.equal(result.completionSource, "protocol-error");
+		assert.match(result.errorMessage ?? "", /stdout record larger/i);
 	} finally {
 		if (prevBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
 		else process.env.PI_TASKFLOW_PI_BIN = prevBin;

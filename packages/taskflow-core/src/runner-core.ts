@@ -481,6 +481,12 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	acc: TAcc;
 	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
 	completionPolicy?: CompletionPolicy<TAcc>;
+	/** Host-specific escape hatch for a known redundant record that can grow
+	 * without bound. The callback receives only a bounded prefix and must return
+	 * true only when the accumulator already contains the authoritative data.
+	 * Accepted records are discarded through their newline and never count as a
+	 * terminal event; the host must still emit its compact terminal record. */
+	canDiscardOversizedLine?: (acc: TAcc, prefix: string) => boolean;
 	/** Synchronous notification at the terminal-reap linearization point. */
 	onTerminalCommit?: () => void;
 	/** Fail closed when the CLI exits zero before its authoritative terminal event. */
@@ -556,6 +562,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		if (proc.pid) registerProcessTree(proc.pid);
 
 		let buffer = "";
+		let discardingOversizedLine = false;
 		const stdoutDecoder = new StringDecoder("utf8");
 		const stderrDecoder = new StringDecoder("utf8");
 		let idleTimer: NodeJS.Timeout | undefined;
@@ -760,28 +767,74 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			}
 		};
 
+		const canDiscardOversizedLine = (line: string): boolean => {
+			if (!opts.canDiscardOversizedLine) return false;
+			try {
+				// Never hand an unbounded record to host policy code. Pi needs only
+				// the fixed JSON event prefix to identify its redundant history.
+				return opts.canDiscardOversizedLine(acc, line.slice(0, 256));
+			} catch (error) {
+				failProtocol(`Oversized-line policy failed: ${error instanceof Error ? error.message : String(error)}`);
+				return false;
+			}
+		};
+		const discardOversizedLine = () => {
+			clearTerminalCandidate();
+			armIdle();
+			const diagnostic =
+				"[taskflow] Discarded an oversized redundant host record; waiting for the authoritative terminal event.";
+			result.stderr += `${result.stderr && !result.stderr.endsWith("\n") ? "\n" : ""}${diagnostic}\n`;
+		};
+		const consumeStdout = (decoded: string) => {
+			let chunk = decoded;
+			while (chunk && !protocolError) {
+				if (discardingOversizedLine) {
+					const newline = chunk.indexOf("\n");
+					if (newline < 0) return;
+					discardingOversizedLine = false;
+					chunk = chunk.slice(newline + 1);
+					continue;
+				}
+
+				buffer += chunk;
+				chunk = "";
+				let newline = buffer.indexOf("\n");
+				while (newline >= 0 && !protocolError) {
+					const line = buffer.slice(0, newline);
+					buffer = buffer.slice(newline + 1);
+					if (Buffer.byteLength(line) > MAX_STDOUT_LINE_BYTES) {
+						if (canDiscardOversizedLine(line)) discardOversizedLine();
+						else failProtocol(`Subagent emitted a stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+					} else {
+						processLine(line);
+					}
+					newline = buffer.indexOf("\n");
+				}
+				if (protocolError) {
+					buffer = "";
+					return;
+				}
+				if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES) {
+					if (canDiscardOversizedLine(buffer)) {
+						// Retain no history payload while the rest of this record
+						// streams. The next newline exits discard mode.
+						buffer = "";
+						discardingOversizedLine = true;
+						discardOversizedLine();
+					} else {
+						buffer = "";
+						failProtocol(`Subagent emitted an unterminated stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
+					}
+				}
+			}
+		};
+
 		proc.stdout.on("data", (data: Buffer) => {
 			// StringDecoder preserves multi-byte UTF-8 characters split across
 			// arbitrary pipe chunks. Candidate revocation is event-semantic below:
 			// metadata/heartbeat records classified as `ignore` must not disable both
 			// terminal grace and the ordinary idle watchdog.
-			buffer += stdoutDecoder.write(data);
-			if (Buffer.byteLength(buffer) > MAX_STDOUT_LINE_BYTES && !buffer.includes("\n")) {
-				// Drop the retained bytes before terminating so the bound remains true
-				// even while a non-cooperative child takes time to die.
-				buffer = "";
-				failProtocol(`Subagent emitted an unterminated stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
-				return;
-			}
-			const lines = buffer.split("\n");
-			buffer = lines.pop() || "";
-			for (const line of lines) {
-				if (Buffer.byteLength(line) > MAX_STDOUT_LINE_BYTES) {
-					failProtocol(`Subagent emitted a stdout record larger than ${MAX_STDOUT_LINE_BYTES} bytes`);
-					break;
-				}
-				processLine(line);
-			}
+			consumeStdout(stdoutDecoder.write(data));
 			if (!completionPolicy) armIdle();
 		});
 
@@ -821,9 +874,17 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			// Flush decoders and classify the final unterminated record before
 			// settling. Any force-kill timer created by a malformed tail is cleared
 			// below, so no signal can fire after this Promise resolves.
-			buffer += stdoutDecoder.end();
+			consumeStdout(stdoutDecoder.end());
 			if (!stderrCapped) result.stderr += stderrDecoder.end();
-			if (buffer.trim() && killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error") {
+			if (
+				discardingOversizedLine &&
+				killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error"
+			) {
+				failProtocol("Subagent ended during an unterminated oversized stdout record");
+			} else if (
+				buffer.trim() &&
+				killReason !== "abort" && killReason !== "idle-timeout" && killReason !== "fatal-error"
+			) {
 				processLine(buffer);
 			}
 			settled = true;
