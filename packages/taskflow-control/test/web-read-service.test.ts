@@ -555,6 +555,16 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 		assert.ok(admitted.receipt);
 		const run = admitted.run!;
 		const receipt = admitted.receipt!;
+		const originalNextCommitSeq =
+			host.store.nextCommitSeq.bind(host.store);
+		let nextCommitSeqProbes = 0;
+		Object.defineProperty(host.store, "nextCommitSeq", {
+			configurable: true,
+			value: () => {
+				nextCommitSeqProbes += 1;
+				return originalNextCommitSeq();
+			},
+		});
 		const handlers = createInitialWebReadHandlers(host, {
 			now: () => observedAt,
 			cursorCodec: createWebCursorCodec({
@@ -573,6 +583,11 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 			context,
 		);
 		assert.equal(Value.Check(WebRunDetailSchema, detail), true);
+		assert.equal(
+			nextCommitSeqProbes,
+			1,
+			"RunDetail must share one authoritative snapshot with embedded timeline and artifacts",
+		);
 		assert.equal(detail.nodes.length, 2);
 		assert.deepEqual(
 			detail.edges.map((edge) => [
@@ -593,6 +608,25 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 			receipt.receiptId,
 		);
 		assert.deepEqual(detail.replay.unreplayableReasons, []);
+
+		nextCommitSeqProbes = 0;
+		const independentTimeline = await handlers.runTimeline(
+			{
+				params,
+				query: {
+					expectedRunVersion: run.runVersion,
+					limit: 1,
+				},
+				body: {},
+			},
+			context,
+		);
+		assert.equal(independentTimeline.items.length, 1);
+		assert.equal(
+			nextCommitSeqProbes,
+			1,
+			"request-scoped snapshots must not leak into a later handler call",
+		);
 
 		const fragments = await handlers.runFragments(
 			{
@@ -640,6 +674,7 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 			2,
 		);
 
+		nextCommitSeqProbes = 0;
 		const node = await handlers.nodeDetail(
 			{
 				params: { ...params, nodeInstanceId: "finish" },
@@ -649,6 +684,11 @@ test("Run detail, graph, node, attempt, artifact, Receipt, and why-stale reads s
 			context,
 		);
 		assert.equal(Value.Check(WebNodeDetailSchema, node), true);
+		assert.equal(
+			nextCommitSeqProbes,
+			1,
+			"NodeDetail must share one authoritative snapshot with its embedded timeline",
+		);
 		assert.deepEqual(node.dependencyNodeInstanceIds, ["prepare"]);
 		assert.equal(node.attemptCount, 1);
 		assert.equal(

@@ -587,11 +587,30 @@ export function createWebReadService(
 				readonly value: ReadContext;
 		  }
 		| undefined;
+	// Composite DTOs share one immutable authority observation. The scope is
+	// installed only around synchronous nested reads and always removed in finally.
+	const requestScopedContexts = new WeakMap<
+		WebHandlerContext,
+		ReadContext
+	>();
 	const supportedCommands = new Set<WebCommandKind>(
 		options.supportedCommands ?? ["cancel-run"],
 	);
 
-	function context(explicitObservedAt?: number): ReadContext {
+	function context(
+		explicitObservedAt?: number,
+		requestContext?: WebHandlerContext,
+	): ReadContext {
+		const requestScoped = requestContext
+			? requestScopedContexts.get(requestContext)
+			: undefined;
+		if (
+			requestScoped &&
+			(explicitObservedAt === undefined ||
+				requestScoped.observedAt === explicitObservedAt)
+		) {
+			return requestScoped;
+		}
 		const observedAt = explicitObservedAt ?? now();
 		const registryRevision =
 			host.controlMode === "standalone"
@@ -769,6 +788,24 @@ export function createWebReadService(
 			};
 		}
 		return value;
+	}
+
+	function withRequestScopedContext<T>(
+		requestContext: WebHandlerContext,
+		value: ReadContext,
+		read: () => T,
+	): T {
+		const previous = requestScopedContexts.get(requestContext);
+		requestScopedContexts.set(requestContext, value);
+		try {
+			return read();
+		} finally {
+			if (previous) {
+				requestScopedContexts.set(requestContext, previous);
+			} else {
+				requestScopedContexts.delete(requestContext);
+			}
+		}
 	}
 
 	function availableActions(
@@ -2205,31 +2242,40 @@ export function createWebReadService(
 			const receipt = projected.receipt
 				? webReceipt(projected.receipt, resolved.snapshot)
 				: undefined;
-			const timeline = service.readRunTimeline(
-				projectId,
-				controlDomainId,
-				runId,
-				{
-					expectedRunVersion: resolved.run.runVersion,
-					limit: 50,
-				},
+			const [timeline, artifactPage] = withRequestScopedContext(
 				requestContext,
-			);
-			const artifactPage = service.readRunArtifacts(
-				projectId,
-				controlDomainId,
-				runId,
-				{
-					expectedRunVersion: resolved.run.runVersion,
-					...(projected.receipt
-						? {
-								expectedReceiptId:
-									projected.receipt.receiptId,
-							}
-						: {}),
-					limit: 50,
-				},
-				requestContext,
+				ctx,
+				() => [
+					service.readRunTimeline(
+						projectId,
+						controlDomainId,
+						runId,
+						{
+							expectedRunVersion:
+								resolved.run.runVersion,
+							limit: 50,
+						},
+						requestContext,
+					),
+					service.readRunArtifacts(
+						projectId,
+						controlDomainId,
+						runId,
+						{
+							expectedRunVersion:
+								resolved.run.runVersion,
+							...(projected.receipt
+								? {
+										expectedReceiptId:
+											projected.receipt
+												.receiptId,
+									}
+								: {}),
+							limit: 50,
+						},
+						requestContext,
+					),
+				] as const,
 			);
 			return {
 				run: projected.summary,
@@ -2801,7 +2847,10 @@ export function createWebReadService(
 			query,
 			requestContext,
 		) {
-			const ctx = context(requestContext.observedAt);
+			const ctx = context(
+				requestContext.observedAt,
+				requestContext,
+			);
 			const project = ctx.projects.find(
 				(candidate) =>
 					candidate.entry.projectId === projectId &&
@@ -3119,15 +3168,21 @@ export function createWebReadService(
 				boundPlan.program,
 				resolved.snapshot,
 			);
-			const timeline = service.readRunTimeline(
-				projectId,
-				controlDomainId,
-				runId,
-				{
-					expectedRunVersion: resolved.run.runVersion,
-					limit: 200,
-				},
+			const timeline = withRequestScopedContext(
 				requestContext,
+				ctx,
+				() =>
+					service.readRunTimeline(
+						projectId,
+						controlDomainId,
+						runId,
+						{
+							expectedRunVersion:
+								resolved.run.runVersion,
+							limit: 200,
+						},
+						requestContext,
+					),
 			);
 			const outcome =
 				resolved.run.status === "unknown" ||
@@ -3390,7 +3445,10 @@ export function createWebReadService(
 			query,
 			requestContext,
 		) {
-			const ctx = context(requestContext.observedAt);
+			const ctx = context(
+				requestContext.observedAt,
+				requestContext,
+			);
 			const { snapshot, run } = resolveRun(
 				ctx,
 				projectId,
