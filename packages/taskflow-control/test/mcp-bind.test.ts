@@ -91,7 +91,7 @@ test("D21 MCP bind: production script provider; park→approve via tools; exit 3
 	}
 });
 
-test("D21 MCP bind: park + tools.approve first-wins path", async () => {
+test("D21 MCP bind: tools.approve fails closed without durable continuation", async () => {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-apr-home-"));
 	const project = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-apr-proj-"));
 	const env = { ...process.env, TASKFLOW_HOME: home };
@@ -120,12 +120,19 @@ test("D21 MCP bind: park + tools.approve first-wins path", async () => {
 			principal: "mcp",
 			expectedRunVersion: parked.run!.runVersion,
 		});
-		assert.equal(approved.ok, true, JSON.stringify(approved.error));
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
-		// Terminal: cancel rejected
+		assert.equal(approved.ok, false);
+		assert.equal(approved.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(approved.run?.status, "paused");
+		assert.equal(approved.run?.stage, "parked");
+		assert.equal(approved.receipt, undefined);
+		// The parked run remains mutable only through an actual continuation protocol.
 		const cancel = await tools.cancel(r.run!.runId);
-		assert.equal(cancel.ok, false);
+		assert.equal(cancel.ok, false, JSON.stringify(cancel.error));
+		assert.equal(cancel.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(cancel.run?.status, "unknown");
+		assert.equal(cancel.run?.stage, "reconciling");
+		assert.equal(cancel.run?.cancelRequest?.state, "ambiguous");
+		assert.equal(host.store.getReceiptForRun(r.run!.runId), null);
 		host.close();
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });

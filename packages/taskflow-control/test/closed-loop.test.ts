@@ -16,7 +16,7 @@ import {
 	createMockExecutionProvider,
 	openControlRegistry,
 	openProjectControlStore,
-	openUserCoordinatorStore,
+	openUserCoordinatorStore as openUserCoordinatorStoreRaw,
 	CAPACITY_OCCUPYING_STATES,
 	canNormalRelease,
 	DEFAULT_CONTROL_MODE,
@@ -26,6 +26,13 @@ import {
 import { parentReleaseStart } from "./helpers/mp-barrier.mts";
 
 const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
+
+/** Raw global C2 fixtures in this suite are explicit non-GA test plumbing. */
+function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env) {
+	return openUserCoordinatorStoreRaw(env, {
+		allowUnfencedMutationForExplicitNonGaMode: true,
+	});
+}
 
 interface MpChildResult {
 	status: number;
@@ -122,10 +129,48 @@ function tempEnv(): { env: NodeJS.ProcessEnv; home: string; project: string; cle
 	};
 }
 
+function snapshotRegularFiles(root: string): Array<{ relativePath: string; contents: string; mtimeMs: number }> {
+	const snapshot: Array<{ relativePath: string; contents: string; mtimeMs: number }> = [];
+	function visit(dir: string): void {
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const absolutePath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				visit(absolutePath);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			const stat = fs.statSync(absolutePath);
+			snapshot.push({
+				relativePath: path.relative(root, absolutePath),
+				contents: fs.readFileSync(absolutePath).toString("base64"),
+				mtimeMs: stat.mtimeMs,
+			});
+		}
+	}
+	if (fs.existsSync(root)) visit(root);
+	return snapshot.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
 const SCRIPT_FLOW = {
 	name: "fresh-install",
 	phases: [{ id: "main", type: "script", run: "true", final: true }],
 };
+
+function markerScriptFlow(marker: string): Record<string, unknown> {
+	return {
+		name: "admission-marker",
+		phases: [
+			{
+				id: "write-marker",
+				type: "script",
+				// Append rather than overwrite so the assertion below detects a
+				// duplicate physical Script execution, not merely its final value.
+				run: `printf '%s\\n' once >> ${JSON.stringify(marker)}`,
+				final: true,
+			},
+		],
+	};
+}
 
 test("fresh install auto: one run → Receipt with bound plan identity", async () => {
 	const t = tempEnv();
@@ -206,6 +251,87 @@ test("concurrent client start: single writer; attach cannot admit (no dual write
 
 		a.host.close();
 		b.host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("singleton attach opens ControlStore and registry without rewriting durable files", async () => {
+	const t = tempEnv();
+	try {
+		const writer = bootstrapControl({
+			projectRoot: t.project,
+			env: t.env,
+			holderId: "readonly-writer",
+			provider: createMockExecutionProvider({ outcome: "completed", output: "writer" }),
+		});
+		assert.equal(writer.host.role, "writer");
+		const admitted = await writer.host.admitAndRun({ program: SCRIPT_FLOW, commandId: "readonly-writer-run" });
+		assert.equal(admitted.ok, true, JSON.stringify(admitted.error));
+
+		const projectControlDir = path.join(t.project, ".taskflow", "control");
+		const registryPath = path.join(t.home, ".taskflow", "control", "registry.json");
+		const beforeProject = snapshotRegularFiles(projectControlDir);
+		const beforeRegistry = fs.readFileSync(registryPath, "utf-8");
+		const beforeRegistryMtime = fs.statSync(registryPath).mtimeMs;
+		await new Promise((resolve) => setTimeout(resolve, 25));
+
+		const attach = bootstrapControl({
+			projectRoot: t.project,
+			env: t.env,
+			holderId: "readonly-attach",
+			provider: createMockExecutionProvider(),
+		});
+		assert.equal(attach.host.role, "attach");
+		assert.equal(attach.host.canMutate, false);
+		assert.deepEqual(snapshotRegularFiles(projectControlDir), beforeProject);
+		assert.equal(fs.readFileSync(registryPath, "utf-8"), beforeRegistry);
+		assert.equal(fs.statSync(registryPath).mtimeMs, beforeRegistryMtime);
+
+		attach.host.close();
+		writer.host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("read-only attach refuses repair-needed derived state without rebuilding it", async () => {
+	const t = tempEnv();
+	try {
+		const writer = bootstrapControl({
+			projectRoot: t.project,
+			env: t.env,
+			holderId: "readonly-repair-writer",
+			provider: createMockExecutionProvider({ outcome: "completed", output: "writer" }),
+		});
+		const admitted = await writer.host.admitAndRun({
+			program: SCRIPT_FLOW,
+			commandId: "readonly-repair-run",
+		});
+		assert.equal(admitted.ok, true, JSON.stringify(admitted.error));
+
+		const projectionPath = path.join(
+			t.project,
+			".taskflow",
+			"control",
+			"projections",
+			`run-${admitted.run!.runId}.json`,
+		);
+		fs.unlinkSync(projectionPath);
+		const projectControlDir = path.join(t.project, ".taskflow", "control");
+		const before = snapshotRegularFiles(projectControlDir);
+
+		assert.throws(
+			() => openProjectControlStore(t.project, { readOnly: true }),
+			(error: unknown) => {
+				assert.equal((error as { code?: string }).code, "TF_DURABILITY_FAILED", String(error));
+				return true;
+			},
+		);
+		assert.deepEqual(snapshotRegularFiles(projectControlDir), before);
+		assert.equal(fs.existsSync(projectionPath), false, "read-only attach must not repair a projection");
+
+		writer.host.close();
 	} finally {
 		t.cleanup();
 	}
@@ -297,11 +423,227 @@ test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED
 	}
 });
 
+/**
+ * P16-1 admission-saga floor: a capacity rejection may persist a retryable
+ * intent, but it must never strand an accepted command that has no Run. Once
+ * capacity frees, the same command owns exactly one stable run identity and
+ * one successful execution.
+ */
+test("P16 admission: capacity-full queued intent resumes the same command once capacity frees", async () => {
+	const t = tempEnv();
+	try {
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider(),
+		});
+		host.coordinator.setMaxActiveRuns(1, {
+			commandId: "set-capacity-ghost-command",
+			callerPrincipal: "operator",
+			requestBody: { maxActiveRuns: 1 },
+		});
+			const blocker = host.coordinator.reserve();
+		assert.ok(blocker, "test setup must consume the only coordinator slot");
+
+		const result = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "capacity-ghost-command" });
+		assert.equal(result.ok, false);
+		assert.equal(result.error?.code, "TF_CAPACITY_EXCEEDED");
+		const claimed = host.store.getCommand("capacity-ghost-command");
+		assert.ok(claimed, "capacity rejection must persist a durable retry intent");
+		assert.equal(claimed.status, "queued");
+		assert.ok(claimed.runId);
+		assert.equal(claimed.admission?.state, "queued");
+		assert.ok(claimed.admission?.admissionId);
+		assert.equal(host.store.getRun(claimed.runId!), null, "no Run exists before a slot is acquired");
+
+		host.coordinator.releaseUnboundReservation(blocker.reservationId);
+		host.close();
+
+		// A fresh host proves that the queued command, not in-memory retry state,
+		// owns recovery after capacity becomes available.
+		const restarted = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider(),
+		});
+		const resumed = await restarted.admitAndRun({ program: SCRIPT_FLOW, commandId: "capacity-ghost-command" });
+		assert.equal(resumed.ok, true, JSON.stringify(resumed.error));
+		assert.equal(resumed.run?.runId, claimed.runId);
+		assert.ok(resumed.receipt);
+		assert.equal(restarted.store.listRuns().length, 1);
+		const accepted = restarted.store.getCommand("capacity-ghost-command");
+		assert.equal(accepted?.status, "accepted");
+		assert.equal(accepted?.admission?.admissionId, claimed.admission?.admissionId);
+		assert.equal(accepted?.admission?.state, "slot-committed");
+		assert.equal(
+			restarted.coordinator.listReservations().filter((reservation) =>
+				reservation.admissionId === claimed.admission?.admissionId,
+			).length,
+			1,
+			"one admission identity must own one coordinator reservation",
+		);
+		const events = restarted.store.readEvents(1, restarted.store.nextCommitSeq() - 1);
+		assert.equal(
+			events.filter((event) => event.payload.type === "AdmissionIntentRecorded").length,
+			1,
+		);
+		assert.equal(
+			events.filter((event) => event.payload.type === "SlotReserved").length,
+			1,
+		);
+		assert.equal(
+			events.filter((event) => event.payload.type === "SlotCommitted").length,
+			1,
+		);
+		assert.equal(
+			events.filter((event) => event.payload.type === "DispatchIntentRecorded").length,
+			1,
+			"same-command recovery must make one durable provider-dispatch intent",
+		);
+		const dispatchIntent = events.find((event) => event.payload.type === "DispatchIntentRecorded");
+		assert.ok(dispatchIntent);
+		if (dispatchIntent.payload.type === "DispatchIntentRecorded") {
+			assert.ok(
+				dispatchIntent.payload.attempt.idempotencyKey.startsWith(
+					`${claimed.admission!.admissionId}:`,
+				),
+				"provider idempotency must be scoped to the durable admission identity",
+			);
+		}
+		restarted.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+/**
+ * P16-1R adversarial recovery: the coordinator reservation may expire after
+ * the project journal has prepared its Run but before coordinator commit. The
+ * same command must recover through one new reservation and one real Script
+ * dispatch; it must never strand the first Run or mint a second side effect.
+ */
+test("P16 admission: reserve-to-commit TTL expiry rebinds the same command exactly once", async () => {
+	const t = tempEnv();
+	try {
+		const marker = path.join(t.project, "reserve-commit-expiry.marker");
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+		});
+		const reserve = host.coordinator.reserve.bind(host.coordinator);
+		let expireFirstReservation = true;
+		host.coordinator.reserve = (opts) => {
+			const reservation = reserve(opts);
+			if (expireFirstReservation && reservation?.admissionId) {
+				expireFirstReservation = false;
+				host.coordinator.reclaimExpiredReserved(reservation.reservedExpiresAt);
+			}
+			return reservation;
+		};
+
+		const first = await host.admitAndRun({
+			program: markerScriptFlow(marker),
+			commandId: "reserve-commit-expiry",
+		});
+		assert.equal(first.ok, false);
+		assert.equal(first.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(first.error?.recoveryAction, "retry-same-command");
+		assert.equal(first.error?.sideEffects, "none");
+		assert.equal(fs.existsSync(marker), false, "expired pre-commit reservation must not dispatch Script");
+		const interrupted = host.store.getCommand("reserve-commit-expiry");
+		assert.ok(interrupted?.admission);
+		assert.equal(interrupted.admission.state, "project-prepared");
+		assert.ok(interrupted.admission.reservationId);
+		assert.equal(
+			host.coordinator.getReservation(interrupted.admission.reservationId!)?.state,
+			"expired",
+		);
+		host.close();
+
+		// Repeat the same crash window once more: a recovery owner must not
+		// wedge merely because its first replacement lease also elapsed.
+		const secondHost = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+		});
+		const secondReserve = secondHost.coordinator.reserve.bind(secondHost.coordinator);
+		let expireSecondReservation = true;
+		secondHost.coordinator.reserve = (opts) => {
+			const reservation = secondReserve(opts);
+			if (expireSecondReservation && reservation?.admissionId) {
+				expireSecondReservation = false;
+				secondHost.coordinator.reclaimExpiredReserved(reservation.reservedExpiresAt);
+			}
+			return reservation;
+		};
+		const secondInterruptedResult = await secondHost.admitAndRun({
+			program: markerScriptFlow(marker),
+			commandId: "reserve-commit-expiry",
+		});
+		assert.equal(secondInterruptedResult.ok, false);
+		assert.equal(secondInterruptedResult.error?.code, "TF_RECONCILE_REQUIRED");
+		const secondInterrupted = secondHost.store.getCommand("reserve-commit-expiry");
+		assert.equal(secondInterrupted?.admission?.state, "project-prepared");
+		assert.equal(secondInterrupted?.admission?.reservationGeneration, 1);
+		assert.notEqual(secondInterrupted?.admission?.reservationId, interrupted.admission.reservationId);
+		assert.equal(
+			secondHost.coordinator.getReservation(secondInterrupted!.admission!.reservationId!)?.state,
+			"expired",
+		);
+		assert.equal(fs.existsSync(marker), false, "retry before a successful commit must not dispatch Script");
+		secondHost.close();
+
+		const restarted = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+		});
+		const recovered = await restarted.admitAndRun({
+			program: markerScriptFlow(marker),
+			commandId: "reserve-commit-expiry",
+		});
+		assert.equal(recovered.ok, true, JSON.stringify(recovered.error));
+		assert.equal(recovered.run?.runId, interrupted.runId);
+		assert.equal(fs.readFileSync(marker, "utf8"), "once\n");
+		const recoveredCommand = restarted.store.getCommand("reserve-commit-expiry");
+		assert.equal(recoveredCommand?.admission?.state, "slot-committed");
+		assert.equal(recoveredCommand?.admission?.reservationGeneration, 2);
+		assert.notEqual(
+			recoveredCommand?.admission?.reservationId,
+			secondInterrupted?.admission?.reservationId,
+			"recovery must bind a fresh coordinator reservation, not reinterpret an expired lease",
+		);
+		const events = restarted.store.readEvents(1, restarted.store.nextCommitSeq() - 1);
+		assert.equal(
+			events.filter((event) => event.payload.type === "DispatchIntentRecorded").length,
+			1,
+			"recovery must make exactly one durable provider-dispatch intent",
+		);
+		assert.equal(
+			events.filter((event) => event.payload.type === "AdmissionReservationRebound").length,
+			2,
+			"each elapsed prepared lease must leave one explicit journal rebound",
+		);
+		restarted.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("committed slot not TTL-released; forceRelease only via CoordinatorCommandRecord", () => {
 	const t = tempEnv();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
-		const rsv = coord.reserve({ coordinatorEpoch: 1, ttlMs: 1 });
+			const rsv = coord.reserve({ ttlMs: 60_000 });
 		assert.ok(rsv);
 		coord.commitReservation(rsv!.reservationId, {
 			projectId: "p",
@@ -309,7 +651,7 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			runId: "r",
 			projectAdmitCommitSeq: 1,
 		});
-		coord.reclaimExpiredReserved(Date.now() + 10_000);
+		coord.reclaimExpiredReserved(Date.now() + 120_000);
 		const still = coord.getReservation(rsv!.reservationId);
 		assert.equal(still?.state, "committed");
 		assert.ok(CAPACITY_OCCUPYING_STATES.includes(still!.state));
@@ -331,6 +673,26 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 		assert.equal(reservation.operatorOverridden, true);
 		assert.equal(command.kind, "forceRelease");
 		assert.ok(coord.getCommand("force-1"));
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("P16 coordinator: an admission-bound reservation cannot use the unbound release path", () => {
+	const t = tempEnv();
+	try {
+		const coord = openUserCoordinatorStore(t.env);
+			const reservation = coord.reserve({
+				admissionId: "admission-release-guard",
+			});
+		assert.ok(reservation);
+		assert.throws(
+			() => coord.releaseUnboundReservation(reservation.reservationId),
+			/admission\/project\/run\/provider binding/,
+		);
+		const persisted = coord.getReservation(reservation.reservationId);
+		assert.equal(persisted?.state, "reserved");
+		assert.equal(persisted?.admissionId, "admission-release-guard");
 	} finally {
 		t.cleanup();
 	}
@@ -371,7 +733,7 @@ test("reconcile exhaustion: unknown + needs-operator + no Receipt; wait returns 
 	}
 });
 
-test("parkForApproval refuses while provider live; succeeds after quiesce (D38)", async () => {
+test("parkForApproval refuses while provider live; after quiesce it parks without a fake approval Receipt", async () => {
 	const t = tempEnv();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -408,9 +770,11 @@ test("parkForApproval refuses while provider live; succeeds after quiesce (D38)"
 		assert.ok(host.coordinator.occupyingCount() < before);
 
 		const approved = await host.approve(runId!);
-		assert.equal(approved.ok, true);
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
+		assert.equal(approved.ok, false);
+		assert.equal(approved.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(approved.run?.status, "paused");
+		assert.equal(approved.run?.stage, "parked");
+		assert.equal(approved.receipt, undefined);
 		host.close();
 	} finally {
 		t.cleanup();

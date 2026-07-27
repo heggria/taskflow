@@ -5,10 +5,12 @@
 import {
 	acquireOrAttachSingleton,
 	bootstrapControl,
+	isSingletonMutationAuthorityCurrent,
 	newId,
 	openControlRegistry,
 	releaseSingleton,
 	udsPath,
+	withSingletonMutationAuthority,
 	type ControlHost,
 } from "taskflow-control";
 import { startUdsServer, type UdsServerHandle } from "./uds-server.ts";
@@ -53,6 +55,11 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
 				env,
 				holderId: `${holderId}:${root}`,
 				skipSingleton: true,
+				mutationAuthority: () =>
+					isSingletonMutationAuthorityCurrent(singleton.mutationAuthority, env),
+				mutationFence: <T>(fn: () => T): T =>
+					withSingletonMutationAuthority(singleton.mutationAuthority, fn, env),
+				mutationCapability: singleton.mutationAuthority,
 			});
 			hosts.set(host.projectId, host);
 		}
@@ -67,6 +74,8 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
 			socketPath,
 			fencingEpoch: singleton.lock.fencingEpoch,
 			role: singleton.role,
+			isWriterAuthoritative: () =>
+				isSingletonMutationAuthorityCurrent(singleton.mutationAuthority, env),
 			getHost: (projectId) => {
 				// Exact projectId only when provided — no silent wrong-project fallback.
 				if (projectId) return hosts.get(projectId) ?? null;
@@ -86,7 +95,7 @@ export async function startDaemon(opts: DaemonOptions = {}): Promise<DaemonHandl
 			if (uds) await uds.close();
 			for (const h of hosts.values()) h.close();
 			if (singleton.role === "writer") {
-				releaseSingleton(holderId, env);
+				releaseSingleton(singleton.mutationAuthority, env);
 			}
 		},
 	};

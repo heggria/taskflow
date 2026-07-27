@@ -2,6 +2,13 @@
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
 > Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+>
+> **Implementation amendment:** [P16-1R versioned first-dispatch-owner
+> saga](./P16-1R-versioned-first-dispatch-owner.md) is a proposed, mandatory
+> design gate before any runtime adds automatic recovery across the
+> SlotCommitted-to-first-dispatch boundary. It does not change this ADR's
+> wire-freeze status, does not promote the GA matrix, and does not authorize a
+> generic retry.
 
 ## Decision
 ### Capacity (D30)

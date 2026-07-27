@@ -202,6 +202,34 @@ function textContent(text: string, isError = false) {
 	return { content: [{ type: "text", text }], isError };
 }
 
+/**
+ * Keep the emergency legacy route explicitly opt-in even when the control
+ * package itself cannot be loaded. This mirrors controlPlaneEnabled()'s
+ * documented disable values, but intentionally answers only the question
+ * needed before touching the legacy .pi run store.
+ */
+function controlPlaneExplicitlyDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const value = (env.TASKFLOW_CONTROL_PLANE ?? "").toLowerCase();
+	return value === "0" || value === "false" || value === "off" || value === "no";
+}
+
+/**
+ * The 0.2 MCP protocol has a separate .pi run store. Until a daemon-backed
+ * ControlStore lifecycle exists, every legacy execution or lifecycle
+ * entrypoint must reject by default rather than inspect, mutate, or launch it.
+ */
+function legacyRunStoreFallbackDenied(entrypoint: string): ReturnType<typeof textContent> | undefined {
+	if (controlPlaneExplicitlyDisabled()) return undefined;
+	return textContent(
+		[
+			`✗ control-plane ${entrypoint} is not implemented (no legacy fallthrough)`,
+			"The legacy 0.2 protocol uses an independent .pi run store without the shared ControlStore, authority, or Receipt.",
+			"Set TASKFLOW_CONTROL_PLANE=0|false|off|no only for emergency 0.2 fallthrough.",
+		].join("\n"),
+		true,
+	);
+}
+
 /** An MCP `image` content block, optionally followed by text blocks. Codex's
  *  desktop app renders the image as `<img src="data:…">` (an inline SVG shows as
  *  a real diagram) and shows the trailing text as a caption. The CLI/TUI can't
@@ -428,7 +456,7 @@ const TOOLS: McpTool[] = [
 				args: { type: "object", description: "Invocation arguments interpolated as {args.X}." },
 				incremental: { type: "boolean", description: "Default every phase to cross-run cache reuse." },
 				reusedFromSearch: { type: "boolean", description: "Set true when this run was chosen because of a prior taskflow_search → bumps the flow's reuseCount (the reuse flywheel). Default false; direct run-by-name does not bump." },
-				mode: { type: "string", enum: ["foreground", "background"], description: "Execution mode. foreground (default) waits for the full DAG; background returns a runId immediately and continues even if the MCP request ends." },
+				mode: { type: "string", enum: ["foreground", "background"], description: "Execution mode. foreground (default) waits for the full DAG. background is unavailable while the control plane is enabled; the detached 0.2 protocol requires explicit emergency TASKFLOW_CONTROL_PLANE=0|false|off|no and is non-GA." },
 			},
 		},
 	},
@@ -436,7 +464,7 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_runs",
 		title: "Manage background taskflow runs",
 		description:
-			"List recent background runs, inspect one run, wait for completion without losing it when the MCP request ends, or request cancellation. Use after taskflow_run with mode:'background'.",
+			"Legacy detached background lifecycle (list/status/wait/cancel). It is available only with explicit emergency TASKFLOW_CONTROL_PLANE=0|false|off|no; while the control plane is enabled, this tool fails closed and does not touch .pi state.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
@@ -455,7 +483,7 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_resume",
 		title: "Resume a paused/failed run (forks a new run)",
 		description:
-			"Resume a stored run by forking a NEW run (the original run file is never modified). The child carries parentRunId pointing at the original. Reusable completed phases are copied (cache hits); the target phase + its transitive downstream re-run. With no overrides, ordinary resume re-runs the non-done phases. With overrides (requires phaseId + at least one of task/model/timeout/idleTimeout), exactly one phase is re-run with the patched values applied to the child's def only.",
+			"Legacy 0.2 resume: fork a stored .pi run into a NEW child (the parent is never modified). Available only with explicit emergency TASKFLOW_CONTROL_PLANE=0|false|off|no; while the control plane is enabled, it fails closed until ControlStore-backed resume exists. In the legacy path, reusable completed phases are copied (cache hits); the target phase + its transitive downstream re-run. With no overrides, ordinary resume re-runs the non-done phases. With overrides (requires phaseId + at least one of task/model/timeout/idleTimeout), exactly one phase is re-run with the patched values applied to the child's def only.",
 		inputSchema: {
 			type: "object",
 			additionalProperties: false,
@@ -810,6 +838,11 @@ export function makeToolHandlers(
 			const resolvedArgs = resolveArgs(def, providedArgs);
 			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
+			const isBackground = args.mode === "background";
+			if (isBackground) {
+				const denied = legacyRunStoreFallbackDenied("background execution");
+				if (denied) return denied;
+			}
 
 			// Shared discovery for both control-plane and 0.2 paths.
 			const settings = readSubagentSettings();
@@ -831,17 +864,18 @@ export function makeToolHandlers(
 				);
 			}
 
-			// Background mode still uses the 0.2 detached runner (process + .pi store).
-			// ControlHost async admit / shared ControlStore wait is PARTIAL (mandate 3/9)
-			// until daemon-backed background lands. Do not route background through
-			// sync tryControlPlaneRun (would block and ignore detachedRunner).
-			const isBackground = args.mode === "background";
+			// ControlHost async admit / shared ControlStore wait is not implemented
+			// yet. The old detached runner writes a separate .pi run store, so it
+			// must never be selected while the control plane is the default route.
+			// An operator may use the explicit emergency 0.2 opt-out, but default
+			// background mode fails closed until daemon-backed background exists.
 
 			// D21: Foreground ControlHost when control plane is enabled (default ON).
 			// Script phases → ScriptExecutionProvider; agent → host LLM ExecutionProvider.
-			// Opt-out: TASKFLOW_CONTROL_PLANE=0|false|off. Mandate 3: no silent
-			// fallthrough on control-plane errors when enabled.
-			if (!isBackground) {
+			// An explicit emergency opt-out must bypass the import itself: a broken
+			// control-plane package cannot make the documented 0.2 escape hatch lie.
+			// Mandate 3 still forbids fallthrough for every non-opt-out request.
+			if (!isBackground && !controlPlaneExplicitlyDisabled()) {
 				try {
 					const {
 						tryControlPlaneRun,
@@ -878,29 +912,27 @@ export function makeToolHandlers(
 						principal: typeof args.principal === "string" ? args.principal : `mcp:${host ?? "unknown"}`,
 						llmProvider,
 					});
-					if (routed.handled) {
-						return textContent(routed.text, !routed.ok);
-					}
-					// handled:false only when TASKFLOW_CONTROL_PLANE is explicitly off
+					if (routed.handled) return textContent(routed.text, !routed.ok);
+					// The route was entered under CP-on. Do not let an environment
+					// mutation or an unexpected implementation result select 0.2.
+					return textContent(
+						"✗ control-plane unavailable (no legacy fallthrough)\nerror: control-plane route declined an enabled request",
+						true,
+					);
 				} catch (cpErr) {
-					const { controlPlaneEnabled } = await import("taskflow-control").catch(() => ({
-						controlPlaneEnabled: () => true,
-					}));
-					if (controlPlaneEnabled()) {
-						const msg = cpErr instanceof Error ? cpErr.message : String(cpErr);
-						return textContent(
-							[
-								"✗ control-plane unavailable (no legacy fallthrough)",
-								`error: ${msg}`,
-								"Set TASKFLOW_CONTROL_PLANE=0 only for emergency 0.2 fallthrough.",
-							].join("\n"),
-							true,
-						);
-					}
+					const msg = cpErr instanceof Error ? cpErr.message : String(cpErr);
+					return textContent(
+						[
+							"✗ control-plane unavailable (no legacy fallthrough)",
+							`error: ${msg}`,
+							"Set TASKFLOW_CONTROL_PLANE=0|false|off|no only for emergency 0.2 fallthrough.",
+						].join("\n"),
+						true,
+					);
 				}
 			}
 
-			// 0.2 engine path: background always; foreground only when CP disabled.
+			// 0.2 engine path: only with the explicit control-plane opt-out.
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
@@ -1010,6 +1042,8 @@ export function makeToolHandlers(
 		},
 
 		taskflow_runs: async (args, context) => {
+			const denied = legacyRunStoreFallbackDenied("background lifecycle");
+			if (denied) return denied;
 			const action = String(args.action ?? "");
 			if (action === "list") {
 				const limit = Math.max(1, Math.min(50, typeof args.limit === "number" ? Math.floor(args.limit) : 10));
@@ -1059,6 +1093,8 @@ export function makeToolHandlers(
 		},
 
 		taskflow_resume: async (args, context) => {
+			const denied = legacyRunStoreFallbackDenied("resume");
+			if (denied) return denied;
 			// 0.2.0 dogfood issue 5: resume forks a NEW run; the original is never
 			// mutated or overwritten. Optional overrides re-run exactly one phase.
 			const runId = String(args.runId ?? "");

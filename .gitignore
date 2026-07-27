@@ -13,4 +13,5 @@ data/
 .pi/agents/
 .crew/
 .taskflow/
+.taskflow-control.anchor.json
 .scratch/

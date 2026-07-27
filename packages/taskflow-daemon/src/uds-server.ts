@@ -10,13 +10,21 @@
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import type { ControlHost } from "taskflow-control";
+import { ControlStoreDurabilityError, SingletonAuthorityError, type ControlHost } from "taskflow-control";
 
 export const PROTOCOL_MAJOR = 1;
+/** Per-connection JSON-line ceiling; protects the daemon from unbounded pending frames. */
+export const MAX_UDS_LINE_BYTES = 1_048_576;
+/** Bound simultaneously open local peers so idle sockets cannot consume the daemon indefinitely. */
+export const MAX_UDS_CONNECTIONS = 64;
+/** A local peer must finish the one-shot hello before it can hold an admission slot. */
+export const UDS_HELLO_DEADLINE_MS = 5_000;
 
 export interface UdsServerOptions {
 	socketPath: string;
 	fencingEpoch: number;
+	/** Dynamic singleton epoch check; a stale server must reject mutations. */
+	isWriterAuthoritative?: () => boolean;
 	/** Resolve ControlHost by projectId or default first mount. */
 	getHost: (projectId?: string) => ControlHost | null;
 	/** Writer role only serves mutations. */
@@ -30,6 +38,17 @@ export interface UdsServerHandle {
 
 function parseLine(buf: string): unknown {
 	return JSON.parse(buf);
+}
+
+/** JSON-line protocol messages must be objects; scalar JSON has no protocol shape. */
+function isProtocolObject(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function writeProtocolError(socket: net.Socket, message: string): void {
+	socket.write(
+		JSON.stringify({ type: "error", code: "TF_INVALID_ARGUMENT", message }) + "\n",
+	);
 }
 
 export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerHandle> {
@@ -75,19 +94,86 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 		/* best-effort */
 	}
 
+	let activeConnections = 0;
 	const server = net.createServer((socket) => {
-		let acc = "";
-		/** Per-connection: hello must succeed before any RPC (mandate 4). */
-		const conn = { helloOk: false, principal: "anonymous" as string };
+		// A peer may reset while a response is being written; that must not surface
+		// as an unhandled EventEmitter error that terminates the daemon.
+		socket.on("error", () => {
+			/* peer-specific transport failure; close handles slot release when held */
+		});
+		if (activeConnections >= MAX_UDS_CONNECTIONS) {
+			socket.end(
+				JSON.stringify({
+					type: "error",
+					code: "TF_CAPACITY_EXCEEDED",
+					message: `UDS connection capacity ${MAX_UDS_CONNECTIONS} is exhausted`,
+				}) + "\n",
+			);
+			return;
+		}
+		activeConnections += 1;
+		let acc = Buffer.alloc(0);
+		let inputRejected = false;
+		let helloDeadline: ReturnType<typeof setTimeout> | undefined;
+		const conn = {
+			helloOk: false,
+			principal: "anonymous" as string,
+			onHelloAccepted: () => {
+				if (helloDeadline) clearTimeout(helloDeadline);
+			},
+		};
+		const rejectMissingHello = (): void => {
+			if (conn.helloOk || inputRejected) return;
+			inputRejected = true;
+			socket.end(
+				JSON.stringify({
+					type: "error",
+					code: "TF_PROTOCOL_INCOMPATIBLE",
+					message: `hello must complete within ${UDS_HELLO_DEADLINE_MS}ms`,
+				}) + "\n",
+			);
+		};
+		helloDeadline = setTimeout(rejectMissingHello, UDS_HELLO_DEADLINE_MS);
+		socket.once("close", () => {
+			if (helloDeadline) clearTimeout(helloDeadline);
+			activeConnections = Math.max(0, activeConnections - 1);
+		});
+		const rejectOverlongFrame = (): void => {
+			if (inputRejected) return;
+			inputRejected = true;
+			socket.end(
+				JSON.stringify({
+					type: "error",
+					code: "TF_PROTOCOL_INCOMPATIBLE",
+					message: `UDS frame exceeds ${MAX_UDS_LINE_BYTES} bytes`,
+				}) + "\n",
+			);
+		};
+		/** Per-connection: exactly one hello establishes the immutable label before RPC. */
 		socket.on("data", (chunk) => {
-			acc += chunk.toString("utf8");
+			if (inputRejected) return;
+			const data = acc.length === 0 ? chunk : Buffer.concat([acc, chunk]);
+			let start = 0;
 			let idx: number;
-			while ((idx = acc.indexOf("\n")) >= 0) {
-				const line = acc.slice(0, idx).trim();
-				acc = acc.slice(idx + 1);
+			while ((idx = data.indexOf(0x0a, start)) >= 0) {
+				const rawLine = data.subarray(start, idx);
+				if (rawLine.length > MAX_UDS_LINE_BYTES) {
+					rejectOverlongFrame();
+					return;
+				}
+				start = idx + 1;
+				const line = rawLine.toString("utf8").trim();
 				if (!line) continue;
 				void handleLine(socket, line, opts, conn);
 			}
+			const remainder = data.subarray(start);
+			if (remainder.length > MAX_UDS_LINE_BYTES) {
+				rejectOverlongFrame();
+				return;
+			}
+			// Copy the retained tail so a short partial frame does not pin a large
+			// network chunk in memory after earlier complete frames were consumed.
+			acc = Buffer.from(remainder);
 		});
 	});
 
@@ -119,14 +205,15 @@ export async function startUdsServer(opts: UdsServerOptions): Promise<UdsServerH
 	};
 }
 
-function isTrustedPrincipal(p: string): boolean {
+/** Syntax-only admission for a client-asserted label; this is not OS auth. */
+function isValidPrincipalLabel(p: string): boolean {
 	if (!p || p.length > 128) return false;
 	if (/[\r\n\0]/.test(p)) return false;
 	if (/^https?:\/\//i.test(p)) return false;
 	return true;
 }
 
-type ConnState = { helloOk: boolean; principal: string };
+type ConnState = { helloOk: boolean; principal: string; onHelloAccepted: () => void };
 
 async function handleLine(
 	socket: net.Socket,
@@ -134,15 +221,34 @@ async function handleLine(
 	opts: UdsServerOptions,
 	conn: ConnState,
 ): Promise<void> {
-	let msg: Record<string, unknown>;
+	let parsed: unknown;
 	try {
-		msg = parseLine(line) as Record<string, unknown>;
+		parsed = parseLine(line);
 	} catch {
-		socket.write(JSON.stringify({ type: "error", message: "invalid json" }) + "\n");
+		writeProtocolError(socket, "invalid json");
+		return;
+	}
+	if (!isProtocolObject(parsed)) {
+		writeProtocolError(socket, "protocol message must be a JSON object");
+		return;
+	}
+	const msg = parsed;
+	if (typeof msg.type !== "string") {
+		writeProtocolError(socket, "protocol message type must be a string");
 		return;
 	}
 
 	if (msg.type === "hello") {
+		if (conn.helloOk) {
+			socket.write(
+				JSON.stringify({
+					type: "hello-error",
+					code: "TF_PROTOCOL_INCOMPATIBLE",
+					message: "hello is already complete for this connection",
+				}) + "\n",
+			);
+			return;
+		}
 		const major = msg.protocolMajor;
 		if (major !== PROTOCOL_MAJOR) {
 			socket.write(
@@ -154,19 +260,36 @@ async function handleLine(
 			);
 			return;
 		}
-		const principal = String(msg.principal ?? msg.clientId ?? "anonymous");
-		if (!isTrustedPrincipal(principal)) {
+		const principalInput =
+			msg.principal !== undefined
+				? msg.principal
+				: msg.clientId !== undefined
+					? msg.clientId
+					: "anonymous";
+		if (typeof principalInput !== "string") {
 			socket.write(
 				JSON.stringify({
 					type: "hello-error",
 					code: "TF_POLICY_DENIED",
-					message: "untrusted principal",
+					message: "principal label must be a string",
+				}) + "\n",
+			);
+			return;
+		}
+		const principal = principalInput;
+		if (!isValidPrincipalLabel(principal)) {
+			socket.write(
+				JSON.stringify({
+					type: "hello-error",
+					code: "TF_POLICY_DENIED",
+					message: "invalid principal label",
 				}) + "\n",
 			);
 			return;
 		}
 		conn.helloOk = true;
 		conn.principal = principal;
+		conn.onHelloAccepted();
 		socket.write(
 			JSON.stringify({
 				type: "hello-ok",
@@ -193,21 +316,50 @@ async function handleLine(
 			);
 			return;
 		}
-		const method = String(msg.method ?? "");
-		const params = (msg.params ?? {}) as Record<string, unknown>;
-		// Reject untrusted principal strings on every RPC
-		const principal = String(params.principal ?? conn.principal);
-		if (!isTrustedPrincipal(principal)) {
+		if (typeof msg.method !== "string" || msg.method.length === 0) {
+			socket.write(
+				JSON.stringify({
+					type: "rpc-error",
+					id,
+					code: "TF_INVALID_ARGUMENT",
+					message: "rpc method must be a non-empty string",
+				}) + "\n",
+			);
+			return;
+		}
+		const method = msg.method;
+		const rawParams = msg.params === undefined ? {} : msg.params;
+		if (!isProtocolObject(rawParams)) {
+			socket.write(
+				JSON.stringify({
+					type: "rpc-error",
+					id,
+					code: "TF_INVALID_ARGUMENT",
+					message: "rpc params must be a JSON object",
+				}) + "\n",
+			);
+			return;
+		}
+		const params = rawParams;
+		// Command replay and authorization are principal-scoped. A caller may not
+		// switch that identity after hello: otherwise one connection can mint a
+		// command owned by a different principal and bypass cross-principal checks.
+		const requestedPrincipal = params.principal;
+		if (
+			requestedPrincipal !== undefined &&
+			(typeof requestedPrincipal !== "string" || requestedPrincipal !== conn.principal)
+		) {
 			socket.write(
 				JSON.stringify({
 					type: "rpc-error",
 					id,
 					code: "TF_POLICY_DENIED",
-					message: "untrusted principal",
+					message: "RPC principal must match the principal established by hello",
 				}) + "\n",
 			);
 			return;
 		}
+		const principal = conn.principal;
 		try {
 			if (method === "status" || method === "wait") {
 				const host = resolveHostExact(opts, params.projectId as string | undefined);
@@ -230,13 +382,13 @@ async function handleLine(
 				return;
 			}
 			if (method === "admit" || method === "cancel" || method === "approval") {
-				if (opts.role !== "writer") {
+				if (opts.role !== "writer" || opts.isWriterAuthoritative?.() === false) {
 					socket.write(
 						JSON.stringify({
 							type: "rpc-error",
 							id,
 							code: "TF_AUTHORITY_REVOKED",
-							message: "attach cannot mutate",
+							message: "attach or fenced writer cannot mutate",
 						}) + "\n",
 					);
 					return;
@@ -308,17 +460,30 @@ async function handleLine(
 					message: `unknown method ${method}`,
 				}) + "\n",
 			);
-		} catch (e) {
-			socket.write(
-				JSON.stringify({
-					type: "rpc-error",
-					id,
-					code: "TF_COMMAND_FAILED",
+			} catch (e) {
+				const authorityRevoked =
+					e instanceof SingletonAuthorityError ||
+					(!!e && typeof e === "object" && (e as { code?: unknown }).code === "TF_AUTHORITY_REVOKED");
+				const durabilityFailed =
+					e instanceof ControlStoreDurabilityError ||
+					(!!e && typeof e === "object" && (e as { code?: unknown }).code === "TF_DURABILITY_FAILED");
+				socket.write(
+					JSON.stringify({
+						type: "rpc-error",
+						id,
+						code: authorityRevoked
+							? "TF_AUTHORITY_REVOKED"
+							: durabilityFailed
+								? "TF_DURABILITY_FAILED"
+								: "TF_COMMAND_FAILED",
 					message: e instanceof Error ? e.message : String(e),
 				}) + "\n",
 			);
 		}
+		return;
 	}
+
+	writeProtocolError(socket, `unknown protocol message type ${msg.type}`);
 }
 
 /**

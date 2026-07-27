@@ -74,14 +74,16 @@ export async function boundedReconcile(
 			};
 		}
 		if (last.kind === "cancelled") {
-			return {
-				status: "cancelled",
-				stage: "terminal",
-				needsOperator: false,
-				terminal: "cancelled",
-				attempts,
-				exhausted: false,
+			// A provider-local cancelled enum is not a durable, command-bound proof
+			// that all external side effects are contained. Treat it exactly like
+			// ambiguity until a provider-independent containment protocol exists;
+			// otherwise a generic/remote adapter can manufacture a terminal run and
+			// release capacity merely by reporting `cancelled` during reconciliation.
+			last = {
+				kind: "ambiguous",
+				reason: "provider reported cancelled without a durable containment proof",
 			};
+			continue;
 		}
 		if (last.kind === "running") {
 			return {

@@ -3,10 +3,22 @@
  *
  * Each phase is a NodeInstance/Attempt: topo order, dependsOn, when-guard
  * (fail-open on parse error), phase-level ExecutionProvider (script vs llm).
- * Whole-flow single-submit shortcuts are not used here.
+ * Whole-flow single-submit shortcuts are not used here. Native approval phases
+ * return a durable cursor rather than being sent to an LLM.
  */
-import type { ExecutionProvider, CollectResult } from "./provider.ts";
+import type {
+	CollectResult,
+	ExecutionProvider,
+	ProviderSubmissionFence,
+	SubmitResult,
+} from "./provider.ts";
+import { providerHandleOwnershipFailure } from "./provider.ts";
 import { newId } from "./hash.ts";
+import type {
+	DurableDispatchAttempt,
+	DurablePhaseAttempt,
+	RunContinuation,
+} from "./types.ts";
 
 export type PhaseRecord = {
 	id: string;
@@ -22,16 +34,15 @@ export type PhaseRecord = {
 	[key: string]: unknown;
 };
 
-export type PhaseAttempt = {
-	phaseId: string;
-	type: string;
-	status: "completed" | "failed" | "skipped" | "still-running";
-	output?: string;
-	error?: string;
-	providerName?: string;
-	handle?: string;
-	attemptId: string;
-};
+export type PhaseAttempt = DurablePhaseAttempt;
+
+/** Scheduler-owned portion of a journaled RunContinuation. */
+export interface SchedulerCheckpoint {
+	phaseAttempts: PhaseAttempt[];
+	phaseOutputs: Record<string, string>;
+	activeAttempt?: DurableDispatchAttempt;
+	nextPhaseId?: string;
+}
 
 export type ScheduleResult = {
 	ok: boolean;
@@ -50,7 +61,49 @@ export type ScheduleResult = {
 		handle: string;
 		providerName: string;
 		provider: ExecutionProvider;
+		/** A terminal observation fault is never a failed terminal result. */
+		observationError?: string;
 	};
+	/**
+	 * A durable intent was recorded, but the host lost authority before the
+	 * external provider was asked to act. The active intent remains available
+	 * for the authoritative writer to reconcile; this scheduler must not turn it
+	 * into a failed terminal result or release its reservation.
+	 */
+	dispatchDenied?: {
+		phaseId: string;
+		code: ProviderSubmitDenialCode;
+		message: string;
+	};
+	/**
+	 * The provider has accepted a handle, but the host lost authority before it
+	 * could journal DispatchAcknowledged. The durable checkpoint deliberately
+	 * remains intent-recorded; callers must treat the side effect as possible and
+	 * let an authoritative recovery owner reconcile it.
+	 */
+	dispatchAcknowledgementLost?: {
+		phaseId: string;
+		providerName: string;
+		handle: string;
+		message: string;
+	};
+	/**
+	 * A provider accepted an opaque handle, but its durable record cannot prove
+	 * that the handle belongs to this Run/phase. Do not journal the handle or
+	 * call poll/collect/reconcile on it; ControlHost must retain the intent and
+	 * enter an operator-owned reconciliation state.
+	 */
+	dispatchHandleInvalid?: {
+		phaseId: string;
+		providerName: string;
+		handle: string;
+		stage: "acknowledgement" | "terminal-observation";
+		reason: string;
+	};
+	/** Native `approval` phase reached with all upstream work durably checkpointed. */
+	parked?: { phaseId: string; message: string };
+	/** Exact cursor to persist before returning control to ControlHost. */
+	checkpoint: SchedulerCheckpoint;
 };
 
 export interface PhaseSchedulerProviders {
@@ -58,6 +111,71 @@ export interface PhaseSchedulerProviders {
 	script: ExecutionProvider;
 	/** Executes agent/gate/reduce/… via host SubagentRunner. Optional. */
 	llm?: ExecutionProvider;
+}
+
+type MaybePromise<T> = T | Promise<T>;
+
+/** Decision made immediately before an external ExecutionProvider.submit call. */
+export type ProviderSubmitDenialCode = "TF_AUTHORITY_REVOKED" | "TF_RECONCILE_REQUIRED";
+
+export type ProviderSubmitAuthorization =
+	| { allowed: true; submissionFence?: ProviderSubmissionFence }
+	| { allowed: false; code: ProviderSubmitDenialCode; message: string };
+
+/**
+ * Read-only result used by a new ControlHost epoch to resolve one journaled
+ * dispatch intent. This helper never calls `submit`: a crash recovery owner
+ * must not turn an unacknowledged side effect into an implicit replay.
+ */
+export type DurableDispatchRecoveryLookup =
+	| {
+			kind: "found";
+			provider: ExecutionProvider;
+			providerName: string;
+			handle: string;
+			leaseEpoch?: number;
+	  }
+	| { kind: "not-found"; provider: ExecutionProvider; providerName: string }
+	| { kind: "rejected"; provider: ExecutionProvider; providerName: string; reason: string }
+	| { kind: "ambiguous"; provider: ExecutionProvider; providerName: string; reason: string }
+	| { kind: "unsupported"; providerName: string; reason: string }
+	| { kind: "invalid"; reason: string };
+
+type SchedulerCallbacks = {
+	/** Called before the first provider submit for a stable attempt identity. */
+	onDispatchIntent?: (attempt: DurableDispatchAttempt) => MaybePromise<void>;
+	/**
+	 * Last host-side authority check before provider submission. This is a
+	 * narrow pre-submit fence, not a substitute for provider-side fencing or
+	 * idempotent recovery after a process crash.
+	 */
+	beforeProviderSubmit?: (
+		attempt: DurableDispatchAttempt,
+	) => MaybePromise<ProviderSubmitAuthorization>;
+	/** Called after a provider accepts a stable attempt and exposes a handle. */
+	onDispatchAcknowledged?: (attempt: DurableDispatchAttempt) => MaybePromise<void>;
+	/** Called after a phase output/skip advances the durable cursor. */
+	onCheckpoint?: (checkpoint: SchedulerCheckpoint) => MaybePromise<void>;
+};
+
+function providerSubmissionDenial(
+	error: unknown,
+): { code: ProviderSubmitDenialCode; message: string } | undefined {
+	if (!error || typeof error !== "object") return undefined;
+	const code = (error as { code?: unknown }).code;
+	if (code !== "TF_AUTHORITY_REVOKED" && code !== "TF_RECONCILE_REQUIRED") return undefined;
+	return {
+		code,
+		message:
+			error instanceof Error
+				? error.message
+				: "provider submission fence rejected a stale durable submission lease",
+	};
+}
+
+function authorityRevocationMessage(error: unknown): string | undefined {
+	const denial = providerSubmissionDenial(error);
+	return denial?.code === "TF_AUTHORITY_REVOKED" ? denial.message : undefined;
 }
 
 function asPhases(program: unknown): PhaseRecord[] {
@@ -158,23 +276,211 @@ function isAgentishType(type: string): boolean {
 		type === "tournament" ||
 		type === "flow" ||
 		type === "race" ||
-		type === "expand" ||
-		type === "approval"
+		type === "expand"
 	);
 }
+
+function buildPhaseMicroProgram(
+	phase: PhaseRecord,
+	phaseOutputs: Record<string, string>,
+	previous: string,
+): unknown {
+	const phaseClone: PhaseRecord = { ...phase, final: true };
+	if (typeof phaseClone.task === "string") {
+		phaseClone.task = interpolatePhaseText(phaseClone.task, {
+			steps: phaseOutputs,
+			previous,
+		});
+	}
+	if (typeof phaseClone.run === "string") {
+		phaseClone.run = interpolatePhaseText(phaseClone.run, {
+			steps: phaseOutputs,
+			previous,
+		});
+	}
+	return { name: `phase-${phase.id}`, phases: [phaseClone] };
+}
+
+/**
+ * Resolve the provider handle for exactly one durable active attempt after a
+ * restart/takeover. Unlike the ordinary scheduler path, this performs no
+ * external submission. A provider must offer authoritative lookup semantics
+ * or recovery remains fail-closed.
+ */
+export async function lookupDurableDispatchForRecovery(
+	program: unknown,
+	providers: PhaseSchedulerProviders,
+	opts: {
+		runId: string;
+		cwd: string;
+		continuation: Pick<RunContinuation, "phaseOutputs" | "activeAttempt" | "nextPhaseId">;
+	},
+): Promise<DurableDispatchRecoveryLookup> {
+	const active = opts.continuation.activeAttempt;
+	if (!active) return { kind: "invalid", reason: "run has no durable active dispatch attempt" };
+	if (opts.continuation.nextPhaseId && opts.continuation.nextPhaseId !== active.phaseId) {
+		return {
+			kind: "invalid",
+			reason: "durable active dispatch does not match the continuation cursor",
+		};
+	}
+	if (active.state === "prepared") {
+		return {
+			kind: "invalid",
+			reason: "dispatch was prepared but durable intent was never recorded",
+		};
+	}
+
+	const phases = asPhases(program);
+	const ordered = topoOrderPhases(phases);
+	if (!ordered) return { kind: "invalid", reason: "program has no valid topological phase order" };
+	const phaseIndex = ordered.findIndex((phase) => phase.id === active.phaseId);
+	if (phaseIndex < 0) {
+		return {
+			kind: "invalid",
+			reason: `durable active phase ${active.phaseId} is absent from BoundPlan`,
+		};
+	}
+	const phase = ordered[phaseIndex]!;
+	const type = phase.type ?? "agent";
+	if (type !== active.type) {
+		return {
+			kind: "invalid",
+			reason: `durable active type ${active.type} does not match BoundPlan type ${type}`,
+		};
+	}
+	let provider: ExecutionProvider | undefined;
+	if (isScriptType(type)) provider = providers.script;
+	else if (isAgentishType(type)) provider = providers.llm;
+	if (!provider) {
+		return {
+			kind: "invalid",
+			reason: `no ExecutionProvider for durable phase type ${type}`,
+		};
+	}
+	if (provider.name !== active.providerName) {
+		return {
+			kind: "invalid",
+			reason:
+				`durable provider ${active.providerName} does not match current provider ` +
+				`${provider.name} for phase ${active.phaseId}`,
+		};
+	}
+	if (active.providerHandle) {
+		return {
+			kind: "found",
+			provider,
+			providerName: provider.name,
+			handle: active.providerHandle,
+		};
+	}
+	if (!provider.lookupByIdempotency) {
+		return {
+			kind: "unsupported",
+			providerName: provider.name,
+			reason: `provider ${provider.name} has no authoritative idempotency lookup`,
+		};
+	}
+
+	let previous = "";
+	for (const prior of ordered.slice(0, phaseIndex)) {
+		const output = opts.continuation.phaseOutputs[prior.id];
+		if (output !== undefined) previous = output;
+	}
+	const response = await provider.lookupByIdempotency({
+		runId: `${opts.runId}:${phase.id}`,
+		idempotencyKey: active.idempotencyKey,
+		program: buildPhaseMicroProgram(phase, opts.continuation.phaseOutputs, previous),
+		cwd: opts.cwd,
+	});
+	if (response.kind === "found") {
+		if (!response.handle) {
+			return {
+				kind: "ambiguous",
+				provider,
+				providerName: provider.name,
+				reason: `provider ${provider.name} returned an empty recovery handle`,
+			};
+		}
+		return {
+			kind: "found",
+			provider,
+			providerName: provider.name,
+			handle: response.handle,
+			leaseEpoch: response.leaseEpoch,
+		};
+	}
+	if (response.kind === "not-found") {
+		return { kind: "not-found", provider, providerName: provider.name };
+	}
+	return {
+		kind: response.kind,
+		provider,
+		providerName: provider.name,
+		reason: response.reason,
+	};
+}
+
+type TerminalObservation =
+	| { kind: "result"; result: CollectResult }
+	| { kind: "error"; reason: string };
 
 async function waitTerminal(
 	provider: ExecutionProvider,
 	handle: string,
 	deadlineMs: number,
-): Promise<CollectResult> {
+): Promise<TerminalObservation> {
 	const deadline = Date.now() + deadlineMs;
-	let c = await provider.poll(handle);
-	while (c.kind === "still-running" && Date.now() < deadline) {
-		await new Promise((r) => setTimeout(r, 15));
-		c = await provider.poll(handle);
+	// `collect` is the provider's terminal-observation alias. Prefer it when the
+	// adapter implements it so a remote provider cannot hide a terminal result in
+	// a second, unexamined observation path.
+	const observe = provider.collect?.bind(provider) ?? provider.poll.bind(provider);
+	try {
+		let c = await observe(handle);
+		while (c.kind === "still-running" && Date.now() < deadline) {
+			await new Promise((r) => setTimeout(r, 15));
+			c = await observe(handle);
+		}
+		return { kind: "result", result: c };
+	} catch (error) {
+		return {
+			kind: "error",
+			reason: `provider terminal observation failed: ${error instanceof Error ? error.message : String(error)}`,
+		};
 	}
-	return c;
+}
+
+function copyAttempt(attempt: PhaseAttempt): PhaseAttempt {
+	return { ...attempt };
+}
+
+function makeCheckpoint(
+	attempts: readonly PhaseAttempt[],
+	phaseOutputs: Readonly<Record<string, string>>,
+	activeAttempt: DurableDispatchAttempt | undefined,
+	nextPhaseId: string | undefined,
+): SchedulerCheckpoint {
+	return {
+		phaseAttempts: attempts.map(copyAttempt),
+		phaseOutputs: { ...phaseOutputs },
+		...(activeAttempt === undefined ? {} : { activeAttempt: { ...activeAttempt } }),
+		...(nextPhaseId === undefined ? {} : { nextPhaseId }),
+	};
+}
+
+function checkpointResult(
+	ok: boolean,
+	attempts: PhaseAttempt[],
+	phaseOutputs: Record<string, string>,
+	activeAttempt?: DurableDispatchAttempt,
+	nextPhaseId?: string,
+): Pick<ScheduleResult, "ok" | "attempts" | "phaseOutputs" | "checkpoint"> {
+	return {
+		ok,
+		attempts,
+		phaseOutputs,
+		checkpoint: makeCheckpoint(attempts, phaseOutputs, activeAttempt, nextPhaseId),
+	};
 }
 
 /**
@@ -186,29 +492,64 @@ export async function schedulePhases(
 	providers: PhaseSchedulerProviders,
 	opts: {
 		runId: string;
+		/**
+		 * Stable admission identity when the run was created through the durable
+		 * admission saga. Provider retries must share this scope across host
+		 * restart; legacy runs retain their run-id scope.
+		 */
+		admissionId?: string;
 		cwd: string;
 		/** Per-phase poll budget ms (default 60s). */
 		phaseDeadlineMs?: number;
-	},
+		/** A durable cursor from the project journal; settled phases must not rerun. */
+		continuation?: Pick<
+			RunContinuation,
+			"phaseAttempts" | "phaseOutputs" | "activeAttempt" | "nextPhaseId"
+		>;
+	} & SchedulerCallbacks,
 ): Promise<ScheduleResult> {
 	const phases = asPhases(program);
 	if (phases.length === 0) {
-		return { ok: false, error: "program has no phases", attempts: [], phaseOutputs: {} };
+		return { ...checkpointResult(false, [], {}), error: "program has no phases" };
 	}
 	const ordered = topoOrderPhases(phases);
 	if (!ordered) {
-		return { ok: false, error: "phase dependency cycle", attempts: [], phaseOutputs: {} };
+		return { ...checkpointResult(false, [], {}), error: "phase dependency cycle" };
 	}
 
-	const phaseOutputs: Record<string, string> = {};
-	const attempts: PhaseAttempt[] = [];
+	const phaseOutputs: Record<string, string> = { ...(opts.continuation?.phaseOutputs ?? {}) };
+	const attempts: PhaseAttempt[] = (opts.continuation?.phaseAttempts ?? []).map(copyAttempt);
 	const phaseDeadlineMs = opts.phaseDeadlineMs ?? 60_000;
 	let previous = "";
 	let lastFailed: string | undefined;
+	let activeAttempt = opts.continuation?.activeAttempt
+		? { ...opts.continuation.activeAttempt }
+		: undefined;
 
-	for (const phase of ordered) {
+	async function persistCheckpoint(nextPhaseId: string | undefined): Promise<void> {
+		await opts.onCheckpoint?.(makeCheckpoint(attempts, phaseOutputs, activeAttempt, nextPhaseId));
+	}
+
+	for (const [phaseIndex, phase] of ordered.entries()) {
 		const type = phase.type ?? "agent";
+		const settled = attempts.find(
+			(attempt) =>
+				attempt.phaseId === phase.id &&
+				(attempt.status === "completed" || attempt.status === "skipped"),
+		);
+		if (settled) {
+			if (settled.status === "completed") {
+				const output = phaseOutputs[phase.id] ?? settled.output;
+				if (output !== undefined) {
+					phaseOutputs[phase.id] = output;
+					previous = output;
+				}
+			}
+			continue;
+		}
+
 		const attemptId = newId("att");
+		const nextPhaseId = ordered[phaseIndex + 1]?.id;
 
 		// Upstream deps failed → skip remaining (fail closed for success)
 		const depFailed = depsOf(phase).some((d) => {
@@ -223,6 +564,7 @@ export async function schedulePhases(
 				error: "upstream dependency failed",
 				attemptId,
 			});
+			await persistCheckpoint(nextPhaseId);
 			continue;
 		}
 
@@ -234,27 +576,27 @@ export async function schedulePhases(
 				error: "when guard false",
 				attemptId,
 			});
+			await persistCheckpoint(nextPhaseId);
 			continue;
 		}
 
-		// Build phase micro-program for providers
-		const phaseClone: PhaseRecord = { ...phase, final: true };
-		if (typeof phaseClone.task === "string") {
-			phaseClone.task = interpolatePhaseText(phaseClone.task, {
-				steps: phaseOutputs,
-				previous,
-			});
+		// Build phase micro-program for providers.
+		const micro = buildPhaseMicroProgram(phase, phaseOutputs, previous);
+
+		// Approval is a scheduler-native pause. It never invokes an LLM/provider;
+		// ControlHost records the pending request and exact checkpoint atomically.
+		if (type === "approval") {
+			return {
+				...checkpointResult(true, attempts, phaseOutputs, activeAttempt, phase.id),
+				parked: {
+					phaseId: phase.id,
+					message:
+						typeof phase.task === "string"
+							? interpolatePhaseText(phase.task, { steps: phaseOutputs, previous })
+							: "Approve to continue?",
+				},
+			};
 		}
-		if (typeof phaseClone.run === "string") {
-			phaseClone.run = interpolatePhaseText(phaseClone.run, {
-				steps: phaseOutputs,
-				previous,
-			});
-		}
-		const micro = {
-			name: `phase-${phase.id}`,
-			phases: [phaseClone],
-		};
 
 		let provider: ExecutionProvider | undefined;
 		if (isScriptType(type)) {
@@ -263,67 +605,219 @@ export async function schedulePhases(
 			provider = providers.llm;
 			if (!provider) {
 				const err = `no LLM ExecutionProvider for phase type '${type}' (phase ${phase.id})`;
+				attempts.push({ phaseId: phase.id, type, status: "failed", error: err, attemptId });
+				lastFailed = err;
+				await persistCheckpoint(nextPhaseId);
+				continue;
+			}
+		} else {
+			// Unknown type — fail closed.
+			const err = `unsupported phase type '${type}' on ControlHost scheduler`;
+			attempts.push({ phaseId: phase.id, type, status: "failed", error: err, attemptId });
+			lastFailed = err;
+			await persistCheckpoint(nextPhaseId);
+			continue;
+		}
+
+		if (activeAttempt && activeAttempt.phaseId !== phase.id) {
+			const err =
+				`durable dispatch attempt for phase ${activeAttempt.phaseId} blocks phase ${phase.id}; ` +
+				"reconcile the recorded attempt before advancing the cursor";
+			return {
+				...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+				error: err,
+			};
+		}
+
+		let dispatch = activeAttempt;
+		if (dispatch && dispatch.providerName !== provider.name) {
+			return {
+				...checkpointResult(false, attempts, phaseOutputs, dispatch, phase.id),
+				error:
+					`durable dispatch provider ${dispatch.providerName} does not match ` +
+					`current provider ${provider.name} for phase ${phase.id}`,
+			};
+		}
+		if (!dispatch) {
+			const now = Date.now();
+			dispatch = {
+				attemptId,
+				phaseId: phase.id,
+				type,
+				idempotencyKey: `${opts.admissionId ?? opts.runId}:${phase.id}:${attemptId}`,
+				providerName: provider.name,
+				state: "prepared",
+				createdAt: now,
+				updatedAt: now,
+			};
+		}
+		if (dispatch.state === "prepared") {
+			dispatch = { ...dispatch, state: "intent-recorded", updatedAt: Date.now() };
+			activeAttempt = dispatch;
+			await opts.onDispatchIntent?.(dispatch);
+		}
+
+		let handle =
+			dispatch.state === "acknowledged" || dispatch.state === "ambiguous"
+				? dispatch.providerHandle
+				: undefined;
+		if (!handle) {
+			const authorization = await opts.beforeProviderSubmit?.(dispatch);
+			if (authorization?.allowed === false) {
+				return {
+					...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+					error: authorization.message,
+					dispatchDenied: {
+						phaseId: phase.id,
+						code: authorization.code,
+						message: authorization.message,
+					},
+				};
+			}
+			let submit: SubmitResult;
+			try {
+				submit = await provider.submit({
+					runId: `${opts.runId}:${phase.id}`,
+					idempotencyKey: dispatch.idempotencyKey,
+					program: micro,
+					cwd: opts.cwd,
+					submissionFence: authorization?.submissionFence,
+				});
+			} catch (error) {
+				const denial = providerSubmissionDenial(error);
+				if (!denial) throw error;
+				return {
+					...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+					error: denial.message,
+					dispatchDenied: {
+						phaseId: phase.id,
+						code: denial.code,
+						message: denial.message,
+					},
+				};
+			}
+			if (submit.kind === "rejected") {
+				activeAttempt = undefined;
+				attempts.push({
+					phaseId: phase.id,
+					type,
+					status: "failed",
+					error: submit.reason,
+					providerName: provider.name,
+					attemptId: dispatch.attemptId,
+				});
+				lastFailed = submit.reason;
+				await persistCheckpoint(nextPhaseId);
+				continue;
+			}
+
+			handle = submit.handle;
+			if (!handle) {
+				const err = "provider accepted without handle";
+				activeAttempt = undefined;
 				attempts.push({
 					phaseId: phase.id,
 					type,
 					status: "failed",
 					error: err,
-					attemptId,
+					providerName: provider.name,
+					attemptId: dispatch.attemptId,
 				});
 				lastFailed = err;
-				// fail remaining
+				await persistCheckpoint(nextPhaseId);
 				continue;
 			}
-		} else {
-			// unknown type — fail closed
-			const err = `unsupported phase type '${type}' on ControlHost scheduler`;
-			attempts.push({
-				phaseId: phase.id,
-				type,
-				status: "failed",
-				error: err,
-				attemptId,
+			const acknowledgementOwnershipFailure = providerHandleOwnershipFailure(provider, {
+				handle,
+				runId: `${opts.runId}:${phase.id}`,
+				providerName: provider.name,
 			});
-			lastFailed = err;
-			continue;
+			if (acknowledgementOwnershipFailure) {
+				return {
+					...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+					error: acknowledgementOwnershipFailure,
+					dispatchHandleInvalid: {
+						phaseId: phase.id,
+						providerName: provider.name,
+						handle,
+						stage: "acknowledgement",
+						reason: acknowledgementOwnershipFailure,
+					},
+				};
+			}
+			dispatch = {
+				...dispatch,
+				state: submit.kind === "ambiguous" ? "ambiguous" : "acknowledged",
+				providerHandle: handle,
+				updatedAt: Date.now(),
+			};
+			activeAttempt = dispatch;
+			try {
+				await opts.onDispatchAcknowledged?.(dispatch);
+			} catch (error) {
+				const message = authorityRevocationMessage(error);
+				if (!message) throw error;
+				const { providerHandle: _providerHandle, ...intentWithoutHandle } = dispatch;
+				const durableIntent: DurableDispatchAttempt = {
+					...intentWithoutHandle,
+					state: "intent-recorded",
+				};
+				return {
+					...checkpointResult(false, attempts, phaseOutputs, durableIntent, phase.id),
+					error: message,
+					dispatchAcknowledgementLost: {
+						phaseId: phase.id,
+						providerName: provider.name,
+						handle,
+						message,
+					},
+				};
+			}
 		}
 
-		const submit = await provider.submit({
+		const observationOwnershipFailure = providerHandleOwnershipFailure(provider, {
+			handle,
 			runId: `${opts.runId}:${phase.id}`,
-			idempotencyKey: `${opts.runId}:${phase.id}:${attemptId}`,
-			program: micro,
-			cwd: opts.cwd,
+			providerName: provider.name,
 		});
+		if (observationOwnershipFailure) {
+			return {
+				...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+				error: observationOwnershipFailure,
+				dispatchHandleInvalid: {
+					phaseId: phase.id,
+					providerName: provider.name,
+					handle,
+					stage: "terminal-observation",
+					reason: observationOwnershipFailure,
+				},
+			};
+		}
 
-		if (submit.kind === "rejected") {
+		const observed = await waitTerminal(provider, handle, phaseDeadlineMs);
+		if (observed.kind === "error") {
 			attempts.push({
 				phaseId: phase.id,
 				type,
-				status: "failed",
-				error: submit.reason,
+				status: "still-running",
+				error: observed.reason,
 				providerName: provider.name,
-				attemptId,
+				handle,
+				attemptId: dispatch.attemptId,
 			});
-			lastFailed = submit.reason;
-			continue;
+			return {
+				...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+				error: observed.reason,
+				stillRunning: {
+					phaseId: phase.id,
+					handle,
+					providerName: provider.name,
+					provider,
+					observationError: observed.reason,
+				},
+			};
 		}
-
-		const handle = submit.handle;
-		if (!handle) {
-			const err = "provider accepted without handle";
-			attempts.push({
-				phaseId: phase.id,
-				type,
-				status: "failed",
-				error: err,
-				providerName: provider.name,
-				attemptId,
-			});
-			lastFailed = err;
-			continue;
-		}
-
-		const collected = await waitTerminal(provider, handle, phaseDeadlineMs);
+		const collected = observed.result;
 		if (collected.kind === "completed") {
 			const out = collected.output ?? "";
 			phaseOutputs[phase.id] = out;
@@ -335,8 +829,10 @@ export async function schedulePhases(
 				output: out,
 				providerName: provider.name,
 				handle,
-				attemptId,
+				attemptId: dispatch.attemptId,
 			});
+			activeAttempt = undefined;
+			await persistCheckpoint(nextPhaseId);
 		} else if (collected.kind === "failed") {
 			const err = collected.error ?? "phase failed";
 			attempts.push({
@@ -346,22 +842,37 @@ export async function schedulePhases(
 				error: err,
 				providerName: provider.name,
 				handle,
-				attemptId,
+				attemptId: dispatch.attemptId,
 			});
 			lastFailed = err;
+			activeAttempt = undefined;
+			await persistCheckpoint(nextPhaseId);
 		} else if (collected.kind === "cancelled") {
+			// A bare provider-local `cancelled` enum proves neither command-bound
+			// cancellation nor containment of remote/detached side effects. Do not
+			// convert it to a failed terminal phase: retain the active attempt and
+			// hand it to ControlHost's fail-closed reconciliation path instead.
 			attempts.push({
 				phaseId: phase.id,
 				type,
-				status: "failed",
-				error: "phase cancelled",
+				status: "still-running",
+				error: "provider reported cancelled without a durable containment proof",
 				providerName: provider.name,
 				handle,
-				attemptId,
+				attemptId: dispatch.attemptId,
 			});
-			lastFailed = "phase cancelled";
+			return {
+				...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
+				error: "provider reported cancelled without a durable containment proof",
+				stillRunning: {
+					phaseId: phase.id,
+					handle,
+					providerName: provider.name,
+					provider,
+				},
+			};
 		} else {
-			// still-running after budget → hand off to ControlHost reconcile (do not fail-terminal)
+			// Still-running after budget → hand off to ControlHost reconcile (do not fail-terminal).
 			attempts.push({
 				phaseId: phase.id,
 				type,
@@ -369,13 +880,11 @@ export async function schedulePhases(
 				error: "phase still-running after deadline",
 				providerName: provider.name,
 				handle,
-				attemptId,
+				attemptId: dispatch.attemptId,
 			});
 			return {
-				ok: false,
+				...checkpointResult(false, attempts, phaseOutputs, activeAttempt, phase.id),
 				error: "phase still-running after deadline",
-				attempts,
-				phaseOutputs,
 				stillRunning: {
 					phaseId: phase.id,
 					handle,
@@ -389,14 +898,12 @@ export async function schedulePhases(
 	const anyFailed = attempts.some((a) => a.status === "failed");
 	if (anyFailed) {
 		return {
-			ok: false,
+			...checkpointResult(false, attempts, phaseOutputs, activeAttempt),
 			error: lastFailed ?? "one or more phases failed",
-			attempts,
-			phaseOutputs,
 		};
 	}
 
-	// Final output: last final:true phase, else last completed
+	// Final output: last final:true phase, else last completed.
 	const finals = ordered.filter((p) => p.final === true);
 	let finalOutput = "";
 	if (finals.length > 0) {
@@ -407,5 +914,8 @@ export async function schedulePhases(
 		finalOutput = completed[completed.length - 1]?.output ?? "";
 	}
 
-	return { ok: true, finalOutput, attempts, phaseOutputs };
+	return {
+		...checkpointResult(true, attempts, phaseOutputs, activeAttempt),
+		finalOutput,
+	};
 }

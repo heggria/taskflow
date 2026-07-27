@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -17,6 +17,17 @@ import {
 	type Taskflow,
 } from "taskflow-core";
 import { makeToolHandlers } from "taskflow-mcp-core/server";
+
+// This file exercises the explicitly opted-out legacy detached protocol. The
+// default control-plane rejection is covered separately in
+// background-control-plane.test.ts; do not let legacy compatibility assertions
+// accidentally stand in for the product default.
+const previousControlPlane = process.env.TASKFLOW_CONTROL_PLANE;
+process.env.TASKFLOW_CONTROL_PLANE = "0";
+after(() => {
+	if (previousControlPlane === undefined) delete process.env.TASKFLOW_CONTROL_PLANE;
+	else process.env.TASKFLOW_CONTROL_PLANE = previousControlPlane;
+});
 
 interface TextResult {
 	content: Array<{ type: string; text: string }>;

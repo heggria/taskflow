@@ -21,6 +21,15 @@ Wire-freeze gate for taskflow 0.3.0. Master RFC v7.6 is frozen; detail lives her
 | P15 | Approval protocol | [P15-approval-protocol.md](./P15-approval-protocol.md) |
 | P16 | UserCoordinatorStore concurrency + release | [P16-coordinator-concurrency.md](./P16-coordinator-concurrency.md) |
 
+## Implementation supplements
+
+These are scoped implementation gates under an existing P-ADR, not new
+P-numbered wire-freeze requirements.
+
+| Parent | Topic | File | Status |
+|--------|-------|------|--------|
+| P16 | Versioned admission and first-dispatch-owner saga | [P16-1R-versioned-first-dispatch-owner.md](./P16-1R-versioned-first-dispatch-owner.md) | Proposed; NOT GA |
+
 ## Completeness
 
 All P1–P16 are required before shipping frozen wire TypeBox types. Files-only storage is specified in P14. P16 is not foldable into P13.

@@ -15,7 +15,7 @@ import {
 	projectCoordinatorDir,
 	coordinatorDir,
 } from "../src/index.ts";
-import { parentReleaseStart } from "./helpers/mp-barrier.mts";
+import { parentReleaseStart, parentWaitForFiles } from "./helpers/mp-barrier.mts";
 
 const helpersDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers");
 
@@ -139,7 +139,13 @@ test("20+ process parallel singleton: exactly one writer", async () => {
 				process.execPath,
 				["--conditions=development", "--experimental-strip-types", script, t.home, `h-${i}`],
 				{
-					env: { ...process.env, TF_MP_BARRIER: barrierDir, TF_MP_ID: id, TASKFLOW_HOME: t.home },
+					env: {
+						...process.env,
+						TF_MP_BARRIER: barrierDir,
+						TF_MP_ID: id,
+						TF_MP_SINGLETON_RELEASE: path.join(barrierDir, "singleton-release"),
+						TASKFLOW_HOME: t.home,
+					},
 					stdio: ["ignore", "pipe", "pipe"],
 				},
 			);
@@ -172,6 +178,8 @@ test("20+ process parallel singleton: exactly one writer", async () => {
 		}
 
 		parentReleaseStart(barrierDir, N, 30_000);
+		parentWaitForFiles(barrierDir, "acquired-", N, 30_000);
+		fs.writeFileSync(path.join(barrierDir, "singleton-release"), String(Date.now()));
 		const results = await Promise.all(children);
 		try {
 			fs.rmSync(barrierDir, { recursive: true, force: true });

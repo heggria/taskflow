@@ -545,7 +545,7 @@ test("skill: every complete flow example in the bundled skill files passes taskf
 // MCP resume integration (immutable fork + override + actual source label)
 // ===========================================================================
 
-test("mcp: taskflow_resume forks failed history, applies override, and preserves parent bytes", async () => {
+test("mcp: taskflow_resume forks failed history, applies override, and preserves parent bytes", { concurrency: false }, async () => {
 	const fs = await import("node:fs");
 	const os = await import("node:os");
 	const path = await import("node:path");
@@ -557,6 +557,8 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 	} = await import("taskflow-core");
 	const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-"));
+	const previousControlPlane = process.env.TASKFLOW_CONTROL_PLANE;
+	process.env.TASKFLOW_CONTROL_PLANE = "0";
 	try {
 		const def: Taskflow = {
 			name: "resume-me",
@@ -615,12 +617,16 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		assert.equal(child.def.phases.find((phase) => phase.id === "b")?.task, "fixed");
 		assert.equal(parent.def.phases.find((phase) => phase.id === "b")?.task, "fail-me");
 	} finally {
+		if (previousControlPlane === undefined) delete process.env.TASKFLOW_CONTROL_PLANE;
+		else process.env.TASKFLOW_CONTROL_PLANE = previousControlPlane;
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
-test("mcp: taskflow_resume can repair an invalid stored definition with an override", async () => {
+test("mcp: taskflow_resume can repair an invalid stored definition with an override", { concurrency: false }, async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-repair-"));
+	const previousControlPlane = process.env.TASKFLOW_CONTROL_PLANE;
+	process.env.TASKFLOW_CONTROL_PLANE = "0";
 	try {
 		const def: Taskflow = {
 			name: "repair-invalid-resume",
@@ -665,6 +671,8 @@ test("mcp: taskflow_resume can repair an invalid stored definition with an overr
 		assert.deepEqual(calls, ["work"]);
 		assert.match(response.content[0]!.text, /resume complete/);
 	} finally {
+		if (previousControlPlane === undefined) delete process.env.TASKFLOW_CONTROL_PLANE;
+		else process.env.TASKFLOW_CONTROL_PLANE = previousControlPlane;
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
 });

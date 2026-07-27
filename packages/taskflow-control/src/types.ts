@@ -179,7 +179,44 @@ export const CONTROL_STORE_SCHEMA_VERSION = 1;
 // CommandRecord / ControlEvent (D24)
 // ---------------------------------------------------------------------------
 
-export type CommandStatus = "accepted" | "completed" | "failed" | "rejected";
+export type CommandStatus = "queued" | "accepted" | "completed" | "failed" | "rejected";
+
+/**
+ * Durable project-side admission saga state. `queued` is intentionally a
+ * command state rather than a synthetic Run: capacity rejection must retain a
+ * retry identity without publishing a half-admitted execution.
+ */
+export const ADMISSION_INTENT_STATES = [
+	"queued",
+	"project-prepared",
+	"slot-committed",
+] as const;
+export type AdmissionIntentState = (typeof ADMISSION_INTENT_STATES)[number];
+
+/**
+ * Stable identifiers shared by the project journal and coordinator. A retry
+ * must reuse this record; it may not mint a second Run or reservation.
+ */
+export interface AdmissionIntent {
+	schemaVersion: 1;
+	admissionId: string;
+	runId: string;
+	continuationId: string;
+	boundPlanHash: string;
+	state: AdmissionIntentState;
+	/** Present once the coordinator slot is durably reserved. */
+	reservationId?: string;
+	/**
+	 * Monotonic project-journal version of the reservation binding. Zero is the
+	 * initial prepare; every expiry recovery must append an explicit rebound
+	 * record before it may bind a replacement coordinator reservation.
+	 *
+	 * Optional only for pre-recovery v1 journals. New writes always persist it.
+	 */
+	reservationGeneration?: number;
+	createdAt: number;
+	updatedAt: number;
+}
 
 export interface CommandRecord {
 	commandId: string;
@@ -194,6 +231,8 @@ export interface CommandRecord {
 	lastCommitSeq: number;
 	/** Run created by this command (idempotent disclosure key). */
 	runId?: string;
+	/** Present only for the P16 admission saga. */
+	admission?: AdmissionIntent;
 	responseArtifactRef?: string;
 	recordedAt: number;
 }
@@ -214,7 +253,51 @@ export interface ControlEvent {
 	payload: ControlEventPayload;
 }
 
+/**
+ * Journal-derived cursor horizon. The checkpoint is part of the authoritative
+ * event history; no separately writable cursor file may lower this floor.
+ * Physical journal retention is a separate protocol and is deliberately not
+ * implied by this state alone.
+ */
+export interface ControlCompactionState {
+	/** Lowest cursor commit sequence accepted without a checkpoint resync. */
+	minAvailableCommitSeq: number;
+	/** Last authoritative journal commit sequence, including a checkpoint event. */
+	maxCommitSeq: number;
+	/** Commit sequence of the latest durable cursor checkpoint, when one exists. */
+	lastCheckpointCommitSeq?: number;
+	/** Recorded-at time of the latest checkpoint (or deterministic initial zero). */
+	updatedAt: number;
+}
+
 export type ControlEventPayload =
+	| { type: "AdmissionIntentRecorded"; commandId: string; admission: AdmissionIntent }
+	| {
+			type: "SlotReserved";
+			runId: string;
+			admissionId: string;
+			reservationId: string;
+			coordinatorEpoch: number;
+			reservedExpiresAt: number;
+	  }
+	| {
+			type: "AdmissionReservationRebound";
+			runId: string;
+			admissionId: string;
+			fromReservationId: string;
+			reservationId: string;
+			reservationGeneration: number;
+			coordinatorEpoch: number;
+			reservedExpiresAt: number;
+	  }
+	| { type: "ProjectRunPrepared"; runId: string; admissionId: string; reservationId: string }
+	| {
+			type: "SlotCommitted";
+			runId: string;
+			admissionId: string;
+			reservationId: string;
+			projectAdmitCommitSeq: number;
+	  }
 	| { type: "RunReceived"; runId: string; boundPlanHash: string }
 	| { type: "RunAdmitted"; runId: string; reservationId: string }
 	| { type: "RunStatusChanged"; runId: string; status: RunStatus; stage: RunStage; reason?: string }
@@ -224,6 +307,35 @@ export type ControlEventPayload =
 	| { type: "ReceiptIssued"; runId: string; receiptId: string }
 	| { type: "ApprovalParked"; runId: string; approvalRequestId: string }
 	| { type: "ApprovalDecided"; runId: string; approvalRequestId: string; decision: string }
+	/** Immutable plan snapshot used to reconstruct a parked run after restart. */
+	| { type: "BoundPlanStored"; runId: string; boundPlan: BoundPlan }
+	/** Latest durable scheduler cursor for a run. */
+	| { type: "ContinuationStored"; continuation: RunContinuation }
+	| {
+			type: "AttemptPrepared";
+			runId: string;
+			continuationId: string;
+			attempt: DurableDispatchAttempt;
+	  }
+	| {
+			type: "DispatchIntentRecorded";
+			runId: string;
+			continuationId: string;
+			attempt: DurableDispatchAttempt;
+	  }
+	| {
+			type: "DispatchAcknowledged";
+			runId: string;
+			continuationId: string;
+			attempt: DurableDispatchAttempt;
+	  }
+	| { type: "ApprovalRequestStored"; approval: ApprovalRequest }
+	/**
+	 * Durable logical cursor floor. `throughCommitSeq` is an already committed
+	 * prefix; this checkpoint itself remains retained until a future physical
+	 * compaction protocol proves a safe hash-chain handoff.
+	 */
+	| { type: "CompactionCheckpoint"; throughCommitSeq: number }
 	| { type: "Generic"; kind: string; data?: Record<string, unknown> };
 
 // ---------------------------------------------------------------------------
@@ -240,6 +352,8 @@ export interface RunProjection {
 	boundFragmentHash?: string;
 	/** True when auto-reconcile exhausted; wait returns TF_RECONCILE_REQUIRED. */
 	needsOperator: boolean;
+	/** Stable P16 admission-saga identity, if this run was admitted through it. */
+	admissionId?: string;
 	reservationId?: string;
 	createdAt: number;
 	updatedAt: number;
@@ -254,6 +368,164 @@ export interface RunProjection {
 	/** Provider lease/epoch at submit time. */
 	providerLeaseEpoch?: number;
 	providerName?: string;
+	/**
+	 * Durable cancel ownership. A non-terminal cancellation is never inferred
+	 * from an in-memory signal: the command and its external-call boundary are
+	 * journaled before a provider may be touched.
+	 */
+	cancelRequest?: DurableCancelRequest;
+	/** Journaled scheduler cursor for a native durable continuation (P15). */
+	continuationId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Durable scheduler continuation / approval records (P15)
+// ---------------------------------------------------------------------------
+
+export const DURABLE_PHASE_ATTEMPT_STATUSES = [
+	"completed",
+	"failed",
+	"skipped",
+	"still-running",
+] as const;
+export type DurablePhaseAttemptStatus = (typeof DURABLE_PHASE_ATTEMPT_STATUSES)[number];
+
+/** A settled phase cursor. Its output is replayed, never re-executed, on resume. */
+export interface DurablePhaseAttempt {
+	phaseId: string;
+	type: string;
+	status: DurablePhaseAttemptStatus;
+	attemptId: string;
+	output?: string;
+	error?: string;
+	providerName?: string;
+	handle?: string;
+}
+
+export const DURABLE_DISPATCH_STATES = [
+	"prepared",
+	"intent-recorded",
+	"acknowledged",
+	"ambiguous",
+] as const;
+export type DurableDispatchState = (typeof DURABLE_DISPATCH_STATES)[number];
+
+/**
+ * Stable identity for an externally dispatched phase. Reusing the same
+ * idempotencyKey after a crash is the only permitted retry of this attempt.
+ */
+export interface DurableDispatchAttempt {
+	attemptId: string;
+	phaseId: string;
+	type: string;
+	idempotencyKey: string;
+	providerName: string;
+	state: DurableDispatchState;
+	providerHandle?: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
+// There is deliberately no terminal `cancelled` state in 0.3.0. Current
+// providers cannot supply a durable, command-bound containment proof, so a
+// cancellation request remains reconciling until an explicit future protocol
+// can establish that proof.
+export const DURABLE_CANCEL_STATES = ["requested", "signalling", "ambiguous"] as const;
+export type DurableCancelState = (typeof DURABLE_CANCEL_STATES)[number];
+
+/**
+ * One cancel command's durable ownership and provider boundary. `signalling`
+ * means the provider call may already have happened, so retries must reconcile
+ * rather than emit another signal. `ambiguous` retains capacity and requires a
+ * provider observation or operator action.
+ */
+export interface DurableCancelRequest {
+	commandId: string;
+	requestHash: string;
+	principal: string;
+	state: DurableCancelState;
+	providerHandle?: string;
+	providerName?: string;
+	/**
+	 * Immutable route identity captured with CancelRequested. A later host must
+	 * never reinterpret an opaque handle through whichever provider is currently
+	 * convenient: all six fields must still match the live continuation before a
+	 * provider cancellation side effect is allowed.
+	 *
+	 * Older journals legitimately lack these fields. They remain readable but
+	 * fail closed to reconciliation rather than being re-signalled.
+	 */
+	continuationId?: string;
+	continuationVersion?: number;
+	attemptId?: string;
+	phaseId?: string;
+	fencingEpoch?: number;
+	requestedAt: number;
+	updatedAt: number;
+}
+
+export const CONTINUATION_STATUSES = ["active", "parked", "approved", "terminal"] as const;
+export type ContinuationStatus = (typeof CONTINUATION_STATUSES)[number];
+
+/**
+ * Immutable-plan scheduler checkpoint. It is journaled with every cursor
+ * advance, so a restarted host can resume downstream work without replaying
+ * completed side effects.
+ */
+export interface RunContinuation {
+	schemaVersion: 1;
+	continuationId: string;
+	runId: string;
+	projectId: string;
+	controlDomainId: string;
+	boundPlanHash: string;
+	status: ContinuationStatus;
+	/** First phase not durably settled; omitted only after terminal settlement. */
+	nextPhaseId?: string;
+	phaseAttempts: DurablePhaseAttempt[];
+	phaseOutputs: Record<string, string>;
+	/** Current provider dispatch, if any, retained across crash windows. */
+	activeAttempt?: DurableDispatchAttempt;
+	/** Native approval phase currently holding this continuation parked. */
+	approvalPhaseId?: string;
+	approvalRequestId?: string;
+	createdAt: number;
+	updatedAt: number;
+	version: number;
+}
+
+export type ApprovalDecision = "approve" | "reject" | "edit";
+export type ApprovalRequestStatus =
+	| "pending"
+	| "approved"
+	| "rejected"
+	| "edited"
+	| "expired"
+	| "cancelled";
+
+/**
+ * Project-ledger authority record. Legacy side files may mirror older parked
+ * flows, but a native continuation uses this journaled representation.
+ */
+export interface ApprovalRequest {
+	approvalRequestId: string;
+	runId: string;
+	projectId: string;
+	controlDomainId: string;
+	status: ApprovalRequestStatus;
+	allowedDecisions: ApprovalDecision[];
+	createdAt: number;
+	deadline?: number;
+	decidedAt?: number;
+	decision?: ApprovalDecision;
+	decisionCommandId?: string;
+	deciderPrincipal?: string;
+	/** RunVersion at park time for CAS. */
+	expectedRunVersion: number;
+	note?: string;
+	continuationId?: string;
+	phaseId?: string;
+	message?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,6 +561,8 @@ export interface BoundPlan {
 	boundPlanHash: string;
 	executionSemanticHash: string;
 	programName: string;
+	/** In-memory E-1 route identity; schema-1 persistence deliberately omits it. */
+	providerClass?: string;
 	/** Desugared Taskflow JSON (immutable snapshot). */
 	program: unknown;
 	/** FlowIR hash when available (ir:<64-hex>). */
@@ -320,6 +594,8 @@ export interface ConcurrencyReservation {
 	state: ReservationState;
 	/** Fixed 1 in 0.3. */
 	slots: typeof RESERVATION_SLOTS;
+	/** Stable project admission identity while this slot participates in a saga. */
+	admissionId?: string;
 	projectId?: string;
 	projectControlDomainId?: string;
 	runId?: string;

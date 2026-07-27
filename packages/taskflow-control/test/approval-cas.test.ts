@@ -12,8 +12,6 @@ import { test } from "node:test";
 import {
 	createControlHost,
 	createMockExecutionProvider,
-	openUserCoordinatorStore,
-	projectCoordinatorDir,
 } from "../src/index.ts";
 import { parentReleaseStart } from "./helpers/mp-barrier.mts";
 
@@ -38,7 +36,7 @@ function temp(): { env: NodeJS.ProcessEnv; project: string; home: string; cleanu
 	};
 }
 
-test("dual-client approval CAS: stale expectedRunVersion loses (sequential)", async () => {
+test("approval rejects stale versions and remains parked until continuation is durable", async () => {
 	const t = temp();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -75,25 +73,60 @@ test("dual-client approval CAS: stale expectedRunVersion loses (sequential)", as
 		assert.equal(stale.error?.code, "TF_STALE_VERSION");
 
 		const fresh = await b.approve(runId, { expectedRunVersion: vParked });
-		assert.equal(fresh.ok, true, JSON.stringify(fresh.error));
-		assert.equal(fresh.run?.status, "completed");
-		assert.ok(fresh.receipt);
+		assert.equal(fresh.ok, false);
+		assert.equal(fresh.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(fresh.run?.status, "paused");
+		assert.equal(fresh.run?.stage, "parked");
+		assert.equal(fresh.receipt, undefined);
 
 		const again = await a.approve(runId, { expectedRunVersion: vParked });
 		assert.equal(again.ok, false);
-		assert.ok(
-			again.error?.code === "TF_STALE_VERSION" || again.error?.code === "TF_INVALID_ARGUMENT",
-		);
+		assert.equal(again.error?.code, "TF_FEATURE_REQUIRED");
 
-		// Exactly one Receipt on durable store
+		// No Receipt is allowed while there is no durable resume/attempt protocol.
 		const receiptsDir = path.join(t.project, ".taskflow", "control", "receipts");
 		const receiptFiles = fs
 			.readdirSync(receiptsDir)
 			.filter((f) => f.endsWith(".json") && !f.startsWith("by-run-"));
-		assert.equal(receiptFiles.length, 1, `expected 1 receipt file, got ${receiptFiles.join(",")}`);
+		assert.equal(receiptFiles.length, 0, `unexpected receipt file: ${receiptFiles.join(",")}`);
 
 		a.close();
 		b.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("approval never signs a Receipt when no durable provider continuation exists", async () => {
+	const t = temp();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "approve-no-resume" });
+		const runId = admitted.run!.runId;
+		provider.quiesceAll?.();
+		const parked = await host.parkForApproval(runId, {
+			expectedRunVersion: host.getSnapshot(runId)!.run.runVersion,
+		});
+		assert.equal(parked.ok, true, JSON.stringify(parked.error));
+
+		const approved = await host.approve(runId, {
+			expectedRunVersion: parked.run!.runVersion,
+		});
+		assert.equal(approved.ok, false, "approval must not manufacture a terminal success");
+		assert.equal(approved.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(approved.receipt, undefined);
+		assert.equal(host.getSnapshot(runId)?.run.status, "paused");
+		assert.equal(host.getSnapshot(runId)?.run.stage, "parked");
+		assert.equal(host.getSnapshot(runId)?.receipt, null);
+		host.close();
 	} finally {
 		t.cleanup();
 	}
@@ -123,7 +156,7 @@ test("approve requires paused AND parked (not OR)", async () => {
 	}
 });
 
-test("cancel CAS: stale version rejected", async () => {
+test("cancel CAS: stale version rejected; bare mock cancellation remains nonterminal", async () => {
 	const t = temp();
 	try {
 		const host = createControlHost({
@@ -140,22 +173,24 @@ test("cancel CAS: stale version rejected", async () => {
 		const bad = await host.cancel(runId, { expectedRunVersion: v - 1 });
 		assert.equal(bad.ok, false);
 		assert.equal(bad.error?.code, "TF_STALE_VERSION");
-		const ok = await host.cancel(runId, {
+		const unresolved = await host.cancel(runId, {
 			expectedRunVersion: host.getSnapshot(runId)!.run.runVersion,
 		});
-		assert.equal(ok.ok, true);
-		assert.equal(ok.run?.status, "cancelled");
+		assert.equal(unresolved.ok, false, JSON.stringify(unresolved.error));
+		assert.equal(unresolved.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(unresolved.run?.status, "unknown");
+		assert.equal(unresolved.run?.cancelRequest?.state, "ambiguous");
+		assert.ok(unresolved.run?.reservationId);
+		assert.notEqual(host.coordinator.getReservation(unresolved.run!.reservationId!)?.state, "released");
+		assert.equal(host.store.getReceiptForRun(runId), null);
 		host.close();
 	} finally {
 		t.cleanup();
 	}
 });
 
-/**
- * True-parallel dual-client approve: N children share the same expectedRunVersion,
- * barrier-release together, exactly one winner issues Receipt.
- */
-test("multi-process parallel approve CAS: exactly one winner, no double Receipt", async () => {
+/** All concurrent approval callers fail closed without issuing a Receipt. */
+test("multi-process approval attempts preserve a parked run without a Receipt", async () => {
 	const t = temp();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -177,16 +212,6 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 		host.close();
 
 		const N = 6;
-		// Standalone children use project-local coordinator — raise capacity there.
-		const coord = openUserCoordinatorStore(t.env, {
-			baseDir: projectCoordinatorDir(t.project),
-		});
-		coord.setMaxActiveRuns(N + 2, {
-			commandId: "mp-cas-cap",
-			callerPrincipal: "op",
-			requestBody: { maxActiveRuns: N + 2 },
-		});
-
 		const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-cas-barrier-"));
 		const scriptPath = path.join(helpersDir, "mp-approve.mts");
 		const children: Array<{ done: Promise<{ status: number; stdout: string; stderr: string; id: string }> }> =
@@ -257,39 +282,20 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 			};
 		});
 
-		const winners = parsed.filter((p) => p.ok === true);
-		const losers = parsed.filter((p) => p.ok === false);
-		assert.equal(winners.length, 1, `expected exactly 1 winner, got ${winners.length}: ${JSON.stringify(parsed)}`);
-		assert.equal(losers.length, N - 1);
-		assert.ok(winners[0]!.receiptId, "winner must issue Receipt");
-		assert.equal(winners[0]!.status, "completed");
-		for (const l of losers) {
-			// Concurrent losers: STALE_VERSION (preferred) or INVALID once terminal/Receipt
-			// is already durable under the exclusive lock.
-			assert.ok(
-				l.code === "TF_STALE_VERSION" || l.code === "TF_INVALID_ARGUMENT",
-				`loser code=${l.code} full=${JSON.stringify(parsed)}`,
-			);
-			assert.equal(l.receiptId, null);
+		for (const result of parsed) {
+			assert.equal(result.ok, false, JSON.stringify(parsed));
+			assert.equal(result.code, "TF_FEATURE_REQUIRED", JSON.stringify(parsed));
+			assert.equal(result.status, "paused");
+			assert.equal(result.receiptId, null);
 		}
-		// Exactly one distinct receipt id among all children
-		const winnerReceipts = new Set(winners.map((w) => w.receiptId).filter(Boolean));
-		assert.equal(winnerReceipts.size, 1);
 
-		// Durable store: exactly one Receipt artifact
+		// Durable store remains parked with no Receipt artifact.
 		const receiptsDir = path.join(t.project, ".taskflow", "control", "receipts");
 		const receiptFiles = fs
 			.readdirSync(receiptsDir)
 			.filter((f) => f.endsWith(".json") && !f.startsWith("by-run-"));
-		assert.equal(
-			receiptFiles.length,
-			1,
-			`expected 1 durable receipt, got ${receiptFiles.join(",")}`,
-		);
-		const byRun = JSON.parse(
-			fs.readFileSync(path.join(receiptsDir, `by-run-${runId}.json`), "utf-8"),
-		) as { receiptId: string };
-		assert.equal(byRun.receiptId, winners[0]!.receiptId);
+		assert.equal(receiptFiles.length, 0, `unexpected durable receipt: ${receiptFiles.join(",")}`);
+		assert.equal(fs.existsSync(path.join(receiptsDir, `by-run-${runId}.json`)), false);
 	} finally {
 		t.cleanup();
 	}

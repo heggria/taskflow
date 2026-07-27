@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	bootstrapControl,
+	CONTROL_PROTOCOL_MAJOR,
 	controlClientRpc,
 	probeControlEndpoint,
 	type ControlMode,
@@ -61,8 +62,14 @@ export async function runCli(
 		process.platform !== "win32";
 
 	try {
-		if (useUdsClient) {
-			const hello = await probeControlEndpoint({ env, principal, timeoutMs: 3_000 });
+	if (useUdsClient) {
+			const attachLock = host.singleton?.lock;
+			const hello = await probeControlEndpoint({
+				env,
+				principal,
+				socketPath: attachLock?.endpoint,
+				timeoutMs: 3_000,
+			});
 			if (!hello) {
 				return {
 					ok: false,
@@ -78,10 +85,32 @@ export async function runCli(
 					},
 				};
 			}
+			if (
+				!attachLock ||
+				hello.protocolMajor !== CONTROL_PROTOCOL_MAJOR ||
+				hello.role !== "writer" ||
+				hello.fencingEpoch !== attachLock.fencingEpoch
+			) {
+				return {
+					ok: false,
+					exitCode: 1,
+					json: {
+						error: {
+							code: "TF_BOOTSTRAP_FAILED",
+							message:
+								"attach role: UDS hello does not match the singleton writer epoch/role",
+						},
+						role,
+						via: "uds-identity-mismatch",
+					},
+				};
+			}
 			return await runViaUds(cmd, flags, rest, {
 				env,
 				principal,
 				projectId: host.projectId,
+				socketPath: attachLock.endpoint,
+				fencingEpoch: attachLock.fencingEpoch,
 			});
 		}
 
@@ -169,9 +198,21 @@ async function runViaUds(
 	cmd: string,
 	flags: Record<string, string | boolean>,
 	rest: string[],
-	ctx: { env: NodeJS.ProcessEnv; principal: string; projectId: string },
+	ctx: {
+		env: NodeJS.ProcessEnv;
+		principal: string;
+		projectId: string;
+		socketPath: string;
+		fencingEpoch: number;
+	},
 ): Promise<CliResult> {
-	const clientOpts = { env: ctx.env, principal: ctx.principal };
+	const clientOpts = {
+		env: ctx.env,
+		principal: ctx.principal,
+		socketPath: ctx.socketPath,
+		expectedFencingEpoch: ctx.fencingEpoch,
+		expectedRole: "writer" as const,
+	};
 	try {
 		if (cmd === "run") {
 			const define = flags.define

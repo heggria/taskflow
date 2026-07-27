@@ -77,7 +77,10 @@ test("identity: copy of ControlStore to new path is fail-closed (TF_IDENTITY_MIS
 		// Copy .taskflow/control tree to a different project root (clone/worktree share attempt)
 		const srcControl = path.join(t.project, ".taskflow");
 		const destControl = path.join(clone, ".taskflow");
+		const srcRootAnchor = path.join(t.project, ".taskflow-control.anchor.json");
+		const destRootAnchor = path.join(clone, ".taskflow-control.anchor.json");
 		fs.cpSync(srcControl, destControl, { recursive: true });
+		fs.copyFileSync(srcRootAnchor, destRootAnchor);
 
 		assert.throws(
 			() => openProjectControlStore(clone),
@@ -95,6 +98,16 @@ test("identity: copy of ControlStore to new path is fail-closed (TF_IDENTITY_MIS
 		assert.notEqual(storeB.header.controlDomainId, domainA);
 		assert.notEqual(storeB.header.projectId, projectIdA);
 		assert.equal(path.resolve(storeB.header.directoryBinding.path), path.resolve(clone));
+		const cloneAnchor = JSON.parse(fs.readFileSync(destRootAnchor, "utf-8")) as {
+			schemaVersion: number;
+			projectId: string;
+			controlDomainId: string;
+			createdAt: number;
+		};
+		assert.equal(cloneAnchor.schemaVersion, 1);
+		assert.equal(cloneAnchor.projectId, storeB.header.projectId);
+		assert.equal(cloneAnchor.controlDomainId, storeB.header.controlDomainId);
+		assert.ok(Number.isSafeInteger(cloneAnchor.createdAt));
 
 		// Explicit rebind keeps domain after policy allows
 		const moved = fs.mkdtempSync(path.join(os.tmpdir(), "tf-p1-move-"));
@@ -290,6 +303,45 @@ test("ControlHost persists providerHandle on run projection", async () => {
 		assert.equal(r.ok, true);
 		assert.ok(r.run?.providerHandle, "providerHandle must be durable on run");
 		assert.equal(r.run?.providerName, "script");
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("schema-1 BoundPlan persistence does not silently add the E-1 provider route field", async () => {
+	const t = temp();
+	try {
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+		});
+		const result = await host.admitAndRun({
+			commandId: "cmd-schema1-bound-plan",
+			program: {
+				name: "schema1-bound-plan",
+				phases: [{ id: "main", type: "script", run: "true", final: true }],
+			},
+		});
+		assert.equal(result.ok, true, JSON.stringify(result.error));
+		const journalDir = path.join(t.project, ".taskflow", "control", "journal");
+		const entries = fs
+			.readdirSync(journalDir)
+			.filter((file) => file.endsWith(".json"))
+			.map((file) => JSON.parse(fs.readFileSync(path.join(journalDir, file), "utf8")) as {
+				events: Array<{ payload?: { type?: string; boundPlan?: Record<string, unknown> } }>;
+			});
+		const stored = entries
+			.flatMap((entry) => entry.events)
+			.find((event) => event.payload?.type === "BoundPlanStored")?.payload?.boundPlan;
+		assert.ok(stored);
+		assert.equal(
+			Object.prototype.hasOwnProperty.call(stored, "providerClass"),
+			false,
+			"schema-1 persistence must remain unchanged until the schema-2 migration gate",
+		);
 		host.close();
 	} finally {
 		t.cleanup();

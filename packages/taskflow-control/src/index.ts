@@ -17,6 +17,7 @@ export * from "./store/registry.ts";
 export * from "./store/coordinator.ts";
 export * from "./singleton.ts";
 export * from "./linker.ts";
+export * from "./first-dispatch-plan.ts";
 export * from "./provider.ts";
 export * from "./script-provider.ts";
 export * from "./phase-scheduler.ts";

@@ -90,42 +90,49 @@ export function createHostLlmExecutionProvider(opts: {
 					reason: "host-llm provider requires agent-shaped phase (agent + task)",
 				};
 			}
-			const handle = newId("llmjob");
-			const job: LlmJob = {
-				runId: req.runId,
-				agent: extracted.agent || defaultAgent,
-				task: extracted.task,
-				cwd: req.cwd,
-				status: "running",
-				startedAt: Date.now(),
-			};
-			jobs.set(handle, job);
-
-			job.promise = (async () => {
-				try {
-					const res = await opts.runTask({
-						cwd: req.cwd,
-						agent: job.agent,
-						task: job.task,
+				const start = (): SubmitResult => {
+					const handle = newId("llmjob");
+					const job: LlmJob = {
 						runId: req.runId,
-					});
-					if (job.status === "cancelled") return;
-					if (res.ok !== false && (res.exitCode === undefined || res.exitCode === 0)) {
-						job.status = "completed";
-						job.output = res.output ?? "ok";
-					} else {
-						job.status = "failed";
-						job.error = res.error ?? `llm exit ${res.exitCode ?? "nonzero"}`;
-					}
-				} catch (e) {
-					if (job.status === "cancelled") return;
-					job.status = "failed";
-					job.error = e instanceof Error ? e.message : String(e);
-				}
-			})();
+						agent: extracted.agent || defaultAgent,
+						task: extracted.task,
+						cwd: req.cwd,
+						status: "running",
+						startedAt: Date.now(),
+					};
+					jobs.set(handle, job);
 
-			return { kind: "accepted", handle, leaseEpoch: job.startedAt };
-		},
+					// runTask may synchronously create a child process before returning its
+					// Promise. Keep that initiation inside the host-issued synchronous
+					// submission fence so CancelRequested cannot linearize between the
+					// final durable lease check and the LLM side effect.
+					job.promise = (async () => {
+						try {
+							const res = await opts.runTask({
+								cwd: req.cwd,
+								agent: job.agent,
+								task: job.task,
+								runId: req.runId,
+							});
+							if (job.status === "cancelled") return;
+							if (res.ok !== false && (res.exitCode === undefined || res.exitCode === 0)) {
+								job.status = "completed";
+								job.output = res.output ?? "ok";
+							} else {
+								job.status = "failed";
+								job.error = res.error ?? `llm exit ${res.exitCode ?? "nonzero"}`;
+							}
+						} catch (e) {
+							if (job.status === "cancelled") return;
+							job.status = "failed";
+							job.error = e instanceof Error ? e.message : String(e);
+						}
+					})();
+
+					return { kind: "accepted", handle, leaseEpoch: job.startedAt };
+				};
+				return req.submissionFence ? req.submissionFence.execute(start) : start();
+			},
 
 		async poll(handle): Promise<CollectResult> {
 			const job = jobs.get(handle);

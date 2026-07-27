@@ -237,7 +237,7 @@ const TaskflowParamsSchema = Type.Object({
 	),
 	detach: Type.Optional(
 		Type.Boolean({
-			description: "Run in background (detached child process); return runId immediately. Status polled via store.",
+			description: "Legacy 0.2 background execution (detached child process). It is unavailable while the control plane is enabled; TASKFLOW_CONTROL_PLANE=0|false|off|no is an emergency non-GA opt-out.",
 		}),
 	),
 	incremental: Type.Optional(
@@ -251,6 +251,35 @@ const TaskflowParamsSchema = Type.Object({
 /** Portable public view of the Pi tool schema. Keep the precise inferred schema
  * private so declaration emit never exposes TypeBox implementation internals. */
 export const TaskflowParams: TObject = TaskflowParamsSchema;
+
+/**
+ * Keep Pi's 0.2 direct-runtime escape hatch explicitly opt-in even though the
+ * delivery package deliberately does not depend on taskflow-control. This
+ * exactly mirrors controlPlaneEnabled()'s documented disable values; empty,
+ * unset, or unrecognised values all mean the control plane is enabled.
+ */
+export function controlPlaneExplicitlyDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	const value = (env.TASKFLOW_CONTROL_PLANE ?? "").toLowerCase();
+	return value === "0" || value === "false" || value === "off" || value === "no";
+}
+
+/**
+ * Pi has no ControlStore-backed client or daemon lifecycle yet. Do not let its
+ * old direct runtime quietly create or mutate an independent .pi run store
+ * while the product claims that the control plane is the authority.
+ */
+function legacyPiExecutionFallbackMessage(entrypoint: string): string {
+	return [
+		`✗ control-plane ${entrypoint} is not implemented (no legacy fallthrough)`,
+		"The Pi adapter has no ControlStore-backed client or daemon lifecycle; its legacy 0.2 direct runtime uses an independent .pi run store without shared authority or Receipt.",
+		"Set TASKFLOW_CONTROL_PLANE=0|false|off|no only for emergency 0.2 fallthrough.",
+	].join("\n");
+}
+
+function legacyPiExecutionFallbackDenied(action: string, entrypoint: string): ToolResult | undefined {
+	if (controlPlaneExplicitlyDisabled()) return undefined;
+	return errorResult(action, legacyPiExecutionFallbackMessage(entrypoint));
+}
 
 function formatFlowIR(ir: TaskflowIR): string {
 	const lines: string[] = [];
@@ -642,6 +671,10 @@ export default function (pi: ExtensionAPI) {
 			pi.registerCommand(cmdName, {
 				description: flow.def.description || `Run taskflow '${flow.name}'`,
 				handler: async (args, cmdCtx) => {
+					if (!controlPlaneExplicitlyDisabled()) {
+						cmdCtx.ui.notify(legacyPiExecutionFallbackMessage("Pi execution"), "error");
+						return;
+					}
 					if (!cmdCtx.isIdle()) {
 						cmdCtx.ui.notify("Agent is busy; try again when idle.", "warning");
 						return;
@@ -723,19 +756,20 @@ export default function (pi: ExtensionAPI) {
 		label: "Taskflow",
 		description: [
 			"IMPORTANT: Before using this tool for the first time in a session, invoke skill_load('taskflow') to read the full documentation (DSL syntax, examples, best practices). This tool description is a reference, not a tutorial.",
+			"CONTROL-PLANE STATUS: Pi has no ControlStore-backed execution client yet. With TASKFLOW_CONTROL_PLANE enabled (the default), action=run, action=resume, and live action=recompute fail closed rather than use the legacy .pi run store. TASKFLOW_CONTROL_PLANE=0|false|off|no is an emergency non-GA compatibility opt-out only.",
 			"Shorthand (same API as subagent): pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` for parallel, or `chain:[{task,agent?}]` for sequential (use {previous.output}).",
 			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. All 12 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, race, expand) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
-			"Every delegation is tracked (runId), resumable across sessions, and saveable as /tf:<name> via action=save.",
+			"Only in the explicitly opted-out legacy 0.2 compatibility mode are delegations tracked (runId), resumable across sessions, and saveable as /tf:<name> via action=save.",
 			"Use action=agents to list the 18 built-in agents (executor, scout, planner, analyst, critic, reviewer, risk-reviewer, security-reviewer, plan-arbiter, final-arbiter, test-engineer, doc-writer, executor-code, executor-fast, executor-ui, recover, verifier, visual-explorer). Do NOT invent agent names.",
-			"Use action=resume to fork a failed/paused run without mutating its history; optional phase overrides re-run that phase and its downstream. Use action=version to report package, host, commit, and run-state schema identity.",
+			"Use action=resume only in explicit legacy 0.2 compatibility mode to fork a failed/paused run without mutating its history; optional phase overrides re-run that phase and its downstream. Use action=version to report package, host, commit, and run-state schema identity.",
 			"Phase types: agent, parallel (static branches), map (dynamic fan-out over array), gate (VERDICT: PASS/BLOCK), reduce (aggregate from N), approval (human-in-the-loop), flow (run saved sub-flow), loop (iterate until condition/convergence/cap), tournament (N variants, judge picks best/aggregate), script (zero-token shell command), race (first completed branch wins), expand (dynamic fragment).",
 			"Use action=compile to generate a Mermaid diagram + verification report from a saved or inline flow — 0 tokens.",
 			"Interpolation: {args.X}, {steps.ID.output}, {steps.ID.json}, {item} (map), {previous.output}.",
 		].join(" "),
 		parameters: TaskflowParamsSchema,
-		promptSnippet: "Declare a verifiable graph of subagent tasks (single, parallel, chain, or full DAG) — tracked, resumable, context-isolated. The runtime validates the graph before running. Replaces the subagent tool.",
+		promptSnippet: "Declare a verifiable graph of subagent tasks. Pi execution is fail-closed while the control plane is enabled; legacy execution requires an explicit non-GA opt-out.",
 		promptGuidelines: [
-			"BEFORE FIRST USE: invoke skill_load('taskflow') to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nUse taskflow for ALL delegation — single tasks, parallel, chain, or full DAG orchestration. It fully replaces the subagent tool: every delegation is tracked with a runId, resumable across sessions, context-isolated (only final output returns), and saveable as /tf:<name>. Do NOT call the subagent tool directly; use taskflow shorthand (task/tasks/chain) for simple cases instead.",
+			"BEFORE FIRST USE: invoke skill_load('taskflow') to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nPi control-plane safety: when TASKFLOW_CONTROL_PLANE is enabled (default), do not attempt taskflow run/resume/live recompute through this adapter: it fails closed until a ControlStore-backed Pi client exists. TASKFLOW_CONTROL_PLANE=0|false|off|no is emergency legacy compatibility only. In that explicit legacy mode, taskflow can orchestrate single tasks, parallel work, chains, or full DAGs; only the final output returns.",
 			"For complex multi-phase work (explore / 审计 / analyze the project, auditing endpoints, reviewing or migrating many files/modules, cross-checked research), use the full DSL with phases. For taskflow map phases, have the upstream phase emit a JSON array and set output:'json'.",
 			"For taskflow map phases, have the upstream phase emit a JSON array and set output:'json'.",
 		],
@@ -1088,6 +1122,8 @@ export default function (pi: ExtensionAPI) {
 			if (action === "resume") {
 				if (!params.runId)
 					return errorResult(action, "action=resume requires 'runId'");
+				const denied = legacyPiExecutionFallbackDenied(action, "Pi resume");
+				if (denied) return denied;
 				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
 				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
 				const prev = prevR.value;
@@ -1211,13 +1247,17 @@ export default function (pi: ExtensionAPI) {
 					return errorResult(action, "action=recompute requires 'runId'");
 				if (!params.phaseId)
 					return errorResult(action, "action=recompute requires 'phaseId' (the seed phase to re-run)");
-				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
-				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
-				const prev = prevR.value;
 				// H1: the LLM-callable tool defaults to a SAFE dry-run (no tokens, no
 				// mutation). A real recompute — which spends money and overwrites the
 				// run — requires an explicit dryRun:false.
 				const dryRun = params.dryRun !== false;
+				if (!dryRun) {
+					const denied = legacyPiExecutionFallbackDenied(action, "Pi live recompute");
+					if (denied) return denied;
+				}
+				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
+				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
+				const prev = prevR.value;
 				const settings = readSubagentSettings();
 				const { agents } = discoverAgents(ctx.cwd, prev.def.agentScope ?? "user", settings.modelRoles, settings.taskflow);
 				const deps: RuntimeDeps = {
@@ -1331,6 +1371,10 @@ export default function (pi: ExtensionAPI) {
 					description: def.description || `Run taskflow '${def.name}'`,
 					handler: async (args, cmdCtx) => {
 						const parsed = parseArgsString(args, def!);
+						if (!controlPlaneExplicitlyDisabled()) {
+							cmdCtx.ui.notify(legacyPiExecutionFallbackMessage("Pi execution"), "error");
+							return;
+						}
 						if (cmdCtx.isIdle())
 							pi.sendUserMessage(
 								`Run the saved taskflow "${def!.name}" using the taskflow tool with action="run", name="${def!.name}", args=${JSON.stringify(parsed)}.`,
@@ -1363,6 +1407,12 @@ export default function (pi: ExtensionAPI) {
 			for (const w of v.warnings) {
 				console.warn(`[taskflow:${def.name}] ${w}`);
 			}
+			// Both the foreground path and `detach` below create/mutate the old
+			// RunState protocol. Reject before makeRunState(), settings/agent
+			// discovery, executeTaskflow(), or saveRun() unless the user made the
+			// non-GA legacy opt-out explicit.
+			const denied = legacyPiExecutionFallbackDenied(action, "Pi execution");
+			if (denied) return denied;
 			// Detached (background) execution: spawn a child process and return immediately.
 			if (params.detach) {
 				const state = makeRunState(def, args, ctx.cwd);
@@ -1831,6 +1881,10 @@ export default function (pi: ExtensionAPI) {
 					ctx.ui.notify("Usage: /tf recompute <runId> <phaseId> [--apply]\n(default is a safe dry-run; --apply spends tokens)", "warning");
 					return;
 				}
+				if (apply && !controlPlaneExplicitlyDisabled()) {
+					ctx.ui.notify(legacyPiExecutionFallbackMessage("Pi live recompute"), "error");
+					return;
+				}
 				const prevR = loadRunDiagnosed(ctx.cwd, rid);
 				if (!prevR.ok) {
 					ctx.ui.notify(describeLoadFailure(prevR, `Run "${rid}"`), "error");
@@ -1915,6 +1969,10 @@ export default function (pi: ExtensionAPI) {
 					return comp;
 				});
 				if (result?.action === "resume") {
+					if (!controlPlaneExplicitlyDisabled()) {
+						ctx.ui.notify(legacyPiExecutionFallbackMessage("Pi resume"), "error");
+						return;
+					}
 					if (ctx.isIdle()) {
 						pi.sendUserMessage(
 							`Resume the taskflow run "${result.runId}" using the taskflow tool with action="resume", runId="${result.runId}".`,
@@ -1929,6 +1987,10 @@ export default function (pi: ExtensionAPI) {
 			if (sub === "run") {
 				if (!arg) {
 					ctx.ui.notify("Usage: /tf run <name> [args-json]", "warning");
+					return;
+				}
+				if (!controlPlaneExplicitlyDisabled()) {
+					ctx.ui.notify(legacyPiExecutionFallbackMessage("Pi execution"), "error");
 					return;
 				}
 				const [name, ...maybeArgs] = arg.split(/\s+/);
@@ -1952,6 +2014,10 @@ export default function (pi: ExtensionAPI) {
 			if (sub === "resume") {
 				if (!arg) {
 					ctx.ui.notify("Usage: /tf resume <runId>", "warning");
+					return;
+				}
+				if (!controlPlaneExplicitlyDisabled()) {
+					ctx.ui.notify(legacyPiExecutionFallbackMessage("Pi resume"), "error");
 					return;
 				}
 				if (!ctx.isIdle()) {

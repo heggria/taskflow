@@ -2,12 +2,19 @@
  * CLI entry against shipped runCli / bootstrap + real bin subprocess launches.
  */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import {
+	bootstrapControl,
+	singletonLockPath,
+	udsPath,
+	writeFileAtomic,
+} from "taskflow-control";
 import { runCli } from "../src/cli.ts";
 
 const binPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src", "bin.ts");
@@ -112,6 +119,97 @@ test("cli bin subprocess launch twice yields Receipt each time", () => {
 		assert.equal(j2.run?.status, "completed");
 		assert.ok(j2.receipt?.receiptId);
 	} finally {
+		t.cleanup();
+	}
+});
+
+test("cli attach rejects a live unrelated PID whose UDS epoch disagrees with the singleton record", async () => {
+	if (process.platform === "win32") return;
+	const t = temp();
+	let fakeServer: net.Server | undefined;
+	const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1 << 30)"], {
+		stdio: "ignore",
+	});
+	try {
+		assert.ok(unrelated.pid, "fixture must create a live unrelated PID");
+		const initial = bootstrapControl({
+			projectRoot: t.project,
+			controlMode: "standalone",
+			env: t.env,
+		});
+		initial.host.close();
+
+		const socketPath = udsPath(t.env);
+		fs.mkdirSync(path.dirname(socketPath), { recursive: true });
+		fakeServer = net.createServer((socket) => {
+			let buffered = "";
+			socket.on("data", (chunk) => {
+				buffered += chunk.toString("utf8");
+				let newline: number;
+				while ((newline = buffered.indexOf("\n")) >= 0) {
+					const line = buffered.slice(0, newline);
+					buffered = buffered.slice(newline + 1);
+					let message: { type?: unknown; id?: unknown };
+					try {
+						message = JSON.parse(line) as { type?: unknown; id?: unknown };
+					} catch {
+						continue;
+					}
+					if (message.type === "hello") {
+						socket.write(
+							JSON.stringify({
+								type: "hello-ok",
+								protocolMajor: 1,
+								fencingEpoch: 42,
+								role: "writer",
+								capabilities: ["status"],
+							}) + "\n",
+						);
+					} else if (message.type === "rpc") {
+						socket.write(
+							JSON.stringify({
+								type: "rpc-result",
+								id: message.id,
+								result: { run: { runId: "forged", status: "completed" } },
+							}) + "\n",
+						);
+					}
+				}
+			});
+		});
+		await new Promise<void>((resolve, reject) => {
+			fakeServer!.once("error", reject);
+			fakeServer!.listen(socketPath, resolve);
+		});
+
+		writeFileAtomic(
+			singletonLockPath(t.env),
+			JSON.stringify(
+				{
+					holderId: "unrelated-live-process",
+					pid: unrelated.pid,
+					fencingEpoch: 41,
+					endpoint: socketPath,
+					acquiredAt: Date.now(),
+				},
+				null,
+				2,
+			),
+		);
+
+		const result = await runCli(
+			["status", "--cwd", t.project, "--controlMode", "auto", "--runId", "forged"],
+			{ env: t.env, cwd: t.project },
+		);
+		const json = result.json as { error?: { code?: string }; via?: string };
+		assert.equal(result.ok, false, JSON.stringify(result.json));
+		assert.equal(json.error?.code, "TF_BOOTSTRAP_FAILED");
+		assert.equal(json.via, "uds-identity-mismatch");
+	} finally {
+		if (fakeServer) {
+			await new Promise<void>((resolve) => fakeServer!.close(() => resolve()));
+		}
+		if (unrelated.exitCode === null && unrelated.signalCode === null) unrelated.kill("SIGKILL");
 		t.cleanup();
 	}
 });

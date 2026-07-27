@@ -5,7 +5,7 @@
  * control plane is enabled. Script phases use ScriptExecutionProvider; agent
  * phases use an optional host LLM ExecutionProvider (injected by MCP host).
  *
- * Opt-out: TASKFLOW_CONTROL_PLANE=0|false|off forces fall-through to the 0.2
+ * Opt-out: TASKFLOW_CONTROL_PLANE=0|false|off|no forces fall-through to the 0.2
  * engine (tests / emergency only). Production must not rely on silent fallback.
  */
 import { createControlHost } from "./control-host.ts";
@@ -27,7 +27,7 @@ export type ControlPlaneRouteResult =
 
 /**
  * Control plane is ON by default.
- * Explicit disable: TASKFLOW_CONTROL_PLANE=0|false|off
+ * Explicit disable: TASKFLOW_CONTROL_PLANE=0|false|off|no
  */
 export function controlPlaneEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 	const v = (env.TASKFLOW_CONTROL_PLANE ?? "").toLowerCase();

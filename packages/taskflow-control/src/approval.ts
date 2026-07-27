@@ -6,33 +6,13 @@ import * as path from "node:path";
 import { writeFileAtomic, readJsonFile, ensureDir, projectControlRoot } from "./paths.ts";
 import { isSafeId } from "./validate-ids.ts";
 import { newId } from "./hash.ts";
+import type {
+	ApprovalDecision,
+	ApprovalRequest,
+	ApprovalRequestStatus,
+} from "./types.ts";
 
-export type ApprovalDecision = "approve" | "reject" | "edit";
-export type ApprovalRequestStatus =
-	| "pending"
-	| "approved"
-	| "rejected"
-	| "edited"
-	| "expired"
-	| "cancelled";
-
-export interface ApprovalRequest {
-	approvalRequestId: string;
-	runId: string;
-	projectId: string;
-	controlDomainId: string;
-	status: ApprovalRequestStatus;
-	allowedDecisions: ApprovalDecision[];
-	createdAt: number;
-	deadline?: number;
-	decidedAt?: number;
-	decision?: ApprovalDecision;
-	decisionCommandId?: string;
-	deciderPrincipal?: string;
-	/** RunVersion at park time for CAS. */
-	expectedRunVersion: number;
-	note?: string;
-}
+export type { ApprovalDecision, ApprovalRequest, ApprovalRequestStatus } from "./types.ts";
 
 function approvalsDir(projectRoot: string): string {
 	return path.join(projectControlRoot(projectRoot), "approvals");
@@ -47,7 +27,27 @@ export function createApprovalRequest(
 	if (!isSafeId(input.runId)) throw new Error("unsafe runId");
 	const dir = approvalsDir(projectRoot);
 	ensureDir(dir);
-	const req: ApprovalRequest = {
+	const req = newApprovalRequest(input);
+	writeFileAtomic(path.join(dir, `${req.approvalRequestId}.json`), JSON.stringify(req, null, 2));
+	writeFileAtomic(
+		path.join(dir, `by-run-${req.runId}.json`),
+		JSON.stringify({ approvalRequestId: req.approvalRequestId }, null, 2),
+	);
+	return req;
+}
+
+/**
+ * Construct a pending request without performing I/O. Native continuation
+ * callers include this record in the same Project ControlStore journal batch
+ * as the parked Run and checkpoint.
+ */
+export function newApprovalRequest(
+	input: Omit<ApprovalRequest, "approvalRequestId" | "status" | "createdAt" | "allowedDecisions"> & {
+		allowedDecisions?: ApprovalDecision[];
+	},
+): ApprovalRequest {
+	if (!isSafeId(input.runId)) throw new Error("unsafe runId");
+	return {
 		approvalRequestId: newId("apr"),
 		runId: input.runId,
 		projectId: input.projectId,
@@ -57,13 +57,69 @@ export function createApprovalRequest(
 		createdAt: Date.now(),
 		deadline: input.deadline,
 		expectedRunVersion: input.expectedRunVersion,
+		...(input.continuationId === undefined ? {} : { continuationId: input.continuationId }),
+		...(input.phaseId === undefined ? {} : { phaseId: input.phaseId }),
+		...(input.message === undefined ? {} : { message: input.message }),
 	};
-	writeFileAtomic(path.join(dir, `${req.approvalRequestId}.json`), JSON.stringify(req, null, 2));
-	writeFileAtomic(
-		path.join(dir, `by-run-${req.runId}.json`),
-		JSON.stringify({ approvalRequestId: req.approvalRequestId }, null, 2),
-	);
-	return req;
+}
+
+/** Pure pending → decision transition for journaled native approval batches. */
+export function transitionApproval(
+	req: ApprovalRequest,
+	input: {
+		decision: ApprovalDecision;
+		principal: string;
+		commandId: string;
+		note?: string;
+		now?: number;
+	},
+): DecideResult {
+	const now = input.now ?? Date.now();
+	if (req.status !== "pending") {
+		if (
+			(req.status === "approved" && input.decision === "approve") ||
+			(req.status === "rejected" && input.decision === "reject") ||
+			(req.status === "edited" && input.decision === "edit")
+		) {
+			return { ok: true, request: req };
+		}
+		return {
+			ok: false,
+			code: "TF_INVALID_ARGUMENT",
+			message: `illegal transition: status=${req.status} decision=${input.decision}`,
+		};
+	}
+	if (req.deadline !== undefined && now > req.deadline) {
+		return { ok: false, code: "TF_INVALID_ARGUMENT", message: "approval request expired" };
+	}
+	if (!req.allowedDecisions.includes(input.decision)) {
+		return {
+			ok: false,
+			code: "TF_INVALID_ARGUMENT",
+			message: `decision ${input.decision} not allowed`,
+		};
+	}
+	if (!input.principal?.trim()) {
+		return { ok: false, code: "TF_INVALID_ARGUMENT", message: "principal required" };
+	}
+	const status: ApprovalRequestStatus =
+		input.decision === "approve"
+			? "approved"
+			: input.decision === "reject"
+				? "rejected"
+				: "edited";
+	return {
+		ok: true,
+		request: {
+			...req,
+			status,
+			decision: input.decision,
+			decidedAt: now,
+			decisionCommandId: input.commandId,
+			deciderPrincipal: input.principal,
+			...(input.note === undefined ? {} : { note: input.note }),
+		},
+	};
 }
 
 export function loadApprovalRequest(
@@ -108,23 +164,9 @@ export function decideApproval(
 	if (!req) {
 		return { ok: false, code: "TF_NOT_FOUND", message: "approval request not found" };
 	}
-	const now = input.now ?? Date.now();
-	if (req.status !== "pending") {
-		// Idempotent same decision
-		if (
-			(req.status === "approved" && input.decision === "approve") ||
-			(req.status === "rejected" && input.decision === "reject") ||
-			(req.status === "edited" && input.decision === "edit")
-		) {
-			return { ok: true, request: req };
-		}
-		return {
-			ok: false,
-			code: "TF_INVALID_ARGUMENT",
-			message: `illegal transition: status=${req.status} decision=${input.decision}`,
-		};
-	}
-	if (req.deadline !== undefined && now > req.deadline) {
+	const decided = transitionApproval(req, input);
+	if (!decided.ok && decided.message === "approval request expired") {
+		const now = input.now ?? Date.now();
 		const expired: ApprovalRequest = {
 			...req,
 			status: "expired",
@@ -140,31 +182,8 @@ export function decideApproval(
 			message: "approval request expired",
 		};
 	}
-	if (!req.allowedDecisions.includes(input.decision)) {
-		return {
-			ok: false,
-			code: "TF_INVALID_ARGUMENT",
-			message: `decision ${input.decision} not allowed`,
-		};
-	}
-	if (!input.principal?.trim()) {
-		return { ok: false, code: "TF_INVALID_ARGUMENT", message: "principal required" };
-	}
-	const status: ApprovalRequestStatus =
-		input.decision === "approve"
-			? "approved"
-			: input.decision === "reject"
-				? "rejected"
-				: "edited";
-	const next: ApprovalRequest = {
-		...req,
-		status,
-		decision: input.decision,
-		decidedAt: now,
-		decisionCommandId: input.commandId,
-		deciderPrincipal: input.principal,
-		note: input.note,
-	};
+	if (!decided.ok) return decided;
+	const next = decided.request;
 	writeFileAtomic(
 		path.join(approvalsDir(projectRoot), `${req.approvalRequestId}.json`),
 		JSON.stringify(next, null, 2),

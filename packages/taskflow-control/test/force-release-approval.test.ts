@@ -10,10 +10,17 @@ import {
 	createControlHost,
 	createMockExecutionProvider,
 	createScriptExecutionProvider,
-	openUserCoordinatorStore,
+	openUserCoordinatorStore as openUserCoordinatorStoreRaw,
 	loadApprovalForRun,
 	openProjectControlStore,
 } from "../src/index.ts";
+
+/** Raw global C2 fixtures in this suite are explicit non-GA test plumbing. */
+function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env) {
+	return openUserCoordinatorStoreRaw(env, {
+		allowUnfencedMutationForExplicitNonGaMode: true,
+	});
+}
 
 function temp() {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-fa-home-"));
@@ -33,7 +40,7 @@ test("forceRelease requires riskAcknowledged and principal; idempotent by comman
 	const t = temp();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
-		const rsv = coord.reserve({ coordinatorEpoch: 1 });
+		const rsv = coord.reserve();
 		assert.ok(rsv);
 		coord.commitReservation(rsv!.reservationId, {
 			projectId: "p",
@@ -71,6 +78,32 @@ test("forceRelease requires riskAcknowledged and principal; idempotent by comman
 	}
 });
 
+test("unbound reservation release is allowed only before any project/run binding", () => {
+	const t = temp();
+	try {
+		const coord = openUserCoordinatorStore(t.env);
+		const unbound = coord.reserve();
+		assert.ok(unbound);
+		assert.equal(
+			coord.releaseUnboundReservation(unbound!.reservationId).state,
+			"released",
+		);
+
+		const bound = coord.reserve();
+		assert.ok(bound);
+		coord.commitReservation(bound!.reservationId, {
+			projectId: "p",
+			projectControlDomainId: "d",
+			runId: "r",
+			projectAdmitCommitSeq: 1,
+		});
+		assert.throws(() => coord.releaseUnboundReservation(bound!.reservationId), /reserved record/);
+		assert.equal(coord.getReservation(bound!.reservationId)?.state, "committed");
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("host forceReleaseReservation denies without risk ack", async () => {
 	const t = temp();
 	try {
@@ -102,6 +135,84 @@ test("host forceReleaseReservation denies without risk ack", async () => {
 			reason: "operator force",
 		});
 		assert.equal(ok.ok, true);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("host forceReleaseReservation rejects an unsafe external commandId before state mutation", async () => {
+	const t = temp();
+	try {
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider({ outcome: "hang" }),
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({
+			program: {
+				name: "unsafe-force-command-id",
+				phases: [{ id: "main", type: "script", run: "true", final: true }],
+			},
+		});
+		const reservationId = admitted.run?.reservationId;
+		assert.ok(reservationId);
+		const rejected = host.forceReleaseReservation(reservationId, {
+			principal: "operator",
+			riskAcknowledged: true,
+			commandId: "x/../../outside",
+		});
+		assert.equal(rejected.ok, false);
+		if (!rejected.ok) assert.equal(rejected.error.code, "TF_INVALID_ARGUMENT");
+		assert.notEqual(host.coordinator.getReservation(reservationId)?.state, "released");
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("host forceReleaseReservation preserves cross-principal command semantics", async () => {
+	const t = temp();
+	try {
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider({ outcome: "hang" }),
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({
+			program: {
+				name: "force-principal-bound",
+				phases: [{ id: "main", type: "script", run: "true", final: true }],
+			},
+		});
+		const reservationId = admitted.run?.reservationId;
+		assert.ok(reservationId);
+		const commandId = "force-principal-bound-command";
+		const first = host.forceReleaseReservation(reservationId, {
+			commandId,
+			principal: "operator-a",
+			riskAcknowledged: true,
+		});
+		assert.equal(first.ok, true);
+
+		const crossPrincipal = host.forceReleaseReservation(reservationId, {
+			commandId,
+			principal: "operator-b",
+			riskAcknowledged: true,
+		});
+		assert.equal(crossPrincipal.ok, false);
+		if (!crossPrincipal.ok) {
+			assert.equal(crossPrincipal.error.code, "TF_CROSS_PRINCIPAL_COMMAND");
+			assert.equal(crossPrincipal.error.commandId, commandId);
+			assert.equal(crossPrincipal.error.recoveryAction, "none");
+			assert.equal(crossPrincipal.error.sideEffects, "none");
+		}
 		host.close();
 	} finally {
 		t.cleanup();
@@ -154,7 +265,7 @@ test("durable approval reject → blocked; expire → blocked; illegal transitio
 	}
 });
 
-test("durable approval edit → re-reserve + completed Receipt with edited payload", async () => {
+test("durable approval edit fails closed until provider continuation is durable", async () => {
 	const t = temp();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -193,18 +304,19 @@ test("durable approval edit → re-reserve + completed Receipt with edited paylo
 			principal: "editor",
 			expectedRunVersion: parked.run!.runVersion,
 		});
-		assert.equal(edited.ok, true, JSON.stringify(edited.error));
-		assert.equal(edited.run?.status, "completed");
-		assert.equal(edited.run?.stage, "terminal");
-		assert.equal(edited.run?.finalOutput, "edited-output-body");
-		assert.ok(edited.receipt);
+		assert.equal(edited.ok, false);
+		assert.equal(edited.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(edited.run?.status, "paused");
+		assert.equal(edited.run?.stage, "parked");
+		assert.equal(edited.receipt, undefined);
 		const apr = loadApprovalForRun(t.project, runId);
-		assert.equal(apr?.status, "edited");
-		assert.equal(apr?.decision, "edit");
+		assert.equal(apr?.status, "pending");
+		assert.equal(apr?.decision, undefined);
 
-		// Terminal immutability: re-edit rejected
+		// A retry remains a no-side-effect denial until the continuation protocol exists.
 		const again = await host.edit(runId, { note: "nope", principal: "editor" });
 		assert.equal(again.ok, false);
+		assert.equal(again.error?.code, "TF_FEATURE_REQUIRED");
 		host.close();
 	} finally {
 		t.cleanup();

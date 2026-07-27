@@ -82,6 +82,7 @@ export function linkProgram(input: LinkInput): LinkResult {
 		boundPlanHash,
 		executionSemanticHash,
 		programName: program.name,
+		providerClass,
 		program,
 		createdAt: Date.now(),
 		approvalMode,

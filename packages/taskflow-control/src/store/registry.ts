@@ -42,10 +42,19 @@ interface RegistryFile {
 	entries: RegistryEntry[];
 }
 
-export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): ControlRegistry {
+export interface OpenControlRegistryOptions {
+	/** Observe an existing registry without creating its parent directory or mutating entries. */
+	readOnly?: boolean;
+}
+
+export function openControlRegistry(
+	env: NodeJS.ProcessEnv = process.env,
+	opts?: OpenControlRegistryOptions,
+): ControlRegistry {
 	const file = registryPath(env);
 	const lockPath = path.join(userControlRoot(env), "registry.lock");
-	ensureDir(userControlRoot(env));
+	const readOnly = opts?.readOnly === true;
+	if (!readOnly) ensureDir(userControlRoot(env));
 
 	function load(): RegistryFile {
 		return readJsonFile<RegistryFile>(file) ?? { schemaVersion: 1, entries: [] };
@@ -56,6 +65,9 @@ export function openControlRegistry(env: NodeJS.ProcessEnv = process.env): Contr
 	}
 
 	function mutate<T>(fn: (data: RegistryFile) => T): T {
+		if (readOnly) {
+			throw new Error("ControlRegistry opened read-only cannot mutate");
+		}
 		return withExclusiveLockFile(lockPath, () => {
 			const data = load();
 			const result = fn(data);

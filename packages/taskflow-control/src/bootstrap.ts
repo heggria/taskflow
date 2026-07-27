@@ -17,6 +17,12 @@ export interface BootstrapOptions {
 	provider?: ExecutionProvider;
 	holderId?: string;
 	skipSingleton?: boolean;
+	/** Parent singleton fence when taskflowd owns the process-level lock. */
+	mutationAuthority?: () => boolean;
+	/** Parent singleton mutation fence when taskflowd owns the process-level lock. */
+	mutationFence?: <T>(fn: () => T) => T;
+	/** Process-local singleton writer capability for an embedded daemon host. */
+	mutationCapability?: import("./singleton.ts").SingletonMutationAuthority;
 	/** See ControlHostOptions.identityPolicy — default strict. */
 	identityPolicy?: import("./identity.ts").IdentityOpenPolicy;
 }
@@ -58,6 +64,9 @@ export function bootstrapControl(opts: BootstrapOptions): BootstrapResult {
 		provider: opts.provider,
 		holderId: opts.holderId,
 		skipSingleton: opts.skipSingleton,
+		mutationAuthority: opts.mutationAuthority,
+		mutationFence: opts.mutationFence,
+		mutationCapability: opts.mutationCapability,
 		identityPolicy: opts.identityPolicy,
 	};
 

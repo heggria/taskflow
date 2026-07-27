@@ -19,21 +19,75 @@ export type ControlClientOptions = {
 	env?: NodeJS.ProcessEnv;
 	clientId?: string;
 	timeoutMs?: number;
-	/** Authenticated local principal — rejected if looks remote/untrusted. */
+	/** Connection-bound local principal label; not an OS-authenticated identity. */
 	principal?: string;
+	/** Bind an attach RPC to the exact epoch advertised by its singleton record. */
+	expectedFencingEpoch?: number;
+	/** Attach clients may only route mutations to a verified writer endpoint. */
+	expectedRole?: "writer" | "attach";
 };
 
-function isTrustedLocalPrincipal(p: string): boolean {
-	// Reject remote-looking / injection-style principals
+function isValidLocalPrincipalLabel(p: string): boolean {
+	// Reject remote-looking / injection-style labels. The UDS peer still needs an
+	// OS-backed or adapter-backed authentication design before this is GA.
 	if (!p || p.length > 128) return false;
 	if (/[\r\n\0]/.test(p)) return false;
 	if (/^https?:\/\//i.test(p)) return false;
 	return true;
 }
 
+function isValidHello(hello: ControlClientHello): boolean {
+	return (
+		hello.protocolMajor === CONTROL_PROTOCOL_MAJOR &&
+		Number.isSafeInteger(hello.fencingEpoch) &&
+		hello.fencingEpoch >= 0 &&
+		(hello.role === "writer" || hello.role === "attach") &&
+		hello.capabilities.every((capability) => typeof capability === "string")
+	);
+}
+
+function helloMatchesExpectedEndpoint(hello: ControlClientHello, opts: ControlClientOptions): boolean {
+	return (
+		isValidHello(hello) &&
+		(opts.expectedFencingEpoch === undefined ||
+			hello.fencingEpoch === opts.expectedFencingEpoch) &&
+		(opts.expectedRole === undefined || hello.role === opts.expectedRole)
+	);
+}
+
+
+function parseHello(message: Record<string, unknown>): ControlClientHello | null {
+	if (
+		!Array.isArray(message.capabilities) ||
+		!message.capabilities.every((capability) => typeof capability === "string")
+	) {
+		return null;
+	}
+	return {
+		protocolMajor: Number(message.protocolMajor ?? 0),
+		fencingEpoch: Number(message.fencingEpoch ?? -1),
+		role: String(message.role ?? ""),
+		capabilities: message.capabilities,
+	};
+}
+
+function endpointIdentityError(hello: ControlClientHello | null): Error & { code: string } {
+	const detail = hello
+		? `protocol=${hello.protocolMajor}, role=${hello.role}, epoch=${hello.fencingEpoch}`
+		: "malformed hello";
+	return Object.assign(
+		new Error(
+			`TF_BOOTSTRAP_FAILED: control endpoint identity mismatch (${detail})`,
+		),
+		{ code: "TF_BOOTSTRAP_FAILED" },
+	);
+}
+
 /**
  * One-shot hello + RPC over taskflowd UDS.
- * Fails closed if hello missing, protocol mismatch, or untrusted principal.
+ * Fails closed if hello missing, protocol mismatch, or an invalid principal
+ * label. This binds an RPC to its hello label; it does not authenticate the
+ * local OS principal (P13 remains partial).
  */
 export async function controlClientRpc(
 	method: string,
@@ -41,8 +95,8 @@ export async function controlClientRpc(
 	opts: ControlClientOptions = {},
 ): Promise<unknown> {
 	const principal = String(opts.principal ?? params.principal ?? "cli");
-	if (!isTrustedLocalPrincipal(principal)) {
-		throw Object.assign(new Error("TF_POLICY_DENIED: untrusted principal"), {
+	if (!isValidLocalPrincipalLabel(principal)) {
+		throw Object.assign(new Error("TF_POLICY_DENIED: invalid principal label"), {
 			code: "TF_POLICY_DENIED",
 		});
 	}
@@ -85,6 +139,13 @@ export async function controlClientRpc(
 				}
 				if (phase === "hello") {
 					if (msg.type === "hello-ok") {
+						const hello = parseHello(msg);
+						if (!hello || !helloMatchesExpectedEndpoint(hello, opts)) {
+							clearTimeout(timer);
+							sock.end();
+							reject(endpointIdentityError(hello));
+							return;
+						}
 						phase = "rpc";
 						sock.write(
 							JSON.stringify({
@@ -162,16 +223,10 @@ export async function probeControlEndpoint(
 			try {
 				const msg = JSON.parse(line) as Record<string, unknown>;
 				if (msg.type === "hello-ok") {
+					const hello = parseHello(msg);
 					clearTimeout(timer);
 					sock.end();
-					resolve({
-						protocolMajor: Number(msg.protocolMajor ?? 0),
-						fencingEpoch: Number(msg.fencingEpoch ?? 0),
-						role: String(msg.role ?? ""),
-						capabilities: Array.isArray(msg.capabilities)
-							? (msg.capabilities as string[])
-							: [],
-					});
+					resolve(hello && helloMatchesExpectedEndpoint(hello, opts) ? hello : null);
 				} else if (msg.type === "hello-error") {
 					clearTimeout(timer);
 					sock.end();

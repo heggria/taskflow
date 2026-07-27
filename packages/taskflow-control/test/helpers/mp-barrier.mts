@@ -44,3 +44,26 @@ export function parentReleaseStart(barrierDir: string, expectedReady: number, ti
 	// Drop the start gate — all children should be parked on ready and will collide.
 	fs.writeFileSync(path.join(barrierDir, "start"), String(Date.now()));
 }
+
+/** Wait until every child has recorded a post-start milestone. */
+export function parentWaitForFiles(
+	barrierDir: string,
+	prefix: string,
+	expected: number,
+	timeoutMs = 15_000,
+): void {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const count = fs.readdirSync(barrierDir).filter((f) => f.startsWith(prefix)).length;
+		if (count >= expected) return;
+		if (Date.now() > deadline) {
+			throw new Error(
+				`barrier timeout waiting for ${expected} ${prefix} files (got ${count})`,
+			);
+		}
+		const until = Date.now() + 2;
+		while (Date.now() < until) {
+			/* spin */
+		}
+	}
+}

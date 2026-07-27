@@ -16,8 +16,10 @@ if (barrier) {
 	childAwaitStart(barrier, id);
 }
 const env = { ...process.env, TASKFLOW_HOME: home };
-const coord = openUserCoordinatorStore(env);
-const res = coord.reserve({ coordinatorEpoch: 1, ttlMs: 60_000 });
+const coord = openUserCoordinatorStore(env, {
+	allowUnfencedMutationForExplicitNonGaMode: true,
+});
+const res = coord.reserve({ ttlMs: 60_000 });
 process.stdout.write(
 	JSON.stringify({
 		ok: res !== null,
