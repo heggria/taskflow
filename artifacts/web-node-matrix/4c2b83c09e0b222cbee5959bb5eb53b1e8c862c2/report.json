@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "measuredAt": "2026-07-27T03:27:41.473Z",
+  "candidate": {
+    "gitCommit": "4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2",
+    "trackedDirty": false
+  },
+  "runtime": {
+    "launcherNode": "v22.22.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "runtimes": [
+    {
+      "node": "22.19.0",
+      "testCount": 63,
+      "passCount": 63,
+      "failCount": 0,
+      "suiteFiles": 8
+    },
+    {
+      "node": "24.18.0",
+      "testCount": 63,
+      "passCount": 63,
+      "failCount": 0,
+      "suiteFiles": 8
+    },
+    {
+      "node": "26.5.0",
+      "testCount": 63,
+      "passCount": 63,
+      "failCount": 0,
+      "suiteFiles": 8
+    }
+  ]
+}

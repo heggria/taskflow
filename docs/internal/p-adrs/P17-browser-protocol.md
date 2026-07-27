@@ -43,8 +43,9 @@ full-envelope continuation fixtures; session, CSRF, Host/Origin, static
 delivery, SSE and bounded polling fallback tests; a packaged CLI → daemon →
 WebGateway → real browser path over multiple mounted ControlStores; durable
 cancel, approval recovery and lost-response handling; Receipt/artifact
-rendering; five current-source scoped native Safari read/mutation/session
-smokes plus five integrity-checked historical Safari records; and 149 hash-bound
+rendering; two refreshed current-source native Safari read/mutation smokes
+with cancel, Reject/current-session, and two-cookie-jar refreshes still pending
+the native host, plus five integrity-checked historical Safari records; and 149 hash-bound
 reference renders covering nine screen families, two locales, two themes,
 narrow/zoom conditions, and 36 serious/critical accessibility assessments.
 The reference set remains **draft/unapproved**, and the required

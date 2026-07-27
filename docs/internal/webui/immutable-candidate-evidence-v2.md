@@ -10,8 +10,9 @@ The current immutable packaged/evidence build is the tracked-clean commit
 packaged candidate and adds request-scoped reuse of authoritative read
 snapshots for nested Run and Node detail reads. The compatibility, Node,
 performance and four-lane browser reports all bind this same packaged/evidence
-build. The UI assets and exact-source reference render remain unchanged and
-bound to the previously reviewed implementation source.
+build. The UI assets remain unchanged; the exact-source 149-render reference
+set was regenerated against tracked-clean candidate
+`382007f77687442b2e8ea0912dcfb705dba953cb`.
 
 The production build identity is:
 
@@ -24,6 +25,13 @@ The production build identity is:
 
 The evidence checker requires every evidence commit to be in this lineage and
 rejects production or benchmark source drift after the immutable build.
+
+The current reference render evidence binds candidate
+`382007f77687442b2e8ea0912dcfb705dba953cb`, all 149 files under
+`artifacts/web-reference/382007f77687/`, and
+`docs/internal/webui/reference-set-v1/render-evidence.json` with SHA-256
+`308bef04f43282d3865f2452165b1c1cbc0c4aa4ab805aec81feceac1f223e02`.
+It remains `rendered-awaiting-human-approval`.
 
 ## Real old/new packaged compatibility
 
@@ -118,12 +126,12 @@ Evidence:
 
 ## Current-source native Safari scoped records
 
-Native Safari 26.3 on macOS 26.3 exercised five scoped paths against
-tracked-clean candidates `c04540019d99984366843536baa2b47771beb8fa` and
-`f6dfc8017b6bc18d7179a5bfec4b5bb42956e268`. Neither candidate has
-production-source drift from immutable build
-`130e1a3f7c0bf991c96d6e0192a2517be43ff827`; every record binds the same
-benchmark source digest, Web manifest and Web build identity listed above.
+Native Safari 26.3 on macOS 26.3 has refreshed the read/keyboard and
+Allow/revoke-all paths against tracked-clean production-source candidate
+`4c2b83c09e0b222cbee5959bb5eb53b1e8c862c2`. Both records bind the benchmark
+source digest, Web manifest and Web build identity listed above. The
+Reject/current-session, live-cancel and normal/private two-cookie-jar paths
+still require fresh native runs before the candidate checker may pass.
 
 The read/keyboard path proved:
 
@@ -135,39 +143,20 @@ The read/keyboard path proved:
 - native Arrow Down selection changing both the selected node and inspector;
 - verification, Receipt manifest and artifact actions in Evidence.
 
-The four mutation paths proved:
+The refreshed mutation path proved:
 
 - native Allow activation, duplicate-safe pending copy, 3/3 completion,
-  partial verification, `published`, and listener-wide revoke-all;
-- keyboard traversal through both approval answers, authoritative Reject,
-  blocked/pending downstream state, `approval rejected`, and current-session
-  logout;
-- a live cancellable provider Task, visible in-progress node, Stop activation,
-  authoritative cancelled terminal, 0/1 steps, unavailable verification and
-  no invented result;
-- two independent one-time exchanges under one listener, using a normal Safari
-  window and an unlocked private Safari window with distinct cookie jars;
-  listener-wide revocation from the normal session ended both sessions, while
-  the actor projected the all-tabs consequence and the private peer projected
-  the current-tab consequence without changing Task state.
+  partial verification, `published`, and listener-wide revoke-all.
 
 Evidence:
 
 - `docs/internal/webui/native-safari-current-read-smoke-v1.json`,
-  `7f66ed19caf1e554a7945f3b3e24c89f091ce579ce52580d74e1588e105edce3`;
+  `b09cd7c93a9fb4f8c16a73e34ac5c11a3ce520205be84909d55d001c47667f4d`;
 - `docs/internal/webui/native-safari-current-mutation-smoke-v1.json`,
-  `c91d3dce9471745a4eed15154c035987fe3c3203b1b1c46f0464fad009572501`;
-- `docs/internal/webui/native-safari-current-reject-current-session-smoke-v1.json`,
-  `68558f9737c4edeb846a5c0323b7d7c3873dca786b1ec80419c81756c439f349`;
-- `docs/internal/webui/native-safari-current-cancel-smoke-v1.json`,
-  `f39bdf0ee777bfc4ab26b7c3af936fb976c335833204ad181566d58310f79fd9`;
-- `docs/internal/webui/native-safari-current-two-session-revocation-smoke-v1.json`,
-  `ce3af2f4b9429d4b20ff898dc7f22f3f76bd473d7a43ed580b23d9b4004905ae`.
+  `b59927d15e2bd31354b9bc5f1810d998b3215c0b3e7576cbf02c96b1714726ff`.
 
 These are scoped native-browser observations, not a VoiceOver or independent
-reviewer attestation. The two-session record is current-source local evidence
-for independent peer/two-cookie invalidation; it is not an assistive-technology
-or human-product-review result.
+reviewer attestation.
 
 ## Historical native Safari records
 
