@@ -170,8 +170,11 @@ export interface ProjectControlStore {
 	/** Atomic commit: exclusive lock + re-read seq + contiguous commitSeq + fsync. */
 	commit(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number };
 	/**
-	 * Dual-client first-commit-wins: under exclusive commit lock, re-read run,
-	 * check expectedRunVersion + validate, then commit in the same critical section.
+	 * Dual-client first-commit-wins: under exclusive commit lock, residual
+	 * classify + rebuild-from-fold (same refuse policy as claimCommand), then
+	 * re-read run, check expectedRunVersion + validate, then commit in the same
+	 * critical section. Case B residual fails closed as TF_DURABILITY_FAILED
+	 * before any soft CAS outcome.
 	 */
 	compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult;
 	/**
@@ -656,8 +659,36 @@ export function openProjectControlStore(
 		return readPersistedCommitSeq() ?? 1;
 	}
 
+	/**
+	 * Reserved prefixes of derived index filenames. A durable id used as a path
+	 * component must not begin with any of these, or a body file can be scanned
+	 * as an orphan index (`by-cmd-<id>.json`, `by-run-<id>.json`) and poison the
+	 * store. Full denylist — not a single `by-cmd-` check.
+	 *
+	 * Matching is **case-folded**: on case-insensitive filesystems a body named
+	 * `By-cmd-x.json` collides with the index path `by-cmd-x.json`. Only
+	 * `[A-Za-z0-9._-]` ids are accepted elsewhere, so Unicode NFKC/NFD folding
+	 * is not required for this alphabet.
+	 */
+	const RESERVED_INDEX_ID_PREFIXES = ["by-cmd-", "by-run-"] as const;
+
+	function collidesWithIndexGrammar(id: string): boolean {
+		const lower = id.toLowerCase();
+		return RESERVED_INDEX_ID_PREFIXES.some((prefix) => lower.startsWith(prefix));
+	}
+
+	/**
+	 * Durable ids used as path components. Reject reserved index-grammar
+	 * prefixes (case-insensitive) so a client-controlled id cannot plant a body
+	 * that a later scan misreads as an orphan index and permanently poisons the
+	 * store — including case-variant prefixes (`By-cmd-`, `BY-CMD-`, `By-run-`).
+	 */
 	function isSafeCommandId(id: unknown): id is string {
-		return typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
+		return (
+			typeof id === "string" &&
+			/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) &&
+			!collidesWithIndexGrammar(id)
+		);
 	}
 
 	function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
@@ -2510,16 +2541,419 @@ export function openProjectControlStore(
 	}
 
 	/**
+	 * Final journal occurrence per entity is the fold authority for derived state.
+	 */
+	function foldJournalDerived(segments: readonly JournalSegment[]): {
+		commands: Map<string, CommandRecord>;
+		runs: Map<string, RunProjection>;
+		receipts: Map<string, Receipt>;
+		receiptByRun: Map<string, string>;
+	} {
+		const commands = new Map<string, CommandRecord>();
+		const runs = new Map<string, RunProjection>();
+		const receipts = new Map<string, Receipt>();
+		const receiptByRun = new Map<string, string>();
+		for (const { entry } of segments) {
+			if (entry.command) commands.set(entry.command.commandId, entry.command);
+			if (entry.run) runs.set(entry.run.runId, entry.run);
+			if (entry.receipt) {
+				receipts.set(entry.receipt.receiptId, entry.receipt);
+				receiptByRun.set(entry.receipt.runId, entry.receipt.receiptId);
+			}
+		}
+		return { commands, runs, receipts, receiptByRun };
+	}
+
+	/**
+	 * Content equality for journal-derived bodies. Key order and pretty-print are
+	 * not authoritative; every present own field is.
+	 *
+	 * Critical: build a null-prototype object and assign only via own-key
+	 * enumeration. A plain `{}` + `out[key] = …` when `key === "__proto__"`
+	 * invokes the Object.prototype setter, silently drops the residual field,
+	 * and lets a tampered projection compare equal to the fold.
+	 */
+	function canonicalizeAuthority(value: unknown): unknown {
+		if (Array.isArray(value)) return value.map(canonicalizeAuthority);
+		if (value === null || typeof value !== "object") return value;
+		const input = value as Record<string, unknown>;
+		const out = Object.create(null) as Record<string, unknown>;
+		for (const key of Object.keys(input).sort()) {
+			const next = input[key];
+			// JSON cannot encode undefined; omit so disk/journal shapes compare stably.
+			if (next === undefined) continue;
+			out[key] = canonicalizeAuthority(next);
+		}
+		return out;
+	}
+
+	function authorityEqual(a: unknown, b: unknown): boolean {
+		return JSON.stringify(canonicalizeAuthority(a)) === JSON.stringify(canonicalizeAuthority(b));
+	}
+
+	function listDerivedJsonFiles(dir: string, label: string): string[] {
+		if (!fs.existsSync(dir)) return [];
+		let files: string[];
+		try {
+			files = fs.readdirSync(dir);
+		} catch (error) {
+			const detail = error instanceof Error ? error.message : String(error);
+			failDurability(`cannot read ${label}: ${detail}`, dir);
+		}
+		const out: string[] = [];
+		for (const file of files) {
+			// Atomic-write temps were never renamed into derived indexes.
+			if (/\.\d+\.\d+\.tmp$/.test(file)) continue;
+			if (!file.endsWith(".json")) continue;
+			const filePath = path.join(dir, file);
+			let st: fs.Stats;
+			try {
+				st = fs.lstatSync(filePath);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				const detail = error instanceof Error ? error.message : String(error);
+				failDurability(`cannot inspect ${label} entry: ${detail}`, filePath);
+			}
+			if (st.isSymbolicLink() || !st.isFile()) {
+				failDurability(`${label} entry is not a regular file`, filePath);
+			}
+			out.push(file);
+		}
+		return out;
+	}
+
+	/**
+	 * True when residual equals the current fold value, OR equals some earlier
+	 * journal occurrence of the same id (stale disk-behind crash artifact).
+	 * Content the journal never produced is unexplained and must refuse.
+	 */
+	function residualExplainedByJournalHistory(
+		raw: unknown,
+		finalExpected: unknown | undefined,
+		historicalValues: readonly unknown[],
+	): boolean {
+		if (finalExpected !== undefined && authorityEqual(raw, finalExpected)) return true;
+		for (const past of historicalValues) {
+			if (authorityEqual(raw, past)) return true;
+		}
+		return false;
+	}
+
+	/** Collect every journal occurrence per derived id (prefix folds for Case A). */
+	function collectJournalDerivedHistory(segments: readonly JournalSegment[]): {
+		runs: Map<string, unknown[]>;
+		commands: Map<string, unknown[]>;
+		receipts: Map<string, unknown[]>;
+		receiptByRun: Map<string, unknown[]>;
+		commandByCmd: Map<string, unknown[]>;
+	} {
+		const runs = new Map<string, unknown[]>();
+		const commands = new Map<string, unknown[]>();
+		const receipts = new Map<string, unknown[]>();
+		const receiptByRun = new Map<string, unknown[]>();
+		const commandByCmd = new Map<string, unknown[]>();
+		const push = (map: Map<string, unknown[]>, id: string, value: unknown): void => {
+			const list = map.get(id);
+			if (list) list.push(value);
+			else map.set(id, [value]);
+		};
+		for (const { entry } of segments) {
+			if (entry.run) push(runs, entry.run.runId, entry.run);
+			if (entry.command) {
+				push(commands, entry.command.commandId, entry.command);
+				if (entry.command.runId) {
+					push(commandByCmd, entry.command.commandId, { runId: entry.command.runId });
+				}
+			}
+			if (entry.receipt) {
+				push(receipts, entry.receipt.receiptId, entry.receipt);
+				push(receiptByRun, entry.receipt.runId, { receiptId: entry.receipt.receiptId });
+			}
+		}
+		return { runs, commands, receipts, receiptByRun, commandByCmd };
+	}
+
+	/**
+	 * Fold the journal-derived stream watermark (max streamSeq per streamId).
+	 * Segments passed here are already hash-linked / continuity-validated by
+	 * readJournalIntegrity; residual checks use this fold as authority.
+	 */
+	function foldStreamSeqWatermark(segments: readonly JournalSegment[]): Record<string, number> {
+		const streamSeq: Record<string, number> = {};
+		for (const { entry } of segments) {
+			for (const event of entry.events) {
+				streamSeq[event.streamId] = Math.max(streamSeq[event.streamId] ?? 0, event.streamSeq);
+			}
+		}
+		return streamSeq;
+	}
+
+	/**
+	 * stream-seq.json is a **non-entity derived watermark** (not authority).
+	 * Direction-aware residual policy, same refuse class as entity Case B:
+	 *
+	 * Case A — disk-behind: missing file, empty map, missing stream key, or
+	 *   per-stream value strictly less than the journal fold → rebuild allowed.
+	 * Case B — disk-ahead / orphan: any persisted stream key absent from the
+	 *   journal fold, or any value strictly greater than the fold → refuse and
+	 *   preserve residual bytes (never silent scrub via rewrite).
+	 */
+	function assertStreamSeqWatermarkSupportedByJournal(segments: readonly JournalSegment[]): void {
+		const journalStreamSeq = foldStreamSeqWatermark(segments);
+		const persistedStreamMap = readStreamSeqMap();
+		for (const [streamId, seq] of Object.entries(persistedStreamMap)) {
+			const expected = journalStreamSeq[streamId];
+			if (expected === undefined) {
+				failDurability(
+					`orphan stream-seq entry ${JSON.stringify(streamId)} is not supported by the verified journal fold (refusing to scrub residual evidence)`,
+					streamSeqPath,
+				);
+			}
+			if (seq > expected) {
+				failDurability(
+					`disk-ahead stream-seq for ${JSON.stringify(streamId)} (${seq} > journal fold ${expected}) is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+					streamSeqPath,
+				);
+			}
+			// seq < expected → Case A disk-behind watermark; rebuild allowed below.
+		}
+		// Streams present only in the journal fold (missing on disk) are Case A.
+	}
+
+	/**
+	 * Derived projections/receipts/commands **and** the stream-seq watermark are
+	 * not authority. Residual policy is **direction-aware** and runs **before**
+	 * any derived rewrite:
+	 *
+	 * Case A — stale disk-behind (journal ahead, old same-id projection remains):
+	 *   residual equals some historical journal occurrence of that id (or the
+	 *   file is simply missing). Normal crash artifact → rebuild from fold.
+	 *   For stream-seq: missing/lower watermark than fold → rebuild.
+	 *
+	 * Case B — disk-ahead / planted / otherwise divergent residual:
+	 *   on-disk content the journal fold cannot explain → refuse open/mutation
+	 *   and preserve residual bytes as evidence (never scrub via rebuild).
+	 *   For stream-seq: higher watermark or orphan stream id → refuse.
+	 *
+	 * Missing fold-supported files are always allowed (half-commit disk-behind).
+	 *
+	 * Covered derived surfaces: run projections, receipt bodies, command bodies,
+	 * by-run/by-cmd pointer indexes, stream-seq.json watermark.
+	 * commit-seq.json is checked separately in rebuildFromJournal (disk-behind
+	 * rebuilds; disk-ahead refuses) — not via residualExplainedByJournalHistory.
+	 */
+	function assertDerivedArtifactsSupportedByJournal(segments: readonly JournalSegment[]): void {
+		const fold = foldJournalDerived(segments);
+		const history = collectJournalDerivedHistory(segments);
+
+		const projectionDir = projectProjectionsDir(root);
+		for (const file of listDerivedJsonFiles(projectionDir, "projections")) {
+			const match = /^run-(.+)\.json$/.exec(file);
+			if (!match) {
+				failDurability("unexpected projection entry", path.join(projectionDir, file));
+			}
+			const runId = match[1]!;
+			const expected = fold.runs.get(runId);
+			const filePath = path.join(projectionDir, file);
+			if (!expected) {
+				failDurability(
+					`orphan run projection ${JSON.stringify(runId)} is not supported by the verified journal fold`,
+					filePath,
+				);
+			}
+			const raw = readJsonFileStrict<unknown>(filePath);
+			if (raw === null) {
+				failDurability(`run projection ${JSON.stringify(runId)} disappeared during residual check`, filePath);
+			}
+			if (!residualExplainedByJournalHistory(raw, expected, history.runs.get(runId) ?? [])) {
+				failDurability(
+					`divergent run projection ${JSON.stringify(runId)} is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+					filePath,
+				);
+			}
+		}
+
+		const receiptDir = projectReceiptsDir(root);
+		for (const file of listDerivedJsonFiles(receiptDir, "receipts")) {
+			// Case-insensitive index grammar: on case-insensitive FS, By-run-*.json
+			// is the same path family as by-run-*.json and must not fall through as a body.
+			const byRun = /^by-run-(.+)\.json$/i.exec(file);
+			if (byRun) {
+				const runId = byRun[1]!;
+				const expectedReceiptId =
+					fold.receiptByRun.get(runId) ??
+					// Case-insensitive FS: journal keys may differ only by id casing.
+					[...fold.receiptByRun.entries()].find(([id]) => id.toLowerCase() === runId.toLowerCase())?.[1];
+				const filePath = path.join(receiptDir, file);
+				if (expectedReceiptId === undefined) {
+					failDurability(
+						`orphan receipt index for run ${JSON.stringify(runId)} is not supported by the verified journal fold`,
+						filePath,
+					);
+				}
+				const raw = readJsonFileStrict<unknown>(filePath);
+				if (raw === null) {
+					failDurability(`receipt by-run index for ${JSON.stringify(runId)} disappeared during residual check`, filePath);
+				}
+				const historyKey =
+					history.receiptByRun.has(runId)
+						? runId
+						: ([...history.receiptByRun.keys()].find((id) => id.toLowerCase() === runId.toLowerCase()) ?? runId);
+				// Full content equality: a matching pointer with smuggled extras is residual evidence.
+				// Historical pointers explain stale disk-behind after a later receipt rebind.
+				if (
+					!residualExplainedByJournalHistory(
+						raw,
+						{ receiptId: expectedReceiptId },
+						history.receiptByRun.get(historyKey) ?? [],
+					)
+				) {
+					failDurability(
+						`divergent receipt by-run index for ${JSON.stringify(runId)} is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+						filePath,
+					);
+				}
+				continue;
+			}
+			const match = /^(.+)\.json$/.exec(file);
+			if (!match) {
+				failDurability("unexpected receipt entry", path.join(receiptDir, file));
+			}
+			const receiptId = match[1]!;
+			const expected = fold.receipts.get(receiptId);
+			const filePath = path.join(receiptDir, file);
+			if (!expected) {
+				failDurability(
+					`orphan receipt ${JSON.stringify(receiptId)} is not supported by the verified journal fold`,
+					filePath,
+				);
+			}
+			const raw = readJsonFileStrict<unknown>(filePath);
+			if (raw === null) {
+				failDurability(`receipt ${JSON.stringify(receiptId)} disappeared during residual check`, filePath);
+			}
+			if (!residualExplainedByJournalHistory(raw, expected, history.receipts.get(receiptId) ?? [])) {
+				failDurability(
+					`divergent receipt ${JSON.stringify(receiptId)} is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+					filePath,
+				);
+			}
+		}
+
+		const commandDir = projectCommandsDir(root);
+		for (const file of listDerivedJsonFiles(commandDir, "commands")) {
+			// Case-insensitive index grammar (see receipt by-run above).
+			const byCmd = /^by-cmd-(.+)\.json$/i.exec(file);
+			if (byCmd) {
+				const commandId = byCmd[1]!;
+				const filePath = path.join(commandDir, file);
+				const journalCmd =
+					fold.commands.get(commandId) ??
+					[...fold.commands.entries()].find(([id]) => id.toLowerCase() === commandId.toLowerCase())?.[1];
+				if (!journalCmd) {
+					// No pre-journal / zero-zero escape: an index without a journal command
+					// is unexplained residual and must refuse before any rewrite/scrub.
+					failDurability(
+						`orphan command index ${JSON.stringify(file)} is not supported by the verified journal fold`,
+						filePath,
+					);
+				}
+				const expectedRunId = journalCmd.runId;
+				const historyKey =
+					history.commandByCmd.has(commandId)
+						? commandId
+						: ([...history.commandByCmd.keys()].find((id) => id.toLowerCase() === commandId.toLowerCase()) ??
+							commandId);
+				const historicalPointers: readonly unknown[] = history.commandByCmd.get(historyKey) ?? [];
+				const raw = readJsonFileStrict<unknown>(filePath);
+				if (raw === null) {
+					failDurability(`command by-cmd index ${JSON.stringify(file)} disappeared during residual check`, filePath);
+				}
+				if (expectedRunId === undefined) {
+					failDurability(
+						`command index by-cmd-${commandId} exists but command ${JSON.stringify(commandId)} has no runId`,
+						filePath,
+					);
+				}
+				// Full content equality (not pointer-field-only).
+				if (
+					!residualExplainedByJournalHistory(
+						raw,
+						{ runId: expectedRunId },
+						historicalPointers,
+					)
+				) {
+					failDurability(
+						`divergent command by-cmd index for ${JSON.stringify(commandId)} is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+						filePath,
+					);
+				}
+				continue;
+			}
+			const match = /^(.+)\.json$/.exec(file);
+			if (!match) {
+				failDurability("unexpected command entry", path.join(commandDir, file));
+			}
+			const commandId = match[1]!;
+			const filePath = path.join(commandDir, file);
+			const raw = readJsonFileStrict<unknown>(filePath);
+			if (raw === null) {
+				failDurability(`command record ${JSON.stringify(commandId)} disappeared during residual check`, filePath);
+			}
+			// No zero-zero residual escape: firstCommitSeq=0 && lastCommitSeq=0 is
+			// still unexplained if the journal fold never produced this body. A
+			// planted/orphan zero-zero residual must refuse BEFORE rebuild or
+			// removeStaleDerivedFiles can scrub the evidence bytes (Case B).
+			const expected =
+				fold.commands.get(commandId) ??
+				[...fold.commands.entries()].find(([id]) => id.toLowerCase() === commandId.toLowerCase())?.[1];
+			if (!expected) {
+				failDurability(
+					`orphan command ${JSON.stringify(commandId)} is not supported by the verified journal fold`,
+					filePath,
+				);
+			}
+			const historyKey =
+				history.commands.has(commandId)
+					? commandId
+					: ([...history.commands.keys()].find((id) => id.toLowerCase() === commandId.toLowerCase()) ??
+						commandId);
+			if (!residualExplainedByJournalHistory(raw, expected, history.commands.get(historyKey) ?? [])) {
+				failDurability(
+					`divergent command ${JSON.stringify(commandId)} is not explained by the verified journal fold (refusing to scrub residual evidence)`,
+					filePath,
+				);
+			}
+		}
+
+		// Non-entity derived watermark: stream-seq.json (CE5). Must run before any
+		// rewrite in rebuildFromJournal / commitUnlocked can scrub evidence.
+		assertStreamSeqWatermarkSupportedByJournal(segments);
+	}
+
+	/**
 	 * Journal is authoritative: validate continuity, repair only derived state
 	 * (projections / lagging sequence files), then rebuild indexes. This function
 	 * is always called under commit.lock, including startup, so recovery cannot
 	 * roll a concurrent writer's projections backward.
+	 *
+	 * Default residual policy refuses Case B residual before any rewrite so
+	 * evidence bytes are never scrubbed. Explicit `recoverFromJournal` may pass
+	 * `residualPolicy: "operator-scrub"` to rebuild/scrub under operator direction
+	 * after a successful open (still not a silent open-time scrub).
 	 */
-	function rebuildFromJournal(): { rebuiltRuns: number; rebuiltCommands: number; rebuiltReceipts: number } {
+	function rebuildFromJournal(
+		opts: { residualPolicy?: "refuse" | "operator-scrub" } = {},
+	): { rebuiltRuns: number; rebuiltCommands: number; rebuiltReceipts: number } {
 		let rebuiltRuns = 0;
 		let rebuiltCommands = 0;
 		let rebuiltReceipts = 0;
 		const { segments, persistedNext, streamSeq } = readJournalIntegrity();
+		// Every rebuild path (open, claim, admission, finalize, …) refuses residual
+		// that the journal cannot explain — not only the writer-open entrypoint.
+		if ((opts.residualPolicy ?? "refuse") === "refuse") {
+			assertDerivedArtifactsSupportedByJournal(segments);
+		}
 		const persistedStreamMap = readStreamSeqMap();
 
 		if (segments.length > 0) {
@@ -2536,6 +2970,9 @@ export function openProjectControlStore(
 			}
 		}
 
+		// Case A only reaches here: stream-seq missing/behind journal fold was
+		// allowed by assertStreamSeqWatermarkSupportedByJournal; rewrite repairs.
+		// Case B disk-ahead/orphan already refused above under residualPolicy refuse.
 		if (!sameStreamSeqMap(persistedStreamMap, streamSeq)) {
 			writeFileAtomic(streamSeqPath, JSON.stringify(streamSeq, null, 2));
 		}
@@ -2606,6 +3043,11 @@ export function openProjectControlStore(
 	// Writer opens repair only derived files under commit.lock. Attach opens are
 	// strictly observational: any half-commit or stale derived watermark is a
 	// durable failure rather than a reason for the observer to write evidence.
+	//
+	// Writer residual policy is direction-aware (inside rebuildFromJournal):
+	// Case A disk-behind (missing or old self-consistent same-id) rebuilds;
+	// Case B disk-ahead/divergent residual refuses before any rewrite so
+	// evidence bytes are never scrubbed.
 	if (readOnly) {
 		const journal = readJournalIntegrity();
 		if (journal.segments.length > 0) {
@@ -2630,6 +3072,11 @@ export function openProjectControlStore(
 		function commitUnlocked(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number } {
 			const events = batch.events;
 			const journal = readJournalIntegrity();
+			// Residual refuse gate for EVERY derived rewrite mutation (commit /
+			// compareAndCommit / claim empty-event commits), not only rebuildFromJournal
+			// entrypoints. Close the window where claimCommand refuses planted residual
+			// but commit()/compareAndCommit happily overwrite the same evidence bytes.
+			assertDerivedArtifactsSupportedByJournal(journal.segments);
 			const currentCompactionState = deriveCompactionState(journal.segments);
 			let next = readSeqNext();
 		if (events.length === 0 && !batch.command && !batch.run && !batch.receipt) {
@@ -2647,8 +3094,10 @@ export function openProjectControlStore(
 			);
 		}
 		let seq = start;
-		// streamSeq is a derived index. Rebuild its exact journal watermark before
-		// using it, so a stale/forged index cannot create a gap in new events.
+		// streamSeq is a derived index. Residual Case B (disk-ahead/orphan) was
+		// already refused by assertDerivedArtifactsSupportedByJournal above.
+		// Rebuild only Case A lagging watermarks before stamping new events so a
+		// half-commit index cannot create a gap.
 		const persistedStreamMap = readStreamSeqMap();
 		const streamMap = { ...journal.streamSeq };
 		if (!sameStreamSeqMap(persistedStreamMap, streamMap)) {
@@ -2930,7 +3379,20 @@ export function openProjectControlStore(
 		compareAndCommit(opts: CompareAndCommitOpts): CompareAndCommitResult {
 			return withMutationFence(() =>
 				withCommitLock(() => {
+					// Residual classification + rebuild-from-fold BEFORE version CAS —
+					// same order as claimCommand. A CAS-first path would:
+					//   (1) soft-map Case B residual to TF_STALE_VERSION when the
+					//       planted body has a mismatched runVersion (open path uses
+					//       TF_DURABILITY_FAILED for the same residual class);
+					//   (2) CAS against Case A residual bytes instead of the fold,
+					//       letting a residual-version client rewrite from stale state
+					//       or a fold-current client soft-lose incorrectly.
+					// rebuildFromJournal under residualPolicy refuse: Case B throws
+					// TF_DURABILITY_FAILED and preserves residual bytes; Case A is
+					// rewritten from the verified journal fold before any CAS read.
+					rebuildFromJournal();
 					// Re-read durable projection under the same lock as commit (P15 first-commit-wins).
+					// Projection is fold-current after residual classify/rebuild above.
 					const current = readRunFromDisk(opts.runId);
 					if (!current) {
 						return {
@@ -2939,8 +3401,9 @@ export function openProjectControlStore(
 							message: `run ${opts.runId} not found`,
 						};
 					}
-					// Version check first so concurrent CAS losers report TF_STALE_VERSION
-					// (not terminal/INVALID) when the winner already advanced runVersion.
+					// Version check after residual gate so concurrent CAS losers report
+					// TF_STALE_VERSION (not terminal/INVALID) when the winner already
+					// advanced runVersion — and never reclassify Case B residual as stale.
 					if (
 						opts.expectedRunVersion !== undefined &&
 						current.runVersion !== opts.expectedRunVersion
@@ -2994,14 +3457,31 @@ export function openProjectControlStore(
 		},
 
 		recoverFromJournal() {
+			// Operator-directed scrub after a successful open may rebuild past
+			// residual that open/mutation paths refuse. Not a silent open-time scrub.
 			return withMutationFence(() =>
-				withCommitLock(() => rebuildFromJournal()),
+				withCommitLock(() => rebuildFromJournal({ residualPolicy: "operator-scrub" })),
 			);
 		},
 
 		claimCommand(input) {
 			return withMutationFence(() =>
 				withCommitLock(() => {
+					// Reject grammar collisions before any durable write so a
+					// client-controlled commandId cannot plant a body that later
+					// scans misread as a by-cmd index (store poisoning).
+					if (!isSafeCommandId(input.commandId)) {
+						failDurability(
+							`commandId ${JSON.stringify(input.commandId)} is unsafe or collides with reserved index-grammar prefixes (${RESERVED_INDEX_ID_PREFIXES.join(", ")})`,
+							projectCommandsDir(root),
+						);
+					}
+					if (!isSafeCommandId(input.runId)) {
+						failDurability(
+							`runId ${JSON.stringify(input.runId)} is unsafe or collides with reserved index-grammar prefixes (${RESERVED_INDEX_ID_PREFIXES.join(", ")})`,
+							projectCommandsDir(root),
+						);
+					}
 					// A command index is derived only. Rebuild before idempotency
 					// comparison so an orphan file cannot claim command authority.
 					rebuildFromJournal();

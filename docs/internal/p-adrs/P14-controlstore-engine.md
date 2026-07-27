@@ -194,6 +194,106 @@ directory metadata universally durable, or permit physical compaction. P14
 therefore remains **FAIL** for the in-scope post-open path-replacement race,
 compaction, crash/power-loss, and public-entry coverage gaps.
 
+## Direction-aware residual check (batch-06 P14 integrity)
+
+Paths that may rewrite **covered** derived state validate residual bytes against
+the verified journal fold **before** any rewrite:
+
+- `rebuildFromJournal` (writer open, claim, admission, finalize, **`compareAndCommit`**, …)
+  under residual policy `refuse`
+- **`commitUnlocked`** (covers `commit()`, post-CAS `compareAndCommit` body write,
+  claim/admission empty-event commits, and other commit-lock mutations)
+
+### Mutation entry ordering (must not regress)
+
+| Entry | Residual classify | Rebuild-from-fold | Soft outcome before residual? |
+|---|---|---|---|
+| Writer open | yes (`rebuildFromJournal`) | yes (Case A) | no — Case B → `TF_DURABILITY_FAILED` |
+| `claimCommand` / admission / finalize | yes (`rebuildFromJournal` first) | yes (Case A) | no — Case B → `TF_DURABILITY_FAILED` |
+| `commit()` | yes (inside `commitUnlocked`) | no full rebuild; Case A lagging watermarks only | no — Case B → `TF_DURABILITY_FAILED` before rewrite |
+| **`compareAndCommit`** | yes (`rebuildFromJournal` **before** version CAS) | yes (Case A) **before** version CAS | **no** — Case B → `TF_DURABILITY_FAILED`, never soft `TF_STALE_VERSION` / `TF_INVALID_ARGUMENT` / `ok` from residual bytes |
+
+`compareAndCommit` must not CAS against raw residual projection bytes. Residual
+classification and rebuild-from-fold run first (same order as `claimCommand`);
+only then does `expectedRunVersion` / validate / build / `commitUnlocked` run.
+A CAS-first regression would (a) reclassify Case B residual with a mismatched
+`runVersion` as soft `TF_STALE_VERSION`, and (b) allow a residual-version client
+to rewrite from Case A residual instead of the fold.
+
+### Surfaces the gate actually covers
+
+| Surface | Check | Case A (rebuild) | Case B (refuse, preserve bytes) |
+|---|---|---|---|
+| Run projections (`projections/run-*.json`) | Content equality vs current fold **or** any historical journal occurrence of that run id | Missing file, or residual equals a past journal body | Orphan id, smuggled fields, content the journal never produced |
+| Receipt bodies (`receipts/<id>.json`) | Same historical-equality rule | Missing / historical match | Orphan / unexplained body |
+| Command bodies (`commands/<id>.json`) | Same; **no zero-zero escape** for `firstCommitSeq=0 && lastCommitSeq=0` | Missing / historical match | Orphan / planted zero-zero / unexplained body |
+| Pointer indexes (`by-cmd-*`, `by-run-*`) | Full JSON content equality (not pointer-field-only); filename class is case-insensitive | Missing / historical pointer match | Orphan index, smuggled extras |
+| **`stream-seq.json` watermark** (non-entity derived index) | Per-stream scalar vs journal fold max | Missing file, empty map, missing stream key, or value **&lt;** fold | Orphan stream id, or value **&gt;** fold (disk-ahead) |
+
+`commit-seq.json` is **not** checked inside `assertDerivedArtifactsSupportedByJournal`.
+It has a separate direction-aware path in `rebuildFromJournal` only: missing/lower
+`next` rebuilds from journal end; `next` ahead of journal end refuses. Mutation
+paths (`commitUnlocked`) advance commit-seq under anchor continuity checks rather
+than re-running that residual table.
+
+### Direction rule (entities)
+
+| Residual vs journal | Result |
+|---|---|
+| Missing fold-supported file (disk-behind half-commit) | Rebuild from fold; open/mutation succeeds |
+| Content-equal to current fold | Succeeds |
+| **Case A — stale disk-behind same id:** residual equals some *historical* journal occurrence of that id | Rebuild from fold; open/mutation succeeds |
+| **Case B — disk-ahead / planted / otherwise divergent:** residual content the journal never produced (including zero-zero planted/orphan command bodies) | `TF_DURABILITY_FAILED`; residual bytes preserved; never scrub |
+
+### Direction rule (`stream-seq.json`)
+
+| Residual vs journal fold | Result |
+|---|---|
+| Missing / empty / missing stream key / per-stream value **&lt;** fold | Rebuild watermark; open/mutation succeeds |
+| Per-stream value equal to fold | Succeeds |
+| Orphan stream id or per-stream value **&gt;** fold | `TF_DURABILITY_FAILED`; residual bytes preserved; never scrub |
+
+Authority comparison for entity bodies uses a null-prototype canonicalize over own
+keys so a smuggled `"__proto__"` residual field cannot be dropped by the prototype
+setter. Durable ids reject a **full index-grammar denylist** of reserved prefixes
+(`by-cmd-`, `by-run-`) at claim time with **case-folded** matching so
+`By-cmd-*` / `BY-CMD-*` / `By-run-*` cannot plant a body that collides with the
+index grammar on case-insensitive filesystems. Ids are restricted to
+`[A-Za-z0-9._-]`, so Unicode NFKC/NFD folding is not required for this alphabet.
+
+Multi-commit commands already allow `firstCommitSeq <= segment.start` with
+`lastCommitSeq === segment.end` (no equality-to-segment-start requirement on this
+base). Explicit `recoverFromJournal()` may still rebuild/scrub under operator
+direction after a successful open (`residualPolicy: "operator-scrub"`); the
+refuse-before-rewrite gate applies to open, mutation rebuilds, and every
+`commitUnlocked` derived rewrite of the covered surfaces above.
+
+### Explicitly open / out of residual-gate scope
+
+These classes are **not** claimed covered by the residual refuse gate (and must
+not be reported as residual-gate wins without new evidence):
+
+- Coherent whole-root rollback of all local authority bytes (product exclusion)
+- Physical power-loss / crash durability of directory metadata and fsync
+- Hostile post-open path-replacement races (narrow local hardening only; see above)
+- Durable compaction / physical journal truncation
+- Full public-entry coverage matrix
+- Any derived surface **not** listed in the coverage table (if a new watermark or
+  index is added later, it starts open until a red residual test and gate path land)
+- Operator-directed `residualPolicy: "operator-scrub"` after a successful open
+  (intentional scrub under operator direction; not silent open-time repair)
+
+Evidence: `packages/taskflow-control/test/p14-integrity.test.ts` (D1–D5 + CE1–CE7),
+including Case A same-id stale disk-behind, Case B same-id disk-ahead, mutation-path
+residual refuse, zero-zero residual refuse (CE1), `commit`/`compareAndCommit`
+residual refuse (CE2/CE3), case-folded denylist (CE4), stream-seq disk-ahead /
+orphan / commit refuse plus disk-behind rebuild (CE5), `compareAndCommit` Case B
+→ `TF_DURABILITY_FAILED` not soft CAS (CE6), and `compareAndCommit` rebuild-before-CAS
+ordering vs residual-version rewrite (CE7).
+
+This does **not** claim P14 GA closure, anti-rollback, power-loss coverage, or
+hostile path-replacement closure.
+
 ## Status
 
 Accepted for the files-only/local-disk trust model with coherent rollback of all
