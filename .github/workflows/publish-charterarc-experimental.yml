@@ -146,35 +146,33 @@ jobs:
             fi
           done
 
-          # npm assigns `latest` on a package's first-ever publish even when
-          # `--tag experimental` is explicit. Remove only that exact violating
-          # binding; never disturb a stable `latest` pointing elsewhere.
+          # The public npm registry requires a `latest` key in package metadata,
+          # so a package's first-ever publish receives it even with an explicit
+          # non-latest tag. Observe that one unavoidable bootstrap binding, but
+          # never set, move, or remove `latest` from this experimental workflow.
           dist_tags_json="$(pnpm view "$name" dist-tags --json)"
-          latest="$(node -e '
-            const tags = JSON.parse(process.argv[1]);
-            process.stdout.write(tags.latest ?? "");
-          ' "$dist_tags_json")"
-          if [ "$latest" = "$version" ]; then
-            echo "::notice::Removing npm first-publish latest binding from $name@$version"
-            npm dist-tag rm "$name" latest
-            dist_tags_json="$(pnpm view "$name" dist-tags --json)"
-          fi
+          versions_json="$(pnpm view "$name" versions --json)"
 
-          # Fail closed if this version remains bound to latest, or
-          # experimental is missing.
+          # Fail closed unless experimental points at this version. `latest`
+          # may equal it only for the registry-forced sole-version bootstrap.
           node -e '
             const tags = JSON.parse(process.argv[1]);
-            const version = process.argv[2];
+            const rawVersions = JSON.parse(process.argv[2]);
+            const versions = Array.isArray(rawVersions) ? rawVersions : [rawVersions];
+            const version = process.argv[3];
             if (tags.latest === version) {
-              console.error("::error::experimental publish must not set or move latest to " + version);
-              process.exit(1);
+              if (versions.length !== 1 || versions[0] !== version) {
+                console.error("::error::experimental publish moved latest to " + version);
+                process.exit(1);
+              }
+              console.log("registry-forced first-publish latest=" + version + " observed; no stable promise made");
             }
             if (tags.experimental !== version) {
               console.error("::error::experimental dist-tag is " + (tags.experimental ?? "missing") + ", expected " + version);
               process.exit(1);
             }
             console.log("dist-tags ok: experimental=" + tags.experimental + " latest=" + (tags.latest ?? "unset"));
-          ' "$dist_tags_json" "$version"
+          ' "$dist_tags_json" "$versions_json" "$version"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TRUSTED_OWNERS: "heggria,muyun"

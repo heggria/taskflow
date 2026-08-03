@@ -371,8 +371,14 @@ repeated dead end and a mechanically testable invalidation path.
 Before M4, npm `experimental` dist-tag publication remains permitted in
 principle under the user's earlier authorization, but is currently paused until
 M1 passes and a fresh execution-time publish checklist is explicitly approved.
-It must not set or move `latest`, enter the stable Taskflow release, promise
-stable compatibility, or count as adoption evidence.
+It must never explicitly set or move `latest`, enter the stable Taskflow
+release, promise stable compatibility, or count as adoption evidence. The
+public npm registry requires package metadata to contain `latest`, so it binds
+the sole version on a package's first-ever publication even when `--tag
+experimental` is explicit. That registry-forced first-publish `latest` is an
+observed transport constraint, not a stable release or compatibility promise;
+experimental workflows must leave it untouched and consumers must select the
+exact version or `@experimental`.
 
 Only after M4 may the `latest` dist-tag or a stable compatibility promise be
 proposed. A stable release remains a distinct user-authorized decision.

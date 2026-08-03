@@ -48,16 +48,16 @@ test("experimental release: package and workflow cannot promote latest", async (
 	assert.match(workflow, /npm publish[^\n]*\$tarball[^\n]*--provenance/);
 	assert.match(workflow, /npm publish[^\n]*--tag experimental/);
 	assert.doesNotMatch(workflow, /--tag latest|dist-tag (?:add|set)[^\n]*latest/);
+	assert.doesNotMatch(workflow, /dist-tag rm[^\n]*latest/);
 	assert.match(workflow, /verify-published-package\.mjs[^\n]*packages\/charterarc[^\n]*\$tarball/);
 	assert.match(workflow, /PUBLISH_WORKFLOW_PATH:\s*["']?\.github\/workflows\/publish-charterarc-experimental\.yml/);
 	assert.match(workflow, /PUBLISH_REF:\s*\$\{\{ env\.PUBLISH_REF \}\}/);
 	assert.match(workflow, /PUBLISH_COMMIT:\s*\$\{\{ env\.PUBLISH_SHA \}\}/);
 	const verifier = await read("scripts/verify-published-package.mjs");
 	assert.match(verifier, /process\.env\.PUBLISH_COMMIT \?\? process\.env\.GITHUB_SHA/);
-	assert.match(
-		workflow,
-		/if \[ "\$latest" = "\$version" \]; then[\s\S]*npm dist-tag rm "\$name" latest/,
-	);
+	assert.match(workflow, /pnpm view "\$name" versions --json/);
+	assert.match(workflow, /versions\.length !== 1 \|\| versions\[0\] !== version/);
+	assert.match(workflow, /registry-forced first-publish latest=/);
 	assert.match(workflow, /dist-tags/);
 	assert.match(workflow, /experimental/);
 	assert.match(workflow, /latest/);
@@ -72,7 +72,8 @@ test("experimental release: package and workflow cannot promote latest", async (
 
 	const goal = await read("docs/internal/charterarc-autonomous-goal.md");
 	assert.match(goal, /Before M4[\s\S]*npm\s+`experimental` dist-tag/);
-	assert.match(goal, /must not set or move `latest`/);
+	assert.match(goal, /must never explicitly set or move `latest`/);
+	assert.match(goal, /registry-forced first-publish `latest`/);
 	assert.match(goal, /Only after M4[\s\S]*`latest` dist-tag/);
 });
 
