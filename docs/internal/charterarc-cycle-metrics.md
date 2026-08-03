@@ -88,15 +88,15 @@ After every retained external repository has one eligible baseline, alternate el
 
 ## Sample status
 
-- M4 counted sample: 11/20 candidate cycles across 4 local Projects; final eligibility requires M2
+- M4 counted sample: 12/20 candidate cycles across 4 local Projects; final eligibility requires M2
 - Retained integration experiments: 3/3 local consumer branches
 - Active external adoption: 0/3; M2 is unproven
 - Observation window: not started; no active adopted external branch exists
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Twenty-five Grok Runs were executed; twenty-four reported 324 turns and $7.7737324
-- Twenty-two fully reported rows total 1,955,994 input, 114,491 output, and 8,700,160 cache-read tokens
+- Twenty-six Grok Runs were executed; twenty-five reported 336 turns and $8.0620216
+- Twenty-three fully reported rows total 2,047,788 input, 117,906 output, and 8,980,864 cache-read tokens
 - Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
@@ -136,6 +136,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-review-evidence | CharterArc | no | accepted | 0 | 0 | 4.35 | Flow verify; 40/40; packed consumer; invalid-binary healthy no-Run | reviewer evidence rule primary-promoted after governance rejection | pending/pending | 12 | 0.2770528 | 75,632/4,728/324,736 | none; ordinary diff promotion | 0/0/0 |
 | 2026-08-03-adoption-liveness-audit | three consumer branches | no | narrowed | 0 | 0 | — | three direct observers satisfied; main trees have no CharterArc; branches are 4/3/3 integration commits ahead | M2 and four-week window corrected to unproven/not started | n/a/n/a | — | — | — | none; evidence correction only | 0/0/0 |
 | 2026-08-03-adoption-promotion-readiness | three consumer branches | no | narrowed | 0 | 0 | — | exact branch manifests and ignored files; official npm readback; central release-list/workflow audit | local integrations valid; fresh-clone install and merge promotion blocked on an explicit distribution decision | n/a/n/a | — | — | — | no model run or public concept | 0/0/0 |
+| 2026-08-03-overstory-clean-install | overstory | yes | accepted | 0 | 0 | — | deterministic private artifacts; isolated locked install; 274 core + 28 Pi; 5/5 consumer; invalid-binary healthy no-Run | verify now builds workspace exports before typecheck; fresh archive passes | pending/pending | 12 | 0.2882892 | 91,794/3,415/280,704 | none | 0/0/0 |
 
 ### Timing evidence
 

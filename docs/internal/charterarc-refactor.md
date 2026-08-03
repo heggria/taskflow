@@ -676,6 +676,37 @@ merge-ready as a portable adoption. A merge would preserve a manifest whose
 declared package does not exist. No Grok Run was warranted because model work
 cannot change that external fact.
 
+## Private-artifact clean-checkout probe
+
+The next reversible probe separated artifact availability from consumer code.
+The central deterministic packer built `taskflow-core`, `taskflow-hosts`, and
+`charterarc`, repeated each pack to check byte integrity, and installed those
+three local tarballs into archive-only checkouts of every consumer branch. Each
+checkout began without either root or `.charterarc` `node_modules`; project
+dependencies were then restored from the checked lockfiles or `uv.lock`.
+
+llm-arena passed all 6/6 consumer checks and cli-lab passed all 6/6. Overstory's
+first clean checkout returned `unknown`, not `drifted`: its Pi workspace imports
+the core package through `dist` exports, but the root `verify` script typechecked
+before any build had materialized those exports. The same checkout passed its
+full 274 core plus 28 Pi verification after an explicit build, proving the
+cause without authorizing a model from ambiguous infrastructure evidence.
+
+The primary then bound one immutable rule: clean-install verification must
+build workspace exports before typecheck. The overstory Project observed that
+single declared drift and ran one ordinary Grok repair followed by Grok
+read-only review. Grok changed only the root `package.json` verify order; the
+post-run observer returned `satisfied` and `ok: true`. Independent acceptance
+passed 5/5, and a second archive-only checkout installed both the locked project
+dependencies and the three private tarballs before passing the same 5/5 healthy
+no-Run checks. The retained consumer revision is `bef77f9`.
+
+This removes a hidden consumer-code blocker without changing CharterArc. All
+three declarations can now run from clean checkouts when the exact private
+artifact is supplied. They still lack a durable artifact location and an active
+keep/merge decision, so M2 remains `0/3` and the four-week window remains
+unstarted. The probe adds no installer, registry, API, phase, or public concept.
+
 The current Goal deliberately reserves a public package for M5 after M4, so
 publication is not automatically the next step. Progress now needs one explicit
 external choice: either authorize a small private, reproducible artifact channel
