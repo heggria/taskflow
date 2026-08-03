@@ -318,6 +318,26 @@ test("adoption evidence: records llm-arena without promoting bootstrap into a CL
 	assert.doesNotMatch(evidence, /only one external branch is\s+locally retained/);
 });
 
+test("governance seam: records the measured decision before adding framework surface", async () => {
+	const evidence = await readFile(
+		path.resolve(
+			path.dirname(new URL(import.meta.url).pathname),
+			"../../../docs/internal/charterarc-refactor.md",
+		),
+		"utf8",
+	);
+	assert.match(evidence, /## Governance seam decision/);
+	assert.match(evidence, /Decision:\s*\*\*retain the local guards\*\*/i);
+	assert.match(evidence, /134 net launcher lines/);
+	assert.match(evidence, /`cwd:\s*"worktree"`[\s\S]*fail-open[\s\S]*discard/i);
+	assert.match(evidence, /`taskflow_reconcile_workspace`[\s\S]*does not restore/i);
+	assert.match(evidence, /removable consumer lines/i);
+	assert.match(evidence, /central implementation/i);
+	assert.match(evidence, /central tests/i);
+	assert.match(evidence, /consumer authoring/i);
+	assert.match(evidence, /Reconsider when:/i);
+});
+
 test("longitudinal evidence: measures M4 without turning evidence into runtime state", async () => {
 	const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
 	const [goal, metrics, readme] = await Promise.all([

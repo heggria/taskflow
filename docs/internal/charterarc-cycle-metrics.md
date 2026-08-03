@@ -87,8 +87,8 @@ After every retained external repository has one eligible baseline, alternate el
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Twenty-three Grok Runs were executed; twenty-two reported 295 turns and $7.0670520
-- Twenty fully reported rows total 1,760,797 input, 103,639 output, and 7,862,912 cache-read tokens
+- Twenty-four Grok Runs were executed; twenty-three reported 312 turns and $7.4966796
+- Twenty-one fully reported rows total 1,880,362 input, 109,763 output, and 8,375,424 cache-read tokens
 - Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
@@ -124,6 +124,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-overstory-governance-snapshot | overstory | no | narrowed | 0 | 0 | 3.48 | 4/4 consumer; 274 core + 28 Pi; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; llm-arena next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-llm-governance-snapshot | llm-arena | no | narrowed | 0 | 0 | 2.25 | 43/43; lint 0 errors/2 warnings; build; 6/6 consumer; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; cli-lab next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-cli-governance-snapshot | cli-lab | no | narrowed | 0 | 0 | 1.77 | list 8; doctor; profile env; 8 CLI smoke; 6/6 consumer; invalid-binary healthy no-Run | all local snapshots retained; shared-seam comparison next | n/a/n/a | — | — | — | none | 0/0/0 |
+| 2026-08-03-charterarc-governance-seam | CharterArc | no | narrowed | 0 | 0 | 4.23 | Taskflow workspace/reconcile source; 40/40; invalid-binary healthy no-Run | local guards retained; unsupported code-size claim removed | n/a/n/a | 17 | 0.4296276 | 119,565/6,124/512,512 | none; retractable evidence only | 0/0/0 |
 
 ### Timing evidence
 
@@ -253,6 +254,20 @@ After every retained external repository has one eligible baseline, alternate el
   invalid-binary healthy no-Run result. Missing optional credentials remained
   environment facts. This narrowed correction adds no public concept and does
   not increase the zero-model Taskflow-attempt count.
+- `2026-08-03-charterarc-governance-seam`: selected
+  `2026-08-03T07:28:18.300Z`; verified `2026-08-03T07:32:32.300Z`;
+  elapsed `4.23` minutes. No user judgment was requested or supplied after the
+  contradiction was selected, so `Human min` is directly observed as `0`. The
+  primary added one immutable acceptance test, and the root Project itself
+  observed `39/40`, ran one ordinary Grok repair -> read-only review Taskflow,
+  and re-observed `40/40`. Source inspection showed that `cwd: "worktree"`
+  discards successful isolated edits and can fail open, while workspace
+  reconciliation only accepts an inspected generation and does not restore
+  files. The primary retained the local-guard decision but removed Grok's
+  unsupported assertion that a helper's total code was already measured not to
+  shrink. A second invocation with an invalid Grok binary stayed healthy and
+  started no Run. This is retractable product knowledge, not confirmed product
+  drift, so it receives no M4 credit.
 
 ## Matched replay: small deterministic repair
 
@@ -269,7 +284,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Thirteen rows currently have both selected-at and verified-at timestamps under the
+Fourteen rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`

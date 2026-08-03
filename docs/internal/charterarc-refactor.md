@@ -563,15 +563,49 @@ a hypothetical preference for elegance. It justifies the next comparison; it
 does not by itself authorize a third public runtime function, governance option,
 or host-specific dependency.
 
-## Next evidence
+## Governance seam decision
 
-Make an evidence-based retain-or-extract decision about the repeated governance
-guard. First test whether an existing Taskflow workspace/diff seam can remove
-the 134 launcher lines without adding a CharterArc authoring concept. Otherwise
-compare the smallest host-neutral helper plus tests against the exact consumer
-lines it deletes. Reject extraction unless total code and judgment surface both
-shrink. Then return to naturally occurring maintenance; do not invent unrelated
-migrations.
+Decision: **retain the local guards**.
+
+The three governance migrations added 134 net launcher lines of repeated
+pre/post snapshot and fail-closed reporting. That is enough friction to force
+a comparison; it is not enough to authorize extraction. The comparison is:
+
+1. Existing Taskflow workspace seams do not delete those lines. A phase with
+   `cwd: "worktree"` isolates the agent in a throwaway worktree and is
+   fail-open when allocation degrades to a temp dir; teardown is discard of
+   the isolated tree, not a post-`runProject` check that parent launcher,
+   sandbox, and acceptance sources stayed immutable. `taskflow_reconcile_workspace`
+   advances resolve-only workspace generation after inspection; it does not restore
+   files or compare protected-file content and membership before and after a Run.
+   Neither seam replaces the consumer-owned guard without a new CharterArc
+   authoring concept (file scope, when to force `ok: false`, what counts as
+   governance vs product drift).
+
+2. The 134 net launcher lines are an upper bound on removable consumer lines,
+   not a claimed helper saving: each launcher still needs to call `runProject`,
+   bind its host, report the outcome, and exit fail-closed. A smallest
+   host-neutral candidate would add path-scope configuration, snapshot equality,
+   result rewriting, central implementation, and central tests. Its net line
+   count remains unmeasured until there is a concrete patch. Consumer authoring
+   would remain because each project must still name its protected scope and make
+   a missing guard `unknown`. The candidate therefore fails the required judgment-
+   surface test even before asking whether its code total is smaller.
+
+Therefore extraction is rejected. Keep the explicit local guards. Return to
+naturally occurring maintenance; do not invent migrations to justify a helper.
+
+This decision was produced by the root CharterArc Project itself: the primary
+bound this section as immutable acceptance, one Grok-only repair -> read-only
+review Taskflow changed the evidence document, and the post-run observer passed
+40/40 tests. The primary retained the decision but removed Grok's unsupported
+claim that total code was already known not to shrink.
+
+Reconsider when: a concrete patch shows both total lines and author-facing
+judgment surface strictly smaller across the retained consumers, without a new
+public runtime function or host-specific dependency in CharterArc. Another
+consumer is relevant only if it changes that concrete comparison.
+
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained
