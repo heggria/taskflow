@@ -173,11 +173,16 @@ is unknown, never proof of a free Run.
 A later subtraction trial exposed a more important dogfood failure. The first
 Grok repair changed the new acceptance test back to the old required
 `ProjectDefinition.name`, and its reviewer passed the title/behavior
-contradiction. The repair sandbox now makes `packages/charterarc/test`
-read-only, and both repair and review treat any acceptance rewrite as a block.
-With that boundary fixed, exact type and runtime tests rejected both a required
-and an optional compatibility alias. Grok then removed the duplicate identity
-from the definition, declarations, and `runProject`; the ordinary Taskflow's
+contradiction. The first response configured `packages/charterarc/test` as a
+relative sandbox `read_only` directory. A later live probe proved that setting
+did not stop an absolute-path Grok edit, so it is no longer treated as a safety
+boundary. The running parent now hashes acceptance plus the governing Project,
+launcher, sandbox, Goal, and metrics files before and after the bounded Run and
+forces reported `ok: false` on any change. This detects and rejects tampering;
+it does not claim to prevent the write. With primary verification enforcing
+that boundary, exact type and runtime tests rejected both a required and an
+optional compatibility alias. Grok then removed the duplicate identity from
+the definition, declarations, and `runProject`; the ordinary Taskflow's
 `maintain.name` now supplies the existing identity.
 
 This was not a one-shot autonomy success. Four Grok-only Runs all reported
@@ -223,9 +228,10 @@ environment failures remain `unknown`.
 
 The initial probe was not retained at that point. It is now deliberately kept
 on `codex/charterarc-cli-lab-consumer` at commit `88371ea`. Before retention,
-the acceptance boundary moved under a Grok-read-only directory, the review gate
-lost shell authority, and one confirmed adoption drift required the runner to
-fail closed when an attempted Taskflow Run failed or blocked. One Grok-only Run
+the acceptance directory was configured as Grok `read_only`—a setting later
+shown not to enforce the intended relative path—the review gate lost shell
+authority, and one confirmed adoption drift required the runner to fail closed
+when an attempted Taskflow Run failed or blocked. One Grok-only Run
 reached `drifted -> satisfied`, reported 12 turns and $0.2094324, and changed
 only the runner's exit check. Independent verification passed 5/5 consumer
 tests, `uv run cli-lab doctor`, and all eight registered CLI smoke commands; the
@@ -382,8 +388,10 @@ Taskflow Run also had to be successful. This duplication was not cosmetic. An
 earlier cli-lab adoption cycle had already shown that checking only observed
 reality could hide a failed or blocked maintenance attempt.
 
-The primary bound the behavior matrix under the Grok-read-only acceptance
-directory first. The self Project then observed seven missing-property
+The primary bound the behavior matrix in the acceptance directory first. A
+later live probe showed that the directory's relative `read_only` setting was
+not an enforcement boundary, so the evidence rests on independent diff and
+acceptance verification rather than that setting. The self Project then observed seven missing-property
 TypeScript diagnostics, executed one ordinary Grok repair -> read-only review
 Taskflow, and re-observed `satisfied`. The accepted result adds one required
 `ProjectOutcome.ok` boolean while preserving `status` as a statement about

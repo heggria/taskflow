@@ -7,6 +7,7 @@ import project from "../../../charterarc.project.ts";
 import {
 	configureDogfoodGrokSandbox,
 	dogfoodAcceptanceDigest,
+	dogfoodGovernanceDigest,
 } from "../../../scripts/dogfood-charterarc.mts";
 import { runProject } from "../src/index.ts";
 import { buildGrokArgs } from "taskflow-hosts/grok";
@@ -72,7 +73,7 @@ test("self-dogfood project: repair checks directly and review is actually read-o
 	assert.ok(args.includes("--no-subagents"));
 });
 
-test("self-dogfood project: Grok cannot report success after moving acceptance", async () => {
+test("self-dogfood project: Grok cannot report success after moving governance", async () => {
 	const repair = project.maintain.phases.find((phase) => phase.id === "repair")?.task;
 	const review = project.maintain.phases.find((phase) => phase.id === "review")?.task;
 	assert.equal(typeof repair, "string");
@@ -93,13 +94,19 @@ test("self-dogfood project: Grok cannot report success after moving acceptance",
 		),
 		"utf8",
 	);
-	assert.match(
-		sandbox,
-		/deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
-	);
-	assert.match(launcher, /acceptanceBefore = dogfoodAcceptanceDigest\(cwd\)/);
-	assert.match(launcher, /acceptanceUnchanged = acceptanceBefore === acceptanceAfter/);
-	assert.match(launcher, /ok: false,[\s\S]*acceptanceUnchanged: false/);
+	assert.doesNotMatch(sandbox, /^(?:read_only|deny)\s*=/m);
+	for (const governed of [
+		".grok/sandbox.toml",
+		"charterarc.project.ts",
+		"scripts/dogfood-charterarc.mts",
+		"docs/internal/charterarc-autonomous-goal.md",
+		"docs/internal/charterarc-cycle-metrics.md",
+	]) {
+		assert.match(launcher, new RegExp(governed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+	}
+	assert.match(launcher, /governanceBefore = dogfoodGovernanceDigest\(cwd\)/);
+	assert.match(launcher, /governanceUnchanged = governanceBefore === governanceAfter/);
+	assert.match(launcher, /ok: false,[\s\S]*governanceUnchanged: false/);
 });
 
 test("self-dogfood runner: acceptance digest covers content and membership", async () => {
@@ -115,6 +122,30 @@ test("self-dogfood runner: acceptance digest covers content and membership", asy
 		const added = dogfoodAcceptanceDigest(cwd);
 		assert.notEqual(changed, first);
 		assert.notEqual(added, changed);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood runner: governance digest covers the protected control files", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "charterarc-governance-digest-"));
+	try {
+		const governed = [
+			".grok/sandbox.toml",
+			"charterarc.project.ts",
+			"scripts/dogfood-charterarc.mts",
+			"docs/internal/charterarc-autonomous-goal.md",
+			"docs/internal/charterarc-cycle-metrics.md",
+			"packages/charterarc/test/acceptance.test.ts",
+		];
+		for (const relative of governed) {
+			const file = path.join(cwd, relative);
+			await mkdir(path.dirname(file), { recursive: true });
+			await writeFile(file, relative);
+		}
+		const first = dogfoodGovernanceDigest(cwd);
+		await writeFile(path.join(cwd, "charterarc.project.ts"), "changed");
+		assert.notEqual(dogfoodGovernanceDigest(cwd), first);
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
@@ -245,12 +276,12 @@ test("self-dogfood project: an unclassified command failure is unknown", async (
 	}
 });
 
-test("self-dogfood runner: combines ProjectOutcome with primary-owned acceptance", async () => {
+test("self-dogfood runner: combines ProjectOutcome with primary-owned governance", async () => {
 	const source = await readFile(
 		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../scripts/dogfood-charterarc.mts"),
 		"utf8",
 	);
-	assert.match(source, /acceptanceUnchanged\s*\?\s*outcome/);
+	assert.match(source, /governanceUnchanged\s*\?\s*outcome/);
 	assert.match(source, /if\s*\(\s*!reported\.ok\s*\)/);
 	assert.doesNotMatch(source, /dogfoodSucceeded|outcome\.run\?\.ok/);
 });
@@ -395,10 +426,7 @@ test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", a
 		"utf8",
 	);
 	assert.match(sandbox, /\[profiles\.charterarc-self-write\][\s\S]*extends = "workspace"/);
-	assert.match(
-		sandbox,
-		/\[profiles\.charterarc-self-write\][\s\S]*deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
-	);
+	assert.doesNotMatch(sandbox, /^(?:read_only|deny)\s*=/m);
 	assert.match(sandbox, /\[profiles\.charterarc-self-review\][\s\S]*extends = "read-only"/);
 	assert.match(sandbox, /\[shell_environment_policy\][\s\S]*inherit = "core"/);
 });

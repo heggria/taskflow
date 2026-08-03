@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { globSync, readFileSync, readlinkSync } from "node:fs";
+import { globSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runProject } from "charterarc";
@@ -34,10 +34,43 @@ export function dogfoodAcceptanceDigest(cwd: string): string {
 	return digest.digest("hex");
 }
 
+const DOGFOOD_GOVERNING_FILES = [
+	".grok/sandbox.toml",
+	"charterarc.project.ts",
+	"scripts/dogfood-charterarc.mts",
+	"docs/internal/charterarc-autonomous-goal.md",
+	"docs/internal/charterarc-cycle-metrics.md",
+] as const;
+
+/** The running parent process remains the trust anchor for one bounded Run. */
+export function dogfoodGovernanceDigest(cwd: string): string {
+	const digest = createHash("sha256");
+	digest.update(`acceptance:${dogfoodAcceptanceDigest(cwd)}\0`);
+	for (const relative of DOGFOOD_GOVERNING_FILES) {
+		const file = path.join(cwd, relative);
+		digest.update(relative);
+		digest.update("\0");
+		try {
+			const stat = lstatSync(file);
+			if (stat.isFile()) digest.update(readFileSync(file));
+			else if (stat.isSymbolicLink()) digest.update(`link:${readlinkSync(file)}`);
+			else digest.update("unexpected-file-type");
+		} catch (error) {
+			const code =
+				typeof error === "object" && error !== null && "code" in error
+					? String(error.code)
+					: "unknown";
+			digest.update(`unreadable:${code}`);
+		}
+		digest.update("\0");
+	}
+	return digest.digest("hex");
+}
+
 async function main(): Promise<void> {
 	configureDogfoodGrokSandbox();
 	const cwd = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-	const acceptanceBefore = dogfoodAcceptanceDigest(cwd);
+	const governanceBefore = dogfoodGovernanceDigest(cwd);
 	const outcome = await runProject(project, {
 		observeTimeoutMs: 120_000,
 		taskflow: {
@@ -47,16 +80,16 @@ async function main(): Promise<void> {
 			usageAccounting: grokSubagentRunner.usageAccounting,
 		},
 	});
-	const acceptanceAfter = dogfoodAcceptanceDigest(cwd);
-	const acceptanceUnchanged = acceptanceBefore === acceptanceAfter;
-	const reported = acceptanceUnchanged
+	const governanceAfter = dogfoodGovernanceDigest(cwd);
+	const governanceUnchanged = governanceBefore === governanceAfter;
+	const reported = governanceUnchanged
 		? outcome
 		: {
 				...outcome,
 				ok: false,
 				governance: {
-					acceptanceUnchanged: false,
-					summary: "packages/charterarc/test changed during the Grok maintenance Run",
+					governanceUnchanged: false,
+					summary: "CharterArc governing files or acceptance changed during the Grok maintenance Run",
 				},
 			};
 

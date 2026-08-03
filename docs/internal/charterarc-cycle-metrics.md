@@ -120,6 +120,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-governance-deny | CharterArc | no | narrowed | 0 | 0 | 7.43 | Flow verify; Grok sandbox applied with 2 deny paths; 37/37; packed consumer | kernel deny retained; zero-model Run rejected | n/a/n/a | 0 | — | — | none | 0/0/0 |
 | 2026-08-03-charterarc-governance-chain | CharterArc | no | accepted | 0 | 0 | 6.93 | Flow verify; 37/37; packed consumer; Grok profile parse; invalid Grok binary healthy no-Run | five exact governing denies retained; M4-disqualified by primary post-Run hardening | pending/pending | 17 | 0.3254812 | 73,259/5,616/484,224 | none | 0/0/0 |
 | 2026-08-03-charterarc-acceptance-permission | CharterArc probe | no | narrowed | 0 | 0 | 7.17 | Flow verify; live edit changed hash; review gate BLOCK; primary restored; 38/38; packed consumer; invalid-binary healthy no-Run | permission-rule candidate rejected; launcher digest retained | n/a/n/a | 3 | 0.1104848 | 49,714/358/29,696 | none | 0/0/0 |
+| 2026-08-03-charterarc-readable-governance | CharterArc | no | narrowed | 0 | 0 | 2.03 | 39/39; packed consumer; invalid-binary healthy no-Run | exact read-deny removed; parent governance digest retained | n/a/n/a | — | — | — | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -198,6 +199,20 @@ After every retained external repository has one eligible baseline, alternate el
   does not claim to prevent the write. The permission-rule candidate is
   rejected, the narrower fail-closed detector is retained, and the probe earns
   no M4 credit.
+- `2026-08-03-charterarc-readable-governance`: selected
+  `2026-08-03T07:03:20.000Z`; verified `2026-08-03T07:05:22.000Z`;
+  elapsed `2.03` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. The live
+  probe and Grok's local sandbox contract together show that `deny` is both
+  read- and write-deny. The five exact denies retained in the preceding cycle
+  therefore made the Project, launcher, Goal, metrics, and sandbox unreadable
+  to the same repair process whose authoritative tests consume them. The
+  primary removed that self-defeating kernel policy and expanded the already
+  running parent launcher's digest from acceptance alone to acceptance plus all
+  five governing files. Any disk mutation during a Run now forces reported
+  `ok: false`, while normal read access and verification remain possible. This
+  is a governance correction with no Taskflow or Grok Run, no M4 credit, and no
+  new runtime or authoring concept.
 
 ## Matched replay: small deterministic repair
 
@@ -214,7 +229,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Nine rows currently have both selected-at and verified-at timestamps under the
+Ten rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`
