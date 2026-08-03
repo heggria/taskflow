@@ -181,4 +181,4 @@ jobs:
           PUBLISH_REPOSITORY_URL: "https://github.com/heggria/taskflow"
           PUBLISH_WORKFLOW_PATH: ".github/workflows/publish-charterarc-experimental.yml"
           PUBLISH_REF: ${{ env.PUBLISH_REF }}
-          GITHUB_SHA: ${{ env.PUBLISH_SHA }}
+          PUBLISH_COMMIT: ${{ env.PUBLISH_SHA }}

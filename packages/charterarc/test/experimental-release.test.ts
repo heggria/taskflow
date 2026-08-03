@@ -51,7 +51,9 @@ test("experimental release: package and workflow cannot promote latest", async (
 	assert.match(workflow, /verify-published-package\.mjs[^\n]*packages\/charterarc[^\n]*\$tarball/);
 	assert.match(workflow, /PUBLISH_WORKFLOW_PATH:\s*["']?\.github\/workflows\/publish-charterarc-experimental\.yml/);
 	assert.match(workflow, /PUBLISH_REF:\s*\$\{\{ env\.PUBLISH_REF \}\}/);
-	assert.match(workflow, /GITHUB_SHA:\s*\$\{\{ env\.PUBLISH_SHA \}\}/);
+	assert.match(workflow, /PUBLISH_COMMIT:\s*\$\{\{ env\.PUBLISH_SHA \}\}/);
+	const verifier = await read("scripts/verify-published-package.mjs");
+	assert.match(verifier, /process\.env\.PUBLISH_COMMIT \?\? process\.env\.GITHUB_SHA/);
 	assert.match(
 		workflow,
 		/if \[ "\$latest" = "\$version" \]; then[\s\S]*npm dist-tag rm "\$name" latest/,
