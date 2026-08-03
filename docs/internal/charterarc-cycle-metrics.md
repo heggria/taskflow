@@ -87,8 +87,9 @@ After every retained external repository has one eligible baseline, alternate el
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Twenty Grok Runs were executed; nineteen reported 263 turns and $6.3429720
-- Seventeen fully reported rows total 1,556,671 input, 94,169 output, and 6,999,552 cache-read tokens
+- Twenty-one Grok Runs were executed; twenty reported 275 turns and $6.6310860
+- Eighteen fully reported rows total 1,637,824 input, 97,665 output, and 7,348,992 cache-read tokens
+- One additional zero-model Taskflow attempt failed closed during verification; it is not a Grok Run or an M4 cycle
 - Pending next refresh: none
 
 ## Cycles
@@ -115,6 +116,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-llm-outcome-ok | llm-arena | yes | accepted | 0 | 0 | 2.53 | 43/43; lint 0 errors/2 warnings; build; 5/5 consumer; invalid Grok binary healthy no-Run | local success predicate deleted | pending/pending | 10 | 0.2068152 | 68,205/2,979/175,104 | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 | 2026-08-03-cli-outcome-ok | cli-lab | yes | accepted | 0 | 0 | 2.81 | doctor; profile env; 8 CLI smoke; 5/5 consumer; invalid Grok binary healthy no-Run | local success predicate deleted | pending/pending | 11 | 0.2226960 | 70,419/2,539/222,080 | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 | 2026-08-03-charterarc-prospective-baseline | CharterArc | no | accepted | 0 | 0 | 3.93 | Flow verify; 37/37; invalid Grok binary healthy no-Run; heartbeat readback | prospective baseline routing retained | n/a/n/a | 19 | 0.4372336 | 97,262/5,418/700,672 | none; experiment protocol only | 0/0/0 |
+| 2026-08-03-charterarc-m4-release-boundary | CharterArc | no | accepted | 0 | 0 | 6.99 | Flow verify; 37/37; packed consumer; final invalid Grok binary healthy no-Run | release boundary retained; M4-disqualified by extra zero-model Taskflow attempt | pending/pending | 12 | 0.2881140 | 81,153/3,496/349,440 | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -142,6 +144,17 @@ After every retained external repository has one eligible baseline, alternate el
   this evidence-only protocol repair, so `Human min` is directly observed as
   `0`. The Run and its cost are charged, but M4 and seven-day product maturity
   remain unaffected.
+- `2026-08-03-charterarc-m4-release-boundary`: selected
+  `2026-08-03T06:02:39.990Z`; verified `2026-08-03T06:09:39.575Z`;
+  elapsed `6.99` minutes. No user judgment was requested or supplied during
+  this bounded self-maintenance cycle, so `Human min` is directly observed as
+  `0`. A primary formatting change after the successful Grok Run broke an
+  existing packed-consumer text contract. An invalid-provider verification
+  then started one Taskflow attempt, failed closed before any model call or
+  mutation, and exposed the regression. The primary restored the existing
+  phrase and reverified reality without another model call. Because the cycle
+  exceeded the intended one-Run envelope, the accepted change receives no M4
+  credit.
 
 ## Matched replay: small deterministic repair
 

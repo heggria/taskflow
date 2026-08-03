@@ -257,9 +257,10 @@ test("adoption evidence: records llm-arena without promoting bootstrap into a CL
 
 test("longitudinal evidence: measures M4 without turning evidence into runtime state", async () => {
 	const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
-	const [goal, metrics] = await Promise.all([
+	const [goal, metrics, readme] = await Promise.all([
 		readFile(path.join(root, "docs/internal/charterarc-autonomous-goal.md"), "utf8"),
 		readFile(path.join(root, "docs/internal/charterarc-cycle-metrics.md"), "utf8").catch(() => ""),
+		readFile(path.join(root, "packages/charterarc/README.md"), "utf8"),
 	]);
 	assert.match(goal, /\[cycle metrics\]\(\.\/charterarc-cycle-metrics\.md\)/);
 	assert.match(goal, /At least three independent, real repositories choose to keep a Project/);
@@ -330,6 +331,10 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 	assert.match(
 		metrics,
 		/After every retained external repository has one eligible baseline, alternate eligible needs within each repository/,
+	);
+	assert.match(
+		readme,
+		/remains private until M4\s+comparative evidence supports an explicit release decision/,
 	);
 });
 

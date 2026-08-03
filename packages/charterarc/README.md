@@ -68,6 +68,6 @@ observed evidence, while `unavailable` means missing or zero fields are unknown
 and cannot authorize a token or USD budget.
 
 Repository, packed-consumer, and cross-repository experiments each bound one
-project to one domain observer; none used a name registry. Three retained external projects
-already use the private package; an explicit release decision is still required before
-it leaves that private boundary.
+project to one domain observer; none used a name registry.
+Three retained external projects already use the private package.
+It remains private until M4 comparative evidence supports an explicit release decision.
