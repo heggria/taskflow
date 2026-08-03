@@ -427,10 +427,32 @@ Grok binary. It can still prove the zero-Run path, but a future acceptance test
 can no longer silently acquire live model authority. The nested process did not
 retain its usage JSON, so that Run's turns, tokens, and cost remain unknown.
 
+### Second external subtraction: llm-arena
+
+The llm-arena Project independently observed the same duplicated success rule.
+The primary bound a static contract that required direct `outcome.ok` use and
+rejected any `runOk`, `status + run`, or alternate-host fallback. Taskflow's
+zero-token verifier accepted the existing two-phase Flow with only its
+intentional terminal-gate warning. One Grok repair plus read-only review Run
+then changed only `.charterarc/run.mjs`, replacing the local reconstruction
+with `if (!outcome.ok)`.
+
+The Run re-observed `satisfied`, reported 10 turns, 68,205 input tokens, 2,979
+output tokens, 175,104 cache-read tokens, and $0.2068152. The primary separately
+verified 43/43 Python adversarial cases, Web lint with zero errors and the two
+pre-existing warnings, the production build, and all five consumer acceptance
+tests. With the Grok binary forced to a nonexistent path, the real entrypoint
+still returned `satisfied`, `ok: true`, and no `run`.
+
+Two independent external consumers have now deleted their private copy of the
+same semantic rule while adding no authoring concept. This supports retaining
+`ProjectOutcome.ok`; it does not justify a migration helper, a new Project
+field, or publication.
+
 ## Next evidence
 
-Migrate the remaining retained external runners only when each Project observes
-the duplicate predicate; do not add a bulk migration mechanism. Otherwise use
+Migrate cli-lab only when its own Project observes the duplicate predicate; do
+not add a bulk migration mechanism. Otherwise use
 the next naturally occurring maintenance need for longitudinal evidence.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
