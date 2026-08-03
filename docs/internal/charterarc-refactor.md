@@ -348,12 +348,12 @@ the duplication is cheaper than a new abstraction.
 
 ## Adoption burden and private release candidate
 
-After the first external governance migration, the three retained consumer
-trees contain 1,034 checked-in CharterArc lines: 623 in Project declarations,
-215 in consumer acceptance, 119 in host runners, 45 in local package manifests,
-and 32 in Grok sandboxes. Declarations plus acceptance are 838/1,034 lines
-(81.0%); runners alone are 119/1,034 (11.5%), and all
-runner/package/sandbox plumbing together is 196/1,034 (19.0%). A runner helper
+After the second external governance migration, the three retained consumer
+trees contain 1,134 checked-in CharterArc lines: 659 in Project declarations,
+238 in consumer acceptance, 164 in host runners, 45 in local package manifests,
+and 28 in Grok sandboxes. Declarations plus acceptance are 897/1,134 lines
+(79.1%); runners alone are 164/1,134 (14.5%), and all
+runner/package/sandbox plumbing together is 237/1,134 (20.9%). A runner helper
 would optimize the smaller part while leaving the domain-specific `observe`
 classification—the part that safely separates `drifted` from `unknown`—inside
 every project. The helper/CLI route remains rejected.
@@ -509,16 +509,40 @@ This migration removes an unenforced prevention claim and retains a narrower
 post-Run detector; it does not make CharterArc a security boundary. It also
 adds 45 net lines to the overstory launcher. That cost is real evidence against
 pretending the current consumer bootstrap is already minimal. Do not extract a
-public helper after one migration: apply the same correction to the two
-remaining retained consumers, then compare the repeated burden with the helper
-surface it would replace.
+public helper after one migration: apply the same correction to another
+retained consumer, then compare the repeated burden with the helper surface it
+would replace.
+
+## Second external governance migration: llm-arena
+
+llm-arena repeated the same contradiction. The primary first changed its
+observer so a missing parent guard or relative `read_only` declaration is
+`unknown`; the red acceptance invocation therefore exited before Taskflow and
+could not call Grok. The parent launcher then gained the same pre/post snapshot
+over its sandbox, launcher, and acceptance tree, while the unenforced relative
+setting was removed.
+
+Independent verification passed 43/43 Python adversarial cases, Web lint with
+only the two pre-existing warnings, the production build, all six consumer
+acceptance tests, and a direct invalid-binary healthy invocation returning
+`satisfied`, `ok: true`, and no `run`. No Taskflow or Grok Run occurred, no
+product source changed, and no public concept was added.
+
+The second migration again added 45 net lines to the launcher. Repetition has
+now crossed the minimum evidence threshold for evaluating a shared seam, but it
+does not prove that a helper would be smaller: a helper must also receive file
+scope, preserve independent acceptance authority, and avoid pulling Grok host
+policy into CharterArc. Migrate cli-lab once under the same local contract,
+then compare the exact removable duplication with the central API and tests it
+would require. If the helper does not reduce the total judgment surface, reject
+it and keep the explicit launchers.
 
 ## Next evidence
 
-Migrate the same truthful governance boundary to llm-arena and cli-lab one
-consumer at a time, without a model Run unless confirmed product drift requires
-one. Then use the next naturally occurring maintenance need for longitudinal
-evidence; do not invent unrelated migrations.
+Migrate the same truthful governance boundary to cli-lab without a model Run
+unless confirmed product drift requires one. Then make an evidence-based
+retain-or-extract decision about the repeated launcher guard before returning
+to naturally occurring maintenance; do not invent unrelated migrations.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained

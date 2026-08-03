@@ -122,6 +122,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-acceptance-permission | CharterArc probe | no | narrowed | 0 | 0 | 7.17 | Flow verify; live edit changed hash; review gate BLOCK; primary restored; 38/38; packed consumer; invalid-binary healthy no-Run | permission-rule candidate rejected; launcher digest retained | n/a/n/a | 3 | 0.1104848 | 49,714/358/29,696 | none | 0/0/0 |
 | 2026-08-03-charterarc-readable-governance | CharterArc | no | narrowed | 0 | 0 | 2.03 | 39/39; packed consumer; invalid-binary healthy no-Run | exact read-deny removed; parent governance digest retained | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-overstory-governance-snapshot | overstory | no | narrowed | 0 | 0 | 3.48 | 4/4 consumer; 274 core + 28 Pi; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; llm-arena next | n/a/n/a | — | — | — | none | 0/0/0 |
+| 2026-08-03-llm-governance-snapshot | llm-arena | no | narrowed | 0 | 0 | 2.25 | 43/43; lint 0 errors/2 warnings; build; 6/6 consumer; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; cli-lab next | n/a/n/a | — | — | — | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -227,6 +228,18 @@ After every retained external repository has one eligible baseline, alternate el
   core and 28 Pi tests behind `npm run verify`, and the explicit invalid-binary
   healthy no-Run probe passed. This is a narrowed governance correction, not an
   M4 cycle or a Grok Run, and it adds no public concept.
+- `2026-08-03-llm-governance-snapshot`: selected
+  `2026-08-03T07:16:50.000Z`; verified `2026-08-03T07:19:05.000Z`;
+  elapsed `2.25` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. The primary made missing governance
+  an `unknown` observation before touching the launcher, and the red acceptance
+  process therefore exited without a Taskflow or Grok Run. It then removed the
+  ineffective relative `read_only` declaration and added the parent pre/post
+  snapshot. Independent verification passed 43/43 Python cases, lint with zero
+  errors and the two pre-existing warnings, the production build, 6/6 consumer
+  tests, and the explicit invalid-binary healthy no-Run probe. This narrowed
+  correction adds no public concept and does not increase the zero-model
+  Taskflow-attempt count.
 
 ## Matched replay: small deterministic repair
 
@@ -243,7 +256,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Eleven rows currently have both selected-at and verified-at timestamps under the
+Twelve rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`
