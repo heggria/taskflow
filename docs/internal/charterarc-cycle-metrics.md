@@ -21,10 +21,10 @@ A Run that writes this sample is appended by the next refresh; it stays pending 
 
 - M4 counted sample: 5/20 cycles across 3/3 retained projects
 - Observation window: less than 1/4 weeks
-- Comparison baseline: —
-- Eight Grok Runs reported 105 turns and $2.5490100
-- Six fully reported rows total 601,900 input, 29,507 output, and 2,011,392 cache-read tokens
-- Pending next refresh: current metrics correction Run
+- Comparison baseline: one matched replay; human judgment baseline still `—`
+- Eleven Grok Runs reported 131 turns and $3.2141472
+- Nine fully reported rows total 793,378 input, 44,806 output, and 2,646,016 cache-read tokens
+- Pending next refresh: current comparison-evidence recording Run
 
 ## Cycles
 
@@ -38,3 +38,21 @@ A Run that writes this sample is appended by the next refresh; it stays pending 
 | 2026-08-03-charterarc-adoption-evidence | CharterArc | no | narrowed | 0 | 0 | — | 36/36; primary rejected test-debt claim | reworked next row | 17 | 0.4741136 | 139,600/7,212/505,472 | avoided CLI | 0/0/0 |
 | 2026-08-03-charterarc-fact-correction | CharterArc | no | accepted | 0 | 0 | — | 36/36; healthy no-Run | accepted correction | 10 | 0.3399076 | 130,430/2,909/205,312 | avoided CLI | 0/0/0 |
 | 2026-08-03-charterarc-metrics-bootstrap | CharterArc | no | narrowed | 0 | 0 | — | 37/37; primary narrowed semantics/provenance | reworked by current refresh | 12 | 0.3288048 | 89,256/6,764/365,696 | none | 0/0/0 |
+| 2026-08-03-charterarc-metrics-correction | CharterArc | no | accepted | 0 | 0 | — | 37/37; healthy no-Run | metrics semantics retained | 13 | 0.3560392 | 91,295/8,729/403,584 | none | 0/0/0 |
+| 2026-08-03-llm-paired-single | llm-arena replay | no | accepted | 0 | 0 | — | 43/43; lint; build; byte-identical output | comparison only; no M4 credit | 4 | 0.1077940 | 33,194/2,581/86,400 | none | 0/0/0 |
+| 2026-08-03-llm-paired-charterarc | llm-arena replay | no | accepted | 0 | 0 | — | 43/43; lint; build; 5/5 acceptance; byte-identical output | comparison only; no M4 credit | 9 | 0.2013040 | 66,989/3,989/144,640 | none | 0/0/0 |
+
+## Matched replay: small deterministic repair
+
+Both arms started from SHA-256 `05a0fccca1dd9771688483acd0d5c9d9e94d70a60b7a432d5056e712ca70f2f4`.
+Both produced SHA-256 `0d91c5151e1d4df74c57725022ae1a9a8c76484e4ea3e76350ecd7f6a968a36f`.
+
+| Arm | Scope | Wall time | Turns | Reported USD |
+| --- | --- | --- | --- | --- |
+| Single Grok Taskflow | repair only | 40.377 s | 4 | $0.1077940 |
+| CharterArc | observe, repair, read-only review, re-observe | 74.50 s | 9 | $0.2013040 |
+
+CharterArc used 84.5% more wall time, 125.0% more turns, and 86.7% more reported cost
+on this matched repair. The replay does not show a speed, token, cost, or output-quality advantage
+for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
+It does not count toward the 20 natural maintenance cycles.

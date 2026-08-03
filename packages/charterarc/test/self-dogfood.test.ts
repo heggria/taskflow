@@ -330,6 +330,9 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 		["2026-08-03-charterarc-adoption-evidence", "CharterArc", "no", "narrowed", "17", "0.4741136", "139,600/7,212/505,472", "36/36; primary rejected test-debt claim", "reworked next row", "avoided CLI"],
 		["2026-08-03-charterarc-fact-correction", "CharterArc", "no", "accepted", "10", "0.3399076", "130,430/2,909/205,312", "36/36; healthy no-Run", "accepted correction", "avoided CLI"],
 		["2026-08-03-charterarc-metrics-bootstrap", "CharterArc", "no", "narrowed", "12", "0.3288048", "89,256/6,764/365,696", "37/37; primary narrowed semantics/provenance", "reworked by current refresh", "none"],
+		["2026-08-03-charterarc-metrics-correction", "CharterArc", "no", "accepted", "13", "0.3560392", "91,295/8,729/403,584", "37/37; healthy no-Run", "metrics semantics retained", "none"],
+		["2026-08-03-llm-paired-single", "llm-arena replay", "no", "accepted", "4", "0.1077940", "33,194/2,581/86,400", "43/43; lint; build; byte-identical output", "comparison only; no M4 credit", "none"],
+		["2026-08-03-llm-paired-charterarc", "llm-arena replay", "no", "accepted", "9", "0.2013040", "66,989/3,989/144,640", "43/43; lint; build; 5/5 acceptance; byte-identical output", "comparison only; no M4 credit", "none"],
 	] as const;
 	for (const [id, projectName, countForM4, decision, turns, cost, tokens, verification, followUp, publicConcept] of expectedRows) {
 		const fields = metrics
@@ -357,13 +360,22 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 
 	assert.match(metrics, /M4 counted sample: 5\/20 cycles across 3\/3 retained projects/);
 	assert.match(metrics, /Observation window: less than 1\/4 weeks/);
-	assert.match(metrics, /Comparison baseline: —/);
-	assert.match(metrics, /Eight Grok Runs reported 105 turns and \$2\.5490100/);
+	assert.match(metrics, /Comparison baseline: one matched replay; human judgment baseline still `—`/);
+	assert.match(metrics, /Eleven Grok Runs reported 131 turns and \$3\.2141472/);
 	assert.match(
 		metrics,
-		/Six fully reported rows total 601,900 input, 29,507 output, and 2,011,392 cache-read tokens/,
+		/Nine fully reported rows total 793,378 input, 44,806 output, and 2,646,016 cache-read tokens/,
 	);
-	assert.match(metrics, /Pending next refresh: current metrics correction Run/);
+	assert.match(metrics, /Pending next refresh: current comparison-evidence recording Run/);
+	assert.match(metrics, /## Matched replay: small deterministic repair/);
+	assert.match(metrics, /Both arms started from SHA-256 `05a0fccca1dd9771688483acd0d5c9d9e94d70a60b7a432d5056e712ca70f2f4`/);
+	assert.match(metrics, /Both produced SHA-256 `0d91c5151e1d4df74c57725022ae1a9a8c76484e4ea3e76350ecd7f6a968a36f`/);
+	assert.match(metrics, /\| Single Grok Taskflow \| repair only \| 40\.377 s \| 4 \| \$0\.1077940 \|/);
+	assert.match(metrics, /\| CharterArc \| observe, repair, read-only review, re-observe \| 74\.50 s \| 9 \| \$0\.2013040 \|/);
+	assert.match(metrics, /84\.5% more wall time, 125\.0% more turns, and 86\.7% more reported cost/);
+	assert.match(metrics, /does not show a speed, token, cost, or output-quality advantage/);
+	assert.match(metrics, /human diagnosis, acceptance design, or review time/);
+	assert.match(metrics, /does not count toward the 20 natural maintenance cycles/);
 });
 
 test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {
