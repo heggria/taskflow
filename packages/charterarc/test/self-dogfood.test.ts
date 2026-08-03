@@ -313,6 +313,24 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 	assert.match(metrics, /do not infer minutes\s+from message count or reply gaps\./);
 	assert.match(metrics, /A Run duration alone is\s+not this measure/);
 	assert.match(metrics, /a zero or\s+missing baseline median cannot establish the claim\./);
+	assert.match(metrics, /## Prospective baseline assignment/);
+	assert.match(
+		metrics,
+		/For each retained external repository with zero eligible baseline rows, assign its next naturally occurring, low-risk, reversible maintenance need to the baseline before implementation\./,
+	);
+	assert.match(metrics, /Baseline assignment happens before inspecting a candidate solution/);
+	assert.match(
+		metrics,
+		/one ordinary Taskflow Run with exactly one Grok `agent` repair phase/,
+	);
+	assert.match(metrics, /same immutable acceptance[\s\S]*authoritative verification/);
+	assert.match(metrics, /Do not run both arms[\s\S]*accepted real change/);
+	assert.match(metrics, /Baseline Runs do not increase the M4 counted sample/);
+	assert.match(metrics, /Unknown[\s\S]*does not authorize mutation/i);
+	assert.match(
+		metrics,
+		/After every retained external repository has one eligible baseline, alternate eligible needs within each repository/,
+	);
 });
 
 test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {

@@ -66,6 +66,19 @@ repository. The 50% target is
 missing baseline median cannot establish the claim. The matched replay below is
 system-overhead evidence only and is not an eligible human-time baseline.
 
+## Prospective baseline assignment
+
+For each retained external repository with zero eligible baseline rows, assign its next naturally occurring, low-risk, reversible maintenance need to the baseline before implementation.
+Baseline assignment happens before inspecting a candidate solution and before any CharterArc repair attempt on that need.
+
+A baseline Run is one ordinary Taskflow Run with exactly one Grok `agent` repair phase.
+It uses the same immutable acceptance boundary and the same authoritative verification commands as the CharterArc arm would for that repository.
+Do not run both arms on the same need. Its preassigned arm alone may produce the accepted real change; dual-arm matched replay is system-overhead evidence only.
+
+Baseline Runs do not increase the M4 counted sample.
+Unknown does not authorize mutation under either arm; infrastructure failure and missing provider access are also non-authorizing.
+After every retained external repository has one eligible baseline, alternate eligible needs within each repository between CharterArc and baseline so cohort growth stays balanced.
+
 ## Sample status
 
 - M4 counted sample: 11/20 cycles across 4 retained Projects
@@ -74,8 +87,8 @@ system-overhead evidence only and is not an eligible human-time baseline.
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Nineteen Grok Runs were executed; eighteen reported 244 turns and $5.9057384
-- Sixteen fully reported rows total 1,459,409 input, 88,751 output, and 6,298,880 cache-read tokens
+- Twenty Grok Runs were executed; nineteen reported 263 turns and $6.3429720
+- Seventeen fully reported rows total 1,556,671 input, 94,169 output, and 6,999,552 cache-read tokens
 - Pending next refresh: none
 
 ## Cycles
@@ -101,6 +114,7 @@ system-overhead evidence only and is not an eligible human-time baseline.
 | 2026-08-03-overstory-outcome-ok | overstory | yes | accepted | 0 | 0 | 7.50 | 274 core + 28 Pi + 4 consumer; invalid Grok binary healthy no-Run | local success predicate deleted; test probe made model-free | pending/pending | — | — | — | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 | 2026-08-03-llm-outcome-ok | llm-arena | yes | accepted | 0 | 0 | 2.53 | 43/43; lint 0 errors/2 warnings; build; 5/5 consumer; invalid Grok binary healthy no-Run | local success predicate deleted | pending/pending | 10 | 0.2068152 | 68,205/2,979/175,104 | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 | 2026-08-03-cli-outcome-ok | cli-lab | yes | accepted | 0 | 0 | 2.81 | doctor; profile env; 8 CLI smoke; 5/5 consumer; invalid Grok binary healthy no-Run | local success predicate deleted | pending/pending | 11 | 0.2226960 | 70,419/2,539/222,080 | consumed existing `outcome.ok`; no new concept | 0/0/0 |
+| 2026-08-03-charterarc-prospective-baseline | CharterArc | no | accepted | 0 | 0 | 3.93 | Flow verify; 37/37; invalid Grok binary healthy no-Run; heartbeat readback | prospective baseline routing retained | n/a/n/a | 19 | 0.4372336 | 97,262/5,418/700,672 | none; experiment protocol only | 0/0/0 |
 
 ### Timing evidence
 
@@ -122,6 +136,12 @@ system-overhead evidence only and is not an eligible human-time baseline.
   `2026-08-03T05:42:46.838Z`; verified `2026-08-03T05:45:35.355Z`;
   elapsed `2.81` minutes. No user judgment was requested or supplied during
   this bounded consumer cycle, so `Human min` is directly observed as `0`.
+- `2026-08-03-charterarc-prospective-baseline`: selected
+  `2026-08-03T05:52:20.269Z`; verified `2026-08-03T05:56:16.330Z`;
+  elapsed `3.93` minutes. No user judgment was requested or supplied during
+  this evidence-only protocol repair, so `Human min` is directly observed as
+  `0`. The Run and its cost are charged, but M4 and seven-day product maturity
+  remain unaffected.
 
 ## Matched replay: small deterministic repair
 
