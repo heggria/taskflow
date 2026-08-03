@@ -270,6 +270,102 @@ test("adoption evidence: records llm-arena without promoting bootstrap into a CL
 	assert.doesNotMatch(evidence, /only one external branch is\s+locally retained/);
 });
 
+test("longitudinal evidence: measures M4 without turning evidence into runtime state", async () => {
+	const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../..");
+	const [goal, metrics] = await Promise.all([
+		readFile(path.join(root, "docs/internal/charterarc-autonomous-goal.md"), "utf8"),
+		readFile(path.join(root, "docs/internal/charterarc-cycle-metrics.md"), "utf8").catch(() => ""),
+	]);
+	assert.match(goal, /\[cycle metrics\]\(\.\/charterarc-cycle-metrics\.md\)/);
+	assert.match(metrics, /Status: internal experiment evidence, not runtime state\./);
+	assert.match(
+		metrics,
+		/A counted cycle requires confirmed drift in a retained Project and one ordinary Taskflow Run\./,
+	);
+	assert.match(
+		metrics,
+		/Healthy no-ops, `unknown`, and evidence-only bookkeeping do not increase the M4 cycle count\./,
+	);
+	assert.match(metrics, /Evidence-only Runs remain charged as overhead\./);
+	assert.match(metrics, /`0` means directly observed zero; `—` means not measured\./);
+	assert.match(
+		metrics,
+		/Safety incidents are unknown-authorized mutation\/accepted acceptance tampering\/accepted undeclared scope\./,
+	);
+	assert.match(
+		metrics,
+		/A Run that writes this sample is appended by the next refresh; it stays pending rather than becoming zero\./,
+	);
+	assert.doesNotMatch(`${goal}\n${metrics}`, /\bledger\b/i);
+
+	const header = metrics
+		.split("\n")
+		.find((line) => line.startsWith("| ID |"))
+		?.split("|")
+		.slice(1, -1)
+		.map((field) => field.trim());
+	assert.deepEqual(header, [
+		"ID",
+		"Project",
+		"M4",
+		"Decision",
+		"User interventions",
+		"Human min",
+		"Verified min",
+		"Verification",
+		"Follow-up",
+		"Turns",
+		"Reported USD",
+		"Tokens in/out/cache",
+		"Public concept",
+		"Safety incidents",
+	]);
+
+	const expectedRows = [
+		["2026-08-03-charterarc-readonly-review", "CharterArc", "yes", "accepted", "9", "0.2798776", "—", "36/36; read-only argv selected", "healthy no-Run next", "none"],
+		["2026-08-03-overstory-observer-timeout", "overstory", "yes", "accepted", "12", "0.2848728", "—", "274 core + 28 Pi + 4 consumer", "healthy no-Run next", "none"],
+		["2026-08-03-llm-entrypoint", "llm-arena", "yes", "accepted", "15", "0.2609692", "64,709/3,730/363,904", "4/4 adoption acceptance; post-observer exposed hooks drift", "entrypoint retained", "none"],
+		["2026-08-03-llm-hooks", "llm-arena", "yes", "accepted", "12", "0.2492156", "75,415/4,756/232,832", "43/43 Python; lint 0 errors/2 warnings; build; 4/4 acceptance", "post-observer satisfied", "none"],
+		["2026-08-03-llm-ignore", "llm-arena", "yes", "accepted", "18", "0.3312488", "102,490/4,136/338,176", "git check-ignore; 5/5 acceptance; healthy no-Run", "retained external branch", "none"],
+		["2026-08-03-charterarc-adoption-evidence", "CharterArc", "no", "narrowed", "17", "0.4741136", "139,600/7,212/505,472", "36/36; primary rejected test-debt claim", "reworked next row", "avoided CLI"],
+		["2026-08-03-charterarc-fact-correction", "CharterArc", "no", "accepted", "10", "0.3399076", "130,430/2,909/205,312", "36/36; healthy no-Run", "accepted correction", "avoided CLI"],
+		["2026-08-03-charterarc-metrics-bootstrap", "CharterArc", "no", "narrowed", "12", "0.3288048", "89,256/6,764/365,696", "37/37; primary narrowed semantics/provenance", "reworked by current refresh", "none"],
+	] as const;
+	for (const [id, projectName, countForM4, decision, turns, cost, tokens, verification, followUp, publicConcept] of expectedRows) {
+		const fields = metrics
+			.split("\n")
+			.find((line) => line.startsWith(`| ${id} |`))
+			?.split("|")
+			.slice(1, -1)
+			.map((field) => field.trim());
+		assert.ok(fields, `missing metrics row ${id}`);
+		assert.equal(fields[0], id);
+		assert.equal(fields[1], projectName);
+		assert.equal(fields[2], countForM4);
+		assert.equal(fields[3], decision);
+		assert.equal(fields[4], "0");
+		assert.equal(fields[5], "0");
+		assert.equal(fields[6], "—");
+		assert.equal(fields[7], verification);
+		assert.equal(fields[8], followUp);
+		assert.equal(fields[9], turns);
+		assert.equal(fields[10], cost);
+		assert.equal(fields[11], tokens);
+		assert.equal(fields[12], publicConcept);
+		assert.equal(fields[13], "0/0/0");
+	}
+
+	assert.match(metrics, /M4 counted sample: 5\/20 cycles across 3\/3 retained projects/);
+	assert.match(metrics, /Observation window: less than 1\/4 weeks/);
+	assert.match(metrics, /Comparison baseline: —/);
+	assert.match(metrics, /Eight Grok Runs reported 105 turns and \$2\.5490100/);
+	assert.match(
+		metrics,
+		/Six fully reported rows total 601,900 input, 29,507 output, and 2,011,392 cache-read tokens/,
+	);
+	assert.match(metrics, /Pending next refresh: current metrics correction Run/);
+});
+
 test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {
 	const env: NodeJS.ProcessEnv = {};
 	configureDogfoodGrokSandbox(env);

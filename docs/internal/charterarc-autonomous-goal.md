@@ -123,7 +123,7 @@ ordinary next step:
 8. **Keep only durable learning.** Preserve the lesson as the smallest ordinary
    regression test, concise document correction, or narrower declaration.
    Replace the rolling dogfood criterion for the next slice rather than
-   accumulating a new ledger.
+   accumulating a new permanent record.
 9. **Continue.** Select the next contradiction from fresh evidence. Do not add
    work merely to keep the loop busy.
 
@@ -194,6 +194,10 @@ is complete. If comparative value is absent, reduce or end the abstraction and
 retain Taskflow as the bounded workflow runtime.
 
 ## Metrics recorded for every real cycle
+
+Longitudinal sample and per-cycle rows live in the [cycle metrics](./charterarc-cycle-metrics.md)
+file. That file is experiment evidence only; it is not runtime state and does
+not authorize mutation.
 
 Keep measurement lightweight:
 
