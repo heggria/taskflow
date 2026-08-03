@@ -90,13 +90,14 @@ After every retained external repository has one eligible baseline, alternate el
 
 - M4 counted sample: 12/20 candidate cycles across 4 local Projects; final eligibility requires M2
 - Retained integration experiments: 3/3 local consumer branches
+- Pending activation candidates: 3/3; publication and merge are not yet executed
 - Active external adoption: 0/3; M2 is unproven
 - Observation window: not started; no active adopted external branch exists
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Twenty-six Grok Runs were executed; twenty-five reported 336 turns and $8.0620216
-- Twenty-three fully reported rows total 2,047,788 input, 117,906 output, and 8,980,864 cache-read tokens
+- Twenty-seven Grok Runs were executed; twenty-six reported 363 turns and $8.7856512
+- Twenty-four fully reported rows total 2,175,058 input, 133,822 output, and 10,226,176 cache-read tokens
 - Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
@@ -137,6 +138,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-adoption-liveness-audit | three consumer branches | no | narrowed | 0 | 0 | — | three direct observers satisfied; main trees have no CharterArc; branches are 4/3/3 integration commits ahead | M2 and four-week window corrected to unproven/not started | n/a/n/a | — | — | — | none; evidence correction only | 0/0/0 |
 | 2026-08-03-adoption-promotion-readiness | three consumer branches | no | narrowed | 0 | 0 | — | exact branch manifests and ignored files; official npm readback; central release-list/workflow audit | local integrations valid; fresh-clone install and merge promotion blocked on an explicit distribution decision | n/a/n/a | — | — | — | no model run or public concept | 0/0/0 |
 | 2026-08-03-overstory-clean-install | overstory | yes | accepted | 0 | 0 | — | deterministic private artifacts; isolated locked install; 274 core + 28 Pi; 5/5 consumer; invalid-binary healthy no-Run | verify now builds workspace exports before typecheck; fresh archive passes | pending/pending | 12 | 0.2882892 | 91,794/3,415/280,704 | none | 0/0/0 |
+| 2026-08-03-charterarc-experimental-release-ready | CharterArc | no | accepted | 1 | — | — | Flow verify; 42/42; 124 host/release; exact public-dependency tarball install; YAML parse; invalid-Grok healthy no-Run | experimental path prepared; publish and three merges await execution approval | n/a/n/a | 27 | 0.7236296 | 127,270/15,916/1,245,312 | npm `experimental` channel prepared; not published | 0/0/0 |
 
 ### Timing evidence
 
@@ -295,6 +297,18 @@ After every retained external repository has one eligible baseline, alternate el
   the three-package packed consumer, and the invalid-binary healthy no-Run
   probe passed. The accepted revision is charged, but receives no M4 credit
   because its attempted Run failed the governance boundary.
+- `2026-08-03-charterarc-experimental-release-ready`: the user supplied one
+  substantive product-boundary decision: M4 may be preceded by a non-`latest`,
+  no-stability prerelease, while publish and consumer merge remain separate
+  execution approvals. No direct active-minute report exists, so `Human min`
+  remains `—`. One immutable red contract produced four failures; one ordinary
+  Grok repair -> read-only review Run re-observed 42/42 and returned
+  `ok: true`. Independent verification passed the static Flow check, 42/42
+  CharterArc tests, 124/124 host/release tests, three-package packed smoke,
+  an exact CharterArc-only tarball install against public npm dependencies,
+  YAML parsing, and an invalid-Grok healthy no-Run probe. This policy and
+  release-infrastructure cycle is charged but receives no M4 credit; it did
+  not publish, merge a consumer, start the four-week window, or prove adoption.
 
 ## Matched replay: small deterministic repair
 

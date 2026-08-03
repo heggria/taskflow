@@ -1,6 +1,6 @@
 # CharterArc autonomous evolution goal
 
-Status: active operating mandate for the private CharterArc experiment.
+Status: active operating mandate for the pre-stable CharterArc experiment.
 
 Source of direction: [Taskflow 的下一代：从 Agent 工作流到会维护项目的声明式框架](https://vrfi1sk8a0.feishu.cn/docx/FGwbd3AQOoL9yOxa9MHc0P57nbg), revision 23.
 
@@ -186,12 +186,19 @@ The numerical thresholds are falsifiable product targets, not natural laws. A
 proposal may make them stricter. Weakening them or changing the product promise
 requires explicit user authorization.
 
-### M5 — Public product decision
+### M5 — Stable public product decision
 
-Only after M4, decide whether CharterArc deserves a public package and stable
-compatibility promise. Publish nothing merely because the private implementation
-is complete. If comparative value is absent, reduce or end the abstraction and
-retain Taskflow as the bounded workflow runtime.
+Before M4, CharterArc may publish semver prereleases only through the npm
+`experimental` dist-tag when that distribution is needed to make M2/M4 adoption
+measurable. An experimental publication must not set or move `latest`, publish
+the stable Taskflow package set, claim stable compatibility, or count as product
+validation. Every actual publish and consumer merge still requires an explicit
+execution-time review and approval.
+
+Only after M4, decide whether CharterArc deserves the `latest` dist-tag and a
+stable compatibility promise. Publish no stable release merely because the
+implementation is complete. If comparative value is absent, reduce or end the
+abstraction and retain Taskflow as the bounded workflow runtime.
 
 ## Metrics recorded for every real cycle
 

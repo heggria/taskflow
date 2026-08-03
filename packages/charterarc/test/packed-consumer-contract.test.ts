@@ -14,14 +14,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-test("packed consumer: verify the private CharterArc artifact without publishing it", async () => {
+test("packed consumer: verify the pre-stable CharterArc artifact without publishing it", async () => {
 	const packageManifest: unknown = JSON.parse(await read("packages/charterarc/package.json"));
 	assert.equal(
 		isRecord(packageManifest) &&
-			"private" in packageManifest &&
-			packageManifest.private,
+			packageManifest.private !== true,
 		true,
-		"the experiment must stay private until its public contract is deliberately released",
+		"the explicitly authorized experimental package must be publishable",
 	);
 
 	const rootManifest: unknown = JSON.parse(await read("package.json"));
@@ -87,13 +86,14 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 	assert.equal(
 		releaseNames.includes("charterarc"),
 		false,
-		"packed-consumer evidence must not silently turn the private experiment into a public release",
+		"experimental CharterArc must stay outside the stable multi-package release",
 	);
 
 	const readme = await read("packages/charterarc/README.md");
 	assert.match(readme, /`outcome\.ok`/);
 	assert.match(readme, /fail-closed/i);
 	assert.match(readme, /three retained external projects/i);
-	assert.match(readme, /explicit release decision/i);
+	assert.match(readme, /npm install charterarc@experimental/i);
+	assert.match(readme, /does not promise stable compatibility/i);
 	assert.doesNotMatch(readme, /until a real external project retains a declaration/i);
 });

@@ -422,7 +422,7 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 	);
 	assert.match(
 		readme,
-		/remains private until M4\s+comparative evidence supports an explicit release decision/,
+		/npm install charterarc@experimental[\s\S]*does not promise stable compatibility/,
 	);
 });
 

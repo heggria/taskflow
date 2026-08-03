@@ -69,5 +69,10 @@ and cannot authorize a token or USD budget.
 
 Repository, packed-consumer, and cross-repository experiments each bound one
 project to one domain observer; none used a name registry.
-Three retained external projects already use the private package.
-It remains private until M4 comparative evidence supports an explicit release decision.
+Three retained external projects have local integration branches and are
+pending activation; none counts as active adoption before publication, merge,
+and a later ordinary maintenance cycle.
+
+Install a pre-stable build with `npm install charterarc@experimental`. That
+dist-tag does not promise stable compatibility; only an explicit post-M4
+`latest` decision would.

@@ -1,6 +1,6 @@
 # CharterArc foundation
 
-Status: private implementation experiment, not GA.
+Status: pre-stable experimental release candidate, not GA.
 
 ## Decision
 
@@ -707,13 +707,21 @@ artifact is supplied. They still lack a durable artifact location and an active
 keep/merge decision, so M2 remains `0/3` and the four-week window remains
 unstarted. The probe adds no installer, registry, API, phase, or public concept.
 
-The current Goal deliberately reserves a public package for M5 after M4, so
-publication is not automatically the next step. Progress now needs one explicit
-external choice: either authorize a small private, reproducible artifact channel
-plus active-branch retention, or revise the milestone boundary to allow an
-explicitly unstable public prerelease before comparative proof. Until then, do
-not merge the three branches, publish a package, or invent a helper, installer,
-registry, or new CharterArc concept to disguise the delivery gap.
+The user then authorized the narrower experimental route: before M4,
+CharterArc may use a semver prerelease on npm's `experimental` dist-tag with no
+stable compatibility promise. `latest` and the stable Taskflow release remain
+outside that authorization. The package is prepared as
+`charterarc@0.2.7-experimental.0` behind a dedicated tag-triggered workflow that
+packs and smoke-installs one deterministic tarball, publishes it with
+provenance, verifies the exact registry artifact, and fails if this version is
+bound to `latest`. CharterArc stays outside the stable nine-package release.
+
+This is release readiness, not a release: no tag was pushed and npm was not
+mutated. The three retained consumer branches are now classified as pending
+activation candidates, not active adoptions. Publication and each consumer
+merge require a fresh execution-time checklist and explicit approval. M2 and
+the four-week window remain at zero until those events occur and a later
+ordinary project change passes through the retained Project.
 
 Add a public concept only when multiple retained consumers cannot remain simple
 with `ProjectDefinition + Taskflow`.

@@ -144,7 +144,10 @@ try {
 
 	for (const name of packageNames) {
 		const manifest = packedManifest(name);
-		assert.equal(manifest.version, rootManifest.version, `${name} installed at the wrong version`);
+		const sourceVersion = JSON.parse(
+			readFileSync(join(repo, "packages", name, "package.json"), "utf8"),
+		).version;
+		assert.equal(manifest.version, sourceVersion, `${name} installed at the wrong version`);
 		for (const [dependency, range] of Object.entries(manifest.dependencies ?? {})) {
 			assert.doesNotMatch(range, /^workspace:/, `${name} tarball leaked a workspace dependency`);
 		}

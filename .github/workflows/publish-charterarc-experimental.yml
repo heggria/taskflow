@@ -1,0 +1,154 @@
+name: Publish CharterArc experimental
+
+# Publishes only the pre-stable experiment package charterarc to the npm
+# `experimental` dist-tag when a charterarc-v*-experimental.* tag is pushed.
+# Never publishes the stable Taskflow set, never moves `latest`, and never
+# creates a GitHub Release.
+
+on:
+  push:
+    tags:
+      - "charterarc-v*-experimental.*"
+
+concurrency:
+  group: publish-charterarc-experimental-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag commit belongs to origin/main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --prune origin \
+            +refs/heads/main:refs/remotes/origin/main
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          EVENT_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [ "$TAG_COMMIT" != "$EVENT_COMMIT" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME resolves to $TAG_COMMIT, but the event SHA resolves to $EVENT_COMMIT"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME targets $TAG_COMMIT, which is not reachable from origin/main"
+            exit 1
+          fi
+          echo "Verified $GITHUB_REF_NAME at $TAG_COMMIT is reachable from origin/main"
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+
+      - name: Verify experimental tag matches charterarc version
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          EXPECT="charterarc-v$(node -p "require('./packages/charterarc/package.json').version")"
+          VERSION="${EXPECT#charterarc-v}"
+          if [ "$EXPECT" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match packages/charterarc/package.json version ($EXPECT)"
+            exit 1
+          fi
+          case "$VERSION" in
+            *-experimental.*) ;;
+            *)
+              echo "::error::CharterArc version $VERSION is not an experimental prerelease"
+              exit 1
+              ;;
+          esac
+
+      - name: CharterArc acceptance
+        run: pnpm run check:charterarc
+
+      - name: Build charterarc and Taskflow peers used by packed smoke
+        run: pnpm --filter taskflow-core --filter taskflow-hosts --filter charterarc run build
+
+      - name: Packed consumer smoke
+        run: pnpm run test:pack-charterarc
+
+      - name: Create deterministic experimental tarball
+        run: node scripts/pack-release-packages.mjs .experimental-tarballs charterarc
+
+      - name: Smoke-install the experimental tarball
+        run: |
+          set -euo pipefail
+          tarball="$(node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const manifest = JSON.parse(fs.readFileSync(".experimental-tarballs/manifest.json", "utf8"));
+            const entry = manifest.entries.find((item) => item.name === "charterarc");
+            if (!entry) throw new Error("experimental tarball missing for charterarc");
+            process.stdout.write(path.resolve(".experimental-tarballs", entry.filename));
+          ')"
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          cd "$smoke_dir"
+          npm install "$tarball"
+
+      - name: Publish charterarc to npm experimental dist-tag
+        run: |
+          set -euo pipefail
+          name="$(node -p "require('./packages/charterarc/package.json').name")"
+          version="$(node -p "require('./packages/charterarc/package.json').version")"
+          tarball="$(node -e '
+            const fs = require("fs");
+            const path = require("path");
+            const manifest = JSON.parse(fs.readFileSync(".experimental-tarballs/manifest.json", "utf8"));
+            const entry = manifest.entries.find((item) => item.name === "charterarc");
+            if (!entry) throw new Error("experimental tarball missing for charterarc");
+            process.stdout.write(path.resolve(".experimental-tarballs", entry.filename));
+          ')"
+          if pnpm view "$name@$version" version >/dev/null 2>&1; then
+            node scripts/verify-published-package.mjs packages/charterarc "$tarball"
+            echo "::notice::$name@$version already published and verified — skipping"
+          else
+            echo "Publishing $name@$version with --tag experimental"
+            npm publish "$tarball" --provenance --access public --tag experimental
+          fi
+
+          for attempt in 1 2 3 4 5 6; do
+            if node scripts/verify-published-package.mjs packages/charterarc "$tarball"; then
+              break
+            fi
+            if [ "$attempt" -lt 6 ]; then sleep $((attempt * 5)); else
+              echo "::error::Post-publish verification failed for charterarc"
+              exit 1
+            fi
+          done
+
+          # Fail closed if this version is bound to latest, or experimental is missing.
+          dist_tags_json="$(pnpm view "$name" dist-tags --json)"
+          node -e '
+            const tags = JSON.parse(process.argv[1]);
+            const version = process.argv[2];
+            if (tags.latest === version) {
+              console.error("::error::experimental publish must not set or move latest to " + version);
+              process.exit(1);
+            }
+            if (tags.experimental !== version) {
+              console.error("::error::experimental dist-tag is " + (tags.experimental ?? "missing") + ", expected " + version);
+              process.exit(1);
+            }
+            console.log("dist-tags ok: experimental=" + tags.experimental + " latest=" + (tags.latest ?? "unset"));
+          ' "$dist_tags_json" "$version"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TRUSTED_OWNERS: "heggria,muyun"
+          PUBLISH_REPOSITORY_URL: "https://github.com/heggria/taskflow"
+          PUBLISH_WORKFLOW_PATH: ".github/workflows/publish-charterarc-experimental.yml"
+          PUBLISH_REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}

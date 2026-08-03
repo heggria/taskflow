@@ -164,7 +164,7 @@ const maintain: Taskflow = {
 				"Make the smallest causal implementation change. Preserve unrelated work. " +
 				"packages/charterarc/test is immutable acceptance: do not edit, delete, rename, " +
 				"or weaken anything under it. Do not preserve removed fields as optional values " +
-				"or compatibility aliases: CharterArc is private and the acceptance test is the " +
+				"or compatibility aliases: CharterArc is pre-stable and the acceptance test is the " +
 				"exact API. Do not add a second control plane, expand the CharterArc runtime API, " +
 				"install dependencies, stage, commit, or push. Before " +
 				"reporting the on-disk result, run both direct checks (no package manager):\n" +
@@ -190,6 +190,8 @@ const maintain: Taskflow = {
 				"keeps a removed field or compatibility alias, " +
 				"expands the public runtime beyond defineProject/runProject, or adds a planner, " +
 				"scheduler, daemon, registry, ledger, IR, or phase. " +
+				"BLOCK if experimental distribution can set latest, enter the stable multi-package " +
+				"release, or publish without exact-artifact preflight and provenance verification. " +
 				"BLOCK if any factual or quantitative claim is unsupported by the visible evidence; " +
 				"mark it unmeasured instead of inferring. " +
 				"End with VERDICT: PASS or VERDICT: BLOCK.",

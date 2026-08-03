@@ -1,7 +1,6 @@
 {
   "name": "charterarc",
-  "version": "0.2.6",
-  "private": true,
+  "version": "0.2.7-experimental.0",
   "description": "Declarative project maintenance for Taskflow: observe reality, reconcile drift, and run an existing Taskflow.",
   "keywords": [
     "taskflow",
@@ -39,6 +38,8 @@
     "README.md"
   ],
   "publishConfig": {
+    "access": "public",
+    "tag": "experimental",
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
@@ -47,6 +48,7 @@
     }
   },
   "scripts": {
+    "prepublishOnly": "npm run build",
     "build": "rm -rf dist && tsc -p tsconfig.build.json"
   },
   "dependencies": {
