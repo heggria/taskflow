@@ -125,7 +125,7 @@ async function main() {
 		expectedRepository,
 		expectedWorkflowPath,
 		expectedRef,
-		expectedSha: process.env.GITHUB_SHA,
+		expectedSha: process.env.PUBLISH_COMMIT ?? process.env.GITHUB_SHA,
 	});
 	if (errors.length) throw new Error(`${spec} failed published-package verification:\n- ${errors.join("\n- ")}`);
 	process.stdout.write(`verified ${spec}: owner + provenance + integrity (${basename(packageDir)})\n`);
