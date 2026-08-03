@@ -348,15 +348,16 @@ the duplication is cheaper than a new abstraction.
 
 ## Adoption burden and private release candidate
 
-After the second external governance migration, the three retained consumer
-trees contain 1,134 checked-in CharterArc lines: 659 in Project declarations,
-238 in consumer acceptance, 164 in host runners, 45 in local package manifests,
-and 28 in Grok sandboxes. Declarations plus acceptance are 897/1,134 lines
-(79.1%); runners alone are 164/1,134 (14.5%), and all
-runner/package/sandbox plumbing together is 237/1,134 (20.9%). A runner helper
+After all three external governance migrations, the retained consumer trees
+contain 1,237 checked-in CharterArc lines: 695 in Project declarations, 262 in
+consumer acceptance, 208 in host runners, 45 in local package manifests, and 27
+in Grok sandboxes. Declarations plus acceptance are 957/1,237 lines (77.4%);
+runners alone are 208/1,237 (16.8%), and all runner/package/sandbox plumbing
+together is 280/1,237 (22.6%). A runner helper
 would optimize the smaller part while leaving the domain-specific `observe`
 classification—the part that safely separates `drifted` from `unknown`—inside
-every project. The helper/CLI route remains rejected.
+every project. The helper/CLI route is now eligible for a measured subtraction,
+but remains unaccepted until its total surface is smaller.
 
 The shared blocker is package delivery instead: all three branches keep local
 dependencies untracked, while `charterarc` remains private and outside
@@ -537,12 +538,40 @@ then compare the exact removable duplication with the central API and tests it
 would require. If the helper does not reduce the total judgment surface, reject
 it and keep the explicit launchers.
 
+## Third external governance migration: cli-lab
+
+cli-lab completed the same primary-owned correction. Its observer first made a
+missing guard or relative `read_only` declaration `unknown`, and the red
+acceptance invocation exited before Taskflow. The launcher then gained the
+pre/post sandbox, launcher, and acceptance snapshot, while its false prevention
+claim was removed. The project-level `desired` sentence did not grow: the
+governance mechanism remains execution policy rather than part of the project
+outcome authors must describe.
+
+Independent verification used the current canonical cli-lab surface: `list`
+reported eight registered CLIs, doctor passed every repository and package
+check, the default profile resolved, and all eight smoke commands passed.
+Missing optional credentials remained visible environment state rather than
+source drift. All six consumer acceptance tests passed, and a direct invocation
+with an invalid Grok binary returned `satisfied`, `ok: true`, and no `run`.
+There was no Taskflow or Grok Run and no product-source change.
+
+The migration added 44 net launcher lines and 103 net CharterArc lines overall.
+Across the three governance corrections, the launchers gained 134 net lines and
+the full consumer trees gained 287. That is now concrete repeated friction, not
+a hypothetical preference for elegance. It justifies the next comparison; it
+does not by itself authorize a third public runtime function, governance option,
+or host-specific dependency.
+
 ## Next evidence
 
-Migrate the same truthful governance boundary to cli-lab without a model Run
-unless confirmed product drift requires one. Then make an evidence-based
-retain-or-extract decision about the repeated launcher guard before returning
-to naturally occurring maintenance; do not invent unrelated migrations.
+Make an evidence-based retain-or-extract decision about the repeated governance
+guard. First test whether an existing Taskflow workspace/diff seam can remove
+the 134 launcher lines without adding a CharterArc authoring concept. Otherwise
+compare the smallest host-neutral helper plus tests against the exact consumer
+lines it deletes. Reject extraction unless total code and judgment surface both
+shrink. Then return to naturally occurring maintenance; do not invent unrelated
+migrations.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained

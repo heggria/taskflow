@@ -123,6 +123,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-readable-governance | CharterArc | no | narrowed | 0 | 0 | 2.03 | 39/39; packed consumer; invalid-binary healthy no-Run | exact read-deny removed; parent governance digest retained | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-overstory-governance-snapshot | overstory | no | narrowed | 0 | 0 | 3.48 | 4/4 consumer; 274 core + 28 Pi; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; llm-arena next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-llm-governance-snapshot | llm-arena | no | narrowed | 0 | 0 | 2.25 | 43/43; lint 0 errors/2 warnings; build; 6/6 consumer; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; cli-lab next | n/a/n/a | — | — | — | none | 0/0/0 |
+| 2026-08-03-cli-governance-snapshot | cli-lab | no | narrowed | 0 | 0 | 1.77 | list 8; doctor; profile env; 8 CLI smoke; 6/6 consumer; invalid-binary healthy no-Run | all local snapshots retained; shared-seam comparison next | n/a/n/a | — | — | — | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -240,6 +241,18 @@ After every retained external repository has one eligible baseline, alternate el
   tests, and the explicit invalid-binary healthy no-Run probe. This narrowed
   correction adds no public concept and does not increase the zero-model
   Taskflow-attempt count.
+- `2026-08-03-cli-governance-snapshot`: selected
+  `2026-08-03T07:22:02.000Z`; verified `2026-08-03T07:23:48.000Z`;
+  elapsed `1.77` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. Missing governance was bound as
+  `unknown` before the launcher changed, so the red acceptance process exited
+  without Taskflow or Grok. The primary then removed the false relative
+  `read_only` claim and added the parent snapshot. Current cli-lab evidence
+  showed eight registered CLIs, green doctor, a resolved default profile, all
+  eight smoke commands passing, 6/6 consumer tests, and an explicit
+  invalid-binary healthy no-Run result. Missing optional credentials remained
+  environment facts. This narrowed correction adds no public concept and does
+  not increase the zero-model Taskflow-attempt count.
 
 ## Matched replay: small deterministic repair
 
@@ -256,7 +269,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Twelve rows currently have both selected-at and verified-at timestamps under the
+Thirteen rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`
