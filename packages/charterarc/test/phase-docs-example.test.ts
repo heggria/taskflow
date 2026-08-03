@@ -33,9 +33,9 @@ function readmeWith(phases: readonly string[]): string {
 }
 
 test("phase-docs project: the real Taskflow README satisfies the declared contract", async () => {
-	assert.equal(phaseDocsProject.maintain.args, undefined);
-	assert.equal(phaseDocsProject.maintain.phases[0]?.thinking, "low");
-	assert.deepEqual(phaseDocsProject.maintain.phases[1]?.tools, READ_ONLY_TOOLS);
+	assert.equal(phaseDocsProject.maintain.catalog?.args, undefined);
+	assert.equal(phaseDocsProject.maintain.catalog?.phases[0]?.thinking, "low");
+	assert.deepEqual(phaseDocsProject.maintain.catalog?.phases[1]?.tools, READ_ONLY_TOOLS);
 	let tasks = 0;
 	const outcome = await runProject(phaseDocsProject, {
 		taskflow: {
@@ -104,7 +104,7 @@ test("phase-docs project: observed drift is repaired by an ordinary Taskflow", a
 		assert.equal(outcome.after?.status, "satisfied");
 		assert.deepEqual(calls, ["doc-writer", "reviewer"]);
 		assert.match(tasks[0] ?? "", /README\.md: expected/);
-		assert.match(tasks[0] ?? "", /"observation":/);
+		assert.match(tasks[0] ?? "", /"snapshot":/);
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}

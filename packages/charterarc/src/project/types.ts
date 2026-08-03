@@ -1,21 +1,61 @@
 import type { RuntimeDeps, Taskflow, UsageStats } from "taskflow-core";
 
-export interface ProjectDefinition {
-	/** Human-readable desired state. The observer provides checkable evidence. */
-	readonly desired: string;
-	readonly observe: (context: {
-		readonly cwd: string;
-		readonly signal: AbortSignal;
-	}) => Promise<ObservationResult>;
-	/** One ordinary Taskflow owns inspect, repair, gates, and verification. */
-	readonly maintain: Taskflow;
+/** Optional scoped declaration: narrows desired promises and Flow selection. */
+export interface ModuleDefinition {
+	readonly desired: Readonly<Record<string, string>>;
+	/** One ordinary Taskflow per desired key. */
+	readonly maintain: Readonly<Record<string, Taskflow>>;
 }
 
 export type ObservationStatus = "satisfied" | "drifted" | "unknown";
 
-export interface ObservationResult {
-	readonly status: ObservationStatus;
-	readonly summary?: string;
+export interface ObservationTarget {
+	/** Desired key that authorizes one ordinary Taskflow selection. */
+	readonly desired: string;
+	readonly module?: string;
+}
+
+/**
+ * Every observation is an explicit snapshot with facts.
+ * Confirmed drift must identify one desired target; healthy / unknown
+ * snapshots cannot carry mutation authority (`target`).
+ */
+export type ObservationResult =
+	| {
+			readonly status: "satisfied" | "unknown";
+			readonly summary?: string;
+			readonly facts: Readonly<Record<string, unknown>>;
+			readonly target?: never;
+	  }
+	| {
+			readonly status: "drifted";
+			readonly summary?: string;
+			readonly facts: Readonly<Record<string, unknown>>;
+			readonly target: ObservationTarget;
+	  };
+
+export type ProjectObserver = (context: {
+	readonly cwd: string;
+	readonly signal: AbortSignal;
+}) => Promise<ObservationResult>;
+
+/**
+ * Project declaration: keyed desired promises map to ordinary Taskflows.
+ * Optional Modules narrow selection without a second runtime.
+ * The removed single-Flow form (string desired + one Taskflow) is not accepted.
+ */
+export interface ProjectDefinition {
+	readonly desired: Readonly<Record<string, string>>;
+	readonly observe: ProjectObserver;
+	readonly maintain: Readonly<Record<string, Taskflow>>;
+	readonly modules?: Readonly<Record<string, ModuleDefinition>>;
+}
+
+/** Deterministic Flow selection recorded on the outcome when a multi-Flow Run is authorized. */
+export interface FlowSelection {
+	readonly desired: string;
+	readonly flow: string;
+	readonly module?: string;
 }
 
 export interface FlowRunResult {
@@ -46,4 +86,6 @@ export interface ProjectOutcome {
 	readonly before: ObservationResult;
 	readonly run?: FlowRunResult;
 	readonly after?: ObservationResult;
+	/** Present when multi-Flow confirmed drift authorized one ordinary Taskflow Run. */
+	readonly selection?: FlowSelection;
 }

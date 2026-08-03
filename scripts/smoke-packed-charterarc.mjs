@@ -186,9 +186,13 @@ try {
 	// and agent discovery the README documents, but keep observe satisfied so
 	// runProject returns without authorizing a maintenance Run.
 	const project = charterarc.defineProject({
-		desired: "packed consumer Grok bootstrap stays satisfied without a model call",
-		observe: async () => ({ status: "satisfied", summary: "healthy Grok bootstrap" }),
-		maintain: maintenance("packed-charterarc-grok-maintain"),
+		desired: { bootstrap: "packed consumer Grok bootstrap stays satisfied without a model call" },
+		observe: async () => ({
+			status: "satisfied",
+			facts: { bootstrap: "healthy" },
+			summary: "healthy Grok bootstrap",
+		}),
+		maintain: { bootstrap: maintenance("packed-charterarc-grok-maintain") },
 	});
 	const outcome = await charterarc.runProject(project, {
 		taskflow: {
@@ -213,12 +217,20 @@ try {
 	// Drift path: one ordinary Run, then re-observe.
 	let observations = 0;
 	const driftProject = charterarc.defineProject({
-		desired: "packed consumer can repair confirmed drift",
-		observe: async () => ({
-			status: observations++ === 0 ? "drifted" : "satisfied",
-			summary: observations === 1 ? "before repair" : "after repair",
-		}),
-		maintain: maintenance("packed-charterarc-repair"),
+		desired: { repair: "packed consumer can repair confirmed drift" },
+		observe: async () => observations++ === 0
+			? {
+					status: "drifted",
+					target: { desired: "repair" },
+					facts: { repaired: false },
+					summary: "before repair",
+				}
+			: {
+					status: "satisfied",
+					facts: { repaired: true },
+					summary: "after repair",
+				},
+		maintain: { repair: maintenance("packed-charterarc-repair") },
 	});
 	const driftOutcome = await charterarc.runProject(driftProject, runtime);
 	assert.equal(driftOutcome.before.status, "drifted");

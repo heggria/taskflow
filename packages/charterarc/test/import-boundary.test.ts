@@ -27,6 +27,11 @@ test("architecture: the runtime surface has only defineProject and runProject", 
 		"defineProject",
 		"runProject",
 	]);
+	const source = fs.readFileSync(
+		path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src/index.ts"),
+		"utf8",
+	);
+	assert.doesNotMatch(source, /MultiFlowProjectDefinition|SingleFlowProjectDefinition/);
 });
 
 test("package: published exports resolve only to built files", () => {

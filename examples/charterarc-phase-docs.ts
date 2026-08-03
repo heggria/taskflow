@@ -45,6 +45,7 @@ async function observePhaseDocs(cwd: string) {
 	if (start < 0 || end < 0) {
 		return {
 			status: "unknown" as const,
+			facts: { catalog: "not-located" },
 			summary: "README.md phase catalog structure could not be located",
 		};
 	}
@@ -64,7 +65,10 @@ async function observePhaseDocs(cwd: string) {
 	const heading = `## One runtime, ${PHASE_TYPES.length} phase types`;
 
 	if (section.startsWith(heading) && missing.length === 0 && extra.length === 0) {
-		return { status: "satisfied" as const };
+		return {
+			status: "satisfied" as const,
+			facts: { documented, expected },
+		};
 	}
 
 	const problems = [
@@ -75,12 +79,16 @@ async function observePhaseDocs(cwd: string) {
 	];
 	return {
 		status: "drifted" as const,
+		target: { desired: "catalog" },
+		facts: { documented, expected, missing, extra },
 		summary: `README.md: ${problems.join("; ")}`,
 	};
 }
 
 export const phaseDocsProject = defineProject({
-	desired: "README phase count and catalog set match taskflow-core PHASE_TYPES",
+	desired: {
+		catalog: "README phase count and catalog set match taskflow-core PHASE_TYPES",
+	},
 	observe: ({ cwd }) => observePhaseDocs(cwd),
-	maintain: phaseDocsMaintenance,
+	maintain: { catalog: phaseDocsMaintenance },
 });

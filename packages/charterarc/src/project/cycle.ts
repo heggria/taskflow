@@ -9,6 +9,8 @@ import { defineProject } from "./define.ts";
 import { assertOnlyKeys, fail, isRecord, requiredText } from "./internal.ts";
 import type {
 	FlowRunResult,
+	FlowSelection,
+	ModuleDefinition,
 	ObservationResult,
 	ObservationStatus,
 	ProjectDefinition,
@@ -17,20 +19,81 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_OBSERVE_TIMEOUT_MS = 30_000;
-const OBSERVATION_KEYS = ["status", "summary"] as const;
+const OBSERVATION_KEYS = ["status", "summary", "facts", "target"] as const;
+const TARGET_KEYS = ["desired", "module"] as const;
 const OBSERVATION_STATUSES = new Set<ObservationStatus>(["satisfied", "drifted", "unknown"]);
 
-function normalizeObservation(value: ObservationResult): ObservationResult {
+/**
+ * Runtime-normalized observation. The public `ObservationResult` type is the
+ * authoring contract (facts required; drift requires target; non-drift forbids
+ * target). Normalization still accepts malformed observer payloads and demotes
+ * them fail-closed via authorize / unknown paths.
+ */
+type NormalizedObservation = {
+	readonly status: ObservationStatus;
+	readonly summary?: string;
+	readonly facts?: Readonly<Record<string, unknown>>;
+	readonly target?: { readonly desired?: string; readonly module?: string };
+};
+
+function normalizeObservation(value: unknown): NormalizedObservation {
 	if (!isRecord(value)) fail("observer", "must return a plain object");
 	assertOnlyKeys(value, OBSERVATION_KEYS, "observer");
-	if (!OBSERVATION_STATUSES.has(value.status)) {
+	if (!OBSERVATION_STATUSES.has(value.status as ObservationStatus)) {
 		fail("observer.status", "must be satisfied, drifted, or unknown");
 	}
+	const status = value.status as ObservationStatus;
 	const summary =
 		value.summary === undefined ? undefined : requiredText(value.summary, "observer.summary");
+
+	// Facts are required: missing or non-record evidence cannot claim satisfaction
+	// or authorize mutation (fail-closed demotion, not throw).
+	if (value.facts === undefined || !isRecord(value.facts)) {
+		return {
+			status: "unknown",
+			...(summary === undefined ? {} : { summary }),
+		};
+	}
+	const facts = value.facts;
+
+	let target: NormalizedObservation["target"];
+	if (value.target !== undefined) {
+		if (!isRecord(value.target)) {
+			return {
+				status: "unknown",
+				facts,
+				...(summary === undefined ? {} : { summary }),
+			};
+		}
+		assertOnlyKeys(value.target, TARGET_KEYS, "observer.target");
+		const desired =
+			value.target.desired === undefined
+				? undefined
+				: requiredText(value.target.desired, "observer.target.desired");
+		const module =
+			value.target.module === undefined
+				? undefined
+				: requiredText(value.target.module, "observer.target.module");
+		target = {
+			...(desired === undefined ? {} : { desired }),
+			...(module === undefined ? {} : { module }),
+		};
+	}
+
+	// Healthy / unknown snapshots cannot carry mutation authority (`target`).
+	if (status !== "drifted" && target !== undefined) {
+		return {
+			status: "unknown",
+			facts,
+			...(summary === undefined ? {} : { summary }),
+		};
+	}
+
 	return {
-		status: value.status,
+		status,
+		facts,
 		...(summary === undefined ? {} : { summary }),
+		...(target === undefined ? {} : { target }),
 	};
 }
 
@@ -50,7 +113,7 @@ function observationErrorSummary(error: unknown): string {
 async function observeProject(
 	project: ProjectDefinition,
 	deps: ProjectRuntime,
-): Promise<ObservationResult> {
+): Promise<NormalizedObservation> {
 	const controller = new AbortController();
 	const timeout = observeTimeoutMs(deps);
 	const parentSignal = deps.taskflow.signal;
@@ -95,6 +158,112 @@ async function observeProject(
 	}
 }
 
+function resolveModule(
+	project: ProjectDefinition,
+	moduleId: string,
+): ModuleDefinition | undefined {
+	const modules = project.modules;
+	if (modules === undefined) return undefined;
+	return modules[moduleId];
+}
+
+/**
+ * Resolve zero or one Flow from a drifted observation.
+ * Unbound / missing targets on multi-Flow projects yield no selection
+ * (caller demotes to unknown — unknown grants no authority).
+ */
+function resolveSelection(
+	project: ProjectDefinition,
+	observation: NormalizedObservation,
+): { selection: FlowSelection; flow: Taskflow; desiredText: string } | undefined {
+	if (observation.status !== "drifted") return undefined;
+
+	const target = observation.target;
+	if (target === undefined || target.desired === undefined) return undefined;
+
+	if (target.module !== undefined) {
+		const module = resolveModule(project, target.module);
+		if (module === undefined) return undefined;
+		const flow = module.maintain[target.desired];
+		const desiredText = module.desired[target.desired];
+		if (flow === undefined || desiredText === undefined) return undefined;
+		return {
+			selection: {
+				module: target.module,
+				desired: target.desired,
+				flow: flow.name,
+			},
+			flow,
+			desiredText,
+		};
+	}
+
+	const flow = project.maintain[target.desired];
+	const desiredText = project.desired[target.desired];
+	if (flow === undefined || desiredText === undefined) return undefined;
+	return {
+		selection: { desired: target.desired, flow: flow.name },
+		flow,
+		desiredText,
+	};
+}
+
+/** Publish a runtime snapshot as the public ObservationResult contract. */
+function toObservationResult(observation: NormalizedObservation): ObservationResult {
+	const facts = observation.facts ?? {};
+	const summary =
+		observation.summary === undefined ? {} : { summary: observation.summary };
+	if (observation.status === "drifted") {
+		const desired = observation.target?.desired;
+		if (desired === undefined) {
+			// Public contract: confirmed drift must identify a desired target.
+			// Unbound multi-Flow drift is demoted before publication; single-Flow
+			// may still authorize via project identity — surface facts only.
+			return { status: "unknown", facts, ...summary };
+		}
+		return {
+			status: "drifted",
+			facts,
+			target: {
+				desired,
+				...(observation.target?.module === undefined
+					? {}
+					: { module: observation.target.module }),
+			},
+			...summary,
+		};
+	}
+	return {
+		status: observation.status,
+		facts,
+		...summary,
+	};
+}
+
+/** Multi-Flow drifted observations without a bound Flow become unknown. */
+function authorizeObservation(
+	project: ProjectDefinition,
+	observation: NormalizedObservation,
+): {
+	observation: ObservationResult;
+	bound?: { selection: FlowSelection; flow: Taskflow; desiredText: string };
+} {
+	if (observation.status !== "drifted") {
+		return { observation: toObservationResult(observation) };
+	}
+	const bound = resolveSelection(project, observation);
+	if (bound !== undefined) {
+		return { observation: toObservationResult(observation), bound };
+	}
+	return {
+		observation: {
+			status: "unknown",
+			facts: observation.facts ?? {},
+			...(observation.summary === undefined ? {} : { summary: observation.summary }),
+		},
+	};
+}
+
 async function executeMaintenance(
 	taskflow: Taskflow,
 	args: Record<string, unknown>,
@@ -132,6 +301,19 @@ async function executeMaintenance(
 	};
 }
 
+function buildRunArgs(
+	observation: ObservationResult | NormalizedObservation,
+	bound: { selection: FlowSelection; flow: Taskflow; desiredText: string },
+): Record<string, unknown> {
+	return {
+		charterarc: {
+			selection: bound.selection,
+			desired: bound.desiredText,
+			snapshot: observation,
+		},
+	};
+}
+
 export async function runProject(
 	project: ProjectDefinition,
 	deps: ProjectRuntime,
@@ -151,7 +333,9 @@ export async function runProject(
 			cwd: directoryIdentity(cwd)?.canonicalPath ?? cwd,
 		},
 	};
-	const before = await observeProject(stableProject, stableRuntime);
+	const rawBefore = await observeProject(stableProject, stableRuntime);
+	const { observation: before, bound } = authorizeObservation(stableProject, rawBefore);
+
 	if (before.status === "satisfied") {
 		return {
 			status: "satisfied",
@@ -159,31 +343,26 @@ export async function runProject(
 			before,
 		};
 	}
-	if (before.status === "unknown") {
+	if (before.status === "unknown" || bound === undefined) {
 		return {
 			status: "unknown",
 			ok: false,
 			before,
 		};
 	}
-	const args = {
-		charterarc: {
-			project: stableProject.maintain.name,
-			desired: stableProject.desired,
-			observation: before,
-		},
-	};
+
+	const args = buildRunArgs(before, bound);
 
 	let run: FlowRunResult;
 	try {
-		run = await executeMaintenance(stableProject.maintain, args, stableRuntime.taskflow);
+		run = await executeMaintenance(bound.flow, args, stableRuntime.taskflow);
 	} catch (error) {
 		run = {
 			ok: false,
 			finalOutput: error instanceof Error ? error.message : String(error),
 		};
 	}
-	const after = await observeProject(stableProject, stableRuntime);
+	const after = toObservationResult(await observeProject(stableProject, stableRuntime));
 	return {
 		status: after.status,
 		// Fail-closed: observed satisfaction is not enough if the Run failed.
@@ -191,5 +370,6 @@ export async function runProject(
 		before,
 		run,
 		after,
+		selection: bound.selection,
 	};
 }

@@ -9,6 +9,7 @@ import {
 import {
 	defineProject,
 	runProject,
+	type ObservationResult,
 	type ProjectDefinition,
 } from "../src/index.ts";
 
@@ -17,11 +18,31 @@ const maintenance: Taskflow = {
 	phases: [{ id: "repair", type: "agent", agent: "worker", task: "repair", final: true }],
 };
 
+function snapshot(
+	status: ObservationResult["status"],
+	summary?: string,
+): ObservationResult {
+	const facts = { observed: status };
+	if (status === "drifted") {
+		return {
+			status,
+			facts,
+			target: { desired: "contract" },
+			...(summary === undefined ? {} : { summary }),
+		};
+	}
+	return {
+		status,
+		facts,
+		...(summary === undefined ? {} : { summary }),
+	};
+}
+
 function projectWith(observe: ProjectDefinition["observe"]): ProjectDefinition {
 	return defineProject({
-		desired: "main is releasable",
+		desired: { contract: "main is releasable" },
 		observe,
-		maintain: maintenance,
+		maintain: { contract: maintenance },
 	});
 }
 
@@ -61,28 +82,31 @@ function runner(
 test("runProject: healthy reality performs no Taskflow Run", async () => {
 	let tasks = 0;
 	const outcome = await runProject(
-		projectWith(async () => ({ status: "satisfied" })),
+		projectWith(async () => snapshot("satisfied")),
 		{ taskflow: taskflowRuntime(runner(() => tasks += 1)) },
 	);
 
 	assert.equal(outcome.status, "satisfied");
 	assert.equal(outcome.ok, true);
-	assert.equal(outcome.before.status, "satisfied");
+	assert.deepEqual(outcome.before.facts, { observed: "satisfied" });
 	assert.equal(tasks, 0);
 	assert.equal(outcome.after, undefined);
 });
 
-test("runProject: confirmed drift uses the ordinary Taskflow engine", async () => {
+test("runProject: confirmed drift selects and uses the ordinary Taskflow engine", async () => {
 	let observations = 0;
 	let tasks = 0;
-	const project = projectWith(async () => ({
-		status: observations++ === 0 ? "drifted" : "satisfied",
-	}));
+	const project = projectWith(async () =>
+		snapshot(observations++ === 0 ? "drifted" : "satisfied"));
 	const outcome = await runProject(project, {
 		taskflow: taskflowRuntime(runner(() => tasks += 1)),
 	});
 
 	assert.equal(outcome.before.status, "drifted");
+	assert.deepEqual(outcome.selection, {
+		desired: "contract",
+		flow: "maintain-test-project",
+	});
 	assert.equal(outcome.status, "satisfied");
 	assert.equal(outcome.ok, true);
 	assert.equal(tasks, 1);
@@ -112,9 +136,8 @@ test("runProject: exposes existing Taskflow usage without claiming unavailable c
 		meteredRunner as typeof meteredRunner & { usageAccounting: "tokens-only" }
 	).usageAccounting = "tokens-only";
 	const outcome = await runProject(
-		projectWith(async () => ({
-			status: observations++ === 0 ? "drifted" : "satisfied",
-		})),
+		projectWith(async () =>
+			snapshot(observations++ === 0 ? "drifted" : "satisfied")),
 		{ taskflow: taskflowRuntime(meteredRunner) },
 	);
 
@@ -133,7 +156,7 @@ test("runProject: exposes existing Taskflow usage without claiming unavailable c
 test("runProject: unknown evidence holds without authorizing mutation", async () => {
 	let tasks = 0;
 	const outcome = await runProject(
-		projectWith(async () => ({ status: "unknown", summary: "CI unavailable" })),
+		projectWith(async () => snapshot("unknown", "CI unavailable")),
 		{ taskflow: taskflowRuntime(runner(() => tasks += 1)) },
 	);
 
@@ -147,6 +170,8 @@ test("runProject: malformed observer evidence is normalized to unknown", async (
 	const outcome = await runProject(
 		projectWith(async () => ({
 			status: "drifted",
+			target: { desired: "contract" },
+			facts: {},
 			extra: true,
 		} as never)),
 		{ taskflow: taskflowRuntime(runner()) },
@@ -183,7 +208,7 @@ test("runProject: an observer cannot turn its timeout abort into drift authority
 			new Promise((resolve) => {
 				signal.addEventListener(
 					"abort",
-					() => resolve({ status: "drifted" }),
+					() => resolve(snapshot("drifted")),
 					{ once: true },
 				);
 			})),
@@ -200,9 +225,8 @@ test("runProject: an observer cannot turn its timeout abort into drift authority
 test("runProject: status reports observed reality, not a causal changed claim", async () => {
 	let observations = 0;
 	const outcome = await runProject(
-		projectWith(async () => ({
-			status: observations++ === 0 ? "drifted" : "satisfied",
-		})),
+		projectWith(async () =>
+			snapshot(observations++ === 0 ? "drifted" : "satisfied")),
 		{ taskflow: taskflowRuntime(runner(undefined, { fail: true })) },
 	);
 
@@ -216,7 +240,7 @@ test("runProject: post-run observer failure preserves the completed Run outcome"
 	const outcome = await runProject(
 		projectWith(async () => {
 			if (observations++ > 0) throw new Error();
-			return { status: "drifted" };
+			return snapshot("drifted");
 		}),
 		{ taskflow: taskflowRuntime(runner()) },
 	);
@@ -232,9 +256,9 @@ test("runProject: direct callers cannot smuggle a second project identity", asyn
 		runProject(
 			{
 				name: "duplicate-project-name",
-				desired: "main is releasable",
-				observe: async () => ({ status: "satisfied" }),
-				maintain: maintenance,
+				desired: { contract: "main is releasable" },
+				observe: async () => snapshot("satisfied"),
+				maintain: { contract: maintenance },
 			} as never,
 			{ taskflow: taskflowRuntime(runner()) },
 		),
@@ -246,28 +270,38 @@ test("runProject: captures one stable ProjectDefinition before observation", asy
 	let observations = 0;
 	const observerCalls: string[] = [];
 	const mutableProject = {
-		desired: "original desired state",
+		desired: { contract: "original desired state" },
 		async observe(): ReturnType<ProjectDefinition["observe"]> {
 			observerCalls.push("original");
 			const before = observations++ === 0;
 			if (before) {
-				mutableProject.desired = "mutated desired state";
+				mutableProject.desired.contract = "mutated desired state";
 				mutableProject.observe = async () => {
 					observerCalls.push("mutated");
-					return { status: "unknown" };
+					return snapshot("unknown");
 				};
-				mutableProject.maintain.phases[0]!.task = "mutated repair";
+				mutableProject.maintain.contract.phases[0]!.task = "mutated repair";
 			}
-			return { status: before ? "drifted" : "satisfied" };
+			return before
+				? {
+						status: "drifted",
+						target: { desired: "contract" },
+						facts: { evidence: "original evidence" },
+					}
+				: snapshot("satisfied");
 		},
 		maintain: {
-			name: "mutable-maintain",
-			phases: [{
-				id: "repair",
-				type: "agent" as const,
-				task: "{args.charterarc.desired}: original repair",
-				final: true,
-			}],
+			contract: {
+				name: "mutable-maintain",
+				phases: [{
+					id: "repair",
+					type: "agent" as const,
+					task:
+						"{args.charterarc.desired}: " +
+						"{args.charterarc.snapshot.facts.evidence}",
+					final: true,
+				}],
+			},
 		},
 	};
 	const tasks: string[] = [];
@@ -276,7 +310,7 @@ test("runProject: captures one stable ProjectDefinition before observation", asy
 	});
 
 	assert.deepEqual(observerCalls, ["original", "original"]);
-	assert.deepEqual(tasks, ["original desired state: original repair"]);
+	assert.deepEqual(tasks, ["original desired state: original evidence"]);
 });
 
 test("runProject: observation and maintenance stay bound to one runtime cwd", async () => {
@@ -302,9 +336,9 @@ test("runProject: observation and maintenance stay bound to one runtime cwd", as
 		observedCwds.push(context.cwd);
 		if (observations++ === 0) {
 			runtime.taskflow.cwd = os.tmpdir();
-			return { status: "drifted" };
+			return snapshot("drifted");
 		}
-		return { status: "satisfied" };
+		return snapshot("satisfied");
 	});
 
 	await runProject(project, runtime);

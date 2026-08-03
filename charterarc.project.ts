@@ -95,11 +95,14 @@ function classifyFailure(
 	) {
 		return {
 			status: "drifted",
+			target: { desired: kind },
+			facts: { check: kind, exitCode: exitCode(result.error) },
 			summary: `${kind} found a checked contract failure:\n${evidence}`,
 		};
 	}
 	return {
 		status: "unknown",
+		facts: { check: kind, exitCode: exitCode(result.error) },
 		summary: `${kind} failed without a trusted contract failure:\n${evidence}`,
 	};
 }
@@ -128,6 +131,7 @@ async function observeSelf({
 	if (rootName !== "pi-taskflow-monorepo" || charterArcName !== "charterarc") {
 		return {
 			status: "unknown",
+			facts: { repositoryIdentity: "mismatch" },
 			summary: "self-dogfood cwd is not the checked Taskflow/CharterArc repository",
 		};
 	}
@@ -141,71 +145,91 @@ async function observeSelf({
 	signal.throwIfAborted();
 	if (tests.error !== null) return classifyFailure("tests", tests);
 	return /(?:^|\n)# tests [1-9]\d*(?:\n|$)/m.test(tests.stdout)
-		? { status: "satisfied" }
+		? { status: "satisfied", facts: { typecheck: "passed", tests: "passed" } }
 		: {
 				status: "unknown",
+				facts: { typecheck: "passed", tests: "not-observed" },
 				summary: `tests completed without executing an acceptance test:\n${boundedEvidence(tests)}`,
 			};
 }
 
-const maintain: Taskflow = {
-	name: "maintain-charterarc",
-	strictInterpolation: true,
-	phases: [
-		{
-			id: "repair",
-			type: "agent",
-			agent: "executor-fast",
-			tools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
-			thinking: "low",
-			task:
-				"Repair this checked CharterArc contract failure:\n\n" +
-				"{args.charterarc.observation.summary}\n\n" +
-				"Make the smallest causal implementation change. Preserve unrelated work. " +
-				"packages/charterarc/test is immutable acceptance: do not edit, delete, rename, " +
-				"or weaken anything under it. Do not preserve removed fields as optional values " +
-				"or compatibility aliases: CharterArc is pre-stable and the acceptance test is the " +
-				"exact API. Public surface may grow only when immutable acceptance requires the " +
-				"current Project / optional Module / Flow vertical slice. Do not add a second " +
-				"control plane or Taskflow execution primitive, install dependencies, stage, " +
-				"commit, or push. Before " +
-				"reporting the on-disk result, run both direct checks (no package manager):\n" +
-				"node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json\n" +
-				"node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
-		},
-		{
-			id: "review",
-			type: "gate",
-			agent: "reviewer",
-			tools: ["read", "grep", "find", "ls"],
-			dependsOn: ["repair"],
-			final: true,
-			task:
-				"Review the CharterArc self-maintenance result without editing files.\n\n" +
-				"Original evidence:\n{args.charterarc.observation.summary}\n\n" +
-				"Repair report:\n{steps.repair.output}\n\n" +
-				"Do not re-run checks yourself. The post-run observer and primary agent re-run " +
-				"the authoritative checks after this review. Inspect the repair report and " +
-				"visible diff only.\n" +
-				"BLOCK if anything under packages/charterarc/test changed, the " +
-				"change weakens acceptance or touches unrelated work, " +
-				"keeps a removed field or compatibility alias, " +
-				"expands the authoring surface beyond Project, optional Module, and ordinary " +
-				"Taskflow values without immutable acceptance, adds model planning before the " +
-				"deterministic selection slice requires it, or adds a scheduler, daemon, registry, " +
-				"ledger, second IR, or phase. " +
-				"BLOCK if experimental distribution can set latest, enter the stable multi-package " +
-				"release, or publish without exact-artifact preflight and provenance verification. " +
-				"BLOCK if any factual or quantitative claim is unsupported by the visible evidence; " +
-				"mark it unmeasured instead of inferring. " +
-				"End with VERDICT: PASS or VERDICT: BLOCK.",
-		},
-	],
-};
+function maintenanceFlow(name: string, focus: string): Taskflow {
+	return {
+		name,
+		strictInterpolation: true,
+		phases: [
+			{
+				id: "repair",
+				type: "agent",
+				agent: "executor-fast",
+				tools: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+				thinking: "low",
+				timeout: 300_000,
+				task:
+					`Repair the checked CharterArc ${focus} contract failure:\n\n` +
+					"{args.charterarc.snapshot.summary}\n\n" +
+					"Make the smallest causal implementation change. Preserve unrelated work. " +
+					"Edit only packages/charterarc/src, packages/charterarc/README.md, or " +
+					"examples/charterarc-phase-docs.ts when the checked evidence directly " +
+					"requires it. Do not edit charterarc.project.ts, scripts, package metadata, " +
+					"docs/internal, or any other path. " +
+					"packages/charterarc/test is immutable acceptance: do not edit, delete, rename, " +
+					"or weaken anything under it. Do not preserve removed fields as optional values " +
+					"or compatibility aliases: CharterArc is pre-stable and the acceptance test is the " +
+					"exact API. Public surface may grow only when immutable acceptance requires the " +
+					"current Project / optional Module / Flow vertical slice. Do not add a second " +
+					"control plane or Taskflow execution primitive, install dependencies, stage, " +
+					"commit, or push. Before " +
+					"reporting the on-disk result, run both direct checks (no package manager):\n" +
+					"node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json\n" +
+					"node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
+			},
+			{
+				id: "review",
+				type: "gate",
+				agent: "reviewer",
+				tools: ["read", "grep", "find", "ls"],
+				timeout: 300_000,
+				dependsOn: ["repair"],
+				final: true,
+				task:
+					"Review the CharterArc self-maintenance result without editing files.\n\n" +
+					`Selected contract: ${focus}\n\n` +
+					"Original evidence:\n{args.charterarc.snapshot.summary}\n\n" +
+					"Repair report:\n{steps.repair.output}\n\n" +
+					"Do not re-run checks yourself. The post-run observer and primary agent re-run " +
+					"the authoritative checks after this review. Inspect the repair report and " +
+					"visible diff only.\n" +
+					"BLOCK if any changed path is outside packages/charterarc/src, " +
+					"packages/charterarc/README.md, and examples/charterarc-phase-docs.ts, or " +
+					"if a docs/example change was not directly required by acceptance. " +
+					"BLOCK if anything under packages/charterarc/test changed, the " +
+					"change weakens acceptance or touches unrelated work, " +
+					"keeps a removed field or compatibility alias, " +
+					"expands the authoring surface beyond Project, optional Module, and ordinary " +
+					"Taskflow values without immutable acceptance, adds model planning before the " +
+					"deterministic selection slice requires it, or adds a scheduler, daemon, registry, " +
+					"ledger, second IR, or phase. " +
+					"BLOCK if experimental distribution can set latest, enter the stable multi-package " +
+					"release, or publish without exact-artifact preflight and provenance verification. " +
+					"BLOCK if any factual or quantitative claim is unsupported by the visible evidence; " +
+					"mark it unmeasured instead of inferring. " +
+					"End with VERDICT: PASS or VERDICT: BLOCK.",
+			},
+		],
+	};
+}
+
+const maintain = {
+	typecheck: maintenanceFlow("maintain-charterarc-types", "typecheck"),
+	tests: maintenanceFlow("maintain-charterarc-tests", "acceptance-test"),
+} as const;
 
 export default defineProject({
-	desired:
-		"CharterArc source and its retained self-consumer typecheck without emit, and every CharterArc acceptance test passes.",
+	desired: {
+		typecheck: "CharterArc and its retained declarations typecheck without emit.",
+		tests: "Every immutable CharterArc acceptance test passes.",
+	},
 	observe: observeSelf,
 	maintain,
 });

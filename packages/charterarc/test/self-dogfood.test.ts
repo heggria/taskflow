@@ -12,18 +12,25 @@ import {
 import { runProject } from "../src/index.ts";
 import { buildGrokArgs } from "taskflow-hosts/grok";
 
-test("self-dogfood project: uses one ordinary Taskflow", () => {
-	assert.equal(project.maintain.name, "maintain-charterarc");
-	assert.equal(project.maintain.args, undefined);
-	assert.equal(project.maintain.strictInterpolation, true);
+test("self-dogfood project: declares two independently valid ordinary Taskflows", () => {
+	assert.deepEqual(Object.keys(project.desired).sort(), ["tests", "typecheck"]);
+	assert.deepEqual(Object.keys(project.maintain).sort(), ["tests", "typecheck"]);
 	assert.deepEqual(
-		project.maintain.phases.map((phase) => [phase.id, phase.type]),
-		[
-			["repair", "agent"],
-			["review", "gate"],
-		],
+		Object.values(project.maintain).map((flow) => flow.name).sort(),
+		["maintain-charterarc-tests", "maintain-charterarc-types"],
 	);
-	assert.equal(project.maintain.phases[1]?.final, true);
+	for (const flow of Object.values(project.maintain)) {
+		assert.equal(flow.args, undefined);
+		assert.equal(flow.strictInterpolation, true);
+		assert.deepEqual(
+			flow.phases.map((phase) => [phase.id, phase.type]),
+			[
+				["repair", "agent"],
+				["review", "gate"],
+			],
+		);
+		assert.equal(flow.phases[1]?.final, true);
+	}
 });
 
 test("self-dogfood project: repair checks directly and review is actually read-only", () => {
@@ -31,16 +38,18 @@ test("self-dogfood project: repair checks directly and review is actually read-o
 		"node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json",
 		"node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
 	];
-	for (const phase of project.maintain.phases) {
-		const task = phase.task;
-		if (typeof task !== "string") {
-			assert.fail(`phase ${phase.id} is missing a string task`);
+	for (const flow of Object.values(project.maintain)) {
+		for (const phase of flow.phases) {
+			const task = phase.task;
+			if (typeof task !== "string") {
+				assert.fail(`phase ${phase.id} is missing a string task`);
+			}
+			assert.doesNotMatch(task, /\b(?:pnpm|npm|yarn|bun)\b/);
 		}
-		assert.doesNotMatch(task, /\b(?:pnpm|npm|yarn|bun)\b/);
 	}
 
-	const repair = project.maintain.phases.find((phase) => phase.id === "repair");
-	const review = project.maintain.phases.find((phase) => phase.id === "review");
+	const repair = project.maintain.tests?.phases.find((phase) => phase.id === "repair");
+	const review = project.maintain.tests?.phases.find((phase) => phase.id === "review");
 	assert.ok(repair);
 	assert.ok(review);
 	const repairTask = repair.task;
@@ -79,8 +88,8 @@ test("self-dogfood project: repair checks directly and review is actually read-o
 });
 
 test("self-dogfood project: Grok cannot report success after moving governance", async () => {
-	const repair = project.maintain.phases.find((phase) => phase.id === "repair")?.task;
-	const review = project.maintain.phases.find((phase) => phase.id === "review")?.task;
+	const repair = project.maintain.tests?.phases.find((phase) => phase.id === "repair")?.task;
+	const review = project.maintain.tests?.phases.find((phase) => phase.id === "review")?.task;
 	assert.equal(typeof repair, "string");
 	assert.equal(typeof review, "string");
 	assert.match(repair ?? "", /packages\/charterarc\/test is immutable acceptance/);
@@ -185,6 +194,7 @@ test("self-dogfood project: wrong repository identity is unknown and cannot run"
 		});
 
 		assert.equal(outcome.status, "unknown");
+		assert.deepEqual(outcome.before.facts, { repositoryIdentity: "mismatch" });
 		assert.match(outcome.before.summary ?? "", /not the checked Taskflow\/CharterArc repository/);
 		assert.equal(tasks, 0);
 	} finally {
@@ -203,6 +213,8 @@ test("self-dogfood project: a TypeScript diagnostic is confirmed drift", async (
 		});
 
 		assert.equal(result.status, "drifted");
+		assert.deepEqual(result.target, { desired: "typecheck" });
+		assert.equal(result.facts?.check, "typecheck");
 		assert.match(result.summary ?? "", /error TS9999/);
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
@@ -222,6 +234,8 @@ test("self-dogfood project: a failing acceptance test is confirmed drift", async
 		});
 
 		assert.equal(result.status, "drifted");
+		assert.deepEqual(result.target, { desired: "tests" });
+		assert.equal(result.facts?.check, "tests");
 		assert.match(result.summary ?? "", /# fail 1/);
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
