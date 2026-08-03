@@ -33,6 +33,7 @@ test("experimental release: package and workflow cannot promote latest", async (
 
 	const workflow = await read(workflowPath);
 	assert.match(workflow, /tags:\s*\n\s*- ["']charterarc-v\*-experimental\.\*["']/);
+	assert.match(workflow, /workflow_dispatch:/);
 	assert.match(workflow, /permissions:\s*\n\s*contents: read[^\n]*\n\s*id-token: write/);
 	assert.doesNotMatch(workflow, /contents: write/);
 	assert.match(workflow, /git merge-base --is-ancestor[^\n]*origin\/main/);
@@ -49,7 +50,12 @@ test("experimental release: package and workflow cannot promote latest", async (
 	assert.doesNotMatch(workflow, /--tag latest|dist-tag (?:add|set)[^\n]*latest/);
 	assert.match(workflow, /verify-published-package\.mjs[^\n]*packages\/charterarc[^\n]*\$tarball/);
 	assert.match(workflow, /PUBLISH_WORKFLOW_PATH:\s*["']?\.github\/workflows\/publish-charterarc-experimental\.yml/);
-	assert.match(workflow, /PUBLISH_REF:\s*\$\{\{ github\.ref \}\}/);
+	assert.match(workflow, /PUBLISH_REF:\s*\$\{\{ env\.PUBLISH_REF \}\}/);
+	assert.match(workflow, /GITHUB_SHA:\s*\$\{\{ env\.PUBLISH_SHA \}\}/);
+	assert.match(
+		workflow,
+		/if \[ "\$latest" = "\$version" \]; then[\s\S]*npm dist-tag rm "\$name" latest/,
+	);
 	assert.match(workflow, /dist-tags/);
 	assert.match(workflow, /experimental/);
 	assert.match(workflow, /latest/);
