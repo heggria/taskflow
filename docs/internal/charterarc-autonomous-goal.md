@@ -197,7 +197,10 @@ retain Taskflow as the bounded workflow runtime.
 
 Longitudinal sample and per-cycle rows live in the [cycle metrics](./charterarc-cycle-metrics.md)
 file. That file is experiment evidence only; it is not runtime state and does
-not authorize mutation.
+not authorize mutation. Its operational definitions, baseline eligibility, and
+missing-value rules are normative for the M4 comparison; activity counts must
+not be promoted into substitutes for missing human-time or verification-time
+evidence.
 
 Keep measurement lightweight:
 

@@ -317,6 +317,7 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 		"Verified min",
 		"Verification",
 		"Follow-up",
+		"7d rework/rollback",
 		"Turns",
 		"Reported USD",
 		"Tokens in/out/cache",
@@ -326,6 +327,9 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 
 	assert.match(metrics, /Empirical rows and totals are evidence, not product acceptance\./);
 	assert.match(metrics, /Changing them must not trigger a CharterArc maintenance Run\./);
+	assert.match(metrics, /do not infer minutes\s+from message count or reply gaps\./);
+	assert.match(metrics, /A Run duration alone is\s+not this measure/);
+	assert.match(metrics, /a zero or\s+missing baseline median cannot establish the claim\./);
 });
 
 test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {
