@@ -89,7 +89,7 @@ After every retained external repository has one eligible baseline, alternate el
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
 - Twenty-three Grok Runs were executed; twenty-two reported 295 turns and $7.0670520
 - Twenty fully reported rows total 1,760,797 input, 103,639 output, and 7,862,912 cache-read tokens
-- Two additional zero-model Taskflow attempts failed closed during verification or startup; neither is a Grok Run or an M4 cycle
+- Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
 ## Cycles
@@ -121,6 +121,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-governance-chain | CharterArc | no | accepted | 0 | 0 | 6.93 | Flow verify; 37/37; packed consumer; Grok profile parse; invalid Grok binary healthy no-Run | five exact governing denies retained; M4-disqualified by primary post-Run hardening | pending/pending | 17 | 0.3254812 | 73,259/5,616/484,224 | none | 0/0/0 |
 | 2026-08-03-charterarc-acceptance-permission | CharterArc probe | no | narrowed | 0 | 0 | 7.17 | Flow verify; live edit changed hash; review gate BLOCK; primary restored; 38/38; packed consumer; invalid-binary healthy no-Run | permission-rule candidate rejected; launcher digest retained | n/a/n/a | 3 | 0.1104848 | 49,714/358/29,696 | none | 0/0/0 |
 | 2026-08-03-charterarc-readable-governance | CharterArc | no | narrowed | 0 | 0 | 2.03 | 39/39; packed consumer; invalid-binary healthy no-Run | exact read-deny removed; parent governance digest retained | n/a/n/a | — | — | — | none | 0/0/0 |
+| 2026-08-03-overstory-governance-snapshot | overstory | no | narrowed | 0 | 0 | 3.48 | 4/4 consumer; 274 core + 28 Pi; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; llm-arena next | n/a/n/a | — | — | — | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -213,6 +214,19 @@ After every retained external repository has one eligible baseline, alternate el
   `ok: false`, while normal read access and verification remain possible. This
   is a governance correction with no Taskflow or Grok Run, no M4 credit, and no
   new runtime or authoring concept.
+- `2026-08-03-overstory-governance-snapshot`: selected
+  `2026-08-03T07:08:18.000Z`; verified `2026-08-03T07:11:47.000Z`;
+  elapsed `3.48` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. The primary removed the ineffective
+  relative `read_only` declaration and bound the consumer's launcher plus
+  acceptance tree to a parent pre/post snapshot. The first acceptance
+  invocation found that the observer still expected the old local variable
+  name and started one Taskflow attempt. The deliberately invalid Grok binary
+  stopped it before any model call or mutation. The observer was corrected to
+  inspect the final reported result, after which 4/4 consumer tests, the 274
+  core and 28 Pi tests behind `npm run verify`, and the explicit invalid-binary
+  healthy no-Run probe passed. This is a narrowed governance correction, not an
+  M4 cycle or a Grok Run, and it adds no public concept.
 
 ## Matched replay: small deterministic repair
 
@@ -229,7 +243,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Ten rows currently have both selected-at and verified-at timestamps under the
+Eleven rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`

@@ -348,11 +348,12 @@ the duplication is cheaper than a new abstraction.
 
 ## Adoption burden and private release candidate
 
-The three retained consumer trees contain 913 checked-in CharterArc lines:
-566 in Project declarations, 191 in immutable consumer acceptance, 75 in host
-runners, 45 in local package manifests, and 36 in Grok sandboxes. Declarations
-plus acceptance are 757/913 lines (82.9%); runners alone are 75/913 (8.2%), and
-all runner/package/sandbox plumbing together is 156/913 (17.1%). A runner helper
+After the first external governance migration, the three retained consumer
+trees contain 1,034 checked-in CharterArc lines: 623 in Project declarations,
+215 in consumer acceptance, 119 in host runners, 45 in local package manifests,
+and 32 in Grok sandboxes. Declarations plus acceptance are 838/1,034 lines
+(81.0%); runners alone are 119/1,034 (11.5%), and all
+runner/package/sandbox plumbing together is 196/1,034 (19.0%). A runner helper
 would optimize the smaller part while leaving the domain-specific `observe`
 classification—the part that safely separates `drifted` from `unknown`—inside
 every project. The helper/CLI route remains rejected.
@@ -482,11 +483,42 @@ deleted their private success rule while adding no authoring concept. This is
 strong cross-project evidence for retaining the one result field, but it does
 not establish the four-week or comparative-value claim required for release.
 
+## First external governance migration: overstory
+
+The self-consumer's governance correction exposed the same false safety claim
+in all three retained external branches: each sandbox listed relative
+`read_only` paths even though the live probe had already shown that this does
+not prevent absolute-path edits. Overstory was migrated first, without a Grok
+Run. Its parent launcher now snapshots the sandbox, launcher, and acceptance
+tree before and after `runProject` and forces the reported result to `ok: false`
+when they differ. Its observer treats a missing guard or a reintroduced
+relative `read_only` declaration as `unknown`, so governance drift cannot grant
+model mutation authority.
+
+The first acceptance invocation exposed one brittle local coupling: the
+observer still searched the launcher source for `outcome`, while the guarded
+launcher now prints the final `reported` value. That started one ordinary
+Taskflow attempt, which failed before any Grok call or mutation because the
+binary was deliberately invalid. The primary corrected the observer and did
+not invoke Taskflow again. Independent verification passed all four consumer
+acceptance tests, the 274 core tests and 28 Pi tests behind `npm run verify`,
+and a direct invalid-binary healthy invocation returned `satisfied`, `ok: true`,
+and no `run`.
+
+This migration removes an unenforced prevention claim and retains a narrower
+post-Run detector; it does not make CharterArc a security boundary. It also
+adds 45 net lines to the overstory launcher. That cost is real evidence against
+pretending the current consumer bootstrap is already minimal. Do not extract a
+public helper after one migration: apply the same correction to the two
+remaining retained consumers, then compare the repeated burden with the helper
+surface it would replace.
+
 ## Next evidence
 
-Use the next naturally occurring maintenance need for longitudinal evidence;
-do not create synthetic migrations now that every retained consumer uses the
-shared result field.
+Migrate the same truthful governance boundary to llm-arena and cli-lab one
+consumer at a time, without a model Run unless confirmed product drift requires
+one. Then use the next naturally occurring maintenance need for longitudinal
+evidence; do not invent unrelated migrations.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained
