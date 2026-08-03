@@ -217,8 +217,7 @@ function toObservationResult(observation: NormalizedObservation): ObservationRes
 		const desired = observation.target?.desired;
 		if (desired === undefined) {
 			// Public contract: confirmed drift must identify a desired target.
-			// Unbound multi-Flow drift is demoted before publication; single-Flow
-			// may still authorize via project identity — surface facts only.
+			// Unbound drift is demoted before publication — surface facts only.
 			return { status: "unknown", facts, ...summary };
 		}
 		return {

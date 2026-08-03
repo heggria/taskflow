@@ -385,6 +385,17 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 		metrics,
 		/A Run that writes this sample is appended by the next refresh; it stays pending rather than becoming zero\./,
 	);
+	assert.match(goal, /executable, deliberately favorable plain-Taskflow dispatcher/i);
+	assert.match(metrics, /2026-08-03-plain-taskflow-baseline/);
+	assert.match(metrics, /M2 remains 0\/3/);
+	const refactor = await readFile(
+		path.join(root, "docs/internal/charterarc-refactor.md"),
+		"utf8",
+	);
+	assert.match(refactor, /## Plain Taskflow paired baseline/);
+	assert.match(refactor, /215\s+physical lines/);
+	assert.match(refactor, /570 fewer handwritten lines/);
+	assert.match(refactor, /M2 remains `0\/3`/);
 	assert.doesNotMatch(`${goal}\n${metrics}`, /\bledger\b/i);
 
 	const header = metrics

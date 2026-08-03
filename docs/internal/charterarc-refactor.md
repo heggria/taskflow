@@ -747,24 +747,62 @@ and a healthy invocation with the Grok binary forced missing.
 
 All three retained consumer branches then migrated without a model Run:
 
-- overstory `60e3421`: entrypoint and verification Flows;
-- llm-arena `1ad50fd`: entrypoint, Python, web-lint, and web-build Flows;
-- cli-lab `09716c6`: entrypoint and doctor Flows.
+- overstory `6fb2077`: entrypoint and verification Flows;
+- llm-arena `7fc6bda`: entrypoint, Python, web-lint, and web-build Flows;
+- cli-lab `50806e6`: registry and package-doctor Flows.
 
 Each branch points to `charterarc@0.2.7-experimental.0`. The same deterministic
 local tarballs were installed into archive-only checkouts with no pre-existing
-root or CharterArc dependencies; all three consumers passed 6/6 acceptance
+root or CharterArc dependencies; all three consumers passed 7/7 acceptance
 checks and their real healthy observers started no Grok Run. The tarball source
 was local, not npm, so publication and merge remain pending execution decisions.
 M2 is still 0/3 and the four-week window has not started.
 
 The migrations remove model-side prompt branching by choosing a narrower Flow
 before execution, but they do not remove the consumer-specific observation
-judgment. Their declarations grew by 20, 29, and 21 lines respectively, so
-there is not yet evidence that the authoring surface is smaller overall. Do not
-hide that cost behind test count: simplification is the next product question,
-and a shared observer or launcher abstraction is still rejected until it
-removes more judgment and glue than it adds.
+judgment. Their declarations grew by 20, 29, and 26 net lines respectively.
+The cli-lab correction removed an unreachable entrypoint route: its real doctor
+evidence now deterministically distinguishes registry drift from package drift,
+while entrypoint incompleteness remains non-authorizing `unknown`. The three
+acceptance suites drive the actual observer classifiers through both routes;
+static Flow-map presence alone is no longer treated as route evidence.
+
+## Plain Taskflow paired baseline
+
+The product difference now has an executable counterfactual rather than an
+architectural slogan. `packages/charterarc/test/fixtures/plain-taskflow-baseline.ts`
+is a deliberately favorable plain-Taskflow dispatcher: it imports only the
+Taskflow runtime at execution time, reuses CharterArc declaration types, and
+omits CharterArc's declaration validation, cloning, and freezing. Its 215
+physical lines still have to normalize evidence, enforce observer timeout and
+abort, short-circuit healthy and unknown states, select a Project or Module
+route, statically verify the selected Flow, bind inputs, construct and execute a
+RunState, capture failure, observe again, and combine the final outcome
+fail-closed. Those are semantic responsibilities, not a claim that 215 lines is
+a mathematical lower bound.
+
+The paired test sends both implementations through the same two routes and
+asserts identical selection, bound tasks, Run result, and post-Run observation.
+Each side makes exactly two identical model calls: one repair Agent and the same
+JSON-contract review gate. Deterministic reconciliation adds no reviewer Agent,
+approval phase, or human decision. The favorable baseline also runs the actual
+healthy observers from overstory, llm-arena, and cli-lab and starts zero Runs.
+
+As a literal copy comparison, the dispatcher would occupy 645 lines across
+three repositories, while the route-aware consumer declaration deltas total 75
+net lines: 570 fewer handwritten lines. That arithmetic is reproducible but not
+universal. A team can compress the code or build a shared helper; doing so would
+recreate the Project/reconciliation boundary being evaluated and must be
+measured as a competing abstraction. The durable conclusion is narrower:
+CharterArc centralizes the generic orchestration responsibilities while leaving
+the irreducible domain observer and route map in each repository, with no extra
+model or human review step.
+
+This passes the local product-difference and handwritten-glue condition. It
+does not prove active adoption. The package is unpublished, the three branches
+are unmerged, M2 remains `0/3`, and the four-week window has not started. A
+shared observer or repository adapter remains rejected until repeated retained
+consumers expose the same removable domain judgment.
 
 Add a public concept only when multiple retained consumers cannot remain simple
 with `Project / optional Module / Flow-map + Taskflow`.

@@ -320,12 +320,20 @@ install before any merge can count.
 
 **Status: migrated but not activated.** The overstory, llm-arena, and cli-lab
 consumer branches now retain two, four, and two independently selectable Flows
-at commits `60e3421`, `1ad50fd`, and `09716c6`. Each passed 6/6 consumer
+at commits `6fb2077`, `7fc6bda`, and `50806e6`. Each passed 7/7 consumer
 acceptance checks from a fresh archive after installing the same deterministic
 `charterarc@0.2.7-experimental.0` tarball; their real repository checks ran on
-the healthy no-Run path. This is clean-artifact compatibility, not a clean
-registry install: the version has not been published and none of the branches
-has been merged or chosen for active use. M2 therefore remains 0/3.
+the healthy no-Run path. Their acceptance now also drives actual observer
+classifiers through distinct drift routes instead of proving only static map
+shape. An executable, deliberately favorable plain-Taskflow dispatcher matches
+the same route, binding, two model calls, Run result, and re-observation. It is
+215 physical lines before each consumer's domain-specific observer and route
+map; the three migrated declaration deltas total 75 net lines. This supports a
+local product-difference claim, not a mathematical minimum: a team could write
+or share a smaller competing helper. This is still clean-artifact
+compatibility, not a clean registry install: the version has not been published
+and none of the branches has been merged or chosen for active use. M2 therefore
+remains 0/3.
 
 ### M3 — Adaptive planning seam
 
