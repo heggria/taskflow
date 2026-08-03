@@ -723,8 +723,51 @@ merge require a fresh execution-time checklist and explicit approval. M2 and
 the four-week window remain at zero until those events occur and a later
 ordinary project change passes through the retained Project.
 
+## Declarative multi-Flow reset
+
+The North-Star reset removed the old single-Flow compatibility form rather than
+layering another planner over it. Commit `badbba02` now accepts one exact
+authoring shape: desired promises and ordinary Taskflows share route keys, an
+optional Module may narrow the same pair, and an explicit observation snapshot
+selects at most one route. The runtime binds selection, desired text, and the
+snapshot into `args.charterarc`, statically verifies the selected Taskflow, runs
+it through the existing engine, and observes again. It adds no phase, runner,
+scheduler, daemon, registry, or second IR.
+
+The self declaration demonstrated two different live routes. A checked
+typecheck failure selected `maintain-charterarc-types`; after that Run,
+re-observation exposed a distinct test failure without switching plans inside
+the completed Run. A later invocation selected
+`maintain-charterarc-tests`. Both Grok reviews passed. Two further Runs removed
+the compatibility alias and hardened malformed observation handling. One
+earlier Grok process stopped making progress and was interrupted; it is not
+counted as a successful attempt. Independent verification passed 47/47
+CharterArc tests, typecheck, the packed consumer, all 2,080 repository tests,
+and a healthy invocation with the Grok binary forced missing.
+
+All three retained consumer branches then migrated without a model Run:
+
+- overstory `60e3421`: entrypoint and verification Flows;
+- llm-arena `1ad50fd`: entrypoint, Python, web-lint, and web-build Flows;
+- cli-lab `09716c6`: entrypoint and doctor Flows.
+
+Each branch points to `charterarc@0.2.7-experimental.0`. The same deterministic
+local tarballs were installed into archive-only checkouts with no pre-existing
+root or CharterArc dependencies; all three consumers passed 6/6 acceptance
+checks and their real healthy observers started no Grok Run. The tarball source
+was local, not npm, so publication and merge remain pending execution decisions.
+M2 is still 0/3 and the four-week window has not started.
+
+The migrations remove model-side prompt branching by choosing a narrower Flow
+before execution, but they do not remove the consumer-specific observation
+judgment. Their declarations grew by 20, 29, and 21 lines respectively, so
+there is not yet evidence that the authoring surface is smaller overall. Do not
+hide that cost behind test count: simplification is the next product question,
+and a shared observer or launcher abstraction is still rejected until it
+removes more judgment and glue than it adds.
+
 Add a public concept only when multiple retained consumers cannot remain simple
-with `ProjectDefinition + Taskflow`.
+with `Project / optional Module / Flow-map + Taskflow`.
 
 Until then, goals, knowledge ledgers, daemons, registries, ProjectIR, new phase
 kinds, and generic repository adapters stay outside the kernel.

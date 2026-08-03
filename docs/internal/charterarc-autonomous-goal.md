@@ -294,6 +294,17 @@ The immediate vertical slice passes all ten criteria above. One declaration
 routes at least two real observed gaps to two independent existing Taskflows,
 with no handwritten execution dispatcher and no Taskflow runtime duplication.
 
+**Status: passed locally on 2026-08-03.** Commit `badbba02` replaced the
+single-Flow compatibility form with one exact `Project / optional Module /
+Flow-map` declaration. The self Project routed typecheck and test failures to
+independent ordinary Taskflows, automatically bound the selected desired text
+and explicit observation snapshot, and re-observed after one bounded Run.
+Healthy and malformed observations started no Run. Independent evidence was
+47/47 CharterArc tests, repository typecheck, the packed three-package smoke,
+2,080/2,080 repository tests, and an invalid-Grok healthy no-Run probe. Four
+Grok repair/review Runs completed; one earlier stuck attempt was interrupted
+and is not acceptance evidence.
+
 ### M2 — External authoring value
 
 At least three independent, real repositories choose to keep a Project
@@ -306,6 +317,15 @@ not count as adoption.
 The three existing consumer branches remain pending activation candidates.
 They must migrate from the thin fixed-Flow wrapper and pass a clean registry
 install before any merge can count.
+
+**Status: migrated but not activated.** The overstory, llm-arena, and cli-lab
+consumer branches now retain two, four, and two independently selectable Flows
+at commits `60e3421`, `1ad50fd`, and `09716c6`. Each passed 6/6 consumer
+acceptance checks from a fresh archive after installing the same deterministic
+`charterarc@0.2.7-experimental.0` tarball; their real repository checks ran on
+the healthy no-Run path. This is clean-artifact compatibility, not a clean
+registry install: the version has not been published and none of the branches
+has been merged or chosen for active use. M2 therefore remains 0/3.
 
 ### M3 — Adaptive planning seam
 
