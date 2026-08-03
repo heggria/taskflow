@@ -709,19 +709,30 @@ unstarted. The probe adds no installer, registry, API, phase, or public concept.
 
 The user then authorized the narrower experimental route: before M4,
 CharterArc may use a semver prerelease on npm's `experimental` dist-tag with no
-stable compatibility promise. `latest` and the stable Taskflow release remain
-outside that authorization. The package is prepared as
-`charterarc@0.2.7-experimental.0` behind a dedicated tag-triggered workflow that
-packs and smoke-installs one deterministic tarball, publishes it with
-provenance, verifies the exact registry artifact, and fails if this version is
-bound to `latest`. CharterArc stays outside the stable nine-package release.
+stable compatibility promise. CharterArc stays outside the stable nine-package
+release. After an explicit execution checklist, tag
+`charterarc-v0.2.7-experimental.0` published one deterministic artifact with
+SLSA provenance. A replay rebuilt the tag, matched registry integrity, verified
+the repository, workflow, ref, release commit, and npm owner, and then passed
+the complete packed smoke and CharterArc acceptance.
 
-This is release readiness, not a release: no tag was pushed and npm was not
-mutated. The three retained consumer branches are now classified as pending
-activation candidates, not active adoptions. Publication and each consumer
-merge require a fresh execution-time checklist and explicit approval. M2 and
-the four-week window remain at zero until those events occur and a later
-ordinary project change passes through the retained Project.
+The first publish exposed a registry constraint rather than a product rule:
+the public npm registry requires package metadata to retain `latest` and
+rejected its removal with HTTP 400, even though publication explicitly used
+`--tag experimental`. The workflow now accepts `latest` equal to this version
+only while it is the sole published version; it never sets or moves `latest`.
+Consumers pin the exact prerelease or `@experimental`, and no stable
+compatibility promise exists.
+
+Fresh archive-only checkouts of all three consumer commits then installed the
+exact artifact directly from `registry.npmjs.org` with matching integrity and
+passed 7/7 acceptance apiece. Overstory and llm-arena were fast-forwarded to
+their consumer commits on clean `main` branches and repeated 7/7 plus direct
+healthy, missing-Grok zero-Run observations. cli-lab's archive passed, but its
+dirty user worktree was intentionally not merged. This establishes 2/3
+activation and removes the distribution blocker; it does not establish active
+adoption until all three are retained and later ordinary project changes pass
+through their Projects. M2 and the four-week window therefore remain at zero.
 
 ## Declarative multi-Flow reset
 
@@ -751,12 +762,14 @@ All three retained consumer branches then migrated without a model Run:
 - llm-arena `7fc6bda`: entrypoint, Python, web-lint, and web-build Flows;
 - cli-lab `50806e6`: registry and package-doctor Flows.
 
-Each branch points to `charterarc@0.2.7-experimental.0`. The same deterministic
-local tarballs were installed into archive-only checkouts with no pre-existing
-root or CharterArc dependencies; all three consumers passed 7/7 acceptance
-checks and their real healthy observers started no Grok Run. The tarball source
-was local, not npm, so publication and merge remain pending execution decisions.
-M2 is still 0/3 and the four-week window has not started.
+Each declaration points to `charterarc@0.2.7-experimental.0`. The original
+deterministic local-tarball gate passed from archive-only checkouts with no
+pre-existing root or CharterArc dependencies; the later public-registry gate
+repeated 7/7 for all three against the exact npm artifact. Overstory and
+llm-arena now retain those declarations on `main`; cli-lab remains isolated on
+its consumer branch to protect unrelated user WIP. M2 is still 0/3 because no
+post-activation ordinary project change has passed through these Projects, and
+the four-week window has not started.
 
 The migrations remove model-side prompt branching by choosing a narrower Flow
 before execution, but they do not remove the consumer-specific observation
@@ -799,10 +812,11 @@ the irreducible domain observer and route map in each repository, with no extra
 model or human review step.
 
 This passes the local product-difference and handwritten-glue condition. It
-does not prove active adoption. The package is unpublished, the three branches
-are unmerged, M2 remains `0/3`, and the four-week window has not started. A
-shared observer or repository adapter remains rejected until repeated retained
-consumers expose the same removable domain judgment.
+does not prove active adoption. The prerelease is public and two clean consumer
+mains retain it, while cli-lab remains pending; none has yet processed a later
+ordinary project change. M2 remains `0/3`, and the four-week window has not
+started. A shared observer or repository adapter remains rejected until
+repeated retained consumers expose the same removable domain judgment.
 
 Add a public concept only when multiple retained consumers cannot remain simple
 with `Project / optional Module / Flow-map + Taskflow`.

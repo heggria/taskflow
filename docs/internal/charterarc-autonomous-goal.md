@@ -314,26 +314,28 @@ Each must exercise at least two observed routes or one route plus a meaningful
 Module boundary. Local ignored dependencies and frozen integration branches do
 not count as adoption.
 
-The three existing consumer branches remain pending activation candidates.
-They must migrate from the thin fixed-Flow wrapper and pass a clean registry
-install before any merge can count.
-
-**Status: migrated but not activated.** The overstory, llm-arena, and cli-lab
-consumer branches now retain two, four, and two independently selectable Flows
+**Activation status: 2/3; M2 remains 0/3.** The overstory, llm-arena, and
+cli-lab declarations retain two, four, and two independently selectable Flows
 at commits `6fb2077`, `7fc6bda`, and `50806e6`. Each passed 7/7 consumer
-acceptance checks from a fresh archive after installing the same deterministic
-`charterarc@0.2.7-experimental.0` tarball; their real repository checks ran on
-the healthy no-Run path. Their acceptance now also drives actual observer
+acceptance checks from a fresh archive after installing
+`charterarc@0.2.7-experimental.0` directly from `registry.npmjs.org`; their real
+repository checks ran on the healthy no-Run path. Overstory and llm-arena were
+then fast-forwarded to those exact commits on their clean `main` branches,
+repeated 7/7 acceptance, and returned `satisfied` with no Run while Grok was
+forced unavailable. cli-lab passed the same archive gate, but its heavily dirty
+user worktree was deliberately left untouched and its consumer branch remains
+pending activation. Their acceptance also drives actual observer
 classifiers through distinct drift routes instead of proving only static map
 shape. An executable, deliberately favorable plain-Taskflow dispatcher matches
 the same route, binding, two model calls, Run result, and re-observation. It is
 215 physical lines before each consumer's domain-specific observer and route
 map; the three migrated declaration deltas total 75 net lines. This supports a
 local product-difference claim, not a mathematical minimum: a team could write
-or share a smaller competing helper. This is still clean-artifact
-compatibility, not a clean registry install: the version has not been published
-and none of the branches has been merged or chosen for active use. M2 therefore
-remains 0/3.
+or share a smaller competing helper. Publication and two main-branch keep
+decisions remove the earlier artifact and activation blockers, but M2 still
+requires all three repositories plus a later ordinary, non-CharterArc project
+change observed through each retained declaration. No such post-activation
+change exists yet, so M2 remains 0/3 and the four-week window has not started.
 
 ### M3 — Adaptive planning seam
 
