@@ -91,8 +91,8 @@ After every retained external repository has one eligible baseline, alternate el
 - M4 counted sample: 12/20 candidate cycles across 4 local Projects; final eligibility requires M2
 - Retained integration experiments: 3/3 local consumer branches
 - Public-registry clean install: 3/3 at `charterarc@0.2.7-experimental.0`; 7/7 acceptance each
-- Activated retained mains: 2/3; overstory and llm-arena are retained on `main`
-- Pending activation candidates: 1/3; cli-lab remains isolated to protect unrelated user WIP
+- Activated retained mains: 3/3; overstory, llm-arena, and cli-lab are retained on `main`
+- Pending activation candidates: 0/3
 - Active external adoption: 0/3; M2 is unproven
 - Observation window: not started; no retained consumer has yet observed a later ordinary project change
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
@@ -101,7 +101,7 @@ After every retained external repository has one eligible baseline, alternate el
 - Twenty-seven Grok Runs were executed; twenty-six reported 363 turns and $8.7856512
 - Twenty-four fully reported rows total 2,175,058 input, 133,822 output, and 10,226,176 cache-read tokens
 - Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
-- Pending next refresh: the next natural non-CharterArc change in each activated consumer; cli-lab activation only after its user worktree is clean
+- Pending next refresh: the next natural non-CharterArc change in each activated consumer
 
 ## Cycles
 
@@ -144,6 +144,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-multiflow-consumer-migration | three consumer branches | no | accepted | 0 | 0 | — | one deterministic artifact set; fresh archives; 7/7 acceptance each; real healthy observers and two actual routes | multi-Flow branches retained; npm publish and merges still pending | n/a/n/a | — | — | — | existing Project/Flow maps; no new runtime concept | 0/0/0 |
 | 2026-08-03-plain-taskflow-baseline | CharterArc plus three consumer branches | no | accepted | 0 | 0 | — | executable Taskflow-only dispatcher; route/binding/Run/re-observation parity; two identical model calls; 50/50 CharterArc checks | local product difference supported; M2 remains 0/3 | n/a/n/a | — | — | — | test-only baseline; no new runtime concept | 0/0/0 |
 | 2026-08-03-experimental-publish-activation | CharterArc plus three consumers | no | narrowed | 2 | — | — | SLSA/integrity/ref/SHA/owner verified; registry.npmjs.org install; 7/7 x3 archives; 7/7 x2 retained mains; direct healthy zero-Run x2 | overstory and llm-arena activated; cli-lab WIP untouched; await later ordinary changes | n/a/n/a | — | — | — | npm experimental artifact; no stable concept | 0/0/0 |
+| 2026-08-03-cli-lab-main-activation | cli-lab | no | accepted | 0 | 0 | — | exact fast-forward; activation/WIP path intersection empty; public dependencies installed under ignored node_modules with scripts disabled; 7/7 acceptance; doctor; missing-Grok healthy zero-Run | all 3 mains activated; await later ordinary changes | n/a/n/a | — | — | — | no new concept | 0/0/0 |
 
 ### Timing evidence
 

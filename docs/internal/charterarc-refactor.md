@@ -734,6 +734,16 @@ activation and removes the distribution blocker; it does not establish active
 adoption until all three are retained and later ordinary project changes pass
 through their Projects. M2 and the four-week window therefore remain at zero.
 
+A later exact path-intersection audit proved that cli-lab's candidate added only
+five `.charterarc` / `.grok` files and overlapped none of the user's modified or
+untracked WIP. Its `main` branch was therefore fast-forwarded to `50806e6`
+without touching that WIP. The pinned public dependencies were installed only
+under ignored `.charterarc/node_modules` with lifecycle scripts disabled and
+without changing a tracked lockfile. The activated main then passed 7/7 consumer
+acceptance, `cli-lab doctor`, and a missing-Grok healthy invocation with no Run.
+Activation is now 3/3, but M2 remains 0/3 until each retained Project observes a
+later ordinary non-CharterArc change.
+
 ## Declarative multi-Flow reset
 
 The North-Star reset removed the old single-Flow compatibility form rather than
@@ -765,9 +775,9 @@ All three retained consumer branches then migrated without a model Run:
 Each declaration points to `charterarc@0.2.7-experimental.0`. The original
 deterministic local-tarball gate passed from archive-only checkouts with no
 pre-existing root or CharterArc dependencies; the later public-registry gate
-repeated 7/7 for all three against the exact npm artifact. Overstory and
-llm-arena now retain those declarations on `main`; cli-lab remains isolated on
-its consumer branch to protect unrelated user WIP. M2 is still 0/3 because no
+repeated 7/7 for all three against the exact npm artifact. All three now retain
+those declarations on `main`; cli-lab was activated only after the later exact
+path-intersection audit described above. M2 is still 0/3 because no
 post-activation ordinary project change has passed through these Projects, and
 the four-week window has not started.
 
@@ -812,8 +822,8 @@ the irreducible domain observer and route map in each repository, with no extra
 model or human review step.
 
 This passes the local product-difference and handwritten-glue condition. It
-does not prove active adoption. The prerelease is public and two clean consumer
-mains retain it, while cli-lab remains pending; none has yet processed a later
+does not prove active adoption. The prerelease is public and all three consumer
+mains retain it; none has yet processed a later
 ordinary project change. M2 remains `0/3`, and the four-week window has not
 started. A shared observer or repository adapter remains rejected until
 repeated retained consumers expose the same removable domain judgment.
