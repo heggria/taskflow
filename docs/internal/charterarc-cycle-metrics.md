@@ -89,7 +89,7 @@ After every retained external repository has one eligible baseline, alternate el
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
 - Twenty-one Grok Runs were executed; twenty reported 275 turns and $6.6310860
 - Eighteen fully reported rows total 1,637,824 input, 97,665 output, and 7,348,992 cache-read tokens
-- One additional zero-model Taskflow attempt failed closed during verification; it is not a Grok Run or an M4 cycle
+- Two additional zero-model Taskflow attempts failed closed during verification or startup; neither is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
 ## Cycles
@@ -117,6 +117,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-cli-outcome-ok | cli-lab | yes | accepted | 0 | 0 | 2.81 | doctor; profile env; 8 CLI smoke; 5/5 consumer; invalid Grok binary healthy no-Run | local success predicate deleted | pending/pending | 11 | 0.2226960 | 70,419/2,539/222,080 | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 | 2026-08-03-charterarc-prospective-baseline | CharterArc | no | accepted | 0 | 0 | 3.93 | Flow verify; 37/37; invalid Grok binary healthy no-Run; heartbeat readback | prospective baseline routing retained | n/a/n/a | 19 | 0.4372336 | 97,262/5,418/700,672 | none; experiment protocol only | 0/0/0 |
 | 2026-08-03-charterarc-m4-release-boundary | CharterArc | no | accepted | 0 | 0 | 6.99 | Flow verify; 37/37; packed consumer; final invalid Grok binary healthy no-Run | release boundary retained; M4-disqualified by extra zero-model Taskflow attempt | pending/pending | 12 | 0.2881140 | 81,153/3,496/349,440 | none | 0/0/0 |
+| 2026-08-03-charterarc-governance-deny | CharterArc | no | narrowed | 0 | 0 | 7.43 | Flow verify; Grok sandbox applied with 2 deny paths; 37/37; packed consumer | kernel deny retained; zero-model Run rejected | n/a/n/a | 0 | — | — | none | 0/0/0 |
 
 ### Timing evidence
 
@@ -155,6 +156,18 @@ After every retained external repository has one eligible baseline, alternate el
   phrase and reverified reality without another model call. Because the cycle
   exceeded the intended one-Run envelope, the accepted change receives no M4
   credit.
+- `2026-08-03-charterarc-governance-deny`: selected
+  `2026-08-03T06:20:49.356Z`; verified `2026-08-03T06:28:14.997Z`;
+  elapsed `7.43` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. The primary bound protection for
+  the autonomous Goal and longitudinal metrics record, then used `read_only`
+  for two files. Grok 0.2.114 rejected that profile before any model turn because its
+  macOS backend requires `read_only` targets to be directories. The primary
+  did not invoke Project again. It narrowed the policy to one kernel-enforced
+  exact-file `deny` list and removed redundant prompt expectations. A
+  model-free Grok profile check recorded both `deny_paths`; 37/37 tests and the
+  packed consumer passed. The failed zero-model Taskflow attempt is charged as
+  overhead and the change receives no M4 credit.
 
 ## Matched replay: small deterministic repair
 
@@ -171,7 +184,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Four rows currently have both selected-at and verified-at timestamps under the
+Seven rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`

@@ -87,6 +87,10 @@ test("self-dogfood project: Grok cannot move the acceptance boundary", async () 
 		sandbox,
 		/read_only = \["\.grok", "packages\/charterarc\/test"\]/,
 	);
+	assert.match(
+		sandbox,
+		/deny = \["docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
+	);
 });
 
 async function fixtureRepo(tsc: string): Promise<string> {
@@ -366,6 +370,10 @@ test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", a
 	assert.match(
 		sandbox,
 		/\[profiles\.charterarc-self-write\][\s\S]*read_only = \["\.grok", "packages\/charterarc\/test"\]/,
+	);
+	assert.match(
+		sandbox,
+		/\[profiles\.charterarc-self-write\][\s\S]*deny = \["docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
 	);
 	assert.match(sandbox, /\[profiles\.charterarc-self-review\][\s\S]*extends = "read-only"/);
 	assert.match(sandbox, /\[shell_environment_policy\][\s\S]*inherit = "core"/);
