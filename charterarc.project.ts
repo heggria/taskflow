@@ -165,8 +165,10 @@ const maintain: Taskflow = {
 				"packages/charterarc/test is immutable acceptance: do not edit, delete, rename, " +
 				"or weaken anything under it. Do not preserve removed fields as optional values " +
 				"or compatibility aliases: CharterArc is pre-stable and the acceptance test is the " +
-				"exact API. Do not add a second control plane, expand the CharterArc runtime API, " +
-				"install dependencies, stage, commit, or push. Before " +
+				"exact API. Public surface may grow only when immutable acceptance requires the " +
+				"current Project / optional Module / Flow vertical slice. Do not add a second " +
+				"control plane or Taskflow execution primitive, install dependencies, stage, " +
+				"commit, or push. Before " +
 				"reporting the on-disk result, run both direct checks (no package manager):\n" +
 				"node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json\n" +
 				"node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
@@ -188,8 +190,10 @@ const maintain: Taskflow = {
 				"BLOCK if anything under packages/charterarc/test changed, the " +
 				"change weakens acceptance or touches unrelated work, " +
 				"keeps a removed field or compatibility alias, " +
-				"expands the public runtime beyond defineProject/runProject, or adds a planner, " +
-				"scheduler, daemon, registry, ledger, IR, or phase. " +
+				"expands the authoring surface beyond Project, optional Module, and ordinary " +
+				"Taskflow values without immutable acceptance, adds model planning before the " +
+				"deterministic selection slice requires it, or adds a scheduler, daemon, registry, " +
+				"ledger, second IR, or phase. " +
 				"BLOCK if experimental distribution can set latest, enter the stable multi-package " +
 				"release, or publish without exact-artifact preflight and provenance verification. " +
 				"BLOCK if any factual or quantitative claim is unsupported by the visible evidence; " +
