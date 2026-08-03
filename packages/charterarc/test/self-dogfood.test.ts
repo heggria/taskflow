@@ -89,7 +89,7 @@ test("self-dogfood project: Grok cannot move the acceptance boundary", async () 
 	);
 	assert.match(
 		sandbox,
-		/deny = \["docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
+		/deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
 	);
 });
 
@@ -373,7 +373,7 @@ test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", a
 	);
 	assert.match(
 		sandbox,
-		/\[profiles\.charterarc-self-write\][\s\S]*deny = \["docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
+		/\[profiles\.charterarc-self-write\][\s\S]*deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
 	);
 	assert.match(sandbox, /\[profiles\.charterarc-self-review\][\s\S]*extends = "read-only"/);
 	assert.match(sandbox, /\[shell_environment_policy\][\s\S]*inherit = "core"/);
