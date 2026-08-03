@@ -66,5 +66,6 @@ observed evidence, while `unavailable` means missing or zero fields are unknown
 and cannot authorize a token or USD budget.
 
 Repository, packed-consumer, and cross-repository experiments each bound one
-project to one domain observer; none used a name registry. The package remains
-private until a real external project retains a declaration for repeated use.
+project to one domain observer; none used a name registry. Three retained external projects
+already use the private package; an explicit release decision is still required before
+it leaves that private boundary.

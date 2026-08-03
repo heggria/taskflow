@@ -340,12 +340,47 @@ package delivery makes retained consumers reproducible on a fresh clone or
 measured runner maintenance exceeds the cost of a deliberate seam; until then
 the duplication is cheaper than a new abstraction.
 
+## Adoption burden and private release candidate
+
+The three retained consumer trees contain 913 checked-in CharterArc lines:
+566 in Project declarations, 191 in immutable consumer acceptance, 75 in host
+runners, 45 in local package manifests, and 36 in Grok sandboxes. Declarations
+plus acceptance are 757/913 lines (82.9%); runners alone are 75/913 (8.2%), and
+all runner/package/sandbox plumbing together is 156/913 (17.1%). A runner helper
+would optimize the smaller part while leaving the domain-specific `observe`
+classification—the part that safely separates `drifted` from `unknown`—inside
+every project. The helper/CLI route remains rejected.
+
+The shared blocker is package delivery instead: all three branches keep local
+dependencies untracked, while `charterarc` remains private and outside
+`RELEASE_PACKAGE_NAMES`. The existing private packed-consumer smoke covered only
+`taskflow-core + charterarc` with a mock runtime, even though every retained
+consumer injects `taskflow-hosts/grok`.
+
+One Grok-only self-maintenance Run added the real three-package install and a
+healthy Grok bootstrap, then reported 34 turns and $0.8091664. The primary
+narrowed that result after the read-only reviewer exposed a dirty-worktree false
+green: the standalone command packed `taskflow-hosts` without rebuilding it. A
+second bounded Run added the missing build filter, reported 12 turns and
+$0.3045456, and was accepted. Independent verification passed 37/37, rebuilt
+all three packages, installed their tarballs in a fresh consumer, and still
+passed with `PI_TASKFLOW_GROK_BIN` pointing to a nonexistent binary—direct
+evidence that the healthy path made no model call. No repository-local pnpm
+store remained.
+
+This is a private release candidate, not a release. `charterarc` is still
+`private: true`, remains outside the nine-package release list, and adds no
+runtime function or host dependency. The already published `taskflow-core` and
+`taskflow-hosts` 0.2.6 packages satisfy its current dependency boundary; making
+CharterArc public is a separate compatibility and publication decision.
+
 ## Next evidence
 
-Use the next naturally occurring external maintenance need. Retain its
-CharterArc declaration only if that project wants to run it again. Add a public
-concept only when multiple retained consumers cannot remain simple with
-`ProjectDefinition + Taskflow`.
+Use the next naturally occurring maintenance need for longitudinal evidence.
+Publishing the prepared CharterArc package is the next irreversible adoption
+boundary and requires explicit approval; do not use a helper or new public
+concept as a substitute. Add a public concept only when multiple retained
+consumers cannot remain simple with `ProjectDefinition + Taskflow`.
 
 Until then, goals, knowledge ledgers, daemons, registries, ProjectIR, new phase
 kinds, and generic repository adapters stay outside the kernel.

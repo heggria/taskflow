@@ -21,12 +21,12 @@ A Run that writes this sample is appended by the next refresh; it stays pending 
 
 ## Sample status
 
-- M4 counted sample: 6/20 cycles across 4 retained Projects
+- M4 counted sample: 7/20 cycles across 4 retained Projects
 - Independent external adoption: 3/3 retained repositories
 - Observation window: less than 1/4 weeks
 - Comparison baseline: one matched replay; human judgment baseline still `—`
-- Thirteen Grok Runs reported 160 turns and $3.8902788
-- Eleven fully reported rows total 984,391 input, 56,742 output, and 3,387,648 cache-read tokens
+- Fifteen Grok Runs reported 206 turns and $5.0039908
+- Thirteen fully reported rows total 1,192,830 input, 75,505 output, and 5,335,168 cache-read tokens
 - Pending next refresh: none
 
 ## Cycles
@@ -46,6 +46,8 @@ A Run that writes this sample is appended by the next refresh; it stays pending 
 | 2026-08-03-llm-paired-charterarc | llm-arena replay | no | accepted | 0 | 0 | — | 43/43; lint; build; 5/5 acceptance; byte-identical output | comparison only; no M4 credit | 9 | 0.2013040 | 66,989/3,989/144,640 | none | 0/0/0 |
 | 2026-08-03-charterarc-comparison-evidence | CharterArc | no | narrowed | 0 | 0 | — | 37/37; healthy no-Run | empirical rows removed from acceptance | 17 | 0.4666992 | 133,599/8,239/500,224 | none | 0/0/0 |
 | 2026-08-03-cli-lab-entrypoint | cli-lab | yes | accepted | 0 | 0 | — | 5/5 acceptance; doctor; 8 CLI smoke; healthy no-Run | retained external branch | 12 | 0.2094324 | 57,414/3,697/241,408 | none | 0/0/0 |
+| 2026-08-03-charterarc-packed-grok-stack | CharterArc | no | narrowed | 0 | 0 | — | 37/37; primary found stale-host build risk | reworked next row | 34 | 0.8091664 | 122,786/15,078/1,577,088 | none | 0/0/0 |
+| 2026-08-03-charterarc-packed-host-build | CharterArc | yes | accepted | 0 | 0 | — | 37/37; three-package pack/install; invalid Grok binary still healthy no-Run | private release candidate retained | 12 | 0.3045456 | 85,653/3,685/370,432 | none | 0/0/0 |
 
 ## Matched replay: small deterministic repair
 

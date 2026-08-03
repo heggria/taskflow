@@ -3,9 +3,10 @@
 /**
  * Consumer smoke for the private CharterArc artifact without publishing it.
  *
- * Packs taskflow-core + charterarc with pnpm (so workspace:* is rewritten),
- * installs those tarballs into a fresh npm project, then exercises the public
- * surface: defineProject and runProject against the installed dist.
+ * Packs taskflow-core + taskflow-hosts + charterarc with pnpm (so workspace:* is
+ * rewritten), installs those tarballs into a fresh npm project, then exercises
+ * the public surface: defineProject and runProject against the installed dist,
+ * including the Grok bootstrap wiring applications copy from the README.
  *
  * Packing runs from a disposable workspace with an isolated pnpm store so the
  * smoke never relinks the repository node_modules. CharterArc stays private —
@@ -28,7 +29,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packageNames = ["taskflow-core", "charterarc"];
+const packageNames = ["taskflow-core", "taskflow-hosts", "charterarc"];
 const rootManifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 const typeboxRange = rootManifest.devDependencies?.typebox;
 assert.equal(typeof typeboxRange, "string", "root devDependencies must pin typebox for the CharterArc consumer");
@@ -158,6 +159,16 @@ try {
 	assert.equal(typeof charterarc.defineProject, "function", "packed charterarc must export defineProject");
 	assert.equal(typeof charterarc.runProject, "function", "packed charterarc must export runProject");
 
+	const core = await importFromConsumer("taskflow-core");
+	assert.equal(typeof core.discoverAgents, "function", "packed taskflow-core must export discoverAgents");
+	const { grokSubagentRunner } = await importFromConsumer("taskflow-hosts/grok");
+	assert.equal(typeof grokSubagentRunner.runTask, "function", "packed taskflow-hosts/grok must export grokSubagentRunner.runTask");
+	assert.equal(
+		typeof grokSubagentRunner.usageAccounting,
+		"string",
+		"packed grok runner must expose usageAccounting for cost evidence",
+	);
+
 	const maintenance = (name) => ({
 		name,
 		phases: [{
@@ -167,23 +178,33 @@ try {
 			final: true,
 		}],
 	});
+
+	// healthy Grok bootstrap must not start a model: inject the real runner
+	// and agent discovery the README documents, but keep observe satisfied so
+	// runProject returns without authorizing a maintenance Run.
+	const project = charterarc.defineProject({
+		desired: "packed consumer Grok bootstrap stays satisfied without a model call",
+		observe: async () => ({ status: "satisfied", summary: "healthy Grok bootstrap" }),
+		maintain: maintenance("packed-charterarc-grok-maintain"),
+	});
+	const outcome = await charterarc.runProject(project, {
+		taskflow: {
+			cwd: consumerDir,
+			agents: core.discoverAgents(consumerDir, "both").agents,
+			runTask: grokSubagentRunner.runTask,
+			usageAccounting: grokSubagentRunner.usageAccounting,
+		},
+	});
+	assert.equal(outcome.status, "satisfied");
+	assert.equal(outcome.before.status, "satisfied");
+	assert.equal(outcome.run, undefined);
+
 	const runtime = {
 		taskflow: {
 			cwd: consumerDir,
 			agents: [],
 		},
 	};
-	const project = charterarc.defineProject({
-		desired: "packed consumer can observe and stay satisfied",
-		observe: async () => ({ status: "satisfied", summary: "packed consumer healthy" }),
-		maintain: maintenance("packed-charterarc-maintain"),
-	});
-
-	const outcome = await charterarc.runProject(project, runtime);
-
-	assert.equal(outcome.status, "satisfied");
-	assert.equal(outcome.before.status, "satisfied");
-	assert.equal(outcome.run, undefined);
 
 	// Drift path: one ordinary Run, then re-observe.
 	let observations = 0;
@@ -202,7 +223,7 @@ try {
 	assert.equal(driftOutcome.run?.finalOutput, "repaired");
 	assert.equal(driftOutcome.after?.status, "satisfied");
 
-	process.stdout.write("packed CharterArc consumer smoke passed: taskflow-core + charterarc\n");
+	process.stdout.write("packed CharterArc consumer smoke passed: taskflow-core + taskflow-hosts + charterarc\n");
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });
 }

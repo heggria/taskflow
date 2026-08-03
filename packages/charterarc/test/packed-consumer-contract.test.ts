@@ -30,10 +30,16 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 		? rootManifest.scripts
 		: null;
 	assert.notEqual(scripts, null);
+	const packScript = String(scripts?.["test:pack-charterarc"] ?? "");
 	assert.match(
-		String(scripts?.["test:pack-charterarc"] ?? ""),
+		packScript,
 		/smoke-packed-charterarc\.mjs/,
 		"the packed CharterArc consumer must be directly runnable",
+	);
+	assert.match(
+		packScript,
+		/--filter taskflow-hosts\b/,
+		"the standalone packed-consumer command must rebuild the Grok host package it packs",
 	);
 
 	const ci = await read(".github/workflows/ci.yml");
@@ -41,10 +47,18 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 
 	const smoke = await read("scripts/smoke-packed-charterarc.mjs");
 	assert.match(smoke, /["']taskflow-core["']/);
+	assert.match(smoke, /["']taskflow-hosts["']/);
 	assert.match(smoke, /["']charterarc["']/);
 	assert.match(smoke, /\bnpm\b[\s\S]*\binstall\b/);
 	assert.match(smoke, /\bdefineProject\b/);
 	assert.match(smoke, /\brunProject\b/);
+	assert.match(smoke, /importFromConsumer\(["']taskflow-hosts\/grok["']\)/);
+	assert.match(smoke, /\bgrokSubagentRunner\.runTask\b/);
+	assert.match(smoke, /\bdiscoverAgents\b/);
+	assert.match(
+		smoke,
+		/healthy Grok bootstrap must not start a model[\s\S]*assert\.equal\(outcome\.run, undefined\)/,
+	);
 	assert.match(
 		smoke,
 		/const packWorkspaceDir = join\(temporaryRoot, "workspace"\)/,
@@ -71,4 +85,9 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 		false,
 		"packed-consumer evidence must not silently turn the private experiment into a public release",
 	);
+
+	const readme = await read("packages/charterarc/README.md");
+	assert.match(readme, /three retained external projects/i);
+	assert.match(readme, /explicit release decision/i);
+	assert.doesNotMatch(readme, /until a real external project retains a declaration/i);
 });

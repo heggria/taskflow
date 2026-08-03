@@ -13,7 +13,7 @@
     "build:website": "cd website && npm run build",
     "build:skills": "node scripts/build-skills.mjs",
     "test:pack": "pnpm run build && node scripts/smoke-packed-packages.mjs",
-    "test:pack-charterarc": "pnpm --filter taskflow-core --filter charterarc run build && node scripts/smoke-packed-charterarc.mjs",
+    "test:pack-charterarc": "pnpm --filter taskflow-core --filter taskflow-hosts --filter charterarc run build && node scripts/smoke-packed-charterarc.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",
     "test:hosts": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-hosts/test/*.test.ts'",
