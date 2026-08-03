@@ -264,7 +264,9 @@ test("adoption evidence: records llm-arena without promoting bootstrap into a CL
 	assert.match(evidence, /\$0\.8414336/);
 	assert.match(evidence, /Drift was real source and adoption debt/);
 	assert.doesNotMatch(evidence, /Drift was real source and test debt/);
-	assert.match(evidence, /two retained external branches/);
+	assert.match(evidence, /three retained external\s+branches/);
+	assert.match(evidence, /codex\/charterarc-cli-lab-consumer/);
+	assert.match(evidence, /5\/5 consumer\s+tests/);
 	assert.match(evidence, /does not reduce the consumer-specific `observe` judgment/);
 	assert.match(evidence, /would add a `taskflow-hosts` dependency/);
 	assert.doesNotMatch(evidence, /only one external branch is\s+locally retained/);
@@ -277,6 +279,7 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 		readFile(path.join(root, "docs/internal/charterarc-cycle-metrics.md"), "utf8").catch(() => ""),
 	]);
 	assert.match(goal, /\[cycle metrics\]\(\.\/charterarc-cycle-metrics\.md\)/);
+	assert.match(goal, /At least three independent, real repositories choose to keep a Project/);
 	assert.match(metrics, /Status: internal experiment evidence, not runtime state\./);
 	assert.match(
 		metrics,

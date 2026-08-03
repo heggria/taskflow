@@ -221,12 +221,18 @@ resolution—was exercised. A focused classifier test retains the rule that
 only tracked registry/package diagnostics can authorize repair; mixed
 environment failures remain `unknown`.
 
-This probe is not yet a retained downstream adoption. CharterArc is still
-private, so the isolated branch requires local tarball installation, and its
-generic Grok bootstrap is another 23-line runner. One external consumer is not
-enough evidence to add a CLI, host factory, or new public helper. Keep the
-framework unchanged until a second retained consumer repeats that exact
-bootstrap cost or this consumer is deliberately adopted.
+The initial probe was not retained at that point. It is now deliberately kept
+on `codex/charterarc-cli-lab-consumer` at commit `88371ea`. Before retention,
+the acceptance boundary moved under a Grok-read-only directory, the review gate
+lost shell authority, and one confirmed adoption drift required the runner to
+fail closed when an attempted Taskflow Run failed or blocked. One Grok-only Run
+reached `drifted -> satisfied`, reported 12 turns and $0.2094324, and changed
+only the runner's exit check. Independent verification passed 5/5 consumer
+tests, `uv run cli-lab doctor`, and all eight registered CLI smoke commands; the
+next invocation returned `satisfied` with no Run.
+
+The retained branch still uses local private packages and is not portable to a
+fresh clone. This is local adoption evidence, not a package-delivery or GA claim.
 
 ## Private packed-consumer gate
 
@@ -297,8 +303,8 @@ Closing that debt took three bounded Grok-only Runs. Across those Runs Grok
 reported 45 turns and $0.8414336. Independent checks then passed the consumer's
 own suite; the next project invocation returned `satisfied` with no Run.
 
-That probe is the second retained external branch (with overstory). Together
-the two retained external branches still copy a short Grok bootstrap each.
+At that point the probe was the second retained external branch (with overstory).
+Those branches copy a short Grok bootstrap each.
 Extracting that bootstrap into a shared helper or CLI would add a `taskflow-hosts` dependency
 to CharterArc's public surface and does not reduce the consumer-specific `observe` judgment
 that still belongs in each project's declaration. Keep the framework unchanged until
@@ -325,11 +331,14 @@ The transition review still used the old write-capable profile because the
 running DAG was captured before repair; its diff and 35 tests were audited
 independently, and subsequent reviews are now fail-closed read-only.
 
-Multiple consumers now repeat the Grok bootstrap, and two retained external
-branches exist locally, but none is portable while CharterArc is private. Do not
-add a host factory, CLI, or third public runtime function yet. Reconsider that
-seam only after package delivery makes retained consumers reproducible on a
-fresh clone; until then the duplication is cheaper than a new abstraction.
+Multiple consumers now repeat the Grok bootstrap, and three retained external
+branches exist locally, but none is portable while CharterArc is private. The
+third branch did not change the causal seam: each consumer still needs its own
+`observe` judgment, while the repeated runner remains short. Do not add a host
+factory, CLI, or third public runtime function. Reconsider that seam only after
+package delivery makes retained consumers reproducible on a fresh clone or
+measured runner maintenance exceeds the cost of a deliberate seam; until then
+the duplication is cheaper than a new abstraction.
 
 ## Next evidence
 

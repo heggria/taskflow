@@ -155,7 +155,7 @@ and packed consumption works without workspace-only resolution.
 
 ### M2 — Retained external adoption
 
-At least two independent, real repositories choose to keep a Project
+At least three independent, real repositories choose to keep a Project
 declaration because it is simpler than their prior manual Agent workflow. Any
 repeated bootstrap seam is measured before a helper or new API is added.
 
