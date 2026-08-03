@@ -388,12 +388,13 @@ test("longitudinal evidence: measures M4 without turning evidence into runtime s
 	assert.match(goal, /executable, deliberately favorable plain-Taskflow dispatcher/i);
 	assert.match(metrics, /2026-08-03-plain-taskflow-baseline/);
 	assert.match(metrics, /M2 remains 0\/3/);
-	assert.match(goal, /Activation status: 2\/3; M2 remains 0\/3/);
+	assert.match(goal, /Activation status: 3\/3; M2 remains 0\/3/);
 	assert.match(goal, /directly from `registry\.npmjs\.org`/);
 	assert.match(metrics, /Public-registry clean install: 3\/3/);
-	assert.match(metrics, /Activated retained mains: 2\/3/);
-	assert.match(metrics, /Pending activation candidates: 1\/3/);
+	assert.match(metrics, /Activated retained mains: 3\/3/);
+	assert.match(metrics, /Pending activation candidates: 0\/3/);
 	assert.match(metrics, /2026-08-03-experimental-publish-activation/);
+	assert.match(metrics, /2026-08-03-cli-lab-main-activation/);
 	const refactor = await readFile(
 		path.join(root, "docs/internal/charterarc-refactor.md"),
 		"utf8",
