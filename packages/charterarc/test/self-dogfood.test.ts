@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import project from "../../../charterarc.project.ts";
-import { configureDogfoodGrokSandbox } from "../../../scripts/dogfood-charterarc.mts";
+import {
+	configureDogfoodGrokSandbox,
+	dogfoodAcceptanceDigest,
+} from "../../../scripts/dogfood-charterarc.mts";
 import { runProject } from "../src/index.ts";
 import { buildGrokArgs } from "taskflow-hosts/grok";
 
@@ -69,7 +72,7 @@ test("self-dogfood project: repair checks directly and review is actually read-o
 	assert.ok(args.includes("--no-subagents"));
 });
 
-test("self-dogfood project: Grok cannot move the acceptance boundary", async () => {
+test("self-dogfood project: Grok cannot report success after moving acceptance", async () => {
 	const repair = project.maintain.phases.find((phase) => phase.id === "repair")?.task;
 	const review = project.maintain.phases.find((phase) => phase.id === "review")?.task;
 	assert.equal(typeof repair, "string");
@@ -83,14 +86,38 @@ test("self-dogfood project: Grok cannot move the acceptance boundary", async () 
 		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../.grok/sandbox.toml"),
 		"utf8",
 	);
-	assert.match(
-		sandbox,
-		/read_only = \["\.grok", "packages\/charterarc\/test"\]/,
+	const launcher = await readFile(
+		path.resolve(
+			path.dirname(new URL(import.meta.url).pathname),
+			"../../../scripts/dogfood-charterarc.mts",
+		),
+		"utf8",
 	);
 	assert.match(
 		sandbox,
 		/deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
 	);
+	assert.match(launcher, /acceptanceBefore = dogfoodAcceptanceDigest\(cwd\)/);
+	assert.match(launcher, /acceptanceUnchanged = acceptanceBefore === acceptanceAfter/);
+	assert.match(launcher, /ok: false,[\s\S]*acceptanceUnchanged: false/);
+});
+
+test("self-dogfood runner: acceptance digest covers content and membership", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "charterarc-digest-"));
+	try {
+		const acceptance = path.join(cwd, "packages/charterarc/test");
+		await mkdir(acceptance, { recursive: true });
+		await writeFile(path.join(acceptance, "one.test.ts"), "one");
+		const first = dogfoodAcceptanceDigest(cwd);
+		await writeFile(path.join(acceptance, "one.test.ts"), "two");
+		const changed = dogfoodAcceptanceDigest(cwd);
+		await writeFile(path.join(acceptance, "two.test.ts"), "three");
+		const added = dogfoodAcceptanceDigest(cwd);
+		assert.notEqual(changed, first);
+		assert.notEqual(added, changed);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
 });
 
 async function fixtureRepo(tsc: string): Promise<string> {
@@ -218,12 +245,13 @@ test("self-dogfood project: an unclassified command failure is unknown", async (
 	}
 });
 
-test("self-dogfood runner: delegates fail-closed success to ProjectOutcome", async () => {
+test("self-dogfood runner: combines ProjectOutcome with primary-owned acceptance", async () => {
 	const source = await readFile(
 		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../scripts/dogfood-charterarc.mts"),
 		"utf8",
 	);
-	assert.match(source, /if\s*\(\s*!outcome\.ok\s*\)/);
+	assert.match(source, /acceptanceUnchanged\s*\?\s*outcome/);
+	assert.match(source, /if\s*\(\s*!reported\.ok\s*\)/);
 	assert.doesNotMatch(source, /dogfoodSucceeded|outcome\.run\?\.ok/);
 });
 
@@ -367,10 +395,6 @@ test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", a
 		"utf8",
 	);
 	assert.match(sandbox, /\[profiles\.charterarc-self-write\][\s\S]*extends = "workspace"/);
-	assert.match(
-		sandbox,
-		/\[profiles\.charterarc-self-write\][\s\S]*read_only = \["\.grok", "packages\/charterarc\/test"\]/,
-	);
 	assert.match(
 		sandbox,
 		/\[profiles\.charterarc-self-write\][\s\S]*deny = \["\.grok\/sandbox\.toml", "charterarc\.project\.ts", "scripts\/dogfood-charterarc\.mts", "docs\/internal\/charterarc-autonomous-goal\.md", "docs\/internal\/charterarc-cycle-metrics\.md"\]/,
