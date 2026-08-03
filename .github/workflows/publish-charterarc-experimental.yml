@@ -9,6 +9,10 @@ on:
   push:
     tags:
       - "charterarc-v*-experimental.*"
+  # npm assigns `latest` on a package's first publication even when `--tag`
+  # names another channel. A main-only manual replay re-verifies the immutable
+  # artifact and reconciles that one-time registry side effect.
+  workflow_dispatch:
 
 concurrency:
   group: publish-charterarc-experimental-${{ github.ref }}
@@ -26,22 +30,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify tag commit belongs to origin/main
+      - name: Resolve and verify the immutable release tag
         run: |
           set -euo pipefail
+          EXPECT="charterarc-v$(node -p "require('./packages/charterarc/package.json').version")"
+          VERSION="${EXPECT#charterarc-v}"
           git fetch --no-tags --prune origin \
             +refs/heads/main:refs/remotes/origin/main
-          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          git fetch --force origin \
+            "refs/tags/$EXPECT:refs/tags/$EXPECT"
+          TAG_COMMIT="$(git rev-parse "refs/tags/$EXPECT^{commit}")"
           EVENT_COMMIT="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          if [ "$TAG_COMMIT" != "$EVENT_COMMIT" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME resolves to $TAG_COMMIT, but the event SHA resolves to $EVENT_COMMIT"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            if [ "$GITHUB_REF_NAME" != "$EXPECT" ] || [ "$TAG_COMMIT" != "$EVENT_COMMIT" ]; then
+              echo "::error::Tag event does not match immutable release $EXPECT at $TAG_COMMIT"
+              exit 1
+            fi
+          elif [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Manual reconciliation must run from refs/heads/main"
             exit 1
           fi
           if ! git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
-            echo "::error::Tag $GITHUB_REF_NAME targets $TAG_COMMIT, which is not reachable from origin/main"
+            echo "::error::Tag $EXPECT targets $TAG_COMMIT, which is not reachable from origin/main"
             exit 1
           fi
-          echo "Verified $GITHUB_REF_NAME at $TAG_COMMIT is reachable from origin/main"
+          case "$VERSION" in
+            *-experimental.*) ;;
+            *)
+              echo "::error::CharterArc version $VERSION is not an experimental prerelease"
+              exit 1
+              ;;
+          esac
+          echo "PUBLISH_REF=refs/tags/$EXPECT" >> "$GITHUB_ENV"
+          echo "PUBLISH_SHA=$TAG_COMMIT" >> "$GITHUB_ENV"
+          echo "Verified $EXPECT at $TAG_COMMIT is reachable from origin/main"
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -56,13 +78,7 @@ jobs:
       - name: Verify experimental tag matches charterarc version
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          EXPECT="charterarc-v$(node -p "require('./packages/charterarc/package.json').version")"
-          VERSION="${EXPECT#charterarc-v}"
-          if [ "$EXPECT" != "$TAG" ]; then
-            echo "::error::Tag $TAG does not match packages/charterarc/package.json version ($EXPECT)"
-            exit 1
-          fi
+          VERSION="$(node -p "require('./packages/charterarc/package.json').version")"
           case "$VERSION" in
             *-experimental.*) ;;
             *)
@@ -130,8 +146,22 @@ jobs:
             fi
           done
 
-          # Fail closed if this version is bound to latest, or experimental is missing.
+          # npm assigns `latest` on a package's first-ever publish even when
+          # `--tag experimental` is explicit. Remove only that exact violating
+          # binding; never disturb a stable `latest` pointing elsewhere.
           dist_tags_json="$(pnpm view "$name" dist-tags --json)"
+          latest="$(node -e '
+            const tags = JSON.parse(process.argv[1]);
+            process.stdout.write(tags.latest ?? "");
+          ' "$dist_tags_json")"
+          if [ "$latest" = "$version" ]; then
+            echo "::notice::Removing npm first-publish latest binding from $name@$version"
+            npm dist-tag rm "$name" latest
+            dist_tags_json="$(pnpm view "$name" dist-tags --json)"
+          fi
+
+          # Fail closed if this version remains bound to latest, or
+          # experimental is missing.
           node -e '
             const tags = JSON.parse(process.argv[1]);
             const version = process.argv[2];
@@ -150,5 +180,5 @@ jobs:
           NPM_TRUSTED_OWNERS: "heggria,muyun"
           PUBLISH_REPOSITORY_URL: "https://github.com/heggria/taskflow"
           PUBLISH_WORKFLOW_PATH: ".github/workflows/publish-charterarc-experimental.yml"
-          PUBLISH_REF: ${{ github.ref }}
-          GITHUB_SHA: ${{ github.sha }}
+          PUBLISH_REF: ${{ env.PUBLISH_REF }}
+          GITHUB_SHA: ${{ env.PUBLISH_SHA }}
