@@ -1,0 +1,284 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import project from "../../../charterarc.project.ts";
+import {
+	configureDogfoodGrokSandbox,
+	dogfoodSucceeded,
+} from "../../../scripts/dogfood-charterarc.mts";
+import { runProject } from "../src/index.ts";
+import { buildGrokArgs } from "taskflow-hosts/grok";
+
+test("self-dogfood project: uses one ordinary Taskflow", () => {
+	assert.equal(project.maintain.name, "maintain-charterarc");
+	assert.equal(project.maintain.args, undefined);
+	assert.equal(project.maintain.strictInterpolation, true);
+	assert.deepEqual(
+		project.maintain.phases.map((phase) => [phase.id, phase.type]),
+		[
+			["repair", "agent"],
+			["review", "gate"],
+		],
+	);
+	assert.equal(project.maintain.phases[1]?.final, true);
+});
+
+test("self-dogfood project: repair checks directly and review is actually read-only", () => {
+	const directChecks = [
+		"node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json",
+		"node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
+	];
+	for (const phase of project.maintain.phases) {
+		const task = phase.task;
+		if (typeof task !== "string") {
+			assert.fail(`phase ${phase.id} is missing a string task`);
+		}
+		assert.doesNotMatch(task, /\b(?:pnpm|npm|yarn|bun)\b/);
+	}
+
+	const repair = project.maintain.phases.find((phase) => phase.id === "repair");
+	const review = project.maintain.phases.find((phase) => phase.id === "review");
+	assert.ok(repair);
+	assert.ok(review);
+	const repairTask = repair.task;
+	const reviewTask = review.task;
+	if (typeof repairTask !== "string" || typeof reviewTask !== "string") {
+		assert.fail("repair and review must both declare string tasks");
+	}
+	for (const command of directChecks) {
+		assert.match(
+			repairTask,
+			new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+		);
+		assert.doesNotMatch(
+			reviewTask,
+			new RegExp(command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+		);
+	}
+	assert.equal(review.tools?.includes("bash"), false);
+	assert.match(reviewTask, /post-run observer.*primary agent.*authoritative checks/is);
+
+	const args = buildGrokArgs({
+		systemPrompt: "",
+		task: reviewTask,
+		tools: review.tools,
+		mutatingSandboxProfile: "charterarc-self-write",
+		readOnlySandboxProfile: "charterarc-self-review",
+	});
+	assert.equal(args[args.indexOf("--sandbox") + 1], "charterarc-self-review");
+	assert.ok(args.includes("--disallowed-tools"));
+	assert.ok(args.includes("--no-subagents"));
+});
+
+test("self-dogfood project: Grok cannot move the acceptance boundary", async () => {
+	const repair = project.maintain.phases.find((phase) => phase.id === "repair")?.task;
+	const review = project.maintain.phases.find((phase) => phase.id === "review")?.task;
+	assert.equal(typeof repair, "string");
+	assert.equal(typeof review, "string");
+	assert.match(repair ?? "", /packages\/charterarc\/test is immutable acceptance/);
+	assert.match(repair ?? "", /Do not preserve removed fields as optional/);
+	assert.match(review ?? "", /BLOCK if .*packages\/charterarc\/test changed/);
+	assert.match(review ?? "", /compatibility alias/);
+
+	const sandbox = await readFile(
+		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../.grok/sandbox.toml"),
+		"utf8",
+	);
+	assert.match(
+		sandbox,
+		/read_only = \["\.grok", "packages\/charterarc\/test"\]/,
+	);
+});
+
+async function fixtureRepo(tsc: string): Promise<string> {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "charterarc-self-"));
+	await mkdir(path.join(cwd, "packages/charterarc/test"), { recursive: true });
+	await mkdir(path.join(cwd, "node_modules/typescript/bin"), { recursive: true });
+	await writeFile(path.join(cwd, "package.json"), '{"name":"pi-taskflow-monorepo"}');
+	await writeFile(
+		path.join(cwd, "packages/charterarc/package.json"),
+		'{"name":"charterarc"}',
+	);
+	await writeFile(path.join(cwd, "node_modules/typescript/bin/tsc"), tsc);
+	return cwd;
+}
+
+test("self-dogfood project: wrong repository identity is unknown and cannot run", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "charterarc-self-"));
+	try {
+		let tasks = 0;
+		const outcome = await runProject(project, {
+			taskflow: {
+				cwd,
+				agents: [],
+				async runTask() {
+					tasks += 1;
+					throw new Error("unknown evidence must not run maintenance");
+				},
+			},
+		});
+
+		assert.equal(outcome.status, "unknown");
+		assert.match(outcome.before.summary ?? "", /not the checked Taskflow\/CharterArc repository/);
+		assert.equal(tasks, 0);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood project: a TypeScript diagnostic is confirmed drift", async () => {
+	const cwd = await fixtureRepo(
+		'process.stderr.write("fixture.ts(1,1): error TS9999: checked failure\\n");process.exit(2);',
+	);
+	try {
+		const result = await project.observe({
+			cwd,
+			signal: new AbortController().signal,
+		});
+
+		assert.equal(result.status, "drifted");
+		assert.match(result.summary ?? "", /error TS9999/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood project: a failing acceptance test is confirmed drift", async () => {
+	const cwd = await fixtureRepo("process.exit(0);");
+	try {
+		await writeFile(
+			path.join(cwd, "packages/charterarc/test/contract.test.ts"),
+			'import { test } from "node:test";test("fixture",()=>{throw new Error("checked failure")});',
+		);
+		const result = await project.observe({
+			cwd,
+			signal: new AbortController().signal,
+		});
+
+		assert.equal(result.status, "drifted");
+		assert.match(result.summary ?? "", /# fail 1/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood project: inherited Node test filters cannot create a false green", async () => {
+	const cwd = await fixtureRepo("process.exit(0);");
+	const previousNodeOptions = process.env.NODE_OPTIONS;
+	try {
+		await writeFile(
+			path.join(cwd, "packages/charterarc/test/contract.test.ts"),
+			'import { test } from "node:test";test("fixture",()=>{throw new Error("checked failure")});',
+		);
+		process.env.NODE_OPTIONS = "--test-only";
+		const result = await project.observe({
+			cwd,
+			signal: new AbortController().signal,
+		});
+
+		assert.equal(result.status, "drifted");
+	} finally {
+		if (previousNodeOptions === undefined) delete process.env.NODE_OPTIONS;
+		else process.env.NODE_OPTIONS = previousNodeOptions;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood project: an empty acceptance suite is not satisfied", async () => {
+	const cwd = await fixtureRepo("process.exit(0);");
+	try {
+		const result = await project.observe({
+			cwd,
+			signal: new AbortController().signal,
+		});
+
+		assert.equal(result.status, "unknown");
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood project: an unclassified command failure is unknown", async () => {
+	const cwd = await fixtureRepo(
+		'process.stderr.write("opaque tool failure\\n");process.exit(2);',
+	);
+	try {
+		const result = await project.observe({
+			cwd,
+			signal: new AbortController().signal,
+		});
+
+		assert.equal(result.status, "unknown");
+		assert.match(result.summary ?? "", /without a trusted contract failure/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("self-dogfood runner: a blocked maintenance Run cannot exit successfully", () => {
+	assert.equal(dogfoodSucceeded({
+		status: "satisfied",
+		before: { status: "drifted" },
+		run: { ok: false },
+		after: { status: "satisfied" },
+	}), false);
+	assert.equal(dogfoodSucceeded({
+		status: "satisfied",
+		before: { status: "satisfied" },
+	}), true);
+	assert.equal(dogfoodSucceeded({
+		status: "satisfied",
+		before: { status: "drifted" },
+		run: { ok: true },
+		after: { status: "satisfied" },
+	}), true);
+	assert.equal(dogfoodSucceeded({
+		status: "unknown",
+		before: { status: "unknown" },
+	}), false);
+});
+
+test("self-dogfood runner: binds every model phase to Grok Build only", async () => {
+	const source = await readFile(
+		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../scripts/dogfood-charterarc.mts"),
+		"utf8",
+	);
+	assert.match(source, /from "taskflow-hosts\/grok"/);
+	assert.match(source, /runTask: grokSubagentRunner\.runTask/);
+	assert.doesNotMatch(source, /(?:codex|claude|opencode|pi)SubagentRunner/);
+});
+
+test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {
+	const env: NodeJS.ProcessEnv = {};
+	configureDogfoodGrokSandbox(env);
+	assert.equal(
+		env.PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE,
+		"charterarc-self-write",
+	);
+	assert.equal(
+		env.PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE,
+		"charterarc-self-review",
+	);
+
+	const custom: NodeJS.ProcessEnv = {
+		PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE: "operator-write",
+		PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE: "operator-review",
+	};
+	configureDogfoodGrokSandbox(custom);
+	assert.equal(custom.PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE, "operator-write");
+	assert.equal(custom.PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE, "operator-review");
+
+	const sandbox = await readFile(
+		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../.grok/sandbox.toml"),
+		"utf8",
+	);
+	assert.match(sandbox, /\[profiles\.charterarc-self-write\][\s\S]*extends = "workspace"/);
+	assert.match(
+		sandbox,
+		/\[profiles\.charterarc-self-write\][\s\S]*read_only = \["\.grok", "packages\/charterarc\/test"\]/,
+	);
+	assert.match(sandbox, /\[profiles\.charterarc-self-review\][\s\S]*extends = "read-only"/);
+	assert.match(sandbox, /\[shell_environment_policy\][\s\S]*inherit = "core"/);
+});

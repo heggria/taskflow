@@ -35,11 +35,14 @@ I review issues and PRs ~weekly. If you need a faster turnaround, mention why in
 
 ## Architecture
 
-See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow` is a pnpm-workspace monorepo of **nine** published packages:
+See [`AGENTS.md`](./AGENTS.md) for the full layout and conventions. `taskflow`
+is a pnpm-workspace monorepo of **nine** published packages plus the private
+CharterArc refactor foundation:
 
 | Package / directory | What |
 |---------------------|------|
 | `packages/taskflow-core/` | Host-neutral engine: runtime, schema, agents, store, cache, verify, compile, context-store (zero host-SDK deps) |
+| `packages/charterarc/` | Private vNext project-template foundation; not part of the npm release set |
 | `packages/taskflow-core/src/agents/` | 18 built-in agent definitions (`.md` with YAML frontmatter) |
 | `packages/taskflow-mcp-core/` | Host-neutral MCP server: stdio JSON-RPC + `taskflow_*` tools + DAG SVG/outline renderer (depends on taskflow-core) |
 | `packages/taskflow-hosts/` | Shared host runners (codex/claude/opencode/grok) + argv builders + event-stream parsers |

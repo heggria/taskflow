@@ -28,9 +28,28 @@ importers:
       '@types/node':
         specifier: ^26
         version: 26.1.1
+      charterarc:
+        specifier: workspace:*
+        version: link:packages/charterarc
+      taskflow-core:
+        specifier: workspace:*
+        version: link:packages/taskflow-core
+      taskflow-hosts:
+        specifier: workspace:*
+        version: link:packages/taskflow-hosts
       typebox:
         specifier: ^1.3.8
         version: 1.3.8
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/charterarc:
+    dependencies:
+      taskflow-core:
+        specifier: workspace:*
+        version: link:../taskflow-core
+    devDependencies:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

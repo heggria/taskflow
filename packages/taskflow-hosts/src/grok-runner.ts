@@ -16,10 +16,10 @@
  * Mapping to the host-neutral contract:
  *   - output       = concatenated `text` event data (final answer)
  *   - lastActivity = latest text/thought chunk or end/error summary
- *   - usage        = zeros today because Grok 0.2.93 streaming-json does not
- *                    emit token/cost fields. The runner advertises that fact
- *                    so budgeted MCP runs are rejected instead of silently
- *                    running without a ceiling.
+ *   - usage        = token/cost totals from current Grok `end` / `error`
+ *                    events when present. Older and incomplete events may omit
+ *                    them, so the runner still advertises unavailable
+ *                    accounting and budgeted runs remain fail-closed.
  *   - failure      = an `error` event, or a non-zero process exit
  *
  * Permission mapping (codex `sandboxForTools` analogue):
@@ -102,6 +102,39 @@ export function newGrokAccumulator(model?: string): GrokAccumulator {
 	return { usage: emptyUsage(), model, finalText: "", lastActivity: "" };
 }
 
+function nonNegativeNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: undefined;
+}
+
+function applyGrokSpend(acc: GrokAccumulator, event: Record<string, unknown>): void {
+	const usage =
+		event.usage !== null && typeof event.usage === "object" && !Array.isArray(event.usage)
+			? event.usage as Record<string, unknown>
+			: undefined;
+	if (usage) {
+		const input = nonNegativeNumber(usage.input_tokens);
+		const output = nonNegativeNumber(usage.output_tokens);
+		const cacheRead = nonNegativeNumber(usage.cache_read_input_tokens);
+		const total = nonNegativeNumber(usage.total_tokens);
+		if (input !== undefined) acc.usage.input = input;
+		if (output !== undefined) acc.usage.output = output;
+		if (cacheRead !== undefined) acc.usage.cacheRead = cacheRead;
+		if (total !== undefined) acc.usage.contextTokens = total;
+	}
+	const turns = nonNegativeNumber(event.num_turns);
+	if (turns !== undefined && Number.isSafeInteger(turns)) acc.usage.turns = turns;
+	const cost = nonNegativeNumber(event.total_cost_usd);
+	if (
+		cost !== undefined &&
+		event.cost_is_partial !== true &&
+		event.usage_is_incomplete !== true
+	) {
+		acc.usage.cost = cost;
+	}
+}
+
 /**
  * Fold one Grok streaming-json NDJSON line into the accumulator. Returns a
  * LiveUpdate when the stream produced new activity, else null. Empty/malformed
@@ -116,6 +149,7 @@ export function foldGrokEventLine(acc: GrokAccumulator, line: string): LiveUpdat
 	} catch {
 		return null;
 	}
+	applyGrokSpend(acc, event);
 	let activity = "";
 	const type = typeof event.type === "string" ? event.type : "";
 
@@ -208,13 +242,13 @@ function requireCustomSandbox(profile: string | undefined, envName: string, phas
 	if (!profile) {
 		throw new Error(
 			`${phaseKind} Grok phases require a fail-closed custom sandbox profile. ` +
-				`Define one in ~/.grok/sandbox.toml and set ${envName}=<profile>.`,
+				`Define one in .grok/sandbox.toml or ~/.grok/sandbox.toml and set ${envName}=<profile>.`,
 		);
 	}
 	if (BUILTIN_GROK_SANDBOX_PROFILES.has(profile)) {
 		throw new Error(
 			`Grok sandbox '${profile}' is built in and may continue unsandboxed when enforcement is unavailable. ` +
-				`${envName} must name a custom profile from ~/.grok/sandbox.toml.`,
+				`${envName} must name a custom profile from .grok/sandbox.toml or ~/.grok/sandbox.toml.`,
 		);
 	}
 	return profile;

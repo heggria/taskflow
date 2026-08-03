@@ -5,6 +5,7 @@ dist/
 
 # Generated at build time from the root README (single source of truth)
 packages/*/README.md
+!packages/charterarc/README.md
 
 # Runtime state (never commit)
 data/

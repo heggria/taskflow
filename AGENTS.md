@@ -8,8 +8,8 @@ taskflow is a **declarative DAG orchestration runtime** for coding agents — it
 
 **Language:** TypeScript (ES2022, ESM, `--experimental-strip-types` for direct execution in dev)\
 **Runtime:** Node.js ≥ 22.19 (uses `fs.globSync`, `Atomics.wait`)\
-**Dependencies:** Zero runtime deps. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp-core`) and the four MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp-core`). Everything depends on `typebox`.\
-**Layout:** pnpm-workspace monorepo — `taskflow-core` (engine), `taskflow-mcp-core` (MCP + DAG SVG), `taskflow-hosts` (codex/claude/opencode/grok runners), **`taskflow-dsl`** (S4: `.tf.ts` → Taskflow → FlowIR; CLI `taskflow-dsl`), `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow` (host delivery packages).\
+**Dependencies:** Zero runtime deps. The private `charterarc` experiment depends only on `taskflow-core`. The Pi adapter (`pi-taskflow`) peer-depends on `@earendil-works/pi-{agent-core,ai,coding-agent,tui}`; the host-neutral MCP server (`taskflow-mcp-core`) and the four MCP host adapters (`codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`) all depend on `taskflow-core` (the adapters also depend on `taskflow-mcp-core`). Everything depends on `typebox`.\
+**Layout:** pnpm-workspace monorepo — `taskflow-core` (engine), private `charterarc` (project template loop), `taskflow-mcp-core` (MCP + DAG SVG), `taskflow-hosts` (codex/claude/opencode/grok runners), **`taskflow-dsl`** (S4: `.tf.ts` → Taskflow → FlowIR; CLI `taskflow-dsl`), `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow` (host delivery packages).\
 **Build:** each package compiles to `dist/*.js` + `.d.ts` (`tsc`); published packages ship `dist` (Node refuses to type-strip `.ts` under `node_modules`). Dev resolves the TypeScript sources directly via a `development` export condition — no build needed to typecheck or test.
 
 ## Architecture
@@ -46,6 +46,9 @@ packages/
 │  │  ├─ typebox-helpers.ts / frontmatter.ts / paths.ts  ← vendored pi-SDK helpers (zero-dep)
 │  │  └─ agents/           ← 18 built-in agent definitions (*.md with YAML frontmatter; copied to dist)
 │  └─ test/              ← engine unit tests
+├─ charterarc/            ← private vNext experiment: observe → one ordinary Taskflow → re-observe
+│  ├─ src/project/        ← defineProject + the minimal project cycle and public types
+│  └─ test/               ← project-cycle, package-boundary, and real phase-docs tests
 ├─ taskflow-mcp-core/           ← host-neutral MCP server (depends on taskflow-core)
 │  ├─ src/mcp/            ← jsonrpc.ts (stdio JSON-RPC), server.ts (taskflow_* tools; parameterized by
 │  │                        a SubagentRunner), svg.ts (DAG SVG/outline renderer)
@@ -170,7 +173,7 @@ tsconfig.base.json        ← shared compiler options; per-package tsconfig.buil
 ## Development Commands
 
 ```bash
-pnpm install           # links the nine workspace packages (+ website)
+pnpm install           # links nine release packages + private CharterArc (+ website)
 pnpm run typecheck     # tsc --noEmit across all packages (resolves taskflow-core to src via the dev condition)
 pnpm test              # full unit suite (node --experimental-strip-types --test)
 pnpm run test:hosts    # taskflow-hosts tests only
@@ -179,7 +182,9 @@ pnpm run test:codex    # codex-adapter tests only
 pnpm run test:claude   # claude-adapter tests only
 pnpm run test:opencode # opencode-adapter tests only
 pnpm run test:grok     # grok-adapter tests only
-pnpm run build         # emit dist/*.js + .d.ts for all nine packages
+pnpm run check:charterarc   # typecheck the retained declaration + run CharterArc acceptance tests
+pnpm run dogfood:charterarc # observe → at most one Grok-backed Taskflow → re-observe
+pnpm run build         # emit dist/*.js + .d.ts for nine release packages + CharterArc
 pnpm run test:e2e-codex          # codex executor e2e (needs live codex + model access)
 pnpm run test:e2e-codex-mcp       # codex MCP stdio e2e (src)
 pnpm run test:e2e-codex-mcp-full  # codex MCP comprehensive e2e against the built dist (runs build first)
@@ -240,7 +245,7 @@ pnpm run test:e2e-grok-mcp        # grok MCP stdio e2e (src; no live grok needed
 - **New test files**: name them `<name>.test.ts` in the owning package's `test/` dir — each `test:*` script globs `packages/<pkg>/test/*.test.ts`, so they're picked up automatically (no manual list to update). E2E scripts use the `.mts` extension specifically so the glob excludes them (they need a live `pi`/`codex`).
 
 ### File Structure Rules
-- **Source**: `.ts` source lives in `packages/<pkg>/src/`. Host-neutral logic goes in `taskflow-core`; host **runner** code (the `SubagentRunner` impl, argv builder, event-stream parser for codex/claude/opencode/grok) goes in `taskflow-hosts`; host **delivery** code (the MCP server/bin + plugin scaffold) goes in the `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow` packages; the pi adapter (which peer-depends the pi SDK) stays in `pi-taskflow`. `taskflow-core` must never import a host SDK (`@earendil-works/*`).
+- **Source**: `.ts` source lives in `packages/<pkg>/src/`. Host-neutral execution logic goes in `taskflow-core`; the private project observe/run/re-observe loop stays in `charterarc`; host **runner** code (the `SubagentRunner` impl, argv builder, event-stream parser for codex/claude/opencode/grok) goes in `taskflow-hosts`; host **delivery** code (the MCP server/bin + plugin scaffold) goes in the `codex-taskflow` / `claude-taskflow` / `opencode-taskflow` / `grok-taskflow` packages; the pi adapter (which peer-depends the pi SDK) stays in `pi-taskflow`. `taskflow-core` must never import CharterArc or a host SDK (`@earendil-works/*`).
 - **No monolith growth**: prefer cohesive folders (`runtime/phases/<kind>.ts`, `build/erase/*`) over lengthening `runtime.ts` / fat erase pipelines. See `docs/internal/modularization-0.2.0.md`.
 - **Imports**: adapters import the engine via the bare specifier `taskflow-core` (never a relative path into `../taskflow-core/src`). The MCP server lives in the separate `taskflow-mcp-core` package — host adapters import it via `taskflow-mcp-core/server` / `taskflow-mcp-core/jsonrpc`. `detached-runner.ts` is spawn-only — reference it by `taskflow-core/detached-runner.js`, never via the barrel. `runSubagentProcess` (in `runner-core.ts`, re-exported from the `taskflow-core` barrel) is the shared spawn+classify helper every host runner delegates to.
 - **Tests**: `.test.ts` in the owning package's `test/`. Named `<module>.test.ts` or `<feature>.test.ts`.
