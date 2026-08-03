@@ -449,11 +449,36 @@ same semantic rule while adding no authoring concept. This supports retaining
 `ProjectOutcome.ok`; it does not justify a migration helper, a new Project
 field, or publication.
 
+### Third external subtraction: cli-lab
+
+The cli-lab Project observed the last retained external copy of the old success
+predicate. Before authorizing mutation, the primary verified the clean consumer
+worktree and separated it from the canonical main worktree's unrelated user
+changes. The current repository baseline listed eight registered CLIs, passed
+`cli-lab doctor`, resolved the default profile, and passed every registered CLI
+smoke. Missing optional credentials remained environment facts, never drift.
+
+The primary then bound direct `outcome.ok` acceptance and rejected any local
+`runOk`, `status + run`, or alternate-host reconstruction. Taskflow's zero-token
+verifier accepted the unchanged repair-to-read-only-review Flow with only its
+intentional terminal-gate warning. One Grok Run changed only
+`.charterarc/run.mjs` to `if (!outcome.ok) process.exitCode = 1`, re-observed
+`satisfied`, and reported 11 turns, 70,419 input tokens, 2,539 output tokens,
+222,080 cache-read tokens, and $0.2226960.
+
+Independent verification passed doctor, default-profile resolution, all eight
+CLI smokes, and all five consumer acceptance tests. With the Grok binary forced
+to a nonexistent path, the real entrypoint still returned `satisfied`,
+`ok: true`, and no `run`. All three retained external consumers have now
+deleted their private success rule while adding no authoring concept. This is
+strong cross-project evidence for retaining the one result field, but it does
+not establish the four-week or comparative-value claim required for release.
+
 ## Next evidence
 
-Migrate cli-lab only when its own Project observes the duplicate predicate; do
-not add a bulk migration mechanism. Otherwise use
-the next naturally occurring maintenance need for longitudinal evidence.
+Use the next naturally occurring maintenance need for longitudinal evidence;
+do not create synthetic migrations now that every retained consumer uses the
+shared result field.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained
