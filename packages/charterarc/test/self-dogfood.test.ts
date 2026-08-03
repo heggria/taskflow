@@ -250,6 +250,26 @@ test("self-dogfood runner: binds every model phase to Grok Build only", async ()
 	assert.doesNotMatch(source, /(?:codex|claude|opencode|pi)SubagentRunner/);
 });
 
+test("adoption evidence: records llm-arena without promoting bootstrap into a CLI", async () => {
+	const evidence = await readFile(
+		path.resolve(
+			path.dirname(new URL(import.meta.url).pathname),
+			"../../../docs/internal/charterarc-refactor.md",
+		),
+		"utf8",
+	);
+	assert.match(evidence, /## External adoption probe: llm-arena/);
+	assert.match(evidence, /three bounded Grok-only Runs/);
+	assert.match(evidence, /45 turns/);
+	assert.match(evidence, /\$0\.8414336/);
+	assert.match(evidence, /Drift was real source and adoption debt/);
+	assert.doesNotMatch(evidence, /Drift was real source and test debt/);
+	assert.match(evidence, /two retained external branches/);
+	assert.match(evidence, /does not reduce the consumer-specific `observe` judgment/);
+	assert.match(evidence, /would add a `taskflow-hosts` dependency/);
+	assert.doesNotMatch(evidence, /only one external branch is\s+locally retained/);
+});
+
 test("self-dogfood runner: defaults to checked-in fail-closed Grok sandboxes", async () => {
 	const env: NodeJS.ProcessEnv = {};
 	configureDogfoodGrokSandbox(env);

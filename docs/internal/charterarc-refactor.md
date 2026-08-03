@@ -286,6 +286,25 @@ package is installed from local tarballs, so a fresh clone cannot reproduce the
 consumer until there is a deliberate package-delivery decision. The branch is
 therefore evidence for M2, not a public compatibility or GA claim.
 
+## External adoption probe: llm-arena
+
+A third independent consumer used a clean worktree of the real `llm-arena`
+repository rather than another fixture. The declaration bound the project's
+existing verification contract and the same private packed-consumer path used by
+overstory. Drift was real source and adoption debt, not environment noise.
+
+Closing that debt took three bounded Grok-only Runs. Across those Runs Grok
+reported 45 turns and $0.8414336. Independent checks then passed the consumer's
+own suite; the next project invocation returned `satisfied` with no Run.
+
+That probe is the second retained external branch (with overstory). Together
+the two retained external branches still copy a short Grok bootstrap each.
+Extracting that bootstrap into a shared helper or CLI would add a `taskflow-hosts` dependency
+to CharterArc's public surface and does not reduce the consumer-specific `observe` judgment
+that still belongs in each project's declaration. Keep the framework unchanged until
+package delivery makes those branches portable or a third retained consumer proves the
+duplication cost is worse than a deliberate seam.
+
 ## Review capability correction
 
 The self-consumer, cli-lab probe, and overstory probe all repeated one semantic
@@ -306,11 +325,11 @@ The transition review still used the old write-capable profile because the
 running DAG was captured before repair; its diff and 35 tests were audited
 independently, and subsequent reviews are now fail-closed read-only.
 
-Three consumers now repeat the Grok bootstrap, but only one external branch is
-locally retained and none is portable while CharterArc is private. Do not add a
-host factory, CLI, or third public runtime function yet. Reconsider that seam
-only after another retained consumer proves the same bootstrap cost survives
-package delivery; until then the duplication is cheaper than a new abstraction.
+Multiple consumers now repeat the Grok bootstrap, and two retained external
+branches exist locally, but none is portable while CharterArc is private. Do not
+add a host factory, CLI, or third public runtime function yet. Reconsider that
+seam only after package delivery makes retained consumers reproducible on a
+fresh clone; until then the duplication is cheaper than a new abstraction.
 
 ## Next evidence
 
