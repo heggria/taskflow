@@ -68,14 +68,14 @@ system-overhead evidence only and is not an eligible human-time baseline.
 
 ## Sample status
 
-- M4 counted sample: 7/20 cycles across 4 retained Projects
+- M4 counted sample: 8/20 cycles across 4 retained Projects
 - Independent external adoption: 3/3 retained repositories
 - Observation window: 0/28 completed days (started 2026-08-03)
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Fifteen Grok Runs reported 206 turns and $5.0039908
-- Thirteen fully reported rows total 1,192,830 input, 75,505 output, and 5,335,168 cache-read tokens
+- Sixteen Grok Runs reported 223 turns and $5.4762272
+- Fourteen fully reported rows total 1,320,785 input, 83,233 output, and 5,901,696 cache-read tokens
 - Pending next refresh: none
 
 ## Cycles
@@ -97,6 +97,14 @@ system-overhead evidence only and is not an eligible human-time baseline.
 | 2026-08-03-cli-lab-entrypoint | cli-lab | yes | accepted | 0 | 0 | — | 5/5 acceptance; doctor; 8 CLI smoke; healthy no-Run | retained external branch | pending/pending | 12 | 0.2094324 | 57,414/3,697/241,408 | none | 0/0/0 |
 | 2026-08-03-charterarc-packed-grok-stack | CharterArc | no | narrowed | 0 | 0 | — | 37/37; primary found stale-host build risk | corrected next row | n/a/n/a | 34 | 0.8091664 | 122,786/15,078/1,577,088 | none | 0/0/0 |
 | 2026-08-03-charterarc-packed-host-build | CharterArc | yes | accepted | 0 | 0 | — | 37/37; three-package pack/install; invalid Grok binary still healthy no-Run | private release candidate retained | pending/pending | 12 | 0.3045456 | 85,653/3,685/370,432 | none | 0/0/0 |
+| 2026-08-03-charterarc-outcome-ok | CharterArc | yes | accepted | 1 | — | 6.77 | 37/37; three-package pack/install; invalid Grok binary healthy no-Run | self runner uses one fail-closed result; external migrations next | pending/pending | 17 | 0.4722364 | 127,955/7,728/566,528 | `outcome.ok` field; no authoring concept | 0/0/0 |
+
+### Timing evidence
+
+- `2026-08-03-charterarc-outcome-ok`: selected
+  `2026-08-03T05:14:53.435Z`; verified `2026-08-03T05:21:39.436Z`;
+  elapsed `6.77` minutes. The user supplied one substantive method correction,
+  but no direct active-minute report, so `Human min` remains `—`.
 
 ## Matched replay: small deterministic repair
 
@@ -113,8 +121,8 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-No existing cycle has both selected-at and verified-at timestamps under the
-protocol above, so `Verified min` remains `—`. Two recent Runs have direct
+Only `2026-08-03-charterarc-outcome-ok` currently has both selected-at and
+verified-at timestamps under the protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
-understate selected-to-verified time. Historical human minutes also remain `—`
+understate selected-to-verified time. Historical human minutes remain `—`
 unless the directly observed no-intervention condition supports `0`.

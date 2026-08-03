@@ -57,7 +57,11 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 	assert.match(smoke, /\bdiscoverAgents\b/);
 	assert.match(
 		smoke,
-		/healthy Grok bootstrap must not start a model[\s\S]*assert\.equal\(outcome\.run, undefined\)/,
+		/healthy Grok bootstrap must not start a model[\s\S]*assert\.equal\(outcome\.ok, true\)[\s\S]*assert\.equal\(outcome\.run, undefined\)/,
+	);
+	assert.match(
+		smoke,
+		/assert\.equal\(driftOutcome\.ok, true\)[\s\S]*assert\.equal\(driftOutcome\.run\?\.ok, true\)/,
 	);
 	assert.match(
 		smoke,
@@ -87,6 +91,8 @@ test("packed consumer: verify the private CharterArc artifact without publishing
 	);
 
 	const readme = await read("packages/charterarc/README.md");
+	assert.match(readme, /`outcome\.ok`/);
+	assert.match(readme, /fail-closed/i);
 	assert.match(readme, /three retained external projects/i);
 	assert.match(readme, /explicit release decision/i);
 	assert.doesNotMatch(readme, /until a real external project retains a declaration/i);

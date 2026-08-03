@@ -1,17 +1,9 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-	runProject,
-	type ProjectOutcome,
-} from "charterarc";
+import { runProject } from "charterarc";
 import { discoverAgents } from "taskflow-core";
 import { grokSubagentRunner } from "taskflow-hosts/grok";
 import project from "../charterarc.project.ts";
-
-export function dogfoodSucceeded(outcome: ProjectOutcome): boolean {
-	return outcome.status === "satisfied" &&
-		(outcome.before.status === "satisfied" || outcome.run?.ok === true);
-}
 
 /** Defaults Grok sandbox profiles for self-dogfood; preserves operator overrides. */
 export function configureDogfoodGrokSandbox(env: NodeJS.ProcessEnv = process.env): void {
@@ -33,7 +25,7 @@ async function main(): Promise<void> {
 	});
 
 	process.stdout.write(`${JSON.stringify(outcome, null, 2)}\n`);
-	if (!dogfoodSucceeded(outcome)) process.exitCode = 1;
+	if (!outcome.ok) process.exitCode = 1;
 }
 
 if (

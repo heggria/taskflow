@@ -66,6 +66,7 @@ test("runProject: healthy reality performs no Taskflow Run", async () => {
 	);
 
 	assert.equal(outcome.status, "satisfied");
+	assert.equal(outcome.ok, true);
 	assert.equal(outcome.before.status, "satisfied");
 	assert.equal(tasks, 0);
 	assert.equal(outcome.after, undefined);
@@ -83,6 +84,7 @@ test("runProject: confirmed drift uses the ordinary Taskflow engine", async () =
 
 	assert.equal(outcome.before.status, "drifted");
 	assert.equal(outcome.status, "satisfied");
+	assert.equal(outcome.ok, true);
 	assert.equal(tasks, 1);
 	assert.equal(outcome.run?.finalOutput, "repaired");
 	assert.equal(outcome.after?.status, "satisfied");
@@ -136,6 +138,7 @@ test("runProject: unknown evidence holds without authorizing mutation", async ()
 	);
 
 	assert.equal(outcome.status, "unknown");
+	assert.equal(outcome.ok, false);
 	assert.equal(tasks, 0);
 	assert.equal(outcome.run, undefined);
 });
@@ -150,6 +153,7 @@ test("runProject: malformed observer evidence is normalized to unknown", async (
 	);
 
 	assert.equal(outcome.status, "unknown");
+	assert.equal(outcome.ok, false);
 	assert.equal(outcome.before.status, "unknown");
 });
 
@@ -168,6 +172,7 @@ test("runProject: a hanging observer reaches the finite deadline and becomes unk
 
 	assert.equal(receivedSignal?.aborted, true);
 	assert.equal(outcome.status, "unknown");
+	assert.equal(outcome.ok, false);
 	assert.match(outcome.before.summary ?? "", /timed out/);
 });
 
@@ -203,6 +208,7 @@ test("runProject: status reports observed reality, not a causal changed claim", 
 
 	assert.equal(outcome.run?.ok, false);
 	assert.equal(outcome.status, "satisfied");
+	assert.equal(outcome.ok, false);
 });
 
 test("runProject: post-run observer failure preserves the completed Run outcome", async () => {
@@ -217,6 +223,7 @@ test("runProject: post-run observer failure preserves the completed Run outcome"
 
 	assert.equal(outcome.run?.ok, true);
 	assert.equal(outcome.status, "unknown");
+	assert.equal(outcome.ok, false);
 	assert.equal(outcome.after?.summary, "observer failed");
 });
 

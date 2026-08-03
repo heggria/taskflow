@@ -155,12 +155,14 @@ export async function runProject(
 	if (before.status === "satisfied") {
 		return {
 			status: "satisfied",
+			ok: true,
 			before,
 		};
 	}
 	if (before.status === "unknown") {
 		return {
 			status: "unknown",
+			ok: false,
 			before,
 		};
 	}
@@ -184,6 +186,8 @@ export async function runProject(
 	const after = await observeProject(stableProject, stableRuntime);
 	return {
 		status: after.status,
+		// Fail-closed: observed satisfaction is not enough if the Run failed.
+		ok: after.status === "satisfied" && run.ok,
 		before,
 		run,
 		after,

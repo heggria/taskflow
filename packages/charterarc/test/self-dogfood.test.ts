@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import project from "../../../charterarc.project.ts";
-import {
-	configureDogfoodGrokSandbox,
-	dogfoodSucceeded,
-} from "../../../scripts/dogfood-charterarc.mts";
+import { configureDogfoodGrokSandbox } from "../../../scripts/dogfood-charterarc.mts";
 import { runProject } from "../src/index.ts";
 import { buildGrokArgs } from "taskflow-hosts/grok";
 
@@ -217,27 +214,13 @@ test("self-dogfood project: an unclassified command failure is unknown", async (
 	}
 });
 
-test("self-dogfood runner: a blocked maintenance Run cannot exit successfully", () => {
-	assert.equal(dogfoodSucceeded({
-		status: "satisfied",
-		before: { status: "drifted" },
-		run: { ok: false },
-		after: { status: "satisfied" },
-	}), false);
-	assert.equal(dogfoodSucceeded({
-		status: "satisfied",
-		before: { status: "satisfied" },
-	}), true);
-	assert.equal(dogfoodSucceeded({
-		status: "satisfied",
-		before: { status: "drifted" },
-		run: { ok: true },
-		after: { status: "satisfied" },
-	}), true);
-	assert.equal(dogfoodSucceeded({
-		status: "unknown",
-		before: { status: "unknown" },
-	}), false);
+test("self-dogfood runner: delegates fail-closed success to ProjectOutcome", async () => {
+	const source = await readFile(
+		path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../scripts/dogfood-charterarc.mts"),
+		"utf8",
+	);
+	assert.match(source, /if\s*\(\s*!outcome\.ok\s*\)/);
+	assert.doesNotMatch(source, /dogfoodSucceeded|outcome\.run\?\.ok/);
 });
 
 test("self-dogfood runner: binds every model phase to Grok Build only", async () => {

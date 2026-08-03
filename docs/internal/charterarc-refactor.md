@@ -374,6 +374,35 @@ runtime function or host dependency. The already published `taskflow-core` and
 `taskflow-hosts` 0.2.6 packages satisfy its current dependency boundary; making
 CharterArc public is a separate compatibility and publication decision.
 
+## Fail-closed outcome subtraction
+
+The retained self runner plus all three external runners repeated the same
+success rule: observed reality had to be `satisfied`, and any attempted
+Taskflow Run also had to be successful. This duplication was not cosmetic. An
+earlier cli-lab adoption cycle had already shown that checking only observed
+reality could hide a failed or blocked maintenance attempt.
+
+The primary bound the behavior matrix under the Grok-read-only acceptance
+directory first. The self Project then observed seven missing-property
+TypeScript diagnostics, executed one ordinary Grok repair -> read-only review
+Taskflow, and re-observed `satisfied`. The accepted result adds one required
+`ProjectOutcome.ok` boolean while preserving `status` as a statement about
+reality. `ok` is true only when the latest observation is satisfied and any
+attempted Run succeeded. The self runner deleted its local helper and now exits
+directly on that one fail-closed result.
+
+Independent verification passed 37/37 CharterArc checks, rebuilt and installed
+`taskflow-core + taskflow-hosts + charterarc` as packed artifacts, and exercised
+both healthy and drift paths. With `PI_TASKFLOW_GROK_BIN` set to a nonexistent
+binary, the healthy self invocation still returned `satisfied`, `ok: true`, and
+no `run`. The Run reported 17 turns, 127,955 input tokens, 7,728 output tokens,
+566,528 cache-read tokens, and $0.4722364. No new authoring field, function,
+phase, host, or control plane was added.
+
+The next consumer evidence is migration, not another framework abstraction:
+each retained external runner should consume the packed `outcome.ok` contract
+through its own CharterArc cycle and delete its local two-part predicate.
+
 ## Next evidence
 
 Use the next naturally occurring maintenance need for longitudinal evidence.

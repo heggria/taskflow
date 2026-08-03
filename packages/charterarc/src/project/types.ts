@@ -37,6 +37,12 @@ export interface ProjectRuntime {
 export interface ProjectOutcome {
 	/** A statement about observed reality, never a claim of causation. */
 	readonly status: ObservationStatus;
+	/**
+	 * Fail-closed cycle success: true only when the latest observation is
+	 * `satisfied` and any maintenance Run (if present) also succeeded.
+	 * Distinct from `status`, which never claims the Run caused the state.
+	 */
+	readonly ok: boolean;
 	readonly before: ObservationResult;
 	readonly run?: FlowRunResult;
 	readonly after?: ObservationResult;

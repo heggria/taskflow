@@ -58,7 +58,9 @@ The observer receives the project `cwd` and an abort `signal`. It returns only
 
 `outcome.status` reports the latest observed reality. It does not claim that
 the Run caused that state; inspect `outcome.run?.ok` separately. `before` and
-`after` are the corresponding observation results.
+`after` are the corresponding observation results. Fail-closed cycle success is
+`outcome.ok`: true only when the latest observation is `satisfied` and any
+maintenance Run also succeeded.
 
 `outcome.run?.usage` exposes the ordinary Taskflow Run's aggregated usage.
 Read it together with `outcome.run?.usageAccounting`: a nonzero Grok value is

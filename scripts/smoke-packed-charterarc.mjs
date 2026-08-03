@@ -196,6 +196,7 @@ try {
 		},
 	});
 	assert.equal(outcome.status, "satisfied");
+	assert.equal(outcome.ok, true);
 	assert.equal(outcome.before.status, "satisfied");
 	assert.equal(outcome.run, undefined);
 
@@ -219,6 +220,7 @@ try {
 	const driftOutcome = await charterarc.runProject(driftProject, runtime);
 	assert.equal(driftOutcome.before.status, "drifted");
 	assert.equal(driftOutcome.status, "satisfied");
+	assert.equal(driftOutcome.ok, true);
 	assert.equal(driftOutcome.run?.ok, true);
 	assert.equal(driftOutcome.run?.finalOutput, "repaired");
 	assert.equal(driftOutcome.after?.status, "satisfied");
