@@ -293,10 +293,11 @@ deadline. One bounded Grok repair -> review Taskflow returned
 checks then passed all 274 core tests, 28 Pi tests, and 4 consumer tests; the
 next project invocation returned `satisfied` with no Run.
 
-This is retained local evidence, not portable adoption. The private CharterArc
+This is retained local evidence, not portable or active adoption. The private CharterArc
 package is installed from local tarballs, so a fresh clone cannot reproduce the
 consumer until there is a deliberate package-delivery decision. The branch is
-therefore evidence for M2, not a public compatibility or GA claim.
+therefore candidate evidence for M2, not proof of M2, public compatibility, or
+a GA claim.
 
 ## External adoption probe: llm-arena
 
@@ -631,6 +632,24 @@ started no Run. This required no promotion API, Rule store, or second control
 plane: the ordinary diff and commit remain the authorization boundary. Because
 the attempted Run correctly failed governance, this accepted revision receives
 no M4 cycle credit.
+
+## Adoption liveness audit
+
+A fresh zero-model observation ran each retained external Project directly.
+Overstory, llm-arena, and cli-lab all returned `satisfied`, but branch topology
+showed why those green results cannot yet support the longitudinal claim. Their
+consumer branches are respectively 4, 3, and 3 integration-only commits ahead
+of local `main`, with zero commits from `main` missing; none has a remote, and
+none of the three `main` trees contains a CharterArc declaration. No ordinary
+post-adoption project change has passed through these Projects.
+
+The branches remain valid integration and adoption-burden experiments. They are
+not active external adoption, do not prove that a project chose CharterArc
+because it was simpler than the prior workflow, and do not start the four-week
+window. Metrics now distinguish `3/3` retained local experiments from `0/3`
+active adoptions. The eleven prior cycles remain candidate engineering evidence,
+but cannot establish M4 until M2 becomes true. Repeating healthy observers on
+frozen branches would add no evidence and must not trigger a Grok Run.
 
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public

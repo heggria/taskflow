@@ -66,6 +66,13 @@ repository. The 50% target is
 missing baseline median cannot establish the claim. The matched replay below is
 system-overhead evidence only and is not an eligible human-time baseline.
 
+A local experiment branch can prove integration behavior, but it does not by
+itself prove M2 adoption or start the four-week observation window. Active
+adoption requires an explicit keep decision, retention on a branch used for
+ordinary project work, and at least one later non-CharterArc project change
+observed through that declaration. Until then, label the branch candidate
+evidence rather than external adoption.
+
 ## Prospective baseline assignment
 
 For each retained external repository with zero eligible baseline rows, assign its next naturally occurring, low-risk, reversible maintenance need to the baseline before implementation.
@@ -81,9 +88,10 @@ After every retained external repository has one eligible baseline, alternate el
 
 ## Sample status
 
-- M4 counted sample: 11/20 cycles across 4 retained Projects
-- Independent external adoption: 3/3 retained repositories
-- Observation window: 0/28 completed days (started 2026-08-03)
+- M4 counted sample: 11/20 candidate cycles across 4 local Projects; final eligibility requires M2
+- Retained integration experiments: 3/3 local consumer branches
+- Active external adoption: 0/3; M2 is unproven
+- Observation window: not started; no active adopted external branch exists
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
@@ -126,6 +134,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-cli-governance-snapshot | cli-lab | no | narrowed | 0 | 0 | 1.77 | list 8; doctor; profile env; 8 CLI smoke; 6/6 consumer; invalid-binary healthy no-Run | all local snapshots retained; shared-seam comparison next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-charterarc-governance-seam | CharterArc | no | narrowed | 0 | 0 | 4.23 | Taskflow workspace/reconcile source; 40/40; invalid-binary healthy no-Run | local guards retained; unsupported code-size claim removed | n/a/n/a | 17 | 0.4296276 | 119,565/6,124/512,512 | none; retractable evidence only | 0/0/0 |
 | 2026-08-03-charterarc-review-evidence | CharterArc | no | accepted | 0 | 0 | 4.35 | Flow verify; 40/40; packed consumer; invalid-binary healthy no-Run | reviewer evidence rule primary-promoted after governance rejection | pending/pending | 12 | 0.2770528 | 75,632/4,728/324,736 | none; ordinary diff promotion | 0/0/0 |
+| 2026-08-03-adoption-liveness-audit | three consumer branches | no | narrowed | 0 | 0 | — | three direct observers satisfied; main trees have no CharterArc; branches are 4/3/3 integration commits ahead | M2 and four-week window corrected to unproven/not started | n/a/n/a | — | — | — | none; evidence correction only | 0/0/0 |
 
 ### Timing evidence
 
