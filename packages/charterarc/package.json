@@ -1,0 +1,60 @@
+{
+  "name": "charterarc",
+  "version": "0.2.7-experimental.0",
+  "description": "Declarative project maintenance for Taskflow: observe reality, reconcile drift, and run an existing Taskflow.",
+  "keywords": [
+    "taskflow",
+    "agents",
+    "project",
+    "orchestration",
+    "reconciliation"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/taskflow#readme",
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/charterarc"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "experimental",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "prepublishOnly": "npm run build",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "taskflow-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
+}

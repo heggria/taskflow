@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": [
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "../../charterarc.project.ts",
+    "../../examples/charterarc-phase-docs.ts",
+    "../../scripts/dogfood-charterarc.mts"
+  ]
+}

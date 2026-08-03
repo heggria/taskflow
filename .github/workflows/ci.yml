@@ -161,6 +161,12 @@ jobs:
       - name: Build, pack, install, and smoke test all published packages
         run: pnpm run test:pack
 
+      # Private CharterArc is not a release package. Still pack it with its
+      # only dependency and smoke defineProject/runProject from a clean npm
+      # consumer so the private artifact stays directly runnable.
+      - name: Pack and smoke private CharterArc consumer
+        run: pnpm run test:pack-charterarc
+
   website:
     name: website (production export)
     runs-on: ubuntu-latest

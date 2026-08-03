@@ -455,8 +455,8 @@ Each entry is one of:
 | `PI_TASKFLOW_OPENCODE_MODEL` | Override the default OpenCode model for OpenCode executor e2e tests (e.g. `opencode/deepseek-v4-flash-free`). |
 | `PI_TASKFLOW_OPENCODE_UNSAFE_AUTO=1` | Explicitly permit trusted OpenCode mutating/default phases to use unsandboxed `--auto`; otherwise they fail before spawn. All OpenCode children still use `--pure`. |
 | `PI_TASKFLOW_GROK_BIN` | Override the `grok` binary used to spawn Grok Build subagents. |
-| `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` | Required for Grok mutating/no-whitelist phases. Must name a custom profile from `~/.grok/sandbox.toml`; built-in profiles are rejected because they may fail open on unsupported hosts. |
-| `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` | Required for Grok read-only phases. Must name a custom profile extending `read-only`; built-in names are rejected so hooks/plugins remain kernel-contained if the host cannot enforce a built-in profile. |
+| `PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE` | Required for Grok mutating/no-whitelist phases. Must name a custom profile from `.grok/sandbox.toml` or `~/.grok/sandbox.toml`; built-in profiles are rejected because they may fail open on unsupported hosts. |
+| `PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE` | Required for Grok read-only phases. Must name a custom profile from `.grok/sandbox.toml` or `~/.grok/sandbox.toml` extending `read-only`; built-in names are rejected so hooks/plugins remain kernel-contained if the host cannot enforce a built-in profile. |
 
 ---
 

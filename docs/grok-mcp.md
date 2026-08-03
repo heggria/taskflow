@@ -102,8 +102,9 @@ tool whitelist as follows:
   fail closed instead. The runner then uses that profile with
   `--always-approve`. Built-in names such as `workspace` are rejected.
 
-Configure both fail-closed profiles in
-`~/.grok/sandbox.toml` and export the variable before starting the MCP server:
+Configure both fail-closed profiles in project-local `.grok/sandbox.toml` or
+user-global `~/.grok/sandbox.toml`, then export the variables before starting
+the MCP server:
 
 ```toml
 [profiles.taskflow-workspace]
@@ -142,12 +143,18 @@ Effective Taskflow thinking is passed as `--reasoning-effort` (`off` maps to
 
 ### Budget limitation
 
-Grok 0.2.93 does not include token or cost usage in its `streaming-json`
-events. Consequently the Grok-bound MCP server **refuses any flow that declares
-`budget`**; accepting it would advertise a ceiling the runtime cannot enforce.
-Unbudgeted flows still run normally. Other hosts with usage accounting can
-apply an observed-usage stop-loss, but no process-backed host can reserve an
-exact hard token/USD ceiling for an in-flight model call.
+Current Grok `streaming-json` terminal events may include token totals, turns,
+and a complete USD cost. The runner records those observed values, so
+unbudgeted runs can report their actual usage when Grok supplies it.
+
+Older events and incomplete, partial-cost, or pre-model failures may omit some
+or all spend fields. Absence is therefore **unknown, not free**. The Grok
+runner continues to advertise usage accounting as unavailable, and the
+Grok-bound MCP server **refuses every flow that declares `budget`** rather than
+claiming it can enforce a ceiling from incomplete evidence. Other hosts with
+complete usage accounting can apply an observed-usage stop-loss, but no
+process-backed host can reserve an exact hard token/USD ceiling for an
+in-flight model call.
 
 ## Long-running flows and the tool-call timeout
 

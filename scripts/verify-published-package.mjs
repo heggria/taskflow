@@ -34,6 +34,7 @@ export function verifyRegistryIdentity({
 	localIntegrity,
 	trustedOwners,
 	expectedRepository,
+	expectedWorkflowPath = ".github/workflows/publish.yml",
 	expectedRef,
 	expectedSha,
 }) {
@@ -61,7 +62,7 @@ export function verifyRegistryIdentity({
 		errors.push("provenance was not produced by the GitHub Actions workflow build type");
 	}
 	if (workflow?.repository !== expectedRepository) errors.push(`provenance repository is ${workflow?.repository ?? "missing"}`);
-	if (workflow?.path !== ".github/workflows/publish.yml") errors.push(`provenance workflow is ${workflow?.path ?? "missing"}`);
+	if (workflow?.path !== expectedWorkflowPath) errors.push(`provenance workflow is ${workflow?.path ?? "missing"}`);
 	if (workflow?.ref !== expectedRef) errors.push(`provenance ref is ${workflow?.ref ?? "missing"}, expected ${expectedRef}`);
 	const subject = Array.isArray(provenanceStatement.subject)
 		? provenanceStatement.subject.find((s) => s?.name === `pkg:npm/${pkg.name}@${pkg.version}`)
@@ -112,7 +113,9 @@ async function main() {
 		.map((v) => v.trim())
 		.filter(Boolean);
 	const expectedRepository = process.env.PUBLISH_REPOSITORY_URL ?? "https://github.com/heggria/taskflow";
-	const expectedRef = `refs/tags/v${pkg.version}`;
+	const expectedWorkflowPath =
+		process.env.PUBLISH_WORKFLOW_PATH ?? ".github/workflows/publish.yml";
+	const expectedRef = process.env.PUBLISH_REF ?? `refs/tags/v${pkg.version}`;
 	const errors = verifyRegistryIdentity({
 		pkg,
 		metadata,
@@ -120,6 +123,7 @@ async function main() {
 		localIntegrity,
 		trustedOwners,
 		expectedRepository,
+		expectedWorkflowPath,
 		expectedRef,
 		expectedSha: process.env.GITHUB_SHA,
 	});

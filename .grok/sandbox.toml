@@ -1,0 +1,9 @@
+[profiles.charterarc-self-write]
+extends = "workspace"
+
+[profiles.charterarc-self-review]
+extends = "read-only"
+
+[shell_environment_policy]
+inherit = "core"
+ignore_default_excludes = false

@@ -2,17 +2,18 @@
   "name": "pi-taskflow-monorepo",
   "version": "0.2.6",
   "private": true,
-  "description": "Monorepo for taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, and the documentation website.",
+  "description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the private CharterArc experiment.",
   "type": "module",
   "engines": {
     "node": ">=22.19.0"
   },
   "packageManager": "pnpm@11.17.0",
   "scripts": {
-    "build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build",
+    "build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter charterarc build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build",
     "build:website": "cd website && npm run build",
     "build:skills": "node scripts/build-skills.mjs",
     "test:pack": "pnpm run build && node scripts/smoke-packed-packages.mjs",
+    "test:pack-charterarc": "pnpm --filter taskflow-core --filter taskflow-hosts --filter charterarc run build && node scripts/smoke-packed-charterarc.mjs",
     "typecheck": "tsc --noEmit",
     "test": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/*/test/*.test.ts'",
     "test:hosts": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-hosts/test/*.test.ts'",
@@ -22,6 +23,9 @@
     "test:opencode": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/opencode-taskflow/test/*.test.ts'",
     "test:grok": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/grok-taskflow/test/*.test.ts'",
     "test:dsl": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-dsl/test/*.test.ts'",
+    "test:charterarc": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/charterarc/test/*.test.ts'",
+    "check:charterarc": "node node_modules/typescript/bin/tsc --noEmit -p packages/charterarc/tsconfig.check.json && node --conditions=development --experimental-strip-types --test-reporter=tap --test 'packages/charterarc/test/*.test.ts'",
+    "dogfood:charterarc": "node --conditions=development --experimental-strip-types scripts/dogfood-charterarc.mts",
     "test:workspace-baseline": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test packages/taskflow-core/test/workspace-baseline.test.ts",
     "probe:workspace-hosts": "node scripts/workspace-probes/run.mjs",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
@@ -41,6 +45,9 @@
     "@earendil-works/pi-coding-agent": "^0.82.1",
     "@earendil-works/pi-tui": "^0.82.1",
     "@types/node": "^26",
+    "charterarc": "workspace:*",
+    "taskflow-core": "workspace:*",
+    "taskflow-hosts": "workspace:*",
     "typebox": "^1.3.8",
     "typescript": "^7.0.2"
   }

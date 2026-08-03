@@ -1,0 +1,99 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { test } from "node:test";
+
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+async function read(relativePath: string): Promise<string> {
+	return readFile(path.join(repo, relativePath), "utf8");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+test("packed consumer: verify the pre-stable CharterArc artifact without publishing it", async () => {
+	const packageManifest: unknown = JSON.parse(await read("packages/charterarc/package.json"));
+	assert.equal(
+		isRecord(packageManifest) &&
+			packageManifest.private !== true,
+		true,
+		"the explicitly authorized experimental package must be publishable",
+	);
+
+	const rootManifest: unknown = JSON.parse(await read("package.json"));
+	assert.equal(isRecord(rootManifest), true);
+	const scripts = isRecord(rootManifest) && isRecord(rootManifest.scripts)
+		? rootManifest.scripts
+		: null;
+	assert.notEqual(scripts, null);
+	const packScript = String(scripts?.["test:pack-charterarc"] ?? "");
+	assert.match(
+		packScript,
+		/smoke-packed-charterarc\.mjs/,
+		"the packed CharterArc consumer must be directly runnable",
+	);
+	assert.match(
+		packScript,
+		/--filter taskflow-hosts\b/,
+		"the standalone packed-consumer command must rebuild the Grok host package it packs",
+	);
+
+	const ci = await read(".github/workflows/ci.yml");
+	assert.match(ci, /pnpm run test:pack-charterarc/);
+
+	const smoke = await read("scripts/smoke-packed-charterarc.mjs");
+	assert.match(smoke, /["']taskflow-core["']/);
+	assert.match(smoke, /["']taskflow-hosts["']/);
+	assert.match(smoke, /["']charterarc["']/);
+	assert.match(smoke, /\bnpm\b[\s\S]*\binstall\b/);
+	assert.match(smoke, /\bdefineProject\b/);
+	assert.match(smoke, /\brunProject\b/);
+	assert.match(smoke, /importFromConsumer\(["']taskflow-hosts\/grok["']\)/);
+	assert.match(smoke, /\bgrokSubagentRunner\.runTask\b/);
+	assert.match(smoke, /\bdiscoverAgents\b/);
+	assert.match(
+		smoke,
+		/healthy Grok bootstrap must not start a model[\s\S]*assert\.equal\(outcome\.ok, true\)[\s\S]*assert\.equal\(outcome\.run, undefined\)/,
+	);
+	assert.match(
+		smoke,
+		/assert\.equal\(driftOutcome\.ok, true\)[\s\S]*assert\.equal\(driftOutcome\.run\?\.ok, true\)/,
+	);
+	assert.match(
+		smoke,
+		/const packWorkspaceDir = join\(temporaryRoot, "workspace"\)/,
+		"pnpm pack must run from a disposable workspace instead of relinking repository node_modules",
+	);
+	assert.match(
+		smoke,
+		/const pnpmStoreDir = join\(temporaryRoot, "pnpm-store"\)/,
+		"the packed smoke must keep pnpm's generated store inside its disposable temp root",
+	);
+	assert.match(smoke, /npm_config_store_dir:\s*pnpmStoreDir/);
+	assert.doesNotMatch(
+		smoke,
+		/\["--dir", packageDir, "--store-dir"/,
+		"pnpm pack does not accept --store-dir and must not point a fresh store at repository node_modules",
+	);
+
+	const releasePacker = await read("scripts/pack-release-packages.mjs");
+	const releaseNamesSource =
+		/export const RELEASE_PACKAGE_NAMES = \[([\s\S]*?)\];/.exec(releasePacker)?.[1] ?? "";
+	const releaseNames = [...releaseNamesSource.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+	assert.equal(
+		releaseNames.includes("charterarc"),
+		false,
+		"experimental CharterArc must stay outside the stable multi-package release",
+	);
+
+	const readme = await read("packages/charterarc/README.md");
+	assert.match(readme, /`outcome\.ok`/);
+	assert.match(readme, /fail-closed/i);
+	assert.match(readme, /three retained external projects/i);
+	assert.match(readme, /npm install charterarc@experimental/i);
+	assert.match(readme, /does not promise stable compatibility/i);
+	assert.doesNotMatch(readme, /until a real external project retains a declaration/i);
+});
