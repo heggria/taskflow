@@ -403,9 +403,35 @@ The next consumer evidence is migration, not another framework abstraction:
 each retained external runner should consume the packed `outcome.ok` contract
 through its own CharterArc cycle and delete its local two-part predicate.
 
+### First external subtraction: overstory
+
+The overstory Project then observed its retained runner reconstructing the same
+two-part success rule. Its one Grok repair and read-only review Run changed only
+`.charterarc/run.mjs`: two local lines became `if (!outcome.ok)`. The Project
+declaration and immutable acceptance were updated by the primary first, so the
+model could neither weaken the rule nor replace it with another helper.
+
+Independent verification passed 274 core tests, 28 Pi tests, and all four
+consumer acceptance tests. A direct invocation with `PI_TASKFLOW_GROK_BIN`
+pointing to a nonexistent executable returned `satisfied`, `ok: true`, and no
+`run`. This is the intended net-complexity result: CharterArc added one public
+result field once, while the first external consumer deleted its private
+semantic copy and added no authoring concept.
+
+The initial drift proof also exposed a test-authority mistake. The test called
+the real root entrypoint while the repository was drifted, so the proof command
+itself triggered the one maintenance Run and its pre-repair assertion left the
+enclosing suite red. The primary did not trigger another maintenance Run. After
+independent verification, the healthy-entrypoint probe was pinned to a missing
+Grok binary. It can still prove the zero-Run path, but a future acceptance test
+can no longer silently acquire live model authority. The nested process did not
+retain its usage JSON, so that Run's turns, tokens, and cost remain unknown.
+
 ## Next evidence
 
-Use the next naturally occurring maintenance need for longitudinal evidence.
+Migrate the remaining retained external runners only when each Project observes
+the duplicate predicate; do not add a bulk migration mechanism. Otherwise use
+the next naturally occurring maintenance need for longitudinal evidence.
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained

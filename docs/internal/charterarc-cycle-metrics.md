@@ -68,13 +68,13 @@ system-overhead evidence only and is not an eligible human-time baseline.
 
 ## Sample status
 
-- M4 counted sample: 8/20 cycles across 4 retained Projects
+- M4 counted sample: 9/20 cycles across 4 retained Projects
 - Independent external adoption: 3/3 retained repositories
 - Observation window: 0/28 completed days (started 2026-08-03)
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Sixteen Grok Runs reported 223 turns and $5.4762272
+- Seventeen Grok Runs were executed; sixteen reported 223 turns and $5.4762272
 - Fourteen fully reported rows total 1,320,785 input, 83,233 output, and 5,901,696 cache-read tokens
 - Pending next refresh: none
 
@@ -98,6 +98,7 @@ system-overhead evidence only and is not an eligible human-time baseline.
 | 2026-08-03-charterarc-packed-grok-stack | CharterArc | no | narrowed | 0 | 0 | — | 37/37; primary found stale-host build risk | corrected next row | n/a/n/a | 34 | 0.8091664 | 122,786/15,078/1,577,088 | none | 0/0/0 |
 | 2026-08-03-charterarc-packed-host-build | CharterArc | yes | accepted | 0 | 0 | — | 37/37; three-package pack/install; invalid Grok binary still healthy no-Run | private release candidate retained | pending/pending | 12 | 0.3045456 | 85,653/3,685/370,432 | none | 0/0/0 |
 | 2026-08-03-charterarc-outcome-ok | CharterArc | yes | accepted | 1 | — | 6.77 | 37/37; three-package pack/install; invalid Grok binary healthy no-Run | self runner uses one fail-closed result; external migrations next | pending/pending | 17 | 0.4722364 | 127,955/7,728/566,528 | `outcome.ok` field; no authoring concept | 0/0/0 |
+| 2026-08-03-overstory-outcome-ok | overstory | yes | accepted | 0 | 0 | 7.50 | 274 core + 28 Pi + 4 consumer; invalid Grok binary healthy no-Run | local success predicate deleted; test probe made model-free | pending/pending | — | — | — | consumed existing `outcome.ok`; no new concept | 0/0/0 |
 
 ### Timing evidence
 
@@ -105,6 +106,12 @@ system-overhead evidence only and is not an eligible human-time baseline.
   `2026-08-03T05:14:53.435Z`; verified `2026-08-03T05:21:39.436Z`;
   elapsed `6.77` minutes. The user supplied one substantive method correction,
   but no direct active-minute report, so `Human min` remains `—`.
+- `2026-08-03-overstory-outcome-ok`: selected
+  `2026-08-03T05:24:28.650Z`; verified `2026-08-03T05:31:58.732Z`;
+  elapsed `7.50` minutes. No user judgment was requested or supplied during
+  this bounded consumer cycle, so `Human min` is directly observed as `0`.
+  The enclosing pre-repair test process did not retain the nested Run's usage,
+  so turns, tokens, and reported cost remain `—` rather than becoming zero.
 
 ## Matched replay: small deterministic repair
 
@@ -121,8 +128,8 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Only `2026-08-03-charterarc-outcome-ok` currently has both selected-at and
-verified-at timestamps under the protocol above. Two earlier Runs have direct
+Two rows currently have both selected-at and verified-at timestamps under the
+protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`
 unless the directly observed no-intervention condition supports `0`.
