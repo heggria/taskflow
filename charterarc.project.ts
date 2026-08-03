@@ -189,7 +189,10 @@ const maintain: Taskflow = {
 				"change weakens acceptance or touches unrelated work, " +
 				"keeps a removed field or compatibility alias, " +
 				"expands the public runtime beyond defineProject/runProject, or adds a planner, " +
-				"scheduler, daemon, registry, ledger, IR, or phase. End with VERDICT: PASS or VERDICT: BLOCK.",
+				"scheduler, daemon, registry, ledger, IR, or phase. " +
+				"BLOCK if any factual or quantitative claim is unsupported by the visible evidence; " +
+				"mark it unmeasured instead of inferring. " +
+				"End with VERDICT: PASS or VERDICT: BLOCK.",
 		},
 	],
 };

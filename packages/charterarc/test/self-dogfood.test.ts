@@ -60,6 +60,11 @@ test("self-dogfood project: repair checks directly and review is actually read-o
 	}
 	assert.equal(review.tools?.includes("bash"), false);
 	assert.match(reviewTask, /post-run observer.*primary agent.*authoritative checks/is);
+	assert.match(
+		reviewTask,
+		/BLOCK if .*factual or quantitative claim.*unsupported by .*visible evidence/is,
+	);
+	assert.match(reviewTask, /mark it unmeasured instead of inferring/i);
 
 	const args = buildGrokArgs({
 		systemPrompt: "",

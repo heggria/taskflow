@@ -87,8 +87,8 @@ After every retained external repository has one eligible baseline, alternate el
 - Eligible comparative cohort: 0 CharterArc / 0 baseline; M4 value verdict unavailable
 - Historical human judgment baseline: `—`; no same-protocol source exists
 - Matured accepted changes: 0; seven-day rework and rollback rates unavailable
-- Twenty-four Grok Runs were executed; twenty-three reported 312 turns and $7.4966796
-- Twenty-one fully reported rows total 1,880,362 input, 109,763 output, and 8,375,424 cache-read tokens
+- Twenty-five Grok Runs were executed; twenty-four reported 324 turns and $7.7737324
+- Twenty-two fully reported rows total 1,955,994 input, 114,491 output, and 8,700,160 cache-read tokens
 - Three additional zero-model Taskflow attempts failed closed during verification or startup; none is a Grok Run or an M4 cycle
 - Pending next refresh: none
 
@@ -125,6 +125,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-llm-governance-snapshot | llm-arena | no | narrowed | 0 | 0 | 2.25 | 43/43; lint 0 errors/2 warnings; build; 6/6 consumer; invalid-binary healthy no-Run | relative read-only claim removed; parent snapshot retained; cli-lab next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-cli-governance-snapshot | cli-lab | no | narrowed | 0 | 0 | 1.77 | list 8; doctor; profile env; 8 CLI smoke; 6/6 consumer; invalid-binary healthy no-Run | all local snapshots retained; shared-seam comparison next | n/a/n/a | — | — | — | none | 0/0/0 |
 | 2026-08-03-charterarc-governance-seam | CharterArc | no | narrowed | 0 | 0 | 4.23 | Taskflow workspace/reconcile source; 40/40; invalid-binary healthy no-Run | local guards retained; unsupported code-size claim removed | n/a/n/a | 17 | 0.4296276 | 119,565/6,124/512,512 | none; retractable evidence only | 0/0/0 |
+| 2026-08-03-charterarc-review-evidence | CharterArc | no | accepted | 0 | 0 | 4.35 | Flow verify; 40/40; packed consumer; invalid-binary healthy no-Run | reviewer evidence rule primary-promoted after governance rejection | pending/pending | 12 | 0.2770528 | 75,632/4,728/324,736 | none; ordinary diff promotion | 0/0/0 |
 
 ### Timing evidence
 
@@ -268,6 +269,21 @@ After every retained external repository has one eligible baseline, alternate el
   shrink. A second invocation with an invalid Grok binary stayed healthy and
   started no Run. This is retractable product knowledge, not confirmed product
   drift, so it receives no M4 credit.
+- `2026-08-03-charterarc-review-evidence`: selected
+  `2026-08-03T07:37:06.300Z`; verified `2026-08-03T07:41:27.300Z`;
+  elapsed `4.35` minutes. No user judgment was requested or supplied, so
+  `Human min` is directly observed as `0`. The prior cycle's unsupported
+  code-size claim became one immutable acceptance failure. Taskflow's
+  zero-token verifier accepted the existing two-phase Flow with only its
+  intentional terminal-gate warning. The root Project observed `39/40`; one
+  Grok repair -> read-only review Run changed only the review prompt and
+  re-observed `40/40`. The parent correctly forced `ok: false` because
+  `charterarc.project.ts` is governed and changed during its own Run. The
+  primary inspected the two-file diff and explicitly promoted the three-line
+  Rule revision without weakening the governance digest. Typecheck, 40/40,
+  the three-package packed consumer, and the invalid-binary healthy no-Run
+  probe passed. The accepted revision is charged, but receives no M4 credit
+  because its attempted Run failed the governance boundary.
 
 ## Matched replay: small deterministic repair
 
@@ -284,7 +300,7 @@ on this matched repair. The replay does not show a speed, token, cost, or output
 for CharterArc, and it does not measure human diagnosis, acceptance design, or review time.
 It does not count toward the 20 natural maintenance cycles.
 
-Fourteen rows currently have both selected-at and verified-at timestamps under the
+Fifteen rows currently have both selected-at and verified-at timestamps under the
 protocol above. Two earlier Runs have direct
 execution-duration evidence, but backfilling those partial durations would
 understate selected-to-verified time. Historical human minutes remain `—`

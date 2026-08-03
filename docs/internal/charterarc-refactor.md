@@ -606,6 +606,32 @@ judgment surface strictly smaller across the retained consumers, without a new
 public runtime function or host-specific dependency in CharterArc. Another
 consumer is relevant only if it changes that concrete comparison.
 
+## Self-rule promotion evidence
+
+The governance-seam cycle exposed a concrete review failure: Grok's read-only
+reviewer accepted a quantitative code-size claim for which no helper patch had
+been built. The primary narrowed that claim to `unmeasured`, then bound the
+lesson in immutable acceptance: future self-review must BLOCK factual or
+quantitative claims unsupported by visible evidence and must mark the value
+unmeasured rather than infer it.
+
+The root Project observed `39/40` and ran one Grok-only repair -> read-only
+review Taskflow. Grok made the minimal three-line prompt change in
+`charterarc.project.ts`; the post-run observer reached `40/40`. The parent still
+returned `ok: false` because the Project declaration is itself a governed file
+and its digest changed during the Run. That is the intended no-silent-learning
+boundary: a Run may propose its next Rule, but it cannot approve that Rule in
+the same attempt.
+
+Under the delegated Goal, the primary independently inspected the two-file
+diff, retained the immutable test, and explicitly promoted the Project change
+as the next revision. Typecheck, 40/40 tests, the real three-package packed
+consumer, and a missing-Grok healthy invocation then passed; the healthy call
+started no Run. This required no promotion API, Rule store, or second control
+plane: the ordinary diff and commit remain the authorization boundary. Because
+the attempted Run correctly failed governance, this accepted revision receives
+no M4 cycle credit.
+
 Publishing the prepared CharterArc package is the next irreversible adoption
 boundary and requires explicit approval; do not use a helper or new public
 concept as a substitute. Add a public concept only when multiple retained
