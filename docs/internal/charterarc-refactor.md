@@ -651,10 +651,41 @@ active adoptions. The eleven prior cycles remain candidate engineering evidence,
 but cannot establish M4 until M2 becomes true. Repeating healthy observers on
 frozen branches would add no evidence and must not trigger a Grok Run.
 
-Publishing the prepared CharterArc package is the next irreversible adoption
-boundary and requires explicit approval; do not use a helper or new public
-concept as a substitute. Add a public concept only when multiple retained
-consumers cannot remain simple with `ProjectDefinition + Taskflow`.
+## Adoption promotion-readiness audit
+
+A deterministic follow-up audited the exact three consumer branch diffs,
+their `.charterarc/package.json` manifests, ignored files, the official npm
+registry, and the central release pipeline. The integration code contains no
+checked-in absolute path, `file:`, `link:`, workspace, or tarball dependency.
+Each consumer instead declares the same exact public-looking dependency set:
+`charterarc@0.2.6`, `taskflow-core@0.2.6`, and `taskflow-hosts@0.2.6`.
+
+That manifest is not reproducible from a fresh clone. `taskflow-core@0.2.6`
+and `taskflow-hosts@0.2.6` resolve from npm, but an explicit read from
+`registry.npmjs.org` returned `E404` for `charterarc@0.2.6`. None of the
+consumer branches tracks a `.charterarc` lockfile, and all three successful
+local observations load an ignored `.charterarc/node_modules`. In the central
+repository, the package remains `private: true`, is absent from
+`RELEASE_PACKAGE_NAMES`, and is absent from the publish workflow. The packed
+consumer smoke proves that the artifact itself can be built and installed; it
+does not provide that artifact to a fresh consumer checkout.
+
+The promotion decision is therefore narrowed, not green: the branch code is a
+valid local integration candidate, but none of the three branches is currently
+merge-ready as a portable adoption. A merge would preserve a manifest whose
+declared package does not exist. No Grok Run was warranted because model work
+cannot change that external fact.
+
+The current Goal deliberately reserves a public package for M5 after M4, so
+publication is not automatically the next step. Progress now needs one explicit
+external choice: either authorize a small private, reproducible artifact channel
+plus active-branch retention, or revise the milestone boundary to allow an
+explicitly unstable public prerelease before comparative proof. Until then, do
+not merge the three branches, publish a package, or invent a helper, installer,
+registry, or new CharterArc concept to disguise the delivery gap.
+
+Add a public concept only when multiple retained consumers cannot remain simple
+with `ProjectDefinition + Taskflow`.
 
 Until then, goals, knowledge ledgers, daemons, registries, ProjectIR, new phase
 kinds, and generic repository adapters stay outside the kernel.

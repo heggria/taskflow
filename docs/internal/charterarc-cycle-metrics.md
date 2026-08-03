@@ -135,6 +135,7 @@ After every retained external repository has one eligible baseline, alternate el
 | 2026-08-03-charterarc-governance-seam | CharterArc | no | narrowed | 0 | 0 | 4.23 | Taskflow workspace/reconcile source; 40/40; invalid-binary healthy no-Run | local guards retained; unsupported code-size claim removed | n/a/n/a | 17 | 0.4296276 | 119,565/6,124/512,512 | none; retractable evidence only | 0/0/0 |
 | 2026-08-03-charterarc-review-evidence | CharterArc | no | accepted | 0 | 0 | 4.35 | Flow verify; 40/40; packed consumer; invalid-binary healthy no-Run | reviewer evidence rule primary-promoted after governance rejection | pending/pending | 12 | 0.2770528 | 75,632/4,728/324,736 | none; ordinary diff promotion | 0/0/0 |
 | 2026-08-03-adoption-liveness-audit | three consumer branches | no | narrowed | 0 | 0 | — | three direct observers satisfied; main trees have no CharterArc; branches are 4/3/3 integration commits ahead | M2 and four-week window corrected to unproven/not started | n/a/n/a | — | — | — | none; evidence correction only | 0/0/0 |
+| 2026-08-03-adoption-promotion-readiness | three consumer branches | no | narrowed | 0 | 0 | — | exact branch manifests and ignored files; official npm readback; central release-list/workflow audit | local integrations valid; fresh-clone install and merge promotion blocked on an explicit distribution decision | n/a/n/a | — | — | — | no model run or public concept | 0/0/0 |
 
 ### Timing evidence
 
