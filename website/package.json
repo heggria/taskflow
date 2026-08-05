@@ -16,7 +16,7 @@
 		"prepare-source": "fumadocs-mdx"
 	},
 	"dependencies": {
-		"fumadocs-core": "16.11.5",
+		"fumadocs-core": "16.14.0",
 		"fumadocs-mdx": "15.2.0",
 		"fumadocs-ui": "16.11.5",
 		"lucide-react": "^1.27.0",
