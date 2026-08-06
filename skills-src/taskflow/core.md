@@ -664,7 +664,7 @@ use the default. Use cheap agents (`scout`) for discovery and strong agents
 <!-- /host:codex,claude,opencode,grok -->
 
 <!-- host:pi -->
-## Actions (all 18)
+## Actions (all 20)
 
 | action | what it does |
 |--------|--------------|
@@ -675,6 +675,8 @@ use the default. Use cheap agents (`scout`) for discovery and strong agents
 | `agents` | List available agents (never invent names). |
 | `verify` | Static-check a `define` or saved `name` — cycles, missing deps, undefined refs, contract-ref typos. Zero tokens. |
 | `compile` | Render a flow as a Mermaid diagram + verification report. Zero tokens. |
+| `plan` | **Preflight plan (0.2.7).** Bind typed `args`, structural verify + optional lint, topo-ordered phase plan with bound/unresolved/dynamic bindings, and worst-case agent-call bound (`budget.maxAgentCalls`). Zero tokens — no subagent is spawned. Prefer this before any non-trivial `run`. |
+| `analytics` | **Read-only last-N aggregation (0.2.7).** Status histogram, p50/p95 duration, per-phase fail/cache rates for a saved flow `name`. No writes, no auto-tune. |
 | `ir` | Compile to **FlowIR** — the canonical intermediate representation with a content hash per phase. Use to diff two versions of a flow or confirm a definition change actually changed a phase's fingerprint. Zero tokens. |
 | `provenance` | Show a completed run's **observed read-sets** — which phases actually read which upstream outputs at runtime (may be narrower than `dependsOn`). Requires `runId`. Zero tokens. |
 | `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
