@@ -2,6 +2,7 @@
   "title": "Blog",
   "pages": [
     "index",
+    "plan-before-spend-0.2.7",
     "orchestrate-codex-subagents",
     "claude-code-mcp-workflow",
     "what-is-a-task-graph"

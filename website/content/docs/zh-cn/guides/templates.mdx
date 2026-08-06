@@ -29,11 +29,16 @@ description: 五个可直接运行、可保存并改写的 taskflow 模板。
   </Card>
 </Cards>
 
-把任意模板保存为项目里的 `.json` 文件，然后在运行前免费验证它：
+把任意模板保存为项目里的 `.json` 文件，然后在运行前先 **plan**（并可再 verify）：
 
-```bash title="运行前先验证"
-/tf verify <name>
+```bash title="运行前先 plan（0.2.7）"
+/tf plan <name> '{"dir":"src"}'   # 绑定 args + 预算上界，零 token
+/tf verify <name>                 # 结构检查
 ```
+
+<Callout type="info">
+  **0.2.7 入门模板**也在 monorepo [`examples/templates/`](https://github.com/heggria/taskflow/tree/main/examples/templates)：`plan-first.json`（先 plan 习惯）与 `background-with-hooks.json`（file hooks + 审批超时）。详见 [0.2.7 发布说明](/zh-cn/docs/blog/plan-before-spend-0.2.7)。
+</Callout>
 
 ---
 

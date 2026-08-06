@@ -267,6 +267,21 @@ const PhaseSchema = Type.Object(
 			}),
 		),
 
+		// approval — HITL wait bound (distinct from agent wall `timeout`)
+		timeoutMs: Type.Optional(
+			Type.Number({
+				description:
+					"[approval] Max wait for a human decision in ms (>= 1000). On expiry, apply onExpire. Omit for infinite wait (current default).",
+			}),
+		),
+		onExpire: Type.Optional(
+			StringEnum(["reject", "fail", "approve"] as const, {
+				description:
+					"[approval] Decision when timeoutMs elapses. Default 'reject'. 'approve' auto-continues without review (footgun — use deliberately).",
+				default: "reject",
+			}),
+		),
+
 		// loop-until-done
 		until: Type.Optional(
 			Type.String({
@@ -474,6 +489,22 @@ const ArgSpecSchema = Type.Union([
 	EnumArgSpecSchema,
 ]);
 
+/** Flow-level hook action (webhook | file | command). Validated further in validateTaskflow. */
+const HookActionSchema = Type.Object(
+	{
+		type: StringEnum(["webhook", "file", "command"] as const),
+		url: Type.Optional(Type.String({ description: "[webhook] Destination URL (https, or http://127.0.0.1|localhost)" })),
+		timeoutMs: Type.Optional(Type.Number({ description: "[webhook] Request timeout ms (default 5000)" })),
+		path: Type.Optional(Type.String({ description: "[file] Project-relative path for JSON payload" })),
+		run: Type.Optional(
+			Type.Array(Type.String(), {
+				description: "[command] argv only (no shell string). Receives TASKFLOW_HOOK_* env vars.",
+			}),
+		),
+	},
+	{ additionalProperties: false },
+);
+
 export const TaskflowSchema = Type.Object(
 	{
 		name: Type.String({ minLength: 1, description: "Workflow name (becomes /tf:<name> command when saved)" }),
@@ -516,6 +547,20 @@ export const TaskflowSchema = Type.Object(
 				description:
 					"Flow-level idle watchdog in ms (>= 1000, or 0 to disable). Per-phase idleTimeout overrides. 0 requires every agent-running phase to declare a finite wall 'timeout' >= 1000.",
 			}),
+		),
+		/**
+		 * Fire-and-forget terminal notifications. Payload is summary-only
+		 * (`taskflow.hook.v1`) — never transcripts. Hook failure does not change run status.
+		 */
+		hooks: Type.Optional(
+			Type.Object(
+				{
+					onComplete: Type.Optional(Type.Array(HookActionSchema, { maxItems: 5 })),
+					onFail: Type.Optional(Type.Array(HookActionSchema, { maxItems: 5 })),
+					onBlocked: Type.Optional(Type.Array(HookActionSchema, { maxItems: 5 })),
+				},
+				{ additionalProperties: false, description: "Terminal-run hooks (complete / fail / blocked)" },
+			),
 		),
 		phases: Type.Array(PhaseSchema, { minItems: 1, description: "Ordered phase definitions (DAG via dependsOn)" }),
 	},
@@ -757,6 +802,72 @@ function typedArgValueErrors(name: string, spec: ArgSpecRecord, value: unknown, 
 	return [];
 }
 
+/** Inline hook validation (kept in schema to avoid schema↔hooks import cycles). */
+function validateFlowHooksInline(hooks: unknown): string[] {
+	if (hooks === undefined) return [];
+	if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return ["hooks must be an object"];
+	const h = hooks as Record<string, unknown>;
+	const errors: string[] = [];
+	const max = 5;
+	for (const event of ["onComplete", "onFail", "onBlocked"] as const) {
+		if (h[event] === undefined) continue;
+		if (!Array.isArray(h[event])) {
+			errors.push(`hooks.${event} must be an array`);
+			continue;
+		}
+		if (h[event].length > max) errors.push(`hooks.${event} allows at most ${max} actions`);
+		h[event].forEach((action, index) => {
+			if (!action || typeof action !== "object" || Array.isArray(action)) {
+				errors.push(`hooks.${event}[${index}] must be an object`);
+				return;
+			}
+			const a = action as Record<string, unknown>;
+			if (a.type === "webhook") {
+				if (typeof a.url !== "string" || !a.url.trim()) {
+					errors.push(`hooks.${event}[${index}].url is required`);
+					return;
+				}
+				try {
+					const u = new URL(a.url.trim());
+					const host = u.hostname.toLowerCase();
+					const okHttpLocal =
+						u.protocol === "http:" &&
+						(host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1");
+					if (u.protocol !== "https:" && !okHttpLocal) {
+						errors.push(
+							`hooks.${event}[${index}]: URL must be https or http://127.0.0.1|localhost`,
+						);
+					}
+				} catch {
+					errors.push(`hooks.${event}[${index}]: invalid URL`);
+				}
+				if (
+					a.timeoutMs !== undefined &&
+					(typeof a.timeoutMs !== "number" || a.timeoutMs < 100 || a.timeoutMs > 60_000)
+				) {
+					errors.push(`hooks.${event}[${index}].timeoutMs must be 100–60000`);
+				}
+			} else if (a.type === "file") {
+				if (typeof a.path !== "string" || !a.path.trim()) {
+					errors.push(`hooks.${event}[${index}].path is required`);
+				} else if (path.isAbsolute(a.path) || a.path.split(/[/\\]/).includes("..")) {
+					errors.push(`hooks.${event}[${index}].path must be project-relative without '..'`);
+				}
+			} else if (a.type === "command") {
+				if (!Array.isArray(a.run) || a.run.length === 0 || !a.run.every((x) => typeof x === "string")) {
+					errors.push(`hooks.${event}[${index}].run must be a non-empty string array (no shell string)`);
+				}
+			} else {
+				errors.push(`hooks.${event}[${index}].type must be webhook|file|command`);
+			}
+		});
+	}
+	for (const k of Object.keys(h)) {
+		if (!["onComplete", "onFail", "onBlocked"].includes(k)) errors.push(`hooks: unknown key '${k}'`);
+	}
+	return errors;
+}
+
 /** Validate resolved invocation values independently of full flow structure.
  * Runtime calls this at the Core boundary so direct, resume, and detached
  * execution cannot bypass adapter-level typed-arg checks. */
@@ -837,6 +948,11 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			if (name in argSpecs) continue;
 			if (strict) warnings.push(`Invocation argument '${name}' is undeclared`);
 		}
+	}
+
+	// Flow-level hooks (summary-only terminal notifications).
+	if ((flow as { hooks?: unknown }).hooks !== undefined) {
+		errors.push(...validateFlowHooksInline((flow as { hooks?: unknown }).hooks));
 	}
 
 	// Flow-level idleTimeout: positive must be >= 1000; 0 is allowed (disables the
@@ -1104,6 +1220,25 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				errors.push(`Phase '${p.id}': 'reflexion' must be a boolean, got ${typeof r}`);
 			} else if (r === true && type !== "loop") {
 				errors.push(`Phase '${p.id}' (${type}): 'reflexion' is only valid for loop phases`);
+			}
+		}
+		// Approval wait bound (timeoutMs / onExpire) — approval-only.
+		if ((p as { timeoutMs?: unknown }).timeoutMs !== undefined) {
+			const t = (p as { timeoutMs?: unknown }).timeoutMs;
+			if (type !== "approval") {
+				errors.push(`Phase '${p.id}' (${type}): 'timeoutMs' is only valid for approval phases (use 'timeout' for agent wall caps)`);
+			} else if (typeof t !== "number" || !Number.isFinite(t) || t < 1000) {
+				errors.push(`Phase '${p.id}' (approval): 'timeoutMs' must be a number >= 1000 ms`);
+			}
+		}
+		if ((p as { onExpire?: unknown }).onExpire !== undefined) {
+			const o = (p as { onExpire?: unknown }).onExpire;
+			if (type !== "approval") {
+				errors.push(`Phase '${p.id}' (${type}): 'onExpire' is only valid for approval phases`);
+			} else if (o !== "reject" && o !== "fail" && o !== "approve") {
+				errors.push(`Phase '${p.id}' (approval): 'onExpire' must be reject|fail|approve`);
+			} else if ((p as { timeoutMs?: unknown }).timeoutMs === undefined) {
+				warnings.push(`Phase '${p.id}' (approval): 'onExpire' without 'timeoutMs' has no effect`);
 			}
 		}
 		// Other loop-only fields on non-loop phases are silently ignored by the

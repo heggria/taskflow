@@ -58,3 +58,7 @@ export * from "./deterministic.ts";
 export * from "./replay.ts";
 export * from "./exec/index.ts";
 export * from "./verifiers/index.ts";
+export * from "./preflight.ts";
+export * from "./savings.ts";
+export * from "./hooks.ts";
+export * from "./analytics.ts";

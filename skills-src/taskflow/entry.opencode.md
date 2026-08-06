@@ -18,6 +18,8 @@ the OpenCode form (`taskflow_verify`). Each phase's subagent runs as an isolated
 | `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
+| `taskflow_plan` | Preflight plan: bind args, phase order, dynamic bindings, worst-case agent-call bound — zero tokens, no execution. |
+| `taskflow_analytics` | Aggregate last-N runs for a flow (status histogram, durations, per-phase fail/cache rates). Read-only. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
 | `taskflow_compile` | Render a flow's DAG as an inline SVG **and** text outline + a verification report — no execution. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list phases; `json`/`item`/`limit` refine the slice. Hard-truncated, read-only. |
@@ -29,5 +31,4 @@ the OpenCode form (`taskflow_verify`). Each phase's subagent runs as an isolated
 | `taskflow_save` | Save a reusable flow and optional library metadata. |
 | `taskflow_search` | Search and rank reusable flows before authoring another one. |
 
-**Always `taskflow_verify` a non-trivial flow before `taskflow_run`** — it is
-free and catches most authoring mistakes.
+**Always `taskflow_plan` (or at least `taskflow_verify`) a non-trivial flow before `taskflow_run`** — free, binds args, and catches most authoring mistakes.

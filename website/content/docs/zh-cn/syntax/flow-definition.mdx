@@ -102,6 +102,31 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 上面阶段级的 `concurrency: 4` 只对该阶段覆盖 flow 级的 `16`。
 
+## 跑完通知：`hooks`（0.2.7）
+
+可选的 fire-and-forget 通知：当 run 到达终态时触发。Payload 只含摘要（`taskflow.hook.v1`），从不带 transcript。Hook 失败**不会**改变 run 状态。
+
+```json title="hooks — complete / fail / blocked"
+{
+  "name": "long-audit",
+  "hooks": {
+    "onComplete": [
+      { "type": "file", "path": ".taskflow/hooks/last-complete.json" },
+      { "type": "webhook", "url": "https://example.com/hooks/taskflow", "timeoutMs": 5000 }
+    ],
+    "onFail": [{ "type": "file", "path": ".taskflow/hooks/last-fail.json" }],
+    "onBlocked": [{ "type": "command", "run": ["notify-send", "taskflow", "blocked"] }]
+  },
+  "phases": [/* ... */]
+}
+```
+
+- **webhook：** `https://…`，本机 dogfood 可用 `http://127.0.0.1` / `localhost`  
+- **file：** 项目相对路径（禁止 `..`）  
+- **command：** 仅 argv 数组（禁止 shell 字符串）；接收 `TASKFLOW_HOOK_*` 环境变量  
+
+详见 [0.2.7 发布说明](/zh-cn/docs/blog/plan-before-spend-0.2.7)。
+
 ## 给成本封顶：`budget` [#给成本封顶-budget]
 
 有些 flow 是开放式的 —— 一个深度调研 loop、一个有很多变体的 tournament。`budget` 让你设一个基于已上报 USD 成本和/或 token 用量的运行级止损线。观察到任一越线后，不再准入新调用，剩余阶段被**跳过**，运行以 `blocked` 状态结束。

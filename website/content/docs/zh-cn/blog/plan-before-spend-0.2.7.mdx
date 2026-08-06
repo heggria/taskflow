@@ -1,0 +1,103 @@
+---
+title: "0.2.7：花 token 前先计划 · 跑完闭环"
+description: 零 token preflight、完成 hooks、审批超时与只读 analytics——叠在 0.2 编译器转身之上的日常闭环。
+---
+
+**taskflow 0.2.7** 没有再加一种 phase 类型。它补的是你每天真正在跑的闭环：*任何模型调用前先看计划*，*跑完有人（或文件/webhook）知道结果*——并且从不把中间 transcript 塞回宿主。
+
+## 花 token 前先计划
+
+0.2.7 之前你可以 `verify`（结构）和 `lint`（插件）。它们仍然重要。缺的是「按这次调用参数」的问题：
+
+> 如果我**现在**传入这些 args，实际会跑谁、什么仍是动态的、worst-case 会打多少 agent 调用？
+
+那就是 **`taskflow_plan`**（Pi：`action=plan` / `/tf plan`）：
+
+- 用与 `run` 相同的规则绑定 typed 调用参数
+- 按拓扑投影 phase，并标出 **bound / unresolved / dynamic** 绑定
+- 报告 **worst-case agent 调用上界**（`loop` × `maxIterations`；动态 `map.over` → `unbounded`）
+- 合并结构 verify 与可选插件 verifiers
+- **零 token。零 subagent。**
+
+```jsonc
+// MCP
+{ "name": "taskflow_plan", "arguments": {
+  "defineFile": "/tmp/audit.json",
+  "args": { "dir": "src/api" }
+}}
+```
+
+```bash
+# Pi
+/tf plan audit '{"dir":"src/api"}'
+```
+
+若 plan 被挡住（缺 required args、硬 verify 错误），在 `taskflow_run` 之前改图。
+
+## 跑完闭环
+
+长 DAG 常用 **background**。0.2.7 用三块能力让「走开」更安全：
+
+### 1. Flow hooks
+
+在 flow 上可选声明：
+
+```jsonc
+{
+  "hooks": {
+    "onComplete": [
+      { "type": "file", "path": ".taskflow/hooks/last-complete.json" },
+      { "type": "webhook", "url": "https://example.com/hooks/taskflow" }
+    ],
+    "onFail": [{ "type": "file", "path": ".taskflow/hooks/last-fail.json" }],
+    "onBlocked": [{ "type": "command", "run": ["notify-send", "taskflow", "blocked"] }]
+  }
+}
+```
+
+Payload 是 **`taskflow.hook.v1`**：run id、状态、phase 计数、usage 摘要——**从不**包含 phase 输出或 transcript。Hook 失败 fire-and-forget，**绝不会**把已完成 run 改成 failed。本机 dogfood 允许 `http://127.0.0.1` / `localhost`；其它 `http` 拒绝。
+
+### 2. Approval 超时
+
+HITL 以前会无限等。现在：
+
+```jsonc
+{
+  "id": "human",
+  "type": "approval",
+  "task": "可以发版吗？",
+  "timeoutMs": 86400000,
+  "onExpire": "reject"   // reject | fail | approve
+}
+```
+
+省略 `timeoutMs` 则行为不变（永等）。`approve` 是显式脚枪，文档会标明。
+
+### 3. 只读 analytics
+
+`taskflow_analytics` / `/tf analytics <flow> --last 20` 聚合最近运行：状态直方图、p50/p95 耗时、per-phase 失败率与缓存命中率。**不做 auto-tune。** 先攒数据。
+
+## 看得见的省钱
+
+`recompute` 本来就知道 reused / rerun / cutoff。0.2.7 在 MCP 与 Pi 输出前加了 **一行 savings**：
+
+```text
+Savings (DRY RUN, seed: review): reused 5 · rerun 2 · cutoff 0 · saved ~71% phases
+```
+
+前台/background 状态在命中缓存时也会展示 cache-hit 计数。
+
+## 什么没变
+
+- 中间 transcript 仍默认不进宿主（除非 `peek` / `trace`）
+- 控制面 / daemon GA 是另一条线（0.3）——本版本是纯 0.2 引擎 DX
+- Shell `taskflow plan` 刻意延后；用 MCP 或 Pi
+
+## 试一下
+
+1. 安装或升级到 **0.2.7**
+2. 复制 monorepo [`examples/templates/`](https://github.com/heggria/taskflow/tree/main/examples/templates) 下的 `plan-first.json` 或 `background-with-hooks.json`
+3. `taskflow_plan` → 修好参数 → `taskflow_run`
+4. 长任务：`mode: "background"` + file hook
+
+完整变更：[CHANGELOG](https://github.com/heggria/taskflow/blob/main/CHANGELOG.md)。命令参考：[命令](/zh-cn/docs/reference/commands)。

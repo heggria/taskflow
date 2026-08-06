@@ -461,32 +461,44 @@ export async function executeGateBody(phase: Phase, ctx: StepContext): Promise<B
 	}
 }
 
-/** Approval: interactive or auto-reject (fail-open, matches runtime). */
+/** Approval: interactive or auto-reject, with optional timeoutMs / onExpire. */
 export async function executeApprovalBody(phase: Phase, ctx: StepContext): Promise<BodyResult> {
 	const message = interpolate(phase.task ?? "Approve to continue?", interpCtx(ctx)).text;
 	const upstream = Object.values(ctx.steps).map((s) => s.output).filter(Boolean).at(-1);
+	const { resolveApprovalDecision } = await import("../runtime/phases/approval-wait.ts");
+	const resolved = await resolveApprovalDecision({
+		phase,
+		message,
+		upstream,
+		requestApproval: ctx.deps.requestApproval
+			? async (req) => {
+					const d = await ctx.deps.requestApproval!({
+						phaseId: req.phaseId,
+						message: req.message,
+						upstream: req.upstream,
+					});
+					return d;
+				}
+			: undefined,
+		signal: ctx.deps.signal,
+	});
 
-	if (!ctx.deps.requestApproval) {
-		const reason = "(auto-rejected: no interactive approver available)";
+	if (resolved.kind === "fail") {
 		return {
 			midEvents: [
 				baseEvent(ctx, phase.id, "decision", {
-					decision: { type: "gate-verdict", value: "block", reason },
+					decision: { type: "gate-verdict", value: "block", reason: resolved.error },
 				}),
 			],
-			output: reason,
-			status: "done",
+			output: resolved.error,
+			status: "failed",
+			error: resolved.error,
 			usage: emptyUsage(),
-			gate: { verdict: "block", reason },
-			approval: { decision: "reject", auto: true },
+			approval: { decision: "reject", auto: true, note: "approval-expired" },
 		};
 	}
 
-	const decision = await ctx.deps.requestApproval({
-		phaseId: phase.id,
-		message,
-		upstream,
-	});
+	const decision = resolved.decision;
 	const note = decision.note?.trim();
 	const output = note || `(${decision.decision})`;
 	const gate =
@@ -506,7 +518,7 @@ export async function executeApprovalBody(phase: Phase, ctx: StepContext): Promi
 		status: "done",
 		usage: emptyUsage(),
 		gate,
-		approval: { decision: decision.decision, note },
+		approval: { decision: decision.decision, note, auto: resolved.auto },
 	};
 }
 

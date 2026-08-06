@@ -1,17 +1,20 @@
 ---
 title: taskflow 文档
-description: 从 taskflow 0.2 开始，运行第一张可验证任务图，或直接进入编译器 / 运行时参考。
+description: 从 taskflow 0.2.7 开始——花 token 前先计划，跑完闭环——或直接进入编译器 / 运行时参考。
 ---
 
-taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义一张图，在花 token 前验证它，让每个阶段隔离执行，并且只把最终结果返回宿主对话。
+taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义一张图，在花 token 前 **plan 并验证**，让每个阶段隔离执行，并且只把最终结果返回宿主对话。
 
-在 **0.2** 中，这张图还成为了一份编译合同：可以用 TypeScript 编写、检查 FlowIR、replay 已记录的运行决策，并且只重算因输入变化而 stale 的阶段。
+在 **0.2** 中，这张图成为了编译合同：TypeScript 编写、FlowIR、replay、增量重算。**0.2.7** 补上日常闭环：零 token `plan`、完成 hooks、审批超时、只读 analytics。
 
 ## 选择你的路径
 
 <Cards>
   <Card title="五分钟运行第一个 flow" href="/zh-cn/docs/getting-started">
-    选择宿主、安装 taskflow，并运行第一张经过验证的任务图。
+    选择宿主、安装 taskflow，并运行第一张先 plan 再验证的任务图。
+  </Card>
+  <Card title="0.2.7 新能力" href="/zh-cn/docs/blog/plan-before-spend-0.2.7">
+    花 token 前先计划、跑完 hooks、recompute 省钱数字。
   </Card>
   <Card title="理解 taskflow 0.2" href="/zh-cn/docs/compiler-runtime">
     TypeScript DSL、FlowIR、确定性 replay、后台运行与最小重算。
@@ -22,7 +25,7 @@ taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义
 </Cards>
 
 <Callout type="tip">
-  如果你正在评估 0.2，请先看 **[taskflow 0.2 新能力](/zh-cn/docs/compiler-runtime)**，不要从头通读整份 Reference。
+  评估当前版本？先读 **[0.2.7：花 token 前先计划](/zh-cn/docs/blog/plan-before-spend-0.2.7)**，再看 **[编译器 / 运行时](/zh-cn/docs/compiler-runtime)** 总览——不要从头通读 Reference。
 </Callout>
 
 ## 在你的宿主上安装

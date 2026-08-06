@@ -102,6 +102,31 @@ You might be wondering what happens if a phase references `{args.X}` but the cal
 
 Above, the per-phase `concurrency: 4` overrides the flow-level `16` for that phase only.
 
+## Notify when a run finishes: `hooks` (0.2.7)
+
+Optional fire-and-forget notifications when the run reaches a terminal status. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status.
+
+```json title="hooks — complete / fail / blocked"
+{
+  "name": "long-audit",
+  "hooks": {
+    "onComplete": [
+      { "type": "file", "path": ".taskflow/hooks/last-complete.json" },
+      { "type": "webhook", "url": "https://example.com/hooks/taskflow", "timeoutMs": 5000 }
+    ],
+    "onFail": [{ "type": "file", "path": ".taskflow/hooks/last-fail.json" }],
+    "onBlocked": [{ "type": "command", "run": ["notify-send", "taskflow", "blocked"] }]
+  },
+  "phases": [/* ... */]
+}
+```
+
+- **webhook:** `https://…`, or `http://127.0.0.1` / `localhost` for local dogfood  
+- **file:** project-relative path (no `..`)  
+- **command:** argv array only (no shell string); receives `TASKFLOW_HOOK_*` env vars  
+
+See the [0.2.7 release note](/en/docs/blog/plan-before-spend-0.2.7).
+
 ## Cap the cost: `budget`
 
 Some flows are open-ended — a deep research loop, a tournament with many variants. A `budget` sets a run-wide observed-usage stop-loss for USD cost and/or tokens. Once either breach is reported, no new call is admitted, remaining phases are **skipped**, and the run ends with status `blocked`.

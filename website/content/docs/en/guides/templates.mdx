@@ -29,11 +29,16 @@ Templates are complete, runnable taskflow definitions for common agent workflows
   </Card>
 </Cards>
 
-Save any template as a `.json` file in your project, then verify it for free before running:
+Save any template as a `.json` file in your project, then **plan** (and optionally verify) it for free before running:
 
-```bash title="Verify before you run"
-/tf verify <name>
+```bash title="Plan before you run (0.2.7)"
+/tf plan <name> '{"dir":"src"}'   # bind args + budget bound, zero tokens
+/tf verify <name>                 # structural checks
 ```
+
+<Callout type="info">
+  **0.2.7 starter templates** also live in the monorepo under [`examples/templates/`](https://github.com/heggria/taskflow/tree/main/examples/templates): `plan-first.json` (preflight habit) and `background-with-hooks.json` (file hooks + approval timeout). See the [0.2.7 release note](/en/docs/blog/plan-before-spend-0.2.7).
+</Callout>
 
 ---
 

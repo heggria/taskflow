@@ -1,71 +1,83 @@
 {
-  "name": "taskflow-mcp-core",
-  "version": "0.2.6",
-  "description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode/grok adapters — depends only on taskflow-core.",
-  "keywords": [
-    "taskflow",
-    "mcp",
-    "json-rpc",
-    "orchestration",
-    "subagents",
-    "workflow"
-  ],
-  "license": "MIT",
-  "author": "heggria <bshengtao@gmail.com>",
-  "homepage": "https://github.com/heggria/taskflow#readme",
-  "bugs": {
-    "url": "https://github.com/heggria/taskflow/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/heggria/taskflow.git",
-    "directory": "packages/taskflow-mcp-core"
-  },
-  "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "main": "./dist/mcp/server.js",
-  "types": "./dist/mcp/server.d.ts",
-  "exports": {
-    ".": {
-      "development": "./src/mcp/server.ts",
-      "types": "./dist/mcp/server.d.ts",
-      "default": "./dist/mcp/server.js"
-    },
-    "./server": {
-      "development": "./src/mcp/server.ts",
-      "types": "./dist/mcp/server.d.ts",
-      "default": "./dist/mcp/server.js"
-    },
-    "./jsonrpc": {
-      "development": "./src/mcp/jsonrpc.ts",
-      "types": "./dist/mcp/jsonrpc.d.ts",
-      "default": "./dist/mcp/jsonrpc.js"
-    },
-    "./svg": {
-      "development": "./src/mcp/svg.ts",
-      "types": "./dist/mcp/svg.d.ts",
-      "default": "./dist/mcp/svg.js"
-    }
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp-core",
-    "prepublishOnly": "npm run build"
-  },
-  "publishConfig": {
-    "access": "public",
-    "exports": {
-      ".": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" },
-      "./server": { "types": "./dist/mcp/server.d.ts", "default": "./dist/mcp/server.js" },
-      "./jsonrpc": { "types": "./dist/mcp/jsonrpc.d.ts", "default": "./dist/mcp/jsonrpc.js" },
-      "./svg": { "types": "./dist/mcp/svg.d.ts", "default": "./dist/mcp/svg.js" }
-    }
-  },
-  "dependencies": {
-    "taskflow-core": "workspace:*"
-  }
+	"name": "taskflow-mcp-core",
+	"version": "0.2.7",
+	"description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode/grok adapters — depends only on taskflow-core.",
+	"keywords": [
+		"taskflow",
+		"mcp",
+		"json-rpc",
+		"orchestration",
+		"subagents",
+		"workflow"
+	],
+	"license": "MIT",
+	"author": "heggria <bshengtao@gmail.com>",
+	"homepage": "https://github.com/heggria/taskflow#readme",
+	"bugs": {
+		"url": "https://github.com/heggria/taskflow/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/heggria/taskflow.git",
+		"directory": "packages/taskflow-mcp-core"
+	},
+	"type": "module",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"main": "./dist/mcp/server.js",
+	"types": "./dist/mcp/server.d.ts",
+	"exports": {
+		".": {
+			"development": "./src/mcp/server.ts",
+			"types": "./dist/mcp/server.d.ts",
+			"default": "./dist/mcp/server.js"
+		},
+		"./server": {
+			"development": "./src/mcp/server.ts",
+			"types": "./dist/mcp/server.d.ts",
+			"default": "./dist/mcp/server.js"
+		},
+		"./jsonrpc": {
+			"development": "./src/mcp/jsonrpc.ts",
+			"types": "./dist/mcp/jsonrpc.d.ts",
+			"default": "./dist/mcp/jsonrpc.js"
+		},
+		"./svg": {
+			"development": "./src/mcp/svg.ts",
+			"types": "./dist/mcp/svg.d.ts",
+			"default": "./dist/mcp/svg.js"
+		}
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp-core",
+		"prepublishOnly": "npm run build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"exports": {
+			".": {
+				"types": "./dist/mcp/server.d.ts",
+				"default": "./dist/mcp/server.js"
+			},
+			"./server": {
+				"types": "./dist/mcp/server.d.ts",
+				"default": "./dist/mcp/server.js"
+			},
+			"./jsonrpc": {
+				"types": "./dist/mcp/jsonrpc.d.ts",
+				"default": "./dist/mcp/jsonrpc.js"
+			},
+			"./svg": {
+				"types": "./dist/mcp/svg.d.ts",
+				"default": "./dist/mcp/svg.js"
+			}
+		}
+	},
+	"dependencies": {
+		"taskflow-core": "workspace:*"
+	}
 }

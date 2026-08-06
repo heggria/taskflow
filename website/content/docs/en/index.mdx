@@ -1,17 +1,20 @@
 ---
 title: taskflow Documentation
-description: Start with taskflow 0.2, run your first verified graph, or jump straight to the compiler/runtime reference.
+description: Start with taskflow 0.2.7 — plan before spend, close the loop after — or jump into the compiler/runtime reference.
 ---
 
-taskflow is a declarative orchestration runtime for coding-agent subagents. You define a graph, verify it before token spend, execute each phase in isolation, and return only the final result to the host conversation.
+taskflow is a declarative orchestration runtime for coding-agent subagents. You define a graph, **plan and verify it before token spend**, execute each phase in isolation, and return only the final result to the host conversation.
 
-In **0.2**, that graph also becomes a compiled contract: author with TypeScript, inspect FlowIR, replay recorded decisions, and recompute only the phases made stale by a change.
+In **0.2**, that graph became a compiled contract: TypeScript authoring, FlowIR, replay, and incremental recompute. **0.2.7** closes the daily loop: zero-token `plan`, completion hooks, approval timeouts, and read-only analytics.
 
 ## Choose your path
 
 <Cards>
   <Card title="Run a flow in five minutes" href="/en/docs/getting-started">
-    Choose a host, install taskflow, and run a first verified flow.
+    Choose a host, install taskflow, and run a first planned + verified flow.
+  </Card>
+  <Card title="What's new in 0.2.7" href="/en/docs/blog/plan-before-spend-0.2.7">
+    Plan before spend, hooks after finish, savings on recompute.
   </Card>
   <Card title="Understand taskflow 0.2" href="/en/docs/compiler-runtime">
     TypeScript DSL, FlowIR, deterministic replay, background runs, and minimal recompute.
@@ -22,7 +25,7 @@ In **0.2**, that graph also becomes a compiled contract: author with TypeScript,
 </Cards>
 
 <Callout type="tip">
-  If you are evaluating 0.2, start with **[New in taskflow 0.2](/en/docs/compiler-runtime)** rather than reading the reference front to back.
+  Evaluating the current line? Read **[0.2.7: plan before spend](/en/docs/blog/plan-before-spend-0.2.7)** then the **[compiler/runtime](/en/docs/compiler-runtime)** overview — not the reference front to back.
 </Callout>
 
 ## Install on your host

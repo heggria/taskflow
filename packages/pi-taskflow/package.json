@@ -1,65 +1,65 @@
 {
-  "name": "pi-taskflow",
-  "version": "0.2.6",
-  "description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
-  "keywords": [
-    "pi-package",
-    "pi",
-    "pi-coding-agent",
-    "pi-extension",
-    "workflow",
-    "orchestration",
-    "subagents",
-    "agents",
-    "taskflow",
-    "ai",
-    "automation"
-  ],
-  "license": "MIT",
-  "author": "heggria <bshengtao@gmail.com>",
-  "homepage": "https://github.com/heggria/taskflow#readme",
-  "bugs": {
-    "url": "https://github.com/heggria/taskflow/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/heggria/taskflow.git",
-    "directory": "packages/pi-taskflow"
-  },
-  "type": "module",
-  "engines": {
-    "node": ">=22.19.0"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "skills"
-  ],
-  "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs pi-taskflow",
-    "prepublishOnly": "npm run build"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "pi": {
-    "extensions": [
-      "./dist/index.js"
-    ],
-    "skills": [
-      "./skills"
-    ],
-    "image": "https://raw.githubusercontent.com/heggria/taskflow/main/assets/social-preview.png"
-  },
-  "dependencies": {
-    "taskflow-core": "workspace:*"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-agent-core": "*",
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
-    "typebox": "*"
-  }
+	"name": "pi-taskflow",
+	"version": "0.2.7",
+	"description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
+	"keywords": [
+		"pi-package",
+		"pi",
+		"pi-coding-agent",
+		"pi-extension",
+		"workflow",
+		"orchestration",
+		"subagents",
+		"agents",
+		"taskflow",
+		"ai",
+		"automation"
+	],
+	"license": "MIT",
+	"author": "heggria <bshengtao@gmail.com>",
+	"homepage": "https://github.com/heggria/taskflow#readme",
+	"bugs": {
+		"url": "https://github.com/heggria/taskflow/issues"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/heggria/taskflow.git",
+		"directory": "packages/pi-taskflow"
+	},
+	"type": "module",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist",
+		"skills"
+	],
+	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs pi-taskflow",
+		"prepublishOnly": "npm run build"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"pi": {
+		"extensions": [
+			"./dist/index.js"
+		],
+		"skills": [
+			"./skills"
+		],
+		"image": "https://raw.githubusercontent.com/heggria/taskflow/main/assets/social-preview.png"
+	},
+	"dependencies": {
+		"taskflow-core": "workspace:*"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	}
 }

@@ -271,16 +271,20 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
   "id": "approve-ship",
   "type": "approval",
   "dependsOn": ["verify"],
-  "task": "Review the fix before shipping."
+  "task": "Review the fix before shipping.",
+  "timeoutMs": 86400000,
+  "onExpire": "reject"
 }
 ```
 
 - **Approve** → 阶段输出为 `"approved"`，流程继续。
 - **Reject** → 阶段失败，流程中止（除非 `optional: true`）。
 - **Edit** → 键入的备注成为阶段输出，流程继续。
+- **`timeoutMs`（0.2.7，可选）** → 等待人工的最长时间（`>= 1000` ms）。省略则永等（旧行为）。
+- **`onExpire`（0.2.7）** → 超时后 `reject`（默认）| `fail` | `approve`。`approve` 是显式脚枪。
 
 <Callout type="warn">
-  approval 只在交互式宿主（Pi）中有效。在 CI 或分离运行中，`approval` 阶段会**自动 reject** —— 所以别把它放在你会无人值守运行的 flow 上。`timeout` 和 `cache.scope: "cross-run"` 在 approval 阶段上不被支持。
+  approval 只在交互式宿主（Pi）中有效。在 CI 或分离运行中，`approval` 阶段会**自动 reject** —— 所以别把它放在你会无人值守运行的 flow 上。agent 墙钟 `timeout` 与 `cache.scope: "cross-run"` 在 approval 上不支持；HITL 等待请用 **`timeoutMs`**。
 </Callout>
 
 ## 复用一个已保存的 flow：`flow`

@@ -36,12 +36,14 @@ The `/tf` command is the user-facing surface on Pi. Its subcommands fall into fo
 
 | Command | Description |
 |---|---|
+| `/tf plan <name> [args-json]` | **Zero-token preflight** — bind args, project phase order + dynamic bindings, worst-case agent-call bound. Prefer this before `run`. |
 | `/tf verify <name>` | Statically verify a flow — cycles, missing deps, dead ends — at zero token cost. |
 | `/tf compile <name> [lr\|td]` | Render the DAG as a Mermaid diagram (`lr` = left-right, `td` = top-down). |
+| `/tf analytics <name> [--last N]` | Aggregate last-N runs: status histogram, durations, per-phase fail/cache rates (read-only). |
 | `/tf ir <name>` | Compile to FlowIR + content hash (the incremental-recompute intermediate). |
 | `/tf provenance <runId>` | Show the observed read-set provenance for a run. |
 | `/tf why-stale <runId> [phaseId]` | Explain why a cached run is stale — which fingerprint input changed. |
-| `/tf recompute <runId> <phaseId> [--apply]` | Minimally recompute a stale phase. Default is a safe dry-run; `--apply` spends tokens. |
+| `/tf recompute <runId> <phaseId> [--apply]` | Minimally recompute a stale phase. Default is a safe dry-run (with savings line); `--apply` spends tokens. |
 | `/tf trace <runId> [--json]` | Show the append-only event log (subagent I/O + runtime decisions). |
 | `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]` | Offline what-if re-judge of thresholds/budget from a recorded trace (**zero tokens**). |
 
@@ -64,6 +66,7 @@ On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action
 | Action | Description |
 |---|---|
 | `run` | Run an inline or saved flow. |
+| `plan` | Zero-token preflight (args bind + phase plan + budget bound). |
 | `save` | Persist a flow definition. |
 | `search` | Search the reusable-flow library by purpose/tags. |
 | `resume` | Resume a run by `runId`. |
@@ -71,6 +74,7 @@ On Pi, the model can also invoke a `taskflow` tool directly. It takes an `action
 | `agents` | List the built-in agents. |
 | `verify` | Static check. |
 | `compile` | Mermaid diagram + verification report. |
+| `analytics` | Read-only last-N run aggregation for a flow name. |
 | `ir` / `provenance` / `why-stale` / `recompute` | Incremental recompute toolkit. |
 | `trace` / `replay` | Event log inspection + offline decision what-if (zero tokens). |
 | `cache-clear` | Clear the cross-run memoization cache. |
@@ -88,6 +92,8 @@ On MCP hosts, taskflow exposes these tools (the model calls them; you usually do
 | `taskflow_version` | Report package version, build commit, schema version, build time, and host. |
 | `taskflow_list` | List saved flows discoverable in this directory. |
 | `taskflow_show` | Print a saved flow's definition. |
+| `taskflow_plan` | Zero-token preflight: bind args, phase plan, budget bound (no execution). |
+| `taskflow_analytics` | Aggregate last-N runs for a flow (status, duration, fail/cache rates). |
 | `taskflow_verify` | Statically verify a flow (no execution). |
 | `taskflow_compile` | Render a DAG as SVG plus a standalone text outline and verification status; oversized graphs fall back to text only. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). |

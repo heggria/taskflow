@@ -116,8 +116,9 @@ catches cycles / missing deps / undefined refs / contract typos.**
 <!-- /host:pi -->
 <!-- host:codex,claude,opencode,grok -->
 Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
-**Before running a non-trivial flow, `taskflow_verify` it — zero tokens,
-catches cycles / missing deps / undefined refs / contract typos.**
+**Before running a non-trivial flow, `taskflow_plan` it (or at least
+`taskflow_verify`) — zero tokens: binds args, projects the phase plan + budget
+bound, and catches cycles / missing deps / undefined refs / contract typos.**
 <!-- /host:codex,claude,opencode,grok -->
 
 ### Iterating on a big flow? Use `defineFile` (write once, verify / edit / run by path)
@@ -138,6 +139,7 @@ For a non-trivial flow you'll iterate on, **write the definition to a file**
 ```jsonc
 // 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
 // 2. verify, iterate, run — all reference the SAME file by path:
+{ "name": "taskflow_plan",   "arguments": { "defineFile": "/tmp/audit.json", "args": { … } } }  // zero tokens: bind + plan + budget bound
 { "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
 { "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
 { "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers

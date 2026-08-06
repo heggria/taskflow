@@ -13,7 +13,7 @@
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2 新能力](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.7 新能力](#027-花-token-前先计划--跑完闭环) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -152,6 +152,32 @@ pi install npm:pi-taskflow
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
 
+## 0.2.7：花 token 前先计划 · 跑完闭环
+
+0.2 线把图做成了**可编译、可检查**的合同。**0.2.7** 补上日常闭环：跑之前看清计划，跑之后有人（或文件/webhook）知道结果——且从不把 transcript 塞回宿主。
+
+| 花 token 之前 | 花 token 之后 |
+|---|---|
+| **`taskflow_plan` / `/tf plan`** — 绑定 typed args、投影 phase 序、标出动态引用、给出 worst-case agent 调用上界 | **`hooks.onComplete` / `onFail` / `onBlocked`** — webhook / 文件 / 纯 argv 命令；仅摘要 payload（`taskflow.hook.v1`） |
+| **`verify` / `lint`** 仍是 0 花费 | **`approval.timeoutMs` + `onExpire`** — HITL 不再无限挂起 |
+| **`recompute` 省钱一行** — `reused N · rerun M · cutoff K · saved ~P%` | **`taskflow_analytics`** — 最近 N 次状态/耗时/失败与缓存命中率（只读） |
+
+```bash
+# 零 token：看清会跑谁、参数绑没绑上、最坏会打多少 agent 调用
+# MCP: taskflow_plan  ·  Pi: /tf plan my-flow '{"dir":"src"}'
+```
+
+```jsonc
+// 可选：background 跑完后 fire-and-forget 通知
+{
+  "hooks": {
+    "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last-complete.json" }]
+  }
+}
+```
+
+MCP 宿主现为 **19 个工具**（新增 `taskflow_plan`、`taskflow_analytics`）。入门模板见 [`examples/templates/`](./examples/templates/)。完整说明：[CHANGELOG 0.2.7](./CHANGELOG.md#027--2026-08-06)。
+
 ## 0.2 是编译器转身
 
 0.2 之前，taskflow 负责执行声明式图。现在，这张图还拥有编译期前端、规范化中间表示、append-only 决策 trace、离线重放，以及增量重算。
@@ -198,13 +224,15 @@ FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 pro
 
 | 操作 | 它回答什么 | 模型调用 |
 |---|---|---:|
-| `verify` / `compile` | 这张图在结构上可以安全运行吗？ | **0** |
+| **`plan`** | 会跑谁、参数是否绑定、worst-case agent 调用上界？ | **0** |
+| `verify` / `compile` / `lint` | 结构是否安全 / lint 是否干净？ | **0** |
 | `ir` | 规范化图和内容哈希是什么？ | **0** |
 | `resume` | 还有哪些未完成工作？（派生新运行，原运行不变） | 仅未完成阶段 |
 | `trace` | 实际发生了哪些调用和运行时决策？ | 查看时 **0** |
 | `replay` | 如果阈值或预算不同，结果会怎样？ | **0** |
 | `why-stale` | 什么变了，哪些节点依赖它？ | **0** |
-| `recompute` | 最小可观测受影响前沿是什么？ | 仅受影响阶段 |
+| `recompute` | 最小可观测受影响前沿是什么？（含省钱一行） | 仅受影响阶段 |
+| `analytics` | 这个 flow 最近 N 次跑得怎么样？ | **0** |
 
 [探索编译器与运行时 →](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/)
 

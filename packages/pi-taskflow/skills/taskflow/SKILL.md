@@ -8,9 +8,10 @@ description: Orchestrate multi-phase subagent workflows with pi-taskflow. Use wh
 # Taskflow
 
 **Host binding (pi):** everything below is driven through the `taskflow` tool
-(`action: "run" | "verify" | …`) and the `/tf` slash commands. Where an example
-shows a host-neutral invocation like `verify`, use the pi form
-(`action: "verify"` or `/tf verify`).
+(`action: "run" | "plan" | "verify" | "analytics" | …`) and the `/tf` slash commands.
+Where an example shows a host-neutral invocation like `verify`, use the pi form
+(`action: "verify"` or `/tf verify`). Prefer **`action: "plan"` / `/tf plan`**
+before spending tokens on a non-trivial flow.
 
 Build and run **declarative, multi-phase workflows** of subagents. The runtime
 holds intermediate results and the phase DAG, so your main context only receives

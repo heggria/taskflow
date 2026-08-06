@@ -2698,6 +2698,7 @@ async function executePhaseInner(
 	// approval — HITL pause (decision → PhaseState in runtime/phases/approval.ts)
 	if (type === "approval") {
 		const { approvalDecisionToPhaseState } = await import("./runtime/phases/approval.ts");
+		const { resolveApprovalDecision } = await import("./runtime/phases/approval-wait.ts");
 		const readRefs: string[] = [];
 		const ctx = buildInterpolationContext(state, previousOutput, undefined, (ref) => readRefs.push(ref));
 		const message = interpolate(phase.task ?? "Approve to continue?", ctx).text;
@@ -2707,20 +2708,31 @@ async function executePhaseInner(
 		if (cached) return cached;
 
 		const reads = readRefsToReads(readRefs, state);
-		// Non-interactive (headless/CI/detached): auto-REJECT — safety boundary, never bypass.
-		if (!deps.requestApproval) {
-			return approvalDecisionToPhaseState(phase.id, { decision: "reject" }, {
-				inputHash,
-				reads,
-				auto: true,
-			});
-		}
-		const decision = await deps.requestApproval({
-			phaseId: phase.id,
+		const resolved = await resolveApprovalDecision({
+			phase,
 			message,
 			upstream: previousOutput,
+			requestApproval: deps.requestApproval,
+			signal: deps.signal,
 		});
-		return approvalDecisionToPhaseState(phase.id, decision, { inputHash, reads });
+		if (resolved.kind === "fail") {
+			return {
+				id: phase.id,
+				status: "failed",
+				error: resolved.error,
+				output: resolved.error,
+				approval: { decision: "reject", auto: true, note: "approval-expired" },
+				usage: emptyUsage(),
+				inputHash,
+				reads,
+				endedAt: Date.now(),
+			};
+		}
+		return approvalDecisionToPhaseState(phase.id, resolved.decision, {
+			inputHash,
+			reads,
+			auto: resolved.auto,
+		});
 	}
 
 	if (type === "flow" || type === "expand") {
@@ -4311,7 +4323,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			if (!deps.runTask) {
 				throw new Error("event kernel requires RuntimeDeps.runTask");
 			}
-			return await runEventKernel(state, {
+			const kernelResult = await runEventKernel(state, {
 				cwd: deps.cwd,
 				agents: deps.agents,
 				runTask: deps.runTask,
@@ -4328,6 +4340,8 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				_stack: deps._stack,
 				_dynamic: deps._dynamic,
 			});
+			await maybeDispatchTerminalHooks(kernelResult.state, deps.cwd, def);
+			return kernelResult;
 		}
 		return await runTaskflowLayers(state, deps);
 	} catch (e) {
@@ -4621,7 +4635,10 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	// window where a successful detached run permanently lost its final output.
 	state.finalOutput = finalOutput;
 	state.outputSourcePhaseId = outputSourcePhaseId;
+	state.updatedAt = Date.now();
 	safeEmit(deps, state);
+
+	await maybeDispatchTerminalHooks(state, deps.cwd, def);
 
 	const totalUsage = aggregateUsage(Object.values(state.phases).map((p) => p.usage ?? emptyUsage()));
 	return {
@@ -4632,4 +4649,20 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		reuse: summarizeReuse(state),
 		outputSourcePhaseId,
 	};
+}
+
+/** Fire-and-forget terminal hooks; never throws into the runtime outcome. */
+async function maybeDispatchTerminalHooks(
+	state: RunState,
+	cwd: string,
+	def: Taskflow,
+): Promise<void> {
+	try {
+		const hooks = (def as { hooks?: import("./hooks.ts").FlowHooks }).hooks;
+		if (!hooks) return;
+		const { dispatchHooks } = await import("./hooks.ts");
+		await dispatchHooks(state, { cwd, hooks });
+	} catch {
+		/* hooks must never replace the runtime outcome */
+	}
 }
