@@ -33,6 +33,8 @@ Top-level keys of the taskflow definition object.
   "concurrency": 8,                 // default max concurrent subagents (default: 8)
   "agentScope": "user",             // user | project | both (default: user)
   "args": { /* see §3 */ },
+  // 0.2.7: optional terminal hooks (summary payload only — never transcripts)
+  // "hooks": { "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last.json" }] },
   "phases": [ /* see §2 */ ]        // required, at least one phase
 }
 ```
@@ -45,6 +47,7 @@ Top-level keys of the taskflow definition object.
 | `idleTimeout` | number | host default (`300000`) | Flow-level idle watchdog in ms (≥ 1000, or `0` to disable) for all agent-running phases that don't set their own. `0` disables the watchdog but then **every** agent-running phase MUST declare a finite wall `timeout` (≥ 1000) so the flow can never hang. A per-phase `idleTimeout` overrides this. |
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
+| `hooks` | object | — | **0.2.7.** Terminal fire-and-forget notifications: `onComplete` / `onFail` / `onBlocked` arrays of `{type:"webhook"\|"file"\|"command", …}`. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status. `https` or `http://127.0.0.1\|localhost` for webhooks; `command.run` is argv-only (no shell string). |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
 | `version` | number | `1` | Informational metadata in 0.2.x; it does not select runtime semantics or migrate a flow. |
 
@@ -96,6 +99,8 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `run` | script | — | **Required for script.** Shell command: a string (runs in a shell) or an array (direct exec, no shell). A string with an interpolation placeholder is rejected (injection guard). |
 | `input` | script | — | Text piped to the command's stdin; supports interpolation. |
 | `timeout` | script | `60000` | Max run time in ms (1000–300000). On timeout: SIGTERM → SIGKILL, phase fails. For agent-running phases: caps EACH subagent call (≥ 1000 ms); expiry aborts + fails with `timedOut` (never retried). Not supported for approval/flow. |
+| `timeoutMs` | approval | — | **0.2.7.** Max wait for a human decision in ms (≥ 1000). Omit for infinite wait (legacy). On expiry apply `onExpire`. Distinct from agent wall `timeout`. |
+| `onExpire` | approval | `reject` | **0.2.7.** When `timeoutMs` elapses: `reject` \| `fail` \| `approve` (explicit footgun — auto-continues without review). No-op without `timeoutMs`. |
 | `idleTimeout` | agent, gate, reduce, map, parallel, loop, tournament | host default (`300000`) | Idle watchdog in ms (≥ 1000, or `0` to disable). If a subagent produces no output for this long it is killed as stalled. `0` disables the watchdog but then a finite wall `timeout` (≥ 1000) is **required** on that phase so it can never hang. Per-phase overrides the flow-level `idleTimeout`; absent → flow-level or host default. |
 | `dependsOn` | all | `[]` | DAG edges. `from` also implies a dependency. |
 | `output` | all | `text` | `json` parses output so `{steps.id.json}` / map `over` work. |
