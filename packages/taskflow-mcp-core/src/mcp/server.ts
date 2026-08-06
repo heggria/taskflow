@@ -101,6 +101,12 @@ import {
 	formatWhyStale,
 	recomputeTaskflow,
 	type RecomputeReport,
+	preflightTaskflow,
+	formatPreflightReport,
+	formatRecomputeSavingsHeader,
+	formatRunCacheLine,
+	analyzeFlowRuns,
+	formatAnalyticsReport,
 } from "taskflow-core";
 
 const PROTOCOL_VERSION = "2025-06-18";
@@ -398,10 +404,13 @@ function parseReplayOverrides(args: Record<string, unknown>): ReplayOverrides {
 /** Human-readable recompute dry-run report (MCP). Mirrors the pi adapter's
  *  formatRecompute. */
 function formatRecomputeMcp(r: RecomputeReport): string {
-	const lines: string[] = [`Recompute (DRY RUN — MCP never executes) — seed: ${r.seeds.join(", ")}`];
-	lines.push("");
-	lines.push(`▲ would re-run (${r.rerun.length}): ${r.rerun.join(", ") || "—"}`);
-	lines.push(`✓ reused (outside frontier): ${r.reused.join(", ") || "—"}`);
+	const lines: string[] = [
+		`Recompute (DRY RUN — MCP never executes) — seed: ${r.seeds.join(", ")}`,
+		formatRecomputeSavingsHeader({ ...r, dryRun: true }),
+		"",
+		`▲ would re-run (${r.rerun.length}): ${r.rerun.join(", ") || "—"}`,
+		`✓ reused (outside frontier): ${r.reused.join(", ") || "—"}`,
+	];
 	if (r.decisions && r.decisions.length > 0) {
 		lines.push("");
 		lines.push("Why:");
@@ -527,6 +536,39 @@ const TOOLS: McpTool[] = [
 				define: { type: "object" },
 				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file." },
 			},
+		},
+	},
+	{
+		name: "taskflow_plan",
+		title: "Preflight plan a taskflow (zero tokens)",
+		description:
+			"Terraform-plan for taskflows: bind typed args, verify structure, project phase order + dynamic/unresolved bindings, and compute a worst-case agent-call bound — WITHOUT spawning any agent. Provide `name`, `define`, or `defineFile` plus optional `args`.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				name: { type: "string" },
+				define: { type: "object" },
+				defineFile: { type: "string", description: "Path to a JSON (or fenced-Markdown) flow file." },
+				args: { type: "object", description: "Invocation arguments to bind as {args.X}." },
+				json: { type: "boolean", description: "Return the full PreflightResult as JSON." },
+			},
+		},
+	},
+	{
+		name: "taskflow_analytics",
+		title: "Aggregate read-only analytics for a flow",
+		description:
+			"Summarize the last N runs of a flow: status histogram, p50/p95 duration, per-phase fail and cache-hit rates. Zero tokens, no writes, no auto-tune.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				name: { type: "string", description: "Flow name (matches RunState.flowName)." },
+				last: { type: "number", description: "How many recent runs to include (default 20, max 100)." },
+				json: { type: "boolean", description: "Return machine-readable JSON." },
+			},
+			required: ["name"],
 		},
 	},
 	{
@@ -935,7 +977,8 @@ export function makeToolHandlers(
 			// skipped/failed final phase. Omit the label only when no attribution is
 			// available (no phase output).
 			const sourceLabel = res.outputSourcePhaseId ? `--- ${res.outputSourcePhaseId} ---\n` : "";
-			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}`;
+			const cacheLine = formatRunCacheLine(state);
+			const usageLine = `\n\n— ${u.turns} turns · in ${u.input} · out ${u.output} tokens · run ${state.runId}${cacheLine ? `\n— ${cacheLine}` : ""}`;
 			return textContent(`${header}\n\n${sourceLabel}${res.finalOutput}${usageLine}`, !res.ok);
 		},
 
@@ -1346,6 +1389,30 @@ export function makeToolHandlers(
 				lines.push(`  ${icon}${loc}${src} ${issue.message}`);
 			}
 			return textContent(lines.join("\n"), !passed);
+		},
+
+		taskflow_plan: async (args) => {
+			const def = resolveFlow(cwd, args);
+			const discovered = await discoverVerifiers(cwd);
+			const verifiers = [...builtinVerifiers, ...discovered.verifiers];
+			const planArgs =
+				args.args && typeof args.args === "object" && !Array.isArray(args.args)
+					? (args.args as Record<string, unknown>)
+					: undefined;
+			const result = preflightTaskflow(def, {
+				args: planArgs,
+				cwd,
+				verifiers,
+			});
+			return textContent(formatPreflightReport(result, args.json === true), !result.ok);
+		},
+
+		taskflow_analytics: async (args) => {
+			const name = String(args.name ?? "").trim();
+			if (!name) return textContent("taskflow_analytics requires `name`.", true);
+			const last = typeof args.last === "number" && Number.isFinite(args.last) ? args.last : 20;
+			const report = analyzeFlowRuns(cwd, name, { last });
+			return textContent(formatAnalyticsReport(report, args.json === true));
 		},
 
 		taskflow_version: async () => {

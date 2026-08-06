@@ -20,6 +20,8 @@ runs as an isolated `claude -p` session.
 | `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
 | `taskflow_list` | List saved flows discoverable from the current working directory. |
 | `taskflow_show` | Show a saved flow's full definition as JSON. |
+| `taskflow_plan` | Preflight plan: bind args, phase order, dynamic bindings, worst-case agent-call bound — zero tokens, no execution. |
+| `taskflow_analytics` | Aggregate last-N runs for a flow (status histogram, durations, per-phase fail/cache rates). Read-only. |
 | `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
 | `taskflow_compile` | Render a flow's DAG as an inline SVG **and** text outline + a verification report — no execution. |
 | `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list phases; `json`/`item`/`limit` refine the slice. Hard-truncated, read-only. |
@@ -31,8 +33,7 @@ runs as an isolated `claude -p` session.
 | `taskflow_save` | Save a reusable flow and optional library metadata. |
 | `taskflow_search` | Search and rank reusable flows before authoring another one. |
 
-**Always `taskflow_verify` a non-trivial flow before `taskflow_run`** — it is
-free and catches most authoring mistakes.
+**Always `taskflow_plan` (or at least `taskflow_verify`) a non-trivial flow before `taskflow_run`** — free, binds args, and catches most authoring mistakes.
 
 **Security default:** Claude mutating/unrestricted phases are rejected because
 headless Claude has no OS sandbox. Explicitly opt in only for trusted flows by
@@ -135,8 +136,9 @@ proper flow, so you still get progress, persistence, and resume.
 ## How to author a taskflow
 
 Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
-**Before running a non-trivial flow, `taskflow_verify` it — zero tokens,
-catches cycles / missing deps / undefined refs / contract typos.**
+**Before running a non-trivial flow, `taskflow_plan` it (or at least
+`taskflow_verify`) — zero tokens: binds args, projects the phase plan + budget
+bound, and catches cycles / missing deps / undefined refs / contract typos.**
 
 ### Iterating on a big flow? Use `defineFile` (write once, verify / edit / run by path)
 
@@ -146,6 +148,7 @@ For a non-trivial flow you'll iterate on, **write the definition to a file**
 ```jsonc
 // 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
 // 2. verify, iterate, run — all reference the SAME file by path:
+{ "name": "taskflow_plan",   "arguments": { "defineFile": "/tmp/audit.json", "args": { … } } }  // zero tokens: bind + plan + budget bound
 { "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
 { "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
 { "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers

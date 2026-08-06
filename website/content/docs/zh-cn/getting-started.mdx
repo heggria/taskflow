@@ -57,6 +57,10 @@ taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不�
 
 你应该会看到运行时执行一个阶段并返回最终输出。这就是一个 taskflow：一个带名字的、只有一个阶段的图。
 
+<Callout type="tip">
+  **0.2.7 习惯：** 对任何非平凡 flow，先用与 `run` 相同的 `args` 调 **`taskflow_plan` / `/tf plan`**。免费、绑定 typed 参数，并在花钱前给出 worst-case agent 调用上界。详见 [0.2.7 新能力](/zh-cn/docs/blog/plan-before-spend-0.2.7)。
+</Callout>
+
 ## 安装
 
 如果你还没有安装 taskflow，选择你的宿主：

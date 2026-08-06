@@ -39,6 +39,11 @@ import {
 	runsDir,
 	replayRun,
 	upgradeTraceEvent,
+	formatRecomputeSavingsHeader,
+	preflightTaskflow,
+	formatPreflightReport,
+	analyzeFlowRuns,
+	formatAnalyticsReport,
 	type ApprovalDecision,
 	type ApprovalRequest,
 	type RecomputeReport,
@@ -144,8 +149,8 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParamsSchema = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
-		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, clear the cross-run memoization cache, or report the taskflow build/host identity (version)",
+	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
+		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, preflight-plan a flow (zero tokens), aggregate last-N run analytics, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, clear the cross-run memoization cache, or report the taskflow build/host identity (version)",
 		default: "run",
 	}),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
@@ -318,6 +323,7 @@ function formatProvenance(run: RunState): string {
 function formatRecompute(r: RecomputeReport): string {
 	const lines: string[] = [];
 	lines.push(`Recompute — seed: ${r.seeds.join(", ")}${r.dryRun ? "  (DRY RUN — worst-case, no execution)" : ""}`);
+	lines.push(formatRecomputeSavingsHeader(r));
 	lines.push("");
 	lines.push(`▲ re-run (${r.rerun.length}): ${r.rerun.join(", ") || "—"}`);
 	if (!r.dryRun) {
@@ -1080,6 +1086,46 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
+			// plan — zero-token preflight (args bind + phase plan + budget bound)
+			if (action === "plan") {
+				let raw: unknown = params.define;
+				if (raw === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
+					const fromFile = readDefineFile(params.defineFile);
+					if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
+					raw = fromFile.value;
+				}
+				if (typeof raw === "string") {
+					const parsed = safeParse(raw);
+					if (parsed && typeof parsed === "object") raw = parsed;
+				}
+				if (raw === undefined && params.name) {
+					const saved = getFlow(ctx.cwd, params.name);
+					if (!saved) return errorResult(action, `Saved flow "${params.name}" not found`);
+					raw = saved.def;
+				}
+				if (raw === undefined) return errorResult(action, "action=plan requires define, defineFile, or name");
+				const planArgs =
+					params.args && typeof params.args === "object" && !Array.isArray(params.args)
+						? (params.args as Record<string, unknown>)
+						: undefined;
+				const result = preflightTaskflow(raw, { args: planArgs, cwd: ctx.cwd });
+				return {
+					content: [{ type: "text", text: formatPreflightReport(result) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
+			// analytics — read-only last-N aggregation for a flow name
+			if (action === "analytics") {
+				const name = params.name?.trim();
+				if (!name) return errorResult(action, "action=analytics requires name");
+				const report = analyzeFlowRuns(ctx.cwd, name, { last: 20 });
+				return {
+					content: [{ type: "text", text: formatAnalyticsReport(report) }],
+					details: { action } satisfies TaskflowDetails,
+				};
+			}
+
 			// resume — forks a NEW run (immutable history, 0.2.0 dogfood issue 5).
 			// The parent run file is never mutated or overwritten; the child carries
 			// `parentRunId` pointing at it. Optional overrides re-run exactly one
@@ -1598,7 +1644,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("tf", {
 		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
+			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
 			const items = subs.map((s) => ({ value: s, label: s }));
 			const filtered = items.filter((i) => i.value.startsWith(prefix));
 			return filtered.length > 0 ? filtered : null;
@@ -1691,6 +1737,51 @@ export default function (pi: ExtensionAPI) {
 				const { compileTaskflow } = await import("taskflow-core");
 				const compiled = compileTaskflow(flow.def, { direction });
 				ctx.ui.notify(compiled.markdown, compiled.verification.ok ? "info" : "warning");
+				return;
+			}
+
+			if (sub === "plan") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf plan <name> [args-json]", "warning");
+					return;
+				}
+				const tokens = arg.trim().split(/\s+/);
+				const flowName = tokens[0];
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
+					return;
+				}
+				let planArgs: Record<string, unknown> | undefined;
+				if (tokens.length > 1) {
+					try {
+						planArgs = JSON.parse(tokens.slice(1).join(" ")) as Record<string, unknown>;
+					} catch {
+						ctx.ui.notify("plan args must be JSON object", "error");
+						return;
+					}
+				}
+				const result = preflightTaskflow(flowR.value.def, { args: planArgs, cwd: ctx.cwd });
+				ctx.ui.notify(formatPreflightReport(result), result.ok ? "info" : "warning");
+				return;
+			}
+
+			if (sub === "analytics") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf analytics <name> [--last N]", "warning");
+					return;
+				}
+				const tokens = arg.trim().split(/\s+/).filter(Boolean);
+				const flowName = tokens[0];
+				let last = 20;
+				for (let i = 1; i < tokens.length; i++) {
+					if (tokens[i] === "--last" && tokens[i + 1]) {
+						const n = Number(tokens[++i]);
+						if (Number.isFinite(n) && n >= 1) last = n;
+					}
+				}
+				const report = analyzeFlowRuns(ctx.cwd, flowName, { last });
+				ctx.ui.notify(formatAnalyticsReport(report), "info");
 				return;
 			}
 

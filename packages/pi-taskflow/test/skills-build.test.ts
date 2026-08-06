@@ -31,8 +31,9 @@ test("release discovery metadata advertises the complete MCP surface", async () 
 	const { readFileSync } = await import("node:fs");
 	for (const file of [".claude-plugin/marketplace.json", ".grok-plugin/marketplace.json"]) {
 		const text = readFileSync(path.join(root, file), "utf8");
-		assert.match(text, /17 taskflow_\* MCP tools/);
+		assert.match(text, /19 taskflow_\* MCP tools/);
 		assert.match(text, /run\/runs\/resume\/version\/list/);
+		assert.match(text, /plan\/analytics/);
 	}
 	const piSource = readFileSync(path.join(root, "packages", "pi-taskflow", "src", "index.ts"), "utf8");
 	assert.match(piSource, /Use action=resume/);
@@ -71,12 +72,12 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 	] as const) {
 		assert.ok(!/<!--\s*\/?host:/.test(text), `${name} SKILL.md must not contain host markers`);
 	}
-	// Pi teaches its 18 actions; the MCP hosts must not (they're unreachable via MCP).
-	assert.match(piSkill, /Actions \(all 18\)/);
-	assert.doesNotMatch(cxSkill, /Actions \(all 18\)/);
-	assert.doesNotMatch(clSkill, /Actions \(all 18\)/);
-	assert.doesNotMatch(ocSkill, /Actions \(all 18\)/);
-	assert.doesNotMatch(gkSkill, /Actions \(all 18\)/);
+	// Pi teaches its 20 actions; the MCP hosts must not (they're unreachable via MCP).
+	assert.match(piSkill, /Actions \(all 20\)/);
+	assert.doesNotMatch(cxSkill, /Actions \(all 20\)/);
+	assert.doesNotMatch(clSkill, /Actions \(all 20\)/);
+	assert.doesNotMatch(ocSkill, /Actions \(all 20\)/);
+	assert.doesNotMatch(gkSkill, /Actions \(all 20\)/);
 	assert.doesNotMatch(cxSkill, /action: "recompute"/);
 	// The MCP hosts teach the MCP tools; pi must not.
 	assert.match(cxSkill, /taskflow_verify/);

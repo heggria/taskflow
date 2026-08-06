@@ -57,6 +57,10 @@ Then run it.
 
 You should see the runtime execute one phase and return the final output. That is a taskflow: a named graph with one phase.
 
+<Callout type="tip">
+  **0.2.7 habit:** for any non-trivial flow, call **`taskflow_plan` / `/tf plan`** with the same `args` you will pass to `run`. It is free, binds typed args, and surfaces the worst-case agent-call bound before you spend. See [What's new in 0.2.7](/en/docs/blog/plan-before-spend-0.2.7).
+</Callout>
+
 ## Install
 
 If you have not installed taskflow yet, pick your host:

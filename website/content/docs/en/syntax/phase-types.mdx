@@ -271,16 +271,20 @@ Some decisions should not be delegated to an agent at all. An `approval` phase p
   "id": "approve-ship",
   "type": "approval",
   "dependsOn": ["verify"],
-  "task": "Review the fix before shipping."
+  "task": "Review the fix before shipping.",
+  "timeoutMs": 86400000,
+  "onExpire": "reject"
 }
 ```
 
 - **Approve** → phase output is `"approved"`, flow continues.
 - **Reject** → phase fails, flow aborts (unless `optional: true`).
 - **Edit** → the typed note becomes the phase output, flow continues.
+- **`timeoutMs` (0.2.7, optional)** → max wait for a human (`>= 1000` ms). Omit for infinite wait (previous default).
+- **`onExpire` (0.2.7)** → `reject` (default) | `fail` | `approve` when the wait expires. `approve` is an explicit footgun.
 
 <Callout type="warn">
-  Approval only works in interactive hosts (Pi). In CI or detached runs, an `approval` phase **auto-rejects** — so don't put one on a flow you run unattended. `timeout` and `cache.scope: "cross-run"` are not supported on approval phases.
+  Approval only works in interactive hosts (Pi). In CI or detached runs, an `approval` phase **auto-rejects** — so don't put one on a flow you run unattended. Wall `timeout` (agent caps) and `cache.scope: "cross-run"` are not supported on approval phases; use **`timeoutMs`** for the HITL wait bound.
 </Callout>
 
 ## Reuse a saved flow: `flow`

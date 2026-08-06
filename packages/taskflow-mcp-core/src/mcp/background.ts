@@ -25,6 +25,7 @@ import {
 	type AgentScope,
 	type DetachedCancelRequest,
 	type RunState,
+	formatRunCacheLine,
 } from "taskflow-core";
 
 export interface DetachedRunnerBinding {
@@ -345,12 +346,14 @@ export function formatBackgroundRun(state: RunState, includeOutput: boolean): st
 		return cancel ? `${first} · cancellation requested` : first;
 	}
 	const source = state.outputSourcePhaseId ? `--- ${state.outputSourcePhaseId} ---\n` : "";
+	const cacheLine = formatRunCacheLine(state);
+	const cacheNote = cacheLine ? `\n— ${cacheLine}` : "";
 	if (typeof state.finalOutput === "string") {
 		const truncated = state.finalOutput.length > MAX_PRESENTED_OUTPUT_CHARS
 			? `${state.finalOutput.slice(0, MAX_PRESENTED_OUTPUT_CHARS)}\n\n… output truncated; use taskflow_peek for targeted inspection.`
 			: state.finalOutput;
-		return `${first}\n\n${source}${truncated}`;
+		return `${first}${cacheNote}\n\n${source}${truncated}`;
 	}
 	const failure = Object.values(state.phases).find((phase) => phase.status === "failed" && phase.error)?.error;
-	return failure ? `${first}\n\n${failure}` : first;
+	return failure ? `${first}${cacheNote}\n\n${failure}` : `${first}${cacheNote}`;
 }

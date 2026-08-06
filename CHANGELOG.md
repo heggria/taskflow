@@ -2,6 +2,35 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.7] — 2026-08-06
+
+### Added
+
+- **Preflight plan (`taskflow_plan` / `action=plan` / `/tf plan`).** Zero-token dry-run: bind typed invocation args, run structural verify + optional lint verifiers, project topo-ordered phase plan with bound/unresolved/dynamic bindings, and compute a worst-case agent-call bound (loops use `maxIterations`; dynamic maps report `unbounded`). No subagent is spawned.
+- **Budget upper bound in plan.** `PreflightResult.budget.maxAgentCalls` (number or `"unbounded"`) with explicit assumptions — the static cost spine for “plan before spend”.
+- **Incremental savings summary.** Shared `formatSavingsLine` / `formatRecomputeSavingsHeader` / `formatRunCacheLine`: recompute MCP/Pi output leads with `reused N · rerun M · cutoff K · saved ~P% phases`; run/background status can show cache-hit counts.
+- **Flow hooks (`hooks.onComplete` / `onFail` / `onBlocked`).** Fire-and-forget `webhook` | `file` | `command` (argv only) with summary payload `taskflow.hook.v1` (never transcripts). `https` and `http://127.0.0.1|localhost` allowed. Hook failure never changes run status. Dispatched from imperative and event-kernel terminal paths.
+- **Approval `timeoutMs` + `onExpire`.** Optional HITL wait bound (`>= 1000` ms). `onExpire`: `reject` (default) | `fail` | `approve` (explicit footgun). Infinite wait when omitted (backward compatible).
+- **Read-only analytics (`taskflow_analytics` / `action=analytics` / `/tf analytics`).** Last-N run aggregation: status histogram, p50/p95 duration, per-phase fail/cache rates. No writes, no auto-tune.
+- **Templates:** `examples/templates/plan-first.json`, `examples/templates/background-with-hooks.json`.
+- **MCP tool roster is now 19** (`taskflow_plan`, `taskflow_analytics` added).
+
+### Security
+
+- Force **`undici@8.9.0`** via pnpm override (Dependabot high/medium: CRLF, cache directives, cookie attributes, retry desync).
+- Bump pinned **CodeQL Action** init/analyze to the v4.37.4 commit SHA.
+
+### Changed (maintenance)
+
+- Website: fumadocs-core/ui **16.14.0**, fumadocs-mdx **15.2.2**, lucide-react **^1.28.0**, biome **2.5.6**, @types/* patch bumps.
+- Dev peers: Pi SDK **0.83.0**, typebox **^1.3.10**.
+- Plugin manifests and MCP install pins aligned to **0.2.7**.
+
+### Notes
+
+- Shell CLI `taskflow plan` is intentionally **not** in this cut (`taskflow-cli` remains control-plane oriented). Use MCP or Pi surfaces.
+- Control-plane / daemon packages are unchanged by this release narrative (0.3 work stays separate).
+
 ## [0.2.6] — 2026-07-27
 
 ### Fixed

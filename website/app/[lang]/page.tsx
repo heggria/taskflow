@@ -25,16 +25,16 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.2",
+			eyebrow: "taskflow 0.2.7",
 			title: [
-				"Verify before spend.",
-				"Resume across sessions.",
+				"Plan before spend.",
+				"Close the loop after.",
 				"Recompute only what changed.",
 			],
-			sub: "taskflow turns multi-agent coding work into a compiled runtime: declared graphs, isolated execution, deterministic replay, and incremental recompute across Pi, Codex, Claude Code, OpenCode, and Grok.",
+			sub: "taskflow turns multi-agent coding work into a compiled runtime: declared graphs, zero-token preflight, isolated execution, hooks when runs finish, deterministic replay, and incremental recompute across Pi, Codex, Claude Code, OpenCode, and Grok.",
 			noteKicker: "Compiled runtime for coding agents",
 			noteBody:
-				"0.2 is not a nicer prompt ritual. It is a verifiable orchestration runtime with a real intermediate representation, resumable runs, and minimal frontier reruns.",
+				"0.2.7 makes the day-to-day loop complete: taskflow_plan before any model call, hooks and analytics after, savings numbers on recompute — without flooding the host with transcripts.",
 			micro:
 				"Intermediates stay in the runtime. Only the result returns to the host.",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok",
@@ -88,23 +88,33 @@ const copy = {
 			sub: "The page should prove contract, not list features.",
 			items: [
 				{
+					title: "Plan",
+					body: "taskflow_plan binds args, projects phase order, and reports a worst-case agent-call bound — zero tokens, before any spawn.",
+				},
+				{
 					title: "Verify",
 					body: "Static checks happen before any model call: cycles, dead ends, dangling refs, impossible budgets.",
 				},
 				{
-					title: "Resume",
-					body: "Runs survive failures and survive sessions. Detached execution, trace storage, and resumable state are part of the runtime contract.",
-				},
-				{
-					title: "Recompute",
-					body: "When inputs change, taskflow re-runs the stale frontier instead of replaying the whole flow from zero.",
+					title: "Close the loop",
+					body: "Hooks notify when runs complete or fail; approval timeouts stop infinite HITL; analytics summarize the last N runs.",
 				},
 			],
 		},
 		ledger: {
-			title: "0.2 is the compiler turn.",
-			sub: "The graph is no longer only run. It is compiled, resumed, replayed, and incrementally recomputed.",
+			title: "0.2 is the compiler turn. 0.2.7 closes the loop.",
+			sub: "The graph is compiled, planned before spend, resumed, replayed, hooked on completion, and incrementally recomputed.",
 			items: [
+				{
+					tag: "0.2.7",
+					title: "Plan before spend",
+					body: "taskflow_plan + budget bound + savings line on recompute — see the contract before you pay.",
+				},
+				{
+					tag: "0.2.7",
+					title: "Close the loop after",
+					body: "Flow hooks, approval timeout/onExpire, and read-only analytics — without transcript leakage.",
+				},
 				{
 					tag: "S4",
 					title: "TypeScript DSL compiles to FlowIR",
@@ -118,22 +128,12 @@ const copy = {
 				{
 					tag: "Cache",
 					title: "Cross-run content addressing",
-					body: "Unchanged work is reused instead of repurchased.",
-				},
-				{
-					tag: "Delta",
-					title: "why-stale + minimal frontier rerun",
-					body: "Change a file, then re-run only the affected phases.",
+					body: "Unchanged work is reused instead of repurchased — and reported as reused N / rerun M.",
 				},
 				{
 					tag: "Hosts",
-					title: "Five host adapters",
+					title: "Five host adapters · 19 MCP tools",
 					body: "Pi, Codex, Claude Code, OpenCode, and Grok share one engine.",
-				},
-				{
-					tag: "Return",
-					title: "Intermediates stay inside the runtime",
-					body: "The host only receives the final result, not the operational sludge.",
 				},
 			],
 		},
@@ -146,7 +146,7 @@ const copy = {
 			noteTitle: "What stays invariant",
 			notes: [
 				"The graph is explicit and versionable.",
-				"Verification happens before spend.",
+				"Plan and verification happen before spend.",
 				"Phase identity can be fingerprinted and cached.",
 				"The host still receives only finalOutput.",
 			],
@@ -157,23 +157,23 @@ const copy = {
 			rows: [
 				{
 					label: "plan",
-					a: "declared and versioned",
+					a: "zero-token preflight + versioned",
 					b: "re-derived in prose",
 				},
 				{
 					label: "spend",
-					a: "verified first",
+					a: "planned / verified first",
 					b: "discovered during execution",
 				},
-				{ label: "failure", a: "resumed", b: "restarted" },
-				{ label: "change", a: "minimally recomputed", b: "broadly rerun" },
+				{ label: "failure", a: "resumed + hooks notify", b: "restarted" },
+				{ label: "change", a: "minimally recomputed + savings", b: "broadly rerun" },
 			],
 			left: "taskflow",
 			right: "ad-hoc",
 		},
 		cta: {
 			title: "Build the graph once. Rerun it precisely.",
-			body: "Verify before spend. Resume across sessions. Return only the result.",
+			body: "Plan before spend. Resume across sessions. Close the loop after. Return only the result.",
 			primary: "Read the docs",
 			secondary: "Install",
 		},
@@ -187,12 +187,12 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.2",
-			title: ["花 token 前先验证。", "跨会话续跑。", "只重算变化部分。"],
-			sub: "taskflow 把多代理编程工作变成可编译的运行时：声明式图、隔离执行、确定性 replay，以及跨 Pi、Codex、Claude Code、OpenCode、Grok 的增量重算。",
+			eyebrow: "taskflow 0.2.7",
+			title: ["花 token 前先计划。", "跑完闭环通知。", "只重算变化部分。"],
+			sub: "taskflow 把多代理编程工作变成可编译的运行时：声明式图、零 token preflight、隔离执行、跑完 hooks、确定性 replay，以及跨 Pi、Codex、Claude Code、OpenCode、Grok 的增量重算。",
 			noteKicker: "面向 coding agents 的 compiled runtime",
 			noteBody:
-				"0.2 不是更好看的 prompt 仪式，而是一套可验证的编排运行时：有中间表示、有续跑、有最小重算。",
+				"0.2.7 补上日常闭环：taskflow_plan 在任何模型调用前；hooks 与 analytics 在跑完之后；recompute 带上省钱数字——且从不把 transcript 灌进宿主。",
 			micro: "中间过程留在运行时里。回到宿主的，只有结果。",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok",
 			primary: "阅读文档",
@@ -245,23 +245,33 @@ const copy = {
 			sub: "这里要证明合同，而不是罗列功能。",
 			items: [
 				{
+					title: "计划",
+					body: "taskflow_plan 绑定参数、投影 phase 序、给出 worst-case agent 调用上界——零 token，任何 spawn 之前。",
+				},
+				{
 					title: "验证",
 					body: "在任何模型调用前完成静态检查：环路、死路、悬空引用、不可能的预算。",
 				},
 				{
-					title: "续跑",
-					body: "运行能穿越失败，也能穿越会话。detached 执行、trace 持久化、可恢复状态都是运行时合同的一部分。",
-				},
-				{
-					title: "重算",
-					body: "当输入变化时，taskflow 只重跑陈旧前沿，而不是把整条流从零重放。",
+					title: "闭环",
+					body: "hooks 在完成/失败时通知；approval 超时不再永挂；analytics 汇总最近 N 次运行。",
 				},
 			],
 		},
 		ledger: {
-			title: "0.2 是编译器转身。",
-			sub: "图不再只是被运行；它开始被编译、被续跑、被 replay、被增量重算。",
+			title: "0.2 是编译器转身。0.2.7 补上闭环。",
+			sub: "图会被编译，会在花费前被 plan，会续跑、replay、跑完通知，也会增量重算。",
 			items: [
+				{
+					tag: "0.2.7",
+					title: "花 token 前先计划",
+					body: "taskflow_plan + 预算上界 + recompute 省钱一行——付钱前先看见合同。",
+				},
+				{
+					tag: "0.2.7",
+					title: "跑完闭环",
+					body: "flow hooks、approval 超时/onExpire、只读 analytics——不泄露 transcript。",
+				},
 				{
 					tag: "S4",
 					title: "TypeScript DSL 编译到 FlowIR",
@@ -275,22 +285,12 @@ const copy = {
 				{
 					tag: "Cache",
 					title: "跨 run 内容寻址复用",
-					body: "未变化的工作被复用，而不是被重新付费。",
-				},
-				{
-					tag: "Delta",
-					title: "why-stale + 最小前沿重跑",
-					body: "改一个文件，再只重跑受影响的阶段。",
+					body: "未变化的工作被复用——并汇报为 reused N / rerun M。",
 				},
 				{
 					tag: "Hosts",
-					title: "五个宿主适配器",
+					title: "五个宿主 · 19 个 MCP 工具",
 					body: "Pi、Codex、Claude Code、OpenCode、Grok 共用同一套引擎。",
-				},
-				{
-					tag: "Return",
-					title: "中间态留在运行时里",
-					body: "宿主收到的是最终结果，不是运行污泥。",
 				},
 			],
 		},
@@ -303,7 +303,7 @@ const copy = {
 			noteTitle: "不变的东西",
 			notes: [
 				"图是显式的、可版本化的。",
-				"验证先于花费发生。",
+				"计划与验证先于花费发生。",
 				"阶段身份可以被指纹化和缓存。",
 				"回到宿主的仍只有 finalOutput。",
 			],
@@ -312,17 +312,17 @@ const copy = {
 			title: "当图成为数据，事情会怎么变。",
 			sub: "不是品类讲解，而是运行差异。",
 			rows: [
-				{ label: "plan", a: "声明并版本化", b: "每次重推为 prose" },
-				{ label: "spend", a: "先验证", b: "运行中才发现" },
-				{ label: "failure", a: "可续跑", b: "从头再来" },
-				{ label: "change", a: "最小重算", b: "大范围重跑" },
+				{ label: "plan", a: "0 token 预演 + 声明版本化", b: "每次重推为 prose" },
+				{ label: "spend", a: "先 plan / verify", b: "运行中才发现" },
+				{ label: "failure", a: "可续跑 + hooks 通知", b: "从头再来" },
+				{ label: "change", a: "最小重算 + 省钱数字", b: "大范围重跑" },
 			],
 			left: "taskflow",
 			right: "ad-hoc",
 		},
 		cta: {
 			title: "图只搭一次，之后精确重跑。",
-			body: "先验证，能续跑，只把结果带回宿主。",
+			body: "先 plan，再验证，能续跑，跑完能喊，只把结果带回宿主。",
 			primary: "阅读文档",
 			secondary: "安装",
 		},
@@ -341,7 +341,7 @@ export default async function HomePage({
 		"@context": "https://schema.org",
 		"@type": "SoftwareApplication",
 		name: "taskflow",
-		softwareVersion: "0.2.3",
+		softwareVersion: "0.2.7",
 		description: t.hero.sub,
 		applicationCategory: "DeveloperApplication",
 		operatingSystem: "Any",

@@ -1,0 +1,28 @@
+{
+  "name": "background-with-hooks",
+  "description": "Script phase + file hook + optional approval timeout demo.",
+  "hooks": {
+    "onComplete": [
+      { "type": "file", "path": ".taskflow/hooks/last-complete.json" }
+    ],
+    "onFail": [
+      { "type": "file", "path": ".taskflow/hooks/last-fail.json" }
+    ]
+  },
+  "phases": [
+    {
+      "id": "work",
+      "type": "script",
+      "run": "echo done"
+    },
+    {
+      "id": "human",
+      "type": "approval",
+      "dependsOn": ["work"],
+      "task": "Approve the script output?",
+      "timeoutMs": 86400000,
+      "onExpire": "reject",
+      "final": true
+    }
+  ]
+}

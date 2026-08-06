@@ -25,17 +25,24 @@ export function approvalDecisionToPhaseState(
 	opts: {
 		inputHash: string;
 		reads?: PhaseState["reads"];
-		/** When true, mark auto-reject (no interactive approver). */
+		/** When true, mark approval as automatic (timeout / headless / abort). */
 		auto?: boolean;
 	},
 ): PhaseState {
-	if (opts.auto) {
+	const note = decision.note?.trim();
+	// Headless default path: no note and reject → keep historical auto-reject wording.
+	if (
+		opts.auto &&
+		decision.decision === "reject" &&
+		(!note || note === "(auto-rejected: no interactive approver available)")
+	) {
+		const reason = note || "(auto-rejected: no interactive approver available)";
 		return {
 			id: phaseId,
 			status: "done",
-			output: "(auto-rejected: no interactive approver available)",
-			approval: { decision: "reject", auto: true },
-			gate: { verdict: "block", reason: "(auto-rejected: no interactive approver available)" },
+			output: reason,
+			approval: { decision: "reject", auto: true, note },
+			gate: { verdict: "block", reason },
 			usage: emptyUsage(),
 			inputHash: opts.inputHash,
 			reads: opts.reads,
@@ -43,12 +50,11 @@ export function approvalDecisionToPhaseState(
 		};
 	}
 
-	const note = decision.note?.trim();
 	const ps: PhaseState = {
 		id: phaseId,
 		status: "done",
 		output: note || `(${decision.decision})`,
-		approval: { decision: decision.decision, note },
+		approval: { decision: decision.decision, note, ...(opts.auto ? { auto: true } : {}) },
 		usage: emptyUsage(),
 		inputHash: opts.inputHash,
 		reads: opts.reads,

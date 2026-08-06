@@ -1,0 +1,15 @@
+{
+  "name": "plan-first",
+  "description": "Tiny flow to dogfood taskflow_plan before run.",
+  "args": {
+    "target": { "type": "string", "default": "src", "description": "Directory to summarize" }
+  },
+  "phases": [
+    {
+      "id": "scan",
+      "type": "script",
+      "run": ["sh", "-c", "printf 'files under %s\\n' \"$1\"", "sh", "{args.target}"],
+      "final": true
+    }
+  ]
+}

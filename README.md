@@ -13,7 +13,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.7](#027-plan-before-spend--close-the-loop) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
 
 </div>
 
@@ -152,6 +152,32 @@ This is real output from a Pi run—not a mock dashboard:
 
 The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
 
+## 0.2.7: plan before spend · close the loop
+
+The 0.2 line made graphs **compiled and inspectable**. **0.2.7** makes the day-to-day loop feel finished: you can see the plan *before* any model call, and you can hear about the run *after* it finishes — without stuffing transcripts into the host.
+
+| Before spend | After spend |
+|---|---|
+| **`taskflow_plan` / `/tf plan`** — bind typed args, project phase order, mark dynamic refs, worst-case agent-call bound | **`hooks.onComplete` / `onFail` / `onBlocked`** — webhook, file, or argv-only command; summary payload only (`taskflow.hook.v1`) |
+| **`verify` / `lint`** still free | **`approval.timeoutMs` + `onExpire`** — HITL no longer waits forever |
+| **`recompute` savings line** — `reused N · rerun M · cutoff K · saved ~P%` | **`taskflow_analytics`** — last-N status, duration, fail/cache rates (read-only) |
+
+```bash
+# Zero tokens: see what would run and how expensive the worst case looks
+# MCP: taskflow_plan  ·  Pi: /tf plan my-flow '{"dir":"src"}'
+```
+
+```jsonc
+// Optional: fire-and-forget when a background run finishes
+{
+  "hooks": {
+    "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last-complete.json" }]
+  }
+}
+```
+
+MCP hosts now expose **19 tools** (added `taskflow_plan` and `taskflow_analytics`). Starter templates: [`examples/templates/`](./examples/templates/). Full notes: [CHANGELOG 0.2.7](./CHANGELOG.md#027--2026-08-06).
+
 ## 0.2 is the compiler turn
 
 Before 0.2, taskflow executed declarative graphs. Now the graph also has a compile-time frontend, a canonical intermediate representation, an append-only decision trace, offline replay, and incremental recompute.
@@ -198,13 +224,15 @@ FlowIR canonicalizes the graph and gives it a content hash. That compiled identi
 
 | Operation | What it answers | Model calls |
 |---|---|---:|
-| `verify` / `compile` | Is the graph structurally safe to run? | **0** |
+| **`plan`** | What will run, which args bind, worst-case agent calls? | **0** |
+| `verify` / `compile` / `lint` | Is the graph structurally safe / lint-clean? | **0** |
 | `ir` | What is the canonical graph and content hash? | **0** |
 | `resume` | What unfinished work remains? (forks a new run; original untouched) | Only unfinished phases |
 | `trace` | What calls and runtime decisions actually happened? | **0** to inspect |
 | `replay` | What if thresholds or budgets had been different? | **0** |
 | `why-stale` | What changed, and what depends on it? | **0** |
-| `recompute` | What is the smallest observable affected frontier? | Only affected phases |
+| `recompute` | What is the smallest observable affected frontier? (+ savings line) | Only affected phases |
+| `analytics` | How have recent runs of this flow behaved? | **0** |
 
 [Explore the compiler and runtime →](https://heggria.github.io/taskflow/en/docs/compiler-runtime/)
 
@@ -315,7 +343,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.3 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.7 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -324,7 +352,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.3 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.7 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.

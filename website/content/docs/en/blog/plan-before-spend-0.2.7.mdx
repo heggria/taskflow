@@ -1,0 +1,103 @@
+---
+title: "0.2.7: Plan before spend · close the loop after"
+description: Zero-token preflight, completion hooks, approval timeouts, and read-only analytics — the daily loop on top of the 0.2 compiler turn.
+---
+
+**taskflow 0.2.7** does not invent a new phase type. It finishes the loop operators already run every day: *see the plan before any model call*, then *hear about the run when it ends* — without stuffing intermediate transcripts into the host.
+
+## Plan before spend
+
+Before 0.2.7 you could `verify` a graph (structure) and `lint` it (plugins). That still matters. What was missing is the run-shaped question:
+
+> If I pass these args **now**, what will actually execute, what stays dynamic, and how many agent calls could this cost in the worst case?
+
+That is **`taskflow_plan`** (Pi: `action=plan` / `/tf plan`):
+
+- Bind typed invocation args (required / defaults / enums) the same way `run` does
+- Project topo-ordered phases with **bound / unresolved / dynamic** bindings
+- Report a **worst-case agent-call bound** (`loop` × `maxIterations`; dynamic `map.over` → `unbounded`)
+- Fold in structural verify + optional plugin verifiers
+- **Zero tokens. Zero subagent spawn.**
+
+```jsonc
+// MCP
+{ "name": "taskflow_plan", "arguments": {
+  "defineFile": "/tmp/audit.json",
+  "args": { "dir": "src/api" }
+}}
+```
+
+```bash
+# Pi
+/tf plan audit '{"dir":"src/api"}'
+```
+
+If the plan is blocked (missing required args, hard verify errors), fix the graph **before** `taskflow_run`.
+
+## Close the loop after
+
+Long DAGs often run in **background** mode. 0.2.7 adds three pieces that make “walk away” safe:
+
+### 1. Flow hooks
+
+Optional `hooks` on the flow definition:
+
+```jsonc
+{
+  "hooks": {
+    "onComplete": [
+      { "type": "file", "path": ".taskflow/hooks/last-complete.json" },
+      { "type": "webhook", "url": "https://example.com/hooks/taskflow" }
+    ],
+    "onFail": [{ "type": "file", "path": ".taskflow/hooks/last-fail.json" }],
+    "onBlocked": [{ "type": "command", "run": ["notify-send", "taskflow", "blocked"] }]
+  }
+}
+```
+
+Payload schema is **`taskflow.hook.v1`**: run id, status, phase counts, usage summary — **never** phase outputs or transcripts. Hook failure is fire-and-forget and **never** flips a completed run to failed. `http://127.0.0.1` / `localhost` is allowed for local dogfood; other `http` URLs are rejected.
+
+### 2. Approval timeouts
+
+HITL used to wait forever. Now:
+
+```jsonc
+{
+  "id": "human",
+  "type": "approval",
+  "task": "Ship this?",
+  "timeoutMs": 86400000,
+  "onExpire": "reject"   // reject | fail | approve
+}
+```
+
+Omit `timeoutMs` and behavior is unchanged (infinite wait). `approve` is deliberate and documented as a footgun.
+
+### 3. Read-only analytics
+
+`taskflow_analytics` / `/tf analytics <flow> --last 20` aggregates recent runs: status histogram, p50/p95 duration, per-phase fail and cache-hit rates. **No auto-tune.** Data first.
+
+## Savings you can see
+
+`recompute` already knew reused / rerun / cutoff. 0.2.7 puts a **one-line savings header** on MCP and Pi output:
+
+```text
+Savings (DRY RUN, seed: review): reused 5 · rerun 2 · cutoff 0 · saved ~71% phases
+```
+
+Foreground and background status can also surface cache-hit counts when phases hit cross-run or within-run cache.
+
+## What did not change
+
+- Intermediate transcripts still stay out of the host unless you `peek` / `trace`
+- Control-plane / daemon GA is a separate track (0.3) — this release is pure 0.2 engine DX
+- Shell `taskflow plan` is intentionally deferred; use MCP or Pi
+
+## Try it
+
+1. Install or upgrade packages to **0.2.7**
+2. Copy [`examples/templates/plan-first.json`](https://github.com/heggria/taskflow/tree/main/examples/templates) or `background-with-hooks.json`
+3. `taskflow_plan` → fix args → `taskflow_run`
+4. For long work: `mode: "background"` + a file hook
+
+Full changelog: monorepo [`CHANGELOG.md`](https://github.com/heggria/taskflow/blob/main/CHANGELOG.md). Commands reference: [Commands](/en/docs/reference/commands).
