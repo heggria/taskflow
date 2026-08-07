@@ -14,7 +14,9 @@
  * @see docs/internal/overstory-convergence-roadmap.md §3 (M1)
  */
 
-import { collectRefs, type Phase, type Taskflow } from "../schema.ts";
+import { collectRefs, dependenciesOf, type Phase, type Taskflow } from "../schema.ts";
+import type { EffectDecl } from "../effects/types.ts";
+import { validateEffectFlow, validateEffectIR } from "../effects/validate.ts";
 import type {
 	CompileError,
 	CompileWarning,
@@ -84,6 +86,7 @@ const SIDECAR_PHASE_FIELDS = [
 	"idleTimeout",
 	"reduceStrategy",
 	"batchSize",
+	"effects",
 ] as const;
 
 /** Build the per-phase sidecar record (verbatim copy of non-IR fields). */
@@ -158,14 +161,39 @@ export function translateTaskflow(def: Taskflow): {
 
 		sidecarPhases[phase.id] = sidecarForPhase(phase);
 
+		const effectsRaw = phase.effects;
+		let effects: EffectDecl[] | undefined;
+		if (Array.isArray(effectsRaw) && effectsRaw.length > 0) {
+			const effectValidation = validateEffectIR({ effects: effectsRaw });
+			for (const issue of effectValidation.issues) {
+				if (issue.severity === "error") {
+					errors.push({ phaseId: phase.id, code: `effect-${issue.code}`, message: issue.message });
+				} else {
+					warnings.push({ phaseId: phase.id, message: issue.message });
+				}
+			}
+			if (effectValidation.ok) effects = effectsRaw as EffectDecl[];
+		}
+
 		return {
 			id: phase.id,
 			kind: phase.type ?? "agent",
 			inject: Array.from(reads),
 			emits: [phase.id],
 			when: phase.when,
+			...(effects ? { effects } : {}),
 		} satisfies FlowIRNode;
 	});
+
+	const effectFlow = validateEffectFlow(def.phases, (phase) => dependenciesOf(phase as Phase));
+	for (const issue of effectFlow.issues) {
+		const phaseId = issue.effectId?.includes("/") ? issue.effectId.split("/")[0] : undefined;
+		if (issue.severity === "error") {
+			errors.push({ phaseId, code: `effect-${issue.code}`, message: issue.message });
+		} else {
+			warnings.push({ phaseId, message: issue.message });
+		}
+	}
 
 	const ir: FlowIR = {
 		name: def.name,

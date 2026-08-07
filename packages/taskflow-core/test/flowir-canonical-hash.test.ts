@@ -5,6 +5,7 @@ import {
 	hashFlowIR,
 	hashNode,
 } from "../src/flowir/canonical-hash.ts";
+import type { EffectDecl } from "../src/effects/types.ts";
 import type { FlowIR, FlowIRNode } from "../src/flowir/schema.ts";
 
 function node(id: string, overrides: Partial<FlowIRNode> = {}): FlowIRNode {
@@ -302,4 +303,93 @@ test("SENSITIVITY: two distinct IRs do not collide", () => {
 		node("b", { inject: ["a"], task: "task B" }),
 	]);
 	assert.notEqual(hashFlowIR(a), hashFlowIR(b));
+});
+
+// ---------------------------------------------------------------------------
+// 4. TRUSTED EFFECTS (0.3) — content-addressed when present
+// ---------------------------------------------------------------------------
+
+const sampleEffect = (path: string): EffectDecl => ({
+	id: "w1",
+	kind: "fs.write",
+	target: {
+		kind: "path",
+		path: { workspace: "project", subpath: { literalPath: path }, intent: "create-file" },
+	},
+	integrity: "project",
+	confidentiality: "internal",
+});
+
+test("SENSITIVITY: node effects change hashNode", () => {
+	const a = node("x", { task: "t" });
+	const b = node("x", { task: "t", effects: [sampleEffect("out/a.md")] });
+	assert.notEqual(hashNode(a), hashNode(b), "presence of effects must change the node hash");
+});
+
+test("SENSITIVITY: different effect targets produce different hashes", () => {
+	const a = node("x", { effects: [sampleEffect("out/a.md")] });
+	const b = node("x", { effects: [sampleEffect("out/b.md")] });
+	assert.notEqual(hashNode(a), hashNode(b));
+});
+
+test("SENSITIVITY: different effect kinds produce different hashes", () => {
+	const a = node("x", {
+		effects: [{ id: "e1", kind: "fs.read" as const, target: { kind: "path", path: { workspace: "project", subpath: { literalPath: "in.md" }, intent: "existing-file" } } }],
+	});
+	const b = node("x", {
+		effects: [{ id: "e1", kind: "fs.write" as const, target: { kind: "path", path: { workspace: "project", subpath: { literalPath: "in.md" }, intent: "create-file" } } }],
+	});
+	assert.notEqual(hashNode(a), hashNode(b));
+});
+
+test("SENSITIVITY: flows differing only in effects produce different hashFlowIR", () => {
+	const a = ir([node("w", { kind: "script", effects: [sampleEffect("out/a.md")] })]);
+	const b = ir([node("w", { kind: "script", effects: [sampleEffect("out/b.md")] })]);
+	assert.notEqual(hashFlowIR(a), hashFlowIR(b));
+});
+
+test("DETERMINISM: effects-bearing IR hashes stably across calls and clones", () => {
+	const a = ir([
+		node("w", {
+			kind: "script",
+			task: "write",
+			effects: [sampleEffect("out/report.md")],
+		}),
+	]);
+	const h1 = hashFlowIR(a);
+	const h2 = hashFlowIR(a);
+	const h3 = hashFlowIR(JSON.parse(JSON.stringify(a)));
+	assert.equal(h1, h2);
+	assert.equal(h2, h3);
+	assert.match(h1, /^ir:[0-9a-f]{64}$/);
+});
+
+test("INDEPENDENCE: effects object key order does not change the hash", () => {
+	const e1: EffectDecl = {
+		id: "w1",
+		kind: "fs.write",
+		integrity: "project",
+		confidentiality: "internal",
+		target: {
+			kind: "path",
+			path: { workspace: "project", subpath: { literalPath: "out/r.md" }, intent: "create-file" },
+		},
+	};
+	const e2: EffectDecl = {
+		target: {
+			path: { intent: "create-file", subpath: { literalPath: "out/r.md" }, workspace: "project" },
+			kind: "path",
+		},
+		confidentiality: "internal",
+		integrity: "project",
+		kind: "fs.write",
+		id: "w1",
+	};
+	assert.equal(hashNode(node("x", { effects: [e1] })), hashNode(node("x", { effects: [e2] })));
+});
+
+test("INDEPENDENCE: empty effects array is equivalent to absent effects", () => {
+	const a = node("x", { task: "t", effects: [] });
+	const b = node("x", { task: "t" });
+	assert.equal(hashNode(a), hashNode(b));
 });

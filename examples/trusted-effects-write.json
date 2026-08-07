@@ -1,0 +1,34 @@
+{
+  "name": "trusted-effects-write",
+  "description": "0.3 Trusted Effects MVP demo: script phase declares fs.write; content is stdout; the resources transaction is the only finalizer (no LLM).",
+  "phases": [
+    {
+      "id": "write-report",
+      "type": "script",
+      "run": [
+        "node",
+        "-e",
+        "process.stdout.write('# Trusted Effects report\\n\\nCommitted via resource intent.\\n')"
+      ],
+      "idempotent": false,
+      "effects": [
+        {
+          "id": "report",
+          "kind": "fs.write",
+          "purpose": "write final report",
+          "confidentiality": "internal",
+          "integrity": "project",
+          "target": {
+            "kind": "path",
+            "path": {
+              "workspace": "project",
+              "subpath": { "literalPath": "out/report.md" },
+              "intent": "create-file"
+            }
+          }
+        }
+      ],
+      "final": true
+    }
+  ]
+}

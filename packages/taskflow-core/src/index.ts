@@ -62,3 +62,5 @@ export * from "./preflight.ts";
 export * from "./savings.ts";
 export * from "./hooks.ts";
 export * from "./analytics.ts";
+// 0.3 Trusted Effects MVP (additive pure surface + resource-controlled FS transaction)
+export * from "./effects/index.ts";
