@@ -117,8 +117,8 @@ function canonicalSerialize(value: unknown): string {
  * equivalent condition spellings collapse, and `undefined` optionals are
  * omitted so their presence/absence does not affect the hash.
  *
- * `inject`/`emits`/`deps` arrays are preserved verbatim (order is semantic —
- * declared-read order matters for fingerprinting).
+ * `inject`/`emits`/`deps`/`effects` arrays are preserved verbatim (order is
+ * semantic — declared-read / effect-declaration order matters for fingerprinting).
  */
 function canonicalNodeObject(node: FlowIRNode): Record<string, unknown> {
 	const obj: Record<string, unknown> = {
@@ -136,6 +136,9 @@ function canonicalNodeObject(node: FlowIRNode): Record<string, unknown> {
 	if (node.join !== undefined) obj.join = node.join;
 	if (node.timeout !== undefined) obj.timeout = node.timeout;
 	if (node.payload !== undefined) obj.payload = node.payload;
+	// Trusted Effects (0.3): content-address declared side effects when present.
+	// Array order is semantic (declaration order), matching inject/emits.
+	if (node.effects !== undefined && node.effects.length > 0) obj.effects = node.effects;
 	return obj;
 }
 

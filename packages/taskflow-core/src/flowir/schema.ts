@@ -33,8 +33,11 @@
  */
 
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { StringEnum } from "../typebox-helpers.ts";
 import { PHASE_TYPES, type PhaseType } from "../schema.ts";
+import type { EffectDecl } from "../effects/types.ts";
+import { EffectDeclSchema } from "../effects/schema.ts";
 
 // ---------------------------------------------------------------------------
 // FlowIRNodeKind — closed literal union = PHASE_TYPES (currently 12 kinds)
@@ -122,6 +125,12 @@ export interface FlowIRNode {
 	timeout?: number;
 	/** Runtime-affecting DSL payload not otherwise modeled by the core node fields. */
 	payload?: Record<string, unknown>;
+	/**
+	 * Trusted Effects (0.3 MVP): declared side effects for this node.
+	 * Shape is {@link EffectDecl}[]; deep validation is `validateEffectIR` /
+	 * the effects verifier (TypeBox here only checks presence of an array).
+	 */
+	effects?: EffectDecl[];
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +256,12 @@ export const FlowIRNodeSchema = Type.Object(
 				description: "Runtime-affecting DSL payload not otherwise modeled by the core node fields",
 			}),
 		),
+		effects: Type.Optional(
+			Type.Array(EffectDeclSchema, {
+				description:
+					"Trusted Effects (0.3): closed declared side effects (EffectDecl[]).",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -317,6 +332,10 @@ export function isFlowIRNode(value: unknown): value is FlowIRNode {
 	if (n.payload !== undefined && (typeof n.payload !== "object" || n.payload === null || Array.isArray(n.payload))) {
 		return false;
 	}
+	if (n.effects !== undefined && (
+		!Array.isArray(n.effects) ||
+		n.effects.some((effect) => !Value.Check(EffectDeclSchema, effect))
+	)) return false;
 	return true;
 }
 

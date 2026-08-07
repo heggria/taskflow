@@ -1,5 +1,79 @@
 {
   "schemaVersion": 1,
-  "baselineId": "taskflow-workspace-proposed-v1",
-  "cells": []
+  "baselineId": "taskflow-workspace-trusted-effects-v0.3.0-mvp",
+  "notes": "Honest cells for 0.3 Trusted Effects MVP. resolve-only is not a FileBroker sandbox. Empty claims removed.",
+  "cells": [
+    {
+      "host": "pi",
+      "resourceDomain": "filesystem",
+      "capability": "pathref-resolve",
+      "status": "supported",
+      "guarantee": "resolve-only",
+      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+    },
+    {
+      "host": "codex",
+      "resourceDomain": "filesystem",
+      "capability": "pathref-resolve",
+      "status": "supported",
+      "guarantee": "resolve-only",
+      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+    },
+    {
+      "host": "claude",
+      "resourceDomain": "filesystem",
+      "capability": "pathref-resolve",
+      "status": "supported",
+      "guarantee": "resolve-only",
+      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+    },
+    {
+      "host": "opencode",
+      "resourceDomain": "filesystem",
+      "capability": "pathref-resolve",
+      "status": "supported",
+      "guarantee": "resolve-only",
+      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+    },
+    {
+      "host": "grok",
+      "resourceDomain": "filesystem",
+      "capability": "pathref-resolve",
+      "status": "supported",
+      "guarantee": "resolve-only",
+      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+    },
+    {
+      "host": "*",
+      "resourceDomain": "filesystem",
+      "capability": "file-broker",
+      "status": "unsupported",
+      "guarantee": "none",
+      "evidence": "No host has passed FileBroker adversarial baseline; do not claim sandbox."
+    },
+    {
+      "host": "node-local",
+      "resourceDomain": "filesystem",
+      "capability": "trusted-effects-resource-transaction",
+      "status": "supported",
+      "guarantee": "pathref-lease-journal-permit-commit-or-restore",
+      "evidence": "packages/taskflow-core/src/resources/file-transaction.ts + test/resource-file-transaction.test.ts"
+    },
+    {
+      "host": "*",
+      "resourceDomain": "secret",
+      "capability": "secretref-backend",
+      "status": "unsupported",
+      "guarantee": "type-only-fail-closed",
+      "evidence": "SecretRef validated; no vault adapter in 0.3 MVP"
+    },
+    {
+      "host": "*",
+      "resourceDomain": "service",
+      "capability": "serviceref-adapter",
+      "status": "unsupported",
+      "guarantee": "type-only-fail-closed",
+      "evidence": "ServiceRef validated; no live adapter in 0.3 MVP"
+    }
+  ]
 }

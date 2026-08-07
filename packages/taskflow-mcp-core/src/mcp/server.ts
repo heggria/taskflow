@@ -24,7 +24,7 @@
  *   - taskflow_peek    : inspect a stored run's intermediate phase output
  *   - taskflow_trace   : read a run's append-only event trace
  *   - taskflow_replay  : re-evaluate a recorded trace under alternate knobs (zero tokens)
- *   - taskflow_why_stale / taskflow_recompute / taskflow_reconcile_workspace
+ *   - taskflow_why_stale / taskflow_why_effect / taskflow_recompute / taskflow_reconcile_workspace
  *   - taskflow_save / taskflow_search
  */
 
@@ -99,6 +99,8 @@ import {
 	readMapOf,
 	declaredReadMapOfDef,
 	formatWhyStale,
+	whyEffectFromDurableJournal,
+	formatWhyEffect,
 	recomputeTaskflow,
 	type RecomputeReport,
 	preflightTaskflow,
@@ -648,6 +650,23 @@ const TOOLS: McpTool[] = [
 		},
 	},
 	{
+		name: "taskflow_why_effect",
+		title: "Explain why a declared effect is authorized",
+		description:
+			"Given a runId + effectId (+ optional phaseId): explain authorization and lifecycle from the durable resource intent ledger. Zero tokens and read-only. A declaration without matching principal/capability/intent evidence is unauthorized.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run whose flow definition declares the effect." },
+				effectId: { type: "string", description: "Effect id as declared on the phase (or phaseId/effectId composite)." },
+				phaseId: { type: "string", description: "Optional phase scope when the same effect id appears on multiple phases." },
+				json: { type: "boolean", description: "Return the full WhyEffect record as JSON." },
+			},
+			required: ["runId", "effectId"],
+		},
+	},
+	{
 		name: "taskflow_recompute",
 		title: "Re-run a stored run's stale frontier (dry-run only)",
 		description:
@@ -1141,6 +1160,26 @@ export function makeToolHandlers(
 			const declared = declaredReadMapOfDef(run.def);
 			const seeds = typeof args.phaseId === "string" ? [args.phaseId] : [];
 			return textContent(formatWhyStale(run.runId, run.flowName, reads, seeds, declared));
+		},
+
+		taskflow_why_effect: async (args) => {
+			const runId = String(args.runId ?? "");
+			const effectId = String(args.effectId ?? "");
+			if (!runId) return textContent("taskflow_why_effect requires `runId`.", true);
+			if (!effectId) return textContent("taskflow_why_effect requires `effectId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const result = await whyEffectFromDurableJournal({
+				flow: run.def,
+				runId: run.runId,
+				effectId,
+				phaseId: typeof args.phaseId === "string" ? args.phaseId : undefined,
+				workspaceRoot: run.cwd,
+			});
+			if (!result.ok) return textContent(result.error, true);
+			if (args.json === true) return textContent(JSON.stringify(result.why, null, 2));
+			return textContent(formatWhyEffect(result.why));
 		},
 
 		taskflow_recompute: async (args, context) => {

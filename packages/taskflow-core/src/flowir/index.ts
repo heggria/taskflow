@@ -34,7 +34,7 @@ export async function compileTaskflowToIR(def: Taskflow): Promise<TaskflowIR> {
 	const c = compileTaskflowToFlowIR(def);
 	let hash: string | undefined;
 	try {
-		if (c.canonical.nodes.length > 0) {
+		if (c.errors.length === 0 && c.canonical.nodes.length > 0) {
 			hash = hashFlowIR(c.canonical);
 		}
 	} catch {

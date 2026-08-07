@@ -17,6 +17,7 @@
  */
 
 import type { Budget, Taskflow } from "../schema.ts";
+import type { EffectDecl } from "../effects/types.ts";
 
 // ---------------------------------------------------------------------------
 // Declared dependency plane (compile-time, M2)
@@ -63,6 +64,11 @@ export interface FlowIRNode {
 	emits: string[];
 	/** Raw `when` guard passthrough (stub: not rewritten to IR conditions). */
 	when?: string;
+	/**
+	 * Trusted Effects (0.3 MVP): declared side effects for this node.
+	 * Content-addressed by `hashFlowIR` when present on the canonical IR.
+	 */
+	effects?: EffectDecl[];
 }
 
 /** The compiled IR: a flat list of nodes plus flow-level metadata. */

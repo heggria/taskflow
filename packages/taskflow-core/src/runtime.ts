@@ -819,6 +819,29 @@ function flowTreeUsesCwdBridge(
 	return false;
 }
 
+function flowTreeUsesDeclaredEffects(
+	def: Taskflow,
+	loadFlow: RuntimeDeps["loadFlow"],
+	seenUses = new Set<string>(),
+): boolean {
+	if (def.phases.some((phase) => Array.isArray((phase as { effects?: unknown }).effects) &&
+		((phase as { effects?: unknown[] }).effects?.length ?? 0) > 0)) return true;
+	if (!loadFlow) return false;
+	for (const phase of def.phases) {
+		if ((phase.type ?? "agent") !== "flow" || !phase.use) continue;
+		if (seenUses.has(phase.use)) continue;
+		seenUses.add(phase.use);
+		try {
+			const child = loadFlow(phase.use);
+			if (child && flowTreeUsesDeclaredEffects(child, loadFlow, seenUses)) return true;
+		} catch {
+			// A mutable/unavailable saved flow is authority-bearing until proven otherwise.
+			return true;
+		}
+	}
+	return false;
+}
+
 /**
  * Freeze the saved-flow namespace for one top-level execution. Capability
  * discovery and phase execution must observe the same definition, including
@@ -1138,9 +1161,132 @@ async function executePhaseImpl(
 		}
 		return ps;
 	};
+	const executeInnerWithDeclaredEffects = async (innerDeps: RuntimeDeps): Promise<PhaseState> => {
+		const effects = (phase as { effects?: unknown }).effects;
+		if (!Array.isArray(effects) || effects.length === 0) {
+			return executePhaseInner(phase, state, innerDeps, prior, emitProgress, _retryDepth, innerOpts);
+		}
+		const te = await import("./effects/index.ts");
+		const effectValidation = te.validateDeclaredEffectsBeforeAdmission(effects);
+		if (!effectValidation.ok) {
+			return {
+				id: phase.id,
+				status: "failed",
+				error: `trusted-effects admission failed (${effectValidation.code}): ${effectValidation.reason}`,
+				endedAt: Date.now(),
+				usage: emptyUsage(),
+			};
+		}
+		const hasWrites = te.hasDeclaredFsWriteEffects(effects);
+		let binding = innerDeps._workspaceBinding;
+		if (hasWrites && !binding) {
+			const effectiveCwd = resolveEffCwd(innerDeps, phase);
+			try {
+				binding = await innerDeps.workspaceSession?.bindPhase({
+					invocationRoot: effectiveCwd,
+					runId: state.runId,
+					phaseId: phase.id,
+					argDefinitions: state.def.args ?? {},
+					argValues: state.args,
+				});
+			} catch (error) {
+				return {
+					id: phase.id,
+					status: "failed",
+					error: error instanceof Error ? error.message : String(error),
+					endedAt: Date.now(),
+					usage: emptyUsage(),
+				};
+			}
+		}
+		if (hasWrites && !binding) {
+			return {
+				id: phase.id,
+				status: "failed",
+				error: "TFWS_RESOURCE_AUTHORITY_UNAVAILABLE: declared fs.write requires a workspace authority binding",
+				endedAt: Date.now(),
+				usage: emptyUsage(),
+			};
+		}
+		const admitted = binding
+			? await te.preparePhaseDeclaredFsWrites(binding, { effects, signal: innerDeps.signal })
+			: { ok: true as const, prepared: undefined };
+		if (!admitted.ok) {
+			return {
+				id: phase.id,
+				status: "failed",
+				error: `trusted-effects admission failed (${admitted.code}): ${admitted.reason}`,
+				endedAt: Date.now(),
+				usage: emptyUsage(),
+			};
+		}
+		let ps: PhaseState;
+		try {
+			// The file transaction owns admission for declared targets. Do not open a
+			// second broad generation-only intent around each nested runner call.
+			ps = await executePhaseInner(
+				phase,
+				state,
+				hasWrites
+					? { ...innerDeps, _workspaceBinding: undefined, _disableCache: true }
+					: innerDeps,
+				prior,
+				emitProgress,
+				_retryDepth,
+				innerOpts,
+			);
+		} catch (error) {
+			if (admitted.prepared) {
+				await te.rejectPreparedDeclaredFsWrites(
+					admitted.prepared,
+					`phase body threw: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			throw error;
+		}
+		if (!admitted.prepared) return ps;
+		if (ps.status !== "done") {
+			try {
+				await te.rejectPreparedDeclaredFsWrites(
+					admitted.prepared,
+					ps.error ?? `phase ended with status ${ps.status}`,
+				);
+			} catch (error) {
+				return {
+					...ps,
+					status: "failed",
+					error: `${ps.error ?? "phase failed"}; trusted-effects restore failed: ${error instanceof Error ? error.message : String(error)}`,
+					endedAt: Date.now(),
+				};
+			}
+			return ps;
+		}
+		const finalized = await te.finalizePreparedDeclaredFsWrites(admitted.prepared, ps.output ?? "");
+		if (!finalized.ok) {
+			return {
+				...ps,
+				status: "failed",
+				error: `trusted-effects finalize failed (${finalized.code}): ${finalized.reason}`,
+				sideEffect: true,
+				endedAt: Date.now(),
+			};
+		}
+		return {
+			...ps,
+			sideEffect: finalized.committedPaths.length > 0 || ps.sideEffect,
+			warnings: finalized.committedPaths.length === 0
+				? ps.warnings
+				: [
+						...(ps.warnings ?? []),
+						`trusted-effects: committed ${finalized.committedPaths.join(", ")} via resource intent ${finalized.intentId}`,
+					],
+		};
+	};
 	const cwdArg = cwdArgName(phase.cwd);
 	let innerOpts: PhaseExecOpts = { ...opts, upstreamDeps: deps };
-	if ((cwdArg !== undefined || deps._dynamic === true || deps._cwdBoundary !== undefined) && phase.when !== undefined) {
+	if ((cwdArg !== undefined || deps._dynamic === true || deps._cwdBoundary !== undefined ||
+		(Array.isArray((phase as { effects?: unknown }).effects) && ((phase as { effects?: unknown[] }).effects?.length ?? 0) > 0)) &&
+		phase.when !== undefined) {
 		const whenReadRefs: string[] = [];
 		const whenCtx = buildInterpolationContext(
 			state,
@@ -1242,7 +1388,7 @@ async function executePhaseImpl(
 			_disableCache: true,
 			_workspaceBinding: workspaceBinding,
 		};
-		const ps = await executePhaseInner(phase, state, innerDeps, prior, emitProgress, _retryDepth, innerOpts);
+		const ps = await executeInnerWithDeclaredEffects(innerDeps);
 		ps.warnings = [
 			...(ps.warnings ?? []),
 			`cwd bridge: resolve-only {args.${cwdArg}} -> ${bound.value.logicalPath}; principal/root authorization, cross-process lease, and write journal are active, but filesystem access outside this directory is not sandbox-enforced`,
@@ -1287,25 +1433,17 @@ async function executePhaseImpl(
 				usage: emptyUsage(),
 			});
 		}
-		return stamp(await executePhaseInner(
-			phase,
-			state,
-			{
+		return stamp(await executeInnerWithDeclaredEffects({
 				...deps,
 				_cwdOverride: selected.canonicalPath,
 				_cwdBoundary: selected.canonicalPath,
 				_cacheCwdIdentity: selected.canonicalPath,
 				_workspaceBinding: narrowedBinding,
-			},
-			prior,
-			emitProgress,
-			_retryDepth,
-			innerOpts,
-		));
+			}));
 	}
 	// Non-keyword cwd (or none): no workspace lifecycle — run directly.
 	if (!isWorkspaceKeyword(phase.cwd)) {
-		return stamp(await executePhaseInner(phase, state, deps, prior, emitProgress, _retryDepth, innerOpts));
+		return stamp(await executeInnerWithDeclaredEffects(deps));
 	}
 	let ws: Workspace | undefined;
 	try {
@@ -1320,7 +1458,7 @@ async function executePhaseImpl(
 	}
 	const innerDeps: RuntimeDeps = ws ? { ...deps, _cwdOverride: ws.dir, _cacheCwdIdentity: ws.dir } : deps;
 	try {
-		const ps = await executePhaseInner(phase, state, innerDeps, prior, emitProgress, _retryDepth, innerOpts);
+		const ps = await executeInnerWithDeclaredEffects(innerDeps);
 		if (ws && (ws.kind !== "inherited" || ws.note)) {
 			const tag = ws.kind === "inherited" ? "workspace" : `workspace:${ws.kind}`;
 			const msg = ws.note ? `${tag} — ${ws.note}` : `${tag} at ${ws.dir}`;
@@ -1447,6 +1585,13 @@ async function executePhaseInner(
 	// covers every cache path, including the map per-item path (perItemCacheable
 	// requires scope === "cross-run").
 	if (phase.idempotent === false) {
+		cacheScope = "off";
+	}
+	// Declared fs.write → resource transaction finalize; never cache-skip promotion.
+	if (
+		Array.isArray((phase as { effects?: unknown }).effects) &&
+		((phase as { effects?: { kind?: string }[] }).effects ?? []).some((e) => e?.kind === "fs.write")
+	) {
 		cacheScope = "off";
 	}
 	if (deps._disableCache) {
@@ -4212,11 +4357,25 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	// mutations or let downstream phases observe stale files. Disable cache and
 	// within-run resume reuse across the complete reachable flow tree.
 	const bridgeTree = flowTreeUsesCwdBridge(def, deps.loadFlow);
+	const effectsTree = flowTreeUsesDeclaredEffects(def, deps.loadFlow);
+	const resourceTree = bridgeTree || effectsTree;
+	if (effectsTree) {
+		const { validateEffectFlow } = await import("./effects/validate.ts");
+		const labelFlow = validateEffectFlow(def.phases, (phase) => dependenciesOf(phase as Phase));
+		if (!labelFlow.ok) {
+			return failBeforeExecution(
+				`Taskflow '${def.name}' EffectIR label flow is invalid: ${labelFlow.issues
+					.filter((issue) => issue.severity === "error")
+					.map((issue) => issue.message)
+					.join("; ")}`,
+			);
+		}
+	}
 	// Persisted binding is a permanent taint bit: saved-flow definitions can
 	// change between resumes, but prior outputs may already depend on filesystem
 	// mutations. Never regain cache/rebind privileges merely because the current
 	// snapshot no longer declares the bridge.
-	const bridgeTainted = bridgeTree || state.cwdRootBinding !== undefined;
+	const bridgeTainted = resourceTree || state.cwdRootBinding !== undefined;
 	if (bridgeTainted) {
 		const invocationRoot = directoryIdentity(deps.cwd);
 		const statePathRoot = directoryIdentity(state.cwd);
@@ -4228,7 +4387,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 		// phase previously executed without a persisted root binding. Conversely,
 		// a host's launch snapshot proves root continuity, not prior bridge
 		// authorization: adding a bridge after ordinary phases ran still fails.
-		const isLegacyResume = bridgeTree && recordedRoot === undefined && hasExecutablePriorState;
+		const isLegacyResume = resourceTree && recordedRoot === undefined && hasExecutablePriorState;
 		if (
 			isLegacyResume ||
 			!sameDirectoryIdentity(statePathRoot, invocationRoot) ||
@@ -4236,7 +4395,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 			(recordedRoot !== undefined && !sameDirectoryIdentity(recordedRoot, invocationRoot))
 		) {
 			return failBeforeExecution(
-				`Taskflow '${def.name}' cwd-bridge invocation root does not match the run's persisted root; start a new run instead of rebinding on resume`,
+				`Taskflow '${def.name}' resource-authority invocation root does not match the run's persisted root; start a new run instead of rebinding on resume`,
 			);
 		}
 		state.cwdRootBinding ??= invocationRoot;
@@ -4252,7 +4411,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	// control/durability scaffold. This does not upgrade its assurance: the
 	// session is deliberately labelled resolve-only and no OS sandbox claim is
 	// made. A native session must come from an exact approved host baseline cell.
-	if (bridgeTree && deps.cwdBridgeMode === "resolve-only" && !deps.workspaceSession) {
+	if (resourceTree && (effectsTree || deps.cwdBridgeMode === "resolve-only") && !deps.workspaceSession) {
 		try {
 			deps = {
 				...deps,
@@ -4319,7 +4478,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 		// not yet persist compatible input hashes, so it must never blindly trust a
 		// prior `done` row.
 		const hasPriorState = Object.keys(state.phases).length > 0;
-		if (eventKernelEnabled(deps) && deps._cwdBoundary === undefined && !hasPriorState && canUseEventKernel(def, deps.loadFlow)) {
+		if (eventKernelEnabled(deps) && !effectsTree && deps._cwdBoundary === undefined && !hasPriorState && canUseEventKernel(def, deps.loadFlow)) {
 			if (!deps.runTask) {
 				throw new Error("event kernel requires RuntimeDeps.runTask");
 			}

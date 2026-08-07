@@ -2,6 +2,34 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.3.0] — Unreleased (Trusted Effects candidate)
+
+> **Version plan:** keep published packages at **0.2.7** until a human cuts `v0.3.0`.
+> Branch: `feat/0.3.0-trusted-effects`. **Not GA until tag + publish.**
+
+### Added
+
+- **Trusted Effects MVP** (`packages/taskflow-core/src/effects/`):
+  - EffectIR (`EFFECT_KINDS`), PathRef reuse, SecretRef/ServiceRef (type-only fail-closed)
+  - closed TypeBox EffectIR + confidentiality/integrity source-to-sink validation
+  - resource-controlled FS transaction: durable snapshot → persistent lease → journal intent/permit → stage → Commit or Restore+Reject
+  - declaration-only bridge in `effects/runtime-apply.ts`; no second changeset/gateway authority
+  - ledger-backed `whyAuthorized` / `whyContext` / `whyEffect`
+- Optional phase/flow `effects[]`; FlowIR translate/compile/hash include effects
+- Built-in `detectEffectsIssues` (category `effects`) + `effectsLintVerifier`
+- Every imperative phase fast path finalizes declared `fs.write` through the resource transaction; event-kernel-enabled runs use the same safe imperative path
+- Honest host baseline: `conformance/workspace/host-support-baseline.json`
+- Docs: `docs/internal/0.3.0-trusted-effects-mvp.md`, `0.3.0-agent-goal.md`, `0.3.0-ga-scoreboard.md`
+- Example: `examples/trusted-effects-write.json`
+- Tests: `test/effects*.test.ts`, `test/verify-effects.test.ts`
+
+### Notes
+
+- SecretRef/ServiceRef have **no** vault/network backends in this cut.
+- Resolve-only is not an OS sandbox. Direct writes to declared targets are detected and restored; writes outside declared targets remain host-policy dependent.
+- Historical Control Plane (`feat/0.3.0`) is **not** this release definition.
+- **Not released; not GA.**
+
 ## [0.2.7] — 2026-08-06
 
 ### Added
