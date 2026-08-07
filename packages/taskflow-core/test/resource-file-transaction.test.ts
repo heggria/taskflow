@@ -37,6 +37,11 @@ function fixture(): { root: string; control: string } {
 	};
 }
 
+function transactionArtifacts(control: string): string[] {
+	const directory = path.join(control, "file-transactions");
+	return fs.existsSync(directory) ? fs.readdirSync(directory) : [];
+}
+
 async function rootBinding(root: string, control: string, leaseTimeoutMs = 500): Promise<ResolveOnlyPhaseBinding> {
 	const session = await createResolveOnlyWorkspaceSession({
 		invocationRoot: root,
@@ -121,7 +126,7 @@ test("resource file transaction: commits content with durable authority evidence
 		});
 		assert.equal(declarationOnly.ok, true);
 		if (declarationOnly.ok) assert.equal(declarationOnly.why.authorized.allowed, false);
-		assert.equal(fs.readdirSync(path.join(control, "file-transactions")).length, 1);
+		assert.deepEqual(transactionArtifacts(control), [], "terminal commit garbage-collects before-images");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 		fs.rmSync(control, { recursive: true, force: true });
@@ -149,6 +154,7 @@ test("resource file transaction: direct final-path bypass is restored with a kno
 		assert.equal(intent?.status, "aborted-restored");
 		assert.match(intent?.terminalReason ?? "", /changed outside the resource transaction/);
 		assert.equal(await journal.getDomainGeneration(intent!.resourceDomainId), 0);
+		assert.deepEqual(transactionArtifacts(control), [], "terminal abort garbage-collects before-images");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 		fs.rmSync(control, { recursive: true, force: true });
@@ -245,6 +251,16 @@ class ReleaseFailsAfterDurableUnlockCoordinator extends PersistentLeaseCoordinat
 				throw new Error("injected post-release cleanup failure");
 			},
 		};
+	}
+}
+
+class ActivationAndInspectionFailJournal extends WriteIntentJournal {
+	override async activate(): Promise<void> {
+		throw new Error("injected activation failure");
+	}
+
+	override async getIntent(): Promise<never> {
+		throw new Error("injected journal inspection failure");
 	}
 }
 
@@ -349,6 +365,84 @@ test("resource file transaction: post-terminal lease cleanup failure never makes
 	}
 });
 
+test("resource file transaction: post-commit staged cleanup failure remains durable success", async () => {
+	const { root, control } = fixture();
+	const owner: ExecutionOwner = {
+		runId: "run",
+		phaseId: "phase",
+		attemptId: "attempt",
+		unitId: "unit",
+		ancestry: [],
+	};
+	const warnings: string[] = [];
+	const originalWarn = console.warn;
+	console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+	let cleanupCalls = 0;
+	try {
+		const leases = new PersistentLeaseCoordinator({ directory: control, registryId: "registry" });
+		const journal = new WriteIntentJournal({ directory: control, journalEpoch: 1 });
+		const options = {
+			controlDirectory: control,
+			resourceDomainId: "domain",
+			owner,
+			targets: resolvedTargets(root, owner).slice(0, 1),
+			leases,
+			journal,
+			leaseTimeoutMs: 500,
+			permitTtlMs: 5_000,
+			authorizationScopeRoot: root,
+			cleanupStaging: () => {
+				cleanupCalls++;
+				throw new Error("injected staged cleanup failure");
+			},
+		} as Parameters<typeof prepareResourceFileTransaction>[0] & { cleanupStaging: () => void };
+		const tx = await prepareResourceFileTransaction(options);
+		const result = await tx.commit([{ effectId: "a", content: "A" }]);
+		assert.equal(result.ok, true);
+		assert.equal(cleanupCalls, 1);
+		assert.equal(fs.readFileSync(path.join(root, "a.txt"), "utf8"), "A");
+		assert.equal((await journal.listIntents())[0]?.status, "committed-content");
+		assert.equal((await leases.list()).length, 0, "cleanup failure must not leak the lease");
+		assert.ok(warnings.some((warning) => /staging cleanup deferred/.test(warning)));
+	} finally {
+		console.warn = originalWarn;
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(control, { recursive: true, force: true });
+	}
+});
+
+test("resource file transaction: activation plus journal-inspection double fault still releases lease", async () => {
+	const { root, control } = fixture();
+	const owner: ExecutionOwner = {
+		runId: "run",
+		phaseId: "phase",
+		attemptId: "attempt",
+		unitId: "unit",
+		ancestry: [],
+	};
+	try {
+		const leases = new PersistentLeaseCoordinator({ directory: control, registryId: "registry" });
+		await assert.rejects(
+			prepareResourceFileTransaction({
+				controlDirectory: control,
+				resourceDomainId: "domain",
+				owner,
+				targets: resolvedTargets(root, owner).slice(0, 1),
+				leases,
+				journal: new ActivationAndInspectionFailJournal({ directory: control, journalEpoch: 1 }),
+				leaseTimeoutMs: 500,
+				permitTtlMs: 5_000,
+				authorizationScopeRoot: root,
+			}),
+			/injected journal inspection failure/,
+		);
+		assert.equal((await leases.list()).length, 0, "all preparation failures must release the lease");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(control, { recursive: true, force: true });
+	}
+});
+
 test("resource file transaction: startup recovery restores a process-crashed partial multi-file mutation", async () => {
 	const { root, control } = fixture();
 	try {
@@ -387,6 +481,37 @@ test("resource file transaction: startup recovery restores a process-crashed par
 		assert.equal(intent?.status, "aborted-restored");
 		assert.match(intent?.terminalReason ?? "", /startup recovery restored/);
 		assert.equal(intent?.commitGeneration, undefined);
+		assert.deepEqual(transactionArtifacts(control), [], "startup recovery garbage-collects restored before-images");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(control, { recursive: true, force: true });
+	}
+});
+
+test("resource file transaction: startup garbage-collects orphan snapshot directories", async () => {
+	const { root, control } = fixture();
+	try {
+		const orphan = path.join(control, "file-transactions", "orphan-before-intent");
+		fs.mkdirSync(orphan, { recursive: true });
+		fs.writeFileSync(path.join(orphan, "before.blob"), "SECRET-BEFORE-IMAGE");
+		const stale = new Date(Date.now() - 10 * 60_000);
+		fs.utimesSync(orphan, stale, stale);
+		await createResolveOnlyWorkspaceSession({ invocationRoot: root, controlDirectory: control });
+		assert.deepEqual(transactionArtifacts(control), []);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(control, { recursive: true, force: true });
+	}
+});
+
+test("resource file transaction: startup GC preserves a fresh pre-intent transaction window", async () => {
+	const { root, control } = fixture();
+	try {
+		const fresh = path.join(control, "file-transactions", "fresh-before-intent");
+		fs.mkdirSync(fresh, { recursive: true });
+		fs.writeFileSync(path.join(fresh, "before.blob"), "IN-FLIGHT-BEFORE-IMAGE");
+		await createResolveOnlyWorkspaceSession({ invocationRoot: root, controlDirectory: control });
+		assert.deepEqual(transactionArtifacts(control), ["fresh-before-intent"]);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 		fs.rmSync(control, { recursive: true, force: true });

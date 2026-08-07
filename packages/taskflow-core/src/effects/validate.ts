@@ -71,6 +71,11 @@ function labelFlowIssues(
 	sinkLabel = sink.id,
 ): EffectValidationIssue[] {
 	const issues: EffectValidationIssue[] = [];
+	// Two unresolved composition boundaries carry taint but do not create a
+	// concrete source→sink edge by themselves. Keep the taint flowing until it
+	// meets a declared effect; otherwise ordinary dynamic composition would
+	// reject solely because two unknown summaries are sequenced.
+	if (source.__unknownBoundary === true && sink.__unknownBoundary === true) return issues;
 	const sourceConf = confidentialityOf(source);
 	const sinkConf = confidentialityOf(sink);
 	const sourceIntegrity = integrityOf(source);
@@ -361,6 +366,83 @@ export interface EffectFlowPhaseLike {
 	effects?: unknown;
 	dependsOn?: unknown;
 	from?: unknown;
+	type?: unknown;
+	def?: unknown;
+	use?: unknown;
+	final?: unknown;
+}
+
+export interface ComposedEffectFlowLike {
+	name?: unknown;
+	phases?: readonly EffectFlowPhaseLike[];
+}
+
+interface LabeledEffect {
+	label: string;
+	effect: ValidEffectRecord;
+}
+
+interface PhaseEffectSummary {
+	sources: LabeledEffect[];
+	sinks: LabeledEffect[];
+}
+
+export interface ComposedEffectFlowOptions {
+	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
+}
+
+function directPhaseSummary(phase: EffectFlowPhaseLike, phaseLabel: string): PhaseEffectSummary {
+	const sources: LabeledEffect[] = [];
+	const sinks: LabeledEffect[] = [];
+	for (const raw of Array.isArray(phase.effects) ? phase.effects : []) {
+		if (!isObject(raw) || typeof raw.id !== "string" || !isEffectKind(raw.kind)) continue;
+		const effect = raw as ValidEffectRecord;
+		const labeled = { label: `${phaseLabel}/${effect.id}`, effect };
+		if (SOURCE_KINDS.has(effect.kind)) sources.push(labeled);
+		if (SINK_KINDS.has(effect.kind)) sinks.push(labeled);
+	}
+	return { sources, sinks };
+}
+
+function unknownBoundarySummary(phaseLabel: string): PhaseEffectSummary {
+	return {
+		sources: [{
+			label: `${phaseLabel}/<dynamic-source>`,
+			effect: {
+				id: "<dynamic-source>",
+				kind: "secret.read",
+				confidentiality: "secret",
+				integrity: "untrusted",
+				__unknownBoundary: true,
+				target: { kind: "secret", secret: { secretId: "<dynamic>" } },
+			},
+		}],
+		sinks: [{
+			label: `${phaseLabel}/<dynamic-sink>`,
+			effect: {
+				id: "<dynamic-sink>",
+				kind: "service.call",
+				confidentiality: "public",
+				integrity: "verified",
+				__unknownBoundary: true,
+				target: { kind: "service", service: { serviceId: "<dynamic>" } },
+			},
+		}],
+	};
+}
+
+function parseInlineFlow(raw: unknown): ComposedEffectFlowLike | undefined {
+	let value = raw;
+	if (typeof value === "string") {
+		try {
+			value = JSON.parse(value) as unknown;
+		} catch {
+			return undefined;
+		}
+	}
+	if (Array.isArray(value)) return { phases: value as EffectFlowPhaseLike[] };
+	if (!isObject(value) || !Array.isArray(value.phases)) return undefined;
+	return { name: value.name, phases: value.phases as EffectFlowPhaseLike[] };
 }
 
 /**
@@ -375,20 +457,18 @@ export function validateEffectFlow(
 		...(Array.isArray(phase.dependsOn) ? phase.dependsOn.filter((id): id is string => typeof id === "string") : []),
 		...(Array.isArray(phase.from) ? phase.from.filter((id): id is string => typeof id === "string") : []),
 	],
+	phaseSummaries?: ReadonlyMap<string, PhaseEffectSummary>,
 ): EffectValidationResult {
 	const issues: EffectValidationIssue[] = [];
 	const byId = new Map<string, EffectFlowPhaseLike>();
 	const ownSources = new Map<string, Map<string, ValidEffectRecord>>();
+	const sinks = new Map<string, LabeledEffect[]>();
 	for (const phase of phases) {
 		if (typeof phase.id !== "string" || !phase.id) continue;
 		byId.set(phase.id, phase);
-		const sources = new Map<string, ValidEffectRecord>();
-		for (const effect of Array.isArray(phase.effects) ? phase.effects : []) {
-			if (!isObject(effect) || typeof effect.id !== "string" || !isEffectKind(effect.kind)) continue;
-			const valid = effect as ValidEffectRecord;
-			if (SOURCE_KINDS.has(valid.kind)) sources.set(`${phase.id}/${valid.id}`, valid);
-		}
-		ownSources.set(phase.id, sources);
+		const summary = phaseSummaries?.get(phase.id) ?? directPhaseSummary(phase, phase.id);
+		ownSources.set(phase.id, new Map(summary.sources.map(({ label, effect }) => [label, effect])));
+		sinks.set(phase.id, summary.sinks);
 	}
 	const reachable = new Map([...ownSources].map(([id, sources]) => [id, new Map(sources)]));
 	for (let pass = 0; pass < byId.size; pass++) {
@@ -406,20 +486,95 @@ export function validateEffectFlow(
 		}
 		if (!changed) break;
 	}
-	for (const [phaseId, phase] of byId) {
+	for (const phaseId of byId.keys()) {
+		const ownSourceIds = new Set(ownSources.get(phaseId)?.keys() ?? []);
 		const upstreamSources = [...(reachable.get(phaseId) ?? [])]
-			.filter(([sourceId]) => !sourceId.startsWith(`${phaseId}/`));
+			.filter(([sourceId]) => !ownSourceIds.has(sourceId));
 		if (upstreamSources.length === 0) continue;
-		for (const raw of Array.isArray(phase.effects) ? phase.effects : []) {
-			if (!isObject(raw) || typeof raw.id !== "string" || !isEffectKind(raw.kind)) continue;
-			const sink = raw as ValidEffectRecord;
-			if (!SINK_KINDS.has(sink.kind)) continue;
+		for (const { label: sinkLabel, effect: sink } of sinks.get(phaseId) ?? []) {
 			for (const [sourceId, source] of upstreamSources) {
-				issues.push(...labelFlowIssues(source, sink, sourceId, `${phaseId}/${sink.id}`));
+				issues.push(...labelFlowIssues(source, sink, sourceId, sinkLabel));
 			}
 		}
 	}
 	return { ok: !issues.some((issue) => issue.severity === "error"), issues };
+}
+
+interface ComposedSummaryResult extends EffectValidationResult {
+	summary: PhaseEffectSummary;
+}
+
+function summarizeComposedEffectFlow(
+	flow: ComposedEffectFlowLike,
+	options: ComposedEffectFlowOptions,
+	prefix: string,
+	seenUses: ReadonlySet<string>,
+): ComposedSummaryResult {
+	const phases = Array.isArray(flow.phases) ? flow.phases : [];
+	const issues: EffectValidationIssue[] = [];
+	const summaries = new Map<string, PhaseEffectSummary>();
+	for (const phase of phases) {
+		if (typeof phase.id !== "string" || !phase.id) continue;
+		const phaseLabel = `${prefix}${phase.id}`;
+		if (prefix && phase.effects !== undefined) {
+			issues.push(...validateEffectIR({ effects: phase.effects }).issues.map((issue) => ({
+				...issue,
+				effectId: issue.effectId ? `${phaseLabel}/${issue.effectId}` : phaseLabel,
+				message: issue.effectId
+					? issue.message.replace(`'${issue.effectId}'`, `'${phaseLabel}/${issue.effectId}'`)
+					: `${phaseLabel}: ${issue.message}`,
+			})));
+		}
+		const summary = directPhaseSummary(phase, phaseLabel);
+		const type = phase.type ?? "agent";
+		if (type === "flow" || type === "expand") {
+			let child: ComposedEffectFlowLike | undefined;
+			let childSeen = seenUses;
+			if (phase.def !== undefined) {
+				child = parseInlineFlow(phase.def);
+			} else if (type === "flow" && typeof phase.use === "string" && phase.use) {
+				if (!seenUses.has(phase.use)) {
+					try {
+						child = options.resolveFlow?.(phase.use);
+					} catch {
+						child = undefined;
+					}
+					childSeen = new Set([...seenUses, phase.use]);
+				}
+			}
+			const childResult = child
+				? summarizeComposedEffectFlow(child, options, `${phaseLabel}/`, childSeen)
+				: { ok: true, issues: [], summary: unknownBoundarySummary(phaseLabel) };
+			issues.push(...childResult.issues);
+			summary.sources.push(...childResult.summary.sources);
+			summary.sinks.push(...childResult.summary.sinks);
+		}
+		summaries.set(phase.id, summary);
+	}
+	const flowResult = validateEffectFlow(phases, undefined, summaries);
+	issues.push(...flowResult.issues);
+	return {
+		ok: !issues.some((issue) => issue.severity === "error"),
+		issues,
+		summary: {
+			sources: [...summaries.values()].flatMap((summary) => summary.sources),
+			sinks: [...summaries.values()].flatMap((summary) => summary.sinks),
+		},
+	};
+}
+
+/**
+ * Validate label flow across nested flow/expand boundaries. Child sources are
+ * summarized onto the parent node and child sinks receive the parent's
+ * dependency-reachable sources. Unresolved saved/dynamic children expose a
+ * maximally confidential source and public sink until runtime resolution.
+ */
+export function validateComposedEffectFlow(
+	flow: ComposedEffectFlowLike,
+	options: ComposedEffectFlowOptions = {},
+): EffectValidationResult {
+	const result = summarizeComposedEffectFlow(flow, options, "", new Set());
+	return { ok: result.ok, issues: result.issues };
 }
 
 /** Type guard for a well-formed SecretRef (no material). */

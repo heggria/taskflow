@@ -824,19 +824,41 @@ function flowTreeUsesDeclaredEffects(
 	loadFlow: RuntimeDeps["loadFlow"],
 	seenUses = new Set<string>(),
 ): boolean {
-	if (def.phases.some((phase) => Array.isArray((phase as { effects?: unknown }).effects) &&
-		((phase as { effects?: unknown[] }).effects?.length ?? 0) > 0)) return true;
-	if (!loadFlow) return false;
+	if (def.contextSharing === true || def.phases.some((phase) => phase.shareContext === true)) return true;
+	if (def.phases.some((phase) => (phase as { effects?: unknown }).effects !== undefined)) return true;
 	for (const phase of def.phases) {
-		if ((phase.type ?? "agent") !== "flow" || !phase.use) continue;
-		if (seenUses.has(phase.use)) continue;
-		seenUses.add(phase.use);
-		try {
-			const child = loadFlow(phase.use);
-			if (child && flowTreeUsesDeclaredEffects(child, loadFlow, seenUses)) return true;
-		} catch {
-			// A mutable/unavailable saved flow is authority-bearing until proven otherwise.
-			return true;
+		const type = phase.type ?? "agent";
+		if ((type === "flow" || type === "expand") && phase.def !== undefined) {
+			// Inline definitions are resolved before their parent phase cache lookup.
+			// Statically inspect authored object/JSON forms. An interpolated/malformed
+			// form is capability-bearing until resolution proves otherwise: otherwise a
+			// prior parent cache row could skip a newly generated resource transaction.
+			const parsed = typeof phase.def === "string" ? safeParse(phase.def) : phase.def;
+			if (
+				parsed === undefined &&
+				typeof phase.def === "string" &&
+				!/[{](?:steps[.]|args[.]|previous[.]|item(?:[.}]|\b)|loop[.]|reflexion[}])/.test(phase.def)
+			) {
+				// A malformed authored literal cannot resolve into a child at runtime;
+				// preserve the established fail-open/cleanup path. Interpolated strings
+				// remain unknown and therefore authority-bearing until resolved.
+				continue;
+			}
+			const child = normalizeInlineDef(parsed, phase.id);
+			if (!child) return true;
+			if (flowTreeUsesDeclaredEffects(child, loadFlow, seenUses)) return true;
+		}
+		if (type === "flow" && phase.use) {
+			if (seenUses.has(phase.use)) continue;
+			seenUses.add(phase.use);
+			if (!loadFlow) return true;
+			try {
+				const child = loadFlow(phase.use);
+				if (child && flowTreeUsesDeclaredEffects(child, loadFlow, seenUses)) return true;
+			} catch {
+				// A mutable/unavailable saved flow is authority-bearing until proven otherwise.
+				return true;
+			}
 		}
 	}
 	return false;
@@ -1161,11 +1183,20 @@ async function executePhaseImpl(
 		}
 		return ps;
 	};
-	const executeInnerWithDeclaredEffects = async (innerDeps: RuntimeDeps): Promise<PhaseState> => {
-		const effects = (phase as { effects?: unknown }).effects;
-		if (!Array.isArray(effects) || effects.length === 0) {
-			return executePhaseInner(phase, state, innerDeps, prior, emitProgress, _retryDepth, innerOpts);
-		}
+		const executeInnerWithDeclaredEffects = async (innerDeps: RuntimeDeps): Promise<PhaseState> => {
+			const effects = (phase as { effects?: unknown }).effects;
+			if (effects === undefined || (Array.isArray(effects) && effects.length === 0)) {
+				return executePhaseInner(phase, state, innerDeps, prior, emitProgress, _retryDepth, innerOpts);
+			}
+			if (!Array.isArray(effects)) {
+				return {
+					id: phase.id,
+					status: "failed",
+					error: "trusted-effects admission failed (effects-not-array): effects must be an array",
+					endedAt: Date.now(),
+					usage: emptyUsage(),
+				};
+			}
 		const te = await import("./effects/index.ts");
 		const effectValidation = te.validateDeclaredEffectsBeforeAdmission(effects);
 		if (!effectValidation.ok) {
@@ -3039,7 +3070,9 @@ async function executePhaseInner(
 		// change between the root pre-scan and this phase (or return aliases), and
 		// a bridge-bearing child must never be skipped by a cached parent result.
 		const nestedBridgeTree = flowTreeUsesCwdBridge(subDef, deps.loadFlow);
-		if (nestedBridgeTree) deps._disableCache = true;
+		const nestedEffectsTree = flowTreeUsesDeclaredEffects(subDef, deps.loadFlow);
+		const nestedResourceTree = nestedBridgeTree || nestedEffectsTree;
+		if (nestedResourceTree) deps._disableCache = true;
 		// Plugin-error verifier preflight (no-spend gate) BEFORE cache/resume reuse,
 		// for SAVED-USE children only. Inline-def children are already gated by the
 		// verifyTaskflow in the hasDef branch above (plugin errors fail-close,
@@ -3059,7 +3092,7 @@ async function executePhaseInner(
 				return failPhase(phase.id, `flow phase '${phase.id}': sub-flow '${subDef.name}' failed verifier preflight: ${flowPluginErrors.join("; ")}`);
 			}
 		}
-		const flowCc: PhaseCacheCtx = nestedBridgeTree ? { ...cc, scope: "off" } : cc;
+		const flowCc: PhaseCacheCtx = nestedResourceTree ? { ...cc, scope: "off" } : cc;
 		// Every sub-flow cache identity includes the resolved definition. A saved
 		// flow's name alone is insufficient: its contents can change without the
 		// parent definition moving.
@@ -4360,8 +4393,10 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 	const effectsTree = flowTreeUsesDeclaredEffects(def, deps.loadFlow);
 	const resourceTree = bridgeTree || effectsTree;
 	if (effectsTree) {
-		const { validateEffectFlow } = await import("./effects/validate.ts");
-		const labelFlow = validateEffectFlow(def.phases, (phase) => dependenciesOf(phase as Phase));
+		const { validateComposedEffectFlow } = await import("./effects/validate.ts");
+		const labelFlow = validateComposedEffectFlow({ name: def.name, phases: def.phases }, {
+			resolveFlow: deps.loadFlow,
+		});
 		if (!labelFlow.ok) {
 			return failBeforeExecution(
 				`Taskflow '${def.name}' EffectIR label flow is invalid: ${labelFlow.issues

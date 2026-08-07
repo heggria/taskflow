@@ -14,9 +14,9 @@
  * @see docs/internal/overstory-convergence-roadmap.md §3 (M1)
  */
 
-import { collectRefs, dependenciesOf, type Phase, type Taskflow } from "../schema.ts";
+import { collectRefs, type Phase, type Taskflow } from "../schema.ts";
 import type { EffectDecl } from "../effects/types.ts";
-import { validateEffectFlow, validateEffectIR } from "../effects/validate.ts";
+import { validateComposedEffectFlow, validateEffectIR } from "../effects/validate.ts";
 import type {
 	CompileError,
 	CompileWarning,
@@ -163,7 +163,7 @@ export function translateTaskflow(def: Taskflow): {
 
 		const effectsRaw = phase.effects;
 		let effects: EffectDecl[] | undefined;
-		if (Array.isArray(effectsRaw) && effectsRaw.length > 0) {
+		if (effectsRaw !== undefined) {
 			const effectValidation = validateEffectIR({ effects: effectsRaw });
 			for (const issue of effectValidation.issues) {
 				if (issue.severity === "error") {
@@ -172,7 +172,7 @@ export function translateTaskflow(def: Taskflow): {
 					warnings.push({ phaseId: phase.id, message: issue.message });
 				}
 			}
-			if (effectValidation.ok) effects = effectsRaw as EffectDecl[];
+			if (effectValidation.ok && Array.isArray(effectsRaw) && effectsRaw.length > 0) effects = effectsRaw as EffectDecl[];
 		}
 
 		return {
@@ -185,7 +185,7 @@ export function translateTaskflow(def: Taskflow): {
 		} satisfies FlowIRNode;
 	});
 
-	const effectFlow = validateEffectFlow(def.phases, (phase) => dependenciesOf(phase as Phase));
+	const effectFlow = validateComposedEffectFlow({ name: def.name, phases: def.phases });
 	for (const issue of effectFlow.issues) {
 		const phaseId = issue.effectId?.includes("/") ? issue.effectId.split("/")[0] : undefined;
 		if (issue.severity === "error") {

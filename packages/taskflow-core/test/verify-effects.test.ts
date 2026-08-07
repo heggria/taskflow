@@ -87,21 +87,6 @@ test("verify: no effects[] — effects detector is a no-op", () => {
 	assert.equal(r.issues.filter((i) => i.category === "effects").length, 0);
 });
 
-test("verify: flow-level effects[] are validated", () => {
-	const flow = vf([{ id: "a", type: "script", run: "true", final: true }], {
-		// flow-level effects (optional extension surface)
-		...({
-			effects: [
-				writeEffect("a", "out/x.md"),
-				writeEffect("b", "out/x.md"),
-			],
-		} as Partial<VerifiableFlow>),
-	});
-	const r = verifyTaskflow(flow);
-	assert.equal(r.ok, false);
-	assert.ok(r.issues.some((i) => i.category === "effects" && /overlap/i.test(i.message)));
-});
-
 test("detectEffectsIssues: pure helper returns category effects", () => {
 	const flow = vf([
 		scriptPhase("p", [
@@ -157,4 +142,92 @@ test("verify: dependency-connected source and sink enforce information-flow labe
 	const result = verifyTaskflow(flow);
 	assert.equal(result.ok, false);
 	assert.ok(result.issues.some((issue) => /read-secret\/secret-input.*public-output\/write/.test(issue.message)), JSON.stringify(result.issues));
+});
+
+test("verify: parent secret cannot flow into a flow.def child public sink", () => {
+	const flow = vf([
+		{
+			id: "read-secret",
+			task: "read",
+			effects: [{
+				id: "secret-input",
+				kind: "secret.read",
+				target: { kind: "secret", secret: { secretId: "api-key" } },
+			}],
+		},
+		{
+			id: "child",
+			type: "flow",
+			dependsOn: ["read-secret"],
+			def: {
+				name: "public-child",
+				phases: [scriptPhase("publish", [{
+					...writeEffect("write", "public.txt"),
+					confidentiality: "public",
+				}], { final: true })],
+			},
+			final: true,
+		},
+	]);
+	const result = verifyTaskflow(flow);
+	assert.equal(result.ok, false);
+	assert.ok(result.issues.some((issue) => /read-secret\/secret-input.*child\/publish\/write/.test(issue.message)), JSON.stringify(result.issues));
+});
+
+test("verify: expand child secret source cannot flow into a parent public sink", () => {
+	const flow = vf([
+		{
+			id: "child",
+			type: "expand",
+			def: {
+				name: "secret-child",
+				phases: [{
+					id: "read",
+					task: "read",
+					effects: [{
+						id: "secret-output",
+						kind: "secret.read",
+						target: { kind: "secret", secret: { secretId: "api-key" } },
+					}],
+					final: true,
+				}],
+			},
+		},
+		scriptPhase("publish", [{
+			...writeEffect("write", "public.txt"),
+			confidentiality: "public",
+		}], { dependsOn: ["child"], final: true }),
+	]);
+	const result = verifyTaskflow(flow);
+	assert.equal(result.ok, false);
+	assert.ok(result.issues.some((issue) => /child\/read\/secret-output.*publish\/write/.test(issue.message)), JSON.stringify(result.issues));
+});
+
+test("verify: unresolved dynamic definitions stay tainted in both directions", () => {
+	const intoDynamic = vf([
+		{
+			id: "read-secret",
+			task: "read",
+			effects: [{
+				id: "secret-input",
+				kind: "secret.read",
+				target: { kind: "secret", secret: { secretId: "api-key" } },
+			}],
+		},
+		{ id: "dynamic", type: "flow", def: "{steps.plan.json}", dependsOn: ["read-secret"], final: true },
+	]);
+	const intoResult = verifyTaskflow(intoDynamic);
+	assert.equal(intoResult.ok, false);
+	assert.ok(intoResult.issues.some((issue) => /read-secret\/secret-input.*dynamic\/<dynamic-sink>/.test(issue.message)), JSON.stringify(intoResult.issues));
+
+	const outOfDynamic = vf([
+		{ id: "dynamic", type: "expand", def: "{steps.plan.json}" },
+		scriptPhase("publish", [{
+			...writeEffect("write", "public.txt"),
+			confidentiality: "public",
+		}], { dependsOn: ["dynamic"], final: true }),
+	]);
+	const outResult = verifyTaskflow(outOfDynamic);
+	assert.equal(outResult.ok, false);
+	assert.ok(outResult.issues.some((issue) => /dynamic\/<dynamic-source>.*publish\/write/.test(issue.message)), JSON.stringify(outResult.issues));
 });

@@ -14,7 +14,7 @@ import { Errors as SchemaErrors } from "typebox/value";
 import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 import { EffectDeclSchema } from "./effects/schema.ts";
-import { validateEffectFlow } from "./effects/validate.ts";
+import { validateComposedEffectFlow } from "./effects/validate.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
@@ -1536,10 +1536,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 
 	// Cycle detection (Kahn)
 	try {
-		const labelFlow = validateEffectFlow(
-			flow.phases as Phase[],
-			(phase) => dependenciesOf(phase as Phase),
-		);
+		const labelFlow = validateComposedEffectFlow({ name: flow.name, phases: flow.phases as Phase[] });
 		for (const issue of labelFlow.issues) {
 			const message = `[effects] ${issue.message}`;
 			if (issue.severity === "error") errors.push(message);
