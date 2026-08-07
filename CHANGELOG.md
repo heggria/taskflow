@@ -15,13 +15,19 @@ All notable changes to taskflow are documented here. This project follows [Keep 
   - resource-controlled FS transaction: durable snapshot → persistent lease → journal intent/permit → stage → Commit or Restore+Reject
   - declaration-only bridge in `effects/runtime-apply.ts`; no second changeset/gateway authority
   - ledger-backed `whyAuthorized` / `whyContext` / `whyEffect`
-- Optional phase/flow `effects[]`; FlowIR translate/compile/hash include effects
+- Optional phase `effects[]`; FlowIR translate/compile/hash include effects
 - Built-in `detectEffectsIssues` (category `effects`) + `effectsLintVerifier`
 - Every imperative phase fast path finalizes declared `fs.write` through the resource transaction; event-kernel-enabled runs use the same safe imperative path
 - Honest host baseline: `conformance/workspace/host-support-baseline.json`
 - Docs: `docs/internal/0.3.0-trusted-effects-mvp.md`, `0.3.0-agent-goal.md`, `0.3.0-ga-scoreboard.md`
 - Example: `examples/trusted-effects-write.json`
 - Tests: `test/effects*.test.ts`, `test/verify-effects.test.ts`
+
+### Fixed
+
+- Resource-bearing inline/saved/expanded/`ctx_spawn` children can no longer be skipped by parent cache or resume reuse.
+- Information-flow labels compose across nested flow boundaries; unresolved dynamic definitions remain tainted, malformed non-array `effects` fail admission/compile, and `why-effect` follows DAG dependencies.
+- Durable commit/abort results survive staging/lease cleanup faults, activation double faults release leases, and clean-terminal/aged-orphan before-images are garbage-collected.
 
 ### Notes
 
