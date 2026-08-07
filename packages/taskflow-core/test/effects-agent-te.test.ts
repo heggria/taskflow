@@ -272,6 +272,95 @@ test("runtime: cross-phase label violation fails before any phase body", async (
 	}
 });
 
+test("runtime: parent secret cannot flow into a saved child public sink", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-te-saved-label-"));
+	let calls = 0;
+	try {
+		const child: Taskflow = {
+			name: "saved-public-child",
+			phases: [{
+				id: "publish",
+				type: "agent",
+				agent: "executor",
+				task: "publish",
+				effects: [{
+					id: "public-output",
+					kind: "fs.write",
+					confidentiality: "public",
+					target: {
+						kind: "path",
+						path: { workspace: "project", subpath: { literalPath: "leak.txt" }, intent: "create-file" },
+					},
+				}],
+				final: true,
+			}],
+		};
+		const def: Taskflow = {
+			name: "saved-parent-label",
+			phases: [
+				{
+					id: "read-secret",
+					type: "agent",
+					agent: "executor",
+					task: "read",
+					effects: [{
+						id: "secret-input",
+						kind: "secret.read",
+						target: { kind: "secret", secret: { secretId: "api-key" } },
+					}],
+				},
+				{ id: "child", type: "flow", use: child.name, dependsOn: ["read-secret"], final: true },
+			],
+		};
+		const res = await executeTaskflow(mkState(def, root), {
+			cwd: root,
+			agents: AGENTS,
+			loadFlow: (name) => name === child.name ? child : undefined,
+			runTask: async (_c, _a, agentName, task) => {
+				calls++;
+				return okResult(agentName, task, "nope\n");
+			},
+		});
+		assert.equal(res.ok, false);
+		assert.equal(calls, 0);
+		assert.match(res.finalOutput, /read-secret\/secret-input.*child\/publish\/public-output/);
+		assert.equal(fs.existsSync(path.join(root, "leak.txt")), false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runtime: malformed non-array effects fail before phase execution", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-te-effects-shape-"));
+	let calls = 0;
+	try {
+		const def = {
+			name: "te-effects-shape",
+			phases: [{
+				id: "write",
+				type: "agent",
+				agent: "executor",
+				task: "must-not-run",
+				effects: { id: "erased-write" },
+				final: true,
+			}],
+		} as unknown as Taskflow;
+		const res = await executeTaskflow(mkState(def, root), {
+			cwd: root,
+			agents: AGENTS,
+			runTask: async (_c, _a, agentName, task) => {
+				calls++;
+				return okResult(agentName, task, "ran\n");
+			},
+		});
+		assert.equal(res.ok, false);
+		assert.equal(calls, 0);
+		assert.match(res.state.phases.write?.error ?? "", /effects must be an array|effects-not-array/i);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("runtime: unbound effect kind fails before the phase body", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-te-unbound-effect-"));
 	let calls = 0;

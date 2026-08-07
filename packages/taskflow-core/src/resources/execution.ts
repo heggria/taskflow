@@ -28,6 +28,7 @@ import { PersistentLeaseCoordinator, type LeaseHandle } from "./leases.ts";
 import { createHostRootGrant, createRootRegistry, type RootGrant, type RootRegistry } from "./registry.ts";
 import { resolvePathRef, type ResolvedPathRef } from "./resolve.ts";
 import {
+	garbageCollectResourceFileTransactions,
 	prepareResourceFileTransaction,
 	recoverResourceFileIntent,
 	type PreparedResourceFileTransaction,
@@ -371,6 +372,7 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 				signal: this.#signal,
 			}),
 		});
+		garbageCollectResourceFileTransactions(this.#controlDirectory, await this.#journal.listIntents());
 	}
 
 	async bindPhase(input: BindResolveOnlyPhaseInput): Promise<ResolveOnlyPhaseBinding> {

@@ -12,7 +12,7 @@ import type {
 	WhyEffect,
 } from "./types.ts";
 import { EFFECT_KINDS } from "./types.ts";
-import { pathRefRelativeKey, validateEffectIR } from "./validate.ts";
+import { pathRefRelativeKey, validateEffectFlow, validateEffectIR } from "./validate.ts";
 import { defaultWorkspaceControlDirectory } from "../resources/execution.ts";
 import { WriteIntentJournal, type WriteIntentRecord } from "../resources/journal.ts";
 
@@ -114,8 +114,7 @@ export function whyEffect(input: WhyInput): WhyEffect {
 
 /** Minimal flow shape for effect lookup (Taskflow / FlowIR phases). */
 export interface WhyEffectFlowLike {
-	effects?: unknown;
-	phases?: ReadonlyArray<{ id?: string; effects?: unknown } | null | undefined>;
+	phases?: ReadonlyArray<{ id?: string; effects?: unknown; dependsOn?: unknown; from?: unknown } | null | undefined>;
 }
 
 export interface WhyEffectFromFlowInput {
@@ -160,23 +159,9 @@ function asEffectDecl(raw: unknown): EffectDecl | undefined {
 	return raw as unknown as EffectDecl;
 }
 
-/** Collect declared effects from flow-level + each phase (original ids preserved). */
+/** Collect declared effects from each phase (original ids preserved). */
 export function collectDeclaredEffects(flow: WhyEffectFlowLike): LocatedEffect[] {
 	const out: LocatedEffect[] = [];
-	const flowLevel = flow.effects;
-	if (Array.isArray(flowLevel)) {
-		for (const raw of flowLevel) {
-			const e = asEffectDecl(raw);
-			if (e) out.push({ effect: e, bagId: e.id });
-			else if (isObject(raw) && typeof raw.id === "string") {
-				// Keep a stub so validation can still surface shape errors via bag.
-				out.push({
-					effect: raw as unknown as EffectDecl,
-					bagId: raw.id,
-				});
-			}
-		}
-	}
 	const phases = Array.isArray(flow.phases) ? flow.phases : [];
 	for (const p of phases) {
 		if (!p || typeof p !== "object") continue;
@@ -262,12 +247,12 @@ export function whyEffectFromFlow(input: WhyEffectFromFlowInput): WhyEffectFromF
 	}
 
 	const hit = matches[0]!;
-	const bagEffects = located.map((l) => ({
-		...l.effect,
-		id: l.bagId,
-	}));
-	const validation = validateEffectIR({ effects: bagEffects });
-	const effectIssues = validation.issues.filter(
+	const hitPhase = input.flow.phases?.find((phase) => phase?.id === hit.phaseId);
+	const localValidation = validateEffectIR({ effects: hitPhase?.effects });
+	const flowValidation = validateEffectFlow(
+		(input.flow.phases ?? []).filter((phase): phase is NonNullable<typeof phase> => phase !== null && phase !== undefined),
+	);
+	const effectIssues = [...localValidation.issues, ...flowValidation.issues].filter(
 		(i) =>
 			i.effectId === hit.bagId ||
 			i.effectId === hit.effect.id ||

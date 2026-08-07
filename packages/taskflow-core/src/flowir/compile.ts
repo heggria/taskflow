@@ -13,7 +13,7 @@
  * @see ./translate.ts (stub; still used for sidecar field list parity)
  */
 
-import { collectRefs, dependenciesOf, PHASE_TYPES, type Phase, type PhaseType, type Taskflow } from "../schema.ts";
+import { collectRefs, PHASE_TYPES, type Phase, type PhaseType, type Taskflow } from "../schema.ts";
 import { cwdArgName } from "../cwd-bridge.ts";
 import { normalizeCond } from "./cond.ts";
 import type {
@@ -31,7 +31,7 @@ import type {
 	TaskflowIRMeta,
 } from "./meta.ts";
 import type { EffectDecl } from "../effects/types.ts";
-import { validateEffectFlow, validateEffectIR } from "../effects/validate.ts";
+import { validateComposedEffectFlow, validateEffectIR } from "../effects/validate.ts";
 
 // Keep in sync with translate.ts SIDECAR_PHASE_FIELDS (round-trip lossless).
 const SIDECAR_PHASE_FIELDS = [
@@ -224,7 +224,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 		if (phase.join === "all" || phase.join === "any") node.join = phase.join;
 		if (typeof phase.timeout === "number") node.timeout = phase.timeout;
 		const effectsRaw = phase.effects;
-		if (Array.isArray(effectsRaw) && effectsRaw.length > 0) {
+		if (effectsRaw !== undefined) {
 			const effectValidation = validateEffectIR({ effects: effectsRaw });
 			for (const issue of effectValidation.issues) {
 				if (issue.severity === "error") {
@@ -237,7 +237,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 					warnings.push({ phaseId: phase.id, message: issue.message });
 				}
 			}
-			if (effectValidation.ok) {
+			if (effectValidation.ok && Array.isArray(effectsRaw) && effectsRaw.length > 0) {
 				// Only closed, validated EffectIR enters the content-addressed representation.
 				node.effects = effectsRaw as EffectDecl[];
 			}
@@ -253,7 +253,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 		nodes.push(node);
 	}
 
-	const effectFlow = validateEffectFlow(def.phases ?? [], (phase) => dependenciesOf(phase as Phase));
+	const effectFlow = validateComposedEffectFlow({ name: def.name, phases: def.phases ?? [] });
 	for (const issue of effectFlow.issues) {
 		const phaseId = issue.effectId?.includes("/") ? issue.effectId.split("/")[0] : undefined;
 		if (issue.severity === "error") {

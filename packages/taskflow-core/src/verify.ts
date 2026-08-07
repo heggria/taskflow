@@ -640,7 +640,7 @@ export function verifyTaskflow(flow: VerifiableFlow, options?: VerifyOptions): V
 	issues.push(...detectConcurrencyWarnings(safeFlow, succ));
 	issues.push(...detectGuardContradictions(phases));
 	issues.push(...detectContractRefMismatches(phases));
-	// Trusted Effects (0.3): static EffectIR checks when phase/flow carries effects[]
+	// Trusted Effects (0.3): static EffectIR checks when a phase carries effects[]
 	issues.push(...detectEffectsIssues(safeFlow));
 
 	// Caller-supplied verifiers run last, against an isolated deep-frozen snapshot

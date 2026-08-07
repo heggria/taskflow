@@ -79,6 +79,8 @@ export interface ResourceFileTransactionOptions {
 	authorizationScopeRoot: string;
 	/** Preserve a failed authenticated release for the session's next-admission drain. */
 	onDeferredLeaseRelease?: (lease: LeaseHandle) => void;
+	/** Internal fault-injection seam for post-terminal staging cleanup tests. */
+	cleanupStaging?: (stagingDirectory: string) => void;
 }
 
 function hash(parts: readonly (string | Buffer)[]): string {
@@ -238,6 +240,63 @@ async function releaseBestEffort(lease: LeaseHandle): Promise<boolean> {
 	return false;
 }
 
+function removeTransactionDirectoryBestEffort(transactionDirectory: string, label: string): void {
+	try {
+		fs.rmSync(transactionDirectory, { recursive: true, force: true });
+	} catch (error) {
+		console.warn(
+			`[taskflow] resource transaction ${label} deferred for ${path.basename(transactionDirectory)}: ` +
+			(error instanceof Error ? error.message : String(error)),
+		);
+	}
+}
+
+function transactionIdFromArtifact(artifactId: string): string | undefined {
+	return /^workspace-snapshot:([0-9a-f-]{36}):[0-9a-f]{64}$/i.exec(artifactId)?.[1];
+}
+
+const ORPHAN_TRANSACTION_GRACE_MS = 5 * 60_000;
+
+/** Remove terminal and pre-intent orphan before-images while retaining any
+ * pending/dirty transaction needed for recovery or explicit reconciliation. */
+export function garbageCollectResourceFileTransactions(
+	controlDirectory: string,
+	intents: readonly WriteIntentRecord[],
+): void {
+	const retained = new Set<string>();
+	const terminal = new Set<string>();
+	for (const intent of intents) {
+		for (const artifactId of intent.restorableSnapshotArtifactIds ?? []) {
+			const transactionId = transactionIdFromArtifact(artifactId);
+			if (!transactionId) continue;
+			if (intent.status === "pending" || intent.status === "dirty-unknown") retained.add(transactionId);
+			else terminal.add(transactionId);
+		}
+	}
+	const root = path.join(controlDirectory, "file-transactions");
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(root);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		console.warn(`[taskflow] resource transaction orphan GC deferred: ${error instanceof Error ? error.message : String(error)}`);
+		return;
+	}
+	for (const entry of entries) {
+		if (retained.has(entry)) continue;
+		if (!terminal.has(entry)) {
+			try {
+				const stat = fs.lstatSync(path.join(root, entry));
+				if (stat.mtimeMs > Date.now() - ORPHAN_TRANSACTION_GRACE_MS) continue;
+			} catch {
+				// A concurrently removed entry is already collected. Any other inspection
+				// failure stays fail-safe: the best-effort remove below may still decline.
+			}
+		}
+		removeTransactionDirectoryBestEffort(path.join(root, entry), "orphan GC");
+	}
+}
+
 function readManifestFile(filePath: string): unknown {
 	const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
 	const fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
@@ -387,7 +446,9 @@ export class PreparedResourceFileTransaction {
 	readonly #journal: WriteIntentJournal;
 	readonly #stagingDirectory: string;
 	readonly #onDeferredLeaseRelease?: (lease: LeaseHandle) => void;
+	readonly #cleanupStaging: (stagingDirectory: string) => void;
 	#settled = false;
+	#knownCleanTerminal = false;
 
 	constructor(input: {
 		snapshots: readonly Snapshot[];
@@ -396,6 +457,7 @@ export class PreparedResourceFileTransaction {
 		journal: WriteIntentJournal;
 		stagingDirectory: string;
 		onDeferredLeaseRelease?: (lease: LeaseHandle) => void;
+		cleanupStaging?: (stagingDirectory: string) => void;
 	}) {
 		this.intentId = input.mutation.intent.intentId;
 		this.#snapshots = input.snapshots;
@@ -404,6 +466,9 @@ export class PreparedResourceFileTransaction {
 		this.#journal = input.journal;
 		this.#stagingDirectory = input.stagingDirectory;
 		this.#onDeferredLeaseRelease = input.onDeferredLeaseRelease;
+		this.#cleanupStaging = input.cleanupStaging ?? ((stagingDirectory) => {
+			fs.rmSync(path.join(stagingDirectory, "staged"), { recursive: true, force: true });
+		});
 	}
 
 	async commit(payloads: readonly FileWritePayload[]): Promise<FileTransactionResult> {
@@ -451,6 +516,7 @@ export class PreparedResourceFileTransaction {
 				{ preCommitGuard: () => assertExactPostState(this.#snapshots, expected) },
 			);
 			this.#settled = true;
+			this.#knownCleanTerminal = true;
 			return {
 				ok: true,
 				intentId: this.intentId,
@@ -490,6 +556,7 @@ export class PreparedResourceFileTransaction {
 				this.#snapshots.map((snapshot) => snapshot.artifactId),
 			);
 			this.#settled = true;
+			this.#knownCleanTerminal = true;
 			return { ok: false, intentId: this.intentId, code, reason, restored: true };
 		} catch (restoreError) {
 			const current = await this.#journal.getIntent(this.intentId);
@@ -521,7 +588,17 @@ export class PreparedResourceFileTransaction {
 
 	async #finish(): Promise<void> {
 		try {
-			fs.rmSync(path.join(this.#stagingDirectory, "staged"), { recursive: true, force: true });
+			try {
+				this.#cleanupStaging(this.#stagingDirectory);
+			} catch (error) {
+				console.warn(
+					`[taskflow] resource transaction staging cleanup deferred for ${this.intentId}: ` +
+					(error instanceof Error ? error.message : String(error)),
+				);
+			}
+			if (this.#knownCleanTerminal) {
+				removeTransactionDirectoryBestEffort(this.#stagingDirectory, "snapshot GC");
+			}
 		} finally {
 			if (!(await releaseBestEffort(this.#lease))) {
 				this.#onDeferredLeaseRelease?.(this.#lease);
@@ -634,16 +711,24 @@ export async function prepareResourceFileTransaction(
 			journal: options.journal,
 			stagingDirectory: transactionDirectory,
 			onDeferredLeaseRelease: options.onDeferredLeaseRelease,
+			cleanupStaging: options.cleanupStaging,
 		});
 	} catch (error) {
-		if (mutation) {
-			const current = await options.journal.getIntent(mutation.intent.intentId);
-			if (current?.status === "pending") await options.journal.markUnknown(current.intentId, "file transaction preparation failed");
+		let journalError: unknown;
+		try {
+			if (mutation) {
+				const current = await options.journal.getIntent(mutation.intent.intentId);
+				if (current?.status === "pending") await options.journal.markUnknown(current.intentId, "file transaction preparation failed");
+			}
+		} catch (cleanupError) {
+			journalError = cleanupError;
+		} finally {
+			if (lease && !(await releaseBestEffort(lease))) {
+				options.onDeferredLeaseRelease?.(lease);
+				console.warn(`[taskflow] resource transaction lease cleanup deferred for lease ${lease.leaseId}`);
+			}
+			if (!mutation) removeTransactionDirectoryBestEffort(transactionDirectory, "pre-intent GC");
 		}
-		if (lease && !(await releaseBestEffort(lease))) {
-			options.onDeferredLeaseRelease?.(lease);
-			console.warn(`[taskflow] resource transaction lease cleanup deferred for lease ${lease.leaseId}`);
-		}
-		throw error;
+		throw journalError ?? error;
 	}
 }

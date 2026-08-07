@@ -56,6 +56,21 @@ test("PhaseSchema/validateTaskflow: accepts phase with effects[] (and without â€
 	assert.equal(ok2.ok, true, JSON.stringify(ok2.errors));
 });
 
+test("TaskflowSchema: effects[] is phase-scoped and rejects a flow-level ghost declaration", async () => {
+	const { validateTaskflow } = await import("../src/schema.ts");
+	const result = validateTaskflow({
+		name: "fx-flow-level-rejected",
+		effects: [{
+			id: "ghost",
+			kind: "fs.write",
+			target: { kind: "path", path: { workspace: "project", intent: "create-file" } },
+		}],
+		phases: [{ id: "w", type: "script", run: "true", final: true }],
+	});
+	assert.equal(result.ok, false);
+	assert.ok(result.errors.some((error) => /unknown field 'effects'/.test(error)), JSON.stringify(result.errors));
+});
+
 test("PhaseSchema/validateTaskflow: rejects non-array effects", async () => {
 	const { validateTaskflow } = await import("../src/schema.ts");
 	const bad = {
@@ -671,6 +686,68 @@ test("compileTaskflowToIR: invalid EffectIR is diagnosed and never content-addre
 	assert.equal(publicResult.usedFallbackHash, true);
 });
 
+test("compileTaskflowToFlowIR: non-array effects fail closed instead of hashing as no effects", async () => {
+	const { compileTaskflowToFlowIR, compileTaskflowToIR, translateTaskflow } = await import("../src/flowir/index.ts");
+	const def = {
+		name: "fx-effects-not-array",
+		phases: [{
+			id: "w",
+			type: "script",
+			run: "true",
+			effects: { id: "erased-write" },
+		}],
+	};
+	const compiled = compileTaskflowToFlowIR(def as never);
+	assert.equal(compiled.usedFallbackHash, true);
+	assert.ok(compiled.errors.some((error) => error.code === "effect-effects-not-array"), JSON.stringify(compiled.errors));
+	assert.equal(compiled.canonical.nodes[0]?.effects, undefined);
+	const translated = translateTaskflow(def as never);
+	assert.ok(translated.errors.some((error) => error.code === "effect-effects-not-array"), JSON.stringify(translated.errors));
+	const publicResult = await compileTaskflowToIR(def as never);
+	assert.equal(publicResult.hash, undefined);
+});
+
+test("compileTaskflowToFlowIR: nested label-flow violations fail content addressing", async () => {
+	const { compileTaskflowToFlowIR } = await import("../src/flowir/index.ts");
+	const compiled = compileTaskflowToFlowIR({
+		name: "fx-compile-composed-label",
+		phases: [
+			{
+				id: "read-secret",
+				task: "read",
+				effects: [{
+					id: "secret-input",
+					kind: "secret.read",
+					target: { kind: "secret", secret: { secretId: "api-key" } },
+				}],
+			},
+			{
+				id: "child",
+				type: "flow",
+				dependsOn: ["read-secret"],
+				def: {
+					name: "public-child",
+					phases: [{
+						id: "publish",
+						type: "script",
+						run: "true",
+						effects: [{
+							id: "public-output",
+							kind: "fs.write",
+							confidentiality: "public",
+							target: { kind: "path", path: { workspace: "project", subpath: { literalPath: "public.txt" }, intent: "create-file" } },
+						}],
+						final: true,
+					}],
+				},
+				final: true,
+			},
+		],
+	} as never);
+	assert.equal(compiled.usedFallbackHash, true);
+	assert.ok(compiled.errors.some((error) => /read-secret\/secret-input.*child\/publish\/public-output/.test(error.message)), JSON.stringify(compiled.errors));
+});
+
 test("compileTaskflowToIR: cross-phase label violation is diagnosed and never content-addressed", async () => {
 	const { compileTaskflowToFlowIR, compileTaskflowToIR, translateTaskflow } = await import("../src/flowir/index.ts");
 	const def = {
@@ -868,4 +945,62 @@ test("whyEffectFromFlow: ambiguous id requires phaseId", () => {
 	if (!ok.ok) return;
 	assert.equal(ok.phaseId, "b");
 	assert.equal(ok.why.authorized.allowed, true);
+});
+
+test("whyEffectFromFlow: independent phases do not invent an information-flow dependency", () => {
+	const flow = {
+		phases: [
+			{
+				id: "read-secret",
+				effects: [{
+					id: "secret-input",
+					kind: "secret.read",
+					target: { kind: "secret", secret: { secretId: "api-key" } },
+				}],
+			},
+			{
+				id: "publish",
+				effects: [{
+					id: "public-output",
+					kind: "fs.write",
+					target: { kind: "path", path: { workspace: "project", subpath: { literalPath: "public.txt" }, intent: "create-file" } },
+					confidentiality: "public",
+				}],
+			},
+		],
+	};
+	const result = whyEffectFromFlow({ flow, runId: "run-independent", phaseId: "publish", effectId: "public-output" });
+	assert.equal(result.ok, true);
+	if (result.ok) assert.equal(result.why.authorized.allowed, true, result.why.authorized.reasons.join("; "));
+});
+
+test("whyEffectFromFlow: dependency-connected phases agree with DAG label validation", () => {
+	const flow = {
+		phases: [
+			{
+				id: "read-secret",
+				effects: [{
+					id: "secret-input",
+					kind: "secret.read",
+					target: { kind: "secret", secret: { secretId: "api-key" } },
+				}],
+			},
+			{
+				id: "publish",
+				dependsOn: ["read-secret"],
+				effects: [{
+					id: "public-output",
+					kind: "fs.write",
+					target: { kind: "path", path: { workspace: "project", subpath: { literalPath: "public.txt" }, intent: "create-file" } },
+					confidentiality: "public",
+				}],
+			},
+		],
+	};
+	const result = whyEffectFromFlow({ flow, runId: "run-dependent", phaseId: "publish", effectId: "public-output" });
+	assert.equal(result.ok, true);
+	if (result.ok) {
+		assert.equal(result.why.authorized.allowed, false);
+		assert.ok(result.why.authorized.reasons.some((reason) => /read-secret\/secret-input.*publish\/public-output/.test(reason)));
+	}
 });
