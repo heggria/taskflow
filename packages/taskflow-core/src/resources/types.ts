@@ -24,6 +24,10 @@ export interface LeaseRequest {
 export interface ScopedContentEvidence {
 	canonicalPrefix: string;
 	scopeDigest: string;
+	/** Stable declaration id when this scope originates from Trusted Effects. */
+	effectId?: string;
+	/** Capability binding that resolved and authorized this exact scope. */
+	capabilityBindingId?: string;
 	beforeContentId?: string;
 	afterContentId?: string;
 }

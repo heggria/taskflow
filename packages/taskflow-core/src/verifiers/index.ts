@@ -6,10 +6,12 @@
  */
 
 export { scriptLintVerifier } from "./script-lint.ts";
+export { effectsLintVerifier } from "./effects-lint.ts";
 export { discoverVerifiers, listVerifierPaths, type DiscoveredVerifiers } from "./discover.ts";
 
 import type { TaskflowVerifier } from "../verify.ts";
 import { scriptLintVerifier } from "./script-lint.ts";
+import { effectsLintVerifier } from "./effects-lint.ts";
 
 /** All built-in verifiers, in recommended registration order. */
-export const builtinVerifiers: readonly TaskflowVerifier[] = [scriptLintVerifier];
+export const builtinVerifiers: readonly TaskflowVerifier[] = [scriptLintVerifier, effectsLintVerifier];

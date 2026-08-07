@@ -13,7 +13,7 @@
  * @see ./translate.ts (stub; still used for sidecar field list parity)
  */
 
-import { collectRefs, PHASE_TYPES, type Phase, type PhaseType, type Taskflow } from "../schema.ts";
+import { collectRefs, dependenciesOf, PHASE_TYPES, type Phase, type PhaseType, type Taskflow } from "../schema.ts";
 import { cwdArgName } from "../cwd-bridge.ts";
 import { normalizeCond } from "./cond.ts";
 import type {
@@ -30,6 +30,8 @@ import type {
 	FlowIRNode,
 	TaskflowIRMeta,
 } from "./meta.ts";
+import type { EffectDecl } from "../effects/types.ts";
+import { validateEffectFlow, validateEffectIR } from "../effects/validate.ts";
 
 // Keep in sync with translate.ts SIDECAR_PHASE_FIELDS (round-trip lossless).
 const SIDECAR_PHASE_FIELDS = [
@@ -80,9 +82,12 @@ const SIDECAR_PHASE_FIELDS = [
 	"idleTimeout",
 	"reduceStrategy",
 	"batchSize",
+	"effects",
 ] as const;
 
-const NODE_FIELD_KEYS = new Set<string>(["task", "dependsOn", "join", "when", "timeout"]);
+// First-class node fields: present on the IR node, stripped from payload so
+// they are not double-hashed (payload is itself content-addressed).
+const NODE_FIELD_KEYS = new Set<string>(["task", "dependsOn", "join", "when", "timeout", "effects"]);
 
 const VALID_KINDS = new Set<string>(PHASE_TYPES);
 
@@ -215,11 +220,30 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 			node.condRef = n.canonical || undefined;
 		}
 		if (typeof phase.task === "string") node.task = phase.task;
-			if (phase.dependsOn && phase.dependsOn.length > 0) node.deps = [...phase.dependsOn];
-			if (phase.join === "all" || phase.join === "any") node.join = phase.join;
-			if (typeof phase.timeout === "number") node.timeout = phase.timeout;
-			const payload = payloadForPhase(phase);
-			if (payload) node.payload = payload;
+		if (phase.dependsOn && phase.dependsOn.length > 0) node.deps = [...phase.dependsOn];
+		if (phase.join === "all" || phase.join === "any") node.join = phase.join;
+		if (typeof phase.timeout === "number") node.timeout = phase.timeout;
+		const effectsRaw = phase.effects;
+		if (Array.isArray(effectsRaw) && effectsRaw.length > 0) {
+			const effectValidation = validateEffectIR({ effects: effectsRaw });
+			for (const issue of effectValidation.issues) {
+				if (issue.severity === "error") {
+					errors.push({
+						phaseId: phase.id,
+						code: `effect-${issue.code}`,
+						message: issue.message,
+					});
+				} else {
+					warnings.push({ phaseId: phase.id, message: issue.message });
+				}
+			}
+			if (effectValidation.ok) {
+				// Only closed, validated EffectIR enters the content-addressed representation.
+				node.effects = effectsRaw as EffectDecl[];
+			}
+		}
+		const payload = payloadForPhase(phase);
+		if (payload) node.payload = payload;
 
 		for (const from of inject) {
 			edges.push({ from, to: phase.id });
@@ -227,6 +251,16 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 
 		sidecarPhases[phase.id] = sidecarForPhase(phase);
 		nodes.push(node);
+	}
+
+	const effectFlow = validateEffectFlow(def.phases ?? [], (phase) => dependenciesOf(phase as Phase));
+	for (const issue of effectFlow.issues) {
+		const phaseId = issue.effectId?.includes("/") ? issue.effectId.split("/")[0] : undefined;
+		if (issue.severity === "error") {
+			errors.push({ phaseId, code: `effect-${issue.code}`, message: issue.message });
+		} else {
+			warnings.push({ phaseId, message: issue.message });
+		}
 	}
 
 	const canonical: CanonicalFlowIR = {
@@ -262,6 +296,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 				inject: n.inject,
 				emits: n.emits,
 				when: n.when,
+				...(n.effects && n.effects.length > 0 ? { effects: n.effects } : {}),
 			}),
 		),
 		args: def.args,
@@ -276,7 +311,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 	};
 
 	// Genuine compiler owns the IR hash when we produced nodes.
-	const usedFallbackHash = nodes.length === 0 || errors.some((e) => e.code === "empty-phases");
+	const usedFallbackHash = nodes.length === 0 || errors.length > 0;
 
 	return { canonical, ir, meta, warnings, errors, usedFallbackHash };
 }

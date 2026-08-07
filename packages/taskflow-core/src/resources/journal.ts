@@ -29,7 +29,13 @@ import {
 export type { ExternalMutationModel, ScopedContentEvidence, VersionCommitMode } from "./types.ts";
 export type { MutationPermit } from "./permits.ts";
 
-export type WriteIntentStatus = "pending" | "committed-content" | "committed-generation" | "dirty-unknown" | "reconciled";
+export type WriteIntentStatus =
+	| "pending"
+	| "committed-content"
+	| "committed-generation"
+	| "aborted-restored"
+	| "dirty-unknown"
+	| "reconciled";
 
 export interface WriteIntentRecord {
 	journalVersion: 1;
@@ -46,6 +52,9 @@ export interface WriteIntentRecord {
 	externalMutation: ExternalMutationModel;
 	status: WriteIntentStatus;
 	restorableSnapshotArtifactIds?: string[];
+	terminalReason?: string;
+	authorizationPrincipalId?: string;
+	authorizationScopeRoot?: string;
 }
 
 export interface RecoverPendingOptions {
@@ -56,6 +65,15 @@ export interface RecoverPendingOptions {
 	 * recovery append.
 	 */
 	isOwnerActive?: (owner: ExecutionOwner) => boolean | Promise<boolean>;
+	/** Trusted resource backend hook. Return exact before=after evidence only
+	 * after restoring every scope from durable pre-state artifacts. */
+	recoverKnownClean?: (
+		intent: WriteIntentRecord,
+	) => Promise<{
+		scopes: readonly ScopedContentEvidence[];
+		reason: string;
+		restorableSnapshotArtifactIds?: readonly string[];
+	} | undefined>;
 }
 
 export interface PrepareWriteIntent {
@@ -68,6 +86,11 @@ export interface PrepareWriteIntent {
 	beforeGeneration?: number;
 	commitMode: VersionCommitMode;
 	externalMutation: ExternalMutationModel;
+	/** Durable pre-state artifacts captured before permit activation. */
+	restorableSnapshotArtifactIds?: readonly string[];
+	/** Host-authenticated principal; flow JSON cannot supply this value. */
+	authorizationPrincipalId?: string;
+	authorizationScopeRoot?: string;
 	permitTtlMs?: number;
 }
 
@@ -112,6 +135,17 @@ interface UnknownWalRecord {
 	reason: string;
 }
 
+interface AbortRestoredWalRecord {
+	journalVersion: 1;
+	type: "write-abort-restored";
+	ts: string;
+	intentId: string;
+	resourceDomainId: string;
+	reason: string;
+	scopes: ScopedContentEvidence[];
+	restorableSnapshotArtifactIds?: string[];
+}
+
 interface ReconcileWalRecord {
 	journalVersion: 1;
 	type: "write-reconcile";
@@ -122,7 +156,13 @@ interface ReconcileWalRecord {
 	reason: string;
 }
 
-export type JournalWalRecord = IntentWalRecord | CommitContentWalRecord | CommitGenerationWalRecord | UnknownWalRecord | ReconcileWalRecord;
+export type JournalWalRecord =
+	| IntentWalRecord
+	| CommitContentWalRecord
+	| CommitGenerationWalRecord
+	| AbortRestoredWalRecord
+	| UnknownWalRecord
+	| ReconcileWalRecord;
 
 interface JournalProjection {
 	intents: Map<string, WriteIntentRecord>;
@@ -142,6 +182,7 @@ export interface PreparedMutation {
 
 export interface RecoveryResult {
 	recoveredIntentIds: string[];
+	restoredIntentIds: string[];
 	dirtyDomains: string[];
 }
 
@@ -165,6 +206,8 @@ function cloneEvidence(scope: ScopedContentEvidence): ScopedContentEvidence {
 	return {
 		canonicalPrefix: normalizeCanonicalPrefix(scope.canonicalPrefix),
 		scopeDigest: scope.scopeDigest,
+		...(scope.effectId === undefined ? {} : { effectId: scope.effectId }),
+		...(scope.capabilityBindingId === undefined ? {} : { capabilityBindingId: scope.capabilityBindingId }),
 		...(scope.beforeContentId === undefined ? {} : { beforeContentId: scope.beforeContentId }),
 		...(scope.afterContentId === undefined ? {} : { afterContentId: scope.afterContentId }),
 	};
@@ -241,6 +284,27 @@ function fold(records: readonly JournalWalRecord[]): JournalProjection {
 		if (record.resourceDomainId !== intent.resourceDomainId) throw new JournalStateError(`Intent ${record.intentId} domain mismatch`);
 		if (record.type === "write-unknown") {
 			intent.status = "dirty-unknown";
+			intent.terminalReason = record.reason;
+			continue;
+		}
+		if (record.type === "write-abort-restored") {
+			if (!sameCanonicalScopes(intentScopeKeys(intent), record.scopes.map((scope) => ({
+				resourceDomainId: intent.resourceDomainId,
+				canonicalPrefix: scope.canonicalPrefix,
+			})))) {
+				throw new JournalStateError(`Restored scopes do not match intent ${record.intentId}`);
+			}
+			for (const scope of record.scopes) {
+				if (!scope.beforeContentId || scope.afterContentId !== scope.beforeContentId) {
+					throw new JournalStateError(`Restored scope ${scope.canonicalPrefix} does not prove before=after`);
+				}
+			}
+			intent.status = "aborted-restored";
+			intent.scopes = structuredClone(record.scopes);
+			intent.restorableSnapshotArtifactIds = record.restorableSnapshotArtifactIds
+				? [...record.restorableSnapshotArtifactIds]
+				: undefined;
+			intent.terminalReason = record.reason;
 			continue;
 		}
 		const previousGeneration = domainGenerations.get(record.resourceDomainId) ?? 0;
@@ -304,6 +368,12 @@ export class WriteIntentJournal {
 			throw new Error("beforeGeneration must be a non-negative safe integer");
 		}
 		if (!input.resourceDomainId) throw new Error("resourceDomainId must be non-empty");
+		if (input.authorizationPrincipalId !== undefined && !input.authorizationPrincipalId.trim()) {
+			throw new Error("authorizationPrincipalId must be non-empty when supplied");
+		}
+		if (input.authorizationScopeRoot !== undefined && !path.isAbsolute(input.authorizationScopeRoot)) {
+			throw new Error("authorizationScopeRoot must be absolute when supplied");
+		}
 		if (!(["content-snapshot", "generation-only", "unavailable"] as const).includes(input.commitMode)) throw new Error(`Unsupported commitMode ${String(input.commitMode)}`);
 		if (!(["taskflow-managed", "externally-mutable"] as const).includes(input.externalMutation)) throw new Error(`Unsupported externalMutation ${String(input.externalMutation)}`);
 		const scopes = normalizeEvidence(input.scopes);
@@ -337,6 +407,15 @@ export class WriteIntentJournal {
 				commitMode: input.commitMode,
 				externalMutation: input.externalMutation,
 				status: "pending",
+				...(input.authorizationPrincipalId === undefined
+					? {}
+					: { authorizationPrincipalId: input.authorizationPrincipalId }),
+				...(input.authorizationScopeRoot === undefined
+					? {}
+					: { authorizationScopeRoot: path.normalize(input.authorizationScopeRoot) }),
+				...(input.restorableSnapshotArtifactIds === undefined
+					? {}
+					: { restorableSnapshotArtifactIds: [...input.restorableSnapshotArtifactIds] }),
 			};
 			this.#append([{ journalVersion: 1, type: "write-intent", ts: nowIso, intent }]);
 			try {
@@ -476,7 +555,60 @@ export class WriteIntentJournal {
 			await this.#settleTerminalPermit(intentId);
 			const dirty = cloneIntent(intent);
 			dirty.status = "dirty-unknown";
+			dirty.terminalReason = reason || "mutation outcome unknown";
 			return cloneIntent(dirty);
+		});
+	}
+
+	/**
+	 * Settle an active mutation without advancing the resource generation after
+	 * the caller has restored every admitted scope to its exact pre-state.
+	 * This is a known-clean terminal state, not reconciliation: callers must
+	 * provide content evidence proving `beforeContentId === afterContentId` for
+	 * every originally admitted scope.
+	 */
+	async abortRestored(
+		intentId: string,
+		scopes: readonly ScopedContentEvidence[],
+		reason: string,
+		restorableSnapshotArtifactIds?: readonly string[],
+	): Promise<WriteIntentRecord> {
+		const normalized = normalizeEvidence(scopes);
+		if (normalized.some((scope) => !scope.beforeContentId || scope.afterContentId !== scope.beforeContentId)) {
+			throw new JournalStateError("abort-restored requires beforeContentId === afterContentId for every scope");
+		}
+		return this.#mutex.runExclusive(async () => {
+			const intent = this.#projection().intents.get(intentId);
+			if (!intent || intent.status !== "pending") throw new JournalStateError(`Intent ${intentId} is not pending`);
+			if (!sameCanonicalScopes(intentScopeKeys(intent), normalized.map((scope) => ({
+				resourceDomainId: intent.resourceDomainId,
+				canonicalPrefix: scope.canonicalPrefix,
+			})))) {
+				throw new JournalStateError(`Restored content scopes do not match intent ${intentId}`);
+			}
+			await this.permits.assertIntentActive(intentId, intent.owner);
+			const terminalReason = reason || "mutation rejected and pre-state restored";
+			this.#append([{
+				journalVersion: 1,
+				type: "write-abort-restored",
+				ts: new Date(this.now()).toISOString(),
+				intentId,
+				resourceDomainId: intent.resourceDomainId,
+				reason: terminalReason,
+				scopes: normalized,
+				...(restorableSnapshotArtifactIds === undefined
+					? {}
+					: { restorableSnapshotArtifactIds: [...restorableSnapshotArtifactIds] }),
+			}]);
+			await this.#settleTerminalPermit(intentId);
+			const aborted = cloneIntent(intent);
+			aborted.status = "aborted-restored";
+			aborted.scopes = structuredClone(normalized);
+			aborted.restorableSnapshotArtifactIds = restorableSnapshotArtifactIds
+				? [...restorableSnapshotArtifactIds]
+				: undefined;
+			aborted.terminalReason = terminalReason;
+			return cloneIntent(aborted);
 		});
 	}
 
@@ -541,8 +673,9 @@ export class WriteIntentJournal {
 		}
 	}
 
-	/** Startup recovery: any fsynced intent without a terminal WAL record and
-	 * without a live mutation owner becomes dirty-unknown before reuse. */
+	/** Startup recovery: a stale taskflow-managed content intent may first be
+	 * restored by its trusted resource backend. Every other fsynced intent
+	 * without a terminal WAL record becomes dirty-unknown before reuse. */
 	async recoverPending(
 		reason = "startup recovery found an uncommitted write intent",
 		options: RecoverPendingOptions = {},
@@ -550,21 +683,67 @@ export class WriteIntentJournal {
 		return this.#mutex.runExclusive(async () => {
 			const projection = this.#projection();
 			const pending: WriteIntentRecord[] = [];
+			const restored: Array<{
+				intent: WriteIntentRecord;
+				scopes: ScopedContentEvidence[];
+				reason: string;
+				artifacts?: string[];
+			}> = [];
+			const dirty: WriteIntentRecord[] = [];
 			for (const intent of projection.intents.values()) {
 				if (intent.status !== "pending") continue;
 				if (options.isOwnerActive && await options.isOwnerActive(cloneExecutionOwner(intent.owner))) continue;
 				pending.push(intent);
+				let recovered: Awaited<ReturnType<NonNullable<RecoverPendingOptions["recoverKnownClean"]>>>;
+				try {
+					recovered = await options.recoverKnownClean?.(cloneIntent(intent));
+				} catch {
+					recovered = undefined;
+				}
+				if (recovered) {
+					const scopes = normalizeEvidence(recovered.scopes);
+					const exact = sameCanonicalScopes(intentScopeKeys(intent), scopes.map((scope) => ({
+						resourceDomainId: intent.resourceDomainId,
+						canonicalPrefix: scope.canonicalPrefix,
+					})));
+					const clean = scopes.every((scope) =>
+						typeof scope.beforeContentId === "string" && scope.afterContentId === scope.beforeContentId);
+					if (exact && clean) {
+						restored.push({
+							intent,
+							scopes,
+							reason: recovered.reason || reason,
+							...(recovered.restorableSnapshotArtifactIds === undefined
+								? {}
+								: { artifacts: [...recovered.restorableSnapshotArtifactIds] }),
+						});
+						continue;
+					}
+				}
+				dirty.push(intent);
 			}
 			if (pending.length > 0) {
 				const ts = new Date(this.now()).toISOString();
-				this.#append(pending.map((intent): UnknownWalRecord => ({
-					journalVersion: 1,
-					type: "write-unknown",
-					ts,
-					intentId: intent.intentId,
-					resourceDomainId: intent.resourceDomainId,
-					reason,
-				})));
+				this.#append([
+					...restored.map(({ intent, scopes, reason: restoredReason, artifacts }): AbortRestoredWalRecord => ({
+						journalVersion: 1,
+						type: "write-abort-restored",
+						ts,
+						intentId: intent.intentId,
+						resourceDomainId: intent.resourceDomainId,
+						reason: restoredReason,
+						scopes,
+						...(artifacts === undefined ? {} : { restorableSnapshotArtifactIds: artifacts }),
+					})),
+					...dirty.map((intent): UnknownWalRecord => ({
+						journalVersion: 1,
+						type: "write-unknown",
+						ts,
+						intentId: intent.intentId,
+						resourceDomainId: intent.resourceDomainId,
+						reason,
+					})),
+				]);
 			}
 			// Also closes the crash window after a durable commit/unknown append but
 			// before the permit registry transition was persisted. Retained pending
@@ -576,7 +755,8 @@ export class WriteIntentJournal {
 			for (const intent of settle) await this.#settleTerminalPermit(intent.intentId);
 			return {
 				recoveredIntentIds: pending.map((intent) => intent.intentId),
-				dirtyDomains: [...new Set(pending.map((intent) => intent.resourceDomainId))].sort(),
+				restoredIntentIds: restored.map(({ intent }) => intent.intentId),
+				dirtyDomains: [...new Set(dirty.map((intent) => intent.resourceDomainId))].sort(),
 			};
 		});
 	}

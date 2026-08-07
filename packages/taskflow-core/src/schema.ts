@@ -13,6 +13,8 @@ import { Type, type Static } from "typebox";
 import { Errors as SchemaErrors } from "typebox/value";
 import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
+import { EffectDeclSchema } from "./effects/schema.ts";
+import { validateEffectFlow } from "./effects/validate.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
@@ -372,6 +374,17 @@ const PhaseSchema = Type.Object(
 				description:
 					"Marks whether this phase is safe to auto-retry and cache. Defaults to true (safe). Set to false for phases with irreversible side effects (webhook POSTs, deploys, DB writes): transient provider errors are NOT auto-retried, and the result is never served from or written to any cache (within-run resume or cross-run — including under a flow-level 'incremental'). Explicit 'retry{}' is still honored — it is the author's declaration that a repeat is acceptable. The phase state records sideEffect: true for audit.",
 				default: true,
+			}),
+		),
+		/**
+		 * Trusted Effects (0.3 MVP): declared side effects for this phase.
+		 * Validated by the effects verifier (`validateEffectIR`). See
+		 * docs/internal/0.3.0-trusted-effects-mvp.md and effects/types.ts.
+		 */
+		effects: Type.Optional(
+			Type.Array(EffectDeclSchema, {
+				description:
+					"[0.3 Trusted Effects] Declared side effects (fs.read/write/delete, secret.read, service.call) with PathRef/SecretRef/ServiceRef targets and optional confidentiality/integrity labels.",
 			}),
 		),
 		concurrency: Type.Optional(Type.Number({ description: "Override max concurrency for map/parallel" })),
@@ -1519,6 +1532,21 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		if (typeof p.agent === "string" && !p.agent.includes("_") && !VALID_AGENT_RE.test(p.agent)) {
 			errors.push(`Phase '${p.id}': agent '${p.agent}' has invalid name format (expected lowercase alphanumeric with hyphens)`);
 		}
+	}
+
+	// Cycle detection (Kahn)
+	try {
+		const labelFlow = validateEffectFlow(
+			flow.phases as Phase[],
+			(phase) => dependenciesOf(phase as Phase),
+		);
+		for (const issue of labelFlow.issues) {
+			const message = `[effects] ${issue.message}`;
+			if (issue.severity === "error") errors.push(message);
+			else warnings.push(message);
+		}
+	} catch (error) {
+		errors.push(`[effects] label-flow validation failed closed: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
 	// Cycle detection (Kahn)

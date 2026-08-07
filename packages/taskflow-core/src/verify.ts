@@ -12,6 +12,7 @@
 import type { Phase } from "./schema.ts";
 import { asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS } from "./schema.ts";
 import { type OutputContract } from "./contract.ts";
+import { detectEffectsIssues } from "./verifiers/effects-lint.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +27,7 @@ export type IssueCategory =
 	| "ref-integrity"
 	| "guard-contradiction"
 	| "contract"
+	| "effects"
 	| "plugin";
 
 export interface VerificationIssue {
@@ -638,6 +640,8 @@ export function verifyTaskflow(flow: VerifiableFlow, options?: VerifyOptions): V
 	issues.push(...detectConcurrencyWarnings(safeFlow, succ));
 	issues.push(...detectGuardContradictions(phases));
 	issues.push(...detectContractRefMismatches(phases));
+	// Trusted Effects (0.3): static EffectIR checks when phase/flow carries effects[]
+	issues.push(...detectEffectsIssues(safeFlow));
 
 	// Caller-supplied verifiers run last, against an isolated deep-frozen snapshot
 	// of the sanitized flow (so a verifier cannot mutate the real execution plan

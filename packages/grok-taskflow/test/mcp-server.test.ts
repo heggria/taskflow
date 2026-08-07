@@ -72,6 +72,7 @@ test("grok mcp: tools/list exposes the same taskflow tools as other hosts", asyn
 			"taskflow_trace",
 			"taskflow_verify",
 			"taskflow_version",
+			"taskflow_why_effect",
 			"taskflow_why_stale",
 		],
 	);
@@ -122,6 +123,7 @@ test("grok mcp: makeToolHandlers exposes the tools", () => {
 			"taskflow_trace",
 			"taskflow_verify",
 			"taskflow_version",
+			"taskflow_why_effect",
 			"taskflow_why_stale",
 		],
 	);

@@ -27,8 +27,13 @@ import {
 import { PersistentLeaseCoordinator, type LeaseHandle } from "./leases.ts";
 import { createHostRootGrant, createRootRegistry, type RootGrant, type RootRegistry } from "./registry.ts";
 import { resolvePathRef, type ResolvedPathRef } from "./resolve.ts";
+import {
+	prepareResourceFileTransaction,
+	recoverResourceFileIntent,
+	type PreparedResourceFileTransaction,
+} from "./file-transaction.ts";
 import { computeHostBaselineBodyDigest, createSandboxPolicyPlan, SandboxPolicyFactory } from "./sandbox.ts";
-import type { ScopedCapability } from "./schema.ts";
+import type { PathRef, ScopedCapability } from "./schema.ts";
 import { sameExecutionOwner, type ExecutionOwner } from "./types.ts";
 
 export interface CoordinatedScriptResult {
@@ -85,6 +90,10 @@ export interface ResolveOnlyPhaseBinding {
 	readonly resourceDomainId: string;
 	readonly runId: string;
 	readonly phaseId: string;
+	beginFileWriteTransaction(
+		targets: readonly { effectId: string; path: PathRef }[],
+		options?: { unitId?: string; signal?: AbortSignal },
+	): Promise<PreparedResourceFileTransaction>;
 	runAgent(call: ResolveOnlyAgentCall): Promise<RunResult>;
 	runScript(call: ResolveOnlyScriptCall): Promise<CoordinatedScriptResult>;
 }
@@ -285,6 +294,7 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 	readonly #rootIdentity: DirectoryIdentity;
 	readonly #pendingLeaseReleases = new Set<LeaseHandle>();
 	readonly #allowReconcile: boolean;
+	readonly #controlDirectory: string;
 	// A single resolve-only session can fan out many tasks over the same granted
 	// root. They are all potential writers and cannot safely overlap without a
 	// native broker/snapshot backend. Serialize them before lease acquisition so
@@ -317,6 +327,7 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 		const controlDirectory = options.controlDirectory ?? defaultWorkspaceControlDirectory(this.invocationRoot);
 		ensurePrivateDirectory(controlDirectory);
 		const canonicalControlDirectory = fs.realpathSync(controlDirectory);
+		this.#controlDirectory = canonicalControlDirectory;
 		if (isWithin(this.invocationRoot, canonicalControlDirectory) || isWithin(canonicalControlDirectory, this.invocationRoot)) {
 			throw new Error("TFWS_INVALID_POLICY: control-plane storage must not overlap the flow workspace grant");
 		}
@@ -352,6 +363,13 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 				const active = await this.#leases.list();
 				return active.some((lease) => sameExecutionOwner(lease.owner, owner));
 			},
+			recoverKnownClean: (intent) => recoverResourceFileIntent({
+				controlDirectory: this.#controlDirectory,
+				intent,
+				leases: this.#leases,
+				leaseTimeoutMs: this.#leaseTimeoutMs,
+				signal: this.#signal,
+			}),
 		});
 	}
 
@@ -466,6 +484,83 @@ class ResolveOnlyWorkspaceSessionImpl implements ResolveOnlyWorkspaceSession {
 		} finally {
 			releaseTurn();
 		}
+	}
+
+	async beginFileWriteTransaction(
+		input: BindResolveOnlyPhaseInput,
+		boundPath: string,
+		targets: readonly { effectId: string; path: PathRef }[],
+		unitId: string,
+		signal: AbortSignal | undefined,
+	): Promise<PreparedResourceFileTransaction> {
+		await this.#drainPendingLeaseReleases();
+		this.#assertRootIdentity();
+		if (signal?.aborted || this.#signal?.aborted) {
+			throw new Error("ABORT_ERR: file transaction was cancelled before admission");
+		}
+		const dirty = (await this.#journal.listIntents()).find((intent) =>
+			intent.resourceDomainId === this.#grant.resourceDomainId && intent.status === "dirty-unknown");
+		if (dirty) throw new Error("TFWS_RESOURCE_DIRTY: workspace requires reconciliation before another write");
+
+		const owner: ExecutionOwner = {
+			runId: input.runId,
+			phaseId: input.phaseId,
+			attemptId: crypto.randomUUID(),
+			unitId,
+			ancestry: [],
+		};
+		const generation = await this.#journal.getDomainGeneration(this.#grant.resourceDomainId);
+		const rootPrefix = path.relative(this.invocationRoot, boundPath).split(path.sep).filter(Boolean).join("/");
+		const baseCapability: ScopedCapability = {
+			bindingId: this.#grant.bindingId,
+			resourceDomainId: this.#grant.resourceDomainId,
+			providerInstanceId: "root",
+			logicalWorkspaceId: "invocation",
+			logicalPrefix: rootPrefix,
+			physicalScopeRoot: boundPath,
+			access: "read-write",
+			version: { identityMode: "path-bound", generation, state: "clean" },
+			lifetime: { scope: "phase", runId: input.runId, phaseId: input.phaseId, attemptId: owner.attemptId },
+		};
+		const resolvedTargets = targets.map((target) => {
+			if (!("workspace" in target.path) || target.path.workspace === undefined) {
+				throw new Error(`TFWS_HANDLE_INVALID: effect '${target.effectId}' requires a bound workspace PathRef`);
+			}
+			if (target.path.intent !== "create-file" && target.path.intent !== "existing-file") {
+				throw new Error(`TFWS_INVALID_PATH: effect '${target.effectId}' fs.write requires create-file or existing-file intent`);
+			}
+			const logicalWorkspaceId = target.path.workspace;
+			const capability: ScopedCapability = { ...baseCapability, logicalWorkspaceId };
+			const resolved = resolvePathRef(
+				{ ...target.path, access: "read-write", maxLifetime: { scope: "phase" } },
+				{
+					workspaces: new Map([[logicalWorkspaceId, capability]]),
+					runId: input.runId,
+					phaseId: input.phaseId,
+					attemptId: owner.attemptId,
+				},
+				{ definitions: input.argDefinitions, values: input.argValues },
+			);
+			if (!resolved.ok) throw new Error(`${resolved.error.code}: ${resolved.error.redactedMessage}`);
+			return { effectId: target.effectId, ref: resolved.value };
+		});
+		const combinedSignal = this.#signal && signal
+			? AbortSignal.any([this.#signal, signal])
+			: this.#signal ?? signal;
+		return prepareResourceFileTransaction({
+			controlDirectory: this.#controlDirectory,
+			resourceDomainId: this.#grant.resourceDomainId,
+			owner,
+			targets: resolvedTargets,
+			leases: this.#leases,
+			journal: this.#journal,
+			leaseTimeoutMs: this.#leaseTimeoutMs,
+			permitTtlMs: this.#permitTtlMs,
+			signal: combinedSignal,
+			authorizationPrincipalId: this.authority.principalId,
+			authorizationScopeRoot: boundPath,
+			onDeferredLeaseRelease: (lease) => this.#pendingLeaseReleases.add(lease),
+		});
 	}
 
 	async #executeMutationNow<T>(
@@ -710,6 +805,19 @@ class ResolveOnlyPhaseBindingImpl implements ResolveOnlyPhaseBinding {
 		} catch (error) {
 			return agentFailure(call.agentName, call.task, error);
 		}
+	}
+
+	beginFileWriteTransaction(
+		targets: readonly { effectId: string; path: PathRef }[],
+		options: { unitId?: string; signal?: AbortSignal } = {},
+	): Promise<PreparedResourceFileTransaction> {
+		return this.#session.beginFileWriteTransaction(
+			this.#input,
+			this.absolutePath,
+			targets,
+			options.unitId ?? this.phaseId,
+			options.signal,
+		);
 	}
 
 	runScript(call: ResolveOnlyScriptCall): Promise<CoordinatedScriptResult> {

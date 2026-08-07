@@ -56,6 +56,10 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 	}
 	for (const p of def.phases ?? []) {
 		const id = p.id;
+		if (Array.isArray((p as { effects?: unknown }).effects) &&
+			((p as { effects?: unknown[] }).effects?.length ?? 0) > 0) {
+			return `phase '${id}': declared effects require the resource-controlled imperative transaction seam`;
+		}
 		if (p.type === "gate" && (p as { score?: unknown }).score !== undefined) {
 			return `phase '${id}': score gates require the imperative runtime`;
 		}
