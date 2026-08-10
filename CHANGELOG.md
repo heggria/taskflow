@@ -5,7 +5,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ## [0.3.0] — Unreleased (Trusted Effects candidate)
 
 > **Version plan:** keep published packages at **0.2.8** until a human cuts `v0.3.0`.
-> Branch: `codex/0.3.0-trusted-effects-candidate`. **Not GA until tag + publish.**
+> Branch: `rc/0.3.0-trusted-effects`. **Not GA until tag + publish.**
 
 ### Added
 
