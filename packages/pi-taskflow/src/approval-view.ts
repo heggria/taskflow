@@ -1,10 +1,11 @@
 /**
  * Modal approval dialog for `approval` phases (ctx.ui.custom with overlay).
  *
- * Rendered as a centered bordered popup: the full upstream output (e.g. a
- * plan) is shown in a scrollable viewport so long content can be reviewed
- * before deciding. Every line is padded to the full dialog width so the
- * overlay composites cleanly (no see-through, no ghosting in scrollback).
+ * Rendered as a centered bordered popup with a sticky decision footer. Short
+ * upstream output is shown immediately; content larger than the viewport is
+ * collapsed by default and can be toggled independently. Every line is padded
+ * to the full dialog width so the overlay composites cleanly (no see-through,
+ * no ghosting in scrollback).
  *
  * Mouse tracking is intentionally NOT used here. Enabling terminal-level
  * SGR mouse reporting (DECSET 1000h/1006h) to capture wheel events would
@@ -14,12 +15,21 @@
  * Keyboard scrolling (↑↓/PgUp/PgDn/Home/End/j/k/g/G) covers the same
  * ground without risking a stuck mouse-tracking mode.
  *
- * Keys: ↑↓ scroll · PgUp/PgDn page · Home/End jump ·
- *       a/Enter approve · e edit (guidance) · r/Esc reject.
+ * Keys: A/E/R select a decision · Enter confirms · V toggles preview ·
+ *       ↑↓ scroll · PgUp/PgDn page · Home/End jump · Esc rejects.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	decodeKittyPrintable,
+	isKeyRelease,
+	isKeyRepeat,
+	matchesKey,
+	parseKey,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 
 export type ApprovalChoice = "approve" | "reject" | "edit";
 
@@ -33,6 +43,12 @@ export interface ApprovalViewOptions {
 }
 
 const FALLBACK_ROWS = 24;
+const DECISIONS: ApprovalChoice[] = ["reject", "edit", "approve"];
+const DECISION_LABELS: Record<ApprovalChoice, string> = {
+	reject: "Reject",
+	edit: "Edit guidance",
+	approve: "Approve",
+};
 
 export class ApprovalViewComponent {
 	private theme: Theme;
@@ -42,6 +58,8 @@ export class ApprovalViewComponent {
 	private scrollOffset = 0;
 	private cachedWidth?: number;
 	private cachedBody?: string[];
+	private previewExpanded?: boolean;
+	private selectedChoice: ApprovalChoice = "reject";
 	private decided = false;
 
 	constructor(
@@ -76,9 +94,14 @@ export class ApprovalViewComponent {
 	/** Visible body height given the message height — dialog targets ~80% of the terminal. */
 	private maxVisible(msgRows: number): number {
 		const avail = Math.max(10, Math.floor(this.rows() * 0.8));
-		// Chrome: top border, message rows, separator, scroll info, separator, hints, bottom border.
-		const chrome = 1 + msgRows + 1 + 1 + 1 + 1 + 1;
+		// Chrome: border, message, preview summary, scroll info, decision, hints, separators.
+		const chrome = msgRows + 8;
 		return Math.max(3, Math.min(avail - chrome, 60));
+	}
+
+	private upstreamLineCount(): number {
+		const upstream = (this.opts.upstream ?? "").replace(/\r\n/g, "\n").trimEnd();
+		return upstream ? upstream.split("\n").length : 0;
 	}
 
 	/** Wrap the upstream text to the viewport width (cached per width). */
@@ -113,6 +136,7 @@ export class ApprovalViewComponent {
 	}
 
 	private clampScroll(delta: number): void {
+		if (!this.previewExpanded) return;
 		const total = this.cachedBody?.length ?? 0;
 		const visible = this.maxVisible(1);
 		const cap = this.maxOffset(total, visible);
@@ -120,20 +144,34 @@ export class ApprovalViewComponent {
 	}
 
 	handleInput(data: string): void {
-		// Decisions
-		if (matchesKey(data, "return") || data === "a" || data === "y") {
-			this.decide("approve");
-			return;
-		}
-		if (data === "e") {
-			this.decide("edit");
-			return;
-		}
-		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || data === "r" || data === "n") {
+		if (this.decided) return;
+		if (isKeyRelease(data)) return;
+		const printable = (decodeKittyPrintable(data) ?? parseKey(data))?.toLowerCase();
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 			this.decide("reject");
 			return;
 		}
-		// Scrolling (only meaningful when a body exists)
+		if (printable === "v" && !isKeyRepeat(data) && this.upstreamLineCount() > 0) {
+			this.previewExpanded = !(this.previewExpanded ?? false);
+			return;
+		}
+		if (matchesKey(data, "return")) {
+			this.decide(this.selectedChoice);
+			return;
+		}
+
+		if (printable === "r") this.selectedChoice = "reject";
+		else if (printable === "e") this.selectedChoice = "edit";
+		else if (printable === "a") this.selectedChoice = "approve";
+		else if (matchesKey(data, "left") || matchesKey(data, "shift+tab")) {
+			const current = DECISIONS.indexOf(this.selectedChoice);
+			this.selectedChoice = DECISIONS[(current - 1 + DECISIONS.length) % DECISIONS.length]!;
+		} else if (matchesKey(data, "right") || matchesKey(data, "tab")) {
+			const current = DECISIONS.indexOf(this.selectedChoice);
+			this.selectedChoice = DECISIONS[(current + 1) % DECISIONS.length]!;
+		}
+
+		// Scrolling is independent of the selected decision and only acts while expanded.
 		const page = this.maxVisible(1);
 		if (matchesKey(data, "up") || data === "k") {
 			this.clampScroll(-1);
@@ -168,6 +206,17 @@ export class ApprovalViewComponent {
 		return th.fg("border", left + "─".repeat(Math.max(0, width - 2)) + right);
 	}
 
+	private decisionLine(): string {
+		const th = this.theme;
+		const choices = DECISIONS.map((choice) => {
+			const label = DECISION_LABELS[choice];
+			return choice === this.selectedChoice
+				? th.fg("accent", `[${label}]`)
+				: th.fg("dim", ` ${label} `);
+		});
+		return `Decision: ${choices.join("   ")}`;
+	}
+
 	render(width: number): string[] {
 		const th = this.theme;
 		const innerW = Math.max(20, width - 4);
@@ -184,29 +233,43 @@ export class ApprovalViewComponent {
 		const msg = this.msgLines(innerW);
 		for (const l of msg) lines.push(this.row(th.fg("text", l), width));
 
-		// Scrollable upstream body
+		// Independently collapsible upstream body. Only overflowing previews start collapsed.
 		const body = this.bodyLines(innerW);
 		const visible = this.maxVisible(msg.length);
 		const cap = this.maxOffset(body.length, visible);
+		if (this.previewExpanded === undefined) this.previewExpanded = body.length > 0 && cap === 0;
 		this.scrollOffset = Math.min(this.scrollOffset, cap);
 		if (body.length > 0) {
 			lines.push(this.hrule(width, "├", "┤"));
-			const slice = body.slice(this.scrollOffset, this.scrollOffset + visible);
-			while (slice.length < Math.min(visible, body.length)) slice.push("");
-			for (const l of slice) lines.push(this.row(l, width));
-			if (cap > 0) {
-				const above = this.scrollOffset;
-				const below = Math.max(0, body.length - visible - this.scrollOffset);
-				lines.push(
-					this.row(th.fg("dim", `↑${above} more · ↓${below} more (${body.length} lines)`), width),
-				);
+			const state = this.previewExpanded ? "expanded" : "collapsed";
+			const action = this.previewExpanded ? "Hide" : "View";
+			lines.push(
+				this.row(
+					th.fg("dim", `Proposal: ${this.upstreamLineCount()} lines · ${state} · [V] ${action} proposal`),
+					width,
+				),
+			);
+			if (this.previewExpanded) {
+				const slice = body.slice(this.scrollOffset, this.scrollOffset + visible);
+				while (slice.length < Math.min(visible, body.length)) slice.push("");
+				for (const l of slice) lines.push(this.row(l, width));
+				if (cap > 0) {
+					const above = this.scrollOffset;
+					const below = Math.max(0, body.length - visible - this.scrollOffset);
+					lines.push(
+						this.row(th.fg("dim", `↑${above} more · ↓${below} more (${body.length} wrapped lines)`), width),
+					);
+				}
 			}
 		}
 
-		// Key hints
+		// Sticky decision footer: selecting never decides; Enter is always required.
 		lines.push(this.hrule(width, "├", "┤"));
-		const scrollHint = cap > 0 ? "↑↓/PgUp/PgDn scroll · " : "";
-		lines.push(this.row(th.fg("dim", `${scrollHint}a/Enter approve · e edit · r/Esc reject`), width));
+		lines.push(this.row(this.decisionLine(), width));
+		const scrollHint = this.previewExpanded && cap > 0 ? "↑↓/PgUp/PgDn scroll · " : "";
+		lines.push(
+			this.row(th.fg("dim", `${scrollHint}←/→ or R/E/A select · Enter confirm · V preview · Esc reject`), width),
+		);
 		lines.push(this.hrule(width, "╰", "╯"));
 		return lines;
 	}
