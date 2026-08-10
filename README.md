@@ -182,7 +182,7 @@ The 0.2 line made graphs **compiled and inspectable**. **0.2.7** makes the day-t
 }
 ```
 
-MCP hosts now expose **19 tools** (added `taskflow_plan` and `taskflow_analytics`). Starter templates: [`examples/templates/`](./examples/templates/). Full notes: [CHANGELOG 0.2.7](./CHANGELOG.md#027--2026-08-06).
+MCP hosts now expose **20 tools**, including `taskflow_plan`, `taskflow_analytics`, and the Trusted Effects audit tool `taskflow_why_effect`. Starter templates: [`examples/templates/`](./examples/templates/). Full notes: [CHANGELOG](./CHANGELOG.md).
 
 ## 0.2 is the compiler turn
 

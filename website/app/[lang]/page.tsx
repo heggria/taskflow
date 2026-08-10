@@ -132,7 +132,7 @@ const copy = {
 				},
 				{
 					tag: "Hosts",
-					title: "Five host adapters · 19 MCP tools",
+					title: "Five host adapters · 20 MCP tools",
 					body: "Pi, Codex, Claude Code, OpenCode, and Grok share one engine.",
 				},
 			],
@@ -289,7 +289,7 @@ const copy = {
 				},
 				{
 					tag: "Hosts",
-					title: "五个宿主 · 19 个 MCP 工具",
+					title: "五个宿主 · 20 个 MCP 工具",
 					body: "Pi、Codex、Claude Code、OpenCode、Grok 共用同一套引擎。",
 				},
 			],

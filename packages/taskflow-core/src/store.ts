@@ -1016,25 +1016,39 @@ function userFlowsDir(): string {
 	return path.join(getAgentDir(), "taskflows");
 }
 
+function canonicalDiscoveryPath(input: string): string {
+	const absolute = path.resolve(input);
+	try {
+		return fs.realpathSync.native(absolute);
+	} catch {
+		return absolute;
+	}
+}
+
+function sameDiscoveryPath(a: string, b: string): boolean {
+	if (process.platform === "win32") return a.toLowerCase() === b.toLowerCase();
+	return a === b;
+}
+
 function findProjectFlowsDirInternal(cwd: string, create = false): string | null {
 	// Prefer an existing .pi dir up the tree; else use cwd/.pi when creating.
-	// **Never treat `~/.pi/` as a project flow dir** — the home directory is
-	// the user-scope boundary, and the user's `~/.pi/` is the agent dir, not a
-	// project. We skip the home entry entirely during the walk-up, so even a
-	// deeply nested cwd under home will return null (create=false) when no
-	// project `.pi` exists on the path.
-	const home = os.homedir();
-	let dir = cwd;
+	// **Never inherit `~/.pi/` or the shared OS temp root's `.pi/` while walking
+	// ancestors.** Resolve physical paths first so relative cwd values and symlink
+	// aliases cannot bypass either boundary. An explicit create at cwd still uses
+	// cwd/.pi; only ancestor discovery stops at these user/shared boundaries.
+	const home = canonicalDiscoveryPath(os.homedir());
+	const tempRoot = canonicalDiscoveryPath(os.tmpdir());
+	const canonicalCwd = canonicalDiscoveryPath(cwd);
+	let dir = canonicalCwd;
 	while (true) {
-		if (dir !== home) {
-			const candidate = path.join(dir, ".pi");
-			if (fs.existsSync(candidate)) return path.join(candidate, "taskflows");
-		}
+		if (sameDiscoveryPath(dir, home) || sameDiscoveryPath(dir, tempRoot)) break;
+		const candidate = path.join(dir, ".pi");
+		if (fs.existsSync(candidate)) return path.join(candidate, "taskflows");
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
 		dir = parent;
 	}
-	return create ? path.join(cwd, ".pi", "taskflows") : null;
+	return create ? path.join(canonicalCwd, ".pi", "taskflows") : null;
 }
 
 /**

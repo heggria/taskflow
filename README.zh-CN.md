@@ -182,7 +182,7 @@ Pi 审批现在把**选择**和**提交**分开：用 `R` / `E` / `A`、方向�
 }
 ```
 
-MCP 宿主现为 **19 个工具**（新增 `taskflow_plan`、`taskflow_analytics`）。入门模板见 [`examples/templates/`](./examples/templates/)。完整说明：[CHANGELOG 0.2.7](./CHANGELOG.md#027--2026-08-06)。
+MCP 宿主现为 **20 个工具**，包括 `taskflow_plan`、`taskflow_analytics` 和 Trusted Effects 审计工具 `taskflow_why_effect`。入门模板见 [`examples/templates/`](./examples/templates/)。完整说明：[CHANGELOG](./CHANGELOG.md)。
 
 ## 0.2 是编译器转身
 
