@@ -1,0 +1,8 @@
+# G3 typecheck evidence
+branch: feat/0.3.0-trusted-effects
+date: 2026-08-07T07:34:49.397Z
+command: pnpm exec tsc --noEmit
+---
+(no compiler output)
+---
+exit: 0

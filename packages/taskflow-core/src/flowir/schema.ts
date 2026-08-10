@@ -171,6 +171,12 @@ export interface FlowIRBudget {
 	maxUSD?: number;
 	/** Stop admitting calls once observed accumulated input+output tokens exceed this. */
 	maxTokens?: number;
+	/** Absolute tokens reserved for critical/final phases (0.2.8). */
+	reserveTokens?: number;
+	/** Absolute USD reserved for critical/final phases (0.2.8). */
+	reserveUSD?: number;
+	/** Fraction of max reserved when absolute reserve omitted (0.2.8). */
+	reserveRatio?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -292,6 +298,9 @@ export const FlowIRSchema = Type.Object(
 				{
 					maxUSD: Type.Optional(Type.Number()),
 					maxTokens: Type.Optional(Type.Number()),
+					reserveTokens: Type.Optional(Type.Number()),
+					reserveUSD: Type.Optional(Type.Number()),
+					reserveRatio: Type.Optional(Type.Number()),
 				},
 				{ additionalProperties: false },
 			),
@@ -411,6 +420,15 @@ export function assertFlowIR(value: unknown): asserts value is FlowIR {
 		}
 		if (b.maxTokens !== undefined && typeof b.maxTokens !== "number") {
 			throw new Error(`FlowIR: 'budget.maxTokens' must be a number if present`);
+		}
+		if (b.reserveTokens !== undefined && typeof b.reserveTokens !== "number") {
+			throw new Error(`FlowIR: 'budget.reserveTokens' must be a number if present`);
+		}
+		if (b.reserveUSD !== undefined && typeof b.reserveUSD !== "number") {
+			throw new Error(`FlowIR: 'budget.reserveUSD' must be a number if present`);
+		}
+		if (b.reserveRatio !== undefined && typeof b.reserveRatio !== "number") {
+			throw new Error(`FlowIR: 'budget.reserveRatio' must be a number if present`);
 		}
 	}
 	if (ir.concurrency !== undefined && typeof ir.concurrency !== "number") {

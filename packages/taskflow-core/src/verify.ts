@@ -10,6 +10,7 @@
  */
 
 import type { Phase } from "./schema.ts";
+import { flowHasCriticalPath, isCriticalPhase, resolveBudgetCeilings } from "./deterministic.ts";
 import { asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS } from "./schema.ts";
 import { type OutputContract } from "./contract.ts";
 import { detectEffectsIssues } from "./verifiers/effects-lint.ts";
@@ -23,6 +24,7 @@ export type IssueCategory =
 	| "unreachable"
 	| "gate-exhaustion"
 	| "budget-overflow"
+	| "budget-reserve"
 	| "concurrency"
 	| "ref-integrity"
 	| "guard-contradiction"
@@ -478,6 +480,57 @@ function detectBudgetOverflow(flow: VerifiableFlow): VerificationIssue[] {
 				`Increase maxUSD or reduce the number of phases.`,
 			severity: "warning",
 			category: "budget-overflow",
+		});
+	}
+
+	// 0.2.8: soft/hard reserve diagnostics
+	const hasCritical = flowHasCriticalPath(flow.phases);
+	const ceilings = resolveBudgetCeilings(budget, { hasCriticalPath: hasCritical });
+	const criticalCount = flow.phases.filter((p) => isCriticalPhase(p)).length;
+	const nonCriticalCount = flow.phases.length - criticalCount;
+	if (
+		ceilings.softTokens !== undefined &&
+		nonCriticalCount > 0 &&
+		ceilings.softTokens > 0 &&
+		nonCriticalCount > ceilings.softTokens
+	) {
+		issues.push({
+			message:
+				`Budget soft ceiling (${ceilings.softTokens} tokens after reserve) is below the estimated minimum of ~${nonCriticalCount} ` +
+				`for ${nonCriticalCount} non-critical phase(s). Upstream work may be soft-truncated so the critical path can still run. ` +
+				`Raise maxTokens or lower reserveRatio/reserveTokens.`,
+			severity: "warning",
+			category: "budget-reserve",
+		});
+	}
+	if (
+		ceilings.hardTokens !== undefined &&
+		criticalCount > 0 &&
+		ceilings.reserveTokens > 0 &&
+		criticalCount > ceilings.reserveTokens &&
+		// only when reserve is the exclusive remaining slice for critical after soft fills
+		ceilings.softTokens !== undefined &&
+		nonCriticalCount >= ceilings.softTokens
+	) {
+		issues.push({
+			message:
+				`Budget reserve (${ceilings.reserveTokens} tokens) may be tight for ${criticalCount} critical/final phase(s). ` +
+				`Consider raising reserveTokens or maxTokens.`,
+			severity: "warning",
+			category: "budget-reserve",
+		});
+	}
+	if (
+		ceilings.hardTokens !== undefined &&
+		ceilings.hardTokens > 0 &&
+		ceilings.reserveTokens / ceilings.hardTokens >= 0.5
+	) {
+		issues.push({
+			message:
+				`Budget reserve (${ceilings.reserveTokens} of ${ceilings.hardTokens} tokens, ≥50%) is large — non-critical work will have little room. ` +
+				`Confirm reserveRatio/reserveTokens is intentional.`,
+			severity: "warning",
+			category: "budget-reserve",
 		});
 	}
 

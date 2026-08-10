@@ -545,19 +545,37 @@ phases array, or interpolated `{steps.plan.json}`). Two modes:
 }
 ```
 
-### Budget (observed-usage stop-loss)
+### Budget (observed-usage stop-loss, soft/hard + reserve)
 
 Add a run-wide stop-loss at the top level. Ordinary budgeted DAG layers and
-`map`/`parallel`/`tournament` fan-out use serial call admission. Once reported
-cost/tokens exceed the threshold, no new model call is started; the run ends as
-`blocked` with partial outputs preserved. An admitted call may cross the
-threshold. A `race` necessarily starts competing branches together, so all
-already-active race branches may contribute overshoot. This is never a
-zero-overshoot guarantee.
+`map`/`parallel`/`tournament` fan-out use serial call admission.
+
+**Two ceilings (0.2.8):**
+
+| Ceiling | Used for | Meaning |
+|---------|----------|---------|
+| **Hard** (`maxTokens` / `maxUSD`) | `final: true` and `budgetClass: "critical"` | True stop-loss. Crossing it after a phase marks the run `blocked`. |
+| **Soft** (hard − reserve) | Normal (non-critical) phases + their fan-out items | Stops admitting early so the critical path can still run. |
+
+**Reserve:** default **20%** of each declared max when any final/critical phase exists. Override with `reserveRatio` (0–0.5; `0` disables), or absolute `reserveTokens` / `reserveUSD` (absolute wins over ratio). Soft map truncation alone does **not** halt the run — the final synthesize phase can still execute under the hard cap.
 
 ```jsonc
-{ "name": "...", "budget": { "maxUSD": 1.50, "maxTokens": 2000000 }, "phases": [ ... ] }
+{
+  "name": "...",
+  "budget": {
+    "maxTokens": 2000000,
+    // optional: "reserveRatio": 0.25,
+    // optional: "reserveTokens": 400000,
+    // optional: "maxUSD": 1.50
+  },
+  "phases": [
+    { "id": "discover", "type": "map", /* … normal — admits against soft */ },
+    { "id": "report", "type": "reduce", "final": true /* critical — may use reserve */ }
+  ]
+}
 ```
+
+An admitted call may still overshoot its ceiling. A `race` starts competing branches together, so already-active race branches may contribute overshoot. This is never a zero-overshoot guarantee.
 
 **Any flow with a fan-out should have a `budget`** — a map over a
 mis-discovered 500-item array is otherwise unbounded spend.

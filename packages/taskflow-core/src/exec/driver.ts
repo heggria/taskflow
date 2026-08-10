@@ -11,7 +11,13 @@ import { dependenciesOf, resolveArgs, topoLayers, type Budget, type Phase, type 
 import { resolveFinalOutput } from "../final-output.ts";
 import { aggregateUsage, emptyUsage } from "../usage.ts";
 import type { TraceEvent, TraceSink } from "../trace.ts";
-import { overBudget as overBudgetCheck } from "../deterministic.ts";
+import {
+	overBudget as overBudgetCheck,
+	budgetCheckFrom,
+	budgetModeForPhase,
+	flowHasCriticalPath,
+	type BudgetMode,
+} from "../deterministic.ts";
 import { safeParse } from "../interpolate.ts";
 import {
 	EVENT_KERNEL_PHASE_TYPES,
@@ -142,14 +148,15 @@ function safeTraceFlush(deps: EventKernelDeps, phaseId: string): void {
 	}
 }
 
-function runOverBudget(state: RunState): { over: boolean; reason: string } {
+function runOverBudget(state: RunState, mode: BudgetMode = "hard"): { over: boolean; reason: string } {
 	const budget = state.def.budget;
 	if (!budget) return { over: false, reason: "" };
-	return overBudgetCheck({
-		maxUSD: budget.maxUSD,
-		maxTokens: budget.maxTokens,
-		usages: Object.values(state.phases).map((p) => p.usage ?? emptyUsage()),
-	});
+	return overBudgetCheck(
+		budgetCheckFrom(budget, Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), {
+			hasCriticalPath: flowHasCriticalPath(state.def.phases),
+			mode,
+		}),
+	);
 }
 
 function emitLifecycle(
@@ -374,7 +381,40 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		}
 		const plans: PhasePlan[] = layer.map((phase) => {
 			const dep = depsSatisfied(phase, state.phases, byId);
-			return { phase, skipReason: dep.ok ? undefined : dep.skipReason };
+			if (!dep.ok) return { phase, skipReason: dep.skipReason };
+			if (!state.def.budget) return { phase };
+			// 0.2.8 soft/hard admission (mirrors imperative runtime).
+			const mode = budgetModeForPhase(phase);
+			const adm = runOverBudget(state, mode);
+			if (!adm.over) return { phase };
+			if (mode === "hard") {
+				budgetBlocked = true;
+				budgetReason = adm.reason;
+				const skipReason = `Budget exceeded: ${adm.reason}`;
+				const be: Event = {
+					v: EVENT_SCHEMA_VERSION,
+					ts: Date.now(),
+					runId: state.runId,
+					phaseId: phase.id,
+					kind: "decision",
+					decision: { type: "budget-hit", value: "hard", reason: skipReason },
+				};
+				allEvents.push(be);
+				safeTraceEmit(deps, be);
+				return { phase, skipReason };
+			}
+			const skipReason = `Budget soft-cap: ${adm.reason}`;
+			const be: Event = {
+				v: EVENT_SCHEMA_VERSION,
+				ts: Date.now(),
+				runId: state.runId,
+				phaseId: phase.id,
+				kind: "decision",
+				decision: { type: "budget-hit", value: "soft", reason: skipReason },
+			};
+			allEvents.push(be);
+			safeTraceEmit(deps, be);
+			return { phase, skipReason };
 		});
 
 		// Emit skips for dep-unsatisfied phases (sequential, cheap).
@@ -478,8 +518,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 			}
 		}
 
-		// --- Post-layer budget check ---
-		const ob = runOverBudget(state);
+		// --- Post-layer hard budget check (soft alone does not halt the run) ---
+		const ob = runOverBudget(state, "hard");
 		if (ob.over) {
 			budgetBlocked = true;
 			budgetReason = ob.reason;
@@ -491,7 +531,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				runId: state.runId,
 				phaseId: lastPhase.id,
 				kind: "decision",
-				decision: { type: "budget-hit", value: "budget", reason: ob.reason },
+				decision: { type: "budget-hit", value: "hard", reason: ob.reason },
 			};
 			allEvents.push(be);
 			safeTraceEmit(deps, be);

@@ -7,7 +7,12 @@ import type { Budget, Phase, Taskflow } from "../schema.ts";
 import { dependenciesOf } from "../schema.ts";
 import { emptyUsage, type UsageStats } from "../usage.ts";
 import type { RunState } from "../store.ts";
-import { overBudget } from "../deterministic.ts";
+import {
+	overBudget,
+	budgetCheckFrom,
+	flowHasCriticalPath,
+	type BudgetMode,
+} from "../deterministic.ts";
 
 /** Linear-time placeholder detection for untrusted DSL strings.
  *
@@ -139,18 +144,21 @@ export function kernelUnsupportedReason(def: Taskflow): string | undefined {
 	return undefined;
 }
 
-/** Dependency satisfaction matching imperative runtime (join + optional). */
+/** Dependency satisfaction matching imperative runtime (join + optional + soft-cap). */
 export function depsSatisfied(
 	phase: Phase,
-	phases: Record<string, { status: string } | undefined>,
+	phases: Record<string, { status: string; error?: string } | undefined>,
 	byId: Map<string, Phase>,
 ): { ok: boolean; skipReason?: string } {
 	const deps = dependenciesOf(phase);
 	const join = phase.join ?? "all";
 	const depOk = (d: string): boolean => {
-		const s = phases[d]?.status;
+		const ps = phases[d];
+		const s = ps?.status;
 		if (s === "done") return true;
 		if (s === "failed" && byId.get(d)?.optional) return true;
+		// 0.2.8: soft-cap skip is fail-soft for downstream critical path.
+		if (s === "skipped" && typeof ps?.error === "string" && ps.error.startsWith("Budget soft-cap")) return true;
 		return false;
 	};
 	if (deps.length === 0) return { ok: true };
@@ -162,7 +170,7 @@ export function depsSatisfied(
 	};
 }
 
-/** Clamp child budget to the parent's remaining run-wide allowance. */
+/** Clamp child budget to the parent's remaining hard run-wide allowance. */
 export function clampSubFlowBudget(
 	sub: Taskflow,
 	parentBudget: Budget | undefined,
@@ -182,13 +190,25 @@ export function clampSubFlowBudget(
 	const budget: Budget = {};
 	if (Number.isFinite(clamped.maxUSD)) budget.maxUSD = clamped.maxUSD;
 	if (Number.isFinite(clamped.maxTokens)) budget.maxTokens = clamped.maxTokens;
+	const src = child ?? parentBudget;
+	if (src.reserveRatio !== undefined) budget.reserveRatio = src.reserveRatio;
+	if (src.reserveTokens !== undefined) {
+		budget.reserveTokens =
+			budget.maxTokens === undefined
+				? src.reserveTokens
+				: Math.min(src.reserveTokens, budget.maxTokens);
+	}
+	if (src.reserveUSD !== undefined) {
+		budget.reserveUSD =
+			budget.maxUSD === undefined ? src.reserveUSD : Math.min(src.reserveUSD, budget.maxUSD);
+	}
 	return {
 		...sub,
 		budget: budget.maxUSD === undefined && budget.maxTokens === undefined ? undefined : budget,
 	};
 }
 
-/** Check a kernel phase's in-flight retry attempts against the run-wide cap.
+/** Check a kernel phase's in-flight retry attempts against the run-wide hard cap.
  * The driver has not folded the current phase into state yet, so callers must
  * supply the cumulative usage of attempts made so far. Prior completed phase
  * usage comes from state; the current running placeholder is excluded. */
@@ -196,17 +216,20 @@ export function kernelAttemptsOverBudget(
 	state: RunState,
 	phaseId: string,
 	attemptUsage: readonly UsageStats[],
+	mode: BudgetMode = "hard",
 ): boolean {
 	const budget = state.def.budget;
 	if (!budget) return false;
-	return overBudget({
-		maxUSD: budget.maxUSD,
-		maxTokens: budget.maxTokens,
-		usages: [
-			...Object.entries(state.phases)
-				.filter(([id]) => id !== phaseId)
-				.map(([, phase]) => phase.usage ?? emptyUsage()),
-			...attemptUsage,
-		],
-	}).over;
+	return overBudget(
+		budgetCheckFrom(
+			budget,
+			[
+				...Object.entries(state.phases)
+					.filter(([id]) => id !== phaseId)
+					.map(([, phase]) => phase.usage ?? emptyUsage()),
+				...attemptUsage,
+			],
+			{ hasCriticalPath: flowHasCriticalPath(state.def.phases), mode },
+		),
+	).over;
 }

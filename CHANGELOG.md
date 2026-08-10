@@ -30,6 +30,21 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - Historical Control Plane (`feat/0.3.0`) is **not** this release definition.
 - **Not released; not GA.**
 
+## [0.2.8] — Unreleased
+
+### Changed
+
+- **Budget soft/hard ceilings + critical-path reserve.** Run-wide `budget` now has two admission ceilings:
+  - **Hard** (`maxTokens` / `maxUSD`): true stop-loss; once exceeded the run is `blocked` if work remains.
+  - **Soft** (hard − reserve): non-critical phases (default for non-`final` work) stop admitting earlier so `final: true` / `budgetClass: "critical"` can still run under the hard cap.
+  - Default reserve is **20%** of each declared max when a critical path exists; set `reserveRatio: 0` for 0.2.7-style single-ceiling aggression. Absolute `reserveTokens` / `reserveUSD` win over the ratio.
+  - Soft map/phase truncation alone no longer forces a full-run halt; fail-closed `budgetTruncated` (e.g. race incomplete accounting) and hard overspend still do.
+- **Phase `budgetClass`:** `"normal"` | `"critical"` (default: critical when `final: true`, else normal).
+
+### Fixed
+
+- Discover → map fan-out → synthesize flows no longer starve the final phase when early lanes exhaust most of the token cap (dogfood: trusted-effects discovery runs on 2026-08-07).
+
 ## [0.2.7] — 2026-08-06
 
 ### Added

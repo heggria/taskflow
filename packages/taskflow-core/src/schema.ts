@@ -147,12 +147,43 @@ const CacheSchema = Type.Object(
 	{ additionalProperties: false },
 );
 
-/** Run-wide cost / token ceiling. Exceeding it halts the run (remaining phases skipped). */
+/**
+ * Run-wide cost / token ceiling (0.2.8 soft/hard + critical-path reserve).
+ *
+ * Hard ceiling (`maxTokens` / `maxUSD`): once exceeded, no new calls; run is
+ * `blocked` if the critical path cannot finish.
+ * Soft ceiling (hard − reserve): non-critical phases stop admitting earlier so
+ * `final` / `budgetClass:"critical"` work can still run under the hard cap.
+ * Default reserve is 20% of max when a critical path exists; set
+ * `reserveRatio: 0` for 0.2.7-style single-ceiling aggression.
+ */
 const BudgetSchema = Type.Object(
 	{
-		maxUSD: Type.Optional(Type.Number({ minimum: 0, description: "Halt the run once accumulated cost exceeds this many USD" })),
+		maxUSD: Type.Optional(Type.Number({ minimum: 0, description: "Hard cost ceiling in USD (observed usage stop-loss)" })),
 		maxTokens: Type.Optional(
-			Type.Number({ minimum: 0, description: "Halt the run once accumulated input+output tokens exceed this" }),
+			Type.Number({ minimum: 0, description: "Hard token ceiling (accumulated input+output); observed usage stop-loss" }),
+		),
+		reserveTokens: Type.Optional(
+			Type.Number({
+				minimum: 0,
+				description:
+					"Absolute tokens reserved for critical/final phases (wins over reserveRatio for the token axis). Soft ceiling = maxTokens − reserve.",
+			}),
+		),
+		reserveUSD: Type.Optional(
+			Type.Number({
+				minimum: 0,
+				description:
+					"Absolute USD reserved for critical/final phases (wins over reserveRatio for the cost axis). Soft ceiling = maxUSD − reserve.",
+			}),
+		),
+		reserveRatio: Type.Optional(
+			Type.Number({
+				minimum: 0,
+				maximum: 0.5,
+				description:
+					"Fraction of maxTokens/maxUSD reserved when the matching absolute reserve is omitted. Range [0, 0.5]. Default 0.2 when a final/critical phase exists; explicit 0 disables auto-reserve.",
+			}),
 		),
 	},
 	{ additionalProperties: false, minProperties: 1 },
@@ -366,6 +397,12 @@ const PhaseSchema = Type.Object(
 		tools: Type.Optional(Type.Array(Type.String(), { description: "Restrict tools for this phase's agent" })),
 		cwd: Type.Optional(Type.String({ description: "Working directory for this phase. Accepts a literal path; a reserved keyword ('temp', 'dedicated', 'worktree'); or the exact whole placeholder {args.X} when X is declared type:'relative-path'. The 0.2.1 argument bridge requires an explicit host resolve-only opt-in." })),
 		final: Type.Optional(Type.Boolean({ description: "Mark this phase's output as the workflow result" })),
+		budgetClass: Type.Optional(
+			StringEnum(["normal", "critical"] as const, {
+				description:
+					"Budget admission class (0.2.8). 'critical' may spend into the reserved headroom up to the hard ceiling; 'normal' stops at the soft ceiling. Default: 'critical' when final:true, else 'normal'.",
+			}),
+		),
 		optional: Type.Optional(
 			Type.Boolean({ description: "If true, a failure does not abort the run", default: false }),
 		),
@@ -924,6 +961,37 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 	}
 
 	if (!flow.name || typeof flow.name !== "string") errors.push("Missing or invalid 'name'");
+	// Budget: must declare a hard ceiling; reserve must not exceed hard.
+	if (flow.budget !== undefined && flow.budget !== null && typeof flow.budget === "object") {
+		const b = flow.budget as {
+			maxUSD?: number;
+			maxTokens?: number;
+			reserveTokens?: number;
+			reserveUSD?: number;
+			reserveRatio?: number;
+		};
+		if (b.maxUSD === undefined && b.maxTokens === undefined) {
+			errors.push("budget must declare maxUSD and/or maxTokens (hard ceiling)");
+		}
+		if (
+			b.reserveTokens !== undefined &&
+			b.maxTokens !== undefined &&
+			Number.isFinite(b.reserveTokens) &&
+			Number.isFinite(b.maxTokens) &&
+			b.reserveTokens > b.maxTokens
+		) {
+			errors.push(`budget.reserveTokens (${b.reserveTokens}) cannot exceed budget.maxTokens (${b.maxTokens})`);
+		}
+		if (
+			b.reserveUSD !== undefined &&
+			b.maxUSD !== undefined &&
+			Number.isFinite(b.reserveUSD) &&
+			Number.isFinite(b.maxUSD) &&
+			b.reserveUSD > b.maxUSD
+		) {
+			errors.push(`budget.reserveUSD (${b.reserveUSD}) cannot exceed budget.maxUSD (${b.maxUSD})`);
+		}
+	}
 	if (!Array.isArray(flow.phases) || flow.phases.length === 0) {
 		errors.push("Taskflow must have at least one phase");
 		return { ok: false, errors, warnings };

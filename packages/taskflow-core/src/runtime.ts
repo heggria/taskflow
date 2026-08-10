@@ -39,7 +39,15 @@ import { aggregateUsage, emptyUsage, type UsageStats } from "./usage.ts";
 import { type Budget, type CacheScope, asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS, LOOP_HARD_MAX_ITERATIONS, MAX_DYNAMIC_MAP_ITEMS, MAX_DYNAMIC_NESTING, MAX_DYNAMIC_PHASES, parseTtlMs, type Phase, resolveArgs, type Taskflow, topoLayers, TOURNAMENT_DEFAULT_VARIANTS, TOURNAMENT_HARD_MAX_VARIANTS, type TournamentMode, validateInvocationArgs, validateTaskflow } from "./schema.ts";
 import { verifyTaskflow, pluginVerifierErrors, formatPluginIssueMessages, type TaskflowVerifier } from "./verify.ts";
 import { combineScores, combineWithJudge, evaluatePureScorer, formatScorerReport, parseJudgeOutput, SCORE_DEFAULT_THRESHOLD, type ScoreConfig, scoreResultJSON, type ScorerResult, scorerShapeErrors } from "./scorers.ts";
-import { parseGateVerdict, overBudget as overBudgetCheck, parseTournamentWinner, type BudgetCheckInput } from "./deterministic.ts";
+import {
+	parseGateVerdict,
+	overBudget as overBudgetCheck,
+	parseTournamentWinner,
+	budgetCheckFrom,
+	budgetModeForPhase,
+	flowHasCriticalPath,
+	type BudgetMode,
+} from "./deterministic.ts";
 export { parseTournamentWinner } from "./deterministic.ts";
 import { type TraceEvent, type TraceSink } from "./trace.ts";
 // Re-export so existing `import { parseGateVerdict } from "./runtime.ts"` callers
@@ -424,8 +432,10 @@ function normalizeInlineDef(parsed: unknown, phaseId: string): Taskflow | undefi
 
 /**
  * Clamp a runtime-generated sub-flow's budget so it can only ever be TIGHTER
- * than the parent's, never looser. A generated def cannot raise the spend cap by
- * declaring its own large budget. Each dimension becomes min(child, parent).
+ * than the parent's hard ceiling, never looser. A generated def cannot raise
+ * the spend cap by declaring its own large budget. Each dimension becomes
+ * min(child, parent remaining hard). Reserve knobs are re-carried and
+ * absolute reserves are clamped to the new hard max.
  */
 function clampSubFlowBudget(
 	sub: Taskflow,
@@ -448,19 +458,32 @@ function clampSubFlowBudget(
 	const budget: Budget = {};
 	if (Number.isFinite(clamped.maxUSD)) budget.maxUSD = clamped.maxUSD;
 	if (Number.isFinite(clamped.maxTokens)) budget.maxTokens = clamped.maxTokens;
+	// Carry reserve policy into the child under the clamped hard ceiling.
+	const src = child ?? parentBudget;
+	if (src.reserveRatio !== undefined) budget.reserveRatio = src.reserveRatio;
+	if (src.reserveTokens !== undefined) {
+		budget.reserveTokens =
+			budget.maxTokens === undefined
+				? src.reserveTokens
+				: Math.min(src.reserveTokens, budget.maxTokens);
+	}
+	if (src.reserveUSD !== undefined) {
+		budget.reserveUSD =
+			budget.maxUSD === undefined ? src.reserveUSD : Math.min(src.reserveUSD, budget.maxUSD);
+	}
 	return { ...sub, budget: budget.maxUSD === undefined && budget.maxTokens === undefined ? undefined : budget };
 }
 
-/** Aggregate run cost/tokens so far and test against the budget. */
-function overBudget(state: RunState): { over: boolean; reason: string } {
+/** Aggregate run cost/tokens so far and test against soft or hard budget ceilings. */
+function overBudget(state: RunState, mode: BudgetMode = "hard"): { over: boolean; reason: string } {
 	const budget: Budget | undefined = state.def.budget;
 	if (!budget) return { over: false, reason: "" };
-	const input: BudgetCheckInput = {
-		maxUSD: budget.maxUSD,
-		maxTokens: budget.maxTokens,
-		usages: Object.values(state.phases).map((p) => p.usage ?? emptyUsage()),
-	};
-	return overBudgetCheck(input);
+	return overBudgetCheck(
+		budgetCheckFrom(budget, Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), {
+			hasCriticalPath: flowHasCriticalPath(state.def.phases),
+			mode,
+		}),
+	);
 }
 
 /** Merge several sub-results into a single PhaseState (for map/parallel). */
@@ -753,11 +776,12 @@ type SpawnChildRunner = (
 function spawnedOverBudget(state: RunState, local: UsageStats): boolean {
 	const budget = state.def.budget;
 	if (!budget) return false;
-	return overBudgetCheck({
-		maxUSD: budget.maxUSD,
-		maxTokens: budget.maxTokens,
-		usages: [...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), local],
-	}).over;
+	return overBudgetCheck(
+		budgetCheckFrom(budget, [...Object.values(state.phases).map((p) => p.usage ?? emptyUsage()), local], {
+			hasCriticalPath: flowHasCriticalPath(state.def.phases),
+			mode: "hard",
+		}),
+	).over;
 }
 
 /**
@@ -2040,17 +2064,22 @@ async function executePhaseInner(
 		// Usage is only authoritative after a call reports it. Serial admission for
 		// budgeted fan-out prevents N siblings from all observing the same remaining
 		// allowance and overshooting it concurrently.
+		// 0.2.8: non-critical fan-out admits against the soft ceiling so reserve
+		// remains for final/critical phases; critical fan-out uses the hard ceiling.
+		const fanoutBudgetMode = budgetModeForPhase(phase);
 		const admissionConcurrency = state.def.budget ? 1 : concurrency;
 		return mapWithConcurrencyLimit(items, admissionConcurrency, async (it, idx) => {
-			// Budget guard: stop spawning new fan-out items once the run is over budget.
-			if (overBudget(state).over) {
+			// Budget guard: stop spawning new fan-out items once the applicable ceiling is hit.
+			if (overBudget(state, fanoutBudgetMode).over) {
 				done++;
 				refresh();
 				return {
 					agent: it.agent,
 					task: it.task,
 					exitCode: 0,
-					output: "(skipped: budget exceeded)",
+					output: fanoutBudgetMode === "soft"
+						? "(skipped: budget soft-cap; reserved for critical path)"
+						: "(skipped: budget exceeded)",
 					stderr: "",
 					usage: emptyUsage(),
 					stopReason: "budget-skipped",
@@ -2185,7 +2214,7 @@ async function executePhaseInner(
 				agentName,
 				inputHash: cacheKey.key,
 				isAborted: () => deps.signal?.aborted === true,
-				isOverBudget: () => overBudget(state).over,
+				isOverBudget: () => overBudget(state, budgetModeForPhase(phase)).over,
 				resolveTask: (batchValue) => {
 					const batchCtx = buildInterpolationContext(state, batchValue, undefined, onRead);
 					const interp = interpolate(phase.task ?? "", batchCtx);
@@ -2524,7 +2553,7 @@ async function executePhaseInner(
 			const cachedM = cachedPhase(cc, ckM);
 			if (cachedM) return cachedM;
 			const rM = await runOne(agentNameM, fullTaskM, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
-			const psM = resultToPhaseState(phase.id, rM, ckM.key, parseJson);
+			let psM = resultToPhaseState(phase.id, rM, ckM.key, parseJson);
 			if (readRefs.length) psM.reads = readRefsToReads(readRefs, state);
 			psM.warnings = [...(psM.warnings ?? []), scoreWarning, ...(refWarningM ? [refWarningM] : [])];
 			if (psM.status === "done") psM.gate = parseGateVerdict(rM.output);
@@ -2542,7 +2571,7 @@ async function executePhaseInner(
 		if (cached) return cached;
 
 		const r = await runOne(agentName, fullTask, liveSink(state, phase.id, emitProgress), nodeIdFor(), contractCheck);
-		const ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
+		let ps = resultToPhaseState(phase.id, r, inputHash, parseJson);
 		if (readRefs.length) ps.reads = readRefsToReads(readRefs, state);
 		if (refWarning) ps.warnings = [...(ps.warnings ?? []), refWarning];
 		// Prompt-size diagnostics for the single agent call (durable).
@@ -4645,10 +4674,14 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			const deps_ = dependenciesOf(phase);
 			const join = phase.join ?? "all";
 			// An `optional` dependency that failed still counts as satisfied.
+			// 0.2.8: a soft-cap skip also counts as satisfied so the critical path
+			// can still run with partial upstream (empty output for the skipped dep).
 			const depOk = (d: string): boolean => {
-				const s = state.phases[d]?.status;
+				const ps = state.phases[d];
+				const s = ps?.status;
 				if (s === "done") return true;
 				if (s === "failed" && byId.get(d)?.optional) return true;
+				if (s === "skipped" && typeof ps?.error === "string" && ps.error.startsWith("Budget soft-cap")) return true;
 				return false;
 			};
 			const depsSatisfied =
@@ -4659,14 +4692,28 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 			else if (budgetBlocked) skipReason = `Budget exceeded${budgetReason ? `: ${budgetReason}` : ""}`;
 			else if (!depsSatisfied)
 				skipReason = join === "any" ? "All dependencies failed or were skipped" : "Upstream dependency not satisfied";
+			else if (state.def.budget) {
+				// 0.2.8: admit normal phases against soft ceiling; critical against hard.
+				const mode = budgetModeForPhase(phase);
+				const adm = overBudget(state, mode);
+				if (adm.over) {
+					if (mode === "hard") {
+						budgetBlocked = true;
+						budgetReason = adm.reason;
+						skipReason = `Budget exceeded: ${adm.reason}`;
+					} else {
+						skipReason = `Budget soft-cap: ${adm.reason}`;
+					}
+				}
+			}
 
 			if (skipReason) {
-				if (skipReason.startsWith("Budget exceeded")) {
-					budgetBlocked = true;
+				if (skipReason.startsWith("Budget exceeded") || skipReason.startsWith("Budget soft-cap")) {
 					// S1: budget-hit decision so fold/replay can re-tally under new caps.
+					// Soft skips do not set budgetBlocked (critical path may still run).
 					traceDecision(deps, state, phase.id, {
 						type: "budget-hit",
-						value: budgetReason || "budget",
+						value: skipReason.startsWith("Budget soft-cap") ? "soft" : "hard",
 						reason: skipReason,
 					});
 					// executePhase already flushed its phase-end batch. Flush this
@@ -4731,23 +4778,34 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 				gateOutput = ps.output ?? "";
 				gatePhaseId = phase.id;
 			}
-			// A fan-out cut short by the cap is itself a budget skip.
-			if (ps.budgetTruncated) {
+			// 0.2.8: soft fan-out truncation (status done + budgetTruncated, under hard
+			// ceiling) does NOT halt the run — reserve remains for critical work.
+			// Fail-closed signals still halt: hard overspend, or failed+budgetTruncated
+			// (e.g. race incomplete usage accounting).
+			if (ps.budgetTruncated && (ps.status === "failed" || overBudget(state, "hard").over)) {
 				budgetBlocked = true;
-				if (!budgetReason) budgetReason = "fan-out truncated by budget";
+				if (!budgetReason) {
+					budgetReason =
+						ps.status === "failed"
+							? (ps.error ?? "incomplete budget accounting")
+							: "fan-out truncated by hard budget";
+				}
+			} else if (ps.budgetTruncated) {
+				// Soft truncation: annotate so operators see partial fan-out.
+				ps.warnings = [
+					...(ps.warnings ?? []),
+					"fan-out truncated by budget soft-cap; reserved headroom left for critical path",
+				];
 			}
-			// Budget ceiling: once exceeded, remaining phases are skipped.
-			// For concurrent same-layer phases, the check runs after each phase
-			// completes, so at most (concurrency - 1) extra phases may run before
-			// the budget is detected as exceeded. This bounded overshoot is
-			// acceptable: budgetBlocked prevents cascading into subsequent layers.
-			const ob = overBudget(state);
+			// Hard ceiling: once exceeded, remaining phases are skipped.
+			// Soft overshoot without hard breach allows critical/final phases to run.
+			const ob = overBudget(state, "hard");
 			if (ob.over) {
 				if (!budgetBlocked) {
-					// First time we detect the ceiling after a phase completes.
+					// First time we detect the hard ceiling after a phase completes.
 					traceDecision(deps, state, phase.id, {
 						type: "budget-hit",
-						value: "budget",
+						value: "hard",
 						reason: ob.reason,
 					});
 					traceFlush(deps, phase.id);

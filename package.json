@@ -37,7 +37,8 @@
 		"test:e2e-opencode-mcp": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode-mcp.mts",
 		"test:e2e-grok": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok.mts",
 		"test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts",
-		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts"
+		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts",
+		"typecheck:evidence": "node --experimental-strip-types scripts/typecheck-evidence.mts"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-agent-core": "^0.83.0",

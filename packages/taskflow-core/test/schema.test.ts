@@ -625,3 +625,39 @@ test("validateTaskflow: script phase in a DYNAMIC (LLM-authored) flow is rejecte
 	const allowed = validateTaskflow(dyn);
 	assert.equal(allowed.ok, true, `author-written script should be allowed: ${allowed.errors.join("; ")}`);
 });
+
+
+test("validateTaskflow: budget reserve cannot exceed hard max", () => {
+	const badTokens = validateTaskflow({
+		name: "b",
+		budget: { maxTokens: 100, reserveTokens: 200 },
+		phases: [{ id: "a", type: "agent", task: "t", final: true }],
+	});
+	assert.equal(badTokens.ok, false);
+	assert.ok(badTokens.errors.some((e) => /reserveTokens/.test(e)), badTokens.errors.join("; "));
+
+	const badUsd = validateTaskflow({
+		name: "b",
+		budget: { maxUSD: 1, reserveUSD: 2 },
+		phases: [{ id: "a", type: "agent", task: "t", final: true }],
+	});
+	assert.equal(badUsd.ok, false);
+	assert.ok(badUsd.errors.some((e) => /reserveUSD/.test(e)), badUsd.errors.join("; "));
+
+	const ok = validateTaskflow({
+		name: "b",
+		budget: { maxTokens: 100, reserveTokens: 20, reserveRatio: 0.1 },
+		phases: [{ id: "a", type: "agent", task: "t", budgetClass: "critical", final: true }],
+	});
+	assert.equal(ok.ok, true, ok.errors.join("; "));
+});
+
+test("validateTaskflow: budget must declare a hard ceiling", () => {
+	const r = validateTaskflow({
+		name: "b",
+		budget: { reserveRatio: 0.2 },
+		phases: [{ id: "a", type: "agent", task: "t", final: true }],
+	});
+	assert.equal(r.ok, false);
+	assert.ok(r.errors.some((e) => /maxUSD|maxTokens|hard ceiling/i.test(e)), r.errors.join("; "));
+});

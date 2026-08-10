@@ -217,12 +217,13 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 	} catch (err) {
 		phaseState = scriptSpawnErrorToPhaseState(phase.id, err, { inputHash: "" });
 	}
-	const status: StepResult["status"] = phaseState.timedOut
+	let status: StepResult["status"] = phaseState.timedOut
 		? "timedOut"
 		: phaseState.status === "done"
 			? "done"
 			: "failed";
-	const text = phaseState.output ?? "";
+	let text = phaseState.output ?? "";
+	let error = status === "done" ? undefined : phaseState.error;
 	const usage = emptyUsage();
 	const midEvents: Event[] = [
 		baseEvent(ctx, phase.id, "subagent-call", {
@@ -234,7 +235,7 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 			output: {
 				text,
 				usage,
-				stopReason: phaseState.timedOut ? "timeout" : phaseState.status === "done" ? "end" : "error",
+				stopReason: phaseState.timedOut ? "timeout" : status === "done" ? "end" : "error",
 			},
 		}),
 	];
@@ -242,7 +243,7 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 		midEvents,
 		output: text,
 		status,
-		error: status === "done" ? undefined : phaseState.error,
+		error,
 		usage,
 	};
 }

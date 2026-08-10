@@ -27,8 +27,16 @@ function mkState(def: Taskflow, args: Record<string, unknown> = {}): RunState {
 
 function mockRunner(
 	respond: (task: string) => string,
-	opts?: { fail?: (task: string) => boolean; cost?: number; record?: string[] },
+	opts?: {
+		fail?: (task: string) => boolean;
+		cost?: number | ((task: string) => number);
+		input?: number | ((task: string) => number);
+		output?: number | ((task: string) => number);
+		record?: string[];
+	},
 ): RuntimeDeps["runTask"] {
+	const resolve = (v: number | ((task: string) => number) | undefined, task: string, fallback: number): number =>
+		typeof v === "function" ? v(task) : v ?? fallback;
 	return async (_cwd, _agents, agentName, task, _o: RunOptions): Promise<RunResult> => {
 		opts?.record?.push(task);
 		const failed = opts?.fail?.(task) ?? false;
@@ -38,7 +46,13 @@ function mockRunner(
 			exitCode: failed ? 1 : 0,
 			output: failed ? "" : respond(task),
 			stderr: failed ? "boom" : "",
-			usage: { ...emptyUsage(), output: 10, cost: opts?.cost ?? 0.001, turns: 1 },
+			usage: {
+				...emptyUsage(),
+				input: resolve(opts?.input, task, 0),
+				output: resolve(opts?.output, task, 10),
+				cost: resolve(opts?.cost, task, 0.001),
+				turns: 1,
+			},
 			stopReason: failed ? "error" : "end",
 			errorMessage: failed ? "mock failure" : undefined,
 		};
@@ -260,6 +274,100 @@ test("budget: caps a runaway map fan-out and marks the run blocked", async () =>
 	assert.ok((res.state.phases.m.subProgress?.done ?? 5) < 5, "fan-out should be cut short");
 	assert.match(res.state.phases.m.error ?? "", /skipped: budget exceeded/);
 	assert.equal(res.state.status, "blocked");
+});
+
+test("budget 0.2.8: soft reserve lets final synthesize after map soft-truncates", async () => {
+	// Dogfood failure shape: map fan-out ate the whole hard cap; synthesize never ran.
+	// With default 20% reserve (critical final), soft=80, hard=100, 30 tokens/call:
+	// map admits items until soft is crossed; final still runs under hard.
+	const def: Taskflow = {
+		name: "budget-soft-map-final",
+		concurrency: 1,
+		budget: { maxTokens: 100 },
+		phases: [
+			{ id: "d", type: "agent", agent: "a", task: "list", output: "json" },
+			{
+				id: "m",
+				type: "map",
+				over: "{steps.d.json}",
+				agent: "a",
+				task: "item {item}",
+				dependsOn: ["d"],
+			},
+			{ id: "synth", type: "agent", agent: "a", task: "synth {steps.m.output}", dependsOn: ["m"], final: true },
+		],
+	};
+	const runner = mockRunner((t) => (t === "list" ? "[1,2,3,4,5]" : t.startsWith("synth") ? "SYNTH_OK" : "done"), {
+		input: (t) => (t.startsWith("synth") ? 5 : 30),
+		output: 0,
+		cost: 0,
+	});
+	const res = await executeTaskflow(mkState(def), baseDeps(runner, { usageAccounting: "tokens-only" }));
+	assert.equal(res.state.phases.m.budgetTruncated, true, "map should soft-truncate");
+	assert.ok((res.state.phases.m.subProgress?.done ?? 5) < 5, "not all map items should run");
+	assert.equal(res.state.phases.synth.status, "done", "final must still run under hard reserve");
+	assert.equal(res.state.phases.synth.output, "SYNTH_OK");
+	assert.equal(res.state.status, "completed");
+	assert.equal(res.ok, true);
+	assert.doesNotMatch(res.finalOutput, /Budget exceeded/);
+	assert.match(res.finalOutput, /SYNTH_OK/);
+});
+
+test("budget 0.2.8: reserveRatio 0 restores single-ceiling aggression", async () => {
+	const def: Taskflow = {
+		name: "budget-no-reserve",
+		concurrency: 1,
+		budget: { maxTokens: 100, reserveRatio: 0 },
+		phases: [
+			{ id: "d", type: "agent", agent: "a", task: "list", output: "json" },
+			{
+				id: "m",
+				type: "map",
+				over: "{steps.d.json}",
+				agent: "a",
+				task: "item {item}",
+				dependsOn: ["d"],
+			},
+			{ id: "synth", type: "agent", agent: "a", task: "synth", dependsOn: ["m"], final: true },
+		],
+	};
+	const runner = mockRunner((t) => (t === "list" ? "[1,2,3,4,5]" : "done"), {
+		input: 30,
+		output: 0,
+		cost: 0,
+	});
+	const res = await executeTaskflow(mkState(def), baseDeps(runner, { usageAccounting: "tokens-only" }));
+	// Without reserve, map can spend to the hard cap and block the final phase.
+	assert.equal(res.state.phases.synth.status, "skipped");
+	assert.equal(res.state.status, "blocked");
+	assert.match(res.finalOutput, /Budget exceeded/);
+});
+
+test("budget 0.2.8: soft-skipped upstream still satisfies dependsOn for final", async () => {
+	const def: Taskflow = {
+		name: "budget-soft-lanes",
+		concurrency: 1,
+		budget: { maxTokens: 100 },
+		phases: [
+			{ id: "a", type: "agent", agent: "a", task: "lane-a" },
+			{ id: "b", type: "agent", agent: "a", task: "lane-b", dependsOn: ["a"] },
+			{ id: "c", type: "agent", agent: "a", task: "lane-c", dependsOn: ["b"] },
+			{ id: "synth", type: "agent", agent: "a", task: "merge", dependsOn: ["a", "b", "c"], final: true },
+		],
+	};
+	// 45 tokens/call; soft=80 → a,b run (90), c soft-skipped, synth uses reserve.
+	const runner = mockRunner(() => "ok", {
+		input: (t) => (t === "merge" ? 5 : 45),
+		output: 0,
+		cost: 0,
+	});
+	const res = await executeTaskflow(mkState(def), baseDeps(runner, { usageAccounting: "tokens-only" }));
+	assert.equal(res.state.phases.a.status, "done");
+	assert.equal(res.state.phases.b.status, "done");
+	assert.equal(res.state.phases.c.status, "skipped");
+	assert.match(res.state.phases.c.error ?? "", /Budget soft-cap/);
+	assert.equal(res.state.phases.synth.status, "done");
+	assert.equal(res.state.status, "completed");
 });
 
 // ---------------------------------------------------------------------------
