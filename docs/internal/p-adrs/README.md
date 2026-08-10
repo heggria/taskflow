@@ -1,6 +1,6 @@
-# 0.3.0 Protocol ADRs (P1–P16)
+# 0.3.0 Protocol ADRs (P1–P17)
 
-Wire-freeze gate for taskflow 0.3.0. Master RFC v7.6 is frozen; detail lives here + TypeBox.
+Wire-freeze gate for taskflow 0.3.0 and the beta.2 browser protocol. Master RFC v7.7 is frozen; detail lives here + TypeBox.
 
 | ID | Title | File |
 |----|-------|------|
@@ -20,7 +20,8 @@ Wire-freeze gate for taskflow 0.3.0. Master RFC v7.6 is frozen; detail lives her
 | P14 | ControlStore engine (files-only) | [P14-controlstore-engine.md](./P14-controlstore-engine.md) |
 | P15 | Approval protocol | [P15-approval-protocol.md](./P15-approval-protocol.md) |
 | P16 | UserCoordinatorStore concurrency + release | [P16-coordinator-concurrency.md](./P16-coordinator-concurrency.md) |
+| P17 | Browser protocol + aggregate cursors | [P17-browser-protocol.md](./P17-browser-protocol.md) |
 
 ## Completeness
 
-All P1–P16 are required before shipping frozen wire TypeBox types. Files-only storage is specified in P14. P16 is not foldable into P13.
+P1–P16 gate the core 0.3 wire. P17 independently gates the beta.2 browser wire. Files-only storage is specified in P14. P16 is not foldable into P13.

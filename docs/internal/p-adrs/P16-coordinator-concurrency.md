@@ -1,22 +1,36 @@
 # P16: UserCoordinatorStore concurrency + release
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 ### Capacity (D30)
 `count(state ∈ {reserved, committed, orphan-suspect}) ≤ maxActiveRuns`
 slots ≡ **1** per admitted Run (not weighted).
 
+`setMaxActiveRuns` runs under the coordinator mutation lock. After reclaiming only expired `reserved` records, a requested value below the current occupying count is rejected with `TF_CAPACITY_EXCEEDED`; the previous maximum remains authoritative and no completed CoordinatorCommandRecord is written. There is no `desired` value that can temporarily violate the invariant.
+
+Read migration of a legacy-invalid file raises the effective maximum to its already occupying count; it never deletes or releases work to make the number fit.
+
 ### Lifecycle
 reserve (TTL OK) → Admit + projectAdmitCommitSeq → **committed** (no TTL) → dispatch/park/reconciling → **D37** normalRelease | forceRelease
 
 ### D37
 normalRelease = noLiveOrAmbiguousSideEffects ∧ (terminal ∨ parked-readmit)
-forceRelease = CoordinatorCommandRecord + explicit risk ack → operator-overridden
+forceRelease = CoordinatorCommandRecord + explicit risk ack + full observed-state CAS → operator-overridden
+
+Every reservation carries a monotonic `revision`. Force-release requires and atomically compares:
+
+- `reservationId`;
+- expected `committed | orphan-suspect` state and revision;
+- expected coordinator fencing epoch;
+- bound `projectId` and `runId`;
+- the exact typed acknowledgement defined by P17.
+
+Any mismatch returns stale/conflict and leaves the slot untouched. Same `commandId + requestHash + principal` returns the prior CoordinatorCommandRecord without applying release twice; a different hash or principal fails according to P12.
 
 ### Forbidden
-TTL-only committed release; fake terminal after reconcile timeout; CLI mutating reservations without CoordinatorCommandRecord.
+TTL-only committed release; lowering `maxActiveRuns` below occupancy; force-release without complete CAS; fake terminal after reconcile timeout; CLI/Web mutating reservations without CoordinatorCommandRecord.
 
 ### Crash matrix (minimum)
 | Crash window | Reservation | Run |

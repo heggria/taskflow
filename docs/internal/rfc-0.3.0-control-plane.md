@@ -1,16 +1,17 @@
 # RFC: taskflow 0.3.0 — Coding-Agent Control Plane
 
-> **Document version:** **v7.6 (MASTER RFC FROZEN for expansion)**
+> **Document version:** **v7.7 (MASTER RFC FROZEN for expansion)**
 > **Branch:** `feat/0.3.0`
 > **Date:** 2026-07-22
-> **Approver action:** Architecture **Approved**; protocol model **Approved with conditions**; Steps 1–2.5 **go**; wire freeze **not** yet (P1–P16).
-> **No further master-RFC growth** except typo/conflict fixes. Detail → P-ADRs + TypeBox only.
+> **Approver action:** Architecture **Approved**; protocol model **Approved with conditions**; Steps 1–2.5 **go**; core wire freeze **not** yet (P1–P16 validation); beta.2 browser wire baseline is P17.
+> **No further master-RFC growth** except typo/conflict fixes. Core wire detail → P-ADRs + TypeBox; beta.2 browser product/transport detail → Web Console RFC.
 >
 > | Layer | Status |
 > |-------|--------|
 > | Architecture | **Approved** |
 > | 0.3 protocol model | **Approved with conditions** (this version) |
-> | Wire / TypeBox freeze | **Not yet** |
+> | Core wire / TypeBox freeze | **Not yet** |
+> | Browser wire baseline | **P17 accepted for beta.2 implementation** |
 > | Implementation now | **§22 steps 1–2.5** |
 > | DomainTransfer / merged user journal | **Out of 0.3** |
 >
@@ -24,6 +25,9 @@
 [`rfc-background-run.md`](./rfc-background-run.md) ·
 [`../rfc-0.2.0-architecture.md`](../rfc-0.2.0-architecture.md) ·
 [`../0.2.0-north-star.md`](../0.2.0-north-star.md)
+
+**0.3.0-beta.2 release addendum:**
+[`rfc-0.3.0-beta.2-web-console.md`](./rfc-0.3.0-beta.2-web-console.md) defines the browser product on top of this authority model; [`P17-browser-protocol.md`](./p-adrs/P17-browser-protocol.md) independently owns its HTTP/browser wire.
 
 ---
 
@@ -108,7 +112,7 @@ standalone (one project)  OR  taskflowd / embedded multi-mount (singleton)
 | **D10** | Policy: deny \| substitute \| attenuate |
 | **D11** | Unsupported sandbox fail closed |
 | **D12** | Migration: read-old/write-new; tiered rollback; **no DomainTransfer** |
-| **D13** | 0.3 ships ControlHost + journal + BoundPlan/Fragment + CLI; WebUI 0.3.1 |
+| **D13** | 0.3 ships ControlHost + journal + BoundPlan/Fragment + CLI; the local control console enters the same release train in **0.3.0-beta.2** and is governed by its Web Console RFC. |
 | **D14** | Workspace capability RFC normative |
 | **D15** | OS principal + optional adapter credential; `mcp:*` label alone weak |
 | **D16** | at-least-once + idempotent submit + reconcile |
@@ -772,7 +776,7 @@ Fail-at-link: **dev-only**.
 ```text
 taskflow-core / taskflow-control / taskflow-daemon
 taskflow-mcp-core (thin) / taskflow-hosts / taskflow-cli
-taskflow-web (0.3.1+) / host delivery packages
+taskflow-web (0.3.0-beta.2; static local console) / host delivery packages
 ```
 
 | Item | Baseline |
@@ -792,7 +796,7 @@ taskflow-web (0.3.1+) / host delivery packages
 1.a  Public 0.2.4 surface → golden plan
 1.5  Toolchain: pnpm 11, TS7 root, DSL TS6 isolation, @types/node 22; CI 22/24 required, 26 allowed-to-fail
 2.   Single scheduler convergence
-2.5  P-ADRs P1–P16 (all required before wire freeze)
+2.5  Core P-ADRs P1–P16 (all required before core wire freeze)
 3.   Wire freeze + TypeBox
 4.   ControlHost extract
 5.   Project ControlStore + Registry + UserCoordinatorStore
@@ -800,12 +804,12 @@ taskflow-web (0.3.1+) / host delivery packages
 7.   Linker + admission + concurrency reserve path
 8.   ExecutionProviders + reconcile unknown / surface needs-operator
 9.   Thin MCP + CLI
-10. WebUI 0.3.1
+10. WebUI 0.3.0-beta.2 (P17 browser wire + Web Console RFC implementation order)
 ```
 
 **Allowed now: 1–2.5.**
 
-### P-ADR wire-freeze gate (unified — no optional holes)
+### Core P-ADR wire-freeze gate (unified — no optional holes)
 
 > **P1–P16 are all required before wire freeze.**
 > Files-only storage is still specified in **P14** (fsync, atomic batch, locks, recovery, compaction).
@@ -830,6 +834,8 @@ taskflow-web (0.3.1+) / host delivery packages
 | P15 | **Approval protocol** (headless compat + wire status `expired` only) |
 | P16 | UserCoordinatorStore: slots≡1, capacity formula, release predicates, CoordinatorCommandRecord, orphan-suspect, crash matrix |
 
+P17 is not retroactively folded into the core gate above: it is the independent beta.2 browser-protocol gate covering HTTP envelopes, DTOs, pagination, aggregate cursors, session exchange, command dispatch/query, SSE, and artifacts.
+
 ---
 
 ## §23. GA acceptance (minimum)
@@ -843,13 +849,15 @@ taskflow-web (0.3.1+) / host delivery packages
 - [ ] committed / orphan-suspect release **only via D37** normalRelease/forceRelease
 - [ ] reconcile automation exhausted → unknown + needs-operator + no final Receipt
 - [ ] wait returns snapshot + TF_RECONCILE_REQUIRED (not RPC fail)
-- [ ] CoordinatorCommandRecord for setMaxActiveRuns / force-release
-- [ ] Approval: `paused+parked` releases slot; approve → queued + re-reserve; dual-client + restart + timeout/cancel/approve CAS
+- [ ] CoordinatorCommandRecord for setMaxActiveRuns / force-release; reject max below occupancy; force-release full reservation CAS + exact ack + idempotency
+- [ ] Approval: `paused+parked` releases slot; approve → queued + re-reserve, never terminal/Receipt; dual-client + restart + timeout/cancel/approve CAS
+- [ ] Cancel settles terminal only after provider quiescence proof; missing/ambiguous provider knowledge → unknown/reconciling + held capacity + no Receipt
 - [ ] Command idempotency; disclosure re-auth; ArtifactRef ledger-reachability authz
 - [ ] Receipt event manifest survives compaction; bounded-latency assurance verified when used
 - [ ] No DomainTransfer; no federated multi-ControlStore workflow
 - [ ] Public-surface goldens; cancelled; detachedCancel; approval three modes; RunStage parked
-- [ ] P1–P16 ADRs present for shipped wire types
+- [ ] P1–P16 ADRs present for shipped core wire types; P17 present for browser wire
+- [ ] 0.3.0-beta.2 Web Console §20 hard GA core green; high-risk writes either independently gated or entirely hidden
 
 ---
 
@@ -857,10 +865,11 @@ taskflow-web (0.3.1+) / host delivery packages
 
 ```text
 Architecture: Approved
-Protocol model (0.3): Approved with conditions (v7.6 MASTER FROZEN)
-Wire freeze: Not approved (P1–P16 ADRs + TypeBox)
+Protocol model (0.3): Approved with conditions (v7.7 MASTER FROZEN)
+Core wire freeze: Not approved (P1–P16 validation + TypeBox)
+Browser wire baseline: P17 accepted for beta.2 implementation
 Steps 1–2.5: Approved to start
-Master RFC: FROZEN — no expansion; P-ADRs only
+Master RFC: FROZEN — no expansion; core wire in P-ADRs, beta.2 browser scope in Web Console RFC
 RunStage.parked closed for D38
 Release: D37 only (no weaker shorthand)
 ```
@@ -887,4 +896,4 @@ DomainTransfer · merged project journal · federated multi-ControlStore workflo
 
 ---
 
-*End RFC v7.6. Architecture approved; protocol approved with conditions; Steps 1–2.5 go. **Master RFC FROZEN** — implement via P1–P16 ADRs only.*
+*End RFC v7.7. Architecture approved; protocol approved with conditions; Steps 1–2.5 go. **Master RFC FROZEN** — core wire via P1–P16; beta.2 browser wire via P17; product scope via the Web Console RFC.*

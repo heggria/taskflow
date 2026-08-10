@@ -12,10 +12,12 @@
 import * as path from "node:path";
 import {
 	CAPACITY_OCCUPYING_STATES,
+	FORCE_RELEASE_ACKNOWLEDGEMENT,
 	RESERVATION_SLOTS,
 	type ConcurrencyReservation,
 	type CoordinatorCommandRecord,
 	type CoordinatorLease,
+	type ForceReleaseRequest,
 	type ReservationState,
 } from "../types.ts";
 import { hashRequest, newId } from "../hash.ts";
@@ -75,10 +77,10 @@ export interface UserCoordinatorStore {
 	normalRelease(reservationId: string, ctx: ReleaseContext): ConcurrencyReservation;
 	/**
 	 * D37 forceRelease — only via CoordinatorCommandRecord.
-	 * Marks operator-overridden.
+	 * Full observed-state CAS; marks operator-overridden.
 	 */
 	forceRelease(
-		reservationId: string,
+		request: ForceReleaseRequest,
 		cmd: { commandId: string; callerPrincipal: string; requestBody: unknown },
 	): { reservation: ConcurrencyReservation; command: CoordinatorCommandRecord };
 	setMaxActiveRuns(
@@ -101,7 +103,7 @@ interface CoordinatorFile {
 
 function emptyCoordinator(): CoordinatorFile {
 	return {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		maxActiveRuns: DEFAULT_MAX_ACTIVE_RUNS,
 		lease: null,
 		reservations: [],
@@ -117,7 +119,27 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 	const lockPath = path.join(dir, "state.lock");
 
 	function load(): CoordinatorFile {
-		return readJsonFile<CoordinatorFile>(file) ?? emptyCoordinator();
+		const data = readJsonFile<CoordinatorFile>(file) ?? emptyCoordinator();
+		// In-place read migration for pre-CAS reservation records.
+		data.schemaVersion = Math.max(data.schemaVersion ?? 1, 2);
+		data.reservations = (data.reservations ?? []).map((reservation) => ({
+			...reservation,
+			revision:
+				Number.isInteger(reservation.revision) && reservation.revision >= 1
+					? reservation.revision
+					: 1,
+		}));
+		data.commands ??= [];
+		data.nextCommandSeq ??= 1;
+		const legacyOccupancy = data.reservations.filter((reservation) =>
+			(CAPACITY_OCCUPYING_STATES as readonly string[]).includes(reservation.state),
+		).length;
+		if (data.maxActiveRuns < legacyOccupancy) {
+			// Pre-v2 stores could persist an invalid lowering. Preserve occupied work
+			// and repair the ceiling upward; never discard a live reservation.
+			data.maxActiveRuns = legacyOccupancy;
+		}
+		return data;
 	}
 
 	function save(data: CoordinatorFile): void {
@@ -147,9 +169,50 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 	): ConcurrencyReservation {
 		const i = data.reservations.findIndex((r) => r.reservationId === id);
 		if (i < 0) throw new Error(`reservation not found: ${id}`);
-		const next = { ...data.reservations[i]!, ...patch, updatedAt: Date.now() };
+		const current = data.reservations[i];
+		if (!current) throw new Error(`reservation not found: ${id}`);
+		const next = {
+			...current,
+			...patch,
+			revision: current.revision + 1,
+			updatedAt: Date.now(),
+		};
 		data.reservations[i] = next;
 		return next;
+	}
+
+	function reclaimExpiredInPlace(data: CoordinatorFile, now: number): number {
+		let reclaimed = 0;
+		for (const reservation of data.reservations) {
+			if (
+				reservation.state === "reserved" &&
+				reservation.reservedExpiresAt !== undefined &&
+				reservation.reservedExpiresAt <= now
+			) {
+				reservation.state = "expired";
+				reservation.revision += 1;
+				reservation.updatedAt = now;
+				reclaimed += 1;
+			}
+		}
+		return reclaimed;
+	}
+
+	function priorCommand(
+		data: CoordinatorFile,
+		cmd: { commandId: string; callerPrincipal: string },
+		kind: CoordinatorCommandRecord["kind"],
+		requestHash: string,
+	): CoordinatorCommandRecord | null {
+		const prior = data.commands.find((candidate) => candidate.commandId === cmd.commandId);
+		if (!prior) return null;
+		if (prior.callerPrincipal !== cmd.callerPrincipal) {
+			throw new Error("TF_CROSS_PRINCIPAL_COMMAND: command owned by different principal");
+		}
+		if (prior.kind !== kind || prior.requestHash !== requestHash) {
+			throw new Error("TF_IDEMPOTENCY_CONFLICT: same commandId with different request");
+		}
+		return prior;
 	}
 
 	return {
@@ -182,22 +245,14 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 		reserve(opts) {
 			return mutate((data) => {
 				const now = Date.now();
-				for (const r of data.reservations) {
-					if (
-						r.state === "reserved" &&
-						r.reservedExpiresAt !== undefined &&
-						r.reservedExpiresAt <= now
-					) {
-						r.state = "expired";
-						r.updatedAt = now;
-					}
-				}
+				reclaimExpiredInPlace(data, now);
 				if (occupying(data) >= data.maxActiveRuns) {
 					return null;
 				}
 				const ttl = opts.ttlMs ?? RESERVED_TTL_MS;
 				const res: ConcurrencyReservation = {
 					reservationId: newId("rsv"),
+					revision: 1,
 					state: "reserved",
 					slots: RESERVATION_SLOTS,
 					coordinatorEpoch: opts.coordinatorEpoch,
@@ -252,24 +307,59 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 			});
 		},
 
-		forceRelease(reservationId, cmd) {
+		forceRelease(request, cmd) {
 			return mutate((data) => {
-				const r = data.reservations.find((x) => x.reservationId === reservationId);
-				if (!r) throw new Error(`reservation not found: ${reservationId}`);
+				const requestHash = hashRequest(cmd.requestBody);
+				const prior = priorCommand(data, cmd, "forceRelease", requestHash);
+				if (prior) {
+					const priorReservation = data.reservations.find(
+						(candidate) => candidate.reservationId === request.reservationId,
+					);
+					if (!priorReservation) {
+						throw new Error(`reservation not found: ${request.reservationId}`);
+					}
+					return { reservation: priorReservation, command: prior };
+				}
+
+				const r = data.reservations.find((x) => x.reservationId === request.reservationId);
+				if (!r) throw new Error(`reservation not found: ${request.reservationId}`);
+				if (request.acknowledgement !== FORCE_RELEASE_ACKNOWLEDGEMENT) {
+					throw new Error("forceRelease requires exact risk acknowledgement");
+				}
+				if (
+					r.state !== request.expectedState ||
+					r.revision !== request.expectedRevision ||
+					r.coordinatorEpoch !== request.expectedCoordinatorEpoch ||
+					r.projectId !== request.expectedProjectId ||
+					r.runId !== request.expectedRunId
+				) {
+					throw new Error("TF_STALE_VERSION: reservation changed; refresh before forceRelease");
+				}
+				if (data.lease && data.lease.fencingEpoch !== request.expectedCoordinatorEpoch) {
+					throw new Error("TF_STALE_VERSION: coordinator fencing epoch changed");
+				}
 				const seq = data.nextCommandSeq++;
 				const command: CoordinatorCommandRecord = {
 					commandId: cmd.commandId,
-					requestHash: hashRequest(cmd.requestBody),
+					requestHash,
 					callerPrincipal: cmd.callerPrincipal,
 					kind: "forceRelease",
 					firstCommitSeq: seq,
 					lastCommitSeq: seq,
 					status: "completed",
-					payload: { reservationId, riskAcknowledged: true },
+					payload: {
+						reservationId: request.reservationId,
+						expectedState: request.expectedState,
+						expectedRevision: request.expectedRevision,
+						expectedCoordinatorEpoch: request.expectedCoordinatorEpoch,
+						expectedProjectId: request.expectedProjectId,
+						expectedRunId: request.expectedRunId,
+						acknowledgement: request.acknowledgement,
+					},
 					recordedAt: Date.now(),
 				};
 				data.commands.push(command);
-				const next = updateRes(data, reservationId, {
+				const next = updateRes(data, request.reservationId, {
 					state: "released",
 					operatorOverridden: true,
 				});
@@ -286,10 +376,20 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 				throw new Error("maxActiveRuns must be integer >= 1");
 			}
 			return mutate((data) => {
+				const requestHash = hashRequest(cmd.requestBody);
+				const prior = priorCommand(data, cmd, "setMaxActiveRuns", requestHash);
+				if (prior) return prior;
+				reclaimExpiredInPlace(data, Date.now());
+				const currentOccupancy = occupying(data);
+				if (value < currentOccupancy) {
+					throw new Error(
+						`TF_CAPACITY_EXCEEDED: cannot set maxActiveRuns=${value} below occupancy=${currentOccupancy}`,
+					);
+				}
 				const seq = data.nextCommandSeq++;
 				const command: CoordinatorCommandRecord = {
 					commandId: cmd.commandId,
-					requestHash: hashRequest(cmd.requestBody),
+					requestHash,
 					callerPrincipal: cmd.callerPrincipal,
 					kind: "setMaxActiveRuns",
 					firstCommitSeq: seq,
@@ -309,21 +409,7 @@ export function openUserCoordinatorStore(env: NodeJS.ProcessEnv = process.env): 
 		},
 
 		reclaimExpiredReserved(now = Date.now()) {
-			return mutate((data) => {
-				let n = 0;
-				for (const r of data.reservations) {
-					if (
-						r.state === "reserved" &&
-						r.reservedExpiresAt !== undefined &&
-						r.reservedExpiresAt <= now
-					) {
-						r.state = "expired";
-						r.updatedAt = now;
-						n += 1;
-					}
-				}
-				return n;
-			});
+			return mutate((data) => reclaimExpiredInPlace(data, now));
 		},
 
 		getCommand(commandId: string) {

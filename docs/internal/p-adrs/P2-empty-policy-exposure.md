@@ -1,7 +1,7 @@
 # P2: Empty-policy Exposure
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 When no explicit project/user policy is present, Exposure is **host-default attenuated**:

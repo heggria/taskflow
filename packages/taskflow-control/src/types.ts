@@ -1,7 +1,7 @@
 /**
  * 0.3 control-plane wire types (TypeBox + TypeScript).
  *
- * Frozen after P1–P16 ADRs. See docs/internal/rfc-0.3.0-control-plane.md §8–§18
+ * Frozen after P1–P17 ADRs. See docs/internal/rfc-0.3.0-control-plane.md §8–§18
  * and docs/internal/p-adrs/.
  */
 import { Type, type Static } from "typebox";
@@ -84,6 +84,9 @@ export const CAPACITY_OCCUPYING_STATES: readonly ReservationState[] = [
 
 /** slots ≡ 1 fixed in 0.3. */
 export const RESERVATION_SLOTS = 1 as const;
+
+export const FORCE_RELEASE_ACKNOWLEDGEMENT =
+	"I understand this may allow overlapping live side effects" as const;
 
 // ---------------------------------------------------------------------------
 // Error codes (P4)
@@ -222,6 +225,7 @@ export type ControlEventPayload =
 	| { type: "ReceiptIssued"; runId: string; receiptId: string }
 	| { type: "ApprovalParked"; runId: string; approvalRequestId: string }
 	| { type: "ApprovalDecided"; runId: string; approvalRequestId: string; decision: string }
+	| { type: "CancelRequested"; runId: string }
 	| { type: "Generic"; kind: string; data?: Record<string, unknown> };
 
 // ---------------------------------------------------------------------------
@@ -297,6 +301,8 @@ export interface BoundPlan {
 
 export interface ConcurrencyReservation {
 	reservationId: string;
+	/** Monotonic CAS revision; migrated legacy records start at 1. */
+	revision: number;
 	state: ReservationState;
 	/** Fixed 1 in 0.3. */
 	slots: typeof RESERVATION_SLOTS;
@@ -313,6 +319,16 @@ export interface ConcurrencyReservation {
 	updatedAt: number;
 	/** Set when force-released via CoordinatorCommandRecord. */
 	operatorOverridden?: boolean;
+}
+
+export interface ForceReleaseRequest {
+	reservationId: string;
+	expectedState: "committed" | "orphan-suspect";
+	expectedRevision: number;
+	expectedCoordinatorEpoch: number;
+	expectedProjectId: string;
+	expectedRunId: string;
+	acknowledgement: typeof FORCE_RELEASE_ACKNOWLEDGEMENT;
 }
 
 export type CoordinatorCommandKind = "setMaxActiveRuns" | "forceRelease";

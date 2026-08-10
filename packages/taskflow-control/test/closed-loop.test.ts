@@ -20,6 +20,7 @@ import {
 	CAPACITY_OCCUPYING_STATES,
 	canNormalRelease,
 	DEFAULT_CONTROL_MODE,
+	FORCE_RELEASE_ACKNOWLEDGEMENT,
 	assertControlModeExplicit,
 	type ControlEvent,
 } from "../src/index.ts";
@@ -282,6 +283,17 @@ test("maxActiveRuns capacity: N admitted occupy; N+1 always TF_CAPACITY_EXCEEDED
 		assert.ok(r1.run, JSON.stringify(r1.error));
 		assert.ok(r2.run, JSON.stringify(r2.error));
 		assert.equal(host.coordinator.occupyingCount(), 2);
+		assert.throws(
+			() =>
+				host.coordinator.setMaxActiveRuns(1, {
+					commandId: "cmd-max-too-low",
+					callerPrincipal: "op",
+					requestBody: { maxActiveRuns: 1 },
+				}),
+			/TF_CAPACITY_EXCEEDED.*below occupancy=2/,
+		);
+		assert.equal(host.coordinator.maxActiveRuns, 2);
+		assert.equal(host.coordinator.getCommand("cmd-max-too-low"), null);
 
 		const r3 = await host.admitAndRun({ program: SCRIPT_FLOW, commandId: "c3" });
 		// Hard requirement — not soft if
@@ -323,15 +335,41 @@ test("committed slot not TTL-released; forceRelease only via CoordinatorCommandR
 			}),
 		);
 
-		const { reservation, command } = coord.forceRelease(rsv!.reservationId, {
+		const request = {
+			reservationId: rsv!.reservationId,
+			expectedState: "committed" as const,
+			expectedRevision: still!.revision,
+			expectedCoordinatorEpoch: still!.coordinatorEpoch,
+			expectedProjectId: still!.projectId!,
+			expectedRunId: still!.runId!,
+			acknowledgement: FORCE_RELEASE_ACKNOWLEDGEMENT,
+		};
+		assert.throws(
+			() =>
+				coord.forceRelease({ ...request, expectedRevision: request.expectedRevision - 1 }, {
+					commandId: "force-stale",
+					callerPrincipal: "op",
+					requestBody: { ...request, expectedRevision: request.expectedRevision - 1 },
+				}),
+			/TF_STALE_VERSION/,
+		);
+
+		const { reservation, command } = coord.forceRelease(request, {
 			commandId: "force-1",
 			callerPrincipal: "op",
-			requestBody: { reservationId: rsv!.reservationId },
+			requestBody: request,
 		});
 		assert.equal(reservation.state, "released");
 		assert.equal(reservation.operatorOverridden, true);
 		assert.equal(command.kind, "forceRelease");
 		assert.ok(coord.getCommand("force-1"));
+		const retry = coord.forceRelease(request, {
+			commandId: "force-1",
+			callerPrincipal: "op",
+			requestBody: request,
+		});
+		assert.equal(retry.command.firstCommitSeq, command.firstCommitSeq);
+		assert.equal(coord.listReservations().length, 1);
 	} finally {
 		t.cleanup();
 	}
@@ -410,8 +448,10 @@ test("parkForApproval refuses while provider live; succeeds after quiesce (D38)"
 
 		const approved = await host.approve(runId!);
 		assert.equal(approved.ok, true);
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
+		assert.equal(approved.run?.status, "running");
+		assert.equal(approved.run?.stage, "queued");
+		assert.equal(approved.receipt, undefined);
+		assert.equal(host.coordinator.getReservation(approved.run!.reservationId!)?.state, "committed");
 		host.close();
 	} finally {
 		t.cleanup();

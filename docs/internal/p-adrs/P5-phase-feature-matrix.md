@@ -1,7 +1,7 @@
 # P5: Phase × feature + RunStatus/Stage matrix
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 Public 0.2.4 surface goldens (packages/taskflow-core/test/fixtures/public-surface-0.2.4.json) are normative for D21.

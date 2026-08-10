@@ -80,7 +80,7 @@ Host agents (Claude/Codex/Pi/Grok/OpenCode/…)
             ExecutionProviders
 ```
 
-**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7.6+):
+**Non-negotiables** (source of truth: [`rfc-0.3.0-control-plane.md`](./rfc-0.3.0-control-plane.md) v7.7+):
 
 - **Project ControlStore** = Run authority; **UserCoordinatorStore** = singleton + maxActiveRuns + narrow coordinator commands; **Registry** = non-authoritative
 - Disk/journal authority; clerk process is not the sole state copy
@@ -137,7 +137,8 @@ Ship when these are true:
 - [ ] Per-project ControlStore = Run authority; ControlRegistry = mount/aggregate only; UserCoordinatorStore = global maxActiveRuns concurrency only
 - [ ] `taskflow_capabilities` reflects live policy for the caller
 - [ ] Policy: agent + model + tools + budget + roots; deny/substitute/attenuate traced
-- [ ] WebUI or CLI: run observe + cancel/resume + policy edit (observe first)
+- [ ] Core/CLI provides the authoritative observe and control path; this does not imply every control must be duplicated in every frontend
+- [ ] **0.3.0-beta.2 WebUI** follows the explicit product split in [`rfc-0.3.0-beta.2-web-console.md`](./rfc-0.3.0-beta.2-web-console.md) §20: hard GA observation/approval/cancel/evidence core, read-only policy explanation, and independently capability-gated risky writes
 - [ ] At least one **visible** incremental win (re-run cost / why-stale in UI)
 - [ ] Docs: this map + control-plane RFC v7+ (“control plane”, not “another DAG”)
 - [ ] Explicit non-goal list published (no Temporal, no org-chart OS, no Squad clone, no DomainTransfer in 0.3)
