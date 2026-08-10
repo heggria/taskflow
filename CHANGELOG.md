@@ -2,6 +2,22 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [0.2.8] — 2026-08-10
+
+### Fixed
+
+- **Pi approval confirmation.** Approval choices are now selection-only: `A` / `E` / `R`, arrows, and Tab move the pending decision, while Enter confirms it. The dialog starts on Reject, so an accidental Enter fails closed; Escape and Ctrl-C still reject immediately.
+- **Large approval proposals.** Long proposals start collapsed, `V` toggles an inline scrollable preview, and the decision footer remains visible while reviewing. Short proposals remain expanded by default.
+- **Kitty keyboard handling.** Press, repeat, and release events are decoded explicitly so key-release frames cannot trigger a decision and repeated preview keys cannot double-toggle the proposal.
+
+### Changed
+
+- Root, all nine publishable packages, plugin manifests, MCP install pins, and server-version contracts are aligned to **0.2.8**.
+
+### Security
+
+- Force patched transitive versions of **`brace-expansion@5.0.9`** and **`nanoid@3.3.17`** via pnpm overrides; the production dependency audit is clean.
+
 ## [0.2.7] — 2026-08-06
 
 ### Added

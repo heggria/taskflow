@@ -13,7 +13,7 @@
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.7 新能力](#027-花-token-前先计划--跑完闭环) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.8 新能力](#028-先审阅再确认) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -151,6 +151,12 @@ pi install npm:pi-taskflow
 ```
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
+
+## 0.2.8：先审阅，再确认
+
+Pi 审批现在把**选择**和**提交**分开：用 `R` / `E` / `A`、方向键或 Tab 选择拒绝、编辑意见或批准，再按 Enter 确认。默认停在拒绝；Escape 和 Ctrl-C 仍会立即拒绝。
+
+长提案默认折叠，按 `V` 可在原位展开并滚动审阅，决策栏始终可见；短提案默认展开。完整说明：[CHANGELOG 0.2.8](./CHANGELOG.md#028--2026-08-10)。
 
 ## 0.2.7：花 token 前先计划 · 跑完闭环
 
@@ -338,7 +344,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.7 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -347,7 +353,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.7 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。

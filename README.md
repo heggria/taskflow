@@ -13,7 +13,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.7](#027-plan-before-spend--close-the-loop) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.8](#028-review-then-confirm) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
 
 </div>
 
@@ -151,6 +151,12 @@ This is real output from a Pi run—not a mock dashboard:
 ```
 
 The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
+
+## 0.2.8: review, then confirm
+
+Pi approvals now separate **selection** from **commit**. Choose Reject, Edit guidance, or Approve with `R` / `E` / `A`, arrows, or Tab; press Enter to confirm. The safe default is Reject, and Escape or Ctrl-C still rejects immediately.
+
+Long proposals start collapsed. Press `V` to open an inline scrollable preview while the decision footer stays visible; short proposals remain open by default. Full notes: [CHANGELOG 0.2.8](./CHANGELOG.md#028--2026-08-10).
 
 ## 0.2.7: plan before spend · close the loop
 
@@ -343,7 +349,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.7 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -352,7 +358,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.7 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
