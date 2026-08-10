@@ -19,3 +19,4 @@ export * from "./reconcile.ts";
 export * from "./control-host.ts";
 export * from "./bootstrap.ts";
 export * from "./mcp-tools.ts";
+export * from "./web-protocol.ts";

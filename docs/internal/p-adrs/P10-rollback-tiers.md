@@ -1,7 +1,7 @@
 # P10: Rollback tiers
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 1. **Full rollback** possible before any 0.3 ControlStore write.

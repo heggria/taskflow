@@ -1,7 +1,7 @@
 # P7: Dynamic paths + dual hashes + cache
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 Dynamic IR after Compile+Link produces BoundFragment with dual hashes:

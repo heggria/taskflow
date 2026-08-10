@@ -8,9 +8,11 @@ import {
 	isTerminalRunStatus,
 	reconcileRequiredError,
 	type BoundPlan,
+	type CommandRecord,
 	type ControlError,
 	type ControlEvent,
 	type ControlMode,
+	type ForceReleaseRequest,
 	type Receipt,
 	type RunProjection,
 	type RunStage,
@@ -116,7 +118,7 @@ export interface ControlHost {
 	wait(runId: string): Promise<RunSnapshot>;
 	cancel(
 		runId: string,
-		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number },
+		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number; reason?: string },
 	): Promise<AdmitResult>;
 	/** Durable approval: park (release slot) only when provider quiescent (D38). */
 	parkForApproval(
@@ -125,11 +127,16 @@ export interface ControlHost {
 	): Promise<AdmitResult>;
 	approve(
 		runId: string,
-		opts?: { commandId?: string; principal?: string; expectedRunVersion?: number },
+		opts?: {
+			commandId?: string;
+			principal?: string;
+			expectedRunVersion?: number;
+			approvalRequestId?: string;
+		},
 	): Promise<AdmitResult>;
 	/**
-	 * Edit parked approval: CAS decide edit + re-reserve + terminal with edited payload.
-	 * Same first-commit-wins CAS as approve (P15).
+	 * Edit parked approval is capability-gated until edited BoundPlan persistence
+	 * and the normal dispatcher handoff exist. It must fail closed meanwhile.
 	 */
 	edit(
 		runId: string,
@@ -150,14 +157,8 @@ export interface ControlHost {
 	expireApproval(runId: string, opts?: { now?: number }): Promise<AdmitResult>;
 	/** Operator force-release of a concurrency reservation (CoordinatorCommandRecord). */
 	forceReleaseReservation(
-		reservationId: string,
-		opts: {
-			commandId?: string;
-			principal: string;
-			/** Must be true — operator risk acknowledgement (D37). */
-			riskAcknowledged: boolean;
-			reason?: string;
-		},
+		request: ForceReleaseRequest,
+		opts: { commandId?: string; principal: string },
 	): { ok: true; commandId: string } | { ok: false; error: ControlError };
 	close(): void;
 }
@@ -301,6 +302,98 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				controlDomainId: store.header.controlDomainId,
 			},
 			snapshot: run ? { run } : undefined,
+		};
+	}
+
+	function discloseProjectCommand(
+		commandId: string,
+		principal: string,
+		requestHash: string,
+	): AdmitResult | null {
+		const prior = store.getCommand(commandId);
+		if (!prior) return null;
+		if (prior.requestHash !== requestHash) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_IDEMPOTENCY_CONFLICT",
+					message: "same commandId with different requestHash",
+					recoveryAction: "retry-new-command",
+					sideEffects: "none",
+					commandId,
+				},
+			};
+		}
+		if (prior.callerPrincipal !== principal) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_CROSS_PRINCIPAL_COMMAND",
+					message: "command owned by different principal",
+					recoveryAction: "none",
+					sideEffects: "none",
+					commandId,
+				},
+			};
+		}
+		const boundRunId = store.getRunIdForCommand(commandId) ?? prior.runId;
+		const run = boundRunId ? store.getRun(boundRunId) : null;
+		if (!run) {
+			return {
+				ok: false,
+				error: {
+					code: "TF_NOT_FOUND",
+					message: `command ${commandId} known but bound run not found`,
+					recoveryAction: "operator",
+					sideEffects: "unknown",
+					commandId,
+				},
+			};
+		}
+		const receipt = store.getReceiptForRun(run.runId);
+		if (prior.status === "accepted" || run.needsOperator || run.status === "unknown") {
+			const error = reconcileRequiredError("command outcome is pending or requires reconcile", {
+				commandId,
+				projectId: store.header.projectId,
+				controlDomainId: store.header.controlDomainId,
+			});
+			return {
+				ok: false,
+				run,
+				error,
+				snapshot: { run, controlError: error, receipt },
+			};
+		}
+		return {
+			ok: prior.status === "completed",
+			run,
+			receipt: receipt ?? undefined,
+			snapshot: { run, receipt },
+		};
+	}
+
+	function newProjectCommand(input: {
+		commandId: string;
+		requestHash: string;
+		principal: string;
+		kind: string;
+		runId: string;
+		status: CommandRecord["status"];
+		firstCommitSeq?: number;
+	}): CommandRecord {
+		return {
+			commandId: input.commandId,
+			requestHash: input.requestHash,
+			callerPrincipal: input.principal,
+			authorizationContextHash: hashRequest({ principal: input.principal }),
+			projectId: store.header.projectId,
+			controlDomainId: store.header.controlDomainId,
+			kind: input.kind,
+			status: input.status,
+			firstCommitSeq: input.firstCommitSeq ?? 0,
+			lastCommitSeq: 0,
+			runId: input.runId,
+			recordedAt: Date.now(),
 		};
 	}
 
@@ -1007,71 +1100,172 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 		},
 
 		async cancel(runId, opts = {}) {
-			if (!canMutate) return attachDenied("cancel");
-			if (!isSafeId(runId)) {
-				return casError("TF_INVALID_ARGUMENT", `unsafe runId: ${JSON.stringify(runId)}`);
+			const commandId = opts.commandId ?? newId("cmd");
+			if (!isSafeId(commandId) || !isSafeId(runId)) {
+				return casError("TF_INVALID_ARGUMENT", "unsafe commandId or runId");
 			}
-			const handle = resolveHandle(runId);
-			if (handle) await provider.cancel(handle);
-
-			// CAS + commit under exclusive store lock (first-commit-wins).
-			const cas = store.compareAndCommit({
+			const principal = opts.principal ?? "local";
+			const requestHash = hashRequest({
+				kind: "cancel-run",
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
-				validate: (run) => {
-					// Terminal + Receipt immutability (P0): never rewrite completed work.
-					if (run.stage === "terminal" || run.receiptId) {
-						return `run is terminal/has Receipt (status=${run.status}); cannot cancel`;
-					}
-					if (
-						run.status === "completed" ||
-						run.status === "failed" ||
-						run.status === "cancelled" ||
-						run.status === "blocked"
-					) {
-						return `run already terminal status=${run.status}`;
-					}
-					return null;
-				},
+				reason: opts.reason,
+			});
+			const prior = discloseProjectCommand(commandId, principal, requestHash);
+			if (prior) return prior;
+			if (!canMutate) return attachDenied("cancel");
+
+			let hadDurableQuiescence = false;
+			const requested = store.compareAndCommit({
+				runId,
+				expectedRunVersion: opts.expectedRunVersion,
+				validate: (run) =>
+					isTerminalRunStatus(run.status) || run.stage === "terminal" || Boolean(run.receiptId)
+						? `cancel requires non-terminal run (have status=${run.status})`
+						: null,
 				build: (run) => {
+					hadDurableQuiescence = run.status === "paused" && run.stage === "parked";
+					const command = newProjectCommand({
+						commandId,
+						requestHash,
+						principal,
+						kind: "cancel-run",
+						runId,
+						status: "accepted",
+					});
 					const next: RunProjection = {
 						...run,
-						status: "cancelled",
-						stage: "terminal",
+						status: "paused",
+						stage: "executing",
 						updatedAt: Date.now(),
 						runVersion: run.runVersion + 1,
 					};
 					return {
+						command,
 						run: next,
+						events: [
+							makeEvent(runId, { type: "CancelRequested", runId }, commandId),
+							makeEvent(
+								runId,
+								{
+									type: "RunStatusChanged",
+									runId,
+									status: "paused",
+									stage: "executing",
+									reason: opts.reason ?? "cancel-requested",
+								},
+								commandId,
+							),
+						],
+					};
+				},
+			});
+			if (!requested.ok) {
+				return (
+					discloseProjectCommand(commandId, principal, requestHash) ??
+					casError(requested.code, requested.message, requested.run)
+				);
+			}
+
+			const handle = resolveHandle(runId);
+			let cancellation: Awaited<ReturnType<ExecutionProvider["cancel"]>> | null = null;
+			if (handle) {
+				try {
+					cancellation = await provider.cancel(handle);
+				} catch {
+					cancellation = { kind: "ambiguous" };
+				}
+			}
+
+			const cancellationProven =
+				hadDurableQuiescence ||
+				(handle !== undefined && cancellation?.kind === "cancelled" && providerQuiescent(runId));
+			if (cancellationProven) {
+				const acceptedCommand = store.getCommand(commandId);
+				const settled = store.compareAndCommit({
+					runId,
+					expectedRunVersion: requested.run.runVersion,
+					build: (run) => ({
+						command: newProjectCommand({
+							commandId,
+							requestHash,
+							principal,
+							kind: "cancel-run",
+							runId,
+							status: "completed",
+							firstCommitSeq: acceptedCommand?.firstCommitSeq,
+						}),
+						run: {
+							...run,
+							status: "cancelled",
+							stage: "terminal",
+							needsOperator: false,
+							updatedAt: Date.now(),
+							runVersion: run.runVersion + 1,
+						},
 						events: [
 							makeEvent(runId, {
 								type: "RunStatusChanged",
 								runId,
 								status: "cancelled",
 								stage: "terminal",
-								reason: "cancel",
-							}),
+								reason: "cancel-settled",
+							}, commandId),
 						],
-					};
-				},
-			});
-			if (!cas.ok) return casError(cas.code, cas.message, cas.run);
+					}),
+				});
+				if (!settled.ok) return casError(settled.code, settled.message, settled.run);
+				if (settled.run.reservationId) {
+					try {
+						coordinator.normalRelease(settled.run.reservationId, {
+							noLiveOrAmbiguousSideEffects: true,
+							runIsTerminal: true,
+							runIsParkedAndFutureDispatchRequiresReadmission: false,
+						});
+					} catch {
+						/* retain capacity if the release record changed */
+					}
+				}
+				return { ok: true, run: settled.run, snapshot: { run: settled.run } };
+			}
 
-			const priorReservationId = store.getRun(runId)?.reservationId;
-			// Use the pre-commit reservation from built run — re-read may already be terminal.
-			const resId = cas.run.reservationId ?? priorReservationId;
-			if (resId) {
+			const uncertain = store.compareAndCommit({
+				runId,
+				expectedRunVersion: requested.run.runVersion,
+				build: (run) => ({
+					run: {
+						...run,
+						status: "unknown",
+						stage: "reconciling",
+						needsOperator: true,
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					},
+					events: [
+						makeEvent(runId, { type: "ReconcileStarted", runId, attempt: 1 }, commandId),
+						makeEvent(runId, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" }, commandId),
+					],
+				}),
+			});
+			if (!uncertain.ok) return casError(uncertain.code, uncertain.message, uncertain.run);
+			if (uncertain.run.reservationId) {
 				try {
-					coordinator.normalRelease(resId, {
-						noLiveOrAmbiguousSideEffects: providerQuiescent(runId),
-						runIsTerminal: true,
-						runIsParkedAndFutureDispatchRequiresReadmission: false,
-					});
+					coordinator.markOrphanSuspect(uncertain.run.reservationId);
 				} catch {
-					/* keep */
+					/* already released/changed; Run remains unknown */
 				}
 			}
-			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
+			const error = reconcileRequiredError("cancel outcome is not proven; capacity remains held", {
+				commandId,
+				projectId: store.header.projectId,
+				controlDomainId: store.header.controlDomainId,
+			});
+			return {
+				ok: false,
+				run: uncertain.run,
+				error,
+				snapshot: { run: uncertain.run, controlError: error, receipt: null },
+			};
 		},
 
 		async parkForApproval(runId, opts = {}) {
@@ -1096,10 +1290,13 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			}
 
 			let releasedReservationId: string | undefined;
-			let durableAprId: string | undefined;
 			const cas = store.compareAndCommit({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
+				validate: (run) =>
+					isTerminalRunStatus(run.status)
+						? `parkForApproval requires non-terminal run (have status=${run.status})`
+						: null,
 				build: (run) => {
 					releasedReservationId = run.reservationId;
 					const apr = createApprovalRequest(store.projectRoot, {
@@ -1109,13 +1306,13 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						expectedRunVersion: run.runVersion + 1,
 						deadline: Date.now() + 3_600_000,
 					});
-					durableAprId = apr.approvalRequestId;
 					const next: RunProjection = {
 						...run,
 						status: "paused",
 						stage: "parked",
 						approvalRequestId: apr.approvalRequestId,
-						reservationId: undefined,
+						// Keep this binding until coordinator release is durable.
+						reservationId: run.reservationId,
 						updatedAt: Date.now(),
 						runVersion: run.runVersion + 1,
 					};
@@ -1140,31 +1337,87 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						runIsTerminal: false,
 						runIsParkedAndFutureDispatchRequiresReadmission: true,
 					});
-				} catch {
-					/* keep */
+				} catch (cause) {
+					const failed = store.compareAndCommit({
+						runId,
+						expectedRunVersion: cas.run.runVersion,
+						build: (run) => ({
+							run: {
+								...run,
+								needsOperator: true,
+								error: "approval parked but coordinator release is unresolved",
+								updatedAt: Date.now(),
+								runVersion: run.runVersion + 1,
+							},
+							events: [
+								makeEvent(runId, {
+									type: "NeedsOperator",
+									runId,
+									code: "TF_RECONCILE_REQUIRED",
+								}),
+							],
+						}),
+					});
+					const run = failed.ok ? failed.run : failed.run ?? cas.run;
+					const error = reconcileRequiredError(
+						`approval parked but reservation release failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+						{
+							projectId: store.header.projectId,
+							controlDomainId: store.header.controlDomainId,
+						},
+					);
+					return {
+						ok: false,
+						run,
+						error,
+						snapshot: { run, controlError: error, receipt: null },
+					};
 				}
 			}
-			void durableAprId;
-			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
-		},
+				const cleared = store.compareAndCommit({
+					runId,
+					expectedRunVersion: cas.run.runVersion,
+					validate: (run) =>
+						run.status === "paused" && run.stage === "parked"
+							? null
+							: "park state changed before reservation binding was cleared",
+					build: (run) => ({
+						run: {
+							...run,
+							reservationId: undefined,
+							updatedAt: Date.now(),
+							runVersion: run.runVersion + 1,
+						},
+						events: [makeEvent(runId, { type: "Generic", kind: "ApprovalParkReleaseSettled" })],
+					}),
+				});
+				if (!cleared.ok) {
+					const run = cleared.run ?? cas.run;
+					const error = reconcileRequiredError(
+						"reservation released but project binding clear did not commit",
+						{ projectId: store.header.projectId, controlDomainId: store.header.controlDomainId },
+					);
+					return { ok: false, run, error, snapshot: { run, controlError: error, receipt: null } };
+				}
+				return { ok: true, run: cleared.run, snapshot: { run: cleared.run } };
+			},
 
 		async approve(runId, opts = {}) {
+			const commandId = opts.commandId ?? newId("cmd");
+			if (!isSafeId(commandId) || !isSafeId(runId)) {
+				return casError("TF_INVALID_ARGUMENT", "unsafe commandId or runId");
+			}
+			const principal = opts.principal ?? "local";
+			const requestHash = hashRequest({
+				kind: "approve",
+				runId,
+				expectedRunVersion: opts.expectedRunVersion,
+				approvalRequestId: opts.approvalRequestId,
+			});
+			const prior = discloseProjectCommand(commandId, principal, requestHash);
+			if (prior) return prior;
 			if (!canMutate) return attachDenied("approve");
 
-			// Durable approval decision first
-			const pendingApr = loadApprovalForRun(store.projectRoot, runId);
-			if (pendingApr) {
-				const decided = decideApproval(store.projectRoot, pendingApr.approvalRequestId, {
-					decision: "approve",
-					principal: opts.principal ?? "local",
-					commandId: opts.commandId ?? newId("cmd"),
-				});
-				if (!decided.ok) {
-					return casError(decided.code, decided.message, store.getRun(runId) ?? undefined);
-				}
-			}
-
-			// Re-reserve before execute (D38). If CAS loses, free the reserved slot.
 			const reservation = coordinator.reserve({
 				coordinatorEpoch: singleton?.lock.fencingEpoch ?? Date.now(),
 			});
@@ -1182,31 +1435,42 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				};
 			}
 
-			// Single exclusive compareAndCommit: re-read + CAS + paused+parked + Receipt.
-			// Two clients with the same expectedRunVersion → exactly one ok:true.
+			// Phase 1: project ledger records accepted+queued, never completed.
 			const cas = store.compareAndCommit({
 				runId,
 				expectedRunVersion: opts.expectedRunVersion,
 				validate: (run) => {
-					if (run.stage === "terminal" || run.receiptId) {
-						return `run is terminal/has Receipt; cannot approve`;
-					}
-					// D38: require BOTH paused status AND parked stage (not OR).
 					if (run.status !== "paused" || run.stage !== "parked") {
 						return `approve requires paused+parked run (have status=${run.status} stage=${run.stage})`;
+					}
+					if (run.reservationId !== undefined) {
+						return "approval park release saga has not settled";
+					}
+					if (
+						opts.approvalRequestId !== undefined &&
+						run.approvalRequestId !== opts.approvalRequestId
+					) {
+						return "approval request changed; refresh before approve";
 					}
 					return null;
 				},
 				build: (run) => {
 					const now = Date.now();
+					const command = newProjectCommand({
+						commandId,
+						requestHash,
+						principal,
+						kind: "approve",
+						runId,
+						status: "accepted",
+					});
 					const afterDecide: RunProjection = {
 						...run,
-						status: "completed",
-						stage: "terminal",
+						status: "running",
+						stage: "queued",
+						needsOperator: false,
 						reservationId: reservation.reservationId,
-						finalOutput: run.finalOutput ?? "approved",
 						updatedAt: now,
-						// One version bump for the whole atomic transition (CAS base → terminal).
 						runVersion: run.runVersion + 1,
 					};
 					const evDecide = makeEvent(runId, {
@@ -1214,42 +1478,18 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 						runId,
 						approvalRequestId: run.approvalRequestId ?? "",
 						decision: "approve",
-					});
+					}, commandId);
 					const evStatus = makeEvent(runId, {
 						type: "RunStatusChanged",
 						runId,
-						status: "completed",
-						stage: "terminal",
-					});
-					const receiptId = newId("rcpt");
-					const evReceipt = makeEvent(runId, {
-						type: "ReceiptIssued",
-						runId,
-						receiptId,
-					});
-					const receipt = issueReceipt(
-						afterDecide,
-						{
-							boundPlanHash: afterDecide.boundPlanHash,
-							executionSemanticHash: "",
-							programName: "approved",
-							program: {},
-							createdAt: now,
-							approvalMode: "durable-optional",
-							grantRefs: [],
-						},
-						[evDecide.eventId, evStatus.eventId, evReceipt.eventId],
-					);
-					// Stable receiptId for event + receipt object
-					const receiptFixed: Receipt = { ...receipt, receiptId };
-					const withReceipt: RunProjection = {
-						...afterDecide,
-						receiptId,
-					};
+						status: "running",
+						stage: "queued",
+						reason: "approval-approved-awaiting-dispatch",
+					}, commandId);
 					return {
-						run: withReceipt,
-						receipt: receiptFixed,
-						events: [evDecide, evStatus, evReceipt],
+						command,
+						run: afterDecide,
+						events: [evDecide, evStatus],
 					};
 				},
 			});
@@ -1265,36 +1505,95 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 				} catch {
 					/* ignore */
 				}
-				return casError(cas.code, cas.message, cas.run);
+				return (
+					discloseProjectCommand(commandId, principal, requestHash) ??
+					casError(cas.code, cas.message, cas.run)
+				);
 			}
 
-			// Winner: commit then release the re-reserved slot (terminal).
-			try {
-				coordinator.commitReservation(reservation.reservationId, {
-					projectId: store.header.projectId,
-					projectControlDomainId: store.header.controlDomainId,
-					runId,
-					projectAdmitCommitSeq: cas.commitSeqEnd,
-				});
-			} catch {
-				/* reservation may already be committed */
-			}
-			try {
-				coordinator.normalRelease(reservation.reservationId, {
-					noLiveOrAmbiguousSideEffects: true,
-					runIsTerminal: true,
-					runIsParkedAndFutureDispatchRequiresReadmission: false,
-				});
-			} catch {
-				/* keep */
-			}
-
-			return {
-				ok: true,
-				run: cas.run,
-				receipt: cas.receipt,
-				snapshot: { run: cas.run, receipt: cas.receipt },
+			const binding = {
+				projectId: store.header.projectId,
+				projectControlDomainId: store.header.controlDomainId,
+				runId,
+				projectAdmitCommitSeq: cas.commitSeqEnd,
 			};
+			try {
+				coordinator.commitReservation(reservation.reservationId, binding);
+			} catch (cause) {
+				try {
+					coordinator.markReservationCommitUnknown(reservation.reservationId, binding);
+				} catch {
+					/* the Run below remains the durable recovery marker */
+				}
+				const uncertain = store.compareAndCommit({
+					runId,
+					expectedRunVersion: cas.run.runVersion,
+					build: (run) => ({
+						run: {
+							...run,
+							status: "unknown",
+							stage: "reconciling",
+							needsOperator: true,
+							error: "approval accepted but coordinator binding is unresolved",
+							updatedAt: Date.now(),
+							runVersion: run.runVersion + 1,
+						},
+						events: [
+							makeEvent(runId, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" }, commandId),
+						],
+					}),
+				});
+				const run = uncertain.ok ? uncertain.run : uncertain.run ?? cas.run;
+				const error = reconcileRequiredError(
+					`approval accepted but coordinator commit failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+					{ commandId, projectId: store.header.projectId, controlDomainId: store.header.controlDomainId },
+				);
+				return { ok: false, run, error, snapshot: { run, controlError: error, receipt: null } };
+			}
+
+			const pendingApr = loadApprovalForRun(store.projectRoot, runId);
+			if (pendingApr) {
+				const decided = decideApproval(store.projectRoot, pendingApr.approvalRequestId, {
+					decision: "approve",
+					principal,
+					commandId,
+				});
+				if (!decided.ok) {
+					const error = reconcileRequiredError(
+						`coordinator committed but ApprovalRequest decision failed: ${decided.message}`,
+						{ commandId, projectId: store.header.projectId, controlDomainId: store.header.controlDomainId },
+					);
+					return { ok: false, run: cas.run, error, snapshot: { run: cas.run, controlError: error, receipt: null } };
+				}
+			}
+
+			// No dispatcher exists yet that can reconstruct the original BoundPlan.
+			// Keep the command accepted and surface recovery instead of manufacturing
+			// completed execution or a Receipt from an approval decision.
+			const pendingDispatch = store.compareAndCommit({
+				runId,
+				expectedRunVersion: cas.run.runVersion,
+				build: (run) => ({
+					run: {
+						...run,
+						status: "unknown",
+						stage: "reconciling",
+						needsOperator: true,
+						error: "approved run cannot dispatch until BoundPlan dispatcher is wired",
+						updatedAt: Date.now(),
+						runVersion: run.runVersion + 1,
+					},
+					events: [
+						makeEvent(runId, { type: "NeedsOperator", runId, code: "TF_RECONCILE_REQUIRED" }, commandId),
+					],
+				}),
+			});
+			const run = pendingDispatch.ok ? pendingDispatch.run : pendingDispatch.run ?? cas.run;
+			const error = reconcileRequiredError(
+				"approval is durable and capacity-bound, but dispatcher handoff is not implemented",
+				{ commandId, projectId: store.header.projectId, controlDomainId: store.header.controlDomainId },
+			);
+			return { ok: false, run, error, snapshot: { run, controlError: error, receipt: null } };
 		},
 
 		async edit(runId, opts) {
@@ -1303,133 +1602,20 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			if (!note) {
 				return casError("TF_INVALID_ARGUMENT", "edit requires non-empty note/payload");
 			}
-			const pendingApr = loadApprovalForRun(store.projectRoot, runId);
-			if (pendingApr) {
-				const decided = decideApproval(store.projectRoot, pendingApr.approvalRequestId, {
-					decision: "edit",
-					principal: opts.principal ?? "local",
-					commandId: opts.commandId ?? newId("cmd"),
-					note,
-				});
-				if (!decided.ok) {
-					return casError(decided.code, decided.message, store.getRun(runId) ?? undefined);
-				}
-			}
-			// Re-reserve before terminal (same as approve — future provider resume shares this path)
-			const reservation = coordinator.reserve({
-				coordinatorEpoch: singleton?.lock.fencingEpoch ?? Date.now(),
-			});
-			if (!reservation) {
-				return {
-					ok: false,
-					run: store.getRun(runId) ?? undefined,
-					error: {
-						code: "TF_CAPACITY_EXCEEDED",
-						message: "cannot re-reserve after edit",
-						recoveryAction: "retry-same-command",
-						sideEffects: "none",
-					},
-				};
-			}
-			const cas = store.compareAndCommit({
-				runId,
-				expectedRunVersion: opts.expectedRunVersion,
-				validate: (run) => {
-					if (run.stage === "terminal" || run.receiptId) {
-						return `run is terminal/has Receipt; cannot edit`;
-					}
-					if (run.status !== "paused" || run.stage !== "parked") {
-						return `edit requires paused+parked (have ${run.status}/${run.stage})`;
-					}
-					return null;
-				},
-				build: (run) => {
-					const now = Date.now();
-					const after: RunProjection = {
-						...run,
-						status: "completed",
-						stage: "terminal",
-						reservationId: reservation.reservationId,
-						finalOutput: note,
-						updatedAt: now,
-						runVersion: run.runVersion + 1,
-					};
-					const evDecide = makeEvent(runId, {
-						type: "ApprovalDecided",
-						runId,
-						approvalRequestId: run.approvalRequestId ?? "",
-						decision: "edit",
-					});
-					const evStatus = makeEvent(runId, {
-						type: "RunStatusChanged",
-						runId,
-						status: "completed",
-						stage: "terminal",
-						reason: "approval edited",
-					});
-					const receiptId = newId("rcpt");
-					const evReceipt = makeEvent(runId, {
-						type: "ReceiptIssued",
-						runId,
-						receiptId,
-					});
-					const receipt = issueReceipt(
-						after,
-						{
-							boundPlanHash: after.boundPlanHash,
-							executionSemanticHash: "",
-							programName: "edited",
-							program: {},
-							createdAt: now,
-							approvalMode: "durable-optional",
-							grantRefs: [],
-						},
-						[evDecide.eventId, evStatus.eventId, evReceipt.eventId],
-					);
-					const receiptFixed: Receipt = { ...receipt, receiptId };
-					return {
-						run: { ...after, receiptId },
-						receipt: receiptFixed,
-						events: [evDecide, evStatus, evReceipt],
-					};
-				},
-			});
-			if (!cas.ok) {
-				try {
-					coordinator.normalRelease(reservation.reservationId, {
-						noLiveOrAmbiguousSideEffects: true,
-						runIsTerminal: false,
-						runIsParkedAndFutureDispatchRequiresReadmission: true,
-					});
-				} catch {
-					/* ignore */
-				}
-				return casError(cas.code, cas.message, cas.run);
-			}
-			try {
-				coordinator.commitReservation(reservation.reservationId, {
-					projectId: store.header.projectId,
-					projectControlDomainId: store.header.controlDomainId,
-					runId,
-					projectAdmitCommitSeq: cas.commitSeqEnd,
-				});
-			} catch {
-				/* ignore */
-			}
-			try {
-				coordinator.normalRelease(reservation.reservationId, {
-					noLiveOrAmbiguousSideEffects: true,
-					runIsTerminal: true,
-					runIsParkedAndFutureDispatchRequiresReadmission: false,
-				});
-			} catch {
-				/* keep */
-			}
+			const run = store.getRun(runId) ?? undefined;
 			return {
-				ok: true,
-				run: cas.run,
-				receipt: cas.receipt,
-				snapshot: { run: cas.run, receipt: cas.receipt },
+				ok: false,
+				run,
+				error: {
+					code: "TF_FEATURE_REQUIRED",
+					message:
+						"edit approval is disabled until edited BoundPlan persistence and dispatcher handoff are implemented",
+					recoveryAction: "none",
+					sideEffects: "none",
+					projectId: store.header.projectId,
+					controlDomainId: store.header.controlDomainId,
+				},
+				snapshot: run ? { run, receipt: store.getReceiptForRun(runId) } : undefined,
 			};
 		},
 
@@ -1547,7 +1733,7 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			return { ok: true, run: cas.run, snapshot: { run: cas.run } };
 		},
 
-		forceReleaseReservation(reservationId, opts) {
+		forceReleaseReservation(request, opts) {
 			if (!canMutate) {
 				return {
 					ok: false as const,
@@ -1565,23 +1751,17 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 					},
 				};
 			}
-			if (opts.riskAcknowledged !== true) {
-				return {
-					ok: false as const,
-					error: {
-						code: "TF_POLICY_DENIED" as const,
-						message: "forceRelease requires riskAcknowledged:true",
-						recoveryAction: "none" as const,
-						sideEffects: "none" as const,
-					},
-				};
-			}
-			if (!isSafeId(reservationId)) {
+			if (
+				!isSafeId(request.reservationId) ||
+				!isSafeId(request.expectedProjectId) ||
+				!isSafeId(request.expectedControlDomainId) ||
+				!isSafeId(request.expectedRunId)
+			) {
 				return {
 					ok: false as const,
 					error: {
 						code: "TF_INVALID_ARGUMENT" as const,
-						message: `unsafe reservationId`,
+						message: "unsafe force-release identifier",
 						recoveryAction: "none" as const,
 						sideEffects: "none" as const,
 					},
@@ -1589,27 +1769,31 @@ export function createControlHost(opts: ControlHostOptions): ControlHost {
 			}
 			try {
 				const commandId = opts.commandId ?? newId("cmd");
-				const { command } = coordinator.forceRelease(reservationId, {
+				if (!isSafeId(commandId)) {
+					throw new Error("TF_INVALID_ARGUMENT: unsafe commandId");
+				}
+				const { command } = coordinator.forceRelease(request, {
 					commandId,
 					callerPrincipal: opts.principal,
-					requestBody: {
-						reservationId,
-						riskAcknowledged: true,
-						reason: opts.reason,
-					},
 				});
 				return { ok: true as const, commandId: command.commandId };
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				const code = msg.includes("IDEMPOTENCY")
-					? ("TF_IDEMPOTENCY_CONFLICT" as const)
-					: ("TF_COMMAND_FAILED" as const);
+				const code = msg.includes("STALE_VERSION")
+					? ("TF_STALE_VERSION" as const)
+					: msg.includes("IDEMPOTENCY")
+						? ("TF_IDEMPOTENCY_CONFLICT" as const)
+						: msg.includes("CROSS_PRINCIPAL")
+							? ("TF_CROSS_PRINCIPAL_COMMAND" as const)
+							: msg.includes("INVALID_ARGUMENT")
+								? ("TF_INVALID_ARGUMENT" as const)
+								: ("TF_COMMAND_FAILED" as const);
 				return {
 					ok: false as const,
 					error: {
 						code,
 						message: msg,
-						recoveryAction: "none" as const,
+						recoveryAction: code === "TF_STALE_VERSION" ? "refresh" as const : "none" as const,
 						sideEffects: "unknown" as const,
 					},
 				};

@@ -10,9 +10,11 @@ import {
 	createControlHost,
 	createMockExecutionProvider,
 	createScriptExecutionProvider,
+	FORCE_RELEASE_ACKNOWLEDGEMENT,
 	openUserCoordinatorStore,
 	loadApprovalForRun,
 	openProjectControlStore,
+	type ForceReleaseRequest,
 } from "../src/index.ts";
 
 function temp() {
@@ -29,7 +31,7 @@ function temp() {
 	};
 }
 
-test("forceRelease requires riskAcknowledged and principal; idempotent by commandId", () => {
+test("forceRelease requires exact acknowledgement and principal; idempotent by commandId", () => {
 	const t = temp();
 	try {
 		const coord = openUserCoordinatorStore(t.env);
@@ -42,27 +44,39 @@ test("forceRelease requires riskAcknowledged and principal; idempotent by comman
 			projectAdmitCommitSeq: 1,
 		});
 
+		const observed = coord.getReservation(rsv!.reservationId)!;
+		const request: ForceReleaseRequest = {
+			reservationId: observed.reservationId,
+			expectedState: "committed",
+			expectedRevision: observed.revision,
+			expectedCoordinatorEpoch: observed.coordinatorEpoch,
+			expectedProjectId: observed.projectId!,
+			expectedControlDomainId: observed.projectControlDomainId!,
+			expectedRunId: observed.runId!,
+			acknowledgement: FORCE_RELEASE_ACKNOWLEDGEMENT,
+		};
+
 		assert.throws(() =>
-			coord.forceRelease(rsv!.reservationId, {
+			coord.forceRelease({
+				...request,
+				acknowledgement: "no" as typeof FORCE_RELEASE_ACKNOWLEDGEMENT,
+			}, {
 				commandId: "f1",
 				callerPrincipal: "op",
-				requestBody: { reservationId: rsv!.reservationId, riskAcknowledged: false },
 			}),
 		);
 
-		const first = coord.forceRelease(rsv!.reservationId, {
+		const first = coord.forceRelease(request, {
 			commandId: "f-ok",
 			callerPrincipal: "op",
-			requestBody: { reservationId: rsv!.reservationId, riskAcknowledged: true, reason: "stuck" },
 		});
 		assert.equal(first.reservation.state, "released");
-		assert.equal(first.command.payload.riskAcknowledged, true);
+		assert.equal(first.command.payload.acknowledgement, FORCE_RELEASE_ACKNOWLEDGEMENT);
 
 		// Idempotent same commandId
-		const second = coord.forceRelease(rsv!.reservationId, {
+		const second = coord.forceRelease(request, {
 			commandId: "f-ok",
 			callerPrincipal: "op",
-			requestBody: { reservationId: rsv!.reservationId, riskAcknowledged: true, reason: "stuck" },
 		});
 		assert.equal(second.command.commandId, "f-ok");
 		assert.equal(coord.getReservation(rsv!.reservationId)?.state, "released");
@@ -71,7 +85,7 @@ test("forceRelease requires riskAcknowledged and principal; idempotent by comman
 	}
 });
 
-test("host forceReleaseReservation denies without risk ack", async () => {
+test("host forceReleaseReservation enforces the typed observed-state request", async () => {
 	const t = temp();
 	try {
 		const host = createControlHost({
@@ -90,17 +104,24 @@ test("host forceReleaseReservation denies without risk ack", async () => {
 		});
 		const resId = r.run?.reservationId;
 		assert.ok(resId);
-		const denied = host.forceReleaseReservation(resId!, {
-			principal: "op",
-			riskAcknowledged: false,
-		});
+		const observed = host.coordinator.getReservation(resId!)!;
+		const request: ForceReleaseRequest = {
+			reservationId: observed.reservationId,
+			expectedState: "orphan-suspect",
+			expectedRevision: observed.revision,
+			expectedCoordinatorEpoch: observed.coordinatorEpoch,
+			expectedProjectId: observed.projectId!,
+			expectedControlDomainId: observed.projectControlDomainId!,
+			expectedRunId: observed.runId!,
+			acknowledgement: FORCE_RELEASE_ACKNOWLEDGEMENT,
+		};
+		const denied = host.forceReleaseReservation(
+			{ ...request, expectedRevision: request.expectedRevision - 1 },
+			{ principal: "op" },
+		);
 		assert.equal(denied.ok, false);
-		if (!denied.ok) assert.equal(denied.error.code, "TF_POLICY_DENIED");
-		const ok = host.forceReleaseReservation(resId!, {
-			principal: "op",
-			riskAcknowledged: true,
-			reason: "operator force",
-		});
+		if (!denied.ok) assert.equal(denied.error.code, "TF_STALE_VERSION");
+		const ok = host.forceReleaseReservation(request, { principal: "op" });
 		assert.equal(ok.ok, true);
 		host.close();
 	} finally {
@@ -154,7 +175,7 @@ test("durable approval reject → blocked; expire → blocked; illegal transitio
 	}
 });
 
-test("durable approval edit → re-reserve + completed Receipt with edited payload", async () => {
+test("approval edit fails closed until edited-plan dispatcher exists", async () => {
 	const t = temp();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -193,18 +214,20 @@ test("durable approval edit → re-reserve + completed Receipt with edited paylo
 			principal: "editor",
 			expectedRunVersion: parked.run!.runVersion,
 		});
-		assert.equal(edited.ok, true, JSON.stringify(edited.error));
-		assert.equal(edited.run?.status, "completed");
-		assert.equal(edited.run?.stage, "terminal");
-		assert.equal(edited.run?.finalOutput, "edited-output-body");
-		assert.ok(edited.receipt);
+		assert.equal(edited.ok, false);
+		assert.equal(edited.error?.code, "TF_FEATURE_REQUIRED");
+		assert.equal(edited.error?.sideEffects, "none");
+		assert.equal(edited.run?.status, "paused");
+		assert.equal(edited.run?.stage, "parked");
+		assert.equal(edited.receipt, undefined);
 		const apr = loadApprovalForRun(t.project, runId);
-		assert.equal(apr?.status, "edited");
-		assert.equal(apr?.decision, "edit");
+		assert.equal(apr?.status, "pending");
+		assert.equal(apr?.decision, undefined);
 
-		// Terminal immutability: re-edit rejected
+		// Repeated attempts remain side-effect free.
 		const again = await host.edit(runId, { note: "nope", principal: "editor" });
 		assert.equal(again.ok, false);
+		assert.equal(again.error?.code, "TF_FEATURE_REQUIRED");
 		host.close();
 	} finally {
 		t.cleanup();
