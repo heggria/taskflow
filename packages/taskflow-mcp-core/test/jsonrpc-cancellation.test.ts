@@ -308,6 +308,62 @@ test("taskflow_run forwards the JSON-RPC AbortSignal into the host runner", asyn
 	}
 });
 
+test("taskflow_run resolves typed cwd defaults before validation and execution", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "taskflow-mcp-cwd-bridge-"));
+	const previousMode = process.env.TASKFLOW_CWD_BRIDGE_MODE;
+	process.env.TASKFLOW_CWD_BRIDGE_MODE = "resolve-only";
+	try {
+		await mkdir(join(cwd, "packages", "api"), { recursive: true });
+		const runner: SubagentRunner<AgentConfig> = {
+			runTask: async (_cwd, _agents, agent, task) => ({
+				agent, task, exitCode: 0, output: "unused", stderr: "", usage: emptyUsage(),
+			}),
+		};
+		const tools = makeToolHandlers(cwd, runner);
+		const result = (await tools.taskflow_run?.({
+			define: {
+				name: "mcp-cwd-default",
+				args: { package: { type: "relative-path", default: "packages/api" } },
+				phases: [{
+					id: "where",
+					type: "script",
+					run: [process.execPath, "-e", "process.stdout.write(process.cwd())"],
+					cwd: "{args.package}",
+					final: true,
+				}],
+			},
+		})) as { isError?: boolean; content?: Array<{ text?: string }> };
+		const text = result.content?.[0]?.text ?? "";
+		assert.equal(result.isError, false, text);
+		assert.ok(text.includes(join(cwd, "packages", "api")), text);
+	} finally {
+		if (previousMode === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
+		else process.env.TASKFLOW_CWD_BRIDGE_MODE = previousMode;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("taskflow_run rejects a missing required typed arg before spawning", async () => {
+	let calls = 0;
+	const runner: SubagentRunner<AgentConfig> = {
+		runTask: async (_cwd, _agents, agent, task) => {
+			calls++;
+			return { agent, task, exitCode: 0, output: "unexpected", stderr: "", usage: emptyUsage() };
+		},
+	};
+	const tools = makeToolHandlers(process.cwd(), runner);
+	const result = (await tools.taskflow_run?.({
+		define: {
+			name: "missing-cwd-arg",
+			args: { package: { type: "relative-path", required: true } },
+			phases: [{ id: "run", type: "agent", agent: "executor", task: "go", cwd: "{args.package}", final: true }],
+		},
+	})) as { isError?: boolean; content?: Array<{ text?: string }> };
+	assert.equal(result.isError, true);
+	assert.match(result.content?.[0]?.text ?? "", /Missing required argument 'package'/);
+	assert.equal(calls, 0);
+});
+
 test("a host without usage accounting refuses budgeted runs before spawning", async () => {
 	let calls = 0;
 	const runner: SubagentRunner<AgentConfig> & { usageAccounting: "unavailable" } = {

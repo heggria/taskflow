@@ -216,12 +216,26 @@ export function resolveOpencodeModel(model: string | undefined): string | undefi
 	return model;
 }
 
+/** Normalize Taskflow aliases before OpenCode resolves the provider-specific variant. */
+export function resolveOpencodeThinking(thinking: string | undefined): string | undefined {
+	if (!thinking) return undefined;
+	const normalized = thinking.trim().toLowerCase();
+	if (normalized === "off") return "none";
+	if (normalized === "ultra") return "max";
+	if (["none", "minimal", "low", "medium", "high", "xhigh", "max"].includes(normalized)) return normalized;
+	throw new Error(
+		`Unsupported OpenCode thinking level '${thinking}'. Use off, none, minimal, low, medium, high, xhigh, max, or ultra.`,
+	);
+}
+
 /** Context for {@link buildOpencodeArgs} — the pure inputs to argv construction. */
 export interface OpencodeArgsCtx {
 	systemPrompt: string;
 	task: string;
 	/** Already-resolved model (opts.model ?? agent.model). */
 	model?: string;
+	/** Resolved phase -> agent -> global reasoning variant. */
+	thinking?: string;
 	tools?: string[];
 	cwd?: string;
 	/** Explicit acknowledgement for OpenCode's unsandboxed `--auto` mode. */
@@ -263,6 +277,8 @@ export function buildOpencodeArgs(ctx: OpencodeArgsCtx): OpencodeArgs {
 	const args: string[] = ["run", fullPrompt, "--format", "json", "--pure"];
 	if (ctx.cwd) args.push("--dir", ctx.cwd);
 	if (opencodeModel) args.push("-m", opencodeModel);
+	const variant = resolveOpencodeThinking(ctx.thinking);
+	if (variant) args.push("--variant", variant);
 	if (!readOnly) args.push("--auto");
 	return { args, readOnly };
 }
@@ -284,8 +300,8 @@ export async function runOpencodeAgentTask(
 	if (!agent) return unknownAgentResult(agentName, task, agents);
 
 	const model = opts.model ?? agent.model;
+	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 	const tools = opts.tools ?? agent.tools;
-	void globalThinking; // opencode's --variant is provider-specific; reserved.
 
 	const cwd = opts.cwd ?? defaultCwd;
 	const childEnv = opencodeChildEnv();
@@ -296,6 +312,7 @@ export async function runOpencodeAgentTask(
 			systemPrompt: agent.systemPrompt,
 			task,
 			model,
+			thinking,
 			tools,
 			cwd,
 			allowUnsafeAuto: opencodeUnsafeAutoEnabled(),

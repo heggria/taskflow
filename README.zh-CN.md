@@ -12,7 +12,7 @@
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
 </p>
 
-<p align="center"><em>发布线 <code>0.2.0</code> — monorepo 包与插件 pin 为 <code>0.2.0</code>；npm 在 <code>v0.2.0</code> tag 发布任务完成后更新。上方徽章在发版前仍可能显示 registry 上的旧版本。</em></p>
+<p align="center"><em>发布线 <code>0.2.1</code> — monorepo 包与插件 pin 为 <code>0.2.1</code>；npm 在 <code>v0.2.1</code> tag 发布任务完成后更新。上方徽章在发版前仍可能显示 registry 上的旧版本。</em></p>
 
 <p align="center">
   <a href="./README.md">English</a> ·
@@ -55,7 +55,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 # 并分别继承 workspace/read-only，然后：
 export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
 export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 ---
@@ -235,7 +235,7 @@ extends = "read-only"
 ```bash
 export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
 export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 monorepo checkout 另带 plugin scaffold：
@@ -386,7 +386,7 @@ grok mcp add taskflow -- node "$(pwd)/packages/grok-taskflow/dist/mcp/bin.js"
 | `retry` | `{ max, backoffMs?, factor? }`——重试失败的子代理 |
 | `output` | `"text"`（默认）或 `"json"`（暴露 `{steps.ID.json}`） |
 | `model` / `thinking` / `tools` | 子代理的逐阶段覆盖设置 |
-| `cwd` | 子代理的工作目录。字面路径，或一个用于**工作区隔离**的保留关键字——`"temp"`（临时目录，结束后删除）、`"dedicated"`（运行状态下的持久目录，保留）、`"worktree"`（临时分支上的 git worktree，结束后删除）。开放失败；在 LLM 生成的子流程中被拒绝。 |
+| `cwd` | 子代理的工作目录。可用字面路径、用于**工作区隔离**的 `"temp"` / `"dedicated"` / `"worktree"`，或严格的完整占位符 `"{args.X}"`（`X` 必须声明为 `relative-path`）。参数桥默认关闭，仅 host 显式设置 `TASKFLOW_CWD_BRIDGE_MODE=resolve-only` 后启用，并在绑定时对 invocation root 做 realpath containment；它不是文件系统沙箱。LLM 生成的子流程禁止声明任何 `cwd`。 |
 | `context` | 预读并注入到任务前的文件路径（或 `{steps.X}` 引用） |
 | `contextLimit` | `context` 中每个文件读取的最大字符数（默认 8000） |
 | `concurrency` | `map` / `parallel` 的并发分发上限（覆盖流程默认值） |
@@ -553,7 +553,7 @@ Review the audit below. If any endpoint is missing auth, end with
 
 ## 命令
 
-保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute`（仅 dry-run）/ `save` / `search`。
+保存的流程变成 CLI 快捷方式。**这些 `/tf` 命令仅限 Pi**（在 Pi 会话中运行）。在 Codex、Claude Code、OpenCode、Grok Build 上改用 `taskflow_*` MCP 工具——`taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute`（仅 dry-run）/ `reconcile_workspace` / `save` / `search`。
 
 | 命令 | 功能 |
 |---|---|
@@ -573,7 +573,7 @@ Review the audit below. If any endpoint is missing auth, end with
 | `/tf init` | **交互式映射模型角色**到你的已启用模型（写入 `~/.pi/agent/settings.json`） |
 | `/tf:<name> [args]` | 快捷方式——一键运行流程 |
 
-工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`trace`、`replay`、`why-stale`、`recompute`、`cache-clear`、`search`。在 Codex、Claude Code、OpenCode、Grok Build 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_save` / `taskflow_search`。
+工具动作（由模型在 Pi 上使用）：`run`（内联 `define` 或已保存的 `name`）、`save`、`resume`、`list`、`agents`、`init`、`verify`、`compile`、`ir`、`provenance`、`trace`、`replay`、`why-stale`、`recompute`、`reconcile-workspace`、`cache-clear`、`search`。在 Codex、Claude Code、OpenCode、Grok Build 上暴露的 MCP 工具为 `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute`（仅 dry-run）/ `taskflow_reconcile_workspace` / `taskflow_save` / `taskflow_search`。
 
 ## 后台（detached）执行
 
@@ -730,6 +730,29 @@ Taskflow 自带 **18 个内置代理**——每个代理是一个 `.md` 文件�
 
 随时手动编辑这些值，或重新运行 `/tf init`。
 
+Pi 子进程默认隔离环境中自动发现的扩展。可信 Host 操作者可以在同一个
+settings 文件中配置显式扩展白名单，或开启旧版继承行为；Flow 无权修改：
+
+```json
+{
+  "taskflow": {
+    "piChild": {
+      "resourceProfile": "isolated",
+      "extensions": [],
+      "terminalGraceMs": 1500
+    }
+  }
+}
+```
+
+`allowlist` 只接受绝对且已存在的扩展文件路径；`inherit` 会恢复 Pi ambient
+extension discovery，仅建议用于兼容。收到已验证的最终答案和
+`agent_end`/`agent_settled` 后，Taskflow 等待 grace 窗口；若 Pi 仍未退出，
+则回收其进程组并以 `completionSource: "terminal-reap"` 接受完成结果，而不是
+误报 timeout。
+进程组回收可以覆盖普通扩展产生的后代进程，但不是针对恶意代码主动创建新
+session 的 OS 沙箱；不要把不可信扩展加入 allowlist。
+
 若需自定义特定代理的模型或 thinking 而不修改 `modelRoles`，可在 `~/.pi/agent/agents/<name>.md` 创建代理文件，在 YAML frontmatter 中覆盖。
 
 ### 工具路径（`action="init"`）
@@ -817,7 +840,24 @@ provided files. Report violations grouped by file. No fixes.
 
 ## 状态与边界
 
+**v0.2.1**（当前发布线——`v0.2.1` tag 发布后 npm 更新）新增类型化调用参数，
+以及实验性、默认关闭的精确 `cwd: "{args.package}"` 兼容桥。显式启用的
+`resolve-only` 模式会校验可移植相对路径、canonical containment、saved-flow
+单次执行快照、持久化 root identity、嵌套边界只收缩不扩张，以及缓存/恢复保护；
+它是路径解析加固，不是文件系统 sandbox。由于失败的 writer 可能已经修改文件，
+使用该桥的 phase 禁止配置 `retry.max > 0`，必须先显式 reconcile workspace
+才能再次写入。同时，OpenCode thinking 会通过
+`--variant` 向下传递。
+模型可调用的 reconcile 默认拒绝；host operator 必须另行设置
+`TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`，且该 host-only 权限不会传给
+subagent。Pi 的 `/tf reconcile-workspace --ack` 是用户直接触发的控制面命令，
+不要求这个环境开关。
+
+<details><summary>历史版本（保留当时的发布措辞）</summary>
+
 **v0.2.0**（本 monorepo 发布线——`v0.2.0` tag 发布后 npm 才更新）——新增 `taskflow-dsl` TypeScript 前端、Grok Build 交付包、含 `race`/`expand` 的 **12** 种阶段、FlowIR 内容哈希、事件内核 trace/fold、离线 replay。**v0.1.7** 修复：文件 loader 报告失败原因 + 解析位置；pi-taskflow 升级提示一次性；gate fail-closed（issue #54）。**v0.1.6** 新增库 Phase 1、`defineFile`、JSONC。**v0.1.5** 新增 Claude Code / OpenCode 宿主、`taskflow-mcp-core` 拆分。基线：**九个包的多宿主 monorepo**——`taskflow-core`、`taskflow-mcp-core`、`taskflow-hosts`、`taskflow-dsl`，加上 `pi-taskflow`、`codex-taskflow`、`claude-taskflow`、`opencode-taskflow`、`grok-taskflow`。**共享上下文树**：可选开启（`shareContext` / `contextSharing`）的黑板 + 监督工具（`ctx_read`/`ctx_write` 水平复用、`ctx_report`/`ctx_spawn` 垂直监督）。**工作区隔离**：阶段的 `cwd` 接受保留关键字 `temp`/`dedicated`/`worktree`，运行时分配隔离目录（或一条一次性分支上的 git worktree）并在阶段结束后拆除。**后台（detached）执行**：运行可脱离会话后台执行。早期功能：循环至完成（`loop`）、锦标赛（best-of-N 带评判者）、跨运行记忆化（基于 git/文件/glob/环境指纹和 TTL 的内容寻址缓存）、交互式 `/tf init`、18 个内置代理及模型角色。完整的控制流与可靠性层（`when` 守卫、`join: any`、`retry`/回退、`approval`、`flow` 组合、`budget` 上限、`eval` 机器门控、空闲看门狗）构建在 DSL + DAG 运行时（`agent`/`parallel`/`map`/`gate`/`reduce`）之上。支持内联 + 已保存流程、跨会话恢复、实时进度和上下文隔离。一次运行作为一个流式工具调用执行。
+
+</details>
 
 已知边界（已追踪、有限定——不会在流程中途出现意外）：
 

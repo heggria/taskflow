@@ -12,7 +12,7 @@
   <a href="#run-it-on-your-agent"><img src="https://img.shields.io/badge/runs%20on-Pi%20%2B%20Codex%20%2B%20Claude%20Code%20%2B%20OpenCode%20%2B%20Grok-4B4ACF?style=flat-square" alt="runs on Pi, Codex, Claude Code, OpenCode, and Grok Build"></a>
 </p>
 
-<p align="center"><em>Release line <code>0.2.0</code> — monorepo packages and plugin pins are <code>0.2.0</code>; npm registry updates after the <code>v0.2.0</code> tag publish job. Badge above tracks the published npm line until then.</em></p>
+<p align="center"><em>Release line <code>0.2.1</code> — monorepo packages and plugin pins are <code>0.2.1</code>; npm registry updates after the <code>v0.2.1</code> tag publish job. Badge above tracks the published npm line until then.</em></p>
 
 <p align="center">
   <b>English</b> ·
@@ -49,7 +49,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 # workspace/read-only respectively in ~/.grok/sandbox.toml, then:
 export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
 export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 ---
@@ -243,7 +243,7 @@ extends = "read-only"
 ```bash
 export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
 export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.0 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.1 grok-taskflow-mcp
 ```
 
 A plugin scaffold is also available from a monorepo checkout:
@@ -458,7 +458,7 @@ Every phase needs a unique `id` and a `type` (defaults to `agent`). On top of th
 | `retry` | `{ max, backoffMs?, factor? }` — retry a failing subagent |
 | `output` | `"text"` (default) or `"json"` (exposes `{steps.ID.json}`) |
 | `model` / `thinking` / `tools` | Per-phase overrides for the subagent |
-| `cwd` | Working directory for the subagent. A literal path, or a reserved keyword for **workspace isolation** — `"temp"` (ephemeral dir, removed after), `"dedicated"` (persistent dir under the run state, kept), `"worktree"` (a git worktree on a throwaway branch, removed after). Fail-open; rejected in LLM-authored sub-flows. |
+| `cwd` | Working directory for the phase. A literal path; a reserved workspace keyword (`"temp"`, `"dedicated"`, `"worktree"`); or exactly `"{args.X}"` when X is a typed `relative-path`. The typed bridge is fail-closed and requires host `resolve-only` opt-in; generated flows cannot use it. |
 | `context` | File paths to pre-read and inject into the agent prompt |
 | `contextLimit` | Max chars per context file (default 8000) |
 | `concurrency` | Fan-out cap for `map` / `parallel` (overrides the flow default) |
@@ -682,7 +682,7 @@ Condition grammar (for `when`): `== != < > <= >=`, `&& || !`, parentheses, quote
 
 ## Commands
 
-Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, OpenCode, and Grok Build, use the `taskflow_*` MCP tools instead — full set: `taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute` (dry-run) / `save` / `search`.
+Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run in the Pi session). On Codex, Claude Code, OpenCode, and Grok Build, use the `taskflow_*` MCP tools instead — full set: `taskflow_run` / `list` / `show` / `verify` / `compile` / `peek` / `trace` / `replay` / `why_stale` / `recompute` (dry-run) / `reconcile_workspace` / `save` / `search`.
 
 | Command | What it does |
 |---|---|
@@ -702,7 +702,7 @@ Saved flows become CLI shortcuts. **These `/tf` commands are Pi-only** (they run
 | `/tf init` | **Interactively map model roles** to your enabled models (writes `~/.pi/agent/settings.json`) |
 | `/tf:<name> [args]` | Shortcut — runs the flow in one tap |
 
-Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `replay`, `why-stale`, `recompute`, `cache-clear`, `search`. On Codex, Claude Code, OpenCode, and Grok Build the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_save` / `taskflow_search`.
+Tool actions (used by the model on Pi): `run` (inline `define` or saved `name`), `save`, `resume`, `list`, `agents`, `init`, `verify`, `compile`, `ir`, `provenance`, `trace`, `replay`, `why-stale`, `recompute`, `reconcile-workspace`, `cache-clear`, `search`. On Codex, Claude Code, OpenCode, and Grok Build the exposed MCP tools are `taskflow_run` / `taskflow_list` / `taskflow_show` / `taskflow_verify` / `taskflow_compile` / `taskflow_peek` / `taskflow_trace` / `taskflow_replay` / `taskflow_why_stale` / `taskflow_recompute` (dry-run only) / `taskflow_reconcile_workspace` / `taskflow_save` / `taskflow_search`.
 
 ## Background (detached) execution
 
@@ -862,6 +862,31 @@ Your choices are written to `~/.pi/agent/settings.json`:
 
 Edit the values manually any time, or just re-run `/tf init`.
 
+Pi child processes are isolated from ambient extensions by default. Trusted
+operators can opt into an explicit extension allowlist—or the legacy inherited
+behavior—in the same Host settings file (flows cannot change this authority):
+
+```json
+{
+  "taskflow": {
+    "piChild": {
+      "resourceProfile": "isolated",
+      "extensions": [],
+      "terminalGraceMs": 1500
+    }
+  }
+}
+```
+
+`allowlist` requires absolute existing extension-file paths. `inherit` restores
+ambient Pi extension discovery and should be used only as a compatibility mode.
+After a validated final answer plus `agent_end`/`agent_settled`, Taskflow waits
+the grace window and then reaps a Pi process group that failed to exit; this is
+reported as `completionSource: "terminal-reap"` instead of a false timeout.
+Process-group reaping covers ordinary extension descendants; it is not an OS
+sandbox for malicious code that deliberately starts a new session. Never
+allowlist untrusted extensions.
+
 To customize a specific agent's model or thinking without changing `modelRoles`, create an agent file at `~/.pi/agent/agents/<name>.md` with the desired overrides in the YAML frontmatter.
 
 ### Tool path (`action="init"`)
@@ -946,10 +971,31 @@ Our `self-improve` flow is a 10-phase DAG — it audits the codebase, patches de
 
 ## Status & limits
 
-**Compatibility baseline from v0.1.8:** interpolation placeholders in phase
-`cwd` are rejected; the release dependency/security sweep is also retained.
+**Compatibility baseline from v0.1.8:** arbitrary interpolation in phase `cwd`
+remains rejected; 0.2.1 adds only the exact typed exception below. The release
+dependency/security sweep is also retained.
+
+**v0.2.1** (current release line — npm after the `v0.2.1` tag) adds typed
+invocation args and an experimental, default-disabled exact
+`cwd: "{args.package}"` compatibility bridge. The opt-in `resolve-only` mode
+enforces portable relative selectors, canonical containment, immutable
+saved-flow snapshots, persisted root identity, non-expanding nested boundaries,
+and cache/resume safeguards; it is path-resolution hardening, not a filesystem
+sandbox. A phase using this bridge cannot set `retry.max > 0`: a failed writer
+may already have changed files and requires explicit workspace reconciliation
+before another write. Resolve-only writers inside one invocation are serialized
+before lease acquisition, so fan-out cannot self-timeout while cross-process
+writers still contend durably. It also forwards OpenCode thinking through `--variant`.
+Model-callable reconciliation remains fail-closed unless the host operator sets
+`TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; that authority is stripped from
+subagent environments. Pi's `/tf reconcile-workspace --ack` is a direct user
+control-plane command and does not require the environment switch.
+
+<details><summary>Previous release history (retains its release-time wording)</summary>
 
 **v0.2.0** (this monorepo release line — npm after `v0.2.0` tag) — adds the `taskflow-dsl` TypeScript frontend, Grok Build delivery package, 12 phase kinds with `race`/`expand`, FlowIR content hashes, event-kernel trace/fold, and offline replay. **v0.1.7** — **file loaders now report *why* a file failed with the parse position** (line/column) instead of a merged "not found or unparseable" message — `defineFile`, saved flows, run records, and library sidecars all distinguish *missing* from *malformed*, so a stray bare newline in a hand-authored flow is diagnosable in seconds; `safeParse` stays lenient for LLM output. Also fixes a pi-taskflow hint that re-printed every session. **Gate safety hardening (issue #54)**: a shared emphasis-tolerant marker factory now covers **all three decision markers** — `VERDICT`, `WINNER`, and `SCORE` — so Markdown-wrapped tokens (`VERDICT: **BLOCK**`, `WINNER: __3__`, `SCORE: `0.8``) are never silently mis-read (a genuine BLOCK no longer becomes PASS; a judge's pick no longer silently reverts to variant 1); **unparseable gate *model output now fails closed* (BLOCK)** instead of rubber-stamping PASS — a gate that cannot reach a verdict cannot be trusted to pass, while *config* slips (unresolved `score.target`, malformed `scorers`) stay fail-open with a warning; and free-text gates whose task omits a `VERDICT:` instruction now get the exact format suffix **auto-appended**. For the most robust decision phases, use `output: "json"` + `expect` to machine-validate the output (now the documented default for gate verdicts, tournament winners, and router branches). **v0.1.6** added **library Phase 1** (search-before-author + reusable-flow sidecar metadata), the **`defineFile`** parameter (verify/compile/run a flow from a path on disk), and **JSONC comment support** in flow definition files (`//` and `/* */` comments + trailing commas, parsed by the new zero-dependency `parseJsonc`). **v0.1.5** added **Claude Code and OpenCode as hosts**, **extracted the MCP server into its own `taskflow-mcp-core` package**, and **de-duplicated the three host runners** into a shared `runSubagentProcess`. See [CHANGELOG](./CHANGELOG.md) for the full history. Baseline: **multi-host monorepo of nine packages** — the host-neutral `taskflow-core` engine, the host-neutral `taskflow-mcp-core` MCP server, the shared host-runner `taskflow-hosts`, the `taskflow-dsl` compiler, plus `pi-taskflow` (Pi adapter), `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, and `grok-taskflow` (the four delivery packages re-export their runners from `taskflow-hosts` and each ships an MCP bin + plugin/config), all sharing the host-neutral MCP server in `taskflow-mcp-core`. **Library Phase 1**: save flows with `purpose`+`tags` via `taskflow_save` (MCP) or `action=save` (Pi), search them with structural + CJK-aware keyword scoring via `taskflow_search`/`action=search`, and track `reuseCount` via `reusedFromSearch`. **`defineFile`**: pass a `defineFile` path (or `{defineFile, name}`) to `action=run` (Pi) or `taskflow_run`/`taskflow_verify`/`taskflow_compile` (MCP) instead of an inline `define`, and the engine reads the flow from disk — pair it with JSONC comments to annotate saved flows. **JSONC**: flow-definition `.json` files may now carry `//` and `/* */` comments and trailing commas (parsed by `parseJsonc`, re-exported from the `taskflow-core` barrel); LLM-output parsing via `safeParse` stays strict. **Shared Context Tree**: opt-in (`shareContext` / `contextSharing`) blackboard + supervision tools (`ctx_read`/`ctx_write` horizontal reuse, `ctx_report`/`ctx_spawn` vertical supervision); `ctx_spawn` accepts a flat task **or** a dependency-bearing `subflow` (a runtime-validated nested DAG), depth-capped on a unified nesting counter with budget accounting. **Workspace isolation**: a phase's `cwd` accepts reserved keywords `temp`/`dedicated`/`worktree` — the runtime allocates an isolated dir (or a git worktree on a throwaway branch) and tears it down after the phase, fail-open, rejected in LLM-authored sub-flows. **Detached execution**: runs can execute in the background, detached from the Pi session. Prior: loop-until-done (`loop`), tournament (best-of-N with a judge), cross-run memoization (content-addressed cache with git/file/glob/env fingerprints and TTL), interactive `/tf init`, configurable built-in agents, 18 built-in agents with 6 model roles. Full control-flow & reliability layer (`when` guards, `join: any`, `retry`/backoff, `approval`, `flow` composition, `budget` caps, `onBlock: "retry"`, `eval` machine gates, idle watchdog) on top of the DSL + DAG runtime (`agent`/`parallel`/`map`/`gate`/`reduce`). Inline + saved flows, cross-session resume, live progress, and isolated context. A run executes as one streaming tool call.
+
+</details>
 
 Known boundaries (tracked, bounded — no surprises mid-flow):
 

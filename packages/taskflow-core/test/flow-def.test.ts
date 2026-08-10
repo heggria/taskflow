@@ -7,6 +7,9 @@
  * fails-open (defError) without aborting the run.
  */
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunResult } from "../src/runner-core.ts";
@@ -471,7 +474,51 @@ test("flow{def} security: a generated phase with an escaping cwd is rejected", a
 	// run cwd is /tmp; /etc escapes it
 	const res = await executeTaskflow(mkState(def), deps);
 	assert.equal(res.ok, true);
-	assert.match(res.state.phases.run.defError ?? "", /escapes the run directory/i);
+	assert.match(res.state.phases.run.defError ?? "", /cwd selection is not allowed/i);
+});
+
+test("flow{def} security: generated context cannot pre-read files outside the invocation root", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-dynamic-context-root-"));
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "tf-dynamic-context-outside-"));
+	const secret = path.join(outside, "secret.txt");
+	fs.writeFileSync(secret, "OUTSIDE_SECRET_SHOULD_NOT_LEAK");
+	const tasks: string[] = [];
+	try {
+		const plan = {
+			name: "context-escape",
+			phases: [{ id: "read", type: "agent", agent: "a", context: [secret], task: "summarize", final: true }],
+		};
+		const def: Taskflow = {
+			name: "context-parent",
+			phases: [
+				{ id: "plan", type: "agent", agent: "planner", task: "plan", output: "json" },
+				{ id: "run", type: "flow", def: "{steps.plan.json}", dependsOn: ["plan"], final: true },
+			],
+		};
+		const runState = mkState(def);
+		runState.cwd = root;
+		const res = await executeTaskflow(runState, {
+			...baseDeps(async (_cwd, _agents, agent, task) => {
+				tasks.push(task);
+				return {
+					agent,
+					task,
+					exitCode: 0,
+					output: agent === "planner" ? JSON.stringify(plan) : "unexpected",
+					stderr: "",
+					usage: emptyUsage(),
+					stopReason: "end",
+				};
+			}),
+			cwd: root,
+		});
+		assert.equal(res.ok, true, "generated definition rejection stays fail-open at the parent flow phase");
+		assert.match(res.state.phases.run.defError ?? "", /context file pre-reads are not allowed/);
+		assert.equal(tasks.some((task) => task.includes("OUTSIDE_SECRET_SHOULD_NOT_LEAK")), false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
 });
 
 test("flow{def} security: a generated phase with high concurrency is rejected", async () => {

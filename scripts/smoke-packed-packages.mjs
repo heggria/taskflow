@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Consumer smoke test for the exact tarballs that pnpm will publish.
+ * Consumer smoke test for the exact deterministic tarballs npm will publish.
  *
  * This deliberately does not import workspace sources. It packs all nine
  * packages, installs those tarballs into a fresh npm project, then exercises
@@ -11,10 +11,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { packReleasePackages } from "./pack-release-packages.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageNames = [
@@ -71,6 +72,7 @@ async function smokeWildcardExports(packageName, excludedImports = new Set()) {
 	let count = 0;
 	for (const relative of globSync("dist/**/*.js", { cwd: packageRoot })) {
 		const subpath = relative.slice("dist/".length, -".js".length);
+		if (subpath.startsWith("resources/") && manifest.exports?.["./resources/*"] === null) continue;
 		const specifier = `${packageName}/${subpath}`;
 		consumerRequire.resolve(specifier);
 		if (!excludedImports.has(specifier)) await importFromConsumer(specifier);
@@ -108,13 +110,17 @@ function smokeMcpBin(binName) {
 try {
 	mkdirSync(tarballDir, { recursive: true });
 	mkdirSync(consumerDir, { recursive: true });
-	const tarballs = [];
-	for (const name of packageNames) {
-		const packageDir = join(repo, "packages", name);
-		const packed = JSON.parse(run("pnpm", ["--dir", packageDir, "pack", "--pack-destination", tarballDir, "--json"]));
-		assert.ok(packed.filename, `pnpm pack did not return a filename for ${name}`);
-		tarballs.push(resolve(packed.filename));
-	}
+	const suppliedTarballDir = process.argv[2] ? resolve(process.argv[2]) : undefined;
+	const releaseTarballDir = suppliedTarballDir ?? tarballDir;
+	const releaseManifest = suppliedTarballDir
+		? JSON.parse(readFileSync(join(releaseTarballDir, "manifest.json"), "utf8"))
+		: packReleasePackages(releaseTarballDir, packageNames);
+	assert.deepEqual(
+		releaseManifest.entries.map((entry) => entry.name),
+		packageNames,
+		"release tarball manifest must contain all packages in publish order",
+	);
+	const tarballs = releaseManifest.entries.map((entry) => resolve(releaseTarballDir, entry.filename));
 
 	writeFileSync(
 		join(consumerDir, "package.json"),
@@ -161,6 +167,54 @@ try {
 		assert.equal(installedEntries.length, 1, `${name} was installed more than once or is missing`);
 		assert.match(installedEntries[0][1]?.resolved ?? "", /^file:/, `${name} did not resolve from a locally packed tarball`);
 	}
+	const piRunnerPath = join(consumerDir, "node_modules", "pi-taskflow", "dist", "runner.js");
+	const piRunner = await import(pathToFileURL(piRunnerPath).href);
+	const contextExtension = piRunner.ctxExtensionPath();
+	assert.equal(typeof contextExtension, "string", "packed pi-taskflow must resolve its Shared Context Tree extension");
+	assert.equal(
+		contextExtension,
+		realpathSync(join(consumerDir, "node_modules", "pi-taskflow", "dist", "index.js")),
+		"packed pi-taskflow must explicitly load dist/index.js under --no-extensions",
+	);
+	const fakePi = join(temporaryRoot, "fake-pi.mjs");
+	const fakePiCapture = join(temporaryRoot, "fake-pi-argv.json");
+	const sharedContextDir = join(temporaryRoot, "shared-context");
+	mkdirSync(sharedContextDir);
+	writeFileSync(
+		fakePi,
+		`#!${process.execPath}\n` +
+			`import fs from "node:fs";\n` +
+			`fs.writeFileSync(${JSON.stringify(fakePiCapture)}, JSON.stringify({argv:process.argv.slice(2),ctxDir:process.env.PI_TASKFLOW_CTX_DIR,nodeId:process.env.PI_TASKFLOW_NODE_ID}));\n` +
+			`const emit=value=>process.stdout.write(JSON.stringify(value)+"\\n");\n` +
+			`emit({type:"agent_start"}); emit({type:"turn_start"});\n` +
+			`emit({type:"message_end",message:{role:"assistant",content:[{type:"text",text:"PACKED_CTX_OK"}],stopReason:"stop"}});\n` +
+			`emit({type:"agent_end"});\n`,
+	);
+	chmodSync(fakePi, 0o755);
+	const previousPiBin = process.env.PI_TASKFLOW_PI_BIN;
+	try {
+		process.env.PI_TASKFLOW_PI_BIN = fakePi;
+		const packedPiResult = await piRunner.runAgentTask(
+			consumerDir,
+			[{ name: "packed", description: "packed", systemPrompt: "", source: "user", filePath: "" }],
+			"packed",
+			"shared context smoke",
+			{ ctxDir: sharedContextDir, nodeId: "root", idleTimeoutMs: 5_000 },
+			undefined,
+			{ resourceProfile: "isolated", extensions: [], terminalGraceMs: 50 },
+		);
+		assert.equal(packedPiResult.exitCode, 0, `packed Pi Shared Context run failed: ${packedPiResult.stderr}`);
+		assert.equal(packedPiResult.output, "PACKED_CTX_OK");
+		const captured = JSON.parse(readFileSync(fakePiCapture, "utf8"));
+		assert.equal(captured.ctxDir, sharedContextDir);
+		assert.equal(captured.nodeId, "root");
+		assert.ok(captured.argv.includes("--no-extensions"));
+		const extensionValues = captured.argv.flatMap((entry, index) => entry === "--extension" ? [captured.argv[index + 1]] : []);
+		assert.deepEqual(extensionValues, [contextExtension], "packed Shared Context must load only its installed dist extension");
+	} finally {
+		if (previousPiBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
+		else process.env.PI_TASKFLOW_PI_BIN = previousPiBin;
+	}
 
 	const publicImports = [
 		"taskflow-core",
@@ -192,6 +246,11 @@ try {
 	// when imported without its context-file argv; resolution proves it ships
 	// without executing that process entry in the smoke-test process.
 	consumerRequire.resolve("taskflow-core/detached-runner");
+	assert.throws(
+		() => consumerRequire.resolve("taskflow-core/resources/index"),
+		/PACKAGE_PATH_NOT_EXPORTED|not defined by "exports"/,
+		"unfinished Workspace Capability internals must not become a root-package compatibility promise",
+	);
 	for (const specifier of publicImports) await importFromConsumer(specifier);
 	const wildcardExports =
 		await smokeWildcardExports("taskflow-core", new Set(["taskflow-core/detached-runner"])) +

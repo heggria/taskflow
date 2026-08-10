@@ -27,11 +27,20 @@ export type PhaseRef<TJson = unknown> = {
 
 export type TemplateInput = string;
 
-export interface ArgSpec {
+export interface LegacyArgSpec {
+	type?: never;
 	default?: unknown;
 	description?: string;
 	required?: boolean;
 }
+
+export type ArgSpec =
+	| LegacyArgSpec
+	| { type: "string"; default?: string; description?: string; required?: boolean }
+	| { type: "relative-path"; default?: string; description?: string; required?: boolean }
+	| { type: "number"; default?: number; minimum?: number; maximum?: number; description?: string; required?: boolean }
+	| { type: "boolean"; default?: boolean; description?: string; required?: boolean }
+	| { type: "enum"; values: Array<string | number>; default?: string | number; description?: string; required?: boolean };
 
 export interface FlowOptions {
 	description?: string;

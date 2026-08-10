@@ -31,7 +31,7 @@ globally, and the plugin version binds the exact code that runs. Verify:
 
 ```sh
 codex plugin list   # → taskflow@taskflow  installed, enabled
-codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.0 codex-taskflow-mcp)
+codex mcp list      # → taskflow … enabled  (npx -y -p codex-taskflow@0.2.1 codex-taskflow-mcp)
 ```
 
 The bundled skill tells Codex *when* to reach for the tools (multi-phase or
@@ -65,7 +65,7 @@ To stop large flows from being cut off, the plugin's `.mcp.json` ships a
   "mcpServers": {
     "taskflow": {
       "command": "npx",
-      "args": ["-y", "-p", "codex-taskflow@0.2.0", "codex-taskflow-mcp"],
+      "args": ["-y", "-p", "codex-taskflow@0.2.1", "codex-taskflow-mcp"],
       "tool_timeout_sec": 1800
     }
   }
@@ -135,6 +135,7 @@ subagent a flow spawns is itself a `codex exec` process — no pi process needed
 | `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
 | `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
 | `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
+| `taskflow_reconcile_workspace` | After inspecting or repairing a failed resolve-only invocation workspace, explicitly accept its current state and advance its generation. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; does not restore files. |
 
 ## How output is rendered (Codex desktop app)
 

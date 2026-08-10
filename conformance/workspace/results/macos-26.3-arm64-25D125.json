@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "probeVersion": "tfws-probe:v1",
+  "results": [
+    {
+      "target": {
+        "host": "pi",
+        "hostVersion": "0.80.6",
+        "hostBinarySha256": "af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "pass": false,
+        "checks": {
+          "exactCwd": false,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "ambientUserDataDenied": false,
+          "privateTempEnforced": false,
+          "descendantEnforcement": false,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": false,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "script": {
+        "pass": false,
+        "checks": {
+          "exactCwd": true,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": true,
+          "writeInsideReadWrite": true,
+          "siblingScopeDenied": true,
+          "outsideScopeDenied": true,
+          "symlinkEscapeDenied": true,
+          "ambientUserDataDenied": true,
+          "privateTempEnforced": true,
+          "descendantEnforcement": true,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": true,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "fileBroker": {
+        "pass": false,
+        "checks": {
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "brokeredReadNoFollow": false,
+          "brokeredWriteNoFollow": false,
+          "fingerprintNoFollow": false,
+          "resolverOpenPathSwapDenied": false,
+          "abortCleanup": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      }
+    },
+    {
+      "target": {
+        "host": "codex",
+        "hostVersion": "codex-cli 0.144.0-alpha.4",
+        "hostBinarySha256": "fba7b05624324ce44777b174fe6da1bcf08ef8cba634d85ecfaacbd8fa49aa8d",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "pass": false,
+        "checks": {
+          "exactCwd": false,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "ambientUserDataDenied": false,
+          "privateTempEnforced": false,
+          "descendantEnforcement": false,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": false,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "script": {
+        "pass": false,
+        "checks": {
+          "exactCwd": true,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": true,
+          "writeInsideReadWrite": true,
+          "siblingScopeDenied": true,
+          "outsideScopeDenied": true,
+          "symlinkEscapeDenied": true,
+          "ambientUserDataDenied": true,
+          "privateTempEnforced": true,
+          "descendantEnforcement": true,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": true,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "fileBroker": {
+        "pass": false,
+        "checks": {
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "brokeredReadNoFollow": false,
+          "brokeredWriteNoFollow": false,
+          "fingerprintNoFollow": false,
+          "resolverOpenPathSwapDenied": false,
+          "abortCleanup": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      }
+    },
+    {
+      "target": {
+        "host": "opencode",
+        "hostVersion": "1.17.13",
+        "hostBinarySha256": "5124dfe29f6b4552a71a00d1b60427229c58576cb3e2bff5c884cd7c12d66bdb",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "pass": false,
+        "checks": {
+          "exactCwd": false,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "ambientUserDataDenied": false,
+          "privateTempEnforced": false,
+          "descendantEnforcement": false,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": false,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "script": {
+        "pass": false,
+        "checks": {
+          "exactCwd": true,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": true,
+          "writeInsideReadWrite": true,
+          "siblingScopeDenied": true,
+          "outsideScopeDenied": true,
+          "symlinkEscapeDenied": true,
+          "ambientUserDataDenied": true,
+          "privateTempEnforced": true,
+          "descendantEnforcement": true,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": true,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "fileBroker": {
+        "pass": false,
+        "checks": {
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "brokeredReadNoFollow": false,
+          "brokeredWriteNoFollow": false,
+          "fingerprintNoFollow": false,
+          "resolverOpenPathSwapDenied": false,
+          "abortCleanup": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      }
+    },
+    {
+      "target": {
+        "host": "grok",
+        "hostVersion": "grok 0.2.99 (b1b49ccb71a7)",
+        "hostBinarySha256": "01bcacec12e7c2a164d23975f1595400ff7f3cbd74f50b1858f6a5a14eb9ff81",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "pass": false,
+        "checks": {
+          "exactCwd": false,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "ambientUserDataDenied": false,
+          "privateTempEnforced": false,
+          "descendantEnforcement": false,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": false,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "script": {
+        "pass": false,
+        "checks": {
+          "exactCwd": true,
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": true,
+          "writeInsideReadWrite": true,
+          "siblingScopeDenied": true,
+          "outsideScopeDenied": true,
+          "symlinkEscapeDenied": true,
+          "ambientUserDataDenied": true,
+          "privateTempEnforced": true,
+          "descendantEnforcement": true,
+          "abortDescendantCleanup": false,
+          "networkPolicyEnforced": false,
+          "credentialIsolationEnforced": false,
+          "baselineRuntimeUsable": true,
+          "resolverOpenPathSwapDenied": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      },
+      "fileBroker": {
+        "pass": false,
+        "checks": {
+          "readInsideReadOnly": false,
+          "writeInsideReadOnlyDenied": false,
+          "readInsideReadWrite": false,
+          "writeInsideReadWrite": false,
+          "siblingScopeDenied": false,
+          "outsideScopeDenied": false,
+          "symlinkEscapeDenied": false,
+          "brokeredReadNoFollow": false,
+          "brokeredWriteNoFollow": false,
+          "fingerprintNoFollow": false,
+          "resolverOpenPathSwapDenied": false,
+          "abortCleanup": false,
+          "exactMetadataNoFollow": false,
+          "unsupportedPolicyFailsClosed": false
+        }
+      }
+    }
+  ]
+}

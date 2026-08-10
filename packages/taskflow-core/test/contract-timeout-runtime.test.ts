@@ -310,6 +310,32 @@ test("timeout: a fast subagent under the cap is unaffected", async () => {
 	assert.equal(res.finalOutput, "done");
 });
 
+test("timeout: terminal commit linearizes before the phase timer in imperative and event-kernel paths", async () => {
+	for (const eventKernel of [false, true]) {
+		let aborts = 0;
+		const runner: RuntimeDeps["runTask"] = (_c, _a, agent, task, opts) =>
+			new Promise<RunResult>((resolve) => {
+				opts.signal?.addEventListener("abort", () => { aborts++; }, { once: true });
+				setTimeout(() => {
+					opts.onTerminalCommit?.();
+					setTimeout(() => resolve(ok(agent, task, "committed")), 1100);
+				}, 100);
+			});
+		const def: Taskflow = {
+			name: `terminal-before-timeout-${eventKernel}`,
+			phases: [{ id: "p", type: "agent", agent: "a", task: "finish", timeout: 1000, final: true }],
+		};
+		const res = await executeTaskflow(mkState(def), {
+			...baseDeps(runner),
+			eventKernel,
+		});
+		assert.equal(res.ok, true, `eventKernel=${eventKernel}`);
+		assert.equal(res.state.phases.p.timedOut, undefined, `eventKernel=${eventKernel}`);
+		assert.equal(res.finalOutput, "committed");
+		assert.equal(aborts, 0, `eventKernel=${eventKernel}: timeout must not abort after commit`);
+	}
+});
+
 test("timeout: downstream `when` can route on the timed-out phase", async () => {
 	const hangingRunner: RuntimeDeps["runTask"] = (_c, _a, agent, task, opts: RunOptions) => {
 		if (task.includes("hang")) {

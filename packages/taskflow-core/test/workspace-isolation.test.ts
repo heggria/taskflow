@@ -103,6 +103,34 @@ test("workspace isolation: a non-keyword cwd is passed through unchanged (back-c
 	}
 });
 
+test("workspace isolation: relative context files stay anchored to the invocation root", async () => {
+	const cwd = await tmpCwd();
+	const literal = path.join(cwd, "literal");
+	fs.mkdirSync(literal);
+	fs.writeFileSync(path.join(cwd, "ctx.txt"), "INVOCATION_ROOT_CONTEXT");
+	const seenTasks: string[] = [];
+	try {
+		const runTask: RuntimeDeps["runTask"] = async (_c, _a, agentName, task) => {
+			seenTasks.push(task);
+			return ok(agentName, task, "done");
+		};
+		const def: Taskflow = {
+			name: "ws-context-root",
+			phases: [
+				{ id: "temp", type: "agent", agent: "a", cwd: "temp", context: ["ctx.txt"], task: "temp" },
+				{ id: "dedicated", type: "agent", agent: "a", cwd: "dedicated", context: ["ctx.txt"], task: "dedicated", dependsOn: ["temp"] },
+				{ id: "literal", type: "agent", agent: "a", cwd: "literal", context: ["ctx.txt"], task: "literal", dependsOn: ["dedicated"], final: true },
+			],
+		};
+		const res = await executeTaskflow(mkState(def, cwd), { cwd, agents: AGENTS, runTask, persist: () => {} });
+		assert.equal(res.ok, true);
+		assert.equal(seenTasks.length, 3);
+		for (const task of seenTasks) assert.match(task, /INVOCATION_ROOT_CONTEXT/);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("workspace isolation: reserved keyword in a DYNAMIC (LLM-authored) flow is rejected", () => {
 	const dyn: Taskflow = {
 		name: "evil",
@@ -110,7 +138,7 @@ test("workspace isolation: reserved keyword in a DYNAMIC (LLM-authored) flow is 
 	};
 	const v = validateTaskflow(dyn, { dynamic: true, cwd: "/tmp/run" });
 	assert.equal(v.ok, false);
-	assert.ok(v.errors.some((e) => /reserved workspace keyword/i.test(e)), `errors: ${v.errors.join("; ")}`);
+	assert.ok(v.errors.some((e) => /cwd selection is not allowed/i.test(e)), `errors: ${v.errors.join("; ")}`);
 
 	// But the same flow is accepted when author-written (non-dynamic).
 	const ok2 = validateTaskflow(dyn);

@@ -35,7 +35,7 @@ Verify:
 
 ```sh
 claude plugin list   # → claude-taskflow@taskflow  installed, enabled
-claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.2.0 claude-taskflow-mcp)
+claude mcp list      # → taskflow … (npx -y -p claude-taskflow@0.2.1 claude-taskflow-mcp)
 ```
 
 The bundled skill tells Claude Code *when* to reach for the tools (multi-phase
@@ -125,6 +125,7 @@ subagent a flow spawns is itself a `claude -p` process — no pi process needed.
 | `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
 | `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
 | `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
+| `taskflow_reconcile_workspace` | After inspecting or repairing a failed resolve-only invocation workspace, explicitly accept its current state and advance its generation. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; does not restore files. |
 
 ## How output is rendered
 

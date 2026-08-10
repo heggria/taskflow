@@ -35,6 +35,7 @@ export interface InterpolationContext {
 }
 
 const PLACEHOLDER = /\{([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\}/g;
+const EXACT_PLACEHOLDER = /^\{([a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*)\}$/;
 
 export interface InterpolationResult {
 	text: string;
@@ -57,6 +58,19 @@ export function interpolate(
 	});
 
 	return { text, missing };
+}
+
+/** Resolve a structured field without stringifying an exact placeholder.
+ * This lets flow.with preserve typed args and steps.*.json values, while mixed
+ * templates keep the historical string interpolation behavior. */
+export function interpolateValue(value: unknown, ctx: InterpolationContext): unknown {
+	if (typeof value !== "string") return value;
+	const exact = value.match(EXACT_PLACEHOLDER);
+	if (exact) {
+		const resolved = resolvePath(exact[1], ctx);
+		return resolved === undefined ? value : resolved;
+	}
+	return interpolate(value, ctx).text;
 }
 
 /** Resolve + record an observed read (M3 observed-readSet). Fires only on

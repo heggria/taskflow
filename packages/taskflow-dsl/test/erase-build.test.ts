@@ -5,13 +5,19 @@ import { test } from "node:test";
 import { buildSource } from "../src/build.ts";
 import { checkFile, checkSource } from "../src/check.ts";
 import { decompileTaskflow } from "../src/decompile.ts";
-import { flow, agent, TfDslEraseOnlyError } from "../src/index.ts";
+import { flow, agent, TfDslEraseOnlyError, type ArgSpec } from "../src/index.ts";
 import { compileTaskflowToFlowIR, hashFlowIR, validateTaskflow } from "taskflow-core";
 
 test("runes throw TFDSL_ERASE_ONLY at runtime", () => {
 	assert.throws(() => flow("x", () => agent("hi")), (e: unknown) => {
 		return e instanceof TfDslEraseOnlyError || (e instanceof Error && e.message.includes("TFDSL_ERASE_ONLY"));
 	});
+});
+
+test("ArgSpec is a discriminated union at compile time", () => {
+	// @ts-expect-error number args cannot declare a string default
+	const bad: ArgSpec = { type: "number", default: "not-a-number" };
+	assert.equal(typeof bad, "object");
 });
 
 test("build: hello agent", () => {
@@ -26,6 +32,36 @@ export default flow("hello", () => agent("Say hello to {args.name}"));
 	assert.equal(r.taskflow?.phases?.[0]?.type, "agent");
 	assert.match(String(r.taskflow?.phases?.[0]?.task), /Say hello/);
 	assert.ok(r.irHash?.startsWith("ir:"));
+});
+
+test("build: typed relative-path arg and exact cwd bridge survive DSL + FlowIR", () => {
+	const src = `
+import { flow, agent } from "taskflow-dsl";
+export default flow("workspace-review", (ctx) => {
+  ctx.args.declare({ package: { type: "relative-path", required: true } });
+  return agent("Review this package", { cwd: "{args.package}" });
+});
+`;
+	const r = buildSource(src, "workspace-review.tf.ts", { irHash: true });
+	assert.equal(r.ok, true, format(r));
+	assert.deepEqual(r.taskflow?.args?.package, { type: "relative-path", required: true });
+	assert.equal(r.taskflow?.phases[0]?.cwd, "{args.package}");
+	const validation = validateTaskflow(r.taskflow);
+	assert.equal(validation.ok, true, validation.errors.join("; "));
+	const ir = compileTaskflowToFlowIR(r.taskflow!);
+	assert.deepEqual(ir.canonical.nodes[0]?.payload?.cwdUse, {
+		kind: "invocation-relative-arg",
+		arg: "package",
+		access: "read-write",
+		intent: "existing-directory",
+	});
+	assert.match(r.irHash ?? "", /^ir:[0-9a-f]{64}$/);
+	const sourceAgain = decompileTaskflow(r.taskflow!);
+	assert.match(sourceAgain, /"type":\s*"relative-path"/);
+	assert.match(sourceAgain, /cwd:\s*"\{args\.package\}"/);
+	const rebuilt = buildSource(sourceAgain, "workspace-review-roundtrip.tf.ts");
+	assert.equal(rebuilt.ok, true, format(rebuilt));
+	assert.deepEqual(rebuilt.taskflow, r.taskflow);
 });
 
 test("build: agent map reduce chain + templates", () => {

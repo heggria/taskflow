@@ -19,6 +19,7 @@ import {
 	opencodeUnsafeAutoEnabled,
 	isReadOnlyPhase,
 	resolveOpencodeModel,
+	resolveOpencodeThinking,
 	type OpencodeArgsCtx,
 } from "../src/opencode-runner.ts";
 
@@ -152,6 +153,17 @@ test("opencode argv: model passed via `-m <provider/model>` only when resolvable
 		buildOpencodeArgs({ ...baseCtx, model: "anthropic/glm-5.2:xhigh" }).args.indexOf("-m"),
 		-1,
 	);
+});
+
+test("opencode argv: thinking is passed via provider-specific --variant", () => {
+	const high = buildOpencodeArgs({ ...baseCtx, thinking: "high" }).args;
+	assert.equal(high[high.indexOf("--variant") + 1], "high");
+	const off = buildOpencodeArgs({ ...baseCtx, thinking: "off" }).args;
+	assert.equal(off[off.indexOf("--variant") + 1], "none");
+	const ultra = buildOpencodeArgs({ ...baseCtx, thinking: "ultra" }).args;
+	assert.equal(ultra[ultra.indexOf("--variant") + 1], "max");
+	assert.equal(buildOpencodeArgs({ ...baseCtx }).args.indexOf("--variant"), -1);
+	assert.throws(() => resolveOpencodeThinking("bogus"), /Unsupported OpenCode thinking level/);
 });
 
 test("opencode argv: system prompt is prepended into the prompt (no --append-system-prompt flag)", () => {

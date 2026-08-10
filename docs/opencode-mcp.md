@@ -101,6 +101,10 @@ only ids that clearly aren't OpenCode models: an unresolved role placeholder
 path (`openrouter/vendor/model`, ≥ 2 slashes). A dropped id falls back to
 OpenCode's configured default model.
 
+Effective Taskflow thinking is passed as OpenCode's provider/model-specific
+`--variant`; `off` maps to `none` and `ultra` maps to `max`. Other levels are
+best-effort because available variants differ by provider and model.
+
 ## Tools exposed
 
 | Tool | What it does |
@@ -117,6 +121,7 @@ OpenCode's configured default model.
 | `taskflow_replay` | Offline what-if on a recorded trace: re-judge thresholds/budget/models **without calling the model** (zero tokens). |
 | `taskflow_why_stale` | Explain observed/declared dependency staleness for a run (optional seed `phaseId`). Zero tokens. |
 | `taskflow_recompute` | Report the stale frontier for a seed phase (**dry-run only** over MCP — never spends tokens). |
+| `taskflow_reconcile_workspace` | After inspecting or repairing a failed resolve-only invocation workspace, explicitly accept its current state and advance its generation. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; does not restore files. |
 
 ## Use it
 

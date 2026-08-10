@@ -1,6 +1,6 @@
 {
   "name": "pi-taskflow-monorepo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Monorepo for taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, and the documentation website.",
   "type": "module",
@@ -22,6 +22,8 @@
     "test:opencode": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/opencode-taskflow/test/*.test.ts'",
     "test:grok": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/grok-taskflow/test/*.test.ts'",
     "test:dsl": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/taskflow-dsl/test/*.test.ts'",
+    "test:workspace-baseline": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test packages/taskflow-core/test/workspace-baseline.test.ts",
+    "probe:workspace-hosts": "node scripts/workspace-probes/run.mjs",
     "test:e2e-codex": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts",
     "test:e2e-codex-mcp": "node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex-mcp.mts",
     "test:e2e-codex-mcp-full": "pnpm run build && node --experimental-strip-types packages/codex-taskflow/test/e2e-mcp-comprehensive.mts",
@@ -30,7 +32,8 @@
     "test:e2e-opencode": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode.mts",
     "test:e2e-opencode-mcp": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode-mcp.mts",
     "test:e2e-grok": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok.mts",
-    "test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts"
+    "test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts",
+    "test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts"
   },
   "devDependencies": {
     "@earendil-works/pi-agent-core": "^0.80.3",
