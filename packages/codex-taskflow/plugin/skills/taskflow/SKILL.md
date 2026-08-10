@@ -27,6 +27,7 @@ the Codex form (`taskflow_verify`).
 | `taskflow_trace` | Read a run's append-only event timeline. |
 | `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
 | `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
+| `taskflow_why_effect` | Explain why a declared effect is authorized, from the durable resource-intent ledger (`runId` + `effectId`, optional `phaseId`; `json: true` for the full record). Declaration alone is not authorization — zero tokens, read-only. |
 | `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
 | `taskflow_reconcile_workspace` | After inspection/repair, accept a failed resolve-only workspace. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; never restores files. |
 | `taskflow_save` | Save a reusable flow and optional library metadata. |
@@ -213,6 +214,7 @@ back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 | `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/race/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow/expand. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
 | `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with per-path diagnostics (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
 | `idempotent` | side-effect classification. Default `true` (safe to cache + auto-retry). Set `false` on phases with **irreversible side effects** (webhook POSTs, deploys, DB writes, file mutations): transient provider errors are **not** auto-retried (an explicit `retry{}` IS still honored — it's your declaration that repeats are acceptable) and the result is **never cached** in any scope (within-run resume, cross-run, `incremental` — the phase re-runs every time). The phase state records `sideEffect: true` (rendered as ⚡). |
+| `effects` | **[0.3 Trusted Effects]** declared side-effect bag for this phase — typed `fs.read` / `fs.write` / `fs.delete` / `secret.read` / `service.call` declarations with PathRef/SecretRef/ServiceRef targets and optional confidentiality/integrity labels. See **Trusted Effects** below. |
 | `optional` | fail-soft — a failed/blocked phase won't abort the run; downstream sees empty output. Pair with a fallback phase guarded by `when`. |
 | `cache` | per-phase reuse policy (`run-only` default / `cross-run` / `off`). See `configuration.md` §8. |
 
@@ -488,6 +490,82 @@ output is exact.
 { "id": "score", "type": "script", "run": ["python", "score.py"],
   "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
 ```
+
+### Trusted Effects (`effects[]` — declared side effects, 0.3)
+
+> **One-line authority: the model proposes content; the resources runtime is
+> the only commit authority.** A phase declares *what* it intends to touch;
+> for admitted declared `fs.write` targets the runtime runs the
+> resource-controlled **file transaction** — durable snapshot → persistent
+> lease → journal intent/permit → stage → **Commit** or **Restore+Reject** —
+> and no other code finalizes declared content.
+
+Trusted Effects (0.3 MVP) adds an optional `effects[]` bag to **any** phase: a
+closed vocabulary of typed side-effect declarations. `verify` / `compile`
+statically check the bag (unknown kinds, malformed targets, and illegal
+label flows surface as `[effects]` issues), and a run admits every declared
+target through PathRef resolution — lease, durable intent, mutation permit —
+**before** the phase body executes. Start from the runnable example
+**`examples/trusted-effects-write.json`** (a `script` phase that declares one
+`fs.write` and commits it via the resource transaction — no LLM involved).
+
+Each effect:
+
+| field | meaning |
+|-------|---------|
+| `id` | stable id within the flow — the handle the why-* audit explains |
+| `kind` | `fs.read` · `fs.write` · `fs.delete` · `secret.read` · `service.call` |
+| `target` | `{ kind: "path", path: <PathRef> }`, or the `secret` / `service` handle shapes |
+| `confidentiality` | optional label `public` · `internal` · `secret` — a higher label must not flow to a lower sink |
+| `integrity` | optional label `untrusted` · `project` · `verified` — lower integrity must not overwrite higher |
+| `purpose` | free-text note surfaced by the why-* explainers (**not** authority) |
+
+**PathRef shape** — the FS target, always relative to a workspace scope:
+
+```jsonc
+"target": {
+  "kind": "path",
+  "path": {
+    "workspace": "project",                       // scope the path resolves in
+    "subpath": { "literalPath": "out/report.md" }, // or { "argPath": "out" } / { "segments": [ { "segment": "out" } ] }
+    "intent": "create-file"   // create-file | create-directory | existing-file | existing-directory | executable
+  }
+}
+```
+
+**Phase output is the payload.** With one declared `fs.write`, the phase's
+output becomes the staged file content (see the example: `process.stdout.write`
+= the report). With several `fs.write` effects, the phase must emit JSON
+mapping each effect id to its content (`{ "report": "…", "backup": "…" }`).
+Commit promotes each file atomically; a later failure restores every admitted
+file to its durable pre-state, and a direct write by the agent/script to a
+**declared final path** is detected and restored — only the resource
+transaction may finalize declared content.
+
+**Only `fs.write` has a bound runtime backend in this cut.** The other kinds
+are valid to declare and verify, but fail **closed** (no bound resource
+backend): `fs.delete` is not supported by the file transaction, and
+`secret.read` / `service.call` have no vault/network adapters in 0.3 — do not
+author a flow expecting them to do anything yet.
+
+**Audit with `taskflow_why_effect` (zero tokens, read-only).** Pass `runId` +
+`effectId` (add `phaseId` to disambiguate a repeated id; `json: true` for the
+full record) to explain a declared effect's authorization and lifecycle from
+the durable resource-intent ledger — principal, capability binding, intent id,
+journal status, and lifecycle (`declared` / `staged` / `committed` /
+`rejected` / `unknown`). **Declaration alone is not authorization**: if no
+durable intent admitted the effect for this run/phase, `authorized.allowed` is
+`false` (fail-closed).
+
+**What this is NOT (honesty baseline):**
+
+- **No FileBroker sandbox.** Every host's PathRef support is *resolve-only*;
+  this is not an OS sandbox, and no host claims a FileBroker guarantee.
+- **Undeclared paths are not protected.** Only writes to *declared* final
+  targets are detected and restored; writes outside the declared set remain
+  host-policy dependent.
+- **`secret.read` / `service.call` are type-only fail-closed** (see above) —
+  valid declarations, no backend in the MVP.
 
 ### Race phases (first success wins)
 
