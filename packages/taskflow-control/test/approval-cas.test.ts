@@ -74,23 +74,42 @@ test("dual-client approval CAS: stale expectedRunVersion loses (sequential)", as
 		assert.equal(stale.ok, false);
 		assert.equal(stale.error?.code, "TF_STALE_VERSION");
 
-		const fresh = await b.approve(runId, { expectedRunVersion: vParked });
-		assert.equal(fresh.ok, true, JSON.stringify(fresh.error));
-		assert.equal(fresh.run?.status, "completed");
-		assert.ok(fresh.receipt);
+		const winningRequest = {
+			commandId: "approve-winning-command",
+			principal: "alice",
+			expectedRunVersion: vParked,
+		};
+		const fresh = await b.approve(runId, winningRequest);
+		assert.equal(fresh.ok, false);
+		assert.equal(fresh.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(fresh.run?.status, "unknown");
+		assert.equal(fresh.run?.stage, "reconciling");
+		assert.equal(fresh.receipt, undefined);
 
-		const again = await a.approve(runId, { expectedRunVersion: vParked });
+		assert.equal(b.store.getCommand("approve-winning-command")?.status, "accepted");
+		const retry = await a.approve(runId, winningRequest);
+		assert.equal(retry.ok, false);
+		assert.equal(retry.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(retry.run?.runVersion, fresh.run?.runVersion);
+		const crossPrincipal = await a.approve(runId, { ...winningRequest, principal: "bob" });
+		assert.equal(crossPrincipal.ok, false);
+		assert.equal(crossPrincipal.error?.code, "TF_CROSS_PRINCIPAL_COMMAND");
+
+		const again = await a.approve(runId, {
+			commandId: "approve-losing-command",
+			expectedRunVersion: vParked,
+		});
 		assert.equal(again.ok, false);
 		assert.ok(
 			again.error?.code === "TF_STALE_VERSION" || again.error?.code === "TF_INVALID_ARGUMENT",
 		);
 
-		// Exactly one Receipt on durable store
+		// Approval is not provider completion: no Receipt exists yet.
 		const receiptsDir = path.join(t.project, ".taskflow", "control", "receipts");
 		const receiptFiles = fs
 			.readdirSync(receiptsDir)
 			.filter((f) => f.endsWith(".json") && !f.startsWith("by-run-"));
-		assert.equal(receiptFiles.length, 1, `expected 1 receipt file, got ${receiptFiles.join(",")}`);
+		assert.equal(receiptFiles.length, 0, `expected no receipt file, got ${receiptFiles.join(",")}`);
 
 		a.close();
 		b.close();
@@ -123,6 +142,84 @@ test("approve requires paused AND parked (not OR)", async () => {
 	}
 });
 
+test("approve coordinator commit failure stays accepted and enters recoverable saga", async () => {
+	const t = temp();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({ program: SCRIPT_FLOW });
+		provider.quiesceAll?.();
+		const parked = await host.parkForApproval(admitted.run!.runId, {
+			expectedRunVersion: host.getSnapshot(admitted.run!.runId)!.run.runVersion,
+		});
+		assert.equal(parked.ok, true, JSON.stringify(parked.error));
+
+		host.coordinator.commitReservation = () => {
+			throw new Error("injected coordinator commit failure");
+		};
+		const result = await host.approve(admitted.run!.runId, {
+			commandId: "approve-coordinator-failure",
+			principal: "alice",
+			expectedRunVersion: parked.run!.runVersion,
+		});
+		assert.equal(result.ok, false);
+		assert.equal(result.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.match(result.error?.message ?? "", /injected coordinator commit failure/);
+		assert.equal(result.run?.status, "unknown");
+		assert.equal(result.run?.stage, "reconciling");
+		assert.equal(result.run?.needsOperator, true);
+		assert.equal(host.store.getCommand("approve-coordinator-failure")?.status, "accepted");
+		assert.equal(host.store.getReceiptForRun(admitted.run!.runId), null);
+		assert.equal(
+			host.coordinator.getReservation(result.run!.reservationId!)?.state,
+			"orphan-suspect",
+		);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("park release failure retains reservation binding and needs operator", async () => {
+	const t = temp();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const host = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await host.admitAndRun({ program: SCRIPT_FLOW });
+		const reservationId = admitted.run!.reservationId!;
+		provider.quiesceAll?.();
+		host.coordinator.normalRelease = () => {
+			throw new Error("injected release failure");
+		};
+		const result = await host.parkForApproval(admitted.run!.runId, {
+			expectedRunVersion: host.getSnapshot(admitted.run!.runId)!.run.runVersion,
+		});
+		assert.equal(result.ok, false);
+		assert.equal(result.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(result.run?.status, "paused");
+		assert.equal(result.run?.stage, "parked");
+		assert.equal(result.run?.reservationId, reservationId);
+		assert.equal(result.run?.needsOperator, true);
+		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
 test("cancel CAS: stale version rejected", async () => {
 	const t = temp();
 	try {
@@ -140,12 +237,104 @@ test("cancel CAS: stale version rejected", async () => {
 		const bad = await host.cancel(runId, { expectedRunVersion: v - 1 });
 		assert.equal(bad.ok, false);
 		assert.equal(bad.error?.code, "TF_STALE_VERSION");
-		const ok = await host.cancel(runId, {
+		const winningRequest = {
+			commandId: "cancel-winning-command",
+			principal: "alice",
 			expectedRunVersion: host.getSnapshot(runId)!.run.runVersion,
-		});
+		};
+		const ok = await host.cancel(runId, winningRequest);
 		assert.equal(ok.ok, true);
 		assert.equal(ok.run?.status, "cancelled");
+		assert.equal(host.store.getCommand("cancel-winning-command")?.status, "completed");
+		const retry = await host.cancel(runId, winningRequest);
+		assert.equal(retry.ok, true);
+		assert.equal(retry.run?.runVersion, ok.run?.runVersion);
 		host.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("cancel without a recoverable provider handle stays unknown and holds capacity", async () => {
+	const t = temp();
+	try {
+		const first = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider({ outcome: "hang" }),
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await first.admitAndRun({ program: SCRIPT_FLOW });
+		const runId = admitted.run!.runId;
+		const reservationId = admitted.run!.reservationId!;
+		first.close();
+
+		// New host has durable Run state but no process-local provider handle.
+		const reopened = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider({ outcome: "completed" }),
+		});
+		const cancelled = await reopened.cancel(runId, {
+			commandId: "cancel-missing-handle",
+			expectedRunVersion: reopened.getSnapshot(runId)!.run.runVersion,
+		});
+		assert.equal(cancelled.ok, false);
+		assert.equal(cancelled.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(cancelled.run?.status, "unknown");
+		assert.equal(cancelled.run?.stage, "reconciling");
+		assert.equal(cancelled.run?.needsOperator, true);
+		assert.equal(reopened.coordinator.getReservation(reservationId)?.state, "orphan-suspect");
+		assert.equal(reopened.coordinator.occupyingCount(), 1);
+		assert.equal(reopened.store.getReceiptForRun(runId), null);
+		assert.equal(reopened.store.getCommand("cancel-missing-handle")?.status, "accepted");
+		reopened.close();
+	} finally {
+		t.cleanup();
+	}
+});
+
+test("cancel may settle a reopened paused+parked run using durable quiescence proof", async () => {
+	const t = temp();
+	try {
+		const provider = createMockExecutionProvider({ outcome: "hang" });
+		const first = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider,
+			reconcileBudget: { maxAttempts: 1, deadlineMs: 5 },
+		});
+		const admitted = await first.admitAndRun({ program: SCRIPT_FLOW });
+		const runId = admitted.run!.runId;
+		provider.quiesceAll?.();
+		const parked = await first.parkForApproval(runId, {
+			expectedRunVersion: first.getSnapshot(runId)!.run.runVersion,
+		});
+		assert.equal(parked.run?.stage, "parked");
+		first.close();
+
+		const reopened = createControlHost({
+			projectRoot: t.project,
+			env: t.env,
+			skipSingleton: true,
+			controlMode: "standalone",
+			provider: createMockExecutionProvider({ outcome: "completed" }),
+		});
+		const cancelled = await reopened.cancel(runId, {
+			commandId: "cancel-parked",
+			expectedRunVersion: reopened.getSnapshot(runId)!.run.runVersion,
+		});
+		assert.equal(cancelled.ok, true, JSON.stringify(cancelled.error));
+		assert.equal(cancelled.run?.status, "cancelled");
+		assert.equal(cancelled.run?.stage, "terminal");
+		assert.equal(reopened.store.getCommand("cancel-parked")?.status, "completed");
+		reopened.close();
 	} finally {
 		t.cleanup();
 	}
@@ -153,9 +342,9 @@ test("cancel CAS: stale version rejected", async () => {
 
 /**
  * True-parallel dual-client approve: N children share the same expectedRunVersion,
- * barrier-release together, exactly one winner issues Receipt.
+ * barrier-release together, exactly one winner re-queues without a Receipt.
  */
-test("multi-process parallel approve CAS: exactly one winner, no double Receipt", async () => {
+test("multi-process parallel approve CAS: one accepted saga, no fake success or Receipt", async () => {
 	const t = temp();
 	try {
 		const provider = createMockExecutionProvider({ outcome: "hang" });
@@ -181,10 +370,13 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 		const coord = openUserCoordinatorStore(t.env, {
 			baseDir: projectCoordinatorDir(t.project),
 		});
-		coord.setMaxActiveRuns(N + 2, {
+		coord.setMaxActiveRuns({
+			value: N + 2,
+			expectedMaxActiveRuns: 4,
+			expectedCoordinatorEpoch: 0,
+		}, {
 			commandId: "mp-cas-cap",
 			callerPrincipal: "op",
-			requestBody: { maxActiveRuns: N + 2 },
 		});
 
 		const barrierDir = fs.mkdtempSync(path.join(os.tmpdir(), "tf-cas-barrier-"));
@@ -254,42 +446,40 @@ test("multi-process parallel approve CAS: exactly one winner, no double Receipt"
 				code: string | null;
 				receiptId: string | null;
 				status: string | null;
+				stage: string | null;
 			};
 		});
 
-		const winners = parsed.filter((p) => p.ok === true);
-		const losers = parsed.filter((p) => p.ok === false);
-		assert.equal(winners.length, 1, `expected exactly 1 winner, got ${winners.length}: ${JSON.stringify(parsed)}`);
-		assert.equal(losers.length, N - 1);
-		assert.ok(winners[0]!.receiptId, "winner must issue Receipt");
-		assert.equal(winners[0]!.status, "completed");
-		for (const l of losers) {
-			// Concurrent losers: STALE_VERSION (preferred) or INVALID once terminal/Receipt
-			// is already durable under the exclusive lock.
-			assert.ok(
-				l.code === "TF_STALE_VERSION" || l.code === "TF_INVALID_ARGUMENT",
-				`loser code=${l.code} full=${JSON.stringify(parsed)}`,
-			);
-			assert.equal(l.receiptId, null);
-		}
-		// Exactly one distinct receipt id among all children
-		const winnerReceipts = new Set(winners.map((w) => w.receiptId).filter(Boolean));
-		assert.equal(winnerReceipts.size, 1);
+		assert.equal(parsed.filter((p) => p.ok === true).length, 0);
+		const accepted = parsed.filter((p) => p.code === "TF_RECONCILE_REQUIRED");
+		const stale = parsed.filter((p) => p.code === "TF_STALE_VERSION");
+		assert.ok(accepted.length >= 1, JSON.stringify(parsed));
+		assert.equal(accepted.length + stale.length, N, JSON.stringify(parsed));
+		assert.equal(accepted[0]!.receiptId, null);
+		assert.equal(accepted[0]!.status, "unknown");
+		assert.equal(accepted[0]!.stage, "reconciling");
+		for (const result of parsed) assert.equal(result.receiptId, null);
+		const approveCommands = fs
+			.readdirSync(path.join(t.project, ".taskflow", "control", "commands"))
+			.filter((file) => file.endsWith(".json") && !file.startsWith("by-cmd-"))
+			.map((file) => JSON.parse(fs.readFileSync(
+				path.join(t.project, ".taskflow", "control", "commands", file),
+				"utf8",
+			)) as { kind?: string; status?: string })
+			.filter((command) => command.kind === "approve" && command.status === "accepted");
+		assert.equal(approveCommands.length, 1, "exactly one approve command may win durable CAS");
 
-		// Durable store: exactly one Receipt artifact
+		// Durable store: approval alone never creates a Receipt artifact.
 		const receiptsDir = path.join(t.project, ".taskflow", "control", "receipts");
 		const receiptFiles = fs
 			.readdirSync(receiptsDir)
 			.filter((f) => f.endsWith(".json") && !f.startsWith("by-run-"));
 		assert.equal(
 			receiptFiles.length,
-			1,
-			`expected 1 durable receipt, got ${receiptFiles.join(",")}`,
+			0,
+			`expected no durable receipt, got ${receiptFiles.join(",")}`,
 		);
-		const byRun = JSON.parse(
-			fs.readFileSync(path.join(receiptsDir, `by-run-${runId}.json`), "utf-8"),
-		) as { receiptId: string };
-		assert.equal(byRun.receiptId, winners[0]!.receiptId);
+		assert.equal(fs.existsSync(path.join(receiptsDir, `by-run-${runId}.json`)), false);
 	} finally {
 		t.cleanup();
 	}

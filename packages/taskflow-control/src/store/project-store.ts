@@ -15,6 +15,7 @@ import {
 	type RunProjection,
 } from "../types.ts";
 import { newId } from "../hash.ts";
+import { assertSafeId, isSafeId } from "../validate-ids.ts";
 import {
 	bindDirectory,
 	resolveIdentityOnOpen,
@@ -197,6 +198,7 @@ export function openProjectControlStore(
 	let headerCache = header;
 
 	function readRunFromDisk(runId: string): RunProjection | null {
+		if (!isSafeId(runId)) return null;
 		return readJsonFile<RunProjection>(
 			path.join(projectProjectionsDir(root), `run-${runId}.json`),
 		);
@@ -221,13 +223,13 @@ export function openProjectControlStore(
 				events?: ControlEvent[];
 			}>(path.join(dir, f));
 			if (!entry) continue; // corrupt segment: skip (fail-open recover other segments)
-			if (entry.command && isSafeCommandId(entry.command.commandId)) {
+			if (entry.command && isSafeId(entry.command.commandId)) {
 				// Later segments overwrite earlier (journal order = authority)
 				writeFileAtomic(
 					path.join(projectCommandsDir(root), `${entry.command.commandId}.json`),
 					JSON.stringify(entry.command, null, 2),
 				);
-				if (entry.command.runId && isSafeCommandId(entry.command.runId)) {
+				if (entry.command.runId && isSafeId(entry.command.runId)) {
 					writeFileAtomic(
 						path.join(projectCommandsDir(root), `by-cmd-${entry.command.commandId}.json`),
 						JSON.stringify({ runId: entry.command.runId }, null, 2),
@@ -235,7 +237,7 @@ export function openProjectControlStore(
 				}
 				rebuiltCommands += 1;
 			}
-			if (entry.run && isSafeCommandId(entry.run.runId)) {
+			if (entry.run && isSafeId(entry.run.runId)) {
 				// Always write: later journal segments win (full rebuild to latest)
 				writeFileAtomic(
 					path.join(projectProjectionsDir(root), `run-${entry.run.runId}.json`),
@@ -243,12 +245,12 @@ export function openProjectControlStore(
 				);
 				rebuiltRuns += 1;
 			}
-			if (entry.receipt && isSafeCommandId(entry.receipt.receiptId)) {
+			if (entry.receipt && isSafeId(entry.receipt.receiptId)) {
 				writeFileAtomic(
 					path.join(projectReceiptsDir(root), `${entry.receipt.receiptId}.json`),
 					JSON.stringify(entry.receipt, null, 2),
 				);
-				if (isSafeCommandId(entry.receipt.runId)) {
+				if (isSafeId(entry.receipt.runId)) {
 					writeFileAtomic(
 						path.join(projectReceiptsDir(root), `by-run-${entry.receipt.runId}.json`),
 						JSON.stringify({ receiptId: entry.receipt.receiptId }, null, 2),
@@ -260,12 +262,10 @@ export function openProjectControlStore(
 		return { rebuiltRuns, rebuiltCommands, rebuiltReceipts };
 	}
 
-	function isSafeCommandId(id: string): boolean {
-		return typeof id === "string" && id.length > 0 && !id.includes("..") && !id.includes("/");
-	}
-
-	// Recover half-commits before serving reads.
-	rebuildFromJournal();
+	// Recover half-commits before serving reads. This must share the commit lock:
+	// an unlocked open-time rebuild can replay an older projection over a newer
+	// concurrent CAS commit and roll runVersion backwards, admitting two winners.
+	withExclusiveLockFile(commitLockPath, () => rebuildFromJournal());
 
 	const streamSeqPath = path.join(projectControlRoot(root), "stream-seq.json");
 
@@ -275,6 +275,15 @@ export function openProjectControlStore(
 
 	/** Caller MUST hold commitLockPath. */
 	function commitUnlocked(batch: CommitBatch): { commitSeqStart: number; commitSeqEnd: number } {
+		if (batch.command) {
+			assertSafeId(batch.command.commandId, "commandId");
+			if (batch.command.runId) assertSafeId(batch.command.runId, "runId");
+		}
+		if (batch.run) assertSafeId(batch.run.runId, "runId");
+		if (batch.receipt) {
+			assertSafeId(batch.receipt.receiptId, "receiptId");
+			assertSafeId(batch.receipt.runId, "runId");
+		}
 		const events = batch.events;
 		let next = readSeqNext();
 		if (events.length === 0 && !batch.command && !batch.run && !batch.receipt) {
@@ -466,6 +475,8 @@ export function openProjectControlStore(
 		},
 
 		claimCommand(input) {
+			assertSafeId(input.commandId, "commandId");
+			assertSafeId(input.runId, "runId");
 			return withExclusiveLockFile(commitLockPath, () => {
 				const existing = readJsonFile<CommandRecord>(
 					path.join(projectCommandsDir(root), `${input.commandId}.json`),
@@ -519,10 +530,12 @@ export function openProjectControlStore(
 		},
 
 		getReceipt(receiptId: string) {
+			if (!isSafeId(receiptId)) return null;
 			return readJsonFile<Receipt>(path.join(projectReceiptsDir(root), `${receiptId}.json`));
 		},
 
 		getReceiptForRun(runId: string) {
+			if (!isSafeId(runId)) return null;
 			const idx = readJsonFile<{ receiptId: string }>(
 				path.join(projectReceiptsDir(root), `by-run-${runId}.json`),
 			);
@@ -531,12 +544,14 @@ export function openProjectControlStore(
 		},
 
 		getCommand(commandId: string) {
+			if (!isSafeId(commandId)) return null;
 			return readJsonFile<CommandRecord>(
 				path.join(projectCommandsDir(root), `${commandId}.json`),
 			);
 		},
 
 		getRunIdForCommand(commandId: string) {
+			if (!isSafeId(commandId)) return null;
 			const idx = readJsonFile<{ runId: string }>(
 				path.join(projectCommandsDir(root), `by-cmd-${commandId}.json`),
 			);

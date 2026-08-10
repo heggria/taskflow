@@ -5,7 +5,7 @@
  * Spawns the real OS process; exit code ≠ 0 → failed (including exit 37).
  * Cancel kills the process tree; reconcile re-checks pid liveness.
  */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { newId } from "./hash.ts";
@@ -63,6 +63,7 @@ export function createScriptExecutionProvider(opts?: {
 	stateDir?: string;
 }): ExecutionProvider {
 	const jobs = new Map<string, ScriptJob>();
+	const localChildren = new Map<string, ChildProcess>();
 	const stateDir = opts?.stateDir;
 
 	function persist(handle: string, job: ScriptJob): void {
@@ -146,6 +147,7 @@ export function createScriptExecutionProvider(opts?: {
 					});
 
 			job.pid = child.pid;
+			localChildren.set(handle, child);
 			persist(handle, job);
 
 			let timedOut = false;
@@ -173,6 +175,7 @@ export function createScriptExecutionProvider(opts?: {
 				job.error = err.message;
 				job.exitCode = null;
 				persist(handle, job);
+				localChildren.delete(handle);
 			});
 
 			child.on("close", (code) => {
@@ -180,6 +183,7 @@ export function createScriptExecutionProvider(opts?: {
 				job.exitCode = code;
 				if (job.status === "cancelled") {
 					persist(handle, job);
+					localChildren.delete(handle);
 					return;
 				}
 				if (timedOut) {
@@ -192,6 +196,7 @@ export function createScriptExecutionProvider(opts?: {
 					job.error = `script exited with code ${code}${job.stderr ? `: ${job.stderr.trim()}` : ""}`;
 				}
 				persist(handle, job);
+				localChildren.delete(handle);
 			});
 
 			return { kind: "accepted", handle, leaseEpoch: job.startedAt };
@@ -214,6 +219,11 @@ export function createScriptExecutionProvider(opts?: {
 			const job = jobs.get(handle) ?? loadPersisted(handle);
 			if (!job) return { kind: "failed", error: "unknown handle" };
 			if (job.status === "running") {
+				// A local child can have exited while Node's `close` callback is still
+				// queued (especially under heavy parallel load). Let that authoritative
+				// callback record exit code/output before applying restart-time dead-pid
+				// defense. Otherwise an exit-0 script can be falsely terminalized failed.
+				if (localChildren.has(handle)) return { kind: "still-running" };
 				if (job.pid && !isPidAlive(job.pid)) {
 					// Process died without close event — fail-closed (never invent completed).
 					// reconcile() still reports ambiguous for operator needs-operator path.

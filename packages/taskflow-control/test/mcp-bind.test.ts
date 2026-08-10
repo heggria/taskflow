@@ -91,7 +91,7 @@ test("D21 MCP bind: production script provider; park→approve via tools; exit 3
 	}
 });
 
-test("D21 MCP bind: park + tools.approve first-wins path", async () => {
+test("D21 MCP bind: approve fails closed until dispatcher handoff exists", async () => {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-apr-home-"));
 	const project = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-apr-proj-"));
 	const env = { ...process.env, TASKFLOW_HOME: home };
@@ -120,12 +120,12 @@ test("D21 MCP bind: park + tools.approve first-wins path", async () => {
 			principal: "mcp",
 			expectedRunVersion: parked.run!.runVersion,
 		});
-		assert.equal(approved.ok, true, JSON.stringify(approved.error));
-		assert.equal(approved.run?.status, "completed");
-		assert.ok(approved.receipt);
-		// Terminal: cancel rejected
-		const cancel = await tools.cancel(r.run!.runId);
-		assert.equal(cancel.ok, false);
+		assert.equal(approved.ok, false);
+		assert.equal(approved.error?.code, "TF_RECONCILE_REQUIRED");
+		assert.equal(approved.run?.status, "unknown");
+		assert.equal(approved.run?.stage, "reconciling");
+		assert.equal(approved.receipt, undefined);
+		assert.equal(host.store.getReceiptForRun(r.run!.runId), null);
 		host.close();
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });

@@ -1,5 +1,5 @@
 /**
- * P1–P16 ADR presence gate (wire freeze prerequisite).
+ * P1–P17 ADR presence gate (core plus provisional browser protocol baseline).
  */
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -27,18 +27,23 @@ const REQUIRED = [
 	"P14-controlstore-engine.md",
 	"P15-approval-protocol.md",
 	"P16-coordinator-concurrency.md",
+	"P17-browser-protocol.md",
 ];
 
-test("P1–P16 ADR documents all exist", () => {
+test("P1–P17 ADR documents all exist", () => {
 	assert.ok(existsSync(adrDir), `missing ${adrDir}`);
 	const files = new Set(readdirSync(adrDir));
 	for (const f of REQUIRED) {
 		assert.ok(files.has(f), `missing ADR ${f}`);
 		const body = readFileSync(join(adrDir, f), "utf-8");
-		assert.ok(body.includes("Accepted"), `${f} should be Accepted`);
+		if (f === "P17-browser-protocol.md") {
+			assert.match(body, /> Status: \*\*Provisional\*\*/, "P17 must not claim wire freeze");
+		} else {
+			assert.match(body, /> Status: \*\*Accepted\*\*/, `${f} should be Accepted`);
+		}
 		assert.ok(body.length > 200, `${f} too short`);
 	}
-	assert.equal(REQUIRED.length, 16);
+	assert.equal(REQUIRED.length, 17);
 });
 
 test("no DomainTransfer API in taskflow-control public surface", () => {

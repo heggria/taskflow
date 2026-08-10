@@ -1,7 +1,7 @@
 # P4: Negotiation + errors + recoveryAction
 
 > Status: **Accepted** (0.3.0 wire-freeze gate)
-> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.6
+> Normative parent: [rfc-0.3.0-control-plane.md](../rfc-0.3.0-control-plane.md) v7.7
 
 ## Decision
 Handshake carries protocolMajor, supportedReadSchemas[], supportedWriteSchemas[], requiredFeatures[], offeredFeatures[], buildInfo.
