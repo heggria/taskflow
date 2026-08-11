@@ -3,7 +3,7 @@
 /**
  * Consumer smoke test for the exact deterministic tarballs npm will publish.
  *
- * This deliberately does not import workspace sources. It packs all nine
+ * This deliberately does not import workspace sources. It packs all ten
  * packages, installs those tarballs into a fresh npm project, then exercises
  * every explicit public export and every shipped executable.
  */

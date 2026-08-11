@@ -13,7 +13,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.8](#028-review-then-confirm) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.9](#029-hermes-agent--verify-parity) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
 
 </div>
 
@@ -151,6 +151,12 @@ This is real output from a Pi run—not a mock dashboard:
 ```
 
 The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
+
+## 0.2.9: Hermes Agent + verify parity
+
+Taskflow now ships on **Hermes Agent** as `hermes-taskflow`, bringing the same MCP control plane to a sixth host. Hermes children run with an ephemeral home, explicit toolsets, cwd-confined local reads, provider-only credential material, and an explicit opt-in for mutating `--yolo` phases.
+
+Pi's advertised `/tf verify <name>` command now matches the tool surface, including saved flow names containing spaces. Project discovery also stops at canonical home/temp boundaries, so ambient `/tmp/.pi` state cannot become a project by accident. [Full 0.2.9 notes →](./CHANGELOG.md#029--2026-08-11)
 
 ## 0.2.8: review, then confirm
 
@@ -349,7 +355,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -358,7 +364,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
@@ -368,12 +374,12 @@ Grok Build support is new in 0.2. Its CLI stream does not report token/cost usag
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
 # Prefer env in config.yaml (not CLI --env after args — can be stuffed into argv):
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
 ```
 
-Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use ephemeral HERMES_HOME + `--ignore-rules` (no parent MCP/config/rules). RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
+Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use an ephemeral HERMES_HOME with only model routing, `auth.json`, and provider-allowlisted dotenv keys; parent MCP, skills, memory, sessions, and rules are not inherited. RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
 
 [Hermes guide →](./docs/hermes-mcp.md)
 

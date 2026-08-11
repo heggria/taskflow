@@ -382,13 +382,16 @@ Notes:
 <!-- /host:grok -->
 <!-- host:hermes -->
 - Each phase runs as an isolated `hermes chat -q <prompt> -Q --source tool`
-  session. Quiet mode prints a `session_id:` meta line then the final answer;
-  the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
+  session. Quiet mode writes the final answer to stdout and `session_id:`
+  metadata to stderr; stdout is preserved verbatim, including blank lines and
+  answer text that happens to begin with `session_id:`. Unresolved `{{placeholder}}`s are dropped;
   pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
   maps to `--reasoning` (`off` → `none`). Read-only phases use
   local-read tools → `taskflow_readonly_files` (read_file+search_files). Opt-in network via
   `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
-  under RO (writable). Children use ephemeral HERMES_HOME (credentials only). Mutating / default-capable phases fail closed unless
+  under RO (writable). Children use ephemeral HERMES_HOME with `auth.json`, an
+  exact inference-provider dotenv allowlist, and no parent skills/MCP/memory;
+  both `read_file` and `search_files` are confined to the phase cwd. Mutating / default-capable phases fail closed unless
   `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
   `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
   does not stream token/cost accounting, so budgeted flows fail closed at the

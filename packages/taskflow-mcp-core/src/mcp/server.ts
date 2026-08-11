@@ -114,7 +114,7 @@ const SERVER_VERSION = readServerVersion();
 
 /** Build the MCP serverInfo, reflecting the bound host identity (0.2.0 dogfood
  *  issue 4). The base name is `taskflow`; when a host adapter binds its runner
- *  (codex/claude/opencode/grok), the name becomes `taskflow-<host>` so a
+ *  (codex/claude/opencode/grok/hermes), the name becomes `taskflow-<host>` so a
  *  client can tell which host is executing subagents. */
 function serverInfoFor(host?: string) {
 	const name = host && host !== "taskflow" ? `taskflow-${host}` : "taskflow";
@@ -722,7 +722,7 @@ const TOOLS: McpTool[] = [
 		name: "taskflow_version",
 		title: "Show taskflow build/host identity",
 		description:
-			"Report the engine package version, the git commit the dist was built from, the bound host identity (codex/claude/opencode/grok), and the run-state schema version. Zero tokens, no execution. Use to verify which taskflow build a host is running.",
+			"Report the engine package version, the git commit the dist was built from, the bound host identity (codex/claude/opencode/grok/hermes), and the run-state schema version. Zero tokens, no execution. Use to verify which taskflow build a host is running.",
 		inputSchema: { type: "object", additionalProperties: false, properties: {} },
 	},
 ];
@@ -775,7 +775,7 @@ function resolveFlow(cwd: string, params: { name?: string; define?: unknown; def
 }
 
 /** Optional host-identity options for the MCP server (0.2.0 dogfood issue 4).
- *  `host` is the bound host identity (codex/claude/opencode/grok); it is
+ *  `host` is the bound host identity (codex/claude/opencode/grok/hermes); it is
  *  stamped onto RunState.host and reported by `taskflow_version`. Defaults to
  *  `"taskflow"` when omitted so existing callers are unaffected. */
 export interface McpHostOptions {

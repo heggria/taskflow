@@ -12,7 +12,7 @@ The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/ta
 ### Published MCP package (after npm publish)
 
 ```bash title="Register taskflow MCP"
-hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
 ```
 
 Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
@@ -21,7 +21,7 @@ Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow@0.2.9", "hermes-taskflow-mcp"]
     env:
       # Required for mutating agent phases (terminal / file write / coding).
       # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
@@ -78,7 +78,7 @@ Prefer **`mcp_taskflow_plan`** or **`mcp_taskflow_verify`** before any spend, th
 
 | Phase kind | Behavior |
 |------------|----------|
-| Child isolation | ephemeral HERMES_HOME + `--ignore-rules` (show_reasoning off; RO file plugin) |
+| Child isolation | ephemeral HERMES_HOME with model routing, `auth.json`, and provider-only dotenv; no parent MCP/skills/memory/rules; RO plugin only on RO children |
 | Read-only tool whitelist | local-read → `taskflow_readonly_files`; else model-only; `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search` (never attach writable `file`) |
 | Mutating / default-capable | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → child `--yolo` |
 | Budgeted flows | **Rejected** — Hermes quiet mode does not report token/cost |
@@ -91,7 +91,7 @@ Optional env:
 - `PI_TASKFLOW_HERMES_READONLY_WEB` (opt-in network on RO)
 - `PI_TASKFLOW_HERMES_MAX_TURNS` (default `64`)
 - `PI_TASKFLOW_HERMES_BIN` (default `hermes`)
-- `HERMES_HOME` for credentials (`.env`/`auth.json` load from ephemeral HERMES_HOME)
+- `HERMES_HOME` as the parent source for model routing and allowlisted provider auth; every child receives a separate ephemeral home
 
 ## How subagents run
 
@@ -101,7 +101,7 @@ Each agent phase is:
 hermes chat -q "<system + task>" -Q --source tool -t <toolsets> --max-turns N [--in cwd] [-m model] [--yolo]
 ```
 
-Quiet mode prints plain text (plus a `session_id` meta line on stdout or stderr). The runner folds plain text into the host-neutral `RunResult`.
+Quiet mode prints answer text on stdout and `session_id` metadata on stderr. The runner preserves stdout, including blank lines and answer text that begins with `session_id:`.
 
 ## Next
 

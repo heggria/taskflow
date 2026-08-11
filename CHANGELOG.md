@@ -4,18 +4,28 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+## [0.2.9] — 2026-08-11
+
 ### Added
 
-- **`runSubagentProcess` plain-text stdout.** New `stdoutFormat: "text"` for hosts that do not emit NDJSON (required by Hermes quiet mode).
-- **Hermes R4 Critical fix.** Never omit `-t` on RO (was fail-open to full hermes-cli tools). Empty surface is explicit `taskflow_model_only`. RO plugin blocks terminal/exec + cwd-bounds `read_file`. Ephemeral config carries parent `model`/`fallback_providers`; parent home resolution skips polluted tmp HERMES_HOME.
-- **Hermes RO local files + clean quiet output.** Ephemeral home installs a `taskflow_readonly` plugin (`read_file`+`search_files` only, write blocked) and `display.show_reasoning: false`. Isolation uses `--ignore-rules` (not `--safe-mode`) so that config applies; `stripHermesReasoningNoise` strips leftover boxes/think-tags.
-- **Hermes isolation: ephemeral HERMES_HOME.** Children get a temp home with only `.env`/`auth.json` copied (no skills/config/memory). RO default is model-only (zero network); `READONLY_WEB=1` still opts into web,search.
-- **Hermes R3 review follow-ups.** Preserve abort/idle diagnostics on empty stdout; map skill/delegation/memory/… toolsets narrowly; unmapped whitelist fails closed (no wide default); strip prefill/prompt HERMES_* + drop AWS_/AZURE_ from child env; README.zh-CN Hermes install section.
-- **Hermes round-3 hardenings.** Child argv uses `--safe-mode` (implies ignore-user-config/rules + disables plugins/MCP). Broader mutating tool aliases (memory/browser/cronjob/…). Docs/README footgun + READONLY_WEB env table.
-- **Hermes RO is non-writable.** Read-only phases map to `-t search` only (not `file` — Hermes file toolset includes write_file without yolo gating). Docs drop fake `@0.2.8` pins and default YOLO=1 examples.
-- **Hermes round-2 review fixes.** Empty-output errors prefer stderr `Error:` + session_id; RO phases map to `file` without `--yolo` (web opt-in `PI_TASKFLOW_HERMES_READONLY_WEB`); snippet no longer defaults YOLO=1; macOS flaky terminal-grace test timings loosened.
-- **Hermes host isolation hardenings (adversarial review).** Child argv adds `--ignore-user-config --ignore-rules` (no recursive MCP / memory). Child env strips `HERMES_YOLO_MODE`. Default toolsets avoid full `coding` (no `delegate_task`). Unknown tool aliases no longer fail-open to `coding`. Session id recovered from stderr.
-- **Hermes Agent host.** New `hermes-taskflow` delivery package + `taskflow-hosts` `hermesSubagentRunner` (`hermes chat -q -Q --source tool`). Config scaffold (`plugin/hermes.config.snippet.yaml`), skill entry, docs (`docs/hermes-mcp.md`). Install: `hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp`. Mutating phases require `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`. Quiet mode has no token/cost stream — budgeted flows fail closed (same as Grok).
+- **Hermes Agent host.** New `hermes-taskflow` delivery package and `taskflow-hosts` Hermes runner, with a stdio MCP scaffold, generated skill, English/Chinese guides, and first-release install pin `hermes-taskflow@0.2.9`.
+- **Hermes read-only toolsets.** Every child receives an explicit `-t`; local reads use `taskflow_readonly_files`, while model-only phases use an empty `taskflow_model_only` toolset. Read-only web access remains an explicit opt-in.
+
+### Fixed
+
+- **Pi `/tf verify <name>`.** The slash handler now implements the advertised command and preserves schema-valid flow names containing spaces, matching the tool action and autocomplete surfaces.
+- **Project flow discovery.** Ancestor discovery canonicalizes relative/symlink paths and stops at the user home and shared OS temp root, preventing `/tmp/.pi` or `~/.pi` from being mistaken for project state.
+- **Hermes plain-text protocol.** Blank lines and stdout text beginning with `session_id:` are preserved as answer content; session metadata is parsed only from stderr. Abort, idle, and empty-output diagnostics remain fail-closed.
+- **Hermes installation examples.** CLI examples use the live `hermes mcp add --command … --args …` syntax.
+
+### Security
+
+- **Hermes child isolation.** Read-only `read_file` and `search_files` paths are canonicalized and confined to the phase cwd, including `..`, absolute paths, and symlink escapes. The child home receives only `auth.json` plus an exact inference-provider dotenv allowlist; unrelated application secrets are not copied.
+- **Mutating authorization.** The read-only plugin is loaded only for read-only children, so explicitly authorized `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` phases can use their narrowly mapped write/shell toolsets while default/read-only phases remain fail-closed.
+
+### Changed
+
+- Root, all ten publishable packages, plugin manifests, MCP install pins, server-version contracts, website metadata, and deterministic publish/packed-consumer gates are aligned to **0.2.9**.
 
 ## [0.2.8] — 2026-08-10
 

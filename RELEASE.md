@@ -1,12 +1,12 @@
 # Release Guide (monorepo)
 
-taskflow is a monorepo of nine independently published packages:
+taskflow is a monorepo of ten independently published packages:
 
 | Package | npm name | What it is |
 |---------|----------|------------|
 | `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify). Zero host SDK deps. |
 | `packages/taskflow-mcp-core` | **`taskflow-mcp-core`** | Host-neutral MCP server (stdio JSON-RPC + taskflow_* tools + DAG renderer). Depends on core. |
-| `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode/grok `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
+| `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode/grok/hermes `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
 | `packages/taskflow-dsl` | **`taskflow-dsl`** | TypeScript DSL CLI/package: erases `.tf.ts` to Taskflow JSON and optional FlowIR. Depends on core. |
 | `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
 | `packages/codex-taskflow` | **`codex-taskflow`** | Codex delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
@@ -21,7 +21,7 @@ Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-tas
 
 The canonical release path is the tag-triggered GitHub Actions workflow. A
 repository administrator must configure `NPM_TOKEN` for an npm account allowed
-to publish all nine package names. The workflow itself uses least-privilege
+to publish all ten package names. The workflow itself uses least-privilege
 `contents: read` plus `id-token: write` and publishes with npm provenance. Do
 not publish a release from a developer workstation: a manual publish cannot
 provide the workflow identity and source/tag guarantees enforced on reruns.
@@ -32,8 +32,8 @@ provide the workflow identity and source/tag guarantees enforced on reruns.
 pnpm install            # links the workspaces
 pnpm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
 pnpm test               # full unit suite green
-pnpm run build          # emit dist/ for all nine packages (tsc → .js + .d.ts)
-pnpm run test:pack      # pack → clean install → public imports/bins for all nine
+pnpm run build          # emit dist/ for all ten packages (tsc → .js + .d.ts)
+pnpm run test:pack      # pack → clean install → public imports/bins for all ten
 ```
 
 ### Skill coverage check (before every release)
@@ -50,7 +50,7 @@ this release's CHANGELOG section, verify:
       **source** layer: `core.md` (core DSL + actions), `patterns.md` (if it
       changes best practice), `advanced.md` (context sharing / dynamic flows /
       isolation / recompute), `configuration.md` (knobs), or the per-host
-      entry files (`entry.pi.md` / `entry.codex.md` / `entry.claude.md` / `entry.opencode.md` / `entry.grok.md`) for host bindings.
+      entry files (`entry.pi.md` / `entry.codex.md` / `entry.claude.md` / `entry.opencode.md` / `entry.grok.md` / `entry.hermes.md`) for host bindings.
 - [ ] Host-only capabilities are wrapped in `<!-- host:pi -->` /
       `<!-- host:codex -->` blocks — never teach a host a tool it can't reach.
 - [ ] `node scripts/build-skills.mjs` ran and the generated files are committed.
@@ -71,7 +71,7 @@ this release's CHANGELOG section, verify:
 > `workspace:*` locally so `pnpm install --frozen-lockfile` never depends on a
 > not-yet-published release. The deterministic release packer converts those
 > workspace ranges before `npm publish` receives the immutable tarball. Always
-> publish `taskflow-core` first and bump all nine in lockstep.
+> publish `taskflow-core` first and bump all ten in lockstep.
 
 ## Publish from a tag (the only supported release path)
 
@@ -82,8 +82,8 @@ the matching annotated tag:
 ```sh
 git switch main
 git pull --ff-only origin main
-git tag -a v0.2.8 -m "Release v0.2.8"
-git push origin v0.2.8
+git tag -a v0.2.9 -m "Release v0.2.9"
+git push origin v0.2.9
 ```
 
 `.github/workflows/publish.yml` then performs the complete release transaction:
@@ -92,7 +92,7 @@ git push origin v0.2.8
    `origin/main`;
 2. runs typecheck, unit tests and build, creates repeat-verified deterministic
    tarballs, then runs the packed-consumer gate against those exact bytes;
-3. checks the root, all nine package versions, plugin manifests, and pinned MCP
+3. checks the root, all ten package versions, plugin manifests, and pinned MCP
    package versions against the tag;
 4. publishes core first, then shared packages and delivery adapters, all with
    public access and provenance;
@@ -120,9 +120,22 @@ pnpm view hermes-taskflow version --registry=https://registry.npmjs.org/
 
 Also verify the `Publish & Release` workflow completed successfully and that
 the non-draft, non-prerelease GitHub Release targets the tagged commit. A
-partially published nine-package set is not a completed release; fix the cause
+partially published ten-package set is not a completed release; fix the cause
 and rerun the same tag workflow rather than creating a replacement tag or
 publishing missing packages manually.
+
+## Upgrade and rollback
+
+- Upgrade all host package pins as one transaction to `0.2.9`, restart/reload the
+  host's MCP/plugin registration, and verify `taskflow_version` reports `0.2.9`.
+- This patch does not introduce a run-state migration. Keep `.pi/taskflows/` and
+  existing run history in place when upgrading or rolling back.
+- Pi, Codex, Claude Code, OpenCode, and Grok users can roll back by pinning their
+  delivery package to `0.2.8` and restarting the host. Keep all taskflow package
+  versions aligned; do not mix a `0.2.9` adapter with `0.2.8` shared packages.
+- Hermes support begins in `0.2.9`; there is no `hermes-taskflow@0.2.8`. To roll
+  Hermes back, disable/remove its Taskflow MCP entry and restart Hermes rather
+  than attempting to install a nonexistent older package.
 
 ## Install (end users)
 
@@ -142,8 +155,8 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build (published MCP package)
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
 # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 
-hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
 ```

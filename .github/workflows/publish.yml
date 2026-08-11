@@ -1,9 +1,9 @@
 name: Publish & Release
 
-# Publishes all nine packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
+# Publishes all ten packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
 # taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
-# grok-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
-# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All nine workspace
+# grok-taskflow, hermes-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
+# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All ten workspace
 # versions must equal the tag.
 
 on:
@@ -140,6 +140,17 @@ jobs:
           OPENCODE_PINNED="v$(node -p "require('./packages/opencode-taskflow/plugin/opencode.json').mcp.taskflow.command.find(a => a.startsWith('opencode-taskflow@')).split('@')[1]")"
           if [ "$OPENCODE_PINNED" != "$TAG" ]; then
             echo "::error::opencode.json pins opencode-taskflow@${OPENCODE_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
+          HERMES_PINNED="v$(node -e '
+            const fs = require("fs");
+            const text = fs.readFileSync("packages/hermes-taskflow/plugin/hermes.config.snippet.yaml", "utf8");
+            const match = text.match(/hermes-taskflow@(\d+\.\d+\.\d+)/);
+            if (!match) process.exit(2);
+            process.stdout.write(match[1]);
+          ')"
+          if [ "$HERMES_PINNED" != "$TAG" ]; then
+            echo "::error::hermes config snippet pins hermes-taskflow@${HERMES_PINNED#v} but tag is $TAG"
             exit 1
           fi
 

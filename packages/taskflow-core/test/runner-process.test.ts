@@ -2,10 +2,10 @@
  * Unit tests for the shared `runSubagentProcess` (runner-core.ts).
  *
  * This is the spawn / idle-watchdog / abort / signal-kill / stderr-cap / post-exit
- * classify block shared by the codex/claude/opencode/grok runners. It has no other
+ * classify block shared by the codex/claude/opencode/grok/hermes runners. It has no other
  * direct unit tests — the host parsers are tested in their own packages, but the
  * shared process/classify contract (the highest-blast-radius code: a bug here
- * affects all 3 non-pi hosts) is exercised here against REAL short-lived child
+ * affects all five non-pi hosts) is exercised here against REAL short-lived child
  * processes (no mocks), with a trivial foldLine that just echoes stdout.
  */
 

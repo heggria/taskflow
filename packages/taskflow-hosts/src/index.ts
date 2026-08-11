@@ -1,14 +1,14 @@
 /**
  * taskflow-hosts — the shared collection of host-runner implementations.
  *
- * Each non-pi host (codex / claude / opencode / grok) has two halves:
+ * Each non-pi host (codex / claude / opencode / grok / hermes) has two halves:
  *   1. the **runner** — a `SubagentRunner` that spawns that host's CLI, folds
  *      its event stream, and classifies the outcome into a host-neutral
  *      `RunResult`. PLUS the pure argv builders (`buildXxxArgs`) and
  *      permission/model helpers.
  *   2. the **delivery** — the per-host MCP server + bin + plugin scaffold,
  *      which lives in that host's own package (codex-taskflow /
- *      claude-taskflow / opencode-taskflow / grok-taskflow) because it's the
+ *      claude-taskflow / opencode-taskflow / grok-taskflow / hermes-taskflow) because it's the
  *      host-ecosystem install target (`codex plugin add`, `claude plugin
  *      install`, `grok plugin install`, …).
  *

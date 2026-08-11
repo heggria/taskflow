@@ -10,12 +10,11 @@
 # Footgun: prefer this YAML `env:` map. Do not rely on `hermes mcp add … --env`
 # stuffing flags into the node argv list.
 #
-# Pin a version only AFTER a release that includes hermes-taskflow
-# (do not pin 0.2.8 — that tag pre-dates the Hermes host).
+# 0.2.9 is the first release that includes hermes-taskflow.
 
 taskflow:
   command: "npx"
-  args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
+  args: ["-y", "-p", "hermes-taskflow@0.2.9", "hermes-taskflow-mcp"]
   env:
     # Uncomment for mutating agent phases (terminal / file write).
     # Leave unset for verify/plan/script-only flows.

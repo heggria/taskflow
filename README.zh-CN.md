@@ -13,7 +13,7 @@
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.8 新能力](#028-先审阅再确认) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.9 新能力](#029-hermes-agent--verify-对齐) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -151,6 +151,12 @@ pi install npm:pi-taskflow
 ```
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
+
+## 0.2.9：Hermes Agent + verify 对齐
+
+Taskflow 现在通过 `hermes-taskflow` 支持第六个宿主 **Hermes Agent**。Hermes 子代理使用临时 home、显式工具集、cwd 内只读路径边界、仅 provider 凭据，以及对 mutating `--yolo` phase 的明确 opt-in。
+
+Pi 已公开的 `/tf verify <name>` 现在与 tool 接口一致，也能正确处理含空格的 flow 名。项目发现同时在规范化后的 home/temp 边界停止，不再把环境中的 `/tmp/.pi` 误认成项目状态。[完整 0.2.9 说明 →](./CHANGELOG.md#029--2026-08-11)
 
 ## 0.2.8：先审阅，再确认
 
@@ -344,7 +350,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -353,7 +359,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
@@ -363,12 +369,12 @@ Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用�
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
 # 优先在 config.yaml 写 env（不要用 CLI --env 塞进 node argv）：
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
 ```
 
-Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理用临时 HERMES_HOME + `--ignore-rules`（无父级 MCP/config/rules）。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
+Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理使用临时 HERMES_HOME，只继承模型路由、`auth.json` 与 provider allowlist dotenv；不继承父级 MCP、skills、memory、sessions 或 rules。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
 
 [Hermes 指南 →](./docs/hermes-mcp.md)
 
@@ -392,7 +398,7 @@ Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝�
                                                           └─ hermes-taskflow
 ```
 
-`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。六个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
+`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。五个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
 
 测试套件覆盖编排语义、持久化与文件锁竞态、缓存新鲜度、路径穿越、动态图加固、取消、预算、全部 12 种阶段、FlowIR/replay/recompute、TypeScript DSL 擦除、宿主 argv 合同、MCP server，以及打包后的 consumer imports。
 

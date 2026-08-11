@@ -15,7 +15,7 @@ Or paste into `~/.hermes/config.yaml` (see `packages/hermes-taskflow/plugin/herm
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow@0.2.9", "hermes-taskflow-mcp"]
     env:
       # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
     timeout: 600
@@ -43,7 +43,7 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 | Execution | `hermes chat -q … -Q --source tool --ignore-rules` |
 | Read-only phases | local-read → `-t taskflow_readonly_files`; else `-t taskflow_model_only` (never omit `-t`); `READONLY_WEB=1` adds web,search |
 | Mutating phases | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
-| Isolation | ephemeral HERMES_HOME (creds + show_reasoning:false + RO plugin) + `--ignore-rules` |
+| Isolation | ephemeral HERMES_HOME (`auth.json` + provider-only dotenv + `show_reasoning:false`); RO plugin only on RO children; `--ignore-rules` |
 | Session hygiene | `--source tool` keeps integration runs out of the main user session list |
 
 ## Env knobs
@@ -54,7 +54,7 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 | `PI_TASKFLOW_HERMES_READONLY_WEB` | unset | `1` adds web+search on read-only phases |
 | `PI_TASKFLOW_HERMES_MAX_TURNS` | `64` | Child `--max-turns` |
 | `PI_TASKFLOW_HERMES_BIN` | `hermes` | Binary override |
-| `HERMES_HOME` | inherited | Profile / credentials home for child hermes (`.env` still loaded from ephemeral HERMES_HOME) |
+| `HERMES_HOME` | parent profile | Source for model routing and allowlisted provider auth; each child runs from a separate ephemeral home |
 
 ## Dogfood from a checkout
 
