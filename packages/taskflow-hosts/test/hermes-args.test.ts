@@ -16,12 +16,12 @@ import {
 	resolveHermesModel,
 	resolveHermesReasoning,
 	resolveHermesToolsets,
+	stripHermesReasoningNoise,
 	type HermesArgsCtx,
 } from "../src/hermes-runner.ts";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtempSync } from "node:fs";
 
 // --- bin resolution ---------------------------------------------------------
 
@@ -57,9 +57,14 @@ test("hermes read-only: any mutating tool → NOT read-only", () => {
 	assert.equal(isHermesReadOnlyPhase(["read", "terminal"]), false);
 });
 
-test("hermes toolsets: RO → no tools (no net); web opt-in; empty mutating safe default", () => {
-	assert.equal(resolveHermesToolsets(["read"], true), "");
-	assert.equal(resolveHermesToolsets(["read"], true, { readonlyWeb: true }), "web,search");
+test("hermes toolsets: RO local-read → taskflow_readonly_files; web opt-in; empty mutating safe", () => {
+	assert.equal(resolveHermesToolsets(["read"], true), "taskflow_readonly_files");
+	assert.equal(
+		resolveHermesToolsets(["read"], true, { readonlyWeb: true }),
+		"search,taskflow_readonly_files,web",
+	);
+	assert.equal(resolveHermesToolsets(["web_search"], true), "");
+	assert.equal(resolveHermesToolsets(["web_search"], true, { readonlyWeb: true }), "search,web");
 	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
 	assert.equal(resolveHermesToolsets(["skill_manage"], false), "skills");
@@ -145,8 +150,10 @@ test("hermes argv: starts with chat -q <prompt> -Q --source tool and isolation f
 	const src = args.indexOf("--source");
 	assert.ok(src >= 0);
 	assert.equal(args[src + 1], "tool");
-	assert.ok(args.includes("--safe-mode"));
-	// default-capable includes -t; RO omits it (see next test).
+	assert.ok(args.includes("--ignore-rules"));
+	// Ephemeral config replaces --safe-mode (safe-mode would ignore our config).
+	assert.equal(args.includes("--safe-mode"), false);
+	// default-capable includes -t; pure model RO omits it (see next test).
 	assert.ok(args.includes("-t"));
 	assert.ok(args.includes("--max-turns"));
 });
@@ -159,11 +166,10 @@ test("hermes argv: mutating/default fails closed unless yolo acknowledged", () =
 	assert.ok(buildHermesArgs({ ...baseCtx }).args.includes("--yolo"));
 	const ro = buildHermesArgs({ ...baseCtx, tools: ["read"] });
 	assert.equal(ro.args.includes("--yolo"), false, "read-only omits --yolo");
-	assert.equal(ro.args.includes("-t"), false, "RO default is model-only (no -t)");
-	assert.equal(ro.toolsets, "");
+	assert.ok(ro.args.includes("-t"));
+	assert.equal(ro.args[ro.args.indexOf("-t") + 1], "taskflow_readonly_files");
 	const roWeb = buildHermesArgs({ ...baseCtx, tools: ["read"], readonlyWeb: true });
-	assert.ok(roWeb.args.includes("-t"));
-	assert.equal(roWeb.args[roWeb.args.indexOf("-t") + 1], "web,search");
+	assert.equal(roWeb.args[roWeb.args.indexOf("-t") + 1], "search,taskflow_readonly_files,web");
 });
 
 test("hermes unsafe yolo opt-in: only exact env value 1 is accepted", () => {
@@ -199,7 +205,7 @@ test("hermes argv: system prompt prepended to -q body", () => {
 	assert.match(q, /Task: count files/);
 });
 
-test("hermes ephemeral home: copies only credential files and cleans up", () => {
+test("hermes ephemeral home: copies credentials, writes config+RO plugin, cleans up", () => {
 	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-"));
 	writeFileSync(join(parent, ".env"), "XAI_API_KEY=test\n");
 	writeFileSync(join(parent, "auth.json"), "{}\n");
@@ -211,10 +217,20 @@ test("hermes ephemeral home: copies only credential files and cleans up", () => 
 		assert.notEqual(eph.home, parent);
 		assert.ok(existsSync(join(eph.home, ".env")));
 		assert.ok(existsSync(join(eph.home, "auth.json")));
-		assert.equal(existsSync(join(eph.home, "config.yaml")), false);
 		assert.equal(existsSync(join(eph.home, "skills")), false);
+		const cfg = readFileSync(join(eph.home, "config.yaml"), "utf8");
+		assert.match(cfg, /show_reasoning:\s*false/);
+		assert.match(cfg, /taskflow_readonly/);
+		assert.ok(existsSync(join(eph.home, "plugins", "taskflow_readonly", "__init__.py")));
 	} finally {
 		eph.cleanup();
 	}
 	assert.equal(existsSync(eph.home), false);
+});
+
+test("hermes stripHermesReasoningNoise: drops box header and think tags", () => {
+	const noisy =
+		"\n┌─ Reasoning ──────────────────────────────────────────────────────────────────┐\nthinking aloud\nCLEAN_OK\n";
+	assert.equal(stripHermesReasoningNoise(noisy).trim(), "thinking aloud\nCLEAN_OK");
+	assert.equal(stripHermesReasoningNoise("<think>secret</think>\nHI").trim(), "HI");
 });

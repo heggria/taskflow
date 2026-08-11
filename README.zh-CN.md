@@ -368,7 +368,7 @@ hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
 ```
 
-Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理固定 `--safe-mode`（无父级 MCP/config/rules）。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 没有「只读本地文件」toolset。
+Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理用临时 HERMES_HOME + `--ignore-rules`（无父级 MCP/config/rules）。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 没有「只读本地文件」toolset。
 
 [Hermes 指南 →](./docs/hermes-mcp.md)
 

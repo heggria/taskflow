@@ -291,12 +291,12 @@ Notes:
   sandbox profile, while the other hosts use their own permission contracts.
   Omit it to request the host's default capability policy.
 - Each phase runs as an isolated `claude -p --output-format stream-json`
-  session (Claude Code 2.1.169 or newer is required for `--safe-mode`). A model
+  session (Claude Code 2.1.169 or newer is required for `--ignore-rules` + ephemeral HERMES_HOME). A model
   id that still looks like a pi-provider path (contains `/`)
   or an unresolved `{{placeholder}}` is dropped so claude falls back to its
   configured default. Known read-only requests — including an omitted tool
   list — get matching `--tools` and `--allowedTools` lists, and an explicit
-  request stays narrow. `--safe-mode` disables non-managed project/user
+  request stays narrow. `--ignore-rules` + ephemeral HERMES_HOME disables non-managed project/user
   customizations; disk setting sources and non-managed hooks are disabled as
   defense in depth. Administrator-managed policy hooks may still run. Known
   mutating tools are rejected by default because headless Claude has no OS

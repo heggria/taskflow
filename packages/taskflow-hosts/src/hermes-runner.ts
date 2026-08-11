@@ -15,14 +15,16 @@
  *   - failure      = non-zero exit, or empty output with non-zero semantics
  *
  * Permission mapping:
- *   - read-only phase → no tools by default (no file/terminal/network).
- *     Opt-in network: PI_TASKFLOW_HERMES_READONLY_WEB=1 → `-t web,search`.
- *     Hermes cannot express write-less local file tools — do not attach `file`.
- *   - mutating / default-capable → requires explicit
- *     `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` and passes `--yolo`
- *   - children always get `--safe-mode` + ephemeral HERMES_HOME (credentials only)
+ *   - read-only + local-read tools → `-t taskflow_readonly_files`
+ *     (ephemeral plugin: read_file + search_files only; write_file/patch blocked)
+ *   - read-only without local tools → model-only (no `-t`); network opt-in via
+ *     PI_TASKFLOW_HERMES_READONLY_WEB=1 → web,search
+ *   - mutating / default-capable → requires PI_TASKFLOW_HERMES_UNSAFE_YOLO=1 + `--yolo`
+ *   - isolation: ephemeral HERMES_HOME (creds + minimal config + RO plugin) and
+ *     `--ignore-rules` (not `--safe-mode`, so our config can disable reasoning UI)
  *
- * Quiet mode (`-Q`): answer on stdout; `session_id:` on stderr.
+ * Quiet mode (`-Q`): answer on stdout; `session_id:` on stderr. Reasoning boxes
+ * are suppressed via config and stripped from output as defense-in-depth.
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
  * is delegated to shared `runSubagentProcess` in taskflow-core.
  *
@@ -40,7 +42,7 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { filteredChildEnv } from "./child-env.ts";
@@ -214,15 +216,28 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 	return !tools.some((t) => mutating.has(t));
 }
 
+/** Hermes toolset name registered by the ephemeral taskflow_readonly plugin. */
+export const HERMES_READONLY_FILES_TOOLSET = "taskflow_readonly_files";
+
+const LOCAL_READ_TOOLS = new Set([
+	"read",
+	"read_file",
+	"grep",
+	"glob",
+	"search_files",
+	"ls",
+	"list",
+	"list_dir",
+]);
+
 /**
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
- *   - read-only → NEVER attach Hermes `file`. Default RO is **no tools**
- *     (empty string → omit network egress). Opt-in: PI_TASKFLOW_HERMES_READONLY_WEB=1
- *     → `web,search`. Local disk read is unavailable under true RO on Hermes.
+ *   - read-only + local-read aliases → `taskflow_readonly_files` (plugin)
+ *   - read-only + READONLY_WEB → adds web,search
+ *   - read-only otherwise → empty (model-only)
  *   - mutating with explicit tools → union of matching toolsets (narrow)
  *   - default / empty tools → file,terminal,web,search (NOT full `coding`)
- *   - unknown / unmapped aliases: ignored if something else mapped; if NOTHING
- *     mapped from a non-empty tools list → throw (never fail-open to wide default)
+ *   - unmapped non-empty tools list → throw (never fail-open to wide default)
  */
 export function resolveHermesToolsets(
 	tools: string[] | undefined,
@@ -230,8 +245,19 @@ export function resolveHermesToolsets(
 	opts: { readonlyWeb?: boolean } = {},
 ): string {
 	if (readOnly) {
-		// Empty = no -t tools (model-only). Never attach file (writable).
-		return opts.readonlyWeb ? "web,search" : "";
+		const sets = new Set<string>();
+		const wantsLocal = !tools || tools.length === 0 || tools.some((t) => LOCAL_READ_TOOLS.has(t));
+		// Empty tools on RO is unusual (isHermesReadOnlyPhase treats empty as NOT RO).
+		// When tools are local-read shaped, attach the plugin toolset.
+		if (tools && tools.some((t) => LOCAL_READ_TOOLS.has(t))) {
+			sets.add(HERMES_READONLY_FILES_TOOLSET);
+		}
+		if (opts.readonlyWeb) {
+			sets.add("web");
+			sets.add("search");
+		}
+		void wantsLocal;
+		return [...sets].sort().join(",");
 	}
 	if (!tools || tools.length === 0) return "file,terminal,web,search";
 
@@ -297,19 +323,37 @@ export function resolveHermesToolsets(
 				sets.add("session_search");
 				break;
 			default:
-				// Unknown aliases: ignore. Never expand to full `coding`.
 				break;
 		}
 	}
 	if (sets.size === 0) {
-		// Explicit tools that mapped to nothing must not silently widen to the
-		// default mutating surface (file+terminal+web).
 		throw new Error(
 			`Hermes tool whitelist [${tools.join(", ")}] did not map to any Hermes toolset. ` +
 				`Use known aliases (read/write/bash/web/…) or omit tools for the default coding surface.`,
 		);
 	}
 	return [...sets].sort().join(",");
+}
+
+/**
+ * Strip Hermes quiet-mode reasoning chrome and model think-tags from text.
+ * Primary suppression is `display.show_reasoning: false` in the ephemeral
+ * config; this is defense-in-depth when a model still leaks boxes/tags.
+ */
+export function stripHermesReasoningNoise(text: string): string {
+	if (!text) return text;
+	let t = text;
+	// Full reasoning box (open + body until blank line before final answer is hard;
+	// remove the box-drawing header line and matching footer if present).
+	t = t.replace(/^\s*┌─\s*Reasoning[^\n]*\n?/gim, "");
+	t = t.replace(/^\s*└[─\s]*┘\s*\n?/gim, "");
+	// XML-ish think blocks (also stripped by Hermes CLI when displayed; belt-and-suspenders).
+	t = t.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, "");
+	t = t.replace(/<reasoning\b[^>]*>[\s\S]*?<\/reasoning>/gi, "");
+	t = t.replace(/<REASONING_SCRATCHPAD\b[^>]*>[\s\S]*?<\/REASONING_SCRATCHPAD>/gi, "");
+	// Collapse leading blank lines left by stripped headers.
+	t = t.replace(/^\s*\n+/, "");
+	return t.trimEnd();
 }
 
 /** Opt-in network for read-only Hermes phases (default off). */
@@ -402,8 +446,10 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 		"-Q", // quiet: final answer on stdout; session_id on stderr
 		"--source",
 		"tool", // third-party integrations — hide from user session lists
-		// Isolate from parent Hermes profile policy / MCP / memory injection.
-		"--safe-mode",
+		// Isolate from parent rules injection. Ephemeral HERMES_HOME supplies
+		// config (show_reasoning:false, no mcp) + RO plugin — do NOT use
+		// --safe-mode (it would ignore that config).
+		"--ignore-rules",
 		"--max-turns",
 		String(maxTurns),
 	];
@@ -420,11 +466,50 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 }
 
 /**
- * Credential-only files copied into an ephemeral HERMES_HOME. Never copy
- * config.yaml, skills/, memory, plugins, sessions, or gateway state — those are
- * the isolation surface `--safe-mode` + temp home close.
+ * Credential files + minimal isolation config for an ephemeral HERMES_HOME.
+ * Never copy parent skills/, memory, plugins, sessions, or gateway state.
  */
 const HERMES_EPHEMERAL_CREDENTIAL_FILES = [".env", "auth.json"] as const;
+
+const EPHEMERAL_CONFIG_YAML = `display:
+  show_reasoning: false
+mcp_servers: {}
+plugins:
+  enabled:
+    - taskflow_readonly
+  entries:
+    taskflow_readonly:
+      enabled: true
+`;
+
+const EPHEMERAL_RO_PLUGIN_YAML = `name: taskflow_readonly
+version: 0.1.0
+description: Taskflow read-only file toolset (read_file + search_files only)
+`;
+
+const EPHEMERAL_RO_PLUGIN_INIT = `from __future__ import annotations
+
+def register(ctx) -> None:
+    """Register RO file toolset + block write_file/patch if ever exposed."""
+    from toolsets import create_custom_toolset
+
+    create_custom_toolset(
+        name="taskflow_readonly_files",
+        description="Read-only local files for taskflow RO phases",
+        tools=["read_file", "search_files"],
+    )
+
+    def _block_writes(tool_name: str = "", **kwargs):
+        name = tool_name or kwargs.get("name") or ""
+        if name in ("write_file", "patch"):
+            return {
+                "action": "block",
+                "message": "taskflow read-only phase: write_file/patch denied",
+            }
+        return None
+
+    ctx.register_hook("pre_tool_call", _block_writes)
+`;
 
 export interface EphemeralHermesHome {
 	/** Temp directory used as HERMES_HOME for one child. */
@@ -434,9 +519,9 @@ export interface EphemeralHermesHome {
 }
 
 /**
- * Build a throwaway HERMES_HOME with only credential files from the parent
- * profile. Children still authenticate via .env/auth.json but cannot write
- * skills/memory into the operator profile.
+ * Build a throwaway HERMES_HOME with credentials + minimal config + RO plugin.
+ * Children authenticate via .env/auth.json, cannot see parent skills/MCP, and
+ * get display.show_reasoning=false so quiet stdout stays clean.
  */
 export function prepareEphemeralHermesHome(
 	parentHome: string,
@@ -454,6 +539,15 @@ export function prepareEphemeralHermesHome(
 				// failures from hermes itself, not a host crash.
 			}
 		}
+	}
+	try {
+		writeFileSync(join(home, "config.yaml"), EPHEMERAL_CONFIG_YAML, "utf8");
+		const plugDir = join(home, "plugins", "taskflow_readonly");
+		mkdirSync(plugDir, { recursive: true });
+		writeFileSync(join(plugDir, "plugin.yaml"), EPHEMERAL_RO_PLUGIN_YAML, "utf8");
+		writeFileSync(join(plugDir, "__init__.py"), EPHEMERAL_RO_PLUGIN_INIT, "utf8");
+	} catch {
+		// Config/plugin write failures: child still runs; reasoning strip remains.
 	}
 	return {
 		home,
@@ -560,6 +654,16 @@ export async function runHermesAgentTask(
 	if (!acc.sessionId && result.stderr) {
 		const m = result.stderr.match(/session_id:\s*(\S+)/i);
 		if (m) acc.sessionId = m[1];
+	}
+
+	// Suppress reasoning chrome (config + defense-in-depth strip).
+	acc.finalText = stripHermesReasoningNoise(acc.finalText);
+	if (typeof result.output === "string") {
+		result.output = stripHermesReasoningNoise(result.output);
+	}
+	// Keep output aligned with cleaned answer body.
+	if (acc.finalText && result.output !== acc.finalText) {
+		result.output = acc.finalText;
 	}
 
 	// Prefer provider Error: lines from stderr over core's generic empty-output

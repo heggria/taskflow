@@ -321,12 +321,12 @@ Notes:
 <!-- /host:codex -->
 <!-- host:claude -->
 - Each phase runs as an isolated `claude -p --output-format stream-json`
-  session (Claude Code 2.1.169 or newer is required for `--safe-mode`). A model
+  session (Claude Code 2.1.169 or newer is required for `--ignore-rules` + ephemeral HERMES_HOME). A model
   id that still looks like a pi-provider path (contains `/`)
   or an unresolved `{{placeholder}}` is dropped so claude falls back to its
   configured default. Known read-only requests — including an omitted tool
   list — get matching `--tools` and `--allowedTools` lists, and an explicit
-  request stays narrow. `--safe-mode` disables non-managed project/user
+  request stays narrow. `--ignore-rules` + ephemeral HERMES_HOME disables non-managed project/user
   customizations; disk setting sources and non-managed hooks are disabled as
   defense in depth. Administrator-managed policy hooks may still run. Known
   mutating tools are rejected by default because headless Claude has no OS
@@ -386,7 +386,7 @@ Notes:
   the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
   pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
   maps to `--reasoning` (`off` → `none`). Read-only phases use
-  model-only by default (no tools/network). Opt-in network via
+  local-read tools → `taskflow_readonly_files` (read_file+search_files). Opt-in network via
   `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
   under RO (writable). Children use ephemeral HERMES_HOME (credentials only). Mutating / default-capable phases fail closed unless
   `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional

@@ -7,6 +7,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ### Added
 
 - **`runSubagentProcess` plain-text stdout.** New `stdoutFormat: "text"` for hosts that do not emit NDJSON (required by Hermes quiet mode).
+- **Hermes RO local files + clean quiet output.** Ephemeral home installs a `taskflow_readonly` plugin (`read_file`+`search_files` only, write blocked) and `display.show_reasoning: false`. Isolation uses `--ignore-rules` (not `--safe-mode`) so that config applies; `stripHermesReasoningNoise` strips leftover boxes/think-tags.
 - **Hermes isolation: ephemeral HERMES_HOME.** Children get a temp home with only `.env`/`auth.json` copied (no skills/config/memory). RO default is model-only (zero network); `READONLY_WEB=1` still opts into web,search.
 - **Hermes R3 review follow-ups.** Preserve abort/idle diagnostics on empty stdout; map skill/delegation/memory/… toolsets narrowly; unmapped whitelist fails closed (no wide default); strip prefill/prompt HERMES_* + drop AWS_/AZURE_ from child env; README.zh-CN Hermes install section.
 - **Hermes round-3 hardenings.** Child argv uses `--safe-mode` (implies ignore-user-config/rules + disables plugins/MCP). Broader mutating tool aliases (memory/browser/cronjob/…). Docs/README footgun + READONLY_WEB env table.

@@ -295,7 +295,7 @@ Notes:
   the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
   pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
   maps to `--reasoning` (`off` → `none`). Read-only phases use
-  model-only by default (no tools/network). Opt-in network via
+  local-read tools → `taskflow_readonly_files` (read_file+search_files). Opt-in network via
   `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
   under RO (writable). Children use ephemeral HERMES_HOME (credentials only). Mutating / default-capable phases fail closed unless
   `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
