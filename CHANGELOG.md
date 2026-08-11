@@ -6,6 +6,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Added
 
+- **`runSubagentProcess` plain-text stdout.** New `stdoutFormat: "text"` for hosts that do not emit NDJSON (required by Hermes quiet mode).
 - **Hermes Agent host.** New `hermes-taskflow` delivery package + `taskflow-hosts` `hermesSubagentRunner` (`hermes chat -q -Q --source tool`). Config scaffold (`plugin/hermes.config.snippet.yaml`), skill entry, docs (`docs/hermes-mcp.md`). Install: `hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp`. Mutating phases require `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`. Quiet mode has no token/cost stream — budgeted flows fail closed (same as Grok).
 
 ## [0.2.8] — 2026-08-10

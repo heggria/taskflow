@@ -378,7 +378,8 @@ export async function runHermesAgentTask(
 		onLive: opts.onLive,
 		acc,
 		foldLine: foldHermesQuietLine,
-		// Quiet mode has no structured end event — process exit is the terminal.
+		// Quiet mode is plain text (not NDJSON); process exit is the terminal.
+		stdoutFormat: "text",
 		requireTerminalEvent: false,
 	});
 
