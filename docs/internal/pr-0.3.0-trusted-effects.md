@@ -8,10 +8,11 @@
 | | |
 |---|---|
 | Base | `main` @ `4b04e0d` — fix(pi): require explicit approval confirmation (#119) |
-| Head | `rc/0.3.0-trusted-effects` @ `e7c5e31` (12 commits ahead of main) |
+| Head | `rc/0.3.0-trusted-effects` @ `e8a027c` (23 commits ahead of main) |
 | Status | **DRAFT — do not merge, do not publish** |
+| Post-ADV harden | `cbb4131` discovery/file-tx + `580daa0` S-H2; CI 31465576937 green |
 
-This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `e7c5e31` is the exact head this PR is built from (Draft PR #122 — this PR).
+This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `e8a027c` is the exact head this PR is built from (Draft PR #122 — this PR).
 
 ## Summary
 
