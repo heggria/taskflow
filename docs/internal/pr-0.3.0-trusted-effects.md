@@ -1,17 +1,17 @@
 # rc: 0.3.0 Trusted Effects candidate (do not publish)
 
 > Draft PR body. **Not for npm publish** — published packages stay at **0.2.8** until a human cuts `v0.3.0`.
-> This file is the source for the GitHub PR description; copy it into the PR once `gh` auth is available.
+> This file is the source for the GitHub PR description.
 
 ## Base / Head
 
 | | |
 |---|---|
 | Base | `main` @ `4b04e0d` — fix(pi): require explicit approval confirmation (#119) |
-| Head | `rc/0.3.0-trusted-effects` @ `96a32e8` (6 commits ahead of main) |
+| Head | `rc/0.3.0-trusted-effects` @ `d532f69` (10 commits ahead of main) |
 | Status | **DRAFT — do not merge, do not publish** |
 
-This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). Prefer opening this PR from the `rc/0.3.0-trusted-effects` branch, or update the existing draft with the clear SHA above.
+This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `d532f69` is the exact head this PR is built from.
 
 ## Summary
 
@@ -44,18 +44,22 @@ This candidate guarantees **admitted declared filesystem write targets**. It doe
 
 | Gate | Status | Notes |
 |---|---|---|
-| L1 local | **PASS** | post-review candidate `6012695`: focused effects/resources/FlowIR suite 99/99; monorepo typecheck PASS |
-| L2 contract | **PASS** | full unit suite 2198/2198; full build PASS |
+| L1 local | **PASS** | `96a32e8`: monorepo typecheck PASS + `pnpm audit --prod` clean; store-discovery delta re-verified at exact SHA (focused store suite 69/69 + typecheck) |
+| L2 contract | **PASS** | full unit suite 2202 tests → 2198 pass / 0 fail / 4 skipped; full build PASS; `test:pack` 9 packages PASS (pipeline logs built at evidence SHA `6071fb2`) |
 | L3 browser/electron | N/A | — |
-| L4 real-environment | **NOT_RUN** | no live-host E2E on the current SHA; historical live Codex A→B→C + built Codex MCP 16/16 were on an earlier candidate |
+| L4 real-environment | **PASS (built-MCP fixture)** | built Codex MCP comprehensive e2e 16/16 incl. TE fixture — `fs.write` committed through resources + ledger-backed why-effect — against the built dist bin (`codex-mcp-full.log`; evidence SHA `6071fb2` per build-info stamp). **NOT** a live Codex CLI run: `test:e2e-codex` NOT rerun on the current tip (prior-candidate A→B→C historical only) |
 | L5 released | **FAIL** | no tag/publish — human gate |
 | L6 ga | **FAIL** | L5 missing — **NOT GA** |
 
-Remote CI: historical Draft PR #117 run `31167592775` passed all 10 matrix jobs + GitHub CodeQL on `1478510f` (earlier candidate SHA). **Exact-SHA remote CI and live-host E2E have not been rerun for `96a32e8`** (the rc head adds the store-discovery hardening with its own local store tests).
+Exact-SHA remote CI is **open** and is exactly what this PR provides: `.github/workflows/ci.yml` triggers only on PR→main / push to main, and no PR has yet had head = current rc tip (`d532f69`). This Draft PR head is the exact-SHA gate; historical Draft PR #117 run `31167592775` passed all 10 matrix jobs + GitHub CodeQL on `1478510f` (earlier candidate SHA) — prior green is NOT exact-SHA for `d532f69`.
 
 ## Commits (rc/0.3.0-trusted-effects vs main, newest first)
 
 ```
+d532f69 docs: raise scoreboard to L4 built-MCP fixture for rc/96a32e8
+59fd9c3 docs(skills): teach 0.3 Trusted Effects authoring surface
+7add160 docs: add draft PR body for 0.3 trusted-effects RC
+0834c59 docs: refresh 0.3 scoreboard for rc/96a32e8
 96a32e8 fix(store): harden project .pi discovery against tmp and home roots
 6071fb2 docs: refresh trusted effects candidate evidence
 467bc28 fix(effects): close composition and transaction gaps
