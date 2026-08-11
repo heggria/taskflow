@@ -8,10 +8,10 @@
 | | |
 |---|---|
 | Base | `main` @ `4b04e0d` — fix(pi): require explicit approval confirmation (#119) |
-| Head | `rc/0.3.0-trusted-effects` @ `d532f69` (10 commits ahead of main) |
+| Head | `rc/0.3.0-trusted-effects` @ `e7c5e31` (12 commits ahead of main) |
 | Status | **DRAFT — do not merge, do not publish** |
 
-This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `d532f69` is the exact head this PR is built from.
+This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `e7c5e31` is the exact head this PR is built from (Draft PR #122 — this PR).
 
 ## Summary
 
@@ -29,6 +29,7 @@ This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-
 - Example: `examples/trusted-effects-write.json`
 - Tests: `test/effects*.test.ts`, `test/verify-effects.test.ts`
 - **Store hardening:** project `.pi` discovery hardened against tmp and home roots (`96a32e8`)
+- **Windows CI fix:** child-process store import specifiers portable via `pathToFileURL`/`fileURLToPath` (`e7c5e31`; test-harness only, no product change) — windows-latest store/process-supervisor jobs genuinely exercise saveRun/lock semantics
 
 ## Fixed
 
@@ -44,18 +45,20 @@ This candidate guarantees **admitted declared filesystem write targets**. It doe
 
 | Gate | Status | Notes |
 |---|---|---|
-| L1 local | **PASS** | `96a32e8`: monorepo typecheck PASS + `pnpm audit --prod` clean; store-discovery delta re-verified at exact SHA (focused store suite 69/69 + typecheck) |
-| L2 contract | **PASS** | full unit suite 2202 tests → 2198 pass / 0 fail / 4 skipped; full build PASS; `test:pack` 9 packages PASS (pipeline logs built at evidence SHA `6071fb2`) |
+| L1 local | **PASS** | `e7c5e31`: monorepo typecheck PASS (local + CI node 22/24); `pnpm audit --prod` clean (RC pipeline at `6071fb2` — CI does not run audit) |
+| L2 contract | **PASS** | full unit suite 2198 pass / 0 fail / 4 skipped (local + CI node 22/24); full build PASS (CI build job); `test:pack` 9 packages + CharterArc PASS (CI packed-consumer) at exact SHA `e7c5e31` |
 | L3 browser/electron | N/A | — |
-| L4 real-environment | **PASS (built-MCP fixture)** | built Codex MCP comprehensive e2e 16/16 incl. TE fixture — `fs.write` committed through resources + ledger-backed why-effect — against the built dist bin (`codex-mcp-full.log`; evidence SHA `6071fb2` per build-info stamp). **NOT** a live Codex CLI run: `test:e2e-codex` NOT rerun on the current tip (prior-candidate A→B→C historical only) |
+| L4 real-environment | **PASS (built-MCP fixture)** | built Codex MCP comprehensive e2e 16/16 incl. TE fixture — `fs.write` committed through resources + ledger-backed why-effect — against the built dist bin (`codex-mcp-full.log`; evidence SHA `6071fb2` per build-info stamp; CI e2e job re-runs `test:e2e-codex-mcp-full` at exact SHA `e7c5e31`). **NOT** a live Codex CLI run: `test:e2e-codex` NOT rerun on the current tip (prior-candidate A→B→C historical only) |
 | L5 released | **FAIL** | no tag/publish — human gate |
 | L6 ga | **FAIL** | L5 missing — **NOT GA** |
 
-Exact-SHA remote CI is **open** and is exactly what this PR provides: `.github/workflows/ci.yml` triggers only on PR→main / push to main, and no PR has yet had head = current rc tip (`d532f69`). This Draft PR head is the exact-SHA gate; historical Draft PR #117 run `31167592775` passed all 10 matrix jobs + GitHub CodeQL on `1478510f` (earlier candidate SHA) — prior green is NOT exact-SHA for `d532f69`.
+Exact-SHA remote CI is **GREEN**: GitHub Actions run 31460133496 on this PR's head `e7c5e31` passed the full matrix (test node 22/24, e2e codex MCP network-free incl. built-dist comprehensive, build dist, packed consumer 9 pkgs + CharterArc, website export, process supervisor ubuntu/macos/windows, CodeQL JS/TS). A prior red run 31456747148 on `0f9cf16` (windows store tests) was fixed by the test-harness portability change in `e7c5e31`. Historical Draft PR #117 run `31167592775` passed all jobs on `1478510f` (earlier candidate SHA).
 
 ## Commits (rc/0.3.0-trusted-effects vs main, newest first)
 
 ```
+e7c5e31 fix(test): make child-process store imports portable on Windows
+0f9cf16 docs: sync 0.3 draft PR body to rc tip d532f69
 d532f69 docs: raise scoreboard to L4 built-MCP fixture for rc/96a32e8
 59fd9c3 docs(skills): teach 0.3 Trusted Effects authoring surface
 7add160 docs: add draft PR body for 0.3 trusted-effects RC
