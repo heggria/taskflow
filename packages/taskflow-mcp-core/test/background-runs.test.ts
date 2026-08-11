@@ -6,8 +6,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+	clearDetachedProcessRegistry,
 	DETACHED_CONTROL_VERSION,
 	detachedProcessRegistryPath,
+	heartbeatDetachedProcessRegistry,
 	loadRun,
 	newRunId,
 	probeProcess,
@@ -16,6 +18,7 @@ import {
 	type SubagentRunner,
 	type Taskflow,
 } from "taskflow-core";
+import { waitForMcpBackgroundRun } from "../src/mcp/background.ts";
 import { makeToolHandlers } from "taskflow-mcp-core/server";
 
 interface TextResult {
@@ -76,6 +79,103 @@ function runningBackgroundState(cwd: string, name: string): RunState {
 		pid: process.pid,
 	};
 }
+
+test("mcp background: wait holds a terminal result until the authenticated worker lease is released", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-wait-quiescent-"));
+	const state = runningBackgroundState(cwd, "wait-quiescent");
+	state.status = "completed";
+	state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+	state.detachedInstanceId = "wait-quiescent-instance";
+	saveRun(state);
+	heartbeatDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId, state.pid);
+
+	const release = setTimeout(() => {
+		clearDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId);
+	}, 150);
+	const startedAt = Date.now();
+	try {
+		const waited = await waitForMcpBackgroundRun(cwd, state.runId, 1_000);
+		assert.equal(waited.quiescent, true);
+		assert.equal(waited.reason, "quiescent");
+		assert.equal(waited.state?.status, "completed");
+		assert.equal(fs.existsSync(detachedProcessRegistryPath(cwd, state.runId)), false);
+		assert.ok(Date.now() - startedAt >= 100, "wait must not return while the worker can still write cleanup state");
+	} finally {
+		clearTimeout(release);
+		clearDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId);
+		removeTempDir(cwd);
+	}
+});
+
+test("mcp background: a timed-out wait reports finalizing instead of completed", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-wait-timeout-"));
+	const state = runningBackgroundState(cwd, "wait-timeout");
+	state.status = "completed";
+	state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+	state.detachedInstanceId = "wait-timeout-instance";
+	saveRun(state);
+	heartbeatDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId, state.pid);
+	try {
+		const tools = makeToolHandlers(cwd, unusedForegroundRunner, {
+			host: "test",
+			detachedRunner: { module: fixtureModule(), exportName: "instantRunner" },
+		});
+		const waited = await tools.taskflow_runs({ action: "wait", runId: state.runId, timeoutMs: 0 }) as TextResult;
+		assert.equal(waited.isError, false);
+		assert.match(waited.content[0]!.text, /still finalizing/i);
+		assert.doesNotMatch(waited.content[0]!.text, /✓ completed/);
+		assert.equal(fs.existsSync(detachedProcessRegistryPath(cwd, state.runId)), true);
+	} finally {
+		clearDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId);
+		removeTempDir(cwd);
+	}
+});
+
+test("mcp background: an aborted wait does not claim terminal worker quiescence", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-wait-abort-"));
+	const state = runningBackgroundState(cwd, "wait-abort");
+	state.status = "completed";
+	state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+	state.detachedInstanceId = "wait-abort-instance";
+	saveRun(state);
+	heartbeatDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId, state.pid);
+	const controller = new AbortController();
+	controller.abort();
+	try {
+		const waited = await waitForMcpBackgroundRun(cwd, state.runId, 1_000, controller.signal);
+		assert.equal(waited.quiescent, false);
+		assert.equal(waited.reason, "aborted");
+		assert.equal(waited.state?.status, "completed");
+	} finally {
+		clearDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId);
+		removeTempDir(cwd);
+	}
+});
+
+test("mcp background: a dead terminal worker cannot leave a permanent finalizing lease", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-wait-dead-terminal-"));
+	const worker = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+	const pid = worker.pid!;
+	await new Promise<void>((resolve) => worker.once("exit", () => resolve()));
+	assert.equal(probeProcess(pid), "dead");
+	const state = runningBackgroundState(cwd, "wait-dead-terminal");
+	state.status = "completed";
+	state.pid = pid;
+	state.detachedControlVersion = DETACHED_CONTROL_VERSION;
+	state.detachedInstanceId = "wait-dead-terminal-instance";
+	saveRun(state);
+	heartbeatDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId, pid);
+	try {
+		const waited = await waitForMcpBackgroundRun(cwd, state.runId, 0);
+		assert.equal(waited.quiescent, true);
+		assert.equal(waited.reason, "quiescent");
+		assert.equal(waited.state?.status, "completed");
+		assert.equal(fs.existsSync(detachedProcessRegistryPath(cwd, state.runId)), false);
+	} finally {
+		clearDetachedProcessRegistry(cwd, state.runId, state.detachedInstanceId);
+		removeTempDir(cwd);
+	}
+});
 
 test("mcp background: run returns immediately and wait returns durable final output", async () => {
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-background-"));

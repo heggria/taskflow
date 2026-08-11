@@ -1039,7 +1039,15 @@ export function makeToolHandlers(
 			if (action === "status") return textContent(formatBackgroundRun(state, true));
 			if (action === "wait") {
 				const timeoutMs = Math.max(0, Math.min(300_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : 30_000));
-				state = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal) ?? state;
+				const waited = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal);
+				state = waited.state ?? state;
+				if (!waited.quiescent) {
+					const reason = waited.reason === "aborted" ? "Wait was aborted" : "Wait timed out";
+					const activity = state.status === "running"
+						? "the run is still active"
+						: `the ${state.status} result is persisted but its detached worker is still finalizing`;
+					return textContent(`${reason}; ${activity}. Retry taskflow_runs wait.\nRun ${state.runId} · pid ${state.pid ?? "unknown"} · cwd ${state.cwd}`);
+				}
 				return textContent(formatBackgroundRun(state, true), state.status !== "running" && state.status !== "completed");
 			}
 			if (action === "cancel") {

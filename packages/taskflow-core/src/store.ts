@@ -17,6 +17,7 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { renameAtomicWithRetry } from "./atomic-rename.ts";
 import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import { parseStrict } from "./interpolate.ts";
@@ -1549,7 +1550,7 @@ export function writeFileAtomic(filePath: string, data: string): void {
 	const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
 	try {
 		fs.writeFileSync(tmp, data, "utf-8");
-		fs.renameSync(tmp, filePath);
+		renameAtomicWithRetry(tmp, filePath);
 	} catch (e) {
 		try {
 			if (fs.existsSync(tmp)) fs.unlinkSync(tmp);

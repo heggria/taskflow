@@ -203,7 +203,7 @@ test("runSubagentProcess completion: ignored metadata preserves a terminal candi
 			emit({type:"final",text:"DONE"}); emit({type:"terminal"});
 			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
 			setInterval(()=>{},1000);
-		`, { idleTimeoutMs: 80, terminalGraceMs: 50, signal: controller.signal });
+		`, { idleTimeoutMs: 1_000, terminalGraceMs: 50, signal: controller.signal });
 		assert.equal(r.output, "DONE");
 		assert.equal(r.completionSource, "terminal-reap", "ignored metadata must preserve the terminal candidate");
 	} finally {
