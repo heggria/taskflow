@@ -185,7 +185,11 @@ export function translateTaskflow(def: Taskflow): {
 		} satisfies FlowIRNode;
 	});
 
-	const effectFlow = validateComposedEffectFlow({ name: def.name, phases: def.phases });
+	const effectFlow = validateComposedEffectFlow({ name: def.name, phases: def.phases }, {
+		// Static gates have no flow store: an unresolved `flow{use}` child is
+		// advisory (the runtime loader is the authoritative admission gate).
+		downgradeUnresolvedUse: true,
+	});
 	for (const issue of effectFlow.issues) {
 		const phaseId = issue.effectId?.includes("/") ? issue.effectId.split("/")[0] : undefined;
 		if (issue.severity === "error") {

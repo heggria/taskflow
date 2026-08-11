@@ -76,23 +76,30 @@ function labelFlowIssues(
 	// meets a declared effect; otherwise ordinary dynamic composition would
 	// reject solely because two unknown summaries are sequenced.
 	if (source.__unknownBoundary === true && sink.__unknownBoundary === true) return issues;
+	// An unresolved saved `flow{use}` boundary seen by a static gate without a
+	// flow loader is advisory (the saved child may be perfectly benign); the
+	// runtime loader stays the authoritative admission gate. Dynamic inline
+	// `def` boundaries never carry this flag and stay hard-tainted.
+	const advisory = source.__unresolvedUseAdvisory === true || sink.__unresolvedUseAdvisory === true;
+	const code = (base: string): string => (advisory ? "unresolved-flow-use-taint" : base);
+	const suffix = advisory ? " — unresolved flow{use} boundary; advisory only (runtime admission is authoritative)" : "";
 	const sourceConf = confidentialityOf(source);
 	const sinkConf = confidentialityOf(sink);
 	const sourceIntegrity = integrityOf(source);
 	const sinkIntegrity = integrityOf(sink);
 	if (CONFIDENTIALITY_RANK[sourceConf] > CONFIDENTIALITY_RANK[sinkConf]) {
 		issues.push({
-			severity: "error",
-			code: "confidentiality-flow-violation",
-			message: `source effect '${sourceLabel}' (${sourceConf}) cannot flow to sink '${sinkLabel}' (${sinkConf})`,
+			severity: advisory ? "warning" : "error",
+			code: code("confidentiality-flow-violation"),
+			message: `source effect '${sourceLabel}' (${sourceConf}) cannot flow to sink '${sinkLabel}' (${sinkConf})${suffix}`,
 			effectId: sinkLabel,
 		});
 	}
 	if (INTEGRITY_RANK[sourceIntegrity] < INTEGRITY_RANK[sinkIntegrity]) {
 		issues.push({
-			severity: "error",
-			code: "integrity-flow-violation",
-			message: `source effect '${sourceLabel}' (${sourceIntegrity}) cannot satisfy sink '${sinkLabel}' integrity (${sinkIntegrity})`,
+			severity: advisory ? "warning" : "error",
+			code: code("integrity-flow-violation"),
+			message: `source effect '${sourceLabel}' (${sourceIntegrity}) cannot satisfy sink '${sinkLabel}' integrity (${sinkIntegrity})${suffix}`,
 			effectId: sinkLabel,
 		});
 	}
@@ -389,6 +396,21 @@ interface PhaseEffectSummary {
 
 export interface ComposedEffectFlowOptions {
 	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
+	/**
+	 * Static gates (validateTaskflow / verifyTaskflow / FlowIR translate+compile)
+	 * run without a flow store, so a `flow{use: <saved>}` child they cannot load
+	 * degrades to the unknown-boundary summary (secret source + public sink).
+	 * Legal saved-subflow compositions — e.g. a benign child followed by a
+	 * declared write — then hard-fail even though the runtime, which resolves
+	 * the name through `loadFlow`, accepts them. When this option is set, an
+	 * unresolved `use` still emits the conservative unknown-boundary taint but
+	 * reports it as advisory warnings (codes `unresolved-flow-use` /
+	 * `unresolved-flow-use-taint`) instead of errors. Runtime admission (with
+	 * `resolveFlow`) remains the authoritative fail-closed gate for real
+	 * violations. Dynamic inline `def` boundaries are unaffected — they stay
+	 * hard-tainted by design.
+	 */
+	downgradeUnresolvedUse?: boolean;
 }
 
 function directPhaseSummary(phase: EffectFlowPhaseLike, phaseLabel: string): PhaseEffectSummary {
@@ -404,7 +426,8 @@ function directPhaseSummary(phase: EffectFlowPhaseLike, phaseLabel: string): Pha
 	return { sources, sinks };
 }
 
-function unknownBoundarySummary(phaseLabel: string): PhaseEffectSummary {
+function unknownBoundarySummary(phaseLabel: string, advisory = false): PhaseEffectSummary {
+	const advisoryFlag = advisory ? { __unresolvedUseAdvisory: true } : {};
 	return {
 		sources: [{
 			label: `${phaseLabel}/<dynamic-source>`,
@@ -414,6 +437,7 @@ function unknownBoundarySummary(phaseLabel: string): PhaseEffectSummary {
 				confidentiality: "secret",
 				integrity: "untrusted",
 				__unknownBoundary: true,
+				...advisoryFlag,
 				target: { kind: "secret", secret: { secretId: "<dynamic>" } },
 			},
 		}],
@@ -425,6 +449,7 @@ function unknownBoundarySummary(phaseLabel: string): PhaseEffectSummary {
 				confidentiality: "public",
 				integrity: "verified",
 				__unknownBoundary: true,
+				...advisoryFlag,
 				target: { kind: "service", service: { serviceId: "<dynamic>" } },
 			},
 		}],
@@ -513,6 +538,9 @@ function summarizeComposedEffectFlow(
 	const phases = Array.isArray(flow.phases) ? flow.phases : [];
 	const issues: EffectValidationIssue[] = [];
 	const summaries = new Map<string, PhaseEffectSummary>();
+	// Static gates (no flow loader) downgrade unresolved `flow{use}` boundaries
+	// to advisory warnings; the runtime (with a loader) stays fail-closed.
+	const downgradeUse = options.downgradeUnresolvedUse === true;
 	for (const phase of phases) {
 		if (typeof phase.id !== "string" || !phase.id) continue;
 		const phaseLabel = `${prefix}${phase.id}`;
@@ -530,6 +558,10 @@ function summarizeComposedEffectFlow(
 		if (type === "flow" || type === "expand") {
 			let child: ComposedEffectFlowLike | undefined;
 			let childSeen = seenUses;
+			// Only a named saved `flow{use}` is a resolver-resolvable boundary;
+			// dynamic inline `def` strings (LLM-authored, unparseable) stay
+			// hard-tainted by design and never downgrade.
+			let unresolvedUse: string | undefined;
 			if (phase.def !== undefined) {
 				child = parseInlineFlow(phase.def);
 			} else if (type === "flow" && typeof phase.use === "string" && phase.use) {
@@ -541,10 +573,23 @@ function summarizeComposedEffectFlow(
 					}
 					childSeen = new Set([...seenUses, phase.use]);
 				}
+				unresolvedUse = child === undefined ? phase.use : undefined;
 			}
+			const advisory = unresolvedUse !== undefined && downgradeUse;
 			const childResult = child
 				? summarizeComposedEffectFlow(child, options, `${phaseLabel}/`, childSeen)
-				: { ok: true, issues: [], summary: unknownBoundarySummary(phaseLabel) };
+				: { ok: true, issues: [], summary: unknownBoundarySummary(phaseLabel, advisory) };
+			if (advisory) {
+				issues.push({
+					severity: "warning",
+					code: "unresolved-flow-use",
+					message:
+						`phase '${phaseLabel}' uses saved flow '${unresolvedUse}' which cannot be resolved ` +
+						`statically; child effects are unknown and treated as an unknown boundary ` +
+						`(advisory). Runtime admission with the flow store is authoritative.`,
+					effectId: phaseLabel,
+				});
+			}
 			issues.push(...childResult.issues);
 			summary.sources.push(...childResult.summary.sources);
 			summary.sinks.push(...childResult.summary.sinks);
@@ -568,6 +613,9 @@ function summarizeComposedEffectFlow(
  * summarized onto the parent node and child sinks receive the parent's
  * dependency-reachable sources. Unresolved saved/dynamic children expose a
  * maximally confidential source and public sink until runtime resolution.
+ * With {@link ComposedEffectFlowOptions.downgradeUnresolvedUse} set (static
+ * gates without a flow loader), unresolvable `flow{use}` boundaries report as
+ * advisory warnings instead of errors; runtime admission stays authoritative.
  */
 export function validateComposedEffectFlow(
 	flow: ComposedEffectFlowLike,

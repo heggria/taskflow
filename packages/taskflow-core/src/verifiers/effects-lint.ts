@@ -10,13 +10,22 @@
  */
 
 import type { Phase } from "../schema.ts";
-import { validateComposedEffectFlow, validateEffectIR } from "../effects/validate.ts";
+import { validateComposedEffectFlow, validateEffectIR, type ComposedEffectFlowLike } from "../effects/validate.ts";
 import type {
 	TaskflowVerifier,
 	VerifiableFlow,
 	VerificationIssue,
 	VerifierIssue,
 } from "../verify.ts";
+
+/** Options for the static effects detector. */
+export interface DetectEffectsIssuesOptions {
+	/** Optional saved-flow loader used to resolve `flow{use}` children. When
+	 *  provided, resolved children are checked with their real effects; children
+	 *  the loader cannot resolve degrade to advisory warnings (the runtime
+	 *  loader remains the authoritative admission gate). */
+	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
+}
 
 /**
  * Collect all declared effects from each phase, prefix
@@ -25,7 +34,7 @@ import type {
  *
  * Pure — no I/O. Empty effects → empty array (does not fail verify).
  */
-export function detectEffectsIssues(flow: VerifiableFlow): VerificationIssue[] {
+export function detectEffectsIssues(flow: VerifiableFlow, options: DetectEffectsIssuesOptions = {}): VerificationIssue[] {
 	const phases = Array.isArray(flow.phases) ? flow.phases : [];
 	const scopedResults: Array<{ phaseId?: string; result: ReturnType<typeof validateEffectIR> }> = [];
 	for (const rawPhase of phases) {
@@ -37,7 +46,13 @@ export function detectEffectsIssues(flow: VerifiableFlow): VerificationIssue[] {
 		}
 	}
 
-	const flowResult = validateComposedEffectFlow({ phases: phases as Phase[] });
+	const flowResult = validateComposedEffectFlow({ phases: phases as Phase[] }, {
+		// Static gates have no flow store: an unresolved `flow{use}` child is
+		// advisory (the runtime loader is the authoritative admission gate),
+		// not a hard confidentiality taint.
+		downgradeUnresolvedUse: true,
+		resolveFlow: options.resolveFlow,
+	});
 	if (scopedResults.length === 0 && flowResult.issues.length === 0) return [];
 	const issues: VerificationIssue[] = [];
 	for (const scoped of scopedResults) {

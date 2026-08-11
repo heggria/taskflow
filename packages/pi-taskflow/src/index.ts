@@ -1404,7 +1404,10 @@ export default function (pi: ExtensionAPI) {
 				resolvedArgs = params.args as Record<string, unknown>;
 			}
 			const args = resolveArgs(def, resolvedArgs);
-			const v = validateTaskflow(def, { args, cwd: ctx.cwd });
+			// Resolve `flow{use}` children through the store so pre-run validation
+			// checks real child effects when the saved flow exists (runtime remains
+			// the authoritative gate for names the store cannot resolve).
+			const v = validateTaskflow(def, { args, cwd: ctx.cwd, resolveFlow: (name: string) => getFlow(ctx.cwd, name)?.def });
 			if (!v.ok) return errorResult(action, `Invalid taskflow:\n- ${v.errors.join("\n- ")}`);
 			for (const w of v.warnings) {
 				console.warn(`[taskflow:${def.name}] ${w}`);

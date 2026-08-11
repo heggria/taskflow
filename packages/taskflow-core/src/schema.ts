@@ -14,7 +14,7 @@ import { Errors as SchemaErrors } from "typebox/value";
 import { cwdArgName, hasCwdPlaceholder, normalizeRelativePath } from "./cwd-bridge.ts";
 import { WORKSPACE_KEYWORDS } from "./workspace.ts";
 import { EffectDeclSchema } from "./effects/schema.ts";
-import { validateComposedEffectFlow } from "./effects/validate.ts";
+import { validateComposedEffectFlow, type ComposedEffectFlowLike } from "./effects/validate.ts";
 
 // ---------------------------------------------------------------------------
 // Phase types
@@ -778,6 +778,11 @@ export interface ValidationOptions {
 	 *  (phase count, map items, concurrency) and denial of cwd/context/script
 	 *  resource capabilities until a FileBroker/sandbox exists. */
 	dynamic?: boolean;
+	/** Optional saved-flow loader used to resolve `flow{use}` children during
+	 *  effect label-flow validation. When provided, resolved children are checked
+	 *  with their real effects; children the loader cannot resolve degrade to
+	 *  advisory warnings (the runtime loader remains the authoritative gate). */
+	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
 }
 
 type ArgSpecRecord = Record<string, unknown> & {
@@ -1536,7 +1541,13 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 
 	// Cycle detection (Kahn)
 	try {
-		const labelFlow = validateComposedEffectFlow({ name: flow.name, phases: flow.phases as Phase[] });
+		const labelFlow = validateComposedEffectFlow({ name: flow.name, phases: flow.phases as Phase[] }, {
+			// Static gates have no flow store: an unresolved `flow{use}` child is
+			// advisory (the runtime loader is the authoritative admission gate),
+			// not a hard confidentiality taint.
+			downgradeUnresolvedUse: true,
+			resolveFlow: opts.resolveFlow,
+		});
 		for (const issue of labelFlow.issues) {
 			const message = `[effects] ${issue.message}`;
 			if (issue.severity === "error") errors.push(message);

@@ -793,6 +793,16 @@ function resolveFlow(cwd: string, params: { name?: string; define?: unknown; def
 	throw new RpcError(RPC.INVALID_PARAMS, "Provide either `name` (a saved flow) or `define` (an inline flow).");
 }
 
+/** Store-backed saved-flow loader for `flow{use}` resolution in pre-run
+ *  validation. Mirrors the runtime `loadFlow` lookup; returns undefined for
+ *  names the store cannot resolve so runtime admission stays authoritative. */
+function savedFlowLoader(cwd: string): (name: string) => Taskflow | undefined {
+	return (name: string) => {
+		const r = getFlowDiagnosed(cwd, name);
+		return r.ok ? r.value.def : undefined;
+	};
+}
+
 /** Optional host-identity options for the MCP server (0.2.0 dogfood issue 4).
  *  `host` is the bound host identity (codex/claude/opencode/grok); it is
  *  stamped onto RunState.host and reported by `taskflow_version`. Defaults to
@@ -863,13 +873,14 @@ export function makeToolHandlers(
 					? args.name.trim()
 					: undefined;
 			const def = resolveFlow(cwd, args);
-			const structural = validateTaskflow(def);
+			const loadSaved = savedFlowLoader(cwd);
+			const structural = validateTaskflow(def, { resolveFlow: loadSaved });
 			if (!structural.ok) return textContent(`Flow is invalid:\n- ${structural.errors.join("\n- ")}`, true);
 			const providedArgs = args.args && typeof args.args === "object" && !Array.isArray(args.args)
 				? args.args as Record<string, unknown>
 				: {};
 			const resolvedArgs = resolveArgs(def, providedArgs);
-			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
+			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd, resolveFlow: loadSaved });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
 			const usageAccounting = runner.usageAccounting;
 			if (def.budget && usageAccounting === "unavailable") {
