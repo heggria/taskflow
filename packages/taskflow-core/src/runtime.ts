@@ -1641,7 +1641,7 @@ async function executePhaseInner(
 		flowDefHash: state.flowDefHash === "failed" ? undefined : state.flowDefHash,
 		phaseFp: state.phaseFingerprints?.[phase.id],
 		forceRerun: opts?.forceRerun,
-		thinking: phase.thinking,
+		thinking: phase.thinking ?? deps.globalThinking,
 		tools: phase.tools,
 		preRead,
 		agentScope: state.def.agentScope,

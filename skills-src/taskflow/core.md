@@ -550,7 +550,7 @@ backend): `fs.delete` is not supported by the file transaction, and
 `secret.read` / `service.call` have no vault/network adapters in 0.3 — do not
 author a flow expecting them to do anything yet.
 
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 **Audit with `taskflow_why_effect` (zero tokens, read-only).** Pass `runId` +
 `effectId` (add `phaseId` to disambiguate a repeated id; `json: true` for the
 full record) to explain a declared effect's authorization and lifecycle from
@@ -559,7 +559,7 @@ journal status, and lifecycle (`declared` / `staged` / `committed` /
 `rejected` / `unknown`). **Declaration alone is not authorization**: if no
 durable intent admitted the effect for this run/phase, `authorized.allowed` is
 `false` (fail-closed).
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 **What this is NOT (honesty baseline):**
 

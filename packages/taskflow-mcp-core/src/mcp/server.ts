@@ -1099,10 +1099,12 @@ export function makeToolHandlers(
 			}
 			const child = forkRunForResume(prev, { overrides, cwd, host });
 			const settings = readSubagentSettings();
-			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const agentScope = child.def.agentScope ?? "both";
+			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
+				globalThinking: settings.globalThinking,
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting: runner.usageAccounting,

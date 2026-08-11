@@ -559,14 +559,30 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 	} = await import("taskflow-core");
 	const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const userAgentDir = path.join(cwd, "user-agent-root");
+	process.env.PI_CODING_AGENT_DIR = userAgentDir;
 	try {
-		const agentFile = path.join(cwd, ".pi", "agents", "resume-fixture.md");
-		fs.mkdirSync(path.dirname(agentFile), { recursive: true });
-		fs.writeFileSync(agentFile, "---\nname: resume-fixture\ndescription: resume test fixture\n---\nStable resume fixture.\n");
+		fs.mkdirSync(path.join(userAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(
+			path.join(userAgentDir, "agents", "resume-fixture.md"),
+			"---\nname: resume-fixture\ndescription: user resume fixture\n---\nUSER RESUME FIXTURE\n",
+		);
+		fs.writeFileSync(
+			path.join(userAgentDir, "settings.json"),
+			JSON.stringify({ subagents: { globalThinking: "high" }, taskflow: { builtInAgents: false } }),
+		);
+		const projectAgentFile = path.join(cwd, ".pi", "agents", "resume-fixture.md");
+		fs.mkdirSync(path.dirname(projectAgentFile), { recursive: true });
+		fs.writeFileSync(
+			projectAgentFile,
+			"---\nname: resume-fixture\ndescription: project resume fixture\n---\nPROJECT RESUME FIXTURE\n",
+		);
 		const settings = readSubagentSettings();
-		const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+		const { agents } = discoverAgents(cwd, "user", settings.modelRoles, settings.taskflow);
 		const def: Taskflow = {
 			name: "resume-me",
+			agentScope: "user",
 			phases: [
 				{ id: "a", type: "agent", agent: "resume-fixture", task: "stable" },
 				{ id: "b", type: "agent", agent: "resume-fixture", task: "fail-me", dependsOn: ["a"], final: true },
@@ -586,6 +602,7 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		const parentResult = await executeTaskflow(parent, {
 			cwd,
 			agents,
+			globalThinking: settings.globalThinking,
 			runTask: parentRunner,
 		});
 		assert.equal(parentResult.ok, false);
@@ -594,11 +611,14 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		const parentFile = path.join(runsDir(cwd), def.name, `${parent.runId}.json`);
 		const parentBefore = fs.readFileSync(parentFile, "utf8");
 
-		const childTasks: string[] = [];
+		const childCalls: Array<{ task: string; sources: string[]; globalThinking?: string }> = [];
 		const childRunner: SubagentRunner = {
 			usageAccounting: "tokens-only",
-			runTask: async (_cwd, _agents, agent, task) => {
-				childTasks.push(task);
+			runTask: async (_cwd, childAgents, agent, task, _opts, globalThinking) => {
+				const sources = childAgents
+					.map((entry) => (entry as { source?: unknown }).source)
+					.filter((source): source is string => typeof source === "string");
+				childCalls.push({ task, sources, globalThinking });
 				return { agent, task, exitCode: 0, output: `child:${task}`, stderr: "", usage, stopReason: "end" };
 			},
 		};
@@ -619,10 +639,14 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		assert.notEqual(child.runId, parent.runId);
 		assert.equal(child.parentRunId, parent.runId);
 		assert.equal(child.host, "codex");
-		assert.deepEqual(childTasks, ["fixed"], "done phase a is reused; only overridden b re-runs");
+		assert.deepEqual(childCalls.map((call) => call.task), ["fixed"], "done phase a is reused; only overridden b re-runs");
+		assert.deepEqual(childCalls[0]?.sources, ["user"], "resume honors the persisted user-only agent scope");
+		assert.equal(childCalls[0]?.globalThinking, "high", "resume preserves configured global thinking");
 		assert.equal(child.def.phases.find((phase) => phase.id === "b")?.task, "fixed");
 		assert.equal(parent.def.phases.find((phase) => phase.id === "b")?.task, "fail-me");
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
 });

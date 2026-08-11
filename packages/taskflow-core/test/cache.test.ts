@@ -428,6 +428,30 @@ test("runtime: cross-run misses when phase 'thinking' changes (P0-2)", async () 
 	fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("runtime: cross-run misses when effective global thinking changes", async () => {
+	const dir = tmpDir();
+	const store = new CacheStore(dir);
+	const def: Taskflow = {
+		name: "global-think-cr",
+		phases: [{ id: "p", type: "agent", agent: "a", task: "go", cache: { scope: "cross-run" }, final: true }],
+	};
+	const counter = { n: 0 };
+	const deps = (globalThinking: ThinkingLevel): RuntimeDeps => ({
+		cwd: dir,
+		agents: AGENTS,
+		globalThinking,
+		runTask: countingRunner(counter),
+		cacheStore: store,
+	});
+
+	await executeTaskflow(mkState(def, dir), deps("off"));
+	await executeTaskflow(mkState(def, dir), deps("high"));
+	assert.equal(counter.n, 2, "changing the effective global thinking must invalidate the cross-run hit");
+	await executeTaskflow(mkState(def, dir), deps("off"));
+	assert.equal(counter.n, 2, "identical effective global thinking re-hits");
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("runtime: cross-run misses when phase 'tools' change (P0-2)", async () => {
 	const dir = tmpDir();
 	const store = new CacheStore(dir);
