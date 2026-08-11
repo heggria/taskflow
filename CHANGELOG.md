@@ -4,7 +4,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [0.3.0] — Unreleased (Trusted Effects candidate)
 
-> **Version plan:** keep published packages at **0.2.8** until a human cuts `v0.3.0`.
+> **Version plan:** keep published packages at **0.2.9** until a human cuts `v0.3.0`.
 > Branch: `rc/0.3.0-trusted-effects`. **Not GA until tag + publish.**
 
 ### Added
@@ -35,6 +35,29 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - Resolve-only is not an OS sandbox. Direct writes to declared targets are detected and restored; writes outside declared targets remain host-policy dependent.
 - Historical Control Plane (`feat/0.3.0`) is **not** this release definition.
 - **Not released; not GA.**
+
+## [0.2.9] — 2026-08-11
+
+### Added
+
+- **Hermes Agent host.** New `hermes-taskflow` delivery package and `taskflow-hosts` Hermes runner, with a stdio MCP scaffold, generated skill, English/Chinese guides, and first-release install pin `hermes-taskflow@0.2.9`.
+- **Hermes read-only toolsets.** Every child receives an explicit `-t`; local reads use `taskflow_readonly_files`, while model-only phases use an empty `taskflow_model_only` toolset. Read-only web access remains an explicit opt-in.
+
+### Fixed
+
+- **Pi `/tf verify <name>`.** The slash handler now implements the advertised command and preserves schema-valid flow names containing spaces, matching the tool action and autocomplete surfaces.
+- **Project flow discovery.** Ancestor discovery canonicalizes relative/symlink paths and stops at the user home and shared OS temp root, preventing `/tmp/.pi` or `~/.pi` from being mistaken for project state.
+- **Hermes plain-text protocol.** Blank lines and stdout text beginning with `session_id:` are preserved as answer content; session metadata is parsed only from stderr. Abort, idle, and empty-output diagnostics remain fail-closed.
+- **Hermes installation examples.** CLI examples use the live `hermes mcp add --command … --args …` syntax.
+
+### Security
+
+- **Hermes child isolation.** Read-only `read_file` and `search_files` paths are canonicalized and confined to the resolved phase cwd, including `..`, absolute paths, and symlink escapes. The child home receives a filtered inference-provider-only `auth.json`, an exact provider dotenv allowlist, and non-secret model/fallback routing; unrelated application credentials and parent `HERMES_*` control-plane state are not copied.
+- **Mutating authorization.** The read-only plugin is loaded only for read-only children. Explicitly authorized `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` phases default to local `file,terminal`; network requires explicit web aliases, while delegation/skills/memory/browser/cron/control-plane toolsets remain denied.
+
+### Changed
+
+- Root, all ten publishable packages, plugin manifests, MCP install pins, server-version contracts, website metadata, and deterministic publish/packed-consumer gates are aligned to **0.2.9**.
 
 ## [0.2.8] — 2026-08-10
 

@@ -315,7 +315,7 @@ Notes:
   Children inherit only platform/proxy/CA and Grok/xAI/Taskflow-Grok variables;
   unrelated secrets are removed.
 
-For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
 comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.

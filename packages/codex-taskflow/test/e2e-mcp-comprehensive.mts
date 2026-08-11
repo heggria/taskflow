@@ -82,7 +82,7 @@ send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "
 const init = await waitFor(1, "initialize");
 assert.equal(init.result.protocolVersion, "2025-06-18");
 assert.equal(init.result.serverInfo.name, "taskflow-codex");
-assert.equal(init.result.serverInfo.version, "0.2.8");
+assert.equal(init.result.serverInfo.version, "0.2.9");
 ok(`initialize → ${JSON.stringify(init.result.serverInfo)}`);
 
 // notification must NOT produce a response

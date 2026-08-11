@@ -1,7 +1,7 @@
 {
 	"name": "codex-taskflow",
-	"version": "0.2.8",
-	"description": "Run taskflow on OpenAI Codex: a Codex subagent runner plus an MCP server (and a plug-and-play Codex plugin) that exposes the taskflow_* tools to Codex users.",
+	"version": "0.2.9",
+	"description": "Run taskflow on OpenAI Codex: the npm tarball provides the Codex subagent runner and MCP server; the plugin is distributed through the repository marketplace.",
 	"keywords": [
 		"codex",
 		"codex-cli",

@@ -30,7 +30,7 @@ taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义
 
 ## 在你的宿主上安装
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build', 'Hermes Agent']}>
   <Tab value="Pi">
     ```bash title="安装 Pi 扩展"
     pi install npm:pi-taskflow
@@ -63,6 +63,13 @@ taskflow 是面向 coding-agent 子代理的声明式编排运行时。你定义
   </Tab>
   <Tab value="Grok Build">
     按 [Grok Build 指南](/zh-cn/docs/guides/grok-build)中的当前 package / 本地构建说明安装。
+  </Tab>
+  <Tab value="Hermes Agent">
+    ```bash title="注册 Hermes MCP server"
+    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+    ```
+
+    继续阅读 [Hermes Agent 指南](/zh-cn/docs/guides/hermes)。
   </Tab>
 </Tabs>
 

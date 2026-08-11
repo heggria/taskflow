@@ -27,4 +27,4 @@ Other approaches you've thought about.
 - [ ] It fits the declarative JSON-DSL model (not imperative scripting)
 - [ ] It doesn't require new runtime dependencies
 
-> **Response time:** I review feature requests ~weekly. Ideas that align with the [STRATEGY.md](./STRATEGY.md) roadmap get priority.
+> **Response time:** I review feature requests ~weekly. Ideas that align with the [STRATEGY.md](../../docs/internal/STRATEGY.md) roadmap get priority.

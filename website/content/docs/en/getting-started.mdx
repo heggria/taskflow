@@ -26,7 +26,7 @@ Save this as `hello.json`:
 
 Then run it.
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok', 'Hermes']}>
   <Tab value="Pi">
     ```bash title="Run on Pi"
     /tf run hello
@@ -53,6 +53,11 @@ Then run it.
     # Ask Grok to call taskflow_verify / taskflow_run via MCP tools.
     ```
   </Tab>
+  <Tab value="Hermes">
+    ```bash title="Run on Hermes Agent"
+    # Ask Hermes to call taskflow_verify / taskflow_run via MCP tools.
+    ```
+  </Tab>
 </Tabs>
 
 You should see the runtime execute one phase and return the final output. That is a taskflow: a named graph with one phase.
@@ -69,7 +74,7 @@ If you have not installed taskflow yet, pick your host:
   Every taskflow package requires **Node.js 22.19.0 or newer**.
 </Callout>
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok', 'Hermes']}>
   <Tab value="Pi">
     ```bash title="Install pi-taskflow"
     pi install npm:pi-taskflow
@@ -108,6 +113,12 @@ If you have not installed taskflow yet, pick your host:
     # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
     Read-only phases and mutating or omitted-tool phases each fail closed unless their matching custom profile is configured.
+  </Tab>
+  <Tab value="Hermes">
+    ```bash title="Register Hermes Agent MCP"
+    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+    ```
+    See the [Hermes Agent guide](/en/docs/guides/hermes) for read-only isolation and explicit mutating opt-in.
   </Tab>
 </Tabs>
 

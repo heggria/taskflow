@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/hero.zh-CN.png" alt="taskflow：跨五个编程智能体宿主编译、验证并运行多智能体 DAG" width="100%">
+<img src="./assets/hero.zh-CN.png" alt="taskflow：跨六个编程智能体宿主编译、验证并运行多智能体 DAG" width="100%">
 
 <br />
 
@@ -8,12 +8,12 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
-[![Hosts](https://img.shields.io/badge/hosts-5-7775FF?style=flat-square)](#安装到你的宿主)
+[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#安装到你的宿主)
 [![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#为真实工作而生)
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.8 新能力](#028-先审阅再确认) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.9 新能力](#029-hermes-agent--verify-对齐) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -25,7 +25,7 @@
 
 它运行在你已经使用的编程智能体上：
 
-**Pi · Codex · Claude Code · OpenCode · Grok Build**
+**Pi · Codex · Claude Code · OpenCode · Grok Build · Hermes Agent**
 
 ```text
 JSON 或 .tf.ts
@@ -54,7 +54,7 @@ JSON 或 .tf.ts
 | **中间输出** | 涌入宿主上下文 | **隔离在运行时里** |
 | **失败后** | 从头开始或手工恢复状态 | **从持久化阶段状态续跑** |
 | **输入变化** | 大范围重跑 | **解释过期原因，只重跑受影响前沿** |
-| **可移植性** | 绑定单一智能体 | **同一份 JSON 合同跨五个宿主** |
+| **可移植性** | 绑定单一智能体 | **同一份 JSON 合同跨六个宿主** |
 
 这是一项有意的取舍：少一点任意编排代码，换来更多的**可验证性、可观测性、恢复能力与复用**。
 
@@ -131,7 +131,7 @@ pi install npm:pi-taskflow
 /tf:audit-api dir=src/api
 ```
 
-在 Codex、Claude Code、OpenCode 和 Grok Build 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
+在 Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
 
 [查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
@@ -151,6 +151,12 @@ pi install npm:pi-taskflow
 ```
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
+
+## 0.2.9：Hermes Agent + verify 对齐
+
+Taskflow 现在通过 `hermes-taskflow` 支持第六个宿主 **Hermes Agent**。Hermes 子代理使用临时 home、显式工具集、cwd 内只读路径边界、仅 provider 凭据，以及对 mutating `--yolo` phase 的明确 opt-in。
+
+Pi 已公开的 `/tf verify <name>` 现在与 tool 接口一致，也能正确处理含空格的 flow 名。项目发现同时在规范化后的 home/temp 边界停止，不再把环境中的 `/tmp/.pi` 误认成项目状态。[完整 0.2.9 说明 →](./CHANGELOG.md#029--2026-08-11)
 
 ## 0.2.8：先审阅，再确认
 
@@ -344,7 +350,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -353,18 +359,30 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
 
 [Grok Build 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/grok-build)
 
+### Hermes Agent
+
+```bash
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+# 优先在 config.yaml 写 env（不要用 CLI --env 塞进 node argv）：
+#   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
+```
+
+Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理使用临时 HERMES_HOME，只继承非 secret 的 model/fallback 路由、仅含已路由 inference provider 的 `auth.json` 与 provider allowlist dotenv；不继承父级 MCP、skills、memory、sessions 或 rules。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
+
+[Hermes 指南 →](./docs/hermes-mcp.md)
+
 ## 为真实工作而生
 
 <div align="center">
 
-**9 个包** · **5 个宿主** · **12 种阶段** · **18 个内置 agent** · **1,500+ 测试** · **MIT**
+**10 个包** · **6 个宿主** · **12 种阶段** · **18 个内置 agent** · **1,500+ 测试** · **MIT**
 
 </div>
 
@@ -376,10 +394,11 @@ Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用�
                                        taskflow-hosts ─────┼─ codex-taskflow
                                                           ├─ claude-taskflow
                                                           ├─ opencode-taskflow
-                                                          └─ grok-taskflow
+                                                          ├─ grok-taskflow
+                                                          └─ hermes-taskflow
 ```
 
-`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。四个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
+`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。五个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
 
 测试套件覆盖编排语义、持久化与文件锁竞态、缓存新鲜度、路径穿越、动态图加固、取消、预算、全部 12 种阶段、FlowIR/replay/recompute、TypeScript DSL 擦除、宿主 argv 合同、MCP server，以及打包后的 consumer imports。
 
@@ -391,7 +410,7 @@ Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用�
 | [核心概念](https://heggria.github.io/taskflow/zh-cn/docs/concepts/) | DAG、隔离、验证、续跑、共享上下文 |
 | [语法](https://heggria.github.io/taskflow/zh-cn/docs/syntax/) | 阶段字段、控制流、预算、缓存、scorer |
 | [编译器与运行时](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/) | TypeScript DSL、FlowIR、重放、重算、后台运行 |
-| [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok 配置 |
+| [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok、Hermes 配置 |
 | [参考](https://heggria.github.io/taskflow/zh-cn/docs/reference/) | 命令、简写与精确工具接口 |
 | [Showcase](https://heggria.github.io/taskflow/zh-cn/docs/showcase/) | 真实 flow 与案例研究 |
 | [0.2.0 前沿性评估](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | 基于源码、竞品与采用数据的独立技术报告 |

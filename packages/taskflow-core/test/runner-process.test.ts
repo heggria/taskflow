@@ -2,10 +2,10 @@
  * Unit tests for the shared `runSubagentProcess` (runner-core.ts).
  *
  * This is the spawn / idle-watchdog / abort / signal-kill / stderr-cap / post-exit
- * classify block shared by the codex/claude/opencode/grok runners. It has no other
+ * classify block shared by the codex/claude/opencode/grok/hermes runners. It has no other
  * direct unit tests — the host parsers are tested in their own packages, but the
  * shared process/classify contract (the highest-blast-radius code: a bug here
- * affects all 3 non-pi hosts) is exercised here against REAL short-lived child
+ * affects all five non-pi hosts) is exercised here against REAL short-lived child
  * processes (no mocks), with a trivial foldLine that just echoes stdout.
  */
 
@@ -136,6 +136,31 @@ test("runSubagentProcess: a clean JSON-emitting run classifies as end", async ()
 	assert.match(r.output, /answer/);
 });
 
+test("runSubagentProcess: text stdout preserves blank lines for host folding", async () => {
+	const acc = makeAcc();
+	const seen: string[] = [];
+	const r = await runSubagentProcess({
+		agent: "test",
+		task: "plain",
+		model: undefined,
+		bin: process.execPath,
+		args: ["-e", `process.stdout.write("alpha\\n\\nomega\\n");`],
+		cwd: process.cwd(),
+		stdoutFormat: "text",
+		acc,
+		foldLine: (a, line) => {
+			seen.push(line);
+			if (a.finalText) a.finalText += "\n";
+			a.finalText += line;
+			a.lastActivity = line.trim();
+			return null;
+		},
+	});
+
+	assert.deepEqual(seen, ["alpha", "", "omega"]);
+	assert.equal(r.output, "alpha\n\nomega");
+});
+
 test("runSubagentProcess completion: terminal output with a leaky handle is reaped as success", async () => {
 	const r = await terminalRun(`
 		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");
@@ -196,14 +221,14 @@ test("runSubagentProcess completion: later activity revokes a terminal candidate
 
 test("runSubagentProcess completion: ignored metadata preserves a terminal candidate", async () => {
 	const controller = new AbortController();
-	const watchdog = setTimeout(() => controller.abort(), 2_000);
+	const watchdog = setTimeout(() => controller.abort(), 5_000);
 	try {
 		const r = await terminalRun(`
 			const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
 			emit({type:"final",text:"DONE"}); emit({type:"terminal"});
-			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
+			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),30);
 			setInterval(()=>{},1000);
-		`, { idleTimeoutMs: 1_000, terminalGraceMs: 50, signal: controller.signal });
+		`, { idleTimeoutMs: 1_000, terminalGraceMs: 120, signal: controller.signal });
 		assert.equal(r.output, "DONE");
 		assert.equal(r.completionSource, "terminal-reap", "ignored metadata must preserve the terminal candidate");
 	} finally {

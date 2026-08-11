@@ -51,7 +51,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-codex");
-	assert.equal(res.result.serverInfo.version, "0.2.8");
+	assert.equal(res.result.serverInfo.version, "0.2.9");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
@@ -550,19 +550,26 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 	const os = await import("node:os");
 	const path = await import("node:path");
 	const {
+		discoverAgents,
 		executeTaskflow,
 		newRunId,
+		readSubagentSettings,
 		runsDir,
 		saveRun,
 	} = await import("taskflow-core");
 	const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-"));
 	try {
+		const agentFile = path.join(cwd, ".pi", "agents", "resume-fixture.md");
+		fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+		fs.writeFileSync(agentFile, "---\nname: resume-fixture\ndescription: resume test fixture\n---\nStable resume fixture.\n");
+		const settings = readSubagentSettings();
+		const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
 		const def: Taskflow = {
 			name: "resume-me",
 			phases: [
-				{ id: "a", type: "agent", agent: "executor", task: "stable" },
-				{ id: "b", type: "agent", agent: "executor", task: "fail-me", dependsOn: ["a"], final: true },
+				{ id: "a", type: "agent", agent: "resume-fixture", task: "stable" },
+				{ id: "b", type: "agent", agent: "resume-fixture", task: "fail-me", dependsOn: ["a"], final: true },
 			],
 		};
 		const parent: RunState = {
@@ -577,7 +584,8 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 			...(task === "fail-me" ? { errorMessage: "boom" } : {}),
 		});
 		const parentResult = await executeTaskflow(parent, {
-			cwd, agents: [],
+			cwd,
+			agents,
 			runTask: parentRunner,
 		});
 		assert.equal(parentResult.ok, false);

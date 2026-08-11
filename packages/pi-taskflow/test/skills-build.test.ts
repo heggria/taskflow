@@ -63,6 +63,10 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 		path.join(root, "packages", "grok-taskflow", "plugin", "skills", "taskflow", "SKILL.md"),
 		"utf8",
 	);
+	const hmSkill = readFileSync(
+		path.join(root, "packages", "hermes-taskflow", "plugin", "skills", "taskflow", "SKILL.md"),
+		"utf8",
+	);
 	// No leftover markers in any output.
 	for (const [name, text] of [
 		["pi", piSkill],
@@ -70,6 +74,7 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 		["claude", clSkill],
 		["opencode", ocSkill],
 		["grok", gkSkill],
+		["hermes", hmSkill],
 	] as const) {
 		assert.ok(!/<!--\s*\/?host:/.test(text), `${name} SKILL.md must not contain host markers`);
 	}
@@ -79,24 +84,28 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 	assert.doesNotMatch(clSkill, /Actions \(all 20\)/);
 	assert.doesNotMatch(ocSkill, /Actions \(all 20\)/);
 	assert.doesNotMatch(gkSkill, /Actions \(all 20\)/);
+	assert.doesNotMatch(hmSkill, /Actions \(all 20\)/);
 	assert.doesNotMatch(cxSkill, /action: "recompute"/);
 	// The MCP hosts teach the MCP tools; pi must not.
 	assert.match(cxSkill, /taskflow_verify/);
 	assert.match(clSkill, /taskflow_verify/);
 	assert.match(ocSkill, /taskflow_verify/);
 	assert.match(gkSkill, /taskflow_verify/);
+	assert.match(hmSkill, /taskflow_verify/);
 	assert.doesNotMatch(piSkill, /taskflow_verify/);
 	// Each MCP host names itself, not the others, in its host-binding preamble.
 	assert.match(cxSkill, /# Taskflow \(Codex\)/);
 	assert.match(clSkill, /# Taskflow \(Claude Code\)/);
 	assert.match(ocSkill, /# Taskflow \(OpenCode\)/);
 	assert.match(gkSkill, /# Taskflow \(Grok Build\)/);
-	assert.doesNotMatch(cxSkill, /claude -p|opencode run|grok -p/);
-	assert.doesNotMatch(clSkill, /codex exec|opencode run|grok -p/);
-	assert.doesNotMatch(ocSkill, /codex exec|claude -p|grok -p/);
-	assert.doesNotMatch(gkSkill, /codex exec|claude -p|opencode run/);
+	assert.match(hmSkill, /# Taskflow \(Hermes Agent\)/);
+	assert.doesNotMatch(cxSkill, /claude -p|opencode run|grok -p|hermes chat/);
+	assert.doesNotMatch(clSkill, /codex exec|opencode run|grok -p|hermes chat/);
+	assert.doesNotMatch(ocSkill, /codex exec|claude -p|grok -p|hermes chat/);
+	assert.doesNotMatch(gkSkill, /codex exec|claude -p|opencode run|hermes chat/);
+	assert.doesNotMatch(hmSkill, /codex exec|claude -p|opencode run|grok -p/);
 	// All hosts share the same core: flow design ladder + common-mistakes section.
-	for (const text of [piSkill, cxSkill, clSkill, ocSkill, gkSkill]) {
+	for (const text of [piSkill, cxSkill, clSkill, ocSkill, gkSkill, hmSkill]) {
 		assert.match(text, /Flow design ladder/);
 		assert.match(text, /Referencing `\{steps\.X\}` without `dependsOn/);
 	}

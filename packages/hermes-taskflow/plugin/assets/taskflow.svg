@@ -1,0 +1,17 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Taskflow — a declarative DAG of subagent tasks">
+  <rect width="512" height="512" rx="112" fill="#F7F6F3"/>
+  <rect x="4" y="4" width="504" height="504" rx="108" stroke="#E5E3DD" stroke-width="8"/>
+  <g stroke="#4B4ACF" stroke-width="12" stroke-linecap="round" fill="none">
+    <path d="M150 256 C205 256, 205 150, 256 150"/>
+    <path d="M150 256 C205 256, 205 256, 256 256"/>
+    <path d="M150 256 C205 256, 205 362, 256 362"/>
+    <path d="M256 150 C312 150, 312 256, 362 256"/>
+    <path d="M256 256 C312 256, 312 256, 362 256"/>
+    <path d="M256 362 C312 362, 312 256, 362 256"/>
+  </g>
+  <circle cx="150" cy="256" r="34" fill="#4B4ACF"/>
+  <circle cx="256" cy="150" r="26" fill="#8B8AE3"/>
+  <circle cx="256" cy="256" r="26" fill="#8B8AE3"/>
+  <circle cx="256" cy="362" r="26" fill="#8B8AE3"/>
+  <circle cx="362" cy="256" r="34" fill="#0E8A66"/>
+</svg>

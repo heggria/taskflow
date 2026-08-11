@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import type { AgentConfig } from "./agents.ts";
 import { coerceArray, evaluateCondition, interpolate, interpolateValue, type InterpolationContext, safeParse, tryEvaluateCondition } from "./interpolate.ts";
 import { contractViolations } from "./contract.ts";
-import { isFailed, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS, sanitizeErrorMessage } from "./runner-core.ts";
+import { failedResultDisplayOutput, hasMeaningfulFailedOutput, isFailed, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS, sanitizeErrorMessage } from "./runner-core.ts";
 import type { LiveUpdate, RunResult, SubagentRunner } from "./host/runner-types.ts";
 
 /** The host-neutral subagent runner signature the engine drives. A host adapter
@@ -177,8 +177,9 @@ export interface RuntimeResult {
 	 *  normal case this is the (fallback) final phase that actually completed.
 	 *  For gate/budget prefixes, it is retained when underlying partial output
 	 *  is included (the blocking gate/approval phase, or the fallback final
-	 *  phase for a budget halt); `undefined` when no phase output is available
-	 *  (no phase completed). Never the designated skipped/failed final phase. */
+	 *  phase for a budget halt); a failed final phase is attributed only when it
+	 *  has an explicitly marked partial answer. `undefined` when no phase answer
+	 *  is available. */
 	outputSourcePhaseId?: string;
 	/** Incremental-reuse summary: how many phases were reused from cache vs.
 	 *  freshly executed this run, and the cost the reused work would otherwise
@@ -268,16 +269,14 @@ function buildInterpolationContext(
 
 function resultToPhaseState(id: string, r: RunResult, inputHash: string, parseJson: boolean): PhaseState {	const failed = isFailed(r);
 	const attempts = attemptsOf(r);
-	// For failed phases, embed the error info in the output so downstream
-	// phases (and the user) can see what went wrong. The raw r.output is
-	// often a useless placeholder like "(upstream error: subagent failed)".
 	const output = failed
-		? r.errorMessage || r.stderr || r.output
+		? failedResultDisplayOutput(r)
 		: r.output;
 	return {
 		id,
 		status: failed ? "failed" : "done",
 		output,
+		partialOutput: failed && hasMeaningfulFailedOutput(r) ? true : undefined,
 		json: parseJson && !failed ? safeParse(r.output) : undefined,
 		usage: r.usage,
 		model: r.model,
@@ -478,7 +477,8 @@ function mergePhaseState(
 	// which model produced the merged output.
 	const model = ran.find((r) => r.model !== undefined)?.model;
 	// Combine outputs as a labelled list; also expose a JSON array of outputs.
-	// For failed items, use the error message instead of the useless placeholder.
+	// For failed items, preserve a real partial body; replace only the shared
+	// transport placeholder with the concise diagnostic.
 	// Labels are positionally aligned to the ORIGINAL `over` array: we iterate
 	// over ALL results (including budget-skipped, which are filtered to null) and
 	// use `results.length` as N, so item k's label reads `[k/N]` matching its
@@ -489,7 +489,7 @@ function mergePhaseState(
 		.map((r, i) => {
 			if (r.stopReason === "budget-skipped") return null;
 			const label = `### [${i + 1}/${results.length}] ${r.agent}${isFailed(r) ? " (failed)" : ""}`;
-			const content = isFailed(r) ? (r.errorMessage || r.stderr || r.output) : r.output;
+			const content = isFailed(r) ? failedResultDisplayOutput(r) : r.output;
 			return `${label}\n\n${content}`;
 		})
 		.filter((x): x is string => x !== null)
@@ -504,6 +504,7 @@ function mergePhaseState(
 		id,
 		status: anyFailed ? "failed" : "done",
 		output: combinedText,
+		partialOutput: ran.some((r) => isFailed(r) && hasMeaningfulFailedOutput(r)) ? true : undefined,
 		json: jsonArray,
 		usage,
 		model,

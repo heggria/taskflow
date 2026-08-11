@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/hero.png" alt="taskflow: compile, verify, and run multi-agent DAGs across five coding-agent hosts" width="100%">
+<img src="./assets/hero.png" alt="taskflow: compile, verify, and run multi-agent DAGs across six coding-agent hosts" width="100%">
 
 <br />
 
@@ -8,12 +8,12 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
-[![Hosts](https://img.shields.io/badge/hosts-5-7775FF?style=flat-square)](#install-on-your-host)
+[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#install-on-your-host)
 [![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#built-to-survive-real-work)
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.8](#028-review-then-confirm) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.9](#029-hermes-agent--verify-parity) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
 
 </div>
 
@@ -25,7 +25,7 @@
 
 It runs on the coding agent you already use:
 
-**Pi · Codex · Claude Code · OpenCode · Grok Build**
+**Pi · Codex · Claude Code · OpenCode · Grok Build · Hermes Agent**
 
 ```text
 JSON or .tf.ts
@@ -54,7 +54,7 @@ Built-in subagent tools are excellent for one turn. The moment the work branches
 | **Intermediate output** | Floods the host context | **Stays isolated in the runtime** |
 | **Failure** | Start over or reconstruct state | **Resume from persisted phase state** |
 | **Changed input** | Re-run broadly | **Explain staleness and re-run the affected frontier** |
-| **Portability** | Coupled to one agent | **One JSON contract across five hosts** |
+| **Portability** | Coupled to one agent | **One JSON contract across six hosts** |
 
 The trade is deliberate: less arbitrary orchestration code, more **verifiability, observability, recovery, and reuse**.
 
@@ -131,7 +131,7 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 /tf:audit-api dir=src/api
 ```
 
-On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
+On Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
 
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 
@@ -151,6 +151,12 @@ This is real output from a Pi run—not a mock dashboard:
 ```
 
 The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
+
+## 0.2.9: Hermes Agent + verify parity
+
+Taskflow now ships on **Hermes Agent** as `hermes-taskflow`, bringing the same MCP control plane to a sixth host. Hermes children run with an ephemeral home, explicit toolsets, cwd-confined local reads, provider-only credential material, and an explicit opt-in for mutating `--yolo` phases.
+
+Pi's advertised `/tf verify <name>` command now matches the tool surface, including saved flow names containing spaces. Project discovery also stops at canonical home/temp boundaries, so ambient `/tmp/.pi` state cannot become a project by accident. [Full 0.2.9 notes →](./CHANGELOG.md#029--2026-08-11)
 
 ## 0.2.8: review, then confirm
 
@@ -349,7 +355,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.8 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -358,18 +364,31 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
 
 [Grok Build guide →](https://heggria.github.io/taskflow/en/docs/guides/grok-build)
 
+### Hermes Agent
+
+```bash
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+# Prefer env in config.yaml (not CLI --env after args — can be stuffed into argv):
+#   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
+```
+
+Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use an ephemeral HERMES_HOME with only non-secret model/fallback routing, a routed-provider-only inference `auth.json`, and provider-allowlisted dotenv keys; parent MCP, skills, memory, sessions, and rules are not inherited. RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
+
+[Hermes guide →](./docs/hermes-mcp.md)
+
+
 ## Built to survive real work
 
 <div align="center">
 
-**9 packages** · **5 hosts** · **12 phase types** · **18 built-in agents** · **1,500+ tests** · **MIT**
+**10 packages** · **6 hosts** · **12 phase types** · **18 built-in agents** · **1,500+ tests** · **MIT**
 
 </div>
 
@@ -381,10 +400,10 @@ Grok Build support is new in 0.2. Its CLI stream does not report token/cost usag
                                        taskflow-hosts ─────┼─ codex-taskflow
                                                           ├─ claude-taskflow
                                                           ├─ opencode-taskflow
-                                                          └─ grok-taskflow
+                                                          └─ grok-taskflow / hermes-taskflow
 ```
 
-`taskflow-core` is host-neutral and imports no host SDK. `taskflow-mcp-core` implements stdio JSON-RPC without an MCP SDK dependency; `taskflow-hosts` owns the shared host process runners. The four MCP delivery packages bind both layers (and core), while Pi keeps its native adapter.
+`taskflow-core` is host-neutral and imports no host SDK. `taskflow-mcp-core` implements stdio JSON-RPC without an MCP SDK dependency; `taskflow-hosts` owns the shared host process runners. The five MCP delivery packages bind both layers (and core), while Pi keeps its native adapter.
 
 The test suite covers orchestration semantics, persistence and file-lock races, cache freshness, path traversal, dynamic graph hardening, cancellation, budgets, all 12 phase kinds, FlowIR/replay/recompute, TypeScript DSL erasure, host argv contracts, MCP servers, and packed consumer imports.
 
@@ -396,7 +415,7 @@ The test suite covers orchestration semantics, persistence and file-lock races, 
 | [Concepts](https://heggria.github.io/taskflow/en/docs/concepts/) | DAGs, isolation, verification, resume, shared context |
 | [Syntax](https://heggria.github.io/taskflow/en/docs/syntax/) | Phase fields, control flow, budgets, caching, scorers |
 | [Compiler & Runtime](https://heggria.github.io/taskflow/en/docs/compiler-runtime/) | TypeScript DSL, FlowIR, replay, recompute, background runs |
-| [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, and Grok setup |
+| [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, Grok, and Hermes setup |
 | [Reference](https://heggria.github.io/taskflow/en/docs/reference/) | Commands, shorthand, and exact tool surfaces |
 | [Showcase](https://heggria.github.io/taskflow/en/docs/showcase/) | Real flows and case studies |
 | [0.2.0 Frontier Assessment](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | Independent, evidence-based technical assessment (Chinese) |

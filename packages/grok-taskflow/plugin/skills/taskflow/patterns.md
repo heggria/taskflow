@@ -147,7 +147,7 @@ Prefer a `script` phase whenever the check is a command — exact, free, fast.
 Use for: anything expensive or destructive where a human should see the plan
 before the spend. The approval's **Edit** option injects mid-run guidance.
 
-> **MCP-host caveat (Codex / Claude Code / OpenCode):** approval phases auto-reject in
+> **MCP-host caveat (Codex / Claude Code / OpenCode / Grok / Hermes):** approval phases auto-reject in
 > MCP-driven (non-interactive) runs. This archetype only works when a human
 > runs the flow interactively; for tool-driven runs, replace the approval with
 > a strict `gate`.

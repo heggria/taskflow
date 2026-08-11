@@ -6,7 +6,7 @@ description: Five ready-to-run taskflow templates you can save and adapt.
 Templates are complete, runnable taskflow definitions for common agent workflows. Each one is a real JSON graph you can save verbatim and run, then tune for your own repo. They are not toy examples — every phase, dependency, and field here is one you would write in production.
 
 <Callout type="info">
-  These templates run identically on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), or [Grok Build](/en/docs/guides/grok-build) guide for host-specific install.
+  These templates run identically on Pi (`/tf run`) and on Codex / Claude Code / OpenCode / Grok Build / Hermes Agent (`taskflow_run`). See the [Pi](/en/docs/guides/pi), [Codex](/en/docs/guides/codex), [Claude Code](/en/docs/guides/claude-code), [OpenCode](/en/docs/guides/opencode), [Grok Build](/en/docs/guides/grok-build), or [Hermes Agent](/en/docs/guides/hermes) guide for host-specific install.
 </Callout>
 
 ## The gallery
@@ -122,7 +122,7 @@ Discover the files a pull request touches, fan out a per-file security review wi
     ```
   </Tab>
   <Tab value="MCP hosts">
-    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    ```bash title="Run on Codex / Claude / OpenCode / Grok / Hermes"
     # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "pr-security-audit", "args": { "base": "origin/main" } }
     ```
@@ -192,7 +192,7 @@ Research the feature into a shared set of facts, run a four-variant tournament t
     ```
   </Tab>
   <Tab value="MCP hosts">
-    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    ```bash title="Run on Codex / Claude / OpenCode / Grok / Hermes"
     # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "release-note", "args": { "feature": "subagent context isolation" } }
     ```
@@ -252,7 +252,7 @@ Discover every call site of a legacy API, plan the migration per file, gate the 
     ```
   </Tab>
   <Tab value="MCP hosts">
-    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    ```bash title="Run on Codex / Claude / OpenCode / Grok / Hermes"
     # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "codebase-migration", "args": { "oldApi": "legacyAuth()", "newApi": "authorize()" } }
     ```
@@ -324,7 +324,7 @@ Discover the public API surface of a directory, draft reference documentation fo
     ```
   </Tab>
   <Tab value="MCP hosts">
-    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    ```bash title="Run on Codex / Claude / OpenCode / Grok / Hermes"
     # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "api-docs", "args": { "dir": "src" } }
     ```
@@ -404,7 +404,7 @@ Enumerate the project's outdated dependencies, evaluate each for breaking-change
     ```
   </Tab>
   <Tab value="MCP hosts">
-    ```bash title="Run on Codex / Claude / OpenCode / Grok"
+    ```bash title="Run on Codex / Claude / OpenCode / Grok / Hermes"
     # Ask the host to call taskflow_run (MCP). Same tool on every MCP host:
     taskflow_run { "name": "dep-upgrade-review", "args": { "manager": "npm" } }
     ```

@@ -30,6 +30,7 @@ const PUBLISHABLE = new Set([
 	"claude-taskflow",
 	"opencode-taskflow",
 	"grok-taskflow",
+	"hermes-taskflow",
 ]);
 
 const REPO = "heggria/taskflow";

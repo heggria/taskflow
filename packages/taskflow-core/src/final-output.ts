@@ -40,8 +40,9 @@ export interface FinalOutputBlockedCtx {
  * Resolve the run's final output + the id of the phase whose output supplied it.
  *
  * Selection uses `finalPhase()` (the designated `final: true` phase, else the
- * last phase in definition order). When that phase didn't complete (skipped /
- * blocked / failed), falls back to the last `done` phase in definition order.
+ * last phase in definition order). A failed final phase with an answer body
+ * distinct from its diagnostic keeps that partial body; skipped, blocked, and
+ * transport-only failures fall back to the last `done` phase in definition order.
  *
  * Source attribution (the phase whose output appears in `finalOutput`):
  * - Normal: the fallback final phase (when it has output).
@@ -49,9 +50,9 @@ export interface FinalOutputBlockedCtx {
  *   in the prefix), else `undefined`.
  * - Budget blocked: the fallback final phase (when its output is included),
  *   else `undefined`.
- * `undefined` whenever no phase output is available. Never the designated
- * skipped/failed final phase — attribution tracks the phase whose output is
- * actually present in `finalOutput`.
+ * `undefined` whenever no phase answer is available. A designated failed final
+ * phase is a source only when `partialOutput` proves its body is genuine;
+ * attribution always tracks the phase actually present in `finalOutput`.
  */
 export function resolveFinalOutput(
 	phases: Phase[],
@@ -60,7 +61,10 @@ export function resolveFinalOutput(
 ): FinalOutputResolution {
 	const fp = finalPhase(phases);
 	let finalState = state.phases[fp.id];
-	if (!finalState || finalState.status !== "done") {
+	const failedWithPartial =
+		finalState?.status === "failed" &&
+		finalState.partialOutput === true;
+	if (!finalState || (finalState.status !== "done" && !failedWithPartial)) {
 		const doneInOrder = phases.map((p) => state.phases[p.id]).filter((p) => p?.status === "done");
 		if (doneInOrder.length) finalState = doneInOrder[doneInOrder.length - 1];
 	}
@@ -79,10 +83,11 @@ export function resolveFinalOutput(
 		sourceId = finalState?.output ? finalState.id : undefined;
 	} else {
 		finalOutput = finalState?.output ?? "(no output)";
-		// Attribute to a completed phase whenever its output field supplied the
-		// result, including the valid empty-string output. `undefined` means no
-		// phase output existed at all.
-		sourceId = finalState && finalState.status === "done" && finalState.output !== undefined ? finalState.id : undefined;
+		// Attribute to a completed phase or a failed final phase whose distinct
+		// partial body supplied the result. `undefined` means no answer body existed.
+		sourceId = finalState && (finalState.status === "done" || failedWithPartial) && finalState.output !== undefined
+			? finalState.id
+			: undefined;
 	}
 	return { finalOutput, outputSourcePhaseId: sourceId };
 }

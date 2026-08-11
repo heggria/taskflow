@@ -23,7 +23,7 @@ import {
 	safeParse,
 	type InterpolationContext,
 } from "../interpolate.ts";
-import { abortableDelay, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
+import { abortableDelay, failedResultDisplayOutput, hasMeaningfulFailedOutput, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
 import {
 	runScriptCommand,
 	scriptResultToPhaseState,
@@ -111,6 +111,7 @@ export interface StepContext {
 export interface StepResult {
 	events: Event[];
 	output?: string;
+	partialOutput?: true;
 	status: "done" | "failed" | "skipped" | "timedOut";
 	error?: string;
 	/** Token/cost usage for this phase (empty for script / skipped). */
@@ -132,6 +133,7 @@ export interface StepResult {
 type BodyResult = {
 	midEvents: Event[];
 	output?: string;
+	partialOutput?: true;
 	status: StepResult["status"];
 	error?: string;
 	usage: UsageStats;
@@ -180,7 +182,7 @@ function combineFanoutText(results: RunResult[]): string {
 	return results
 		.map((r, i) => {
 			const label = `### [${i + 1}/${results.length}] ${r.agent}${isFailedResult(r) ? " (failed)" : ""}`;
-			const content = isFailedResult(r) ? r.errorMessage || r.stderr || r.output : r.output;
+			const content = isFailedResult(r) ? failedResultDisplayOutput(r) : r.output;
 			return `${label}\n\n${content}`;
 		})
 		.join("\n\n---\n\n");
@@ -441,6 +443,7 @@ async function executeAgentBody(phase: Phase, ctx: StepContext): Promise<BodyRes
 		return {
 			midEvents: [event],
 			output: r.output,
+			partialOutput: failed && hasMeaningfulFailedOutput(r) ? true : undefined,
 			status,
 			error: failed ? r.errorMessage ?? r.stderr : undefined,
 			usage,
@@ -505,6 +508,7 @@ async function executeMapBody(phase: Phase, ctx: StepContext): Promise<BodyResul
 		return {
 			midEvents,
 			output: combineFanoutText(results),
+			partialOutput: results.some((r) => isFailedResult(r) && hasMeaningfulFailedOutput(r)) ? true : undefined,
 			status: anyTimedOut ? "timedOut" : anyFailed ? "failed" : "done",
 			error: errors.length ? errors.join("; ") : undefined,
 			usage,
@@ -557,6 +561,7 @@ async function executeParallelBody(phase: Phase, ctx: StepContext): Promise<Body
 		return {
 			midEvents,
 			output: combineFanoutText(results),
+			partialOutput: results.some((r) => isFailedResult(r) && hasMeaningfulFailedOutput(r)) ? true : undefined,
 			status: anyTimedOut ? "timedOut" : anyFailed ? "failed" : "done",
 			error: errors.length ? errors.join("; ") : undefined,
 			usage,
@@ -655,6 +660,7 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 	return {
 		events,
 		output: body.output,
+		partialOutput: body.partialOutput,
 		status: body.status,
 		error: body.error,
 		usage: body.usage,

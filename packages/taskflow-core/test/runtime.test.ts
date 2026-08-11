@@ -75,6 +75,84 @@ test("runtime: linear agent chain passes outputs forward", async () => {
 	assert.equal(res.state.status, "completed");
 });
 
+test("runtime: failed phase preserves a long meaningful partial output separately from its bounded error", async () => {
+	const marker = "MIDDLE_PARTIAL_MARKER";
+	const partial = `${"a".repeat(5000)}${marker}${"b".repeat(5000)}`;
+	const def: Taskflow = {
+		name: "failed-partial",
+		phases: [{ id: "one", type: "agent", agent: "a", task: "start", final: true }],
+	};
+	const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agentName, task) => ({
+		agent: agentName,
+		task,
+		exitCode: 1,
+		output: partial,
+		stderr: "",
+		usage: emptyUsage(),
+		stopReason: "error",
+		errorMessage: "Hermes quiet run failed with exit code 1",
+	});
+	const res = await executeTaskflow(mkState(def), baseDeps(runTask));
+	assert.equal(res.ok, false);
+	assert.match(res.state.phases.one.output ?? "", new RegExp(marker));
+	assert.match(res.finalOutput, new RegExp(marker));
+	assert.doesNotMatch(res.state.phases.one.error ?? "", new RegExp(marker));
+});
+
+test("runtime: failed HTML partial output survives both imperative and event-kernel paths", async () => {
+	const marker = "HTML_PARTIAL_MIDDLE_MARKER";
+	const partial = `<html><body>${"a".repeat(5000)}${marker}${"b".repeat(5000)}</body></html>`;
+	const def: Taskflow = {
+		name: "failed-html-partial",
+		phases: [{ id: "one", type: "agent", agent: "a", task: "start", final: true }],
+	};
+	for (const eventKernel of [false, true]) {
+		const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agentName, task) => ({
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: partial,
+			stderr: "",
+			usage: emptyUsage(),
+			stopReason: "error",
+			errorMessage: "renderer exited 1 after partial output",
+		});
+		const res = await executeTaskflow(mkState(def), { ...baseDeps(runTask), eventKernel });
+		assert.match(res.state.phases.one.output ?? "", new RegExp(marker), `eventKernel=${eventKernel}`);
+		assert.match(res.finalOutput, new RegExp(marker), `eventKernel=${eventKernel}`);
+		assert.equal(res.outputSourcePhaseId, "one", `eventKernel=${eventKernel}`);
+	}
+});
+
+test("runtime: failed fan-out partial output survives both imperative and event-kernel merge paths", async () => {
+	const marker = "FANOUT_PARTIAL_MIDDLE_MARKER";
+	const partial = `${"a".repeat(5000)}${marker}${"b".repeat(5000)}`;
+	const def: Taskflow = {
+		name: "failed-fanout-partial",
+		phases: [
+			{ id: "list", type: "agent", agent: "a", task: "list", output: "json" },
+			{ id: "work", type: "map", over: "{steps.list.json}", agent: "a", task: "do {item}", dependsOn: ["list"], final: true },
+		],
+	};
+	for (const eventKernel of [false, true]) {
+		const runTask: RuntimeDeps["runTask"] = async (_cwd, _agents, agentName, task) => ({
+			agent: agentName,
+			task,
+			exitCode: task === "list" ? 0 : 1,
+			output: task === "list" ? '["a","b"]' : partial,
+			stderr: "",
+			usage: emptyUsage(),
+			stopReason: task === "list" ? "end" : "error",
+			errorMessage: task === "list" ? undefined : "worker exited 1 after partial output",
+		});
+		const res = await executeTaskflow(mkState(def), { ...baseDeps(runTask), eventKernel });
+		assert.equal(res.state.phases.work.status, "failed", `eventKernel=${eventKernel}`);
+		assert.match(res.state.phases.work.output ?? "", new RegExp(marker), `eventKernel=${eventKernel}`);
+		assert.match(res.finalOutput, new RegExp(marker), `eventKernel=${eventKernel}`);
+		assert.equal(res.outputSourcePhaseId, "work", `eventKernel=${eventKernel}`);
+	}
+});
+
 test("runtime: map fan-out spawns one task per array item", async () => {
 	const def: Taskflow = {
 		name: "fanout",
@@ -229,6 +307,13 @@ test("runtime: failed map items include error info in combined output", async ()
 	assert.ok(output, "output should exist");
 	assert.match(output, /\(failed\)/);
 	assert.match(output, /mock failure/);
+	// A transport-only failed fan-out has diagnostics but no partial answer, so
+	// run-level output keeps the previous completed phase.
+	assert.equal(res.finalOutput, '["a","b","c"]');
+	assert.equal(res.outputSourcePhaseId, "list");
+	const kernel = await executeTaskflow(mkState(def), { ...deps, eventKernel: true });
+	assert.equal(kernel.finalOutput, '["a","b","c"]');
+	assert.equal(kernel.outputSourcePhaseId, "list");
 });
 
 test("runtime: map over non-array fails gracefully", async () => {

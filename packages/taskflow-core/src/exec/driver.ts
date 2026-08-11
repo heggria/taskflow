@@ -450,6 +450,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 				id: phase.id,
 				status: st,
 				output: result.output,
+				partialOutput: result.partialOutput,
 				json: phaseJson,
 				error: result.error,
 				startedAt,

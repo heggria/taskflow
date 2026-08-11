@@ -92,6 +92,9 @@ export interface PhaseState {
 	 *  terminal accounting cannot look these ids up in the original definition. */
 	optional?: boolean;
 	output?: string;
+	/** True only when a failed phase's output contains a genuine partial answer
+	 *  rather than a transport diagnostic/placeholder. */
+	partialOutput?: true;
 	json?: unknown;
 	usage?: UsageStats;
 	model?: string;
@@ -1016,8 +1019,6 @@ function cleanupRunArtifactsIfSnapshotMatches(runsRoot: string, entry: RunIndexE
 function userFlowsDir(): string {
 	return path.join(getAgentDir(), "taskflows");
 }
-
-
 
 function findProjectFlowsDirInternal(cwd: string, create = false): string | null {
 	// Prefer an existing .pi dir up the tree (shared boundary helper); else use

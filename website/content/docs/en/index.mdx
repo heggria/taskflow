@@ -30,7 +30,7 @@ In **0.2**, that graph became a compiled contract: TypeScript authoring, FlowIR,
 
 ## Install on your host
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build', 'Hermes Agent']}>
   <Tab value="Pi">
     ```bash title="Install the Pi extension"
     pi install npm:pi-taskflow
@@ -63,6 +63,13 @@ In **0.2**, that graph became a compiled contract: TypeScript authoring, FlowIR,
   </Tab>
   <Tab value="Grok Build">
     Follow the current package and local-build instructions in the [Grok Build guide](/en/docs/guides/grok-build).
+  </Tab>
+  <Tab value="Hermes Agent">
+    ```bash title="Register the Hermes MCP server"
+    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+    ```
+
+    Continue with the [Hermes Agent guide](/en/docs/guides/hermes).
   </Tab>
 </Tabs>
 

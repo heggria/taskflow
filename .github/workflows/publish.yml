@@ -1,9 +1,9 @@
 name: Publish & Release
 
-# Publishes all nine packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
+# Publishes all ten packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
 # taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
-# grok-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
-# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All nine workspace
+# grok-taskflow, hermes-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
+# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All ten workspace
 # versions must equal the tag.
 
 on:
@@ -95,7 +95,7 @@ jobs:
             echo "::error::CHANGELOG.md has no dated release heading for $VERSION"
             exit 1
           fi
-          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow; do
+          for pkg in taskflow-core taskflow-mcp-core taskflow-hosts taskflow-dsl pi-taskflow codex-taskflow claude-taskflow opencode-taskflow grok-taskflow hermes-taskflow; do
             V="v$(node -p "require('./packages/$pkg/package.json').version")"
             if [ "$V" != "$TAG" ]; then
               echo "::error::Tag $TAG does not match $pkg version $V"
@@ -142,6 +142,17 @@ jobs:
             echo "::error::opencode.json pins opencode-taskflow@${OPENCODE_PINNED#v} but tag is $TAG"
             exit 1
           fi
+          HERMES_PINNED="v$(node -e '
+            const fs = require("fs");
+            const text = fs.readFileSync("packages/hermes-taskflow/plugin/hermes.config.snippet.yaml", "utf8");
+            const match = text.match(/hermes-taskflow@(\d+\.\d+\.\d+)/);
+            if (!match) process.exit(2);
+            process.stdout.write(match[1]);
+          ')"
+          if [ "$HERMES_PINNED" != "$TAG" ]; then
+            echo "::error::hermes config snippet pins hermes-taskflow@${HERMES_PINNED#v} but tag is $TAG"
+            exit 1
+          fi
 
       - name: Publish workspaces to npmjs.com
         # Order matters: taskflow-core first (the adapters depend on it).
@@ -184,6 +195,7 @@ jobs:
           publish_one claude-taskflow
           publish_one opencode-taskflow
           publish_one grok-taskflow
+          publish_one hermes-taskflow
 
           # A successful publish command is not sufficient: registry metadata,
           # provenance, and tarball bytes can become visible at different times.
@@ -212,6 +224,7 @@ jobs:
           verify_one claude-taskflow
           verify_one opencode-taskflow
           verify_one grok-taskflow
+          verify_one hermes-taskflow
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TRUSTED_OWNERS: "heggria,muyun"
@@ -245,7 +258,7 @@ jobs:
               }
             } catch {}
             const text = body.join('\n').trim();
-            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow.'));
+            fs.writeFileSync('/tmp/release-notes.md', text || ('Release ' + process.argv[1] + ' \u2014 taskflow-core, taskflow-mcp-core, taskflow-hosts, taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow, grok-taskflow, hermes-taskflow.'));
           " "$VERSION"
 
           TAG_PATH="$(jq -rn --arg tag "$GITHUB_REF_NAME" '$tag | @uri')"
