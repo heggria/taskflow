@@ -52,8 +52,9 @@ test("hermes read-only: any mutating tool → NOT read-only", () => {
 	assert.equal(isHermesReadOnlyPhase(["read", "terminal"]), false);
 });
 
-test("hermes toolsets: read-only → web,search; empty → file,terminal,web,search (not coding)", () => {
-	assert.equal(resolveHermesToolsets(["read"], true), "web,search");
+test("hermes toolsets: read-only → file (local); web opt-in; empty mutating → file,terminal,web,search", () => {
+	assert.equal(resolveHermesToolsets(["read"], true), "file");
+	assert.equal(resolveHermesToolsets(["read"], true, { readonlyWeb: true }), "file,search,web");
 	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
 	assert.equal(resolveHermesToolsets(["totally-unknown"], false), "file,terminal,web,search");

@@ -7,6 +7,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ### Added
 
 - **`runSubagentProcess` plain-text stdout.** New `stdoutFormat: "text"` for hosts that do not emit NDJSON (required by Hermes quiet mode).
+- **Hermes round-2 review fixes.** Empty-output errors prefer stderr `Error:` + session_id; RO phases map to `file` without `--yolo` (web opt-in `PI_TASKFLOW_HERMES_READONLY_WEB`); snippet no longer defaults YOLO=1; macOS flaky terminal-grace test timings loosened.
 - **Hermes host isolation hardenings (adversarial review).** Child argv adds `--ignore-user-config --ignore-rules` (no recursive MCP / memory). Child env strips `HERMES_YOLO_MODE`. Default toolsets avoid full `coding` (no `delegate_task`). Unknown tool aliases no longer fail-open to `coding`. Session id recovered from stderr.
 - **Hermes Agent host.** New `hermes-taskflow` delivery package + `taskflow-hosts` `hermesSubagentRunner` (`hermes chat -q -Q --source tool`). Config scaffold (`plugin/hermes.config.snippet.yaml`), skill entry, docs (`docs/hermes-mcp.md`). Install: `hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp`. Mutating phases require `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`. Quiet mode has no token/cost stream — budgeted flows fail closed (same as Grok).
 

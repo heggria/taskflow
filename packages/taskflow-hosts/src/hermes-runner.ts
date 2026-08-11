@@ -5,10 +5,8 @@
  *   hermes chat -q <prompt> -Q --source tool [--in cwd] [-m model] [-t toolsets]
  *     [--reasoning level] [--max-turns N] [--yolo]
  *
- * Quiet mode (`-Q`) emits plain text on stdout:
- *   session_id: 20260811_121111_f093bf
- *   <final answer>
- *
+ * Quiet mode (`-Q`) emits plain text on stdout (final answer).
+ * Session id is printed on stderr by Hermes so piped stdout stays clean.
  * Mapping to the host-neutral contract:
  *   - output       = stdout with the leading `session_id:` line stripped
  *   - lastActivity = last non-empty stdout line
@@ -17,11 +15,13 @@
  *   - failure      = non-zero exit, or empty output with non-zero semantics
  *
  * Permission mapping:
- *   - read-only phase (whitelist with no mutating tools) → `-t web,search`
- *     (no terminal/file — Hermes' `file` toolset includes write/patch)
+ *   - read-only phase → `-t file` (no --yolo; network opt-in via
+ *     PI_TASKFLOW_HERMES_READONLY_WEB=1 → adds web,search)
  *   - mutating / default-capable → requires explicit
  *     `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` and passes `--yolo`
+ *   - children always get `--ignore-user-config --ignore-rules`
  *
+ * Quiet mode (`-Q`): answer on stdout; `session_id:` on stderr.
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
  * is delegated to shared `runSubagentProcess` in taskflow-core.
  *
@@ -41,6 +41,8 @@ import {
 import { emptyUsage } from "taskflow-core";
 import { filteredChildEnv } from "./child-env.ts";
 
+/** Mirrors taskflow-core TRANSPORT_ERROR_PLACEHOLDER (not always re-exported). */
+const UPSTREAM_ERROR_PLACEHOLDER = "(upstream error: subagent failed; see error)";
 /** Explicit operator acknowledgement required before Hermes may use `--yolo`
  * (bypass dangerous-command approvals) for mutating/default-capable phases. */
 export const HERMES_UNSAFE_YOLO_ENV = "PI_TASKFLOW_HERMES_UNSAFE_YOLO";
@@ -188,14 +190,32 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 
 /**
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
- *   - read-only → web,search (no terminal/file — file toolset includes writes)
+ *   - read-only → `file` when the whitelist is local-read shaped (Hermes cannot
+ *     express write-less file tools; children run WITHOUT --yolo so mutating
+ *     file ops stay approval-gated / non-interactive fail-closed). Network is
+ *     opt-in via PI_TASKFLOW_HERMES_READONLY_WEB=1 → adds web,search.
  *   - mutating with explicit tools → union of matching toolsets
- *   - default / empty → file,terminal,web,search (NOT full `coding`: that
- *     includes delegate_task / skill_manage and enables nested fan-out)
+ *   - default / empty → file,terminal,web,search (NOT full `coding`)
  *   - unknown aliases are ignored (never fail-open to `coding`)
  */
-export function resolveHermesToolsets(tools: string[] | undefined, readOnly: boolean): string {
-	if (readOnly) return "web,search";
+export function resolveHermesToolsets(
+	tools: string[] | undefined,
+	readOnly: boolean,
+	opts: { readonlyWeb?: boolean } = {},
+): string {
+	if (readOnly) {
+		const localRead = new Set(["read", "read_file", "grep", "glob", "search_files", "ls", "list", "list_dir"]);
+		const wantsLocal = !tools || tools.length === 0 || tools.some((t) => localRead.has(t));
+		const sets = new Set<string>();
+		if (wantsLocal) sets.add("file");
+		if (opts.readonlyWeb) {
+			sets.add("web");
+			sets.add("search");
+		}
+		// Pure web RO whitelist with no local tools and no web opt-in → search only.
+		if (sets.size === 0) sets.add("search");
+		return [...sets].sort().join(",");
+	}
 	if (!tools || tools.length === 0) return "file,terminal,web,search";
 
 	const sets = new Set<string>();
@@ -244,6 +264,13 @@ export function resolveHermesToolsets(tools: string[] | undefined, readOnly: boo
 	return [...sets].sort().join(",");
 }
 
+/** Opt-in network for read-only Hermes phases (default off). */
+export const HERMES_READONLY_WEB_ENV = "PI_TASKFLOW_HERMES_READONLY_WEB";
+
+export function hermesReadonlyWebEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env[HERMES_READONLY_WEB_ENV] === "1";
+}
+
 /** Resolve a taskflow model id to something `hermes chat -m` accepts. */
 export function resolveHermesModel(model: string | undefined): string | undefined {
 	if (!model) return undefined;
@@ -280,6 +307,8 @@ export interface HermesArgsCtx {
 	allowUnsafeYolo?: boolean;
 	/** Max tool-calling iterations (default 64). */
 	maxTurns?: number;
+	/** Opt-in network for read-only phases (PI_TASKFLOW_HERMES_READONLY_WEB=1). */
+	readonlyWeb?: boolean;
 }
 
 export interface HermesArgs {
@@ -303,7 +332,7 @@ export interface HermesArgs {
 export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 	const hermesModel = resolveHermesModel(ctx.model);
 	const readOnly = isHermesReadOnlyPhase(ctx.tools);
-	const toolsets = resolveHermesToolsets(ctx.tools, readOnly);
+	const toolsets = resolveHermesToolsets(ctx.tools, readOnly, { readonlyWeb: ctx.readonlyWeb });
 	const fullPrompt = ctx.systemPrompt.trim()
 		? `${ctx.systemPrompt.trim()}\n\n---\n\nTask: ${ctx.task}`
 		: `Task: ${ctx.task}`;
@@ -381,6 +410,7 @@ export async function runHermesAgentTask(
 			cwd,
 			allowUnsafeYolo,
 			maxTurns: hermesMaxTurnsFromEnv(),
+			readonlyWeb: hermesReadonlyWebEnabled(),
 		}));
 	} catch (error) {
 		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
@@ -422,13 +452,31 @@ export async function runHermesAgentTask(
 		if (m) acc.sessionId = m[1];
 	}
 
-	// If Hermes exited 0 with only a session_id line and no body, surface that.
-	if (result.exitCode === 0 && !acc.finalText.trim()) {
-		result.exitCode = 1;
-		result.stopReason = "error";
-		result.errorMessage = acc.sessionId
-			? `Hermes quiet run produced no answer (session_id=${acc.sessionId})`
-			: "Hermes quiet run produced no answer";
+	// Prefer provider Error: lines from stderr over core's generic empty-output
+	// message. Core may have already flipped exitCode 0→1 with a placeholder.
+	if (!acc.finalText.trim()) {
+		const stderr = result.stderr ?? "";
+		const errLine =
+			stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim() ||
+			stderr.match(/error:\s*(.+)/i)?.[1]?.trim();
+		const sessionNote = acc.sessionId ? ` (session_id=${acc.sessionId})` : "";
+		const genericEmpty =
+			!result.errorMessage ||
+			/without a final output/i.test(result.errorMessage) ||
+			result.errorMessage === UPSTREAM_ERROR_PLACEHOLDER;
+		if (errLine) {
+			result.exitCode = result.exitCode || 1;
+			result.stopReason = result.stopReason === "end" ? "error" : (result.stopReason ?? "error");
+			result.errorMessage = sanitizeErrorMessage(`${errLine}${sessionNote}`);
+		} else if (result.exitCode === 0 || genericEmpty) {
+			result.exitCode = 1;
+			result.stopReason = "error";
+			result.errorMessage = sanitizeErrorMessage(
+				acc.sessionId
+					? `Hermes quiet run produced no answer (session_id=${acc.sessionId})`
+					: "Hermes quiet run produced no answer",
+			);
+		}
 	}
 
 	return result;
