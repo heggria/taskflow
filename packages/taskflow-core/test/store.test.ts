@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Taskflow } from "../src/schema.ts";
 import {
 	getFlow,
@@ -21,6 +22,16 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * File URL for the store module used by child-process scripts below.
+ * `path.resolve()` yields a backslash path on Windows (e.g. `D:\a\...`) which
+ * ESM treats as a bare package specifier and fails to resolve at startup
+ * (ERR_MODULE_NOT_FOUND / ERR_UNSUPPORTED_ESM_URL_SCHEME). `pathToFileURL`
+ * produces a portable `file:///D:/a/...` specifier that Node resolves on every
+ * platform.
+ */
+const STORE_SRC_URL = pathToFileURL(path.resolve("packages/taskflow-core/src/store.ts")).href;
 
 /** Create an isolated temp directory with a `.pi` marker so findProjectFlowsDir finds it. */
 function makeTmpCwd(): string {
@@ -1344,7 +1355,7 @@ test("M1: concurrent saveRun for different runIds keeps every index entry", asyn
 	try {
 		const N = 8;
 		const script = `
-			import { saveRun } from ${JSON.stringify(path.resolve("packages/taskflow-core/src/store.ts"))};
+			import { saveRun } from ${JSON.stringify(STORE_SRC_URL)};
 			const [cwd, runId] = [process.argv[2], process.argv[3]];
 			saveRun({
 				runId, flowName: "concurrent", def: { name: "concurrent", phases: [] },
@@ -1401,7 +1412,7 @@ test("L1: a stale lock is stolen cleanly by racing acquirers (no leak, single wi
 		fs.utimesSync(lockPath, old, old);
 
 		const script = `
-			import { saveRun, loadRun } from ${JSON.stringify(path.resolve("packages/taskflow-core/src/store.ts"))};
+			import { saveRun, loadRun } from ${JSON.stringify(STORE_SRC_URL)};
 			const cwd = process.argv[2];
 			saveRun({
 				runId: "L1", flowName: "lockflow", def: { name: "lockflow", phases: [] },
@@ -1440,7 +1451,7 @@ test("L1: an old mtime never permits stealing from a live lock owner", async () 
 		const releasePath = path.join(cwd, "release");
 		const script = `
 			import fs from "node:fs";
-			import { withLock } from ${JSON.stringify(path.resolve("packages/taskflow-core/src/store.ts"))};
+			import { withLock } from ${JSON.stringify(STORE_SRC_URL)};
 			const [lockPath, readyPath, releasePath] = process.argv.slice(2);
 			withLock(lockPath, () => {
 				fs.writeFileSync(readyPath, "ready");
@@ -1580,7 +1591,7 @@ test("fix-5: cleanup code filters corrupt updatedAt entries (pattern validated v
 	//
 	// Verify by reading the source:
 	const src = fs.readFileSync(
-		path.join(path.dirname(new URL(import.meta.url).pathname), "../src/store.ts"),
+		path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/store.ts"),
 		"utf-8",
 	);
 	// The cleanup function should filter corrupt entries before sorting.

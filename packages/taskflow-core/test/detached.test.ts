@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import type { Taskflow } from "../src/schema.ts";
 import {
 	isProcessAlive,
@@ -126,7 +127,7 @@ test("detached-runner: completes flow and persists terminal state", async () => 
 		const mockRunnerPath = path.join(cwd, "mock-detached-runner.mts");
 		fs.writeFileSync(mockRunnerPath, `
 import { readFileSync } from "node:fs";
-import { loadRun, saveRun } from "${path.resolve("packages/taskflow-core/src/store.ts")}";
+import { loadRun, saveRun } from "${pathToFileURL(path.resolve("packages/taskflow-core/src/store.ts")).href}";
 
 interface DetachContext {
 	runId: string;
