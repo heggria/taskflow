@@ -42,7 +42,7 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { filteredChildEnv } from "./child-env.ts";
@@ -218,6 +218,8 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 
 /** Hermes toolset name registered by the ephemeral taskflow_readonly plugin. */
 export const HERMES_READONLY_FILES_TOOLSET = "taskflow_readonly_files";
+/** Empty toolset — always pass `-t` so Hermes does not fall back to hermes-cli defaults. */
+export const HERMES_MODEL_ONLY_TOOLSET = "taskflow_model_only";
 
 const LOCAL_READ_TOOLS = new Set([
 	"read",
@@ -234,7 +236,8 @@ const LOCAL_READ_TOOLS = new Set([
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
  *   - read-only + local-read aliases → `taskflow_readonly_files` (plugin)
  *   - read-only + READONLY_WEB → adds web,search
- *   - read-only otherwise → empty (model-only)
+ *   - read-only otherwise → `taskflow_model_only` (empty toolset; NEVER omit -t —
+ *     Hermes defaults to full hermes-cli tools when -t is absent)
  *   - mutating with explicit tools → union of matching toolsets (narrow)
  *   - default / empty tools → file,terminal,web,search (NOT full `coding`)
  *   - unmapped non-empty tools list → throw (never fail-open to wide default)
@@ -246,9 +249,6 @@ export function resolveHermesToolsets(
 ): string {
 	if (readOnly) {
 		const sets = new Set<string>();
-		const wantsLocal = !tools || tools.length === 0 || tools.some((t) => LOCAL_READ_TOOLS.has(t));
-		// Empty tools on RO is unusual (isHermesReadOnlyPhase treats empty as NOT RO).
-		// When tools are local-read shaped, attach the plugin toolset.
 		if (tools && tools.some((t) => LOCAL_READ_TOOLS.has(t))) {
 			sets.add(HERMES_READONLY_FILES_TOOLSET);
 		}
@@ -256,7 +256,8 @@ export function resolveHermesToolsets(
 			sets.add("web");
 			sets.add("search");
 		}
-		void wantsLocal;
+		// Critical: omitting -t loads full hermes-cli defaults (terminal/write/…).
+		if (sets.size === 0) sets.add(HERMES_MODEL_ONLY_TOOLSET);
 		return [...sets].sort().join(",");
 	}
 	if (!tools || tools.length === 0) return "file,terminal,web,search";
@@ -413,15 +414,14 @@ export interface HermesArgs {
  * Build the full `hermes chat` argv — PURE (no process.env, no spawn).
  *
  *   hermes chat -q <prompt> -Q --source tool
- *     --safe-mode
+ *     --ignore-rules
  *     [--in cwd] [-m model] [-t toolsets] [--reasoning level]
  *     [--max-turns N] [--yolo]
  *
- * Isolation: `--safe-mode` disables user config, rules, plugins, and MCP
- * (implies --ignore-user-config and --ignore-rules) so a child cannot recurse
- * into taskflow MCP or inherit gateway tool policy.
- * Credentials still load from HERMES_HOME/.env (Hermes CLI contract).
- */
+ * Isolation: ephemeral HERMES_HOME (credentials + show_reasoning:false + RO
+ * plugin). `--ignore-rules` skips AGENTS.md injection. Do not use --safe-mode
+ * (it would ignore our ephemeral config/plugin).
+ * Credentials still load from the ephemeral home's .env/auth.json. */
 export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 	const hermesModel = resolveHermesModel(ctx.model);
 	const readOnly = isHermesReadOnlyPhase(ctx.tools);
@@ -453,9 +453,11 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 		"--max-turns",
 		String(maxTurns),
 	];
-	// Empty toolsets = model-only (RO default). Omit -t rather than pass "".
+	// Empty toolsets must never happen for RO (Critical fail-open). Always pass -t.
 	if (toolsets) {
 		args.push("-t", toolsets);
+	} else {
+		args.push("-t", HERMES_MODEL_ONLY_TOOLSET);
 	}
 	if (ctx.cwd) args.push("--in", ctx.cwd);
 	if (hermesModel) args.push("-m", hermesModel);
@@ -471,16 +473,73 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
  */
 const HERMES_EPHEMERAL_CREDENTIAL_FILES = [".env", "auth.json"] as const;
 
-const EPHEMERAL_CONFIG_YAML = `display:
-  show_reasoning: false
-mcp_servers: {}
-plugins:
-  enabled:
-    - taskflow_readonly
-  entries:
-    taskflow_readonly:
-      enabled: true
-`;
+/**
+ * Pull a top-level YAML mapping block (e.g. `model:`) from parent config text.
+ * Indentation-based; no full YAML parser dependency.
+ */
+export function extractYamlTopLevelBlock(source: string, key: string): string | undefined {
+	const lines = source.split(/\r?\n/);
+	const start = lines.findIndex(
+		(l) => new RegExp(`^${key}:\\s*(?:#.*)?$`).test(l) || new RegExp(`^${key}:\\s+\\S`).test(l),
+	);
+	if (start < 0) return undefined;
+	const first = lines[start];
+	// Inline scalar: `model: foo`
+	if (/^[\w-]+:\s+\S/.test(first) && !first.trimEnd().endsWith(":")) {
+		return first;
+	}
+	const out = [first];
+	for (let i = start + 1; i < lines.length; i++) {
+		const line = lines[i];
+		if (
+			line.trim() === "" ||
+			line.startsWith(" ") ||
+			line.startsWith("	") ||
+			line.trimStart().startsWith("#")
+		) {
+			out.push(line);
+			continue;
+		}
+		// next top-level key
+		if (/^[\w-]+:/.test(line)) break;
+		out.push(line);
+	}
+	// trim trailing blank lines
+	while (out.length && out[out.length - 1].trim() === "") out.pop();
+	return out.join("\n");
+}
+
+/** Build ephemeral config.yaml text: isolation defaults + parent model routing. */
+export function buildEphemeralHermesConfigYaml(parentHome: string): string {
+	const parts: string[] = [
+		"display:",
+		"  show_reasoning: false",
+		"mcp_servers: {}",
+		"plugins:",
+		"  enabled:",
+		"    - taskflow_readonly",
+		"  entries:",
+		"    taskflow_readonly:",
+		"      enabled: true",
+	];
+	const parentCfgPath = join(parentHome, "config.yaml");
+	if (existsSync(parentCfgPath)) {
+		try {
+			const raw = readFileSync(parentCfgPath, "utf8");
+			// Carry only model routing — never parent mcp_servers / skills / plugins.
+			for (const key of ["model", "fallback_providers", "providers"]) {
+				const block = extractYamlTopLevelBlock(raw, key);
+				if (block) {
+					parts.push("");
+					parts.push(block);
+				}
+			}
+		} catch {
+			/* parent model optional — .env may still auth */
+		}
+	}
+	return `${parts.join("\n")}\n`;
+}
 
 const EPHEMERAL_RO_PLUGIN_YAML = `name: taskflow_readonly
 version: 0.1.0
@@ -489,8 +548,12 @@ description: Taskflow read-only file toolset (read_file + search_files only)
 
 const EPHEMERAL_RO_PLUGIN_INIT = `from __future__ import annotations
 
+import os
+from pathlib import Path
+
+
 def register(ctx) -> None:
-    """Register RO file toolset + block write_file/patch if ever exposed."""
+    """Register RO + model-only toolsets; block writes and out-of-cwd reads."""
     from toolsets import create_custom_toolset
 
     create_custom_toolset(
@@ -498,17 +561,50 @@ def register(ctx) -> None:
         description="Read-only local files for taskflow RO phases",
         tools=["read_file", "search_files"],
     )
+    create_custom_toolset(
+        name="taskflow_model_only",
+        description="No tools (taskflow RO model-only; prevents hermes-cli default toolset)",
+        tools=[],
+    )
 
-    def _block_writes(tool_name: str = "", **kwargs):
+    _BLOCK = frozenset({
+        "write_file", "patch", "terminal", "process", "execute_code",
+        "delegate_task", "skill_manage", "computer_use", "cronjob",
+        "send_message", "text_to_speech", "browser_navigate", "browser",
+    })
+
+    def _pre_tool(tool_name: str = "", args=None, **kwargs):
         name = tool_name or kwargs.get("name") or ""
-        if name in ("write_file", "patch"):
+        if name in _BLOCK:
             return {
                 "action": "block",
-                "message": "taskflow read-only phase: write_file/patch denied",
+                "message": f"taskflow read-only phase: {name} denied",
             }
+        # Constrain local reads to the child cwd (HOME/secrets stay out of scope).
+        if name == "read_file":
+            raw = ""
+            if isinstance(args, dict):
+                raw = str(args.get("path") or args.get("file") or "")
+            if raw:
+                try:
+                    cwd = Path(os.getcwd()).resolve()
+                    target = Path(raw).expanduser()
+                    if not target.is_absolute():
+                        target = (cwd / target).resolve()
+                    else:
+                        target = target.resolve()
+                    target.relative_to(cwd)
+                except Exception:
+                    return {
+                        "action": "block",
+                        "message": (
+                            "taskflow read-only phase: path escapes phase cwd "
+                            f"({raw!r}); only paths under the working directory are allowed"
+                        ),
+                    }
         return None
 
-    ctx.register_hook("pre_tool_call", _block_writes)
+    ctx.register_hook("pre_tool_call", _pre_tool)
 `;
 
 export interface EphemeralHermesHome {
@@ -541,13 +637,21 @@ export function prepareEphemeralHermesHome(
 		}
 	}
 	try {
-		writeFileSync(join(home, "config.yaml"), EPHEMERAL_CONFIG_YAML, "utf8");
+		writeFileSync(join(home, "config.yaml"), buildEphemeralHermesConfigYaml(parentHome), "utf8");
 		const plugDir = join(home, "plugins", "taskflow_readonly");
 		mkdirSync(plugDir, { recursive: true });
 		writeFileSync(join(plugDir, "plugin.yaml"), EPHEMERAL_RO_PLUGIN_YAML, "utf8");
 		writeFileSync(join(plugDir, "__init__.py"), EPHEMERAL_RO_PLUGIN_INIT, "utf8");
-	} catch {
-		// Config/plugin write failures: child still runs; reasoning strip remains.
+	} catch (error) {
+		// Fail closed: without config/plugin, RO toolsets and show_reasoning are wrong.
+		try {
+			rmSync(home, { recursive: true, force: true });
+		} catch {
+			/* ignore */
+		}
+		throw new Error(
+			`Failed to materialize ephemeral Hermes home: ${error instanceof Error ? error.message : String(error)}`,
+		);
 	}
 	return {
 		home,
@@ -561,9 +665,27 @@ export function prepareEphemeralHermesHome(
 	};
 }
 
-/** Resolve parent HERMES_HOME the way Hermes CLI does (env or ~/.hermes). */
+/**
+ * Resolve the operator Hermes profile to clone credentials/model routing from.
+ * Prefer `PI_TASKFLOW_HERMES_PARENT_HOME`, then a usable `HERMES_HOME`, then `~/.hermes`.
+ * Skips ephemeral taskflow temps and empty tmp HERMES_HOME leftovers.
+ */
 export function resolveParentHermesHome(env: NodeJS.ProcessEnv = process.env): string {
-	return env.HERMES_HOME?.trim() || join(env.HOME || tmpdir(), ".hermes");
+	const override = env.PI_TASKFLOW_HERMES_PARENT_HOME?.trim();
+	if (override) return override;
+
+	const fallback = join(env.HOME || tmpdir(), ".hermes");
+	const candidates = [env.HERMES_HOME?.trim(), fallback].filter(Boolean) as string[];
+
+	for (const candidate of candidates) {
+		if (candidate.includes("taskflow-hermes-")) continue;
+		const hasCreds =
+			existsSync(join(candidate, "auth.json")) ||
+			existsSync(join(candidate, ".env")) ||
+			existsSync(join(candidate, "config.yaml"));
+		if (hasCreds) return candidate;
+	}
+	return fallback;
 }
 
 function hermesMaxTurnsFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
@@ -595,7 +717,23 @@ export async function runHermesAgentTask(
 	const cwd = opts.cwd ?? defaultCwd;
 	const allowUnsafeYolo = hermesUnsafeYoloEnabled();
 	const childEnv = hermesChildEnv(process.env, { allowUnsafeYolo });
-	const ephemeral = prepareEphemeralHermesHome(resolveParentHermesHome(process.env));
+	let ephemeral: EphemeralHermesHome;
+	try {
+		ephemeral = prepareEphemeralHermesHome(resolveParentHermesHome(process.env));
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			errorMessage: message,
+			stopReason: "error",
+		};
+	}
 	childEnv.HERMES_HOME = ephemeral.home;
 
 	let args: string[];

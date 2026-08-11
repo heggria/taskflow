@@ -24,7 +24,7 @@
  *
  * Hermes then launches this as a stdio MCP server and the taskflow_* tools
  * become available (prefixed mcp_taskflow_*). Each subagent runs as an
- * isolated `hermes chat -q -Q --safe-mode` session. This file ships compiled to
+ * isolated `hermes chat -q -Q --ignore-rules` session. This file ships compiled to
  * dist/mcp/bin.js, so no `--experimental-strip-types` flag is needed.
  */
 

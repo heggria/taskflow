@@ -57,13 +57,14 @@ test("hermes read-only: any mutating tool → NOT read-only", () => {
 	assert.equal(isHermesReadOnlyPhase(["read", "terminal"]), false);
 });
 
-test("hermes toolsets: RO local-read → taskflow_readonly_files; web opt-in; empty mutating safe", () => {
+test("hermes toolsets: RO local-read → taskflow_readonly_files; never omit -t", () => {
 	assert.equal(resolveHermesToolsets(["read"], true), "taskflow_readonly_files");
 	assert.equal(
 		resolveHermesToolsets(["read"], true, { readonlyWeb: true }),
 		"search,taskflow_readonly_files,web",
 	);
-	assert.equal(resolveHermesToolsets(["web_search"], true), "");
+	// Critical: bare RO without local tools must still pass an explicit empty toolset.
+	assert.equal(resolveHermesToolsets(["web_search"], true), "taskflow_model_only");
 	assert.equal(resolveHermesToolsets(["web_search"], true, { readonlyWeb: true }), "search,web");
 	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
@@ -209,7 +210,7 @@ test("hermes ephemeral home: copies credentials, writes config+RO plugin, cleans
 	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-"));
 	writeFileSync(join(parent, ".env"), "XAI_API_KEY=test\n");
 	writeFileSync(join(parent, "auth.json"), "{}\n");
-	writeFileSync(join(parent, "config.yaml"), "should-not-copy: true\n");
+	writeFileSync(join(parent, "config.yaml"), "should-not-copy: true\nmodel:\n  default: test-model\n  provider: xai-oauth\n");
 	mkdirSync(join(parent, "skills"));
 	writeFileSync(join(parent, "skills", "x.md"), "nope");
 	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir() });
@@ -221,6 +222,8 @@ test("hermes ephemeral home: copies credentials, writes config+RO plugin, cleans
 		const cfg = readFileSync(join(eph.home, "config.yaml"), "utf8");
 		assert.match(cfg, /show_reasoning:\s*false/);
 		assert.match(cfg, /taskflow_readonly/);
+		assert.match(cfg, /model:\n\s+default: test-model/);
+		assert.doesNotMatch(cfg, /should-not-copy/);
 		assert.ok(existsSync(join(eph.home, "plugins", "taskflow_readonly", "__init__.py")));
 	} finally {
 		eph.cleanup();
