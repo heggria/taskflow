@@ -52,15 +52,28 @@ export function hermesUnsafeYoloEnabled(env: NodeJS.ProcessEnv = process.env): b
 	return env[HERMES_UNSAFE_YOLO_ENV] === "1";
 }
 
-export function hermesChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-	return filteredChildEnv(
+/** Parent Hermes env keys that must never leak into taskflow children. */
+const HERMES_CHILD_DENY = new Set([
+	"HERMES_YOLO_MODE",
+	"HERMES_ACCEPT_HOOKS",
+	// Avoid inheriting gateway/session routing that is irrelevant to one-shot children.
+	"HERMES_GATEWAY_TOKEN",
+	"HERMES_API_SERVER_KEY",
+]);
+
+/**
+ * Build a least-privilege env for a Hermes child.
+ * Keeps provider credentials + HERMES_HOME (for .env auth), but strips YOLO and
+ * other process-scoped bypass flags so parent gateway yolo cannot silently arm
+ * a read-only phase.
+ */
+export function hermesChildEnv(
+	source: NodeJS.ProcessEnv = process.env,
+	opts: { allowUnsafeYolo?: boolean } = {},
+): NodeJS.ProcessEnv {
+	const filtered = filteredChildEnv(
 		source,
-		[
-			"HERMES_HOME",
-			"HERMES_ACCEPT_HOOKS",
-			"OPENROUTER_API_KEY",
-			"NOUS_API_KEY",
-		],
+		["HERMES_HOME", "OPENROUTER_API_KEY", "NOUS_API_KEY"],
 		[
 			"HERMES_",
 			"OPENAI_",
@@ -76,6 +89,18 @@ export function hermesChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.
 			"DEEPSEEK_",
 		],
 	);
+	for (const key of Object.keys(filtered)) {
+		if (HERMES_CHILD_DENY.has(key.toUpperCase()) || HERMES_CHILD_DENY.has(key)) {
+			delete filtered[key];
+		}
+	}
+	// Explicit deny even if casing differs.
+	delete filtered.HERMES_YOLO_MODE;
+	delete filtered.HERMES_ACCEPT_HOOKS;
+	if (opts.allowUnsafeYolo) {
+		// Prefer argv --yolo; do not also freeze HERMES_YOLO_MODE unless needed.
+	}
+	return filtered;
 }
 
 /** Accumulated state folded from Hermes quiet-mode plain-text stdout. */
@@ -165,11 +190,13 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
  *   - read-only → web,search (no terminal/file — file toolset includes writes)
  *   - mutating with explicit tools → union of matching toolsets
- *   - default / empty → coding
+ *   - default / empty → file,terminal,web,search (NOT full `coding`: that
+ *     includes delegate_task / skill_manage and enables nested fan-out)
+ *   - unknown aliases are ignored (never fail-open to `coding`)
  */
 export function resolveHermesToolsets(tools: string[] | undefined, readOnly: boolean): string {
 	if (readOnly) return "web,search";
-	if (!tools || tools.length === 0) return "coding";
+	if (!tools || tools.length === 0) return "file,terminal,web,search";
 
 	const sets = new Set<string>();
 	for (const t of tools) {
@@ -209,15 +236,11 @@ export function resolveHermesToolsets(tools: string[] | undefined, readOnly: boo
 				sets.add("browser");
 				break;
 			default:
-				// Unknown aliases fall back to coding so the child still has a
-				// sensible coding surface rather than an empty toolset.
-				sets.add("coding");
+				// Unknown aliases: ignore. Never expand to full `coding`.
 				break;
 		}
 	}
-	if (sets.size === 0) return "coding";
-	// If coding already covers everything, just use it.
-	if (sets.has("coding")) return "coding";
+	if (sets.size === 0) return "file,terminal,web,search";
 	return [...sets].sort().join(",");
 }
 
@@ -268,8 +291,14 @@ export interface HermesArgs {
 /**
  * Build the full `hermes chat` argv — PURE (no process.env, no spawn).
  *
- *   hermes chat -q <prompt> -Q --source tool [--in cwd] [-m model]
- *     [-t toolsets] [--reasoning level] [--max-turns N] [--yolo]
+ *   hermes chat -q <prompt> -Q --source tool
+ *     --ignore-user-config --ignore-rules
+ *     [--in cwd] [-m model] [-t toolsets] [--reasoning level]
+ *     [--max-turns N] [--yolo]
+ *
+ * Isolation: --ignore-user-config skips parent mcp_servers / config.yaml so a
+ * child cannot recurse into taskflow MCP or inherit gateway tool policy.
+ * Credentials still load from HERMES_HOME/.env (Hermes CLI contract).
  */
 export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 	const hermesModel = resolveHermesModel(ctx.model);
@@ -292,9 +321,12 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 		"chat",
 		"-q",
 		fullPrompt,
-		"-Q", // quiet: final answer + session_id only
+		"-Q", // quiet: final answer on stdout; session_id on stderr
 		"--source",
 		"tool", // third-party integrations — hide from user session lists
+		// Isolate from parent Hermes profile policy / MCP / memory injection.
+		"--ignore-user-config",
+		"--ignore-rules",
 		"-t",
 		toolsets,
 		"--max-turns",
@@ -335,7 +367,8 @@ export async function runHermesAgentTask(
 	const thinking = opts.thinking ?? agent.thinking ?? globalThinking;
 	const tools = opts.tools ?? agent.tools;
 	const cwd = opts.cwd ?? defaultCwd;
-	const childEnv = hermesChildEnv();
+	const allowUnsafeYolo = hermesUnsafeYoloEnabled();
+	const childEnv = hermesChildEnv(process.env, { allowUnsafeYolo });
 
 	let args: string[];
 	try {
@@ -346,7 +379,7 @@ export async function runHermesAgentTask(
 			thinking,
 			tools,
 			cwd,
-			allowUnsafeYolo: hermesUnsafeYoloEnabled(),
+			allowUnsafeYolo,
 			maxTurns: hermesMaxTurnsFromEnv(),
 		}));
 	} catch (error) {
@@ -382,6 +415,12 @@ export async function runHermesAgentTask(
 		stdoutFormat: "text",
 		requireTerminalEvent: false,
 	});
+
+	// Hermes quiet mode prints `session_id: …` on stderr (stdout stays clean).
+	if (!acc.sessionId && result.stderr) {
+		const m = result.stderr.match(/session_id:\s*(\S+)/i);
+		if (m) acc.sessionId = m[1];
+	}
 
 	// If Hermes exited 0 with only a session_id line and no body, surface that.
 	if (result.exitCode === 0 && !acc.finalText.trim()) {

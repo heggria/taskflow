@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 
-export type HostId = "pi" | "codex" | "claude" | "opencode" | "grok";
+export type HostId = "pi" | "codex" | "claude" | "opencode" | "grok" | "hermes";
 
 const HOSTS: { id: HostId; label: string; command: string; guide: string }[] = [
 	{
@@ -39,6 +39,13 @@ const HOSTS: { id: HostId; label: string; command: string; guide: string }[] = [
 		command:
 			"grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp",
 		guide: "/docs/getting-started",
+	},
+	{
+		id: "hermes",
+		label: "Hermes",
+		command:
+			"hermes mcp add taskflow --command npx --args -y -p hermes-taskflow hermes-taskflow-mcp",
+		guide: "/docs/guides/hermes",
 	},
 ];
 

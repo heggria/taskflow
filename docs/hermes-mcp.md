@@ -6,7 +6,7 @@ that binds Taskflow's host-neutral MCP server to Hermes subagents.
 ## Install
 
 ```bash
-hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+hermes mcp add taskflow --command node --args "$(pwd)/packages/hermes-taskflow/dist/mcp/bin.js"
 ```
 
 Or paste into `~/.hermes/config.yaml` (see `packages/hermes-taskflow/plugin/hermes.config.snippet.yaml`):
@@ -20,6 +20,10 @@ mcp_servers:
       PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"
     timeout: 600
 ```
+
+**Footgun:** do **not** put `--env KEY=VAL` after bare `--args …` in a way that Hermes
+parses env flags into the node argv list. Prefer writing `env:` in `config.yaml`
+explicitly (as above), then `hermes mcp test taskflow`.
 
 Restart Hermes. Tools register as `mcp_taskflow_*`.
 
