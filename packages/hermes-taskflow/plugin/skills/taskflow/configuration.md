@@ -244,13 +244,7 @@ advances its generation; it does not restore files or certify them as correct.
 
 **Passing args:**
 
-```
-/tf run audit-endpoints {"dir":"packages/api"}     # JSON
-/tf run audit-endpoints dir=packages/api depth=3   # key=value pairs
-/tf run audit-endpoints packages/api               # single positional → first declared arg
-```
-
-Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
+Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 
 ---
 
@@ -296,8 +290,19 @@ Notes:
   host-specific. It is a literal whitelist on Pi; Codex maps it to an OS
   sandbox profile, while the other hosts use their own permission contracts.
   Omit it to request the host's default capability policy.
-- Each phase runs as an isolated process:
-  `pi --mode json -p --no-session [--model …] [--thinking …] [--tools …] [--append-system-prompt <agent>] "Task: …"`.
+- Each phase runs as an isolated `hermes chat -q <prompt> -Q --source tool`
+  session. Quiet mode prints a `session_id:` meta line then the final answer;
+  the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
+  pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
+  maps to `--reasoning` (`off` → `none`). Read-only phases use
+  `-t web,search` (Hermes' `file` toolset includes write/patch, so it is not
+  used for read-only). Mutating / default-capable phases fail closed unless
+  `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
+  `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
+  does not stream token/cost accounting, so budgeted flows fail closed at the
+  MCP adapter the same way other non-accounting hosts do when costs are
+  unobservable. Children inherit only platform/proxy/CA, `HERMES_*`, and
+  common provider variables; unrelated secrets are removed.
 
 For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
@@ -339,13 +344,6 @@ Taskflow shares the subagent settings file at `~/.pi/agent/settings.json`:
   "subagents": {
     "globalThinking": "medium"              // fallback thinking for all subagents
   },
-	"taskflow": {
-		"piChild": {
-			"resourceProfile": "isolated",       // isolated | allowlist | inherit
-			"extensions": [],                    // absolute trusted paths; allowlist only
-			"terminalGraceMs": 1500
-		}
-	},
   "defaultThinkingLevel": "low"          // used if subagents.globalThinking is absent
 }
 ```
@@ -357,17 +355,6 @@ Taskflow shares the subagent settings file at `~/.pi/agent/settings.json`:
   role is configured.
 - `subagents.globalThinking` (or top-level `defaultThinkingLevel`) — global
   thinking fallback.
-- `taskflow.piChild.resourceProfile` is a **Host authority**, never a Flow DSL
-  field. `isolated` (default) passes `--no-extensions`; `allowlist` additionally
-  loads the listed canonical absolute files; `inherit` explicitly restores
-  ambient Pi extension discovery for compatibility.
-- A validated final assistant message plus `agent_end` / `agent_settled` is a
-  terminal candidate. If Pi does not exit within `terminalGraceMs`, Taskflow
-  reaps the child process group and accepts the completed result. Later activity,
-  abort, error output, or malformed NDJSON prevents that success path.
-- Process-group reaping contains ordinary extension descendants; it is not an
-  OS sandbox against malicious code that deliberately escapes into a new
-  session. Do not allowlist untrusted extensions.
 
 ---
 
@@ -486,8 +473,6 @@ Each entry is one of:
 | Run state (resume) | `<project .pi>/taskflows/runs/<flowName>/<runId>.json` | ❌ gitignore |
 
 - `action: "save"` takes `scope: "project"` (default) or `"user"`.
-- Saved flows auto-register as `/tf:<name>` (immediately for the current session,
-  and on future `session_start`).
 - Project flows override user flows on a name collision.
 - Add `.pi/taskflows/runs/` to `.gitignore`.
 

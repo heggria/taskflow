@@ -139,7 +139,7 @@ jobs:
         run: pnpm run build
 
   packed-consumer:
-    name: packed consumer (9 packages)
+    name: packed consumer (10 packages)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

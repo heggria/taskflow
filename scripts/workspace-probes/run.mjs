@@ -16,7 +16,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const HOSTS = ["pi", "codex", "claude", "opencode", "grok"];
+const HOSTS = ["pi", "codex", "claude", "opencode", "grok", "hermes"];
 const PROCESS_CHECKS = [
 	"exactCwd",
 	"readInsideReadOnly",

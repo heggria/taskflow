@@ -1,3 +1,44 @@
+---
+name: taskflow
+description: Orchestrate multi-phase subagent workflows with Taskflow. Use whenever a request spans a whole project or many items — deeply exploring / 探索 / auditing / 审计 / analyzing a codebase, reviewing or migrating many files or modules in parallel, cross-checked/adversarial review, codebase-wide research, or any repeatable orchestration you want to save and rerun. Prefer this over ad-hoc parallel work when the task has multiple phases (discover → work → review → report) or dynamic fan-out over a discovered list. Drives the taskflow_* MCP tools (Hermes registers them as mcp_taskflow_*).
+---
+
+<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/entry.hermes.md + core.md (npm run build:skills) -->
+
+# Taskflow (Hermes Agent)
+
+**Host binding (Hermes):** everything below is driven through the `taskflow_*`
+MCP tools. Hermes prefixes MCP tools as `mcp_taskflow_*` (e.g.
+`mcp_taskflow_verify`). Where an example shows a host-neutral invocation like
+`verify`, use the Hermes form (`mcp_taskflow_verify` / `taskflow_verify`).
+Each phase's subagent runs as an isolated `hermes chat -q -Q --source tool`
+session.
+
+| Tool | What it does |
+|------|--------------|
+| `taskflow_run` | Run a saved or inline flow. Optional `args`, `incremental`; `mode: "background"` returns a durable `runId` immediately. |
+| `taskflow_runs` | List background runs or `status` / `wait` / `cancel` one by `runId`. |
+| `taskflow_resume` | Fork a failed/paused run into a new immutable child run, optionally overriding one phase's task/model/timeouts. |
+| `taskflow_version` | Report the executing package version, build commit, schema version, build time, and host identity. |
+| `taskflow_list` | List saved flows discoverable from the current working directory. |
+| `taskflow_show` | Show a saved flow's full definition as JSON. |
+| `taskflow_plan` | Preflight plan: bind args, phase order, dynamic bindings, worst-case agent-call bound — zero tokens, no execution. |
+| `taskflow_analytics` | Aggregate last-N runs for a flow (status histogram, durations, per-phase fail/cache rates). Read-only. |
+| `taskflow_verify` | Statically verify a flow (cycles, missing deps, undefined refs, contract typos) — no execution, zero tokens. |
+| `taskflow_compile` | Render a flow's DAG as an inline SVG **and** text outline + a verification report — no execution. |
+| `taskflow_peek` | Inspect one phase's intermediate output from a stored run (post-hoc debugging). Omit `phaseId` to list phases; `json`/`item`/`limit` refine the slice. Hard-truncated, read-only. |
+| `taskflow_trace` | Read a run's append-only event timeline. |
+| `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
+| `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
+| `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
+| `taskflow_reconcile_workspace` | After inspection/repair, accept a failed resolve-only workspace. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; never restores files. |
+| `taskflow_save` | Save a reusable flow and optional library metadata. |
+| `taskflow_search` | Search and rank reusable flows before authoring another one. |
+
+**Always `taskflow_plan` (or at least `taskflow_verify`) a non-trivial flow before `taskflow_run`** — free, binds args, and catches most authoring mistakes.
+
+**Mutating runs:** set `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` on the MCP server env so agent phases may use Hermes `--yolo` (see package README / `plugin/hermes.config.snippet.yaml`).
+
 Build and run **declarative, multi-phase workflows** of subagents. The runtime
 holds intermediate results and the phase DAG, so your main context only receives
 the final answer — not every step's transcript.
@@ -10,12 +51,7 @@ mistakes that break flows. Load the companion files **only when needed**:
 | File | Load when you need |
 |------|--------------------|
 | `patterns.md` | **Designing a non-trivial flow.** Proven flow archetypes (audit fan-out, self-healing rework, plan→approve→execute, dynamic replanning, tournament synthesis, incremental audit), anti-patterns, and the production-flow quality checklist. |
-<!-- host:pi -->
-| `advanced.md` | Shared Context Tree (`ctx_*` tools, `ctx_spawn` sub-graphs), workspace isolation (`cwd: temp/dedicated/worktree`), dynamic sub-flow (`flow{def}`) contracts & security caps, and the **incremental recompute suite** (`ir` / `provenance` / `why-stale` / `recompute` / `cache-clear`). |
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 | `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, workspace isolation (`cwd: temp/dedicated/worktree`), immutable resume (`taskflow_resume`), and build/host identity (`taskflow_version`). |
-<!-- /host:codex,claude,opencode,grok,hermes -->
 | `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. **TypeScript DSL CLI** (`taskflow-dsl` / S4). |
 | `library.md` | **Before authoring a non-trivial flow — SEARCH the reusable-flow library.** Save reusable flows with `purpose`+`tags` so future search finds them; reuse + generalize instead of rewriting from scratch. The compounding flywheel. |
 
@@ -36,10 +72,6 @@ mistakes that break flows. Load the companion files **only when needed**:
 - A **single-file, single-step** change you can do directly — just do it.
 - **Interactive debugging** where each step depends on watching live output.
 - Work that is **one bash command** — run it yourself, don't wrap it in a flow.
-<!-- host:pi -->
-- A single quick delegation with no tracking needs — the plain `subagent` tool
-  is fine (though the shorthand below gives you resume + save for free).
-<!-- /host:pi -->
 
 ## Flow design ladder
 
@@ -99,43 +131,20 @@ proper flow, so you still get progress, persistence, and resume.
   (the workspace lifecycle is per-phase — use the top-level `cwd` for isolation).
 - Add `name` to label the run.
 - Precedence if several are given: `chain` > `tasks` > `task`.
-<!-- host:pi -->
-- You can pass these as top-level tool params **or** inside `define`.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 - Pass these as the `define` argument to `taskflow_run`.
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ## How to author a taskflow
 
-<!-- host:pi -->
-Call the `taskflow` tool. To run a brand-new flow you write inline, pass
-`action: "run"` with a `define` object. To run a saved flow, pass `name`.
-**Before running a non-trivial flow, `action: "verify"` it — zero tokens,
-catches cycles / missing deps / undefined refs / contract typos.**
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
 **Before running a non-trivial flow, `taskflow_plan` it (or at least
 `taskflow_verify`) — zero tokens: binds args, projects the phase plan + budget
 bound, and catches cycles / missing deps / undefined refs / contract typos.**
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ### Iterating on a big flow? Use `defineFile` (write once, verify / edit / run by path)
 
 For a non-trivial flow you'll iterate on, **write the definition to a file**
 (typically in the OS tmp dir) and point every call at it with `defineFile`:
 
-<!-- host:pi -->
-```jsonc
-// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
-// 2. verify, iterate, run — all reference the SAME file by path:
-{ "action": "verify", "defineFile": "/tmp/audit.json" }        // zero tokens
-{ "action": "compile", "defineFile": "/tmp/audit.json" }        // diagram + report
-{ "action": "run",    "defineFile": "/tmp/audit.json", "args": { … } }
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 ```jsonc
 // 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
 // 2. verify, iterate, run — all reference the SAME file by path:
@@ -145,7 +154,6 @@ For a non-trivial flow you'll iterate on, **write the definition to a file**
 { "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers
 { "name": "taskflow_run",    "arguments": { "defineFile": "/tmp/audit.json" } }
 ```
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 The file can be raw JSON **or** a Markdown doc with a fenced ```json block
 (`write` the JSON form, or paste the flow into a note and fence it). Between
@@ -360,16 +368,10 @@ The (interpolated) `task` is the prompt shown.
 - **Background (detached)** runs **auto-reject** (no interactive approver);
   downstream sees the rejection; the flow continues (fail-open).
 
-<!-- host:pi -->
-Place one before the expensive part of a flow (a big fan-out, a mutation) —
-see the plan→approve→execute archetype in `patterns.md`.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 > **MCP-host caveat (Codex / Claude Code / OpenCode):** MCP-driven runs are
 > non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
 > (agent review) in flows you run through the `taskflow_*` tools; use `approval`
 > only in flows a human runs interactively.
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ### Sub-flows (composition) — summary
 
@@ -650,10 +652,6 @@ if you literally want `a → b → c → d`, or write explicit `dependsOn`.
 
 Phase ids and agent names use **hyphens** (`audit-each`, `risk-reviewer`).
 An unknown agent name fails the phase with the list of available agents.
-<!-- host:pi -->
-Check with `action: "agents"` instead of guessing.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 Built-in agents: `executor`, `executor-code` (complex, multi-file),
 `executor-fast` (trivial), `executor-ui`, `scout` (cheap recon), `planner`,
 `analyst`, `critic`, `reviewer`, `risk-reviewer`, `security-reviewer`,
@@ -661,89 +659,13 @@ Built-in agents: `executor`, `executor-code` (complex, multi-file),
 `recover`, `visual-explorer`. **Do not invent agent names** — omit `agent` to
 use the default. Use cheap agents (`scout`) for discovery and strong agents
 (`critic`, `final-arbiter`) for gates/judging.
-<!-- /host:codex,claude,opencode,grok,hermes -->
-
-<!-- host:pi -->
-## Actions (all 20)
-
-| action | what it does |
-|--------|--------------|
-| `run` | Run an inline `define` or a saved `name` (+ optional `args`). Add `detach: true` for background (returns runId immediately). Add `incremental: true` to default every phase to cross-run cache reuse. |
-| `save` | Persist `define` (scope `project` default / `user`); becomes `/tf:<name>`. Project overrides user on collision. |
-| `resume` | Continue a paused/failed run by `runId`. Cache-aware: `done` phases are reused, only the unfinished tail re-runs. |
-| `list` | List saved flows. |
-| `agents` | List available agents (never invent names). |
-| `verify` | Static-check a `define` or saved `name` — cycles, missing deps, undefined refs, contract-ref typos. Zero tokens. |
-| `compile` | Render a flow as a Mermaid diagram + verification report. Zero tokens. |
-| `plan` | **Preflight plan (0.2.7).** Bind typed `args`, structural verify + optional lint, topo-ordered phase plan with bound/unresolved/dynamic bindings, and worst-case agent-call bound (`budget.maxAgentCalls`). Zero tokens — no subagent is spawned. Prefer this before any non-trivial `run`. |
-| `analytics` | **Read-only last-N aggregation (0.2.7).** Status histogram, p50/p95 duration, per-phase fail/cache rates for a saved flow `name`. No writes, no auto-tune. |
-| `ir` | Compile to **FlowIR** — the canonical intermediate representation with a content hash per phase. Use to diff two versions of a flow or confirm a definition change actually changed a phase's fingerprint. Zero tokens. |
-| `provenance` | Show a completed run's **observed read-sets** — which phases actually read which upstream outputs at runtime (may be narrower than `dependsOn`). Requires `runId`. Zero tokens. |
-| `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
-| `replay` | **Offline what-if** on a recorded trace: re-evaluate under alternate gate thresholds, budget caps, or model routes **without calling the model** (zero tokens). Reports per-phase `reused` / `would-block` / `verdict-flipped` / `would-exceed-budget` / `needs-live-rerun`. `runId` required; optional `thresholds`, `budgetMaxUSD`, `budgetMaxTokens`, `models`; `--json` for the full `ReplayReport`. |
-| `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
-| `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
-| `reconcile-workspace` | Explicitly reconcile a dirty resolve-only cwd workspace after acknowledging the risk. |
-| `version` | Report package version, build commit, run-state schema version, and host identity. Zero tokens. |
-| `cache-clear` | Clear the cross-run memoization store. |
-| `search` | Search the reusable-flow **library** by purpose/tags (structural + CJK-aware keyword scoring). Find a flow to reuse before authoring a new one. |
-| `init` | Model-roles configuration. `mode: "show"` is read-only; `apply-defaults` requires `force: true`; `interactive` needs a UI session. |
-
-**The incremental loop** (`ir` → `why-stale` → `recompute`) is taskflow's
-cheapest superpower: after a repo change, re-pay for only the affected phases
-of a prior run instead of re-running the whole flow. Full workflow with an
-example in `advanced.md`.
-
-## Background (detached) runs
-
-Add `detach: true` to `action: "run"` to spawn the flow in a detached child
-process. Returns immediately with the `runId`; the flow survives the host
-session exiting. Poll via `/tf runs` or resume by `runId`. Approval phases
-auto-reject in detached mode; a crashed detached process persists
-`status: "failed"` (resumable).
-<!-- /host:pi -->
 
 ## Operating a run (lifecycle & inspection)
 
 A run moves through: **running →** `completed` (a `final` phase produced output)
 **/** `blocked` (gate BLOCK, approval rejected, or `budget` hit) **/** `failed`
 (a non-`optional` phase errored) **/** `paused` (aborted).
-<!-- host:pi -->
-`failed` and `paused` are resumable.
-<!-- /host:pi -->
 
-<!-- host:pi -->
-- **Resume forks immutable history.** `action: "resume"` accepts only a
-  `failed` or `paused` run, creates a new child `runId` with `parentRunId`,
-  reuses completed unaffected phases, and never overwrites the parent. Optional
-  `phaseId` + `resumeTask`/`resumeModel`/`resumeTimeout`/`resumeIdleTimeout`
-  overrides patch the failed/in-flight phase on the child only.
-- **Resume vs. re-run vs. recompute.** Resume when inputs are unchanged and you
-  want to continue the tail (fixed a gate, raised the budget). Re-run from
-  scratch when the task text changed. **Recompute** when the *world* changed
-  (a file, a commit) and you want to re-pay for only the affected phases.
-- **Inspect runs.** `/tf runs` lists recent runs; `/tf show <name>` prints a
-  saved flow's definition. Run state:
-  `<project .pi>/taskflows/runs/<flowName>/<runId>.json` (gitignored).
-- **Peek at intermediate outputs.** `/tf peek <runId>` lists phases (status +
-  output size); `/tf peek <runId> <phaseId>` prints that phase's stored output —
-  `--json` for parsed JSON, `--item <n>` for one section of a fan-out,
-  `--limit <chars>` (default 4000, max 32000). Read-only, human-invoked: the
-  context-isolation contract still holds — peek is the debugging escape hatch
-  when one phase of many produced garbage.
-
-## User commands
-
-- `/tf list` · `/tf run <name> [args]` · `/tf show <name>` · `/tf runs` · `/tf resume <runId>`
-- `/tf verify` · `/tf compile <name> [lr|td]` · `/tf ir <name>`
-- `/tf peek <runId> [phaseId] [--json] [--item <n>] [--limit <chars>]`
-- `/tf provenance <runId>` · `/tf trace <runId> [--json]` · `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]`
-- `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
-- `/tf reconcile-workspace --ack` · `/tf version`
-- `/tf init` — interactive model-roles setup
-- `/tf:<name> [args]` — shortcut for each saved flow
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 `taskflow_run` reports a `runId`. If the final output looks wrong, don't
 re-run blind — `taskflow_peek` the run: omit `phaseId` to list phase statuses
 and output sizes, then peek the suspicious phase (`json: true` for parsed
@@ -767,4 +689,3 @@ For flows re-run as the repo evolves, pass `incremental: true` to
 input → $0 instant hit. Per-phase `cache.fingerprint` entries
 (`git:HEAD`, `glob!:src/**/*.ts`, `file:package.json`) invalidate on world
 changes; a cached `map` re-executes only changed items. See `configuration.md` §8.
-<!-- /host:codex,claude,opencode,grok,hermes -->

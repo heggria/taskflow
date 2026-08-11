@@ -1,17 +1,9 @@
-<!-- host:pi -->
-# Taskflow Advanced — context sharing, dynamic sub-flows, isolation, incremental recompute
+<!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/advanced.md (npm run build:skills) -->
 
-Load this when a flow needs: cross-phase knowledge sharing (`shareContext`),
-runtime-generated work (`flow{def}` / `ctx_spawn`), isolated working
-directories, or surgical re-execution after the world changes
-(`ir` / `provenance` / `why-stale` / `recompute`).
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 # Taskflow Advanced — dynamic sub-flows & workspace isolation
 
 Load this when a flow needs: runtime-generated work (`flow{def}` / `expand`) or
 isolated working directories (`cwd: temp/dedicated/worktree`).
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ---
 
@@ -29,90 +21,6 @@ breadth caps match `flow{def}`. **Event kernel** still excludes `race`/`expand`
 (imperative path only until step handlers exist).
 
 ---
-
-<!-- host:pi -->
-## Shared Context Tree (blackboard + supervision) — opt-in
-
-> **0.2.0 host scope:** context-tool injection is implemented by `pi-taskflow`.
-> Codex, Claude, OpenCode, and Grok runners do not expose `ctx_*` tools yet.
-
-By default subagents are fully isolated: they share nothing and only return a
-final output string. Opt a phase in with `shareContext: true` (or
-`contextSharing: true` at the flow level for every phase) to give its subagent
-four extra tools backed by a per-run, file-based blackboard:
-
-| tool | direction | use |
-|------|-----------|-----|
-| `ctx_write(key, value)` | horizontal | publish a finding so siblings/descendants can reuse it (avoid re-reading the same files) |
-| `ctx_read(key?)` | horizontal | read findings visible to this node: its own + ancestors' + **completed** other nodes' (omit `key` to list all) |
-| `ctx_report(summary, structured?)` | vertical ↑ | report a result upward to the parent |
-| `ctx_spawn(assignments[])` | vertical ↓ | delegate child tasks; after this node finishes the runtime runs each child (isolated) and **folds their reports into this phase's output**. Each assignment is either a flat `{task, agent?}` OR a `{subflow, defaultAgent?}` — an inline plan `{phases:[...]}` the runtime validates and runs as a nested sub-flow |
-
-Visibility is eventually-consistent: a sibling's findings become visible once
-that sibling **completes** (a running sibling's half-written blackboard is
-hidden). Own findings beat ancestors' beat completed-others' on key conflicts.
-
-**When to use:** fan-out items share expensive context (one map item maps the
-repo, the rest read its findings), or a task should discover work at runtime
-and delegate it (`ctx_spawn`) rather than the author pre-declaring every branch.
-
-```jsonc
-{ "id": "survey", "type": "agent", "agent": "scout", "shareContext": true,
-  "task": "Map the API surface. ctx_write key 'endpoints' with the JSON list so the auditors don't re-scan." },
-{ "id": "audit", "type": "map", "over": "{steps.survey.json}", "shareContext": true,
-  "dependsOn": ["survey"], "agent": "analyst",
-  "task": "ctx_read 'endpoints' for shared context, then audit {item} for missing auth." }
-```
-
-**Spawning a sub-graph (not just flat tasks).** A `ctx_spawn` assignment can be
-a whole inline plan — use `subflow` when the delegated work has multiple
-coordinated steps with dependencies:
-
-```jsonc
-ctx_spawn({ assignments: [
-  { task: "quick standalone check", agent: "analyst" },          // flat task
-  { subflow: {                                                   // a DAG
-      phases: [
-        { id: "scan",  type: "agent",  agent: "scout",  task: "list endpoints" },
-        { id: "audit", type: "map",    over: "{steps.scan.json}", task: "audit {item}", dependsOn: ["scan"] },
-        { id: "sum",   type: "reduce", from: ["audit"], task: "summarize", dependsOn: ["audit"], final: true }
-      ]
-    },
-    defaultAgent: "analyst"   // inner phases without their own `agent` use this
-  }
-] })
-```
-
-The subflow is validated (cycles / dangling refs / dead-ends) before it runs; a
-bad plan fails **open** (a diagnostic is folded into the report, the run
-continues). `agent` (flat task) = who executes; `defaultAgent` (subflow) =
-fallback for inner phases. Nesting is bounded: spawn-subflows and `flow{def}`
-share one depth counter capped at 5.
-
-**Guards & limits:** ids used with sharing must match `[A-Za-z0-9._-]+`; keys
-are `[A-Za-z0-9._-]` (≤128 chars); values ≤256 KB; ≤256 keys/node; `ctx_spawn`
-≤16 tasks/call, task ≤64 KB, depth ≤5. All bookkeeping is fail-open (it can
-never sink a phase); the per-run blackboard is cleaned up with the run.
-
-You do **not** need to teach the tools in your `task` text — enabling
-`shareContext` auto-appends usage guidance to the subagent's system prompt.
-Mentioning a specific key in the task ("ctx_write the endpoint list under
-'endpoints'") just makes the cross-phase contract explicit.
-
-**Producer tip (learned from real runs):** the phase that *publishes* shared
-context should be a **capable** agent (high thinking), and the `ctx_write`
-should be framed as its **primary deliverable** ("if you did not call ctx_write
-you failed the task"). A fast / `thinking: off` agent asked to "survey AND
-ctx_write" will often do the survey and skip the write. Consumers can be
-lighter — reading is a single reliable step.
-
-**Caching interaction:** `shareContext: true` disables per-item map caching
-(a sharing item can read sibling writes outside its declared deps, so the
-per-item key would under-approximate real reads). The whole-map cache path
-still applies.
-
----
-<!-- /host:pi -->
 
 ## Dynamic sub-flows (`flow{def}`) — the full contract
 
@@ -215,82 +123,6 @@ each `cwd: "worktree"`, each attempting a different refactor strategy and
 reporting its test results; a downstream gate/judge picks which diff to apply
 for real. The main tree is never touched by the losers.
 
-<!-- host:pi -->
----
-
-## Incremental recompute suite (`ir` / `provenance` / `why-stale` / `recompute`)
-
-Taskflow's cheapest superpower: after the world changes, re-pay for **only the
-affected phases** of a stored run instead of re-running the flow.
-
-Two complementary planes:
-
-| Plane | Mechanism | Answers |
-|-------|-----------|---------|
-| **Declared** | `dependsOn` ∪ `{steps.X}` refs in the definition | "what *could* depend on what" |
-| **Observed** | read-sets recorded at runtime (which upstream outputs a phase actually consumed) | "what *did* depend on what" |
-
-`why-stale` and `recompute` use the **union** (observed ∪ declared) so the
-frontier is sound even for runs made before observation existed.
-
-### The workflow
-
-```
-1. taskflow { action: "ir", name: "security-sweep" }
-     → FlowIR: canonical form + a content hash per phase.
-       Diff two versions of a flow; confirm an edit actually changed a
-       phase's fingerprint (identical hash ⇒ cache-hit eligible).
-
-2. taskflow { action: "provenance", runId: "<id>" }
-     → the run's observed read-sets: who actually read what.
-
-3. taskflow { action: "why-stale", runId: "<id>", phaseId: "discover" }
-     → the transitive stale frontier if 'discover' is assumed changed —
-       exactly which phases would re-run and the edge that makes each stale.
-       Omit phaseId to print the whole observed dependency graph.
-
-4. taskflow { action: "recompute", runId: "<id>", phaseId: "discover" }
-     → DRY-RUN by default: reports what would re-execute, zero tokens.
-
-5. taskflow { action: "recompute", runId: "<id>", phaseId: "discover", "dryRun": false }
-     → actually re-runs the seed + stale frontier, reuses every non-stale
-       phase's stored output, persists the updated run.
-       An aborted recompute never overwrites the original run.
-```
-
-CLI equivalents: `/tf ir <name>` · `/tf provenance <runId>` ·
-`/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]`.
-
-### When to reach for which reuse mechanism
-
-| Situation | Mechanism |
-|-----------|-----------|
-| Run crashed / gate blocked / budget hit — inputs unchanged | `action: "resume"` (within-run cache) |
-| The flow will be re-run repeatedly as the repo evolves | `incremental: true` + `cache.fingerprint` (cross-run cache — `configuration.md` §8) |
-| One phase of a completed run is now wrong/stale (a file changed, you edited one task) | `why-stale` → `recompute` (surgical, keeps the same run) |
-| The definition changed structurally | fresh `run` (compare `ir` hashes to see what changed) |
-| Cache serving stale results you can't explain | `provenance` to see real reads; `cache-clear` as the last resort |
-
-### Worked example
-
-A 12-phase nightly audit run completed yesterday. Today `src/auth/session.ts`
-changed. Instead of re-running all 12 phases:
-
-```
-/tf why-stale run-xyz discover
-  → Stale frontier (transitive, 4 phases):
-    ■ discover        (changed — seed)
-    ■ audit           ← reads discover
-    ■ screen          ← reads audit
-    ■ report          ← reads screen (declared)
-/tf recompute run-xyz discover --apply
-  → re-runs 4 phases, reuses 8, persists the updated run.
-```
-
-The other 8 phases (dependency summary, license scan, …) are served from the
-stored run at $0.
-<!-- /host:pi -->
-
 ---
 
 ## Trace & offline replay (`trace` / `replay`) — vs resume / recompute
@@ -310,14 +142,6 @@ Every instrumented run may write an append-only **event log**
 input/output, and runtime **decisions** (gate verdict/score, when-guard,
 cache-hit, budget-hit, tournament-winner, unreplayable).
 
-<!-- host:pi -->
-```
-taskflow { action: "trace", runId: "<id>" }
-taskflow { action: "trace", runId: "<id>", json: true }   // full machine record
-/tf trace <runId> [--json]
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 ```
 taskflow_trace { runId: "<id>" }
 taskflow_trace { runId: "<id>", json: true }
@@ -326,7 +150,6 @@ taskflow_trace { runId: "<id>", json: true }
 MCP trace responses are bounded. JSON mode returns an envelope with
 `total`/`returned`/`truncated`; use `limit` (default 200, max 1000) to select the
 newest events without flooding the host context.
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 If there is no log (pre-trace run, or no sink injected), the tool reports that
 clearly — it never invents events.
@@ -344,19 +167,10 @@ calling any model:
 Outcomes per phase: `reused`, `would-block`, `verdict-flipped`,
 `would-exceed-budget`, `threshold-changed`, `needs-live-rerun`, `failed`.
 
-<!-- host:pi -->
-```
-taskflow { action: "replay", runId: "<id>", thresholds: { review: 0.9 } }
-taskflow { action: "replay", runId: "<id>", budgetMaxUSD: 0.05, json: true }
-/tf replay <runId> --threshold review=0.9 --budget-usd 0.05 [--json]
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 ```
 taskflow_replay { runId: "<id>", thresholds: { review: 0.9 } }
 taskflow_replay { runId: "<id>", budgetMaxUSD: 0.05, json: true }
 ```
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
 **Import-graph guarantee:** `replayRun` never imports the process-spawning
 runtime or event kernel — offline replay cannot accidentally spend tokens.
@@ -371,35 +185,6 @@ runtime or event kernel — offline replay cannot accidentally spend tokens.
 | "Would a $0.10 cap have stopped the fan-out?" | `replay` with `budgetMaxUSD` |
 | Need fresh model judgment under a new model id | `replay` will say `needs-live-rerun` → live `recompute`/`run` |
 
-<!-- host:pi -->
----
-
-## Resume overrides (re-run one phase with a patch)
-
-`action: "resume"` accepts a `failed` or `paused` run and **forks a new
-run** — the original run file is never
-modified or overwritten (the child carries `parentRunId` pointing at it).
-Completed unaffected phases are reused (within-run cache hits); the target
-phase + its transitive downstream re-run.
-
-To re-run **exactly one phase** with a patched task/model/timeout/idleTimeout,
-pass override fields alongside `phaseId` (at least one override is required):
-
-```
-taskflow { action: "resume", runId: "<id>", phaseId: "audit",
-           resumeTask: "re-audit src/api with the new checklist",
-           resumeModel: "gpt-5" }
-```
-
-The overrides are applied to the **child's** def only — the parent def +
-persisted file stay untouched. `validateResumeOverrides` checks the target
-phase exists, that at least one override is supplied, and that the patched def
-passes the normal Taskflow validator (so a bad ref is caught before re-run).
-
-Without overrides, ordinary resume forks a new run and re-runs the non-done
-(failed/paused) phases.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 ---
 
 ## Resume overrides (re-run one phase with a patch)
@@ -418,23 +203,7 @@ taskflow_resume { runId: "<id>", phaseId: "audit",
 
 The overrides apply to the child's def only; the parent is untouched. Without
 overrides, ordinary resume re-runs the non-done phases.
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
-<!-- host:pi -->
----
-
-## `version` — build/host identity
-
-`action: "version"` (or `/tf version`) reports the engine package version, the
-git commit the dist was built from, the run-state schema version, and the host
-(`pi`). The git commit is stamped at build time — `git` is never run at
-runtime (source/dev checkouts report `unknown`).
-```
-taskflow { action: "version" }
-/tf version
-```
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
 ---
 
 ## Pluggable verifiers — zero-token custom static checks
@@ -496,22 +265,3 @@ was built from, the run-state schema version, and the bound host
 ```
 taskflow_version {}
 ```
-<!-- /host:codex,claude,opencode,grok,hermes -->
-
-<!-- host:pi -->
----
-
-## `init` — model roles setup
-
-`action: "init"` manages the `modelRoles` map (`{{steward}}` /
-`{{expert}}` / `{{builder}}` / `{{scout}}`
-placeholders in agent frontmatter → real model ids):
-
-- `mode: "show"` (default) — read-only report of current roles.
-- `mode: "apply-defaults"` — writes recommended defaults; **requires
-  `force: true`** (destructive: overwrites `modelRoles` in settings.json).
-- `mode: "interactive"` — requires a UI session (`/tf init` is the human path).
-
-If phases fail with `Model metadata for {{scout}} not found`, roles are
-unconfigured — run `/tf init`.
-<!-- /host:pi -->

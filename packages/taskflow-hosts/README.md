@@ -3,9 +3,9 @@
 > Shared host-runner collection for [taskflow](https://github.com/heggria/taskflow).
 
 This package holds the `SubagentRunner` implementations for taskflow's non-pi
-hosts — **codex**, **claude**, **opencode**, and **grok** — plus their pure argv
+hosts — **codex**, **claude**, **opencode**, **grok**, and **hermes** — plus their pure argv
 builders (`buildCodexArgs` / `buildClaudeArgs` / `buildOpencodeArgs` /
-`buildGrokArgs`) and event-stream parsers. It is the **single place** host
+`buildGrokArgs` / `buildHermesArgs`) and event-stream parsers. It is the **single place** host
 runners live; a new host adds a `<host>-runner.ts` here.
 
 ## Why a separate package
@@ -17,13 +17,13 @@ Each host has two halves:
    permission/model helpers.
 2. **The delivery** — the per-host MCP server + bin + plugin scaffold, which is
    that host ecosystem's install target (`codex plugin add`, `claude plugin
-   install`, OpenCode config, `grok plugin install`).
+   install`, OpenCode config, `grok plugin install`, Hermes `mcp_servers`).
 
 Half #1 is nearly identical in *shape* across hosts and changes for the same
 reasons (a `taskflow-core` contract change, or a host CLI flag change). Half #2
 is genuinely host-specific (different install mechanisms, different plugin
 manifests). So #1 is collected here; #2 stays in `codex-taskflow` /
-`claude-taskflow` / `opencode-taskflow` / `grok-taskflow`, which import their
+`claude-taskflow` / `opencode-taskflow` / `grok-taskflow` / `hermes-taskflow`, which import their
 runner from this package.
 
 ## Install
@@ -31,7 +31,7 @@ runner from this package.
 You usually don't install this directly — install the host delivery package:
 
 ```bash
-npm install -g codex-taskflow     # or claude-taskflow / opencode-taskflow / grok-taskflow
+npm install -g codex-taskflow     # or claude-taskflow / opencode-taskflow / grok-taskflow / hermes-taskflow
 ```
 
 For code-level use:
@@ -46,12 +46,14 @@ npm install taskflow-hosts
 // one host, tree-shaken:
 import { codexSubagentRunner, buildCodexArgs } from "taskflow-hosts/codex";
 import { grokSubagentRunner, buildGrokArgs } from "taskflow-hosts/grok";
+import { hermesSubagentRunner, buildHermesArgs } from "taskflow-hosts/hermes";
 
 // or the barrel:
 import {
 	claudeSubagentRunner,
 	opencodeSubagentRunner,
 	grokSubagentRunner,
+	hermesSubagentRunner,
 } from "taskflow-hosts";
 ```
 
@@ -69,6 +71,7 @@ helpers (`sandboxForTools`, `permissionArgsForTools` / `permissionArgsForGrokToo
 | Claude Code | `claude -p --output-format stream-json` | `claude-taskflow` |
 | OpenCode | `opencode run --format json` | `opencode-taskflow` |
 | Grok Build | `grok -p --output-format streaming-json` | `grok-taskflow` |
+| Hermes Agent | `hermes chat -q -Q --source tool` | `hermes-taskflow` |
 
 ## Adding a host
 

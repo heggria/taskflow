@@ -13,8 +13,9 @@ taskflow is a monorepo of nine independently published packages:
 | `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
 | `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
 | `packages/grok-taskflow` | **`grok-taskflow`** | Grok Build delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
+| `packages/hermes-taskflow` | **`hermes-taskflow`** | Hermes Agent delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
 
-Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, and `grok-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core`, `taskflow-hosts`, and `taskflow-dsl` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, taskflow-hosts, taskflow-dsl, then the adapters**.
+Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`, and `hermes-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core`, `taskflow-hosts`, and `taskflow-dsl` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, taskflow-hosts, taskflow-dsl, then the adapters (including hermes)**.
 
 ## One-time repository setup
 
@@ -75,7 +76,7 @@ this release's CHANGELOG section, verify:
 ## Publish from a tag (the only supported release path)
 
 First merge the release commit to `main` and wait for every required check,
-including `packed consumer (9 packages)`, to pass. From the updated `main`, push
+including `packed consumer (10 packages)`, to pass. From the updated `main`, push
 the matching annotated tag:
 
 ```sh
@@ -114,6 +115,7 @@ pnpm view codex-taskflow version --registry=https://registry.npmjs.org/
 pnpm view claude-taskflow version --registry=https://registry.npmjs.org/
 pnpm view opencode-taskflow version --registry=https://registry.npmjs.org/
 pnpm view grok-taskflow version --registry=https://registry.npmjs.org/
+pnpm view hermes-taskflow version --registry=https://registry.npmjs.org/
 ```
 
 Also verify the `Publish & Release` workflow completed successfully and that
@@ -142,4 +144,6 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 # Grok Build (published MCP package)
 grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.8 grok-taskflow-mcp
 # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+
+hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
 ```

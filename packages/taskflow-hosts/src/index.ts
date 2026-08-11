@@ -26,3 +26,4 @@ export * from "./codex-runner.ts";
 export * from "./claude-runner.ts";
 export * from "./opencode-runner.ts";
 export * from "./grok-runner.ts";
+export * from "./hermes-runner.ts";

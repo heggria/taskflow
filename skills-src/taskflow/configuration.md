@@ -251,9 +251,9 @@ advances its generation; it does not restore files or certify them as correct.
 
 Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ---
 
@@ -380,8 +380,23 @@ Notes:
   Children inherit only platform/proxy/CA and Grok/xAI/Taskflow-Grok variables;
   unrelated secrets are removed.
 <!-- /host:grok -->
+<!-- host:hermes -->
+- Each phase runs as an isolated `hermes chat -q <prompt> -Q --source tool`
+  session. Quiet mode prints a `session_id:` meta line then the final answer;
+  the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
+  pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
+  maps to `--reasoning` (`off` → `none`). Read-only phases use
+  `-t web,search` (Hermes' `file` toolset includes write/patch, so it is not
+  used for read-only). Mutating / default-capable phases fail closed unless
+  `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
+  `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
+  does not stream token/cost accounting, so budgeted flows fail closed at the
+  MCP adapter the same way other non-accounting hosts do when costs are
+  unobservable. Children inherit only platform/proxy/CA, `HERMES_*`, and
+  common provider variables; unrelated secrets are removed.
+<!-- /host:hermes -->
 
-For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
 comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.

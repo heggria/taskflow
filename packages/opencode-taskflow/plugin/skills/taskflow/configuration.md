@@ -305,7 +305,7 @@ Notes:
   compatibility aliases `off → none` and `ultra → max`. Other levels are
   best-effort because supported variants differ by provider and model.
 
-For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
 comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.

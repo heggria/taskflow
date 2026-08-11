@@ -8,7 +8,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
-[![Hosts](https://img.shields.io/badge/hosts-5-7775FF?style=flat-square)](#安装到你的宿主)
+[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#安装到你的宿主)
 [![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#为真实工作而生)
 
 [English](./README.md) · **简体中文**
@@ -25,7 +25,7 @@
 
 它运行在你已经使用的编程智能体上：
 
-**Pi · Codex · Claude Code · OpenCode · Grok Build**
+**Pi · Codex · Claude Code · OpenCode · Grok Build · Hermes Agent**
 
 ```text
 JSON 或 .tf.ts

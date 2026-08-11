@@ -28,6 +28,7 @@ const packageNames = [
 	"claude-taskflow",
 	"opencode-taskflow",
 	"grok-taskflow",
+	"hermes-taskflow",
 ];
 const rootManifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 const peerNames = [
@@ -237,6 +238,7 @@ try {
 		"taskflow-hosts/claude",
 		"taskflow-hosts/opencode",
 		"taskflow-hosts/grok",
+		"taskflow-hosts/hermes",
 		"taskflow-dsl",
 		"taskflow-dsl/build",
 		"taskflow-dsl/check",
@@ -251,6 +253,8 @@ try {
 		"opencode-taskflow/mcp/server",
 		"grok-taskflow",
 		"grok-taskflow/mcp/server",
+		"hermes-taskflow",
+		"hermes-taskflow/mcp/server",
 	];
 	// detached-runner is a spawn-only public entry point and intentionally exits
 	// when imported without its context-file argv; resolution proves it ships
@@ -291,12 +295,13 @@ try {
 		["claude-taskflow-mcp", "taskflow-claude"],
 		["opencode-taskflow-mcp", "taskflow-opencode"],
 		["grok-taskflow-mcp", "taskflow-grok"],
+		["hermes-taskflow-mcp", "taskflow-hermes"],
 	]) {
 		smokeMcpBin(binName, serverName);
 	}
 
 	process.stdout.write(
-		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 5 bins\n`,
+		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 6 bins\n`,
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });

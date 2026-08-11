@@ -11,6 +11,7 @@ packages:
   - "packages/claude-taskflow"
   - "packages/opencode-taskflow"
   - "packages/grok-taskflow"
+  - "packages/hermes-taskflow"
   - "packages/taskflow-dsl"
   - "website"
 overrides:
