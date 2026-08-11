@@ -12,11 +12,16 @@ import {
 	hermesUnsafeYoloEnabled,
 	isHermesReadOnlyPhase,
 	newHermesAccumulator,
+	prepareEphemeralHermesHome,
 	resolveHermesModel,
 	resolveHermesReasoning,
 	resolveHermesToolsets,
 	type HermesArgsCtx,
 } from "../src/hermes-runner.ts";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
 
 // --- bin resolution ---------------------------------------------------------
 
@@ -52,8 +57,8 @@ test("hermes read-only: any mutating tool → NOT read-only", () => {
 	assert.equal(isHermesReadOnlyPhase(["read", "terminal"]), false);
 });
 
-test("hermes toolsets: read-only → search (no file write); web opt-in; empty mutating safe default", () => {
-	assert.equal(resolveHermesToolsets(["read"], true), "search");
+test("hermes toolsets: RO → no tools (no net); web opt-in; empty mutating safe default", () => {
+	assert.equal(resolveHermesToolsets(["read"], true), "");
 	assert.equal(resolveHermesToolsets(["read"], true, { readonlyWeb: true }), "web,search");
 	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
@@ -141,7 +146,7 @@ test("hermes argv: starts with chat -q <prompt> -Q --source tool and isolation f
 	assert.ok(src >= 0);
 	assert.equal(args[src + 1], "tool");
 	assert.ok(args.includes("--safe-mode"));
-	// --safe-mode implies ignore-user-config/ignore-rules; we do not double-list them.
+	// default-capable includes -t; RO omits it (see next test).
 	assert.ok(args.includes("-t"));
 	assert.ok(args.includes("--max-turns"));
 });
@@ -152,11 +157,13 @@ test("hermes argv: mutating/default fails closed unless yolo acknowledged", () =
 		new RegExp(`${HERMES_UNSAFE_YOLO_ENV}=1`),
 	);
 	assert.ok(buildHermesArgs({ ...baseCtx }).args.includes("--yolo"));
-	assert.equal(
-		buildHermesArgs({ ...baseCtx, tools: ["read"] }).args.includes("--yolo"),
-		false,
-		"read-only omits --yolo",
-	);
+	const ro = buildHermesArgs({ ...baseCtx, tools: ["read"] });
+	assert.equal(ro.args.includes("--yolo"), false, "read-only omits --yolo");
+	assert.equal(ro.args.includes("-t"), false, "RO default is model-only (no -t)");
+	assert.equal(ro.toolsets, "");
+	const roWeb = buildHermesArgs({ ...baseCtx, tools: ["read"], readonlyWeb: true });
+	assert.ok(roWeb.args.includes("-t"));
+	assert.equal(roWeb.args[roWeb.args.indexOf("-t") + 1], "web,search");
 });
 
 test("hermes unsafe yolo opt-in: only exact env value 1 is accepted", () => {
@@ -190,4 +197,24 @@ test("hermes argv: system prompt prepended to -q body", () => {
 	const q = args[args.indexOf("-q") + 1] as string;
 	assert.match(q, /You are careful/);
 	assert.match(q, /Task: count files/);
+});
+
+test("hermes ephemeral home: copies only credential files and cleans up", () => {
+	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-"));
+	writeFileSync(join(parent, ".env"), "XAI_API_KEY=test\n");
+	writeFileSync(join(parent, "auth.json"), "{}\n");
+	writeFileSync(join(parent, "config.yaml"), "should-not-copy: true\n");
+	mkdirSync(join(parent, "skills"));
+	writeFileSync(join(parent, "skills", "x.md"), "nope");
+	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir() });
+	try {
+		assert.notEqual(eph.home, parent);
+		assert.ok(existsSync(join(eph.home, ".env")));
+		assert.ok(existsSync(join(eph.home, "auth.json")));
+		assert.equal(existsSync(join(eph.home, "config.yaml")), false);
+		assert.equal(existsSync(join(eph.home, "skills")), false);
+	} finally {
+		eph.cleanup();
+	}
+	assert.equal(existsSync(eph.home), false);
 });

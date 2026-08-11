@@ -41,9 +41,9 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 |---------|----------|
 | Control plane | Full `taskflow_*` MCP roster (run, plan, verify, compile, resume, …) |
 | Execution | Each agent phase: `hermes chat -q … -Q --source tool --safe-mode` |
-| Read-only phases | `-t search` (no file/terminal; `READONLY_WEB=1` → web,search) |
+| Read-only phases | model-only by default (no `-t`); `READONLY_WEB=1` → `web,search` |
 | Mutating phases | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
-| Isolation | `--safe-mode` (no parent config / rules / plugins / MCP recursion) |
+| Isolation | `--safe-mode` + ephemeral `HERMES_HOME` (credentials only) |
 | Session hygiene | `--source tool` keeps integration runs out of the main user session list |
 
 ## Env knobs

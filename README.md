@@ -373,7 +373,7 @@ hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
 ```
 
-Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents run with `--safe-mode` (no parent MCP/config/rules). Read-only phases use `-t search` only — Hermes has no write-less local file toolset.
+Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents run with `--safe-mode` (no parent MCP/config/rules). Read-only phases are model-only by default — Hermes has no write-less local file toolset.
 
 [Hermes guide →](./docs/hermes-mcp.md)
 

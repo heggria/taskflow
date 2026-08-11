@@ -15,12 +15,12 @@
  *   - failure      = non-zero exit, or empty output with non-zero semantics
  *
  * Permission mapping:
- *   - read-only phase → `-t search` (web_search only; no file/terminal).
- *     Network extract via PI_TASKFLOW_HERMES_READONLY_WEB=1 → `web,search`.
+ *   - read-only phase → no tools by default (no file/terminal/network).
+ *     Opt-in network: PI_TASKFLOW_HERMES_READONLY_WEB=1 → `-t web,search`.
  *     Hermes cannot express write-less local file tools — do not attach `file`.
  *   - mutating / default-capable → requires explicit
  *     `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` and passes `--yolo`
- *   - children always get `--safe-mode` (no parent config/rules/plugins/MCP)
+ *   - children always get `--safe-mode` + ephemeral HERMES_HOME (credentials only)
  *
  * Quiet mode (`-Q`): answer on stdout; `session_id:` on stderr.
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
@@ -40,6 +40,9 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
+import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { filteredChildEnv } from "./child-env.ts";
 
 /** Mirrors taskflow-core TRANSPORT_ERROR_PLACEHOLDER (not always re-exported). */
@@ -213,9 +216,8 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 
 /**
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
- *   - read-only → NEVER attach Hermes `file` (it includes write_file/patch and is
- *     not approval-gated for ordinary workspace paths). Default RO is `search`
- *     only (web_search, no extract). Opt-in network: PI_TASKFLOW_HERMES_READONLY_WEB=1
+ *   - read-only → NEVER attach Hermes `file`. Default RO is **no tools**
+ *     (empty string → omit network egress). Opt-in: PI_TASKFLOW_HERMES_READONLY_WEB=1
  *     → `web,search`. Local disk read is unavailable under true RO on Hermes.
  *   - mutating with explicit tools → union of matching toolsets (narrow)
  *   - default / empty tools → file,terminal,web,search (NOT full `coding`)
@@ -228,8 +230,8 @@ export function resolveHermesToolsets(
 	opts: { readonlyWeb?: boolean } = {},
 ): string {
 	if (readOnly) {
-		// Do not map to `file` — write_file/patch remain available without --yolo.
-		return opts.readonlyWeb ? "web,search" : "search";
+		// Empty = no -t tools (model-only). Never attach file (writable).
+		return opts.readonlyWeb ? "web,search" : "";
 	}
 	if (!tools || tools.length === 0) return "file,terminal,web,search";
 
@@ -402,17 +404,72 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 		"tool", // third-party integrations — hide from user session lists
 		// Isolate from parent Hermes profile policy / MCP / memory injection.
 		"--safe-mode",
-		"-t",
-		toolsets,
 		"--max-turns",
 		String(maxTurns),
 	];
+	// Empty toolsets = model-only (RO default). Omit -t rather than pass "".
+	if (toolsets) {
+		args.push("-t", toolsets);
+	}
 	if (ctx.cwd) args.push("--in", ctx.cwd);
 	if (hermesModel) args.push("-m", hermesModel);
 	const reasoning = resolveHermesReasoning(ctx.thinking);
 	if (reasoning) args.push("--reasoning", reasoning);
 	if (!readOnly) args.push("--yolo");
 	return { args, readOnly, toolsets };
+}
+
+/**
+ * Credential-only files copied into an ephemeral HERMES_HOME. Never copy
+ * config.yaml, skills/, memory, plugins, sessions, or gateway state — those are
+ * the isolation surface `--safe-mode` + temp home close.
+ */
+const HERMES_EPHEMERAL_CREDENTIAL_FILES = [".env", "auth.json"] as const;
+
+export interface EphemeralHermesHome {
+	/** Temp directory used as HERMES_HOME for one child. */
+	home: string;
+	/** Remove the temp home (best-effort). */
+	cleanup: () => void;
+}
+
+/**
+ * Build a throwaway HERMES_HOME with only credential files from the parent
+ * profile. Children still authenticate via .env/auth.json but cannot write
+ * skills/memory into the operator profile.
+ */
+export function prepareEphemeralHermesHome(
+	parentHome: string,
+	opts: { tmpRoot?: string } = {},
+): EphemeralHermesHome {
+	const root = opts.tmpRoot ?? tmpdir();
+	const home = mkdtempSync(join(root, "taskflow-hermes-"));
+	for (const name of HERMES_EPHEMERAL_CREDENTIAL_FILES) {
+		const src = join(parentHome, name);
+		if (existsSync(src)) {
+			try {
+				copyFileSync(src, join(home, name));
+			} catch {
+				// Best-effort: missing/unreadable credentials surface as auth
+				// failures from hermes itself, not a host crash.
+			}
+		}
+	}
+	return {
+		home,
+		cleanup: () => {
+			try {
+				rmSync(home, { recursive: true, force: true });
+			} catch {
+				/* ignore */
+			}
+		},
+	};
+}
+
+/** Resolve parent HERMES_HOME the way Hermes CLI does (env or ~/.hermes). */
+export function resolveParentHermesHome(env: NodeJS.ProcessEnv = process.env): string {
+	return env.HERMES_HOME?.trim() || join(env.HOME || tmpdir(), ".hermes");
 }
 
 function hermesMaxTurnsFromEnv(env: NodeJS.ProcessEnv = process.env): number | undefined {
@@ -444,6 +501,8 @@ export async function runHermesAgentTask(
 	const cwd = opts.cwd ?? defaultCwd;
 	const allowUnsafeYolo = hermesUnsafeYoloEnabled();
 	const childEnv = hermesChildEnv(process.env, { allowUnsafeYolo });
+	const ephemeral = prepareEphemeralHermesHome(resolveParentHermesHome(process.env));
+	childEnv.HERMES_HOME = ephemeral.home;
 
 	let args: string[];
 	try {
@@ -459,6 +518,7 @@ export async function runHermesAgentTask(
 			readonlyWeb: hermesReadonlyWebEnabled(),
 		}));
 	} catch (error) {
+		ephemeral.cleanup();
 		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
 		return {
 			agent: agentName,
@@ -474,24 +534,28 @@ export async function runHermesAgentTask(
 	}
 
 	const acc = newHermesAccumulator(model);
-	const result = await runSubagentProcess({
-		agent: agentName,
-		task,
-		model,
-		bin: hermesBin(),
-		args,
-		env: childEnv,
-		cwd,
-		idleTimeoutMs: opts.idleTimeoutMs,
-		signal: opts.signal,
-		onLive: opts.onLive,
-		acc,
-		foldLine: foldHermesQuietLine,
-		// Quiet mode is plain text (not NDJSON); process exit is the terminal.
-		stdoutFormat: "text",
-		requireTerminalEvent: false,
-	});
-
+	let result: RunResult;
+	try {
+		result = await runSubagentProcess({
+			agent: agentName,
+			task,
+			model,
+			bin: hermesBin(),
+			args,
+			env: childEnv,
+			cwd,
+			idleTimeoutMs: opts.idleTimeoutMs,
+			signal: opts.signal,
+			onLive: opts.onLive,
+			acc,
+			foldLine: foldHermesQuietLine,
+			// Quiet mode is plain text (not NDJSON); process exit is the terminal.
+			stdoutFormat: "text",
+			requireTerminalEvent: false,
+		});
+	} finally {
+		ephemeral.cleanup();
+	}
 	// Hermes quiet mode prints `session_id: …` on stderr (stdout stays clean).
 	if (!acc.sessionId && result.stderr) {
 		const m = result.stderr.match(/session_id:\s*(\S+)/i);

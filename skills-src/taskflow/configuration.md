@@ -386,9 +386,9 @@ Notes:
   the runner strips the meta line. Unresolved `{{placeholder}}`s are dropped;
   pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
   maps to `--reasoning` (`off` → `none`). Read-only phases use
-  `-t search` only (web_search; no file/terminal — Hermes `file` includes
-  write_file/patch and is not a RO sandbox). Opt-in network extract via
-  `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Mutating / default-capable phases fail closed unless
+  model-only by default (no tools/network). Opt-in network via
+  `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
+  under RO (writable). Children use ephemeral HERMES_HOME (credentials only). Mutating / default-capable phases fail closed unless
   `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
   `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
   does not stream token/cost accounting, so budgeted flows fail closed at the
