@@ -34,6 +34,7 @@ export const RELEASE_PACKAGE_NAMES = [
 	"claude-taskflow",
 	"opencode-taskflow",
 	"grok-taskflow",
+	"hermes-taskflow",
 ];
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");

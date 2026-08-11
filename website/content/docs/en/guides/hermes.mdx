@@ -1,0 +1,111 @@
+---
+title: Using taskflow on Hermes Agent
+description: Install taskflow as an MCP server on Hermes Agent and orchestrate multi-phase workflows with isolated Hermes subagents.
+---
+
+[Hermes Agent](https://hermes-agent.nousresearch.com/) is Nous Research's open-source coding agent (CLI, TUI, desktop, messaging gateways). Taskflow's published path is its MCP server: Hermes discovers `taskflow_*` tools and each agent phase spawns an isolated `hermes chat -q -Q` child.
+
+The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/hermes-mcp.md) in the repo.
+
+## Install
+
+### Published MCP package (after npm publish)
+
+```bash title="Register taskflow MCP"
+hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
+```
+
+Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
+
+```yaml title="mcp_servers.taskflow"
+mcp_servers:
+  taskflow:
+    command: "npx"
+    args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
+    env:
+      # Required for mutating agent phases (terminal / file write / coding).
+      # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
+    timeout: 600
+```
+
+Requires **Node.js ≥ 22.19.0**. Restart Hermes so MCP tools are rediscovered as `mcp_taskflow_*`.
+
+### Local monorepo dogfood (before npm publish)
+
+```bash title="Local dogfood install"
+pnpm install
+pnpm --filter taskflow-core build
+pnpm --filter taskflow-mcp-core build
+pnpm --filter taskflow-hosts build
+pnpm --filter hermes-taskflow build
+
+# Point MCP at the compiled bin:
+#   command: node
+#   args: ["/abs/path/to/packages/hermes-taskflow/dist/mcp/bin.js"]
+#   env: { PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1" }
+```
+
+Optional skill:
+
+```bash
+cp -R packages/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskflow
+```
+
+## Verify the install
+
+```bash
+hermes mcp list
+hermes mcp test taskflow
+```
+
+In a Hermes session, tools should appear as `mcp_taskflow_list`, `mcp_taskflow_verify`, `mcp_taskflow_run`, …
+
+## Run your first flow
+
+### Just ask
+
+```text
+> List my saved taskflows.
+> Verify this flow, then run it: {name:"review-changes", phases:[...]}
+> Run the "review-changes" taskflow with dir set to src.
+```
+
+### Call tools directly
+
+Prefer **`mcp_taskflow_plan`** or **`mcp_taskflow_verify`** before any spend, then `mcp_taskflow_run`.
+
+## Permissions & safety
+
+| Phase kind | Behavior |
+|------------|----------|
+| Child isolation | ephemeral HERMES_HOME + `--ignore-rules` (show_reasoning off; RO file plugin) |
+| Read-only tool whitelist | local-read → `taskflow_readonly_files`; else model-only; `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search` (never attach writable `file`) |
+| Mutating / default-capable | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → child `--yolo` |
+| Budgeted flows | **Rejected** — Hermes quiet mode does not report token/cost |
+
+**Install footgun:** write MCP `env:` in `config.yaml`. Do not pass `--env` after bare CLI args in a way that lands in the node argv list.
+
+Optional env:
+
+- `PI_TASKFLOW_HERMES_UNSAFE_YOLO` (mutating only; leave unset for verify/script)
+- `PI_TASKFLOW_HERMES_READONLY_WEB` (opt-in network on RO)
+- `PI_TASKFLOW_HERMES_MAX_TURNS` (default `64`)
+- `PI_TASKFLOW_HERMES_BIN` (default `hermes`)
+- `HERMES_HOME` for credentials (`.env`/`auth.json` load from ephemeral HERMES_HOME)
+
+## How subagents run
+
+Each agent phase is:
+
+```bash
+hermes chat -q "<system + task>" -Q --source tool -t <toolsets> --max-turns N [--in cwd] [-m model] [--yolo]
+```
+
+Quiet mode prints plain text (plus a `session_id` meta line on stdout or stderr). The runner folds plain text into the host-neutral `RunResult`.
+
+## Next
+
+- [Agents & model roles](/en/docs/guides/agents-and-model-roles)
+- [Background runs](/en/docs/guides/background-runs)
+- [Templates](/en/docs/guides/templates)
+- Repo docs: [hermes-mcp.md](https://github.com/heggria/taskflow/blob/main/docs/hermes-mcp.md)

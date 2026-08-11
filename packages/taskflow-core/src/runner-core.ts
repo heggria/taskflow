@@ -492,6 +492,13 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	/** Fail closed when the CLI exits zero before its authoritative terminal event. */
 	requireTerminalEvent?: boolean;
 	terminalEventLabel?: string;
+	/**
+	 * How stdout lines are framed.
+	 * - `"json"` (default): every non-empty line must parse as JSON (NDJSON hosts).
+	 * - `"text"`: plain-text lines are passed straight to `foldLine` (e.g. Hermes
+	 *   quiet mode). Malformed-JSON protocol failure is disabled.
+	 */
+	stdoutFormat?: "json" | "text";
 }
 
 /** Spawn an isolated subagent process, fold its event stream, and classify the
@@ -709,15 +716,18 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		};
 		const processLine = (line: string) => {
 			if (!line.trim() || protocolError) return;
-			// Every supported host advertises a JSON/NDJSON stream. Treat malformed
-			// records as a protocol failure: silently dropping them can turn a
-			// truncated provider error into a successful phase with empty output.
-			let event: unknown;
-			try {
-				event = JSON.parse(line);
-			} catch {
-				failProtocol("Subagent emitted malformed or truncated JSON output");
-				return;
+			// Default hosts advertise a JSON/NDJSON stream. Treat malformed records
+			// as a protocol failure: silently dropping them can turn a truncated
+			// provider error into a successful phase with empty output.
+			// Plain-text hosts (Hermes quiet mode) opt into stdoutFormat: "text".
+			let event: unknown = line;
+			if (opts.stdoutFormat !== "text") {
+				try {
+					event = JSON.parse(line);
+				} catch {
+					failProtocol("Subagent emitted malformed or truncated JSON output");
+					return;
+				}
 			}
 			let live: LiveUpdate | null;
 			try {

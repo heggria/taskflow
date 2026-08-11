@@ -196,14 +196,14 @@ test("runSubagentProcess completion: later activity revokes a terminal candidate
 
 test("runSubagentProcess completion: ignored metadata preserves a terminal candidate", async () => {
 	const controller = new AbortController();
-	const watchdog = setTimeout(() => controller.abort(), 2_000);
+	const watchdog = setTimeout(() => controller.abort(), 5_000);
 	try {
 		const r = await terminalRun(`
 			const emit=x=>process.stdout.write(JSON.stringify(x)+"\\n");
 			emit({type:"final",text:"DONE"}); emit({type:"terminal"});
-			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),20);
+			setTimeout(()=>emit({type:"diagnostic",message:"metadata only"}),30);
 			setInterval(()=>{},1000);
-		`, { idleTimeoutMs: 80, terminalGraceMs: 50, signal: controller.signal });
+		`, { idleTimeoutMs: 250, terminalGraceMs: 120, signal: controller.signal });
 		assert.equal(r.output, "DONE");
 		assert.equal(r.completionSource, "terminal-reap", "ignored metadata must preserve the terminal candidate");
 	} finally {

@@ -1,5 +1,5 @@
 {
-	"title": "指南与 Recipes",
+	"title": "Guides & Recipes",
 	"pages": [
 		"index",
 		"---Hosts---",
@@ -8,6 +8,7 @@
 		"claude-code",
 		"opencode",
 		"grok-build",
+		"hermes",
 		"agents-and-model-roles",
 		"---Recipes---",
 		"templates",
