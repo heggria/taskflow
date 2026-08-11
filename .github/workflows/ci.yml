@@ -65,6 +65,7 @@ jobs:
         run: pnpm test
 
   e2e:
+    # Required status context: keep this literal stable; the job now covers all MCP hosts.
     name: e2e (codex MCP, network-free)
     runs-on: ubuntu-latest
     steps:
@@ -115,6 +116,10 @@ jobs:
       # Grok MCP e2e is also stdio-only and does not require a live Grok model.
       - name: Grok MCP e2e (stdio handshake + tool calls)
         run: pnpm run test:e2e-grok-mcp
+
+      # Hermes MCP uses the same network-free stdio handshake/tool-call contract.
+      - name: Hermes MCP e2e (stdio handshake + tool calls)
+        run: pnpm run test:e2e-hermes-mcp
 
   build:
     name: build (dist emit)

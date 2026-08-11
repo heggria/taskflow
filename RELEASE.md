@@ -9,10 +9,10 @@ taskflow is a monorepo of ten independently published packages:
 | `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode/grok/hermes `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
 | `packages/taskflow-dsl` | **`taskflow-dsl`** | TypeScript DSL CLI/package: erases `.tf.ts` to Taskflow JSON and optional FlowIR. Depends on core. |
 | `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
-| `packages/codex-taskflow` | **`codex-taskflow`** | Codex delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
-| `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
+| `packages/codex-taskflow` | **`codex-taskflow`** | Codex npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
+| `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
 | `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
-| `packages/grok-taskflow` | **`grok-taskflow`** | Grok Build delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + plugin. |
+| `packages/grok-taskflow` | **`grok-taskflow`** | Grok Build npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
 | `packages/hermes-taskflow` | **`hermes-taskflow`** | Hermes Agent delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
 
 Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`, and `hermes-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core`, `taskflow-hosts`, and `taskflow-dsl` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, taskflow-hosts, taskflow-dsl, then the adapters (including hermes)**.

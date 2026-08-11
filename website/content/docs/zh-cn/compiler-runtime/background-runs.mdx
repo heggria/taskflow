@@ -5,7 +5,7 @@ description: 启动长时间运行的流程并立即返回提示符。通过 run
 
 普通的 `taskflow` 调用会阻塞你的会话，直到所有阶段完成。一个三阶段的代码审计如果耗时八分钟，你的提示符就冻结八分钟。
 
-后台运行解决了这个问题。Pi 的 `taskflow` 工具使用 `detach: true`；Codex、Claude Code、OpenCode 和 Grok Build 的 MCP `taskflow_run` 使用 `mode: "background"`。两者都会立即返回 `runId`，由子进程接管工作并持久化进度与最终状态。MCP 宿主还可通过 `taskflow_runs` 执行 `list`、`status`、`wait` 和持久化 `cancel`。
+后台运行解决了这个问题。Pi 的 `taskflow` 工具使用 `detach: true`；Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 的 MCP `taskflow_run` 使用 `mode: "background"`。两者都会立即返回 `runId`，由子进程接管工作并持久化进度与最终状态。MCP 宿主还可通过 `taskflow_runs` 执行 `list`、`status`、`wait` 和持久化 `cancel`。
 
 本指南详细说明具体的 spawn 机制、如何检查后台运行的状态、审批（approval）阶段会发生什么，以及无头运行的限制。
 

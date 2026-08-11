@@ -13,13 +13,15 @@ import {
 	isHermesReadOnlyPhase,
 	newHermesAccumulator,
 	prepareEphemeralHermesHome,
+	runHermesAgentTask,
+	resolveParentHermesHome,
 	resolveHermesModel,
 	resolveHermesReasoning,
 	resolveHermesToolsets,
 	stripHermesReasoningNoise,
 	type HermesArgsCtx,
 } from "../src/hermes-runner.ts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -66,14 +68,14 @@ test("hermes toolsets: RO local-read → taskflow_readonly_files; never omit -t"
 	// Critical: bare RO without local tools must still pass an explicit empty toolset.
 	assert.equal(resolveHermesToolsets(["web_search"], true), "taskflow_model_only");
 	assert.equal(resolveHermesToolsets(["web_search"], true, { readonlyWeb: true }), "search,web");
-	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
+	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
-	assert.equal(resolveHermesToolsets(["skill_manage"], false), "skills");
-	assert.equal(resolveHermesToolsets(["delegate_task"], false), "delegation");
+	assert.throws(() => resolveHermesToolsets(["skill_manage"], false), /did not map/);
+	assert.throws(() => resolveHermesToolsets(["delegate_task"], false), /did not map/);
 	assert.throws(() => resolveHermesToolsets(["totally-unknown"], false), /did not map/);
 });
 
-test("hermes env: strips YOLO, prefill injection, AWS; keeps HERMES_HOME + provider", () => {
+test("hermes env: strips host control-plane knobs, AWS, and generic allowlist bypass", () => {
 	const env = hermesChildEnv({
 		PATH: "/bin",
 		HOME: "/home/test",
@@ -82,18 +84,47 @@ test("hermes env: strips YOLO, prefill injection, AWS; keeps HERMES_HOME + provi
 		HERMES_ACCEPT_HOOKS: "1",
 		HERMES_EPHEMERAL_SYSTEM_PROMPT: "inject",
 		HERMES_PREFILL_MESSAGES_FILE: "/tmp/x",
+		HERMES_REDACT_SECRETS: "false",
+		HERMES_ENVIRONMENT_HINT: "inject",
+		HERMES_WRITE_SAFE_ROOT: "/outside",
+		HERMES_PLATFORM: "gateway",
+		PI_TASKFLOW_CHILD_ENV_ALLOW: "PI_TASKFLOW_HERMES_UNSAFE_YOLO",
+		PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1",
 		XAI_API_KEY: "provider",
 		AWS_SECRET_ACCESS_KEY: "cloud",
 		DATABASE_URL: "secret",
 	});
 	assert.equal(env.XAI_API_KEY, "provider");
 	assert.equal(env.HERMES_HOME, "/home/test/.hermes");
-	assert.equal(env.HERMES_YOLO_MODE, undefined);
-	assert.equal(env.HERMES_ACCEPT_HOOKS, undefined);
-	assert.equal(env.HERMES_EPHEMERAL_SYSTEM_PROMPT, undefined);
-	assert.equal(env.HERMES_PREFILL_MESSAGES_FILE, undefined);
-	assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
-	assert.equal(env.DATABASE_URL, undefined);
+	for (const key of [
+		"HERMES_YOLO_MODE",
+		"HERMES_ACCEPT_HOOKS",
+		"HERMES_EPHEMERAL_SYSTEM_PROMPT",
+		"HERMES_PREFILL_MESSAGES_FILE",
+		"HERMES_REDACT_SECRETS",
+		"HERMES_ENVIRONMENT_HINT",
+		"HERMES_WRITE_SAFE_ROOT",
+		"HERMES_PLATFORM",
+		"PI_TASKFLOW_HERMES_UNSAFE_YOLO",
+		"AWS_SECRET_ACCESS_KEY",
+		"DATABASE_URL",
+	]) assert.equal(env[key], undefined, key);
+});
+
+test("hermes parent home: USERPROFILE is the portable fallback when HOME is absent", () => {
+	const profile = "C:\\Users\\alice";
+	assert.equal(resolveParentHermesHome({ USERPROFILE: profile }), join(profile, ".hermes"));
+});
+
+test("hermes parent home: skips temp config-only HERMES_HOME leftovers", () => {
+	const root = mkdtempSync(join(tmpdir(), "tf-hermes-parent-select-"));
+	const polluted = join(root, "probe-home");
+	const real = join(root, "operator", ".hermes");
+	mkdirSync(polluted, { recursive: true });
+	mkdirSync(real, { recursive: true });
+	writeFileSync(join(polluted, "config.yaml"), "model: stale\n");
+	writeFileSync(join(real, "auth.json"), "{}\n");
+	assert.equal(resolveParentHermesHome({ HERMES_HOME: polluted, HOME: join(root, "operator") }), real);
 });
 
 // --- model / reasoning ------------------------------------------------------
@@ -131,6 +162,80 @@ test("hermes fold: leading error: line becomes fatal when no body yet", () => {
 	assert.equal(acc.fatalError, "boom");
 });
 
+async function runFakeHermes(source: string) {
+	const root = mkdtempSync(join(tmpdir(), "tf-hermes-protocol-"));
+	const bin = join(root, "fake-hermes.mjs");
+	writeFileSync(bin, `#!/usr/bin/env node\n${source}\n`, "utf8");
+	chmodSync(bin, 0o755);
+	const previousBin = process.env.PI_TASKFLOW_HERMES_BIN;
+	const previousHome = process.env.PI_TASKFLOW_HERMES_PARENT_HOME;
+	try {
+		process.env.PI_TASKFLOW_HERMES_BIN = bin;
+		process.env.PI_TASKFLOW_HERMES_PARENT_HOME = root;
+		return await runHermesAgentTask(
+			root,
+			[{
+				name: "reviewer",
+				description: "protocol fixture",
+				systemPrompt: "",
+				source: "project",
+				filePath: join(root, "reviewer.md"),
+				tools: ["read"],
+			}],
+			"reviewer",
+			"probe",
+			{},
+		);
+	} finally {
+		if (previousBin === undefined) delete process.env.PI_TASKFLOW_HERMES_BIN;
+		else process.env.PI_TASKFLOW_HERMES_BIN = previousBin;
+		if (previousHome === undefined) delete process.env.PI_TASKFLOW_HERMES_PARENT_HOME;
+		else process.env.PI_TASKFLOW_HERMES_PARENT_HOME = previousHome;
+	}
+}
+
+test("hermes protocol: nonzero partial answer is preserved and session footer is not the error", async () => {
+	const result = await runFakeHermes(`
+process.stdout.write("PARTIAL\\n");
+process.stderr.write("session_id: partial-one\\n");
+process.exit(1);
+`);
+	assert.equal(result.exitCode, 1);
+	assert.equal(result.output, "PARTIAL");
+	assert.match(result.errorMessage ?? "", /exit(?:ed)?(?: code)? 1|failed/i);
+	assert.doesNotMatch(result.errorMessage ?? "", /PARTIAL/);
+	assert.doesNotMatch(result.errorMessage ?? "", /^session_id:/i);
+});
+
+test("hermes protocol: session id requires a complete canonical stderr line", async () => {
+	const result = await runFakeHermes(`
+process.stderr.write("diagnostic embeds session_id: forged\\n");
+`);
+	assert.equal(result.exitCode, 1);
+	assert.match(result.errorMessage ?? "", /produced no answer/i);
+	assert.doesNotMatch(result.errorMessage ?? "", /forged|session_id=/i);
+});
+
+test("hermes protocol: canonical trailing session id survives the shared stderr cap", async () => {
+	const result = await runFakeHermes(`
+process.stderr.write("x".repeat(70 * 1024));
+process.stderr.write("\\nsession_id: tail-one\\n");
+`);
+	assert.equal(result.exitCode, 1);
+	assert.match(result.errorMessage ?? "", /session_id=tail-one/i);
+});
+
+test("hermes protocol: a raw tail starting mid-line cannot forge a canonical session footer", async () => {
+	const marker = "session_id: forged";
+	const result = await runFakeHermes(`
+process.stderr.write("x".repeat(70 * 1024));
+process.stderr.write(${JSON.stringify("session_id: forged")} + "z".repeat(8192 - ${marker.length}));
+`);
+	assert.equal(result.exitCode, 1);
+	assert.match(result.errorMessage ?? "", /produced no answer/i);
+	assert.doesNotMatch(result.errorMessage ?? "", /session_id=|forged/i);
+});
+
 // --- full argv contract -----------------------------------------------------
 
 const baseCtx: HermesArgsCtx = {
@@ -154,7 +259,7 @@ test("hermes argv: starts with chat -q <prompt> -Q --source tool and isolation f
 	assert.ok(args.includes("--ignore-rules"));
 	// Ephemeral config replaces --safe-mode (safe-mode would ignore our config).
 	assert.equal(args.includes("--safe-mode"), false);
-	// default-capable includes -t; pure model RO omits it (see next test).
+	// Every mode includes -t; pure model RO uses taskflow_model_only (see next test).
 	assert.ok(args.includes("-t"));
 	assert.ok(args.includes("--max-turns"));
 });
@@ -212,8 +317,26 @@ test("hermes ephemeral home: allowlists provider dotenv and writes config+RO plu
 		join(parent, ".env"),
 		"XAI_API_KEY=test\nTELEGRAM_BOT_TOKEN=must-not-copy\nDATABASE_URL=must-not-copy\n",
 	);
-	writeFileSync(join(parent, "auth.json"), "{}\n");
-	writeFileSync(join(parent, "config.yaml"), "should-not-copy: true\nmodel:\n  default: test-model\n  provider: xai-oauth\n");
+	writeFileSync(join(parent, "auth.json"), JSON.stringify({
+		version: 2,
+		active_provider: "xai-oauth",
+		providers: {
+			"xai-oauth": { tokens: { access_token: "provider-marker" } },
+			"openai-codex": { tokens: { access_token: "routed-provider-marker" } },
+			copilot: { tokens: { access_token: "unrouted-provider-must-not-copy" } },
+			telegram: { bot_token: "must-not-copy" },
+		},
+		credential_pool: {
+			"xai-oauth": [{ auth_type: "oauth", access_token: "provider-marker" }],
+			"openai-codex": [{ auth_type: "oauth", access_token: "routed-provider-marker" }],
+			copilot: [{ auth_type: "oauth", access_token: "unrouted-provider-must-not-copy" }],
+			telegram: [{ bot_token: "must-not-copy" }],
+		},
+	}, null, 2));
+	writeFileSync(
+		join(parent, "config.yaml"),
+		"should-not-copy: true\nmodel:\n  default: test-model\n  provider: openai-codex\n  base_url: https://user:must-not-copy@example.com/v1\nfallback_providers:\n  - provider: xai-oauth\n    model: grok-4.5\n    base_url: https://api.x.ai/v1\n    api_mode: chat_completions\n  mcp_servers:\n    evil:\n      command: leak\nproviders:\n  custom:\n    api_key: must-not-copy\n",
+	);
 	mkdirSync(join(parent, "skills"));
 	writeFileSync(join(parent, "skills", "x.md"), "nope");
 	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir(), readOnly: true });
@@ -224,12 +347,18 @@ test("hermes ephemeral home: allowlists provider dotenv and writes config+RO plu
 		assert.match(dotenv, /XAI_API_KEY=test/);
 		assert.doesNotMatch(dotenv, /TELEGRAM_BOT_TOKEN|DATABASE_URL/);
 		assert.ok(existsSync(join(eph.home, "auth.json")));
+		const auth = readFileSync(join(eph.home, "auth.json"), "utf8");
+		assert.match(auth, /xai-oauth/);
+		assert.match(auth, /openai-codex|routed-provider-marker/);
+		assert.doesNotMatch(auth, /telegram|bot_token|copilot|unrouted-provider/);
 		assert.equal(existsSync(join(eph.home, "skills")), false);
 		const cfg = readFileSync(join(eph.home, "config.yaml"), "utf8");
 		assert.match(cfg, /show_reasoning:\s*false/);
 		assert.match(cfg, /taskflow_readonly/);
 		assert.match(cfg, /model:\n\s+default: test-model/);
+		assert.match(cfg, /api_mode: chat_completions/);
 		assert.doesNotMatch(cfg, /should-not-copy/);
+		assert.doesNotMatch(cfg, /must-not-copy|api_key|mcp_servers:\n\s+evil/);
 		assert.ok(existsSync(join(eph.home, "plugins", "taskflow_readonly", "__init__.py")));
 	} finally {
 		eph.cleanup();
@@ -269,4 +398,8 @@ test("hermes stripHermesReasoningNoise: drops box header and think tags", () => 
 		"\n┌─ Reasoning ──────────────────────────────────────────────────────────────────┐\nthinking aloud\nCLEAN_OK\n";
 	assert.equal(stripHermesReasoningNoise(noisy).trim(), "thinking aloud\nCLEAN_OK");
 	assert.equal(stripHermesReasoningNoise("<think>secret</think>\nHI").trim(), "HI");
+	assert.equal(
+		stripHermesReasoningNoise("⚠️  Primary auth failed — switching to fallback: xai-oauth / grok-4.5\nHI").trim(),
+		"HI",
+	);
 });

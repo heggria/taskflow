@@ -365,7 +365,7 @@ Place one before the expensive part of a flow (a big fan-out, a mutation) —
 see the plan→approve→execute archetype in `patterns.md`.
 <!-- /host:pi -->
 <!-- host:codex,claude,opencode,grok,hermes -->
-> **MCP-host caveat (Codex / Claude Code / OpenCode):** MCP-driven runs are
+> **MCP-host caveat (Codex / Claude Code / OpenCode / Grok / Hermes):** MCP-driven runs are
 > non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
 > (agent review) in flows you run through the `taskflow_*` tools; use `approval`
 > only in flows a human runs interactively.
@@ -563,8 +563,9 @@ zero-overshoot guarantee.
 mis-discovered 500-item array is otherwise unbounded spend.
 
 Host accounting matters: Codex reports tokens but not cost, so Codex accepts
-`maxTokens` and rejects `maxUSD`. Grok 0.2.93 reports neither and rejects every
-flow declaring `budget`. Pi, Claude Code, and OpenCode accept both dimensions.
+`maxTokens` and rejects `maxUSD`. Grok 0.2.93 and Hermes quiet mode report
+neither, so both reject every flow declaring `budget`. Pi, Claude Code, and
+OpenCode accept both dimensions.
 
 ### Strict interpolation
 

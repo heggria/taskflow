@@ -26,7 +26,7 @@ taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不�
 
 然后运行它。
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok', 'Hermes']}>
   <Tab value="Pi">
     ```bash title="在 Pi 上运行"
     /tf run hello
@@ -53,6 +53,11 @@ taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不�
     # 让 Grok 通过 MCP 调用 taskflow_verify / taskflow_run。
     ```
   </Tab>
+  <Tab value="Hermes">
+    ```bash title="在 Hermes Agent 上运行"
+    # 让 Hermes 通过 MCP 调用 taskflow_verify / taskflow_run。
+    ```
+  </Tab>
 </Tabs>
 
 你应该会看到运行时执行一个阶段并返回最终输出。这就是一个 taskflow：一个带名字的、只有一个阶段的图。
@@ -69,7 +74,7 @@ taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不�
   所有 taskflow 包都要求 **Node.js 22.19.0 或更高版本**。
 </Callout>
 
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok']}>
+<Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok', 'Hermes']}>
   <Tab value="Pi">
     ```bash title="安装 pi-taskflow"
     pi install npm:pi-taskflow
@@ -108,6 +113,12 @@ taskflow 让你把多步骤的 agent 工作描述成一张声明式图。你不�
     # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
     只读阶段与可写或未声明 tools 的阶段都会在对应自定义 profile 未配置时 fail closed。
+  </Tab>
+  <Tab value="Hermes">
+    ```bash title="注册 Hermes Agent MCP"
+    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+    ```
+    只读隔离与显式可写 opt-in 说明见 [Hermes Agent 指南](/zh-cn/docs/guides/hermes)。
   </Tab>
 </Tabs>
 

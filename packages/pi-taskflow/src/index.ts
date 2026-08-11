@@ -1669,8 +1669,13 @@ export default function (pi: ExtensionAPI) {
 		},
 		handler: async (argStr, ctx) => {
 			completionCwd = ctx.cwd;
-			const [sub, ...rest] = argStr.trim().split(/\s+/);
-			const arg = rest.join(" ");
+			const trimmedArg = argStr.trim();
+			const separator = trimmedArg.search(/\s/u);
+			const sub = separator < 0 ? trimmedArg : trimmedArg.slice(0, separator);
+			// Preserve the selected flow name verbatim after the command separator;
+			// autocomplete may return legal names with repeated/Unicode whitespace.
+			const arg = separator < 0 ? "" : trimmedArg.slice(separator).trim();
+			const rest = arg ? arg.split(/\s+/u) : [];
 
 			if (!sub || sub === "list") {
 				const flows = listFlows(ctx.cwd);

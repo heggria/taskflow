@@ -20,8 +20,8 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Security
 
-- **Hermes child isolation.** Read-only `read_file` and `search_files` paths are canonicalized and confined to the phase cwd, including `..`, absolute paths, and symlink escapes. The child home receives only `auth.json` plus an exact inference-provider dotenv allowlist; unrelated application secrets are not copied.
-- **Mutating authorization.** The read-only plugin is loaded only for read-only children, so explicitly authorized `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` phases can use their narrowly mapped write/shell toolsets while default/read-only phases remain fail-closed.
+- **Hermes child isolation.** Read-only `read_file` and `search_files` paths are canonicalized and confined to the resolved phase cwd, including `..`, absolute paths, and symlink escapes. The child home receives a filtered inference-provider-only `auth.json`, an exact provider dotenv allowlist, and non-secret model/fallback routing; unrelated application credentials and parent `HERMES_*` control-plane state are not copied.
+- **Mutating authorization.** The read-only plugin is loaded only for read-only children. Explicitly authorized `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` phases default to local `file,terminal`; network requires explicit web aliases, while delegation/skills/memory/browser/cron/control-plane toolsets remain denied.
 
 ### Changed
 

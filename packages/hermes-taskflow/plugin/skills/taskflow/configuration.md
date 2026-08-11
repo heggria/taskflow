@@ -298,15 +298,19 @@ Notes:
   maps to `--reasoning` (`off` → `none`). Read-only phases use
   local-read tools → `taskflow_readonly_files` (read_file+search_files). Opt-in network via
   `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
-  under RO (writable). Children use ephemeral HERMES_HOME with `auth.json`, an
-  exact inference-provider dotenv allowlist, and no parent skills/MCP/memory;
-  both `read_file` and `search_files` are confined to the phase cwd. Mutating / default-capable phases fail closed unless
-  `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables `--yolo`. Optional
+  under RO (writable). Children use ephemeral HERMES_HOME with an inference-only
+  filtered `auth.json`, an exact inference-provider dotenv allowlist, non-secret
+  model/fallback routing, and no parent skills/MCP/memory; both `read_file` and
+  `search_files` are confined to the resolved phase cwd. Mutating/default-capable
+  phases fail closed unless `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables
+  `--yolo`; their default surface is local `file,terminal`, while explicit web
+  aliases may add `web`. Delegation, skills, memory, browser, cron, and other
+  control-plane toolsets are denied in 0.2.9. Optional
   `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
   does not stream token/cost accounting, so budgeted flows fail closed at the
   MCP adapter the same way other non-accounting hosts do when costs are
-  unobservable. Children inherit only platform/proxy/CA, `HERMES_*`, and
-  common provider variables; unrelated secrets are removed.
+  unobservable. Children inherit only platform/proxy/CA and common provider
+  variables; generic `HERMES_*` control-plane state and unrelated secrets are removed.
 
 For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the

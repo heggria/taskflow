@@ -91,6 +91,9 @@ export interface PhaseState {
 	 *  terminal accounting cannot look these ids up in the original definition. */
 	optional?: boolean;
 	output?: string;
+	/** True only when a failed phase's output contains a genuine partial answer
+	 *  rather than a transport diagnostic/placeholder. */
+	partialOutput?: true;
 	json?: unknown;
 	usage?: UsageStats;
 	model?: string;

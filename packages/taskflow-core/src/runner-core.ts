@@ -69,8 +69,27 @@ export function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> 
 }
 
 /** Placeholder written to a failed phase's `output` so downstream interpolation
- *  can detect "upstream failed" without being polluted by raw HTML/JSON. */
+ *  can detect "upstream failed" without mistaking transport chrome for an answer. */
 export const TRANSPORT_ERROR_PLACEHOLDER = "(upstream error: subagent failed; see error)";
+
+/** Whether a failed RunResult contains a genuine non-empty answer body. */
+export function hasMeaningfulFailedOutput(
+	r: Pick<RunResult, "output">,
+): boolean {
+	const output = r.output?.trim() ?? "";
+	return output.length > 0 && output !== TRANSPORT_ERROR_PLACEHOLDER;
+}
+
+/** Preserve a real failed answer body while keeping transport placeholders out
+ * of downstream contexts. Content type alone is not evidence of transport
+ * garbage: an agent may legitimately be generating HTML/SVG/JSON. */
+export function failedResultDisplayOutput(
+	r: Pick<RunResult, "output" | "errorMessage" | "stderr">,
+): string {
+	const output = r.output ?? "";
+	if (hasMeaningfulFailedOutput(r)) return output;
+	return r.errorMessage || r.stderr || output;
+}
 
 /** Hard cap on the errorMessage field stored in PhaseState (≈ 4 KB). */
 export const ERROR_MESSAGE_MAX_LEN = 4096;
@@ -477,6 +496,9 @@ export interface RunSubagentProcessOptions<TAcc extends SubagentAccumulator> {
 	terminationGraceMs?: number;
 	signal?: AbortSignal;
 	onLive?: (live: LiveUpdate) => void;
+	/** Bounded host-specific metadata observer. Receives raw stderr chunks before
+	 * the shared 64KB retained-diagnostic cap; exceptions are ignored. */
+	observeStderr?: (data: Buffer) => void;
 	/** Per-host event folding: the host's accumulator + its line parser. */
 	acc: TAcc;
 	foldLine: (acc: TAcc, line: string) => LiveUpdate | null;
@@ -852,6 +874,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 		let stderrBytes = 0;
 		let stderrCapped = false;
 		proc.stderr.on("data", (data: Buffer) => {
+			try { opts.observeStderr?.(data); } catch { /* metadata observer is fail-open */ }
 			// Diagnostics are real child activity too. A CLI that is actively
 			// reporting provider retries on stderr must not be killed as idle.
 			// stderr is activity while running, but after a terminal candidate it

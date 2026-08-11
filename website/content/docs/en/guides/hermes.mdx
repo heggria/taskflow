@@ -78,7 +78,7 @@ Prefer **`mcp_taskflow_plan`** or **`mcp_taskflow_verify`** before any spend, th
 
 | Phase kind | Behavior |
 |------------|----------|
-| Child isolation | ephemeral HERMES_HOME with model routing, `auth.json`, and provider-only dotenv; no parent MCP/skills/memory/rules; RO plugin only on RO children |
+| Child isolation | ephemeral HERMES_HOME with non-secret model/fallback routing, a routed-provider-only inference `auth.json`, and provider-only dotenv; no parent MCP/skills/memory/rules; RO plugin only on RO children |
 | Read-only tool whitelist | local-read → `taskflow_readonly_files`; else model-only; `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search` (never attach writable `file`) |
 | Mutating / default-capable | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → child `--yolo` |
 | Budgeted flows | **Rejected** — Hermes quiet mode does not report token/cost |

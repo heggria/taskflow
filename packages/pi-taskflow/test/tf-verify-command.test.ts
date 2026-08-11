@@ -56,7 +56,7 @@ describe("/tf verify slash command (#121)", () => {
 		fs.mkdirSync(path.join(cwd, ".pi", "taskflows"), { recursive: true });
 		// Minimal clean flow — verify should report no issues.
 		const def = {
-			name: "minimal repro",
+			name: "minimal  repro",
 			strictInterpolation: true,
 			agentScope: "project",
 			phases: [
@@ -103,15 +103,15 @@ describe("/tf verify slash command (#121)", () => {
 		);
 	});
 
-	test("/tf verify preserves a saved flow name containing spaces", async () => {
+	test("/tf verify preserves a saved flow name containing repeated spaces", async () => {
 		let notified = "";
 		let kind = "";
-		await tf.handler("verify minimal repro", makeCtx(cwd, (text, k) => {
+		await tf.handler("verify minimal  repro", makeCtx(cwd, (text, k) => {
 			notified = text;
 			kind = k ?? "";
 		}));
 		assert.doesNotMatch(notified, /unknown subcommand/i);
-		assert.match(notified, /Verification of "minimal repro"/);
+		assert.match(notified, /Verification of "minimal  repro"/);
 		assert.match(notified, /✅ No issues found/);
 		assert.equal(kind, "info");
 	});
@@ -159,8 +159,8 @@ describe("/tf verify slash command (#121)", () => {
 		const items = tf.getArgumentCompletions("verify min");
 		assert.ok(Array.isArray(items), `expected items, got ${items}`);
 		assert.ok(
-			items.some((i: { value: string }) => i.value === "verify minimal repro"),
-			`expected verify minimal repro in ${JSON.stringify(items)}`,
+			items.some((i: { value: string }) => i.value === "verify minimal  repro"),
+			`expected verify minimal  repro in ${JSON.stringify(items)}`,
 		);
 	});
 

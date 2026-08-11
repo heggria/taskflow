@@ -44,7 +44,7 @@ const HOSTS: { id: HostId; label: string; command: string; guide: string }[] = [
 		id: "hermes",
 		label: "Hermes",
 		command:
-			"hermes mcp add taskflow --command npx --args -y -p hermes-taskflow hermes-taskflow-mcp",
+			"hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp",
 		guide: "/docs/guides/hermes",
 	},
 ];

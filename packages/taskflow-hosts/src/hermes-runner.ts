@@ -42,9 +42,9 @@ import {
 	type UsageStats,
 } from "taskflow-core";
 import { emptyUsage } from "taskflow-core";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve as resolvePath, sep } from "node:path";
 import { filteredChildEnv } from "./child-env.ts";
 
 /** Mirrors taskflow-core TRANSPORT_ERROR_PLACEHOLDER (not always re-exported). */
@@ -74,6 +74,11 @@ const HERMES_CHILD_DENY = new Set([
 	"HERMES_SYSTEM_PROMPT",
 	"HERMES_SAFE_MODE",
 	"HERMES_MAX_ITERATIONS",
+	"HERMES_REDACT_SECRETS",
+	"HERMES_ENVIRONMENT_HINT",
+	"HERMES_WRITE_SAFE_ROOT",
+	"HERMES_PLATFORM",
+	"PI_TASKFLOW_HERMES_UNSAFE_YOLO",
 ]);
 
 /**
@@ -90,7 +95,6 @@ export function hermesChildEnv(
 		source,
 		["HERMES_HOME", "OPENROUTER_API_KEY", "NOUS_API_KEY"],
 		[
-			"HERMES_",
 			"OPENAI_",
 			"ANTHROPIC_",
 			"GOOGLE_",
@@ -106,6 +110,12 @@ export function hermesChildEnv(
 	);
 	for (const key of Object.keys(filtered)) {
 		const upper = key.toUpperCase();
+		// HERMES_HOME is replaced with the ephemeral child home below. Every
+		// other HERMES_* value is host control-plane state, not provider auth.
+		if (upper.startsWith("HERMES_") && upper !== "HERMES_HOME") {
+			delete filtered[key];
+			continue;
+		}
 		if (HERMES_CHILD_DENY.has(upper) || HERMES_CHILD_DENY.has(key)) {
 			delete filtered[key];
 		}
@@ -233,7 +243,7 @@ const LOCAL_READ_TOOLS = new Set([
  *   - read-only otherwise → `taskflow_model_only` (empty toolset; NEVER omit -t —
  *     Hermes defaults to full hermes-cli tools when -t is absent)
  *   - mutating with explicit tools → union of matching toolsets (narrow)
- *   - default / empty tools → file,terminal,web,search (NOT full `coding`)
+ *   - default / empty tools → file,terminal (network/control-plane denied)
  *   - unmapped non-empty tools list → throw (never fail-open to wide default)
  */
 export function resolveHermesToolsets(
@@ -254,9 +264,10 @@ export function resolveHermesToolsets(
 		if (sets.size === 0) sets.add(HERMES_MODEL_ONLY_TOOLSET);
 		return [...sets].sort().join(",");
 	}
-	if (!tools || tools.length === 0) return "file,terminal,web,search";
+	if (!tools || tools.length === 0) return "file,terminal";
 
 	const sets = new Set<string>();
+	const unmapped: string[] = [];
 	for (const t of tools) {
 		switch (t) {
 			case "read":
@@ -281,50 +292,16 @@ export function resolveHermesToolsets(
 			case "web":
 				sets.add("web");
 				break;
-			case "vision":
-			case "vision_analyze":
-				sets.add("vision");
-				break;
-			case "execute_code":
-			case "code_execution":
-				sets.add("code_execution");
-				break;
-			case "browser":
-			case "browser_navigate":
-				sets.add("browser");
-				break;
-			case "skill_manage":
-			case "skills":
-				sets.add("skills");
-				break;
-			case "delegate_task":
-			case "delegation":
-				sets.add("delegation");
-				break;
-			case "memory":
-				sets.add("memory");
-				break;
-			case "cronjob":
-				sets.add("cronjob");
-				break;
-			case "text_to_speech":
-			case "tts":
-				sets.add("tts");
-				break;
-			case "computer_use":
-				sets.add("computer_use");
-				break;
-			case "session_search":
-				sets.add("session_search");
-				break;
 			default:
+				unmapped.push(t);
 				break;
 		}
 	}
-	if (sets.size === 0) {
+	if (unmapped.length > 0 || sets.size === 0) {
 		throw new Error(
-			`Hermes tool whitelist [${tools.join(", ")}] did not map to any Hermes toolset. ` +
-				`Use known aliases (read/write/bash/web/…) or omit tools for the default coding surface.`,
+			`Hermes tool whitelist [${tools.join(", ")}] did not map safely to supported Hermes toolsets. ` +
+				`0.2.9 permits only local file, terminal, and explicit web aliases; ` +
+				`delegation/skills/memory/browser/cron/control-plane tools are denied.`,
 		);
 	}
 	return [...sets].sort().join(",");
@@ -346,6 +323,9 @@ export function stripHermesReasoningNoise(text: string): string {
 	t = t.replace(/<think(?:ing)?\b[^>]*>[\s\S]*?<\/think(?:ing)?>/gi, "");
 	t = t.replace(/<reasoning\b[^>]*>[\s\S]*?<\/reasoning>/gi, "");
 	t = t.replace(/<REASONING_SCRATCHPAD\b[^>]*>[\s\S]*?<\/REASONING_SCRATCHPAD>/gi, "");
+	// Hermes CLI transport chrome: fallback selection is diagnostic metadata,
+	// not part of the model's answer body.
+	t = t.replace(/^\s*⚠️\s+Primary auth failed\s+—\s+switching to fallback:[^\n]*\n?/gim, "");
 	// Collapse leading blank lines left by stripped headers.
 	t = t.replace(/^\s*\n+/, "");
 	return t.trimEnd();
@@ -461,8 +441,16 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 	return { args, readOnly, toolsets };
 }
 
-/** OAuth/API credential store is copied; dotenv is filtered separately. */
-const HERMES_EPHEMERAL_CREDENTIAL_FILES = ["auth.json"] as const;
+/** Inference-provider ids whose auth-store entries may enter a child profile. */
+const HERMES_INFERENCE_AUTH_PROVIDERS = new Set([
+	"alibaba-coding-plan", "anthropic", "arcee", "azure-foundry", "cohere",
+	"copilot", "dashscope", "deepinfra", "deepseek", "fireworks", "gemini",
+	"gmi", "google", "groq", "hf", "huggingface", "kimi", "kimi-coding",
+	"minimax", "minimax-oauth", "mistral", "nous", "novita", "nvidia",
+	"ollama", "openai", "openai-codex", "opencode", "opencode-go",
+	"opencode-zen", "openrouter", "stepfun", "together", "tokenhub", "upstage",
+	"xai", "xai-oauth", "xiaomi", "zai", "zhipu", "glm",
+]);
 
 /** Exact inference-provider dotenv keys allowed into an ephemeral child home. */
 const HERMES_PROVIDER_DOTENV_KEYS = new Set([
@@ -513,6 +501,49 @@ export function filterHermesProviderDotenv(source: string): string {
 	return kept.length > 0 ? `${kept.join("\n")}\n` : "";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Filter Hermes auth.json to known inference-provider credential entries. */
+export function filterHermesAuthJson(
+	source: string,
+	routedProviders: ReadonlySet<string> = new Set(),
+): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(source);
+	} catch {
+		return "";
+	}
+	if (!isRecord(parsed)) return "";
+	const out: Record<string, unknown> = {};
+	if (typeof parsed.version === "number") out.version = parsed.version;
+	if (typeof parsed.updated_at === "string") out.updated_at = parsed.updated_at;
+	let activeProvider: string | undefined;
+	if (
+		typeof parsed.active_provider === "string" &&
+		HERMES_INFERENCE_AUTH_PROVIDERS.has(parsed.active_provider)
+	) {
+		activeProvider = parsed.active_provider;
+	}
+	const allowed = new Set(
+		[...routedProviders].filter((provider) => HERMES_INFERENCE_AUTH_PROVIDERS.has(provider)),
+	);
+	if (allowed.size === 0 && activeProvider) allowed.add(activeProvider);
+	if (activeProvider && allowed.has(activeProvider)) out.active_provider = activeProvider;
+	for (const key of ["providers", "credential_pool"] as const) {
+		const sourceMap = parsed[key];
+		if (!isRecord(sourceMap)) continue;
+		const kept: Record<string, unknown> = {};
+		for (const [provider, value] of Object.entries(sourceMap)) {
+			if (allowed.has(provider)) kept[provider] = value;
+		}
+		if (Object.keys(kept).length > 0) out[key] = kept;
+	}
+	return `${JSON.stringify(out, null, 2)}\n`;
+}
+
 /**
  * Pull a top-level YAML mapping block (e.g. `model:`) from parent config text.
  * Indentation-based; no full YAML parser dependency.
@@ -549,6 +580,72 @@ export function extractYamlTopLevelBlock(source: string, key: string): string | 
 	return out.join("\n");
 }
 
+function safeHermesRoutingScalar(field: string, value: string): string | undefined {
+	if (!/^[A-Za-z0-9_./:@+\-]+$/.test(value)) return undefined;
+	if (field === "api_mode") return value;
+	if (field !== "base_url") return value;
+	try {
+		const url = new URL(value);
+		if (!["http:", "https:"].includes(url.protocol)) return undefined;
+		if (url.username || url.password || url.search || url.hash) return undefined;
+		return value;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Carry only non-secret scalar routing fields from the parent config.
+ * This deliberately omits `providers:` and all nested mappings (MCP/plugins/
+ * api_key/token) rather than treating indentation as a security boundary.
+ */
+export function sanitizeHermesRoutingConfig(source: string): string {
+	const parts: string[] = [];
+	const model = extractYamlTopLevelBlock(source, "model");
+	if (model) {
+		const firstLine = model.split(/\r?\n/, 1)[0];
+		if (/^model:\s+[A-Za-z0-9_./:@+\-]+\s*$/.test(firstLine)) {
+			parts.push(firstLine.trimEnd());
+		} else {
+			const fields = model.split(/\r?\n/).flatMap((line) => {
+				const match = line.match(/^  (default|provider|base_url|api_mode):\s+([A-Za-z0-9_./:@+\-]+)\s*$/);
+				const value = match ? safeHermesRoutingScalar(match[1], match[2]) : undefined;
+				return match && value ? [`  ${match[1]}: ${value}`] : [];
+			});
+			if (fields.length > 0) parts.push(["model:", ...fields].join("\n"));
+		}
+	}
+	const fallback = extractYamlTopLevelBlock(source, "fallback_providers");
+	if (fallback) {
+		const rows: string[] = [];
+		for (const line of fallback.split(/\r?\n/).slice(1)) {
+			const first = line.match(/^  - (provider|model|base_url|api_mode):\s+([A-Za-z0-9_./:@+\-]+)\s*$/);
+			const firstValue = first ? safeHermesRoutingScalar(first[1], first[2]) : undefined;
+			if (first && firstValue) {
+				rows.push(`  - ${first[1]}: ${firstValue}`);
+				continue;
+			}
+			const next = line.match(/^    (provider|model|base_url|api_mode):\s+([A-Za-z0-9_./:@+\-]+)\s*$/);
+			const nextValue = next ? safeHermesRoutingScalar(next[1], next[2]) : undefined;
+			if (next && nextValue && rows.length > 0) rows.push(`    ${next[1]}: ${nextValue}`);
+		}
+		if (rows.length > 0) parts.push(["fallback_providers:", ...rows].join("\n"));
+	}
+	return parts.join("\n\n");
+}
+
+function hermesRoutingProviders(source: string): Set<string> {
+	const routing = sanitizeHermesRoutingConfig(source);
+	const providers = new Set<string>();
+	for (const line of routing.split(/\r?\n/)) {
+		const mapped = line.match(/^\s*(?:-\s+)?provider:\s+([A-Za-z0-9_.+\-]+)\s*$/);
+		if (mapped) providers.add(mapped[1]);
+	}
+	const scalarModel = routing.match(/^model:\s+([A-Za-z0-9_.+\-]+)\//m);
+	if (scalarModel) providers.add(scalarModel[1]);
+	return providers;
+}
+
 /** Build ephemeral config.yaml text: isolation defaults + parent model routing. */
 export function buildEphemeralHermesConfigYaml(
 	parentHome: string,
@@ -574,14 +671,8 @@ export function buildEphemeralHermesConfigYaml(
 	if (existsSync(parentCfgPath)) {
 		try {
 			const raw = readFileSync(parentCfgPath, "utf8");
-			// Carry only model routing — never parent mcp_servers / skills / plugins.
-			for (const key of ["model", "fallback_providers", "providers"]) {
-				const block = extractYamlTopLevelBlock(raw, key);
-				if (block) {
-					parts.push("");
-					parts.push(block);
-				}
-			}
+			const routing = sanitizeHermesRoutingConfig(raw);
+			if (routing) parts.push("", routing);
 		} catch {
 			/* parent model optional — .env may still auth */
 		}
@@ -645,7 +736,7 @@ def register(ctx) -> None:
             if not isinstance(raw, str):
                 return _deny("path must be a string")
             try:
-                cwd = Path(os.getcwd()).resolve(strict=True)
+                cwd = Path(os.environ.get("PI_TASKFLOW_HERMES_PHASE_CWD", os.getcwd())).resolve(strict=True)
                 target = Path(raw).expanduser()
                 if not target.is_absolute():
                     target = cwd / target
@@ -682,15 +773,23 @@ export function prepareEphemeralHermesHome(
 	const root = opts.tmpRoot ?? tmpdir();
 	const readOnly = opts.readOnly !== false;
 	const home = mkdtempSync(join(root, "taskflow-hermes-"));
-	for (const name of HERMES_EPHEMERAL_CREDENTIAL_FILES) {
-		const src = join(parentHome, name);
-		if (existsSync(src)) {
-			try {
-				copyFileSync(src, join(home, name));
-			} catch {
-				// Best-effort: missing/unreadable credentials surface as auth
-				// failures from hermes itself, not a host crash.
-			}
+	let routedProviders = new Set<string>();
+	const parentConfig = join(parentHome, "config.yaml");
+	if (existsSync(parentConfig)) {
+		try {
+			routedProviders = hermesRoutingProviders(readFileSync(parentConfig, "utf8"));
+		} catch {
+			// Missing routing falls back to the auth store's active provider below.
+		}
+	}
+	const parentAuth = join(parentHome, "auth.json");
+	if (existsSync(parentAuth)) {
+		try {
+			const filteredAuth = filterHermesAuthJson(readFileSync(parentAuth, "utf8"), routedProviders);
+			if (filteredAuth) writeFileSync(join(home, "auth.json"), filteredAuth, "utf8");
+		} catch {
+			// Missing/unreadable auth surfaces as an authentication failure; never
+			// fall back to copying the operator's unfiltered credential store.
 		}
 	}
 	const parentDotenv = join(parentHome, ".env");
@@ -746,15 +845,21 @@ export function resolveParentHermesHome(env: NodeJS.ProcessEnv = process.env): s
 	const override = env.PI_TASKFLOW_HERMES_PARENT_HOME?.trim();
 	if (override) return override;
 
-	const fallback = join(env.HOME || tmpdir(), ".hermes");
+	const fallback = join(env.HOME || env.USERPROFILE || homedir(), ".hermes");
 	const candidates = [env.HERMES_HOME?.trim(), fallback].filter(Boolean) as string[];
 
+	const tempRoot = resolvePath(tmpdir());
 	for (const candidate of candidates) {
 		if (candidate.includes("taskflow-hermes-")) continue;
-		const hasCreds =
-			existsSync(join(candidate, "auth.json")) ||
-			existsSync(join(candidate, ".env")) ||
-			existsSync(join(candidate, "config.yaml"));
+		const hasAuth =
+			existsSync(join(candidate, "auth.json")) || existsSync(join(candidate, ".env"));
+		const absolute = resolvePath(candidate);
+		const underTemp = absolute === tempRoot || absolute.startsWith(`${tempRoot}${sep}`);
+		// Test/probe profiles frequently leave HERMES_HOME pointing at a temp
+		// config-only directory. It cannot authenticate and must not shadow the
+		// operator profile. A non-temp config-only profile remains a valid custom
+		// routing home when credentials arrive through process env.
+		const hasCreds = hasAuth || (!underTemp && existsSync(join(candidate, "config.yaml")));
 		if (hasCreds) return candidate;
 	}
 	return fallback;
@@ -836,8 +941,39 @@ export async function runHermesAgentTask(
 		};
 	}
 	childEnv.HERMES_HOME = ephemeral.home;
+	childEnv.PI_TASKFLOW_HERMES_PHASE_CWD = cwd;
 
 	const acc = newHermesAccumulator(model);
+	// Hermes writes its canonical session footer at process exit. Keep only the
+	// final complete stderr line before runner-core's retained-diagnostic cap.
+	// A bounded raw tail is unsafe: slicing can start mid-line immediately before
+	// an embedded `session_id:` substring and make it look canonical.
+	let stderrFragment = "";
+	let stderrFragmentTruncated = false;
+	let lastCompleteStderrLine: string | undefined;
+	const observeStderr = (data: Buffer) => {
+		const pieces = data.toString("utf8").split("\n");
+		if (pieces.length === 1) {
+			stderrFragment += pieces[0];
+			if (stderrFragment.length > 8192) {
+				stderrFragment = stderrFragment.slice(-8192);
+				stderrFragmentTruncated = true;
+			}
+			return;
+		}
+		const firstComplete = `${stderrFragment}${pieces[0]}`.replace(/\r$/, "");
+		if (!stderrFragmentTruncated && firstComplete.trim()) lastCompleteStderrLine = firstComplete;
+		for (const complete of pieces.slice(1, -1)) {
+			const line = complete.replace(/\r$/, "");
+			if (line.trim()) lastCompleteStderrLine = line;
+		}
+		stderrFragment = pieces.at(-1) ?? "";
+		stderrFragmentTruncated = false;
+		if (stderrFragment.length > 8192) {
+			stderrFragment = stderrFragment.slice(-8192);
+			stderrFragmentTruncated = true;
+		}
+	};
 	let result: RunResult;
 	try {
 		result = await runSubagentProcess({
@@ -856,14 +992,31 @@ export async function runHermesAgentTask(
 			// Quiet mode is plain text (not NDJSON); process exit is the terminal.
 			stdoutFormat: "text",
 			requireTerminalEvent: false,
+			observeStderr,
 		});
 	} finally {
 		ephemeral.cleanup();
 	}
-	// Hermes quiet mode prints `session_id: …` on stderr (stdout stays clean).
-	if (!acc.sessionId && result.stderr) {
-		const m = result.stderr.match(/session_id:\s*(\S+)/i);
-		if (m) acc.sessionId = m[1];
+	// Hermes quiet mode prints a complete canonical `session_id: …` stderr line.
+	// Embedded diagnostic prose is not metadata. The complete-line observer also
+	// recovers a legitimate footer emitted after runner-core's 64KB diagnostic cap.
+	const canonicalSessionId = (text: string): string | undefined => {
+		const lines = text.split(/\r?\n/);
+		for (let i = lines.length - 1; i >= 0; i--) {
+			if (!lines[i].trim()) continue;
+			return lines[i].match(/^\s*session_id:\s*(\S+)\s*$/i)?.[1];
+		}
+		return undefined;
+	};
+	if (!acc.sessionId) {
+		acc.sessionId = canonicalSessionId(lastCompleteStderrLine ?? "") ?? canonicalSessionId(result.stderr ?? "");
+	}
+	if (result.stderr) {
+		result.stderr = result.stderr
+			.split(/\r?\n/)
+			.filter((line) => !/^\s*session_id:\s*\S+\s*$/i.test(line))
+			.join("\n")
+			.trimEnd();
 	}
 
 	// Suppress reasoning chrome (config + defense-in-depth strip).
@@ -875,6 +1028,18 @@ export async function runHermesAgentTask(
 	if (acc.finalText && result.output !== acc.finalText) {
 		result.output = acc.finalText;
 	}
+	const preservedStop =
+		result.stopReason === "aborted" ||
+		result.completionSource === "abort" ||
+		result.completionSource === "idle-timeout" ||
+		result.idleTimeout === true;
+	if (result.exitCode !== 0 && acc.finalText.trim() && !preservedStop && !result.errorMessage) {
+		const sessionNote = acc.sessionId ? ` (session_id=${acc.sessionId})` : "";
+		result.stopReason = result.stopReason === "end" ? "error" : (result.stopReason ?? "error");
+		result.errorMessage = sanitizeErrorMessage(
+			`Hermes quiet run failed with exit code ${result.exitCode}${sessionNote} after producing partial output.`,
+		);
+	}
 
 	// Prefer provider Error: lines from stderr over core's generic empty-output
 	// message. Core may have already flipped exitCode 0→1 with a placeholder.
@@ -883,11 +1048,6 @@ export async function runHermesAgentTask(
 		const stderr = result.stderr ?? "";
 		const errLine = stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim();
 		const sessionNote = acc.sessionId ? ` (session_id=${acc.sessionId})` : "";
-		const preservedStop =
-			result.stopReason === "aborted" ||
-			result.completionSource === "abort" ||
-			result.completionSource === "idle-timeout" ||
-			result.idleTimeout === true;
 		const genericEmpty =
 			!result.errorMessage ||
 			/without a final output/i.test(result.errorMessage) ||

@@ -43,7 +43,7 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 | Execution | `hermes chat -q … -Q --source tool --ignore-rules` |
 | Read-only phases | local-read → `-t taskflow_readonly_files`; else `-t taskflow_model_only` (never omit `-t`); `READONLY_WEB=1` adds web,search |
 | Mutating phases | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
-| Isolation | ephemeral HERMES_HOME (`auth.json` + provider-only dotenv + `show_reasoning:false`); RO plugin only on RO children; `--ignore-rules` |
+| Isolation | ephemeral HERMES_HOME (routed-provider-only inference `auth.json` + provider-only dotenv + non-secret model/fallback routing + `show_reasoning:false`); RO plugin only on RO children; `--ignore-rules` |
 | Session hygiene | `--source tool` keeps integration runs out of the main user session list |
 
 ## Env knobs

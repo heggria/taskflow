@@ -131,7 +131,7 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 /tf:audit-api dir=src/api
 ```
 
-On Codex, Claude Code, OpenCode, and Grok Build, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
+On Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
 
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 
@@ -379,7 +379,7 @@ hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
 ```
 
-Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use an ephemeral HERMES_HOME with only model routing, `auth.json`, and provider-allowlisted dotenv keys; parent MCP, skills, memory, sessions, and rules are not inherited. RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
+Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use an ephemeral HERMES_HOME with only non-secret model/fallback routing, a routed-provider-only inference `auth.json`, and provider-allowlisted dotenv keys; parent MCP, skills, memory, sessions, and rules are not inherited. RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
 
 [Hermes guide →](./docs/hermes-mcp.md)
 

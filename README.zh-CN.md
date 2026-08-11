@@ -131,7 +131,7 @@ pi install npm:pi-taskflow
 /tf:audit-api dir=src/api
 ```
 
-在 Codex、Claude Code、OpenCode 和 Grok Build 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
+在 Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
 
 [查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
@@ -374,7 +374,7 @@ hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
 ```
 
-Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理使用临时 HERMES_HOME，只继承模型路由、`auth.json` 与 provider allowlist dotenv；不继承父级 MCP、skills、memory、sessions 或 rules。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
+Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理使用临时 HERMES_HOME，只继承非 secret 的 model/fallback 路由、仅含已路由 inference provider 的 `auth.json` 与 provider allowlist dotenv；不继承父级 MCP、skills、memory、sessions 或 rules。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
 
 [Hermes 指南 →](./docs/hermes-mcp.md)
 

@@ -13,13 +13,13 @@ This page is an honest comparison — including where LangGraph is clearly the b
 |---|---|---|
 | **What it is** | A library for stateful LLM app graphs (Python/JS) | A declarative task-DAG runtime for coding-agent subagents |
 | **You write** | Python or JS graph code | JSON data (the DSL) |
-| **Runs inside** | your own application process | your coding agent (Pi, Codex, Claude Code, OpenCode, Grok Build) |
+| **Runs inside** | your own application process | your coding agent (Pi, Codex, Claude Code, OpenCode, Grok Build, Hermes Agent) |
 | **Nodes are** | arbitrary functions (LLM calls, tools, logic) | **subagent invocations** (scoped, model-routed agent calls) |
 | **State** | a typed shared state object, reduced over edges | the Shared Context Tree (blackboard + supervision) |
 | **Persistence** | checkpointers (SQLite/Postgres/in-memory) | file-backed run store + cross-run cache |
 | **Human-in-the-loop** | interrupt + resume on state | `approval` phases (approve/reject/edit) |
 | **Verification** | runtime graph validation | **static pre-flight: cycles, dead-ends, budget, dangling refs — before any token** |
-| **Host coupling** | framework-agnostic (you bring the model + tools) | **agent-host-native** (installs as a Pi extension / Codex/Claude/OpenCode/Grok plugin) |
+| **Host coupling** | framework-agnostic (you bring the model + tools) | **agent-host-native** (installs as a Pi extension / Codex/Claude/OpenCode/Grok/Hermes integration) |
 
 ## Where they genuinely overlap
 

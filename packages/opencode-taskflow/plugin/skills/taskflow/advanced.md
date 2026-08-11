@@ -260,7 +260,7 @@ are covered by `taskflow_verify`; `taskflow_lint` reports only plugin findings.
 
 `taskflow_version` reports the engine package version, the git commit the dist
 was built from, the run-state schema version, and the bound host
-(`codex`/`claude`/`opencode`/`grok`). The git commit is stamped at build time —
+(`codex`/`claude`/`opencode`/`grok`/`hermes`). The git commit is stamped at build time —
 `git` is never run at runtime.
 ```
 taskflow_version {}
