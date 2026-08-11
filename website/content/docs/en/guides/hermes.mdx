@@ -12,7 +12,7 @@ The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/ta
 ### Published MCP package (after npm publish)
 
 ```bash title="Register taskflow MCP"
-hermes mcp add taskflow -- npx -y -p hermes-taskflow@0.2.8 hermes-taskflow-mcp
+hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
 ```
 
 Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
@@ -21,10 +21,10 @@ Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow@0.2.8", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
     env:
       # Required for mutating agent phases (terminal / file write / coding).
-      PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"
+      # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
     timeout: 600
 ```
 
@@ -78,7 +78,7 @@ Prefer **`mcp_taskflow_plan`** or **`mcp_taskflow_verify`** before any spend, th
 
 | Phase kind | Behavior |
 |------------|----------|
-| Read-only tool whitelist | `-t web,search` (no terminal/file) |
+| Read-only tool whitelist | `-t search` (web_search only; no file/terminal — Hermes `file` is writable) |
 | Mutating / default-capable | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → child `--yolo` |
 | Budgeted flows | **Rejected** — Hermes quiet mode does not report token/cost |
 

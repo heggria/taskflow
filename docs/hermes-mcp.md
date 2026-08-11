@@ -15,9 +15,9 @@ Or paste into `~/.hermes/config.yaml` (see `packages/hermes-taskflow/plugin/herm
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow@0.2.8", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
     env:
-      PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"
+      # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
     timeout: 600
 ```
 
@@ -41,7 +41,7 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 |---------|----------|
 | Control plane | Full `taskflow_*` MCP roster (run, plan, verify, compile, resume, …) |
 | Execution | Each agent phase: `hermes chat -q <prompt> -Q --source tool` |
-| Read-only phases | `-t web,search` (no terminal/file) |
+| Read-only phases | `-t search` (no file/terminal; READONLY_WEB=1 → web,search) |
 | Mutating phases | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
 | Session hygiene | `--source tool` keeps integration runs out of the main user session list |
 

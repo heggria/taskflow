@@ -15,8 +15,9 @@
  *   - failure      = non-zero exit, or empty output with non-zero semantics
  *
  * Permission mapping:
- *   - read-only phase → `-t file` (no --yolo; network opt-in via
- *     PI_TASKFLOW_HERMES_READONLY_WEB=1 → adds web,search)
+ *   - read-only phase → `-t search` (web_search only; no file/terminal).
+ *     Network extract via PI_TASKFLOW_HERMES_READONLY_WEB=1 → `web,search`.
+ *     Hermes cannot express write-less local file tools — do not attach `file`.
  *   - mutating / default-capable → requires explicit
  *     `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` and passes `--yolo`
  *   - children always get `--ignore-user-config --ignore-rules`
@@ -190,10 +191,10 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 
 /**
  * Map a phase tool whitelist to Hermes `-t` toolsets. Best-effort:
- *   - read-only → `file` when the whitelist is local-read shaped (Hermes cannot
- *     express write-less file tools; children run WITHOUT --yolo so mutating
- *     file ops stay approval-gated / non-interactive fail-closed). Network is
- *     opt-in via PI_TASKFLOW_HERMES_READONLY_WEB=1 → adds web,search.
+ *   - read-only → NEVER attach Hermes `file` (it includes write_file/patch and is
+ *     not approval-gated for ordinary workspace paths). Default RO is `search`
+ *     only (web_search, no extract). Opt-in network: PI_TASKFLOW_HERMES_READONLY_WEB=1
+ *     → `web,search`. Local disk read is unavailable under true RO on Hermes.
  *   - mutating with explicit tools → union of matching toolsets
  *   - default / empty → file,terminal,web,search (NOT full `coding`)
  *   - unknown aliases are ignored (never fail-open to `coding`)
@@ -204,17 +205,8 @@ export function resolveHermesToolsets(
 	opts: { readonlyWeb?: boolean } = {},
 ): string {
 	if (readOnly) {
-		const localRead = new Set(["read", "read_file", "grep", "glob", "search_files", "ls", "list", "list_dir"]);
-		const wantsLocal = !tools || tools.length === 0 || tools.some((t) => localRead.has(t));
-		const sets = new Set<string>();
-		if (wantsLocal) sets.add("file");
-		if (opts.readonlyWeb) {
-			sets.add("web");
-			sets.add("search");
-		}
-		// Pure web RO whitelist with no local tools and no web opt-in → search only.
-		if (sets.size === 0) sets.add("search");
-		return [...sets].sort().join(",");
+		// Do not map to `file` — write_file/patch remain available without --yolo.
+		return opts.readonlyWeb ? "web,search" : "search";
 	}
 	if (!tools || tools.length === 0) return "file,terminal,web,search";
 
@@ -457,14 +449,19 @@ export async function runHermesAgentTask(
 	if (!acc.finalText.trim()) {
 		const stderr = result.stderr ?? "";
 		const errLine =
-			stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim() ||
-			stderr.match(/error:\s*(.+)/i)?.[1]?.trim();
+			stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim();
 		const sessionNote = acc.sessionId ? ` (session_id=${acc.sessionId})` : "";
 		const genericEmpty =
 			!result.errorMessage ||
 			/without a final output/i.test(result.errorMessage) ||
 			result.errorMessage === UPSTREAM_ERROR_PLACEHOLDER;
-		if (errLine) {
+		const mayUpgradeProviderError =
+			genericEmpty &&
+			result.stopReason !== "aborted" &&
+			result.stopReason !== "idle-timeout" &&
+			result.completionSource !== "abort" &&
+			result.completionSource !== "idle-timeout";
+		if (errLine && mayUpgradeProviderError) {
 			result.exitCode = result.exitCode || 1;
 			result.stopReason = result.stopReason === "end" ? "error" : (result.stopReason ?? "error");
 			result.errorMessage = sanitizeErrorMessage(`${errLine}${sessionNote}`);

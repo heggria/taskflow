@@ -368,7 +368,7 @@ Grok Build support is new in 0.2. Its CLI stream does not report token/cost usag
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow -- npx -y -p hermes-taskflow@0.2.8 hermes-taskflow-mcp
+hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
 # mutating agent phases need PI_TASKFLOW_HERMES_UNSAFE_YOLO=1 on the MCP env
 ```
 
