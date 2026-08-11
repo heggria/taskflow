@@ -16,7 +16,6 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
@@ -27,6 +26,7 @@ import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
 import type { FlowMeta } from "./library/types.ts";
+import { findProjectTaskflowsDir, canonicalDiscoveryPath } from "./discovery-boundary.ts";
 
 export interface SavedFlow {
 	name: string;
@@ -1016,39 +1016,16 @@ function userFlowsDir(): string {
 	return path.join(getAgentDir(), "taskflows");
 }
 
-function canonicalDiscoveryPath(input: string): string {
-	const absolute = path.resolve(input);
-	try {
-		return fs.realpathSync.native(absolute);
-	} catch {
-		return absolute;
-	}
-}
 
-function sameDiscoveryPath(a: string, b: string): boolean {
-	if (process.platform === "win32") return a.toLowerCase() === b.toLowerCase();
-	return a === b;
-}
 
 function findProjectFlowsDirInternal(cwd: string, create = false): string | null {
-	// Prefer an existing .pi dir up the tree; else use cwd/.pi when creating.
-	// **Never inherit `~/.pi/` or the shared OS temp root's `.pi/` while walking
-	// ancestors.** Resolve physical paths first so relative cwd values and symlink
-	// aliases cannot bypass either boundary. An explicit create at cwd still uses
-	// cwd/.pi; only ancestor discovery stops at these user/shared boundaries.
-	const home = canonicalDiscoveryPath(os.homedir());
-	const tempRoot = canonicalDiscoveryPath(os.tmpdir());
+	// Prefer an existing .pi dir up the tree (shared boundary helper); else use
+	// cwd/.pi when creating. Never inherit ~/.pi or temp .pi via walk/symlink.
+	const existing = findProjectTaskflowsDir(cwd);
+	if (existing) return existing;
+	if (!create) return null;
 	const canonicalCwd = canonicalDiscoveryPath(cwd);
-	let dir = canonicalCwd;
-	while (true) {
-		if (sameDiscoveryPath(dir, home) || sameDiscoveryPath(dir, tempRoot)) break;
-		const candidate = path.join(dir, ".pi");
-		if (fs.existsSync(candidate)) return path.join(candidate, "taskflows");
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	return create ? path.join(canonicalCwd, ".pi", "taskflows") : null;
+	return path.join(canonicalCwd, ".pi", "taskflows");
 }
 
 /**

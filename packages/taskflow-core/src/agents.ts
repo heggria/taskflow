@@ -46,6 +46,7 @@ export interface TaskflowSettings {
 
 import { DEFAULT_KEPT_RUNS, DEFAULT_RUN_AGE_DAYS, writeFileAtomic } from "./store.ts";
 import { DEFAULT_LIBRARY_SETTINGS, type LibrarySettings } from "./library/types.ts";
+import { findProjectAgentsDir } from "./discovery-boundary.ts";
 
 export const DEFAULT_TASKFLOW_SETTINGS: TaskflowSettings = {
 	builtInAgents: true,
@@ -264,14 +265,8 @@ function isDirectory(p: string): boolean {
 }
 
 function findNearestProjectAgentsDir(cwd: string): string | null {
-	let currentDir = cwd;
-	while (true) {
-		const candidate = path.join(currentDir, ".pi", "agents");
-		if (isDirectory(candidate)) return candidate;
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
-	}
+	const dir = findProjectAgentsDir(cwd);
+	return dir && isDirectory(dir) ? dir : null;
 }
 
 export function discoverAgents(

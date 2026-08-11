@@ -98,6 +98,106 @@ function isWithin(root: string, candidate: string): boolean {
 	return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
+/** Stage blob basenames must be path-safe; effect ids are attacker-influenced IR. */
+function assertSafeEffectId(effectId: string): void {
+	if (!effectId || effectId !== path.basename(effectId) || effectId === "." || effectId === "..") {
+		throw new Error(`TFWS_INVALID_EFFECT_ID: effect id is not a safe path segment: ${JSON.stringify(effectId)}`);
+	}
+	if (/[\\/]/.test(effectId) || (process.platform === "win32" && effectId.includes(":"))) {
+		throw new Error(`TFWS_INVALID_EFFECT_ID: effect id must not contain path separators: ${JSON.stringify(effectId)}`);
+	}
+}
+
+function stageBlobPath(stagingDirectory: string, effectId: string): string {
+	assertSafeEffectId(effectId);
+	return path.join(stagingDirectory, "staged", `${effectId}-${crypto.randomUUID()}.blob`);
+}
+
+/** Re-validate containment for commit: no intermediate symlinks; parents stay in scope. */
+function assertCommitContainment(snapshots: readonly Snapshot[], authorizationScopeRoot: string): void {
+	const root = fs.realpathSync(authorizationScopeRoot);
+	for (const snapshot of snapshots) {
+		assertWritablePathInScope(snapshot.physicalPath, root);
+	}
+}
+
+/**
+ * Ensure each path segment from root→file is either missing or a real directory
+ * (never a symlink). Prevents prepare→commit TOCTOU where a body plants mid-path links.
+ */
+function assertWritablePathInScope(filePath: string, authorizationRoot: string): void {
+	const root = path.resolve(authorizationRoot);
+	const absolute = path.resolve(filePath);
+	if (!isWithin(root, path.dirname(absolute)) && path.dirname(absolute) !== root) {
+		// dirname must be inside root (file itself may be direct child)
+		const parent = path.dirname(absolute);
+		if (!isWithin(root, parent) && parent !== root) {
+			throw new Error(`TFWS_PATH_ESCAPE: parent ${parent} outside scope ${root}`);
+		}
+	}
+	const rel = path.relative(root, absolute);
+	if (rel.startsWith(`..`) || path.isAbsolute(rel)) {
+		throw new Error(`TFWS_PATH_ESCAPE: ${absolute} outside scope ${root}`);
+	}
+	const segments = rel.split(path.sep).filter(Boolean);
+	let current = root;
+	// Walk all parent segments (exclude final filename).
+	for (let i = 0; i < segments.length - 1; i++) {
+		current = path.join(current, segments[i]!);
+		try {
+			const st = fs.lstatSync(current);
+			if (st.isSymbolicLink()) {
+				throw new Error(`TFWS_PATH_ESCAPE: intermediate symlink at ${current}`);
+			}
+			if (!st.isDirectory()) {
+				throw new Error(`TFWS_PATH_ESCAPE: intermediate path is not a directory: ${current}`);
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+				// Remaining segments will be created without following links (see ensureDirectoryNoFollow).
+				break;
+			}
+			throw error;
+		}
+	}
+	try {
+		const st = fs.lstatSync(absolute);
+		if (st.isSymbolicLink()) {
+			throw new Error(`TFWS_PATH_ESCAPE: target is a symlink: ${absolute}`);
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
+/** mkdir -p that refuses to traverse symlinks (segment-wise, lstat each existing). */
+function ensureDirectoryNoFollow(directory: string, authorizationRoot: string): void {
+	const root = path.resolve(authorizationRoot);
+	const absolute = path.resolve(directory);
+	if (!isWithin(root, absolute) && absolute !== root) {
+		throw new Error(`TFWS_PATH_ESCAPE: mkdir outside scope: ${absolute}`);
+	}
+	const rel = absolute === root ? "" : path.relative(root, absolute);
+	if (rel.startsWith("..") || path.isAbsolute(rel)) {
+		throw new Error(`TFWS_PATH_ESCAPE: mkdir outside scope: ${absolute}`);
+	}
+	let current = root;
+	if (rel) {
+		for (const seg of rel.split(path.sep).filter(Boolean)) {
+			current = path.join(current, seg);
+			try {
+				const st = fs.lstatSync(current);
+				if (st.isSymbolicLink()) throw new Error(`TFWS_PATH_ESCAPE: mkdir hits symlink ${current}`);
+				if (!st.isDirectory()) throw new Error(`TFWS_PATH_ESCAPE: mkdir hits non-dir ${current}`);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				fs.mkdirSync(current, { mode: 0o700 });
+			}
+		}
+	}
+}
+
+
 function nearestExistingAncestor(candidate: string): string {
 	let current = path.dirname(candidate);
 	while (true) {
@@ -144,9 +244,10 @@ function writeBufferDurable(filePath: string, content: Buffer, mode = 0o600): vo
 	fsyncDirectory(path.dirname(filePath));
 }
 
-function replaceFileAtomic(filePath: string, content: Buffer, mode = 0o600): void {
+function replaceFileAtomic(filePath: string, content: Buffer, mode = 0o600, authorizationRoot?: string): void {
 	const parent = path.dirname(filePath);
-	ensureDirectory(parent);
+	if (authorizationRoot !== undefined) ensureDirectoryNoFollow(parent, authorizationRoot);
+	else ensureDirectory(parent);
 	const temp = path.join(parent, `.taskflow-write-${process.pid}-${crypto.randomUUID()}`);
 	try {
 		writeBufferDurable(temp, content, mode);
@@ -448,6 +549,8 @@ export class PreparedResourceFileTransaction {
 	readonly #onDeferredLeaseRelease?: (lease: LeaseHandle) => void;
 	readonly #cleanupStaging: (stagingDirectory: string) => void;
 	#settled = false;
+	#busy = false;
+	readonly #authorizationScopeRoot: string;
 	#knownCleanTerminal = false;
 
 	constructor(input: {
@@ -457,6 +560,7 @@ export class PreparedResourceFileTransaction {
 		journal: WriteIntentJournal;
 		stagingDirectory: string;
 		onDeferredLeaseRelease?: (lease: LeaseHandle) => void;
+		authorizationScopeRoot: string;
 		cleanupStaging?: (stagingDirectory: string) => void;
 	}) {
 		this.intentId = input.mutation.intent.intentId;
@@ -466,6 +570,7 @@ export class PreparedResourceFileTransaction {
 		this.#journal = input.journal;
 		this.#stagingDirectory = input.stagingDirectory;
 		this.#onDeferredLeaseRelease = input.onDeferredLeaseRelease;
+		this.#authorizationScopeRoot = input.authorizationScopeRoot;
 		this.#cleanupStaging = input.cleanupStaging ?? ((stagingDirectory) => {
 			fs.rmSync(path.join(stagingDirectory, "staged"), { recursive: true, force: true });
 		});
@@ -473,12 +578,22 @@ export class PreparedResourceFileTransaction {
 
 	async commit(payloads: readonly FileWritePayload[]): Promise<FileTransactionResult> {
 		this.#assertOpen();
+		this.#enterBusy();
+		try {
+		return await this.#commitLocked(payloads);
+		} finally {
+			this.#leaveBusy();
+		}
+	}
+
+	async #commitLocked(payloads: readonly FileWritePayload[]): Promise<FileTransactionResult> {
 		const byId = new Map(payloads.map((payload) => [payload.effectId, payload]));
 		if (byId.size !== this.#snapshots.length || this.#snapshots.some((snapshot) => !byId.has(snapshot.effectId))) {
 			return this.#rejectAndFinish("commit-rejected", "payload ids do not exactly match the admitted effects");
 		}
 		try {
 			assertExactPreState(this.#snapshots);
+			assertCommitContainment(this.#snapshots, this.#authorizationScopeRoot);
 		} catch (error) {
 			return this.#rejectAndFinish(
 				"declared-path-bypass",
@@ -491,7 +606,7 @@ export class PreparedResourceFileTransaction {
 			for (const snapshot of this.#snapshots) {
 				const payload = byId.get(snapshot.effectId)!;
 				const bytes = typeof payload.content === "string" ? Buffer.from(payload.content, "utf8") : payload.content;
-				const stagedPath = path.join(this.#stagingDirectory, "staged", `${snapshot.effectId}-${crypto.randomUUID()}.blob`);
+				const stagedPath = stageBlobPath(this.#stagingDirectory, snapshot.effectId);
 				writeBufferDurable(stagedPath, bytes);
 				expected.set(snapshot.effectId, contentId(bytes));
 			}
@@ -499,7 +614,7 @@ export class PreparedResourceFileTransaction {
 				await this.#journal.assertActive(this.#mutation.permit, this.#mutation.intent.owner);
 				const payload = byId.get(snapshot.effectId)!;
 				const bytes = typeof payload.content === "string" ? Buffer.from(payload.content, "utf8") : payload.content;
-				replaceFileAtomic(snapshot.physicalPath, bytes, snapshot.mode ?? 0o600);
+				replaceFileAtomic(snapshot.physicalPath, bytes, snapshot.mode ?? 0o600, this.#authorizationScopeRoot);
 			}
 			const evidence = this.#snapshots.map((snapshot) => ({
 				canonicalPrefix: snapshot.physicalPath,
@@ -532,10 +647,15 @@ export class PreparedResourceFileTransaction {
 
 	async reject(reason: string): Promise<FileTransactionResult> {
 		this.#assertOpen();
+		this.#enterBusy();
 		try {
-			return await this.#rejectAndRestore("commit-rejected", reason || "phase rejected");
+			try {
+				return await this.#rejectAndRestore("commit-rejected", reason || "phase rejected");
+			} finally {
+				await this.#finish();
+			}
 		} finally {
-			await this.#finish();
+			this.#leaveBusy();
 		}
 	}
 
@@ -586,6 +706,15 @@ export class PreparedResourceFileTransaction {
 		if (this.#settled) throw new Error(`resource file transaction ${this.intentId} is already settled`);
 	}
 
+	#enterBusy(): void {
+		if (this.#busy) throw new Error(`resource file transaction ${this.intentId} is already in progress`);
+		this.#busy = true;
+	}
+
+	#leaveBusy(): void {
+		this.#busy = false;
+	}
+
 	async #finish(): Promise<void> {
 		try {
 			try {
@@ -601,7 +730,14 @@ export class PreparedResourceFileTransaction {
 			}
 		} finally {
 			if (!(await releaseBestEffort(this.#lease))) {
-				this.#onDeferredLeaseRelease?.(this.#lease);
+				try {
+					this.#onDeferredLeaseRelease?.(this.#lease);
+				} catch (error) {
+					console.warn(
+						`[taskflow] resource transaction deferred lease release callback failed for ${this.#lease.leaseId}: ` +
+						(error instanceof Error ? error.message : String(error)),
+					);
+				}
 				console.warn(`[taskflow] resource transaction lease cleanup deferred for lease ${this.#lease.leaseId}`);
 			}
 		}
@@ -616,6 +752,7 @@ export async function prepareResourceFileTransaction(
 	const seenPaths = new Set<string>();
 	for (const target of options.targets) {
 		if (!target.effectId || seenEffects.has(target.effectId)) throw new Error(`duplicate or empty effect id: ${target.effectId}`);
+		assertSafeEffectId(target.effectId);
 		if (target.ref.capability.resourceDomainId !== options.resourceDomainId) {
 			throw new Error(`TFWS_ACCESS_ESCALATION: effect '${target.effectId}' resolved to a foreign resource domain`);
 		}
@@ -711,6 +848,7 @@ export async function prepareResourceFileTransaction(
 			journal: options.journal,
 			stagingDirectory: transactionDirectory,
 			onDeferredLeaseRelease: options.onDeferredLeaseRelease,
+			authorizationScopeRoot: options.authorizationScopeRoot,
 			cleanupStaging: options.cleanupStaging,
 		});
 	} catch (error) {
