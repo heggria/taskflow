@@ -737,13 +737,34 @@ def register(ctx) -> None:
                 return _deny("path must be a string")
             try:
                 cwd = Path(os.environ.get("PI_TASKFLOW_HERMES_PHASE_CWD", os.getcwd())).resolve(strict=True)
-                target = Path(raw).expanduser()
-                if not target.is_absolute():
-                    target = cwd / target
-                # Resolve existing symlink ancestors while allowing an
-                # in-cwd nonexistent final component to be searched safely.
-                target = target.resolve(strict=False)
-                target.relative_to(cwd)
+                raw_paths = [raw]
+                if name == "search_files":
+                    # Hermes search_files treats a missing "dir1,dir2" or
+                    # "dir1 dir2" path as a multi-path request. Validate the
+                    # same candidates; otherwise a relative prefix such as
+                    # ".,/etc" resolves under cwd here but later escapes when
+                    # the tool splits it. Preserve real in-cwd paths with spaces.
+                    direct = Path(raw).expanduser()
+                    if not direct.is_absolute():
+                        direct = cwd / direct
+                    direct = direct.resolve(strict=False)
+                    if not direct.exists():
+                        parts = [
+                            part
+                            for chunk in raw.split(",")
+                            for part in chunk.split()
+                            if part.strip()
+                        ]
+                        if len(parts) >= 2:
+                            raw_paths = parts
+                for raw_path in raw_paths:
+                    target = Path(raw_path).expanduser()
+                    if not target.is_absolute():
+                        target = cwd / target
+                    # Resolve existing symlink ancestors while allowing an
+                    # in-cwd nonexistent final component to be searched safely.
+                    target = target.resolve(strict=False)
+                    target.relative_to(cwd)
             except (OSError, RuntimeError, ValueError):
                 return _deny(
                     "path escapes phase cwd "

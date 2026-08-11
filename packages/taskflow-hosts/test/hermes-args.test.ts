@@ -3,6 +3,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import {
 	buildHermesArgs,
 	HERMES_UNSAFE_YOLO_ENV,
@@ -21,7 +22,7 @@ import {
 	stripHermesReasoningNoise,
 	type HermesArgsCtx,
 } from "../src/hermes-runner.ts";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -388,6 +389,56 @@ test("hermes RO plugin: cwd-bounds read_file and search_files, including symlink
 		assert.match(plugin, /args\.get\("path", "\."\)/);
 		assert.match(plugin, /resolve\(strict=False\)/);
 		assert.match(plugin, /target\.relative_to\(cwd\)/);
+
+		const cwd = mkdtempSync(join(tmpdir(), "tf-hermes-ro-cwd-"));
+		const outside = mkdtempSync(join(tmpdir(), "tf-hermes-ro-outside-"));
+		const spaced = join(cwd, "inside with spaces");
+		mkdirSync(spaced);
+		const link = join(cwd, "outside-link");
+		symlinkSync(outside, link);
+		const probe = String.raw`
+import importlib.util, json, sys, types
+
+plugin_path, cwd, outside, spaced, link = sys.argv[1:]
+toolsets = types.ModuleType("toolsets")
+toolsets.create_custom_toolset = lambda **kwargs: None
+sys.modules["toolsets"] = toolsets
+spec = importlib.util.spec_from_file_location("taskflow_readonly", plugin_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+class Ctx:
+    def register_hook(self, name, callback):
+        self.callback = callback
+
+ctx = Ctx()
+mod.register(ctx)
+cb = ctx.callback
+def blocked(name, path):
+    return cb(tool_name=name, args={"path": path}) is not None
+
+print(json.dumps({
+    "inside": blocked("search_files", cwd),
+    "outside": blocked("read_file", outside),
+    "comma_multi": blocked("search_files", ".," + outside),
+    "space_multi": blocked("search_files", ". " + outside),
+    "spaced_inside": blocked("search_files", spaced),
+    "symlink_escape": blocked("search_files", link),
+}))
+`;
+		const run = spawnSync("python3", ["-c", probe, join(eph.home, "plugins", "taskflow_readonly", "__init__.py"), cwd, outside, spaced, link], {
+			encoding: "utf8",
+			env: { ...process.env, PI_TASKFLOW_HERMES_PHASE_CWD: cwd },
+		});
+		assert.equal(run.status, 0, run.stderr);
+		assert.deepEqual(JSON.parse(run.stdout), {
+			inside: false,
+			outside: true,
+			comma_multi: true,
+			space_multi: true,
+			spaced_inside: false,
+			symlink_escape: true,
+		});
 	} finally {
 		eph.cleanup();
 	}
