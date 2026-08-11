@@ -133,6 +133,22 @@ pi install npm:pi-taskflow
 
 在 Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
 
+大型项目可以把保存的定义递归组织在 `.pi/taskflows/flows/` 下，例如 `.pi/taskflows/flows/release/audit-api.json`。旧的 `.pi/taskflows/*.json` 仍可发现，并在同一作用域的重名冲突中优先；嵌套定义按与区域设置无关的 Unicode 标量路径顺序确定优先级。重新保存一个已发现的嵌套 flow 会原地更新该定义及相邻元数据；新 flow 仍写入旧版顶层位置。发现过程由用户与项目共享一套预算，超过 1,000 个 flow、10,000 个已访问目录项、512 个目录、8 MiB 定义总量、单文件 1 MiB 或 16 层深度时会安全失败。它拒绝可信存储边界以下直到定义叶子的符号链接，并跳过点路径、元数据（`*.meta.json`）和已编译 IR（`*.flowir.json`）；为兼容 home 目录迁移，配置的 agent 目录边界本身可以是符号链接。保存新 flow 时会执行相同的存储边界校验，并在写锁内重新验证目标目录的物理身份。
+
+文件支持的 flow 可以显式选择从定义文件目录运行脚本阶段：
+
+```json
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
+  ]
+}
+```
+
+此时 `./scripts/prepare.sh` 从保存 flow 或 `defineFile` 所在目录解析。默认值仍是 `"invocation"`，显式 phase `cwd` 仍然优先；inline 定义没有可信文件来源，因此请求 `scriptCwd: "flow"` 时会安全失败。如果执行继承了 cwd bridge 边界，解析出的 flow 来源目录也必须位于该边界内。
+
 [查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
 ## 看见整张图运行

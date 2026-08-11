@@ -301,14 +301,17 @@ test("kernel opt-in routes budgeted map to imperative per-item guard", async () 
 	assert.equal(result.state.phases.m.budgetTruncated, true);
 });
 
-test("FlowIR hash includes agentScope and contextSharing", async () => {
+test("FlowIR hash includes agentScope, contextSharing, and scriptCwd", async () => {
 	const base: Taskflow = { name: "semantic-hash", phases: [{ id: "p", task: "x", final: true }] };
 	const user = await compileTaskflowToIR({ ...base, agentScope: "user" });
 	const project = await compileTaskflowToIR({ ...base, agentScope: "project" });
 	const plain = await compileTaskflowToIR({ ...base, contextSharing: false });
 	const shared = await compileTaskflowToIR({ ...base, contextSharing: true });
+	const invocation = await compileTaskflowToIR({ ...base, scriptCwd: "invocation" });
+	const flow = await compileTaskflowToIR({ ...base, scriptCwd: "flow" });
 	assert.notEqual(user.hash, project.hash);
 	assert.notEqual(plain.hash, shared.hash);
+	assert.notEqual(invocation.hash, flow.hash);
 });
 
 test("cross-run cache cannot cross agentScope or contextSharing boundaries", async () => {

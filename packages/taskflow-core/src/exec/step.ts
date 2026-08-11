@@ -11,6 +11,7 @@ import { dependenciesOf, MAX_DYNAMIC_MAP_ITEMS, PHASE_TYPES } from "../schema.ts
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { RunState } from "../store.ts";
+import type { DirectoryIdentity } from "../cwd-bridge.ts";
 import type { AgentConfig } from "../agents.ts";
 import type { RunOptions, RunResult } from "../host/runner-types.ts";
 import type { Event } from "./events.ts";
@@ -25,6 +26,7 @@ import {
 } from "../interpolate.ts";
 import { abortableDelay, failedResultDisplayOutput, hasMeaningfulFailedOutput, isFailed as isFailedResult, isTransientError, mapWithConcurrencyLimit, PHASE_TIMEOUT_ABORT_GRACE_MS } from "../runner-core.ts";
 import {
+	resolveScriptCwd,
 	runScriptCommand,
 	scriptResultToPhaseState,
 	scriptSpawnErrorToPhaseState,
@@ -85,6 +87,7 @@ export interface StepDeps {
 	globalThinking?: string;
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
+	loadSavedFlow?: (name: string) => { def: Taskflow; filePath?: string; sourceDirIdentity?: DirectoryIdentity } | undefined;
 	/** Sub-flow call stack (recursion guard). */
 	stack?: string[];
 	/** Nested flow runner (driver injects runEventKernel). */
@@ -93,6 +96,8 @@ export interface StepDeps {
 		args: Record<string, unknown>;
 		stack: string[];
 		dynamic?: boolean;
+		flowSourceFile?: string;
+		flowSourceDirIdentity?: DirectoryIdentity;
 	}) => Promise<NestedFlowResult>;
 }
 
@@ -208,10 +213,25 @@ async function executeScriptBody(phase: Phase, ctx: StepContext): Promise<BodyRe
 	const timeoutMs = phase.timeout ?? 60_000;
 	let phaseState;
 	try {
+		const executionCwd = typeof phase.cwd === "string" && !/^(temp|dedicated|worktree)$/.test(phase.cwd)
+			&& !phase.cwd.includes("{")
+			? resolvePath(ctx.deps.cwd, phase.cwd)
+			: ctx.deps.cwd;
+		const hasExplicitScriptCwd = phase.cwd !== undefined;
+		const scriptCwd = resolveScriptCwd({
+			executionCwd,
+			hasExplicitCwd: hasExplicitScriptCwd,
+			scriptCwd: ctx.state.def.scriptCwd,
+			flowSourceFile: ctx.state.flowSourceFile,
+			flowSourceDirIdentity: ctx.state.flowSourceDirIdentity,
+		});
 		const result = await runScriptCommand({
 			interpRunText: argv,
 			arrayForm: Array.isArray(run),
-			cwd: ctx.deps.cwd,
+			cwd: scriptCwd,
+			cwdIdentity: !hasExplicitScriptCwd && ctx.state.def.scriptCwd === "flow"
+				? ctx.state.flowSourceDirIdentity
+				: undefined,
 			signal: ctx.deps.signal,
 			timeoutMs,
 		});

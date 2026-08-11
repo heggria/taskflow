@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import type { Taskflow } from "../src/schema.ts";
 import {
 	getFlow,
+	getFlowDiagnosed,
 	hashInput,
 	listFlows,
 	listRuns,
@@ -17,6 +19,7 @@ import {
 	type RunIndexEntry,
 	type RunState,
 } from "../src/store.ts";
+import { directoryIdentity } from "../src/cwd-bridge.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,6 +291,432 @@ test("listFlows: returns project-scope flows sorted by name", () => {
 	}
 });
 
+test("listFlows: discovers project flows recursively below the flows convention directory", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "release", "scripts-and-flow");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const filePath = path.join(nestedDir, "publish.json");
+		fs.writeFileSync(filePath, JSON.stringify(minimalFlow("nested-publish")), "utf8");
+
+		const loaded = getFlow(cwd, "nested-publish");
+		assert.ok(loaded, "nested flow should be discoverable by its declared name");
+		assert.equal(loaded.scope, "project");
+		assert.equal(loaded.filePath, fs.realpathSync(filePath));
+		assert.deepEqual(loaded.sourceDirIdentity, directoryIdentity(nestedDir));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("saveFlow: updates an existing nested flow in place without creating a legacy shadow", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		const nestedDir = path.join(root, "flows", "release");
+		const nestedPath = path.join(nestedDir, "publish.json");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(nestedPath, JSON.stringify(minimalFlow("nested-publish")), "utf8");
+
+		const updated: Taskflow = {
+			...minimalFlow("nested-publish"),
+			description: "updated in place",
+		};
+		const saved = saveFlow(cwd, updated, "project");
+
+		assert.equal(saved.filePath, fs.realpathSync(nestedPath));
+		assert.equal(fs.existsSync(path.join(root, "nested-publish.json")), false);
+		assert.equal(getFlow(cwd, "nested-publish")?.def.description, "updated in place");
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("saveFlow: preserves a nested user path even when project scope has the same name", () => {
+	const cwd = makeTmpCwd();
+	const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-user-save-scope-"));
+	const previous = process.env.TASKFLOW_AGENT_DIR;
+	try {
+		process.env.TASKFLOW_AGENT_DIR = agentDir;
+		const userRoot = path.join(agentDir, "taskflows");
+		const userNestedDir = path.join(userRoot, "flows", "team");
+		const userPath = path.join(userNestedDir, "shared.json");
+		fs.mkdirSync(userNestedDir, { recursive: true });
+		fs.writeFileSync(userPath, JSON.stringify({ ...minimalFlow("shared"), description: "user old" }), "utf8");
+
+		const projectPath = path.join(cwd, ".pi", "taskflows", "shared.json");
+		fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+		fs.writeFileSync(projectPath, JSON.stringify({ ...minimalFlow("shared"), description: "project" }), "utf8");
+
+		const saved = saveFlow(cwd, { ...minimalFlow("shared"), description: "user new" }, "user");
+		assert.equal(saved.filePath, fs.realpathSync(userPath));
+		assert.equal(fs.existsSync(path.join(userRoot, "shared.json")), false);
+		assert.equal(JSON.parse(fs.readFileSync(userPath, "utf8")).description, "user new");
+		assert.equal(JSON.parse(fs.readFileSync(projectPath, "utf8")).description, "project");
+	} finally {
+		if (previous === undefined) delete process.env.TASKFLOW_AGENT_DIR;
+		else process.env.TASKFLOW_AGENT_DIR = previous;
+		cleanup(cwd);
+		cleanup(agentDir);
+	}
+});
+
+test("listFlows: supports a symlinked user agent boundary without following symlinks below it", (t) => {
+	const cwd = makeTmpCwd();
+	const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-agent-boundary-"));
+	const actualAgentDir = path.join(sandbox, "agent-real");
+	const linkedAgentDir = path.join(sandbox, "agent-link");
+	const previous = process.env.TASKFLOW_AGENT_DIR;
+	try {
+		const userFlows = path.join(actualAgentDir, "taskflows");
+		fs.mkdirSync(userFlows, { recursive: true });
+		fs.writeFileSync(path.join(userFlows, "portable.json"), JSON.stringify(minimalFlow("portable-user-flow")), "utf8");
+		try {
+			fs.symlinkSync(actualAgentDir, linkedAgentDir, "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		process.env.TASKFLOW_AGENT_DIR = linkedAgentDir;
+
+		const found = listFlows(cwd).find((flow) => flow.scope === "user" && flow.name === "portable-user-flow");
+		assert.ok(found, "the trusted agent-dir boundary may itself be a symlink");
+		assert.equal(found.filePath, fs.realpathSync(path.join(userFlows, "portable.json")));
+	} finally {
+		if (previous === undefined) delete process.env.TASKFLOW_AGENT_DIR;
+		else process.env.TASKFLOW_AGENT_DIR = previous;
+		cleanup(cwd);
+		cleanup(sandbox);
+	}
+});
+
+test("listFlows: rejects a symlinked project .pi trust boundary", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-project-boundary-outside-"));
+	try {
+		fs.rmSync(path.join(cwd, ".pi"), { recursive: true, force: true });
+		fs.mkdirSync(path.join(outside, "taskflows"), { recursive: true });
+		fs.writeFileSync(
+			path.join(outside, "taskflows", "escape.json"),
+			JSON.stringify(minimalFlow("project-boundary-escape")),
+			"utf8",
+		);
+		try {
+			fs.symlinkSync(outside, path.join(cwd, ".pi"), "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		assert.equal(getFlow(cwd, "project-boundary-escape"), null);
+	} finally {
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("saveFlow: rejects a symlinked project .pi boundary without writing outside", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-project-save-outside-"));
+	try {
+		fs.rmSync(path.join(cwd, ".pi"), { recursive: true, force: true });
+		try {
+			fs.symlinkSync(outside, path.join(cwd, ".pi"), "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+
+		assert.throws(
+			() => saveFlow(cwd, minimalFlow("project-save-escape")),
+			/trusted storage root|unsafe saved-flow storage/i,
+		);
+		assert.equal(fs.existsSync(path.join(outside, "taskflows")), false, "rejection must not create outside directories");
+		assert.equal(fs.existsSync(path.join(outside, "taskflows", "project-save-escape.json")), false);
+	} finally {
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("saveFlow: rejects a symlinked user taskflows root without writing outside", (t) => {
+	const cwd = makeTmpCwd();
+	const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-user-save-agent-"));
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-user-save-outside-"));
+	const previous = process.env.TASKFLOW_AGENT_DIR;
+	try {
+		try {
+			fs.symlinkSync(outside, path.join(agentDir, "taskflows"), "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		process.env.TASKFLOW_AGENT_DIR = agentDir;
+
+		assert.throws(
+			() => saveFlow(cwd, minimalFlow("user-save-escape"), "user"),
+			/trusted storage root|unsafe saved-flow storage/i,
+		);
+		assert.equal(fs.existsSync(path.join(outside, "user-save-escape.json")), false);
+	} finally {
+		if (previous === undefined) delete process.env.TASKFLOW_AGENT_DIR;
+		else process.env.TASKFLOW_AGENT_DIR = previous;
+		cleanup(cwd);
+		cleanup(agentDir);
+		cleanup(outside);
+	}
+});
+
+test("saveFlow: revalidates a newly created target directory inside the write lock", () => {
+	const cwd = makeTmpCwd();
+	const targetDir = path.join(cwd, ".pi", "taskflows");
+	const displacedDir = path.join(cwd, ".pi", "taskflows-displaced");
+	const lockPath = path.join(targetDir, "new-target-swap.json.lock");
+	const mutableFs = createRequire(import.meta.url)("node:fs") as { openSync: typeof fs.openSync };
+	const originalOpenSync = mutableFs.openSync;
+	let swapped = false;
+	mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+		if (!swapped && path.resolve(String(args[0])) === path.resolve(lockPath)) {
+			swapped = true;
+			fs.renameSync(targetDir, displacedDir);
+			fs.mkdirSync(targetDir, { recursive: true });
+		}
+		return Reflect.apply(originalOpenSync, mutableFs, args) as number;
+	}) as typeof fs.openSync;
+	syncBuiltinESMExports();
+	try {
+		assert.throws(
+			() => saveFlow(cwd, minimalFlow("new-target-swap")),
+			/saved flow parent directory changed before write/,
+		);
+		assert.equal(swapped, true);
+		assert.equal(fs.existsSync(path.join(targetDir, "new-target-swap.json")), false);
+		assert.equal(fs.existsSync(path.join(displacedDir, "new-target-swap.json")), false);
+	} finally {
+		mutableFs.openSync = originalOpenSync;
+		syncBuiltinESMExports();
+		cleanup(cwd);
+	}
+});
+
+test("listFlows: legacy top-level wins same-scope nested duplicates with a diagnostic", (t) => {
+	const cwd = makeTmpCwd();
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: unknown) => warnings.push(String(message)));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		const nestedDir = path.join(root, "flows", "team");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "duplicate.json"),
+			JSON.stringify({ ...minimalFlow("duplicate"), description: "legacy" }),
+			"utf8",
+		);
+		fs.writeFileSync(
+			path.join(nestedDir, "duplicate.json"),
+			JSON.stringify({ ...minimalFlow("duplicate"), description: "nested" }),
+			"utf8",
+		);
+
+		const loaded = getFlow(cwd, "duplicate");
+		assert.equal(loaded?.def.description, "legacy");
+		assert.ok(warnings.some((message) => message.includes("duplicate") && message.includes("flows/team/duplicate.json")));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("listFlows: rejects a symlinked flows convention root", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-store-outside-"));
+	try {
+		fs.writeFileSync(path.join(outside, "escape.json"), JSON.stringify(minimalFlow("escape")), "utf8");
+		const taskflowsRoot = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(taskflowsRoot, { recursive: true });
+		try {
+			fs.symlinkSync(outside, path.join(taskflowsRoot, "flows"), "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		assert.equal(getFlow(cwd, "escape"), null);
+	} finally {
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("listFlows: rejects a symlinked taskflows parent root", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-store-parent-outside-"));
+	try {
+		fs.mkdirSync(path.join(outside, "flows"), { recursive: true });
+		fs.writeFileSync(path.join(outside, "flows", "escape.json"), JSON.stringify(minimalFlow("parent-escape")), "utf8");
+		try {
+			fs.symlinkSync(outside, path.join(cwd, ".pi", "taskflows"), "dir");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("directory symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		assert.equal(getFlow(cwd, "parent-escape"), null);
+	} finally {
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("listFlows: rejects symlinked legacy definition files", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-store-file-outside-"));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		const externalFlow = path.join(outside, "external.json");
+		fs.writeFileSync(externalFlow, JSON.stringify(minimalFlow("legacy-escape")), "utf8");
+		try {
+			fs.symlinkSync(externalFlow, path.join(root, "legacy-escape.json"), "file");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("file symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		assert.equal(getFlow(cwd, "legacy-escape"), null);
+	} finally {
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("listFlows: oversized definition fails discovery closed", (t) => {
+	const cwd = makeTmpCwd();
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: unknown) => warnings.push(String(message)));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "oversized.json"),
+			JSON.stringify({ ...minimalFlow("oversized"), description: "x".repeat(1_100_000) }),
+			"utf8",
+		);
+		assert.deepEqual(listFlows(cwd), []);
+		assert.ok(warnings.some((message) => message.includes("1048576 bytes/file")));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("listFlows: cumulative definition bytes are bounded across candidates", (t) => {
+	const cwd = makeTmpCwd();
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: unknown) => warnings.push(String(message)));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		for (let i = 0; i < 9; i++) {
+			const name = `large-${i}`;
+			fs.writeFileSync(
+				path.join(root, `${name}.json`),
+				JSON.stringify({ ...minimalFlow(name), description: "x".repeat(940_000) }),
+				"utf8",
+			);
+		}
+		assert.deepEqual(listFlows(cwd), []);
+		assert.ok(warnings.some((message) => message.includes("8388608 bytes")));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("listFlows: legacy root entry breadth is bounded", (t) => {
+	const cwd = makeTmpCwd();
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: unknown) => warnings.push(String(message)));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		for (let i = 0; i <= 10_000; i++) fs.writeFileSync(path.join(root, `entry-${i}.txt`), "");
+		assert.deepEqual(listFlows(cwd), []);
+		assert.ok(warnings.some((message) => message.includes("10000 entries")));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("getFlowDiagnosed: safety exhaustion uses one discovery budget without a listFlows pre-pass", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const nestedRoot = path.join(cwd, ".pi", "taskflows", "flows");
+		fs.mkdirSync(nestedRoot, { recursive: true });
+		for (let i = 0; i < 513; i++) fs.mkdirSync(path.join(nestedRoot, `dir-${i.toString().padStart(4, "0")}`));
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+		try {
+			const result = getFlowDiagnosed(cwd, "missing");
+			assert.equal(result.ok, false);
+			if (!result.ok) assert.match(result.detail, /exceeded a safety limit/);
+			assert.deepEqual(warnings, []);
+		} finally {
+			console.warn = originalWarn;
+		}
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("listFlows: nested duplicate precedence uses locale-independent code-point order", (t) => {
+	const cwd = makeTmpCwd();
+	t.mock.method(console, "warn", () => undefined);
+	try {
+		const root = path.join(cwd, ".pi", "taskflows", "flows");
+		const zDir = path.join(root, "z");
+		const umlautDir = path.join(root, "ä");
+		fs.mkdirSync(zDir, { recursive: true });
+		fs.mkdirSync(umlautDir, { recursive: true });
+		fs.writeFileSync(path.join(zDir, "same.json"), JSON.stringify({ ...minimalFlow("same"), description: "z" }), "utf8");
+		fs.writeFileSync(path.join(umlautDir, "same.json"), JSON.stringify({ ...minimalFlow("same"), description: "umlaut" }), "utf8");
+
+		assert.equal(getFlow(cwd, "same")?.def.description, "z");
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("listFlows: directory breadth limit fails closed with a diagnostic", (t) => {
+	const cwd = makeTmpCwd();
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: unknown) => warnings.push(String(message)));
+	try {
+		const root = path.join(cwd, ".pi", "taskflows", "flows");
+		fs.mkdirSync(root, { recursive: true });
+		for (let i = 0; i < 512; i++) fs.mkdirSync(path.join(root, `dir-${String(i).padStart(3, "0")}`));
+		assert.deepEqual(listFlows(cwd).filter((flow) => flow.scope === "project"), []);
+		assert.ok(warnings.some((message) => message.includes("failed closed") && message.includes("512 directories")));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
 test("listFlows: ignores non-JSON files in flows directory", () => {
 	const cwd = makeTmpCwd();
 	try {
@@ -318,6 +747,27 @@ test("listFlows: skips malformed JSON files gracefully", () => {
 		const flows = listFlows(cwd);
 		const projectNames = flows.filter((f) => f.scope === "project").map((f) => f.name);
 		assert.deepEqual(projectNames, ["valid"]);
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("getFlowDiagnosed: reports a corrupt nested flow by filename", async (t) => {
+	const { getFlowDiagnosed } = await import("../src/store.ts");
+	const cwd = makeTmpCwd();
+	t.mock.method(console, "warn", () => undefined);
+	try {
+		const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "team");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const filePath = path.join(nestedDir, "broken.json");
+		fs.writeFileSync(filePath, "{ nope", "utf8");
+
+		const result = getFlowDiagnosed(cwd, "broken");
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.equal(result.reason, "unparseable");
+			assert.equal(result.path, fs.realpathSync(filePath));
+		}
 	} finally {
 		cleanup(cwd);
 	}
@@ -376,13 +826,19 @@ test("saveRun: dot/dotdot/leading-dot flowName cannot escape the runs root (H1)"
 test("saveRun + loadRun: roundtrip persistence", () => {
 	const cwd = makeTmpCwd();
 	try {
-		const state = mkRunState(cwd, { runId: "test-roundtrip-001" });
+		const state = mkRunState(cwd, {
+			runId: "test-roundtrip-001",
+			flowSourceFile: path.join(cwd, ".pi", "taskflows", "flows", "test-flow.json"),
+			flowSourceDirIdentity: directoryIdentity(cwd),
+		});
 		saveRun(state);
 
 		const loaded = loadRun(cwd, "test-roundtrip-001");
 		assert.ok(loaded, "loadRun should find the saved run");
 		assert.equal(loaded.runId, "test-roundtrip-001");
 		assert.equal(loaded.flowName, "test-flow");
+		assert.equal(loaded.flowSourceFile, state.flowSourceFile);
+		assert.deepEqual(loaded.flowSourceDirIdentity, state.flowSourceDirIdentity);
 		assert.equal(loaded.status, "running");
 	} finally {
 		cleanup(cwd);

@@ -102,6 +102,7 @@ test("closure: decompile preserves ids, collisions, real final, fields, and Flow
 		strictInterpolation: true,
 		contextSharing: true,
 		incremental: true,
+		scriptCwd: "flow",
 		budget: { maxTokens: 1000 },
 		concurrency: 3,
 		phases: [

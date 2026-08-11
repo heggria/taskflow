@@ -7,6 +7,7 @@
  */
 
 import type { Phase, Taskflow } from "../schema.ts";
+import type { DirectoryIdentity } from "../cwd-bridge.ts";
 import { readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import {
@@ -694,6 +695,8 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 	const hasDef = (phase as { def?: unknown }).def !== undefined;
 	const stack = ctx.deps.stack ?? [];
 	let subDef: Taskflow | undefined;
+	let subFlowSourceFile: string | undefined;
+	let subFlowSourceDirIdentity: DirectoryIdentity | undefined;
 	let recursionKey: string;
 
 	const defFailOpen = (diag: string): BodyResult => ({
@@ -760,7 +763,7 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 				usage: emptyUsage(),
 			};
 		}
-		if (!ctx.deps.loadFlow) {
+		if (!ctx.deps.loadSavedFlow) {
 			return {
 				midEvents: [],
 				status: "failed",
@@ -768,8 +771,8 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 				usage: emptyUsage(),
 			};
 		}
-		subDef = ctx.deps.loadFlow(useName);
-		if (!subDef) {
+		const loaded = ctx.deps.loadSavedFlow(useName);
+		if (!loaded) {
 			return {
 				midEvents: [],
 				status: "failed",
@@ -777,6 +780,9 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 				usage: emptyUsage(),
 			};
 		}
+		subDef = loaded.def;
+		subFlowSourceFile = loaded.filePath;
+		subFlowSourceDirIdentity = loaded.sourceDirIdentity;
 		recursionKey = useName;
 	}
 
@@ -815,6 +821,8 @@ export async function executeFlowBody(phase: Phase, ctx: StepContext): Promise<B
 		args: provided,
 		stack: nextStack,
 		dynamic: hasDef,
+		flowSourceFile: subFlowSourceFile,
+		flowSourceDirIdentity: subFlowSourceDirIdentity,
 	});
 
 	return {

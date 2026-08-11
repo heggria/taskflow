@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { test } from "node:test";
-import { emptyUsage, type AgentConfig, type SubagentRunner } from "taskflow-core";
+import { emptyUsage, saveRun, type AgentConfig, type RunState, type SubagentRunner } from "taskflow-core";
 import { makeToolHandlers } from "../src/mcp/server.ts";
 import { serveStdio, TRANSPORT_SHUTDOWN_GRACE_MS, type RpcHandler } from "../src/mcp/jsonrpc.ts";
 
@@ -339,6 +339,89 @@ test("taskflow_run resolves typed cwd defaults before validation and execution",
 	} finally {
 		if (previousMode === undefined) delete process.env.TASKFLOW_CWD_BRIDGE_MODE;
 		else process.env.TASKFLOW_CWD_BRIDGE_MODE = previousMode;
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("taskflow_run defineFile carries canonical source into flow-relative scripts", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "taskflow-mcp-flow-source-"));
+	try {
+		const flowDir = join(cwd, ".pi", "taskflows", "flows", "release bundle");
+		await mkdir(flowDir, { recursive: true });
+		const defineFile = join(flowDir, "publish.json");
+		await writeFile(defineFile, JSON.stringify({
+			name: "mcp-define-file-source",
+			scriptCwd: "flow",
+			phases: [{
+				id: "where",
+				type: "script",
+				run: [process.execPath, "-e", "process.stdout.write(process.cwd())"],
+				final: true,
+			}],
+		}), "utf8");
+		const runner: SubagentRunner<AgentConfig> = {
+			runTask: async (_cwd, _agents, agent, task) => ({
+				agent, task, exitCode: 0, output: "unused", stderr: "", usage: emptyUsage(),
+			}),
+		};
+		const tools = makeToolHandlers(cwd, runner);
+		const result = (await tools.taskflow_run?.({ defineFile })) as {
+			isError?: boolean;
+			content?: Array<{ text?: string }>;
+		};
+		const text = result.content?.[0]?.text ?? "";
+		assert.equal(result.isError, false, text);
+		assert.ok(text.includes(flowDir), text);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("taskflow_resume reloads a saved subflow with atomic source provenance", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "taskflow-mcp-resume-source-"));
+	try {
+		const childDir = join(cwd, ".pi", "taskflows", "flows", "resume-child");
+		await mkdir(childDir, { recursive: true });
+		await writeFile(join(childDir, "child.json"), JSON.stringify({
+			name: "resume-child",
+			scriptCwd: "flow",
+			phases: [{
+				id: "where",
+				type: "script",
+				run: [process.execPath, "-e", "process.stdout.write(process.cwd())"],
+				final: true,
+			}],
+		}), "utf8");
+		const parentDef = {
+			name: "resume-parent",
+			phases: [{ id: "child-phase", type: "flow" as const, use: "resume-child", final: true }],
+		};
+		const state: RunState = {
+			runId: "resume-source-001",
+			flowName: parentDef.name,
+			def: parentDef,
+			args: {},
+			status: "failed",
+			phases: { "child-phase": { id: "child-phase", status: "failed", error: "seed failure" } },
+			createdAt: Date.now(),
+			updatedAt: Date.now(),
+			cwd,
+		};
+		saveRun(state);
+		const runner: SubagentRunner<AgentConfig> = {
+			runTask: async (_cwd, _agents, agent, task) => ({
+				agent, task, exitCode: 0, output: "unused", stderr: "", usage: emptyUsage(),
+			}),
+		};
+		const tools = makeToolHandlers(cwd, runner);
+		const result = (await tools.taskflow_resume?.({ runId: state.runId })) as {
+			isError?: boolean;
+			content?: Array<{ text?: string }>;
+		};
+		const text = result.content?.[0]?.text ?? "";
+		assert.equal(result.isError, false, text);
+		assert.ok(text.includes(childDir), text);
+	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}
 });

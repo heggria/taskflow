@@ -83,6 +83,14 @@ export interface ApprovalDecision {
 	note?: string;
 }
 
+export interface LoadedSavedFlow {
+	def: Taskflow;
+	/** Canonical loader-owned definition path. Omitted for legacy loaders. */
+	filePath?: string;
+	/** Identity of the canonical definition directory, captured with the file. */
+	sourceDirIdentity?: DirectoryIdentity;
+}
+
 export interface RuntimeDeps {
 	cwd: string;
 	agents: AgentConfig[];
@@ -100,8 +108,12 @@ export interface RuntimeDeps {
 	runTask?: RunTaskFn;
 	/** Resolve an `approval` phase. Omit for non-interactive runs (auto-reject). */
 	requestApproval?: (req: ApprovalRequest) => Promise<ApprovalDecision>;
-	/** Resolve a saved taskflow by name for `flow` (sub-workflow) phases. */
+	/** Legacy definition-only loader. Prefer `loadSavedFlow` when file-backed
+	 * semantics such as `scriptCwd:"flow"` are available. */
 	loadFlow?: (name: string) => Taskflow | undefined;
+	/** Atomically resolve a saved definition together with its trusted canonical
+	 * source path. Runtime snapshots the pair as one immutable capability. */
+	loadSavedFlow?: (name: string) => LoadedSavedFlow | undefined;
 	/** Cross-run memoization store. Omit to construct a default one for `deps.cwd`. */
 	cacheStore?: CacheStore;
 	/** Default cache scope for phases that don't specify one. */
@@ -165,7 +177,7 @@ export interface RuntimeDeps {
 }
 
 type FlowLoaderSnapshotEntry =
-	| { ok: true; value: Taskflow | undefined }
+	| { ok: true; value: LoadedSavedFlow | undefined }
 	| { ok: false; error: unknown };
 
 export interface RuntimeResult {
@@ -827,17 +839,20 @@ function flowTreeUsesCwdBridge(
  * after the root binding and cache policy were decided.
  */
 function snapshotFlowLoader(deps: RuntimeDeps): RuntimeDeps {
-	if (!deps.loadFlow || deps._flowLoaderSnapshot) return deps;
-	const source = deps.loadFlow;
+	if ((!deps.loadSavedFlow && !deps.loadFlow) || deps._flowLoaderSnapshot) return deps;
+	const source: (name: string) => LoadedSavedFlow | undefined = deps.loadSavedFlow
+		?? ((name) => {
+			const def = deps.loadFlow?.(name);
+			return def === undefined ? undefined : { def };
+		});
 	const snapshot = new Map<string, FlowLoaderSnapshotEntry>();
-	const loadFlow = (name: string): Taskflow | undefined => {
+	const loadSavedFlow = (name: string): LoadedSavedFlow | undefined => {
 		let entry = snapshot.get(name);
 		if (!entry) {
 			try {
 				const loaded = source(name);
-				// Loader-owned objects may be mutated asynchronously. Capability scan
-				// and execution operate on a detached structured snapshot, never the
-				// loader's live reference.
+				// Definition and provenance are detached and cached as one value, so
+				// mutable discovery cannot pair data from one flow with another path.
 				entry = { ok: true, value: loaded === undefined ? undefined : structuredClone(loaded) };
 			} catch (error) {
 				entry = { ok: false, error };
@@ -847,7 +862,8 @@ function snapshotFlowLoader(deps: RuntimeDeps): RuntimeDeps {
 		if (!entry.ok) throw entry.error;
 		return entry.value;
 	};
-	return { ...deps, loadFlow, _flowLoaderSnapshot: snapshot };
+	const loadFlow = (name: string): Taskflow | undefined => loadSavedFlow(name)?.def;
+	return { ...deps, loadFlow, loadSavedFlow, _flowLoaderSnapshot: snapshot };
 }
 
 function sameDirectoryIdentity(a: DirectoryIdentity | undefined, b: DirectoryIdentity | undefined): boolean {
@@ -2490,7 +2506,7 @@ async function executePhaseInner(
 
 	// script — zero-token shell (spawn/timeout/size caps in runtime/phases/script.ts)
 	if (type === "script") {
-		const { runScriptCommand, scriptResultToPhaseState, scriptSpawnErrorToPhaseState } =
+		const { resolveScriptCwd, runScriptCommand, scriptResultToPhaseState, scriptSpawnErrorToPhaseState } =
 			await import("./runtime/phases/script.ts");
 		const cmd = phase.run;
 		if (!cmd) {
@@ -2514,19 +2530,48 @@ async function executePhaseInner(
 		const stdinInterp = phase.input !== undefined ? interpolate(phase.input, ctx) : undefined;
 		if (stdinInterp?.missing.length) warnUnresolvedRefs(phase.id, stdinInterp.missing);
 		const stdinInput = stdinInterp?.text;
+		const reads = readRefs.length ? readRefsToReads(readRefs, state) : undefined;
+		let scriptCwd: string;
+		const hasExplicitScriptCwd = deps._cwdOverride !== undefined || phase.cwd !== undefined;
+		try {
+			scriptCwd = resolveScriptCwd({
+				executionCwd: effCwd,
+				hasExplicitCwd: hasExplicitScriptCwd,
+				scriptCwd: state.def.scriptCwd,
+				flowSourceFile: state.flowSourceFile,
+				flowSourceDirIdentity: state.flowSourceDirIdentity,
+			});
+		} catch (err: unknown) {
+			return scriptSpawnErrorToPhaseState(phase.id, err, {
+				inputHash: hashInput(phase.id, JSON.stringify(interpRunText), stdinInput ?? "", "script-cwd-unresolved"),
+				reads,
+			});
+		}
+		if (deps._cwdBoundary && !isPathWithin(deps._cwdBoundary, scriptCwd)) {
+			return scriptSpawnErrorToPhaseState(
+				phase.id,
+				new Error("TF_CWD_BOUNDARY_ESCAPE: script cwd must remain inside the inherited cwd boundary"),
+				{
+					inputHash: hashInput(phase.id, JSON.stringify(interpRunText), stdinInput ?? "", "script-cwd-boundary-escape"),
+					reads,
+				},
+			);
+		}
 
-		const ck = cacheKeys(cc, [phase.id, JSON.stringify(interpRunText), stdinInput ?? ""]);
+		const ck = cacheKeys(cc, [phase.id, JSON.stringify(interpRunText), stdinInput ?? "", `cwd:${scriptCwd}`]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(cc, ck);
 		if (cached) return cached;
 
 		const SCRIPT_TIMEOUT_MS = phase.timeout ?? 60_000;
-		const reads = readRefs.length ? readRefsToReads(readRefs, state) : undefined;
 		try {
 			const invoke = () => runScriptCommand({
 				interpRunText,
 				arrayForm: Array.isArray(cmd),
-				cwd: effCwd,
+				cwd: scriptCwd,
+				cwdIdentity: !hasExplicitScriptCwd && state.def.scriptCwd === "flow"
+					? state.flowSourceDirIdentity
+					: undefined,
 				signal: deps.signal,
 				stdinInput,
 				timeoutMs: SCRIPT_TIMEOUT_MS,
@@ -2762,6 +2807,8 @@ async function executePhaseInner(
 		}
 
 		let subDef: Taskflow | undefined;
+		let subFlowSourceFile: string | undefined;
+		let subFlowSourceDirIdentity: DirectoryIdentity | undefined;
 		let name: string;
 		let recursionKey: string; // identity used for cache key + recursion guard
 
@@ -2869,9 +2916,12 @@ async function executePhaseInner(
 			// --- Saved flow via `use` (unchanged behavior). ---
 			const useName = phase.use;
 			if (!useName) return failPhase(phase.id, `flow phase '${phase.id}' requires 'use' or 'def'`);
-			if (!deps.loadFlow) return failPhase(phase.id, `flow phase '${phase.id}': no sub-flow loader available`);
-			subDef = deps.loadFlow(useName);
-			if (!subDef) return failPhase(phase.id, `flow phase '${phase.id}': saved flow not found: '${useName}'`);
+			if (!deps.loadSavedFlow) return failPhase(phase.id, `flow phase '${phase.id}': no sub-flow loader available`);
+			const loaded = deps.loadSavedFlow(useName);
+			if (!loaded) return failPhase(phase.id, `flow phase '${phase.id}': saved flow not found: '${useName}'`);
+			subDef = loaded.def;
+			subFlowSourceFile = loaded.filePath;
+			subFlowSourceDirIdentity = loaded.sourceDirIdentity;
 			name = useName;
 			recursionKey = useName;
 		}
@@ -2919,7 +2969,7 @@ async function executePhaseInner(
 		// Every sub-flow cache identity includes the resolved definition. A saved
 		// flow's name alone is insufficient: its contents can change without the
 		// parent definition moving.
-		const flowIdentity = `${hasDef ? "def" : "flow"}:${name}:${JSON.stringify(subDef)}`;
+		const flowIdentity = `${hasDef ? "def" : "flow"}:${name}:${JSON.stringify(subDef)}:source:${subFlowSourceFile ?? ""}:source-dir:${JSON.stringify(subFlowSourceDirIdentity ?? null)}`;
 		const ck = cacheKeys(flowCc, [phase.id, flowIdentity, preRead, JSON.stringify(subArgs)]);
 		const inputHash = ck.key;
 		const cached = cachedPhase(flowCc, ck);
@@ -2952,6 +3002,8 @@ async function executePhaseInner(
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			cwd: effCwd,
+			flowSourceFile: subFlowSourceFile,
+			flowSourceDirIdentity: subFlowSourceDirIdentity,
 		};
 		// B8: pass this flow phase's preRead content to every sub-flow phase by
 		// wrapping runTask — sub-phase preRead still gets prepended on top of it.
@@ -4338,6 +4390,7 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 				verifiers: deps.verifiers,
 				requestApproval: deps.requestApproval,
 				loadFlow: deps.loadFlow,
+				loadSavedFlow: deps.loadSavedFlow,
 				_stack: deps._stack,
 				_dynamic: deps._dynamic,
 			});

@@ -7,12 +7,39 @@ import type { Phase } from "../../schema.ts";
 import type { PhaseState } from "../../store.ts";
 import { emptyUsage } from "../../usage.ts";
 import { StringDecoder } from "node:string_decoder";
+import * as path from "node:path";
 import { killProcessTree, registerProcessTree, unregisterProcessTree } from "../../runner-core.ts";
-import { CWD_BRIDGE_MODE_ENV } from "../../cwd-bridge.ts";
+import { CWD_BRIDGE_MODE_ENV, directoryIdentity, type DirectoryIdentity } from "../../cwd-bridge.ts";
 import { WORKSPACE_RECONCILE_MODE_ENV } from "../../resources/execution.ts";
 
 const MAX_STDOUT = 1_048_576; // 1 MB cap
 const SIGKILL_GRACE_MS = 5_000;
+
+function assertDirectoryIdentity(dir: string, expected: DirectoryIdentity): DirectoryIdentity {
+	const current = directoryIdentity(dir);
+	if (!current || current.canonicalPath !== expected.canonicalPath || current.device !== expected.device || current.inode !== expected.inode) {
+		throw new Error("flow-relative script cwd source directory identity changed after definition load");
+	}
+	return current;
+}
+
+/** Resolve a script phase cwd without changing any existing explicit cwd or
+ * workspace-isolation semantics. Flow-relative mode is opt-in and requires
+ * trusted loader provenance; it never guesses a directory from flow data. */
+export function resolveScriptCwd(opts: {
+	executionCwd: string;
+	hasExplicitCwd: boolean;
+	scriptCwd?: "invocation" | "flow";
+	flowSourceFile?: string;
+	flowSourceDirIdentity?: DirectoryIdentity;
+}): string {
+	if (opts.hasExplicitCwd || opts.scriptCwd !== "flow") return opts.executionCwd;
+	if (!opts.flowSourceFile || !opts.flowSourceDirIdentity) {
+		throw new Error("flow-relative script cwd requires stable saved-flow or defineFile provenance");
+	}
+	const sourceDir = path.dirname(opts.flowSourceFile);
+	return assertDirectoryIdentity(sourceDir, opts.flowSourceDirIdentity).canonicalPath;
+}
 
 export interface ScriptRunResult {
 	stdout: string;
@@ -31,6 +58,8 @@ export async function runScriptCommand(opts: {
 	/** Original `run` shape: array → no shell; string → shell true. */
 	arrayForm: boolean;
 	cwd: string;
+	/** When present, revalidated synchronously inside the spawn closure. */
+	cwdIdentity?: DirectoryIdentity;
 	signal?: AbortSignal;
 	stdinInput?: string;
 	timeoutMs: number;
@@ -39,6 +68,9 @@ export async function runScriptCommand(opts: {
 	const { interpRunText, arrayForm, cwd, signal, stdinInput, timeoutMs } = opts;
 
 	return new Promise((resolve, reject) => {
+		// This is deliberately inside the post-import Promise executor: no await or
+		// host wrapper runs between this identity check and child_process.spawn.
+		if (opts.cwdIdentity) assertDirectoryIdentity(cwd, opts.cwdIdentity);
 		const childEnv = { ...process.env };
 		// Script phases execute flow-authored commands, so they are not a trusted
 		// host principal. Host-only workspace controls must never be delegated even

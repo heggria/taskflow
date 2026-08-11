@@ -124,6 +124,7 @@ export async function phaseFingerprint(def: Taskflow, phaseId: string): Promise<
 		flow: {
 			agentScope: def.agentScope ?? "user",
 			contextSharing: def.contextSharing ?? false,
+			scriptCwd: def.scriptCwd ?? "invocation",
 		},
 		self: stripPolicy(phase),
 		deps: depsPayload,

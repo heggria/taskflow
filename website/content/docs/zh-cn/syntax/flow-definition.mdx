@@ -379,6 +379,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 | `strictInterpolation` | `boolean` | `false` | 否 | 把校验警告提升为硬错误。 |
 | `contextSharing` | `boolean` | `false` | 否 | 为所有阶段启用共享上下文树。 |
 | `incremental` | `boolean` | `false` | 否 | 把每个阶段默认为跨运行缓存。 |
+| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | 否 | 未显式设置阶段 `cwd` 时，脚本阶段使用的默认工作目录。`"flow"` 仅适用于已保存 flow 或 `defineFile`，并使用定义文件所在目录；继承的 cwd bridge 边界仍会约束解析结果。 |
 | `phases` | `Phase[]`（`minItems: 1`） | — | **是** | 有序阶段定义。见[阶段类型](/zh-cn/docs/syntax/phase-types)。 |
 
 ### ArgSpec
