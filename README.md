@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/hero.png" alt="taskflow: compile, verify, and run multi-agent DAGs across five coding-agent hosts" width="100%">
+<img src="./assets/hero.png" alt="taskflow: compile, verify, and run multi-agent DAGs across six coding-agent hosts" width="100%">
 
 <br />
 
@@ -397,7 +397,7 @@ Hermes quiet mode does not report token/cost usage, so budget-declaring flows ar
                                                           └─ grok-taskflow / hermes-taskflow
 ```
 
-`taskflow-core` is host-neutral and imports no host SDK. `taskflow-mcp-core` implements stdio JSON-RPC without an MCP SDK dependency; `taskflow-hosts` owns the shared host process runners. The four MCP delivery packages bind both layers (and core), while Pi keeps its native adapter.
+`taskflow-core` is host-neutral and imports no host SDK. `taskflow-mcp-core` implements stdio JSON-RPC without an MCP SDK dependency; `taskflow-hosts` owns the shared host process runners. The five MCP delivery packages bind both layers (and core), while Pi keeps its native adapter.
 
 The test suite covers orchestration semantics, persistence and file-lock races, cache freshness, path traversal, dynamic graph hardening, cancellation, budgets, all 12 phase kinds, FlowIR/replay/recompute, TypeScript DSL erasure, host argv contracts, MCP servers, and packed consumer imports.
 

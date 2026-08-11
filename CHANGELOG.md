@@ -7,6 +7,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 ### Added
 
 - **`runSubagentProcess` plain-text stdout.** New `stdoutFormat: "text"` for hosts that do not emit NDJSON (required by Hermes quiet mode).
+- **Hermes R3 review follow-ups.** Preserve abort/idle diagnostics on empty stdout; map skill/delegation/memory/… toolsets narrowly; unmapped whitelist fails closed (no wide default); strip prefill/prompt HERMES_* + drop AWS_/AZURE_ from child env; README.zh-CN Hermes install section.
 - **Hermes round-3 hardenings.** Child argv uses `--safe-mode` (implies ignore-user-config/rules + disables plugins/MCP). Broader mutating tool aliases (memory/browser/cronjob/…). Docs/README footgun + READONLY_WEB env table.
 - **Hermes RO is non-writable.** Read-only phases map to `-t search` only (not `file` — Hermes file toolset includes write_file without yolo gating). Docs drop fake `@0.2.8` pins and default YOLO=1 examples.
 - **Hermes round-2 review fixes.** Empty-output errors prefer stderr `Error:` + session_id; RO phases map to `file` without `--yolo` (web opt-in `PI_TASKFLOW_HERMES_READONLY_WEB`); snippet no longer defaults YOLO=1; macOS flaky terminal-grace test timings loosened.

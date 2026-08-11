@@ -57,7 +57,32 @@ test("hermes toolsets: read-only → search (no file write); web opt-in; empty m
 	assert.equal(resolveHermesToolsets(["read"], true, { readonlyWeb: true }), "web,search");
 	assert.equal(resolveHermesToolsets(undefined, false), "file,terminal,web,search");
 	assert.equal(resolveHermesToolsets(["bash", "read"], false), "file,terminal");
-	assert.equal(resolveHermesToolsets(["totally-unknown"], false), "file,terminal,web,search");
+	assert.equal(resolveHermesToolsets(["skill_manage"], false), "skills");
+	assert.equal(resolveHermesToolsets(["delegate_task"], false), "delegation");
+	assert.throws(() => resolveHermesToolsets(["totally-unknown"], false), /did not map/);
+});
+
+test("hermes env: strips YOLO, prefill injection, AWS; keeps HERMES_HOME + provider", () => {
+	const env = hermesChildEnv({
+		PATH: "/bin",
+		HOME: "/home/test",
+		HERMES_HOME: "/home/test/.hermes",
+		HERMES_YOLO_MODE: "1",
+		HERMES_ACCEPT_HOOKS: "1",
+		HERMES_EPHEMERAL_SYSTEM_PROMPT: "inject",
+		HERMES_PREFILL_MESSAGES_FILE: "/tmp/x",
+		XAI_API_KEY: "provider",
+		AWS_SECRET_ACCESS_KEY: "cloud",
+		DATABASE_URL: "secret",
+	});
+	assert.equal(env.XAI_API_KEY, "provider");
+	assert.equal(env.HERMES_HOME, "/home/test/.hermes");
+	assert.equal(env.HERMES_YOLO_MODE, undefined);
+	assert.equal(env.HERMES_ACCEPT_HOOKS, undefined);
+	assert.equal(env.HERMES_EPHEMERAL_SYSTEM_PROMPT, undefined);
+	assert.equal(env.HERMES_PREFILL_MESSAGES_FILE, undefined);
+	assert.equal(env.AWS_SECRET_ACCESS_KEY, undefined);
+	assert.equal(env.DATABASE_URL, undefined);
 });
 
 // --- model / reasoning ------------------------------------------------------
@@ -165,21 +190,4 @@ test("hermes argv: system prompt prepended to -q body", () => {
 	const q = args[args.indexOf("-q") + 1] as string;
 	assert.match(q, /You are careful/);
 	assert.match(q, /Task: count files/);
-});
-
-test("hermes env: keeps provider/hermes home and drops YOLO / unrelated secrets", () => {
-	const env = hermesChildEnv({
-		PATH: "/bin",
-		HOME: "/home/test",
-		HERMES_HOME: "/home/test/.hermes",
-		HERMES_YOLO_MODE: "1",
-		HERMES_ACCEPT_HOOKS: "1",
-		XAI_API_KEY: "provider",
-		DATABASE_URL: "secret",
-	});
-	assert.equal(env.XAI_API_KEY, "provider");
-	assert.equal(env.HERMES_HOME, "/home/test/.hermes");
-	assert.equal(env.HERMES_YOLO_MODE, undefined);
-	assert.equal(env.HERMES_ACCEPT_HOOKS, undefined);
-	assert.equal(env.DATABASE_URL, undefined);
 });

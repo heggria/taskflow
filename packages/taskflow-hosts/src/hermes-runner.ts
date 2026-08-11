@@ -62,13 +62,20 @@ const HERMES_CHILD_DENY = new Set([
 	// Avoid inheriting gateway/session routing that is irrelevant to one-shot children.
 	"HERMES_GATEWAY_TOKEN",
 	"HERMES_API_SERVER_KEY",
+	// Prompt/control-plane injection — never let parent gateway steer children.
+	"HERMES_PREFILL_MESSAGES_FILE",
+	"HERMES_EPHEMERAL_SYSTEM_PROMPT",
+	"HERMES_EXTRA_SYSTEM_PROMPT",
+	"HERMES_SYSTEM_PROMPT",
+	"HERMES_SAFE_MODE",
+	"HERMES_MAX_ITERATIONS",
 ]);
 
 /**
  * Build a least-privilege env for a Hermes child.
  * Keeps provider credentials + HERMES_HOME (for .env auth), but strips YOLO and
  * other process-scoped bypass flags so parent gateway yolo cannot silently arm
- * a read-only phase.
+ * a read-only phase. Also strips prompt-injection HERMES_* control vars.
  */
 export function hermesChildEnv(
 	source: NodeJS.ProcessEnv = process.env,
@@ -87,13 +94,21 @@ export function hermesChildEnv(
 			"GROQ_",
 			"MISTRAL_",
 			"COHERE_",
-			"AWS_",
-			"AZURE_",
 			"DEEPSEEK_",
+			// Intentionally omit AWS_/AZURE_ — cloud control-plane keys are too
+			// broad for YOLO children; operators can PI_TASKFLOW_CHILD_ENV_ALLOW.
 		],
 	);
 	for (const key of Object.keys(filtered)) {
-		if (HERMES_CHILD_DENY.has(key.toUpperCase()) || HERMES_CHILD_DENY.has(key)) {
+		const upper = key.toUpperCase();
+		if (HERMES_CHILD_DENY.has(upper) || HERMES_CHILD_DENY.has(key)) {
+			delete filtered[key];
+		}
+		// Strip any HERMES_* prompt/prefill control surface by substring.
+		if (
+			upper.startsWith("HERMES_") &&
+			/(PREFILL|EPHEMERAL|SYSTEM_PROMPT|YOLO|ACCEPT_HOOKS|GATEWAY|API_SERVER)/.test(upper)
+		) {
 			delete filtered[key];
 		}
 	}
@@ -202,9 +217,10 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
  *     not approval-gated for ordinary workspace paths). Default RO is `search`
  *     only (web_search, no extract). Opt-in network: PI_TASKFLOW_HERMES_READONLY_WEB=1
  *     → `web,search`. Local disk read is unavailable under true RO on Hermes.
- *   - mutating with explicit tools → union of matching toolsets
- *   - default / empty → file,terminal,web,search (NOT full `coding`)
- *   - unknown aliases are ignored (never fail-open to `coding`)
+ *   - mutating with explicit tools → union of matching toolsets (narrow)
+ *   - default / empty tools → file,terminal,web,search (NOT full `coding`)
+ *   - unknown / unmapped aliases: ignored if something else mapped; if NOTHING
+ *     mapped from a non-empty tools list → throw (never fail-open to wide default)
  */
 export function resolveHermesToolsets(
 	tools: string[] | undefined,
@@ -254,12 +270,43 @@ export function resolveHermesToolsets(
 			case "browser_navigate":
 				sets.add("browser");
 				break;
+			case "skill_manage":
+			case "skills":
+				sets.add("skills");
+				break;
+			case "delegate_task":
+			case "delegation":
+				sets.add("delegation");
+				break;
+			case "memory":
+				sets.add("memory");
+				break;
+			case "cronjob":
+				sets.add("cronjob");
+				break;
+			case "text_to_speech":
+			case "tts":
+				sets.add("tts");
+				break;
+			case "computer_use":
+				sets.add("computer_use");
+				break;
+			case "session_search":
+				sets.add("session_search");
+				break;
 			default:
 				// Unknown aliases: ignore. Never expand to full `coding`.
 				break;
 		}
 	}
-	if (sets.size === 0) return "file,terminal,web,search";
+	if (sets.size === 0) {
+		// Explicit tools that mapped to nothing must not silently widen to the
+		// default mutating surface (file+terminal+web).
+		throw new Error(
+			`Hermes tool whitelist [${tools.join(", ")}] did not map to any Hermes toolset. ` +
+				`Use known aliases (read/write/bash/web/…) or omit tools for the default coding surface.`,
+		);
+	}
 	return [...sets].sort().join(",");
 }
 
@@ -453,22 +500,27 @@ export async function runHermesAgentTask(
 
 	// Prefer provider Error: lines from stderr over core's generic empty-output
 	// message. Core may have already flipped exitCode 0→1 with a placeholder.
+	// Never rewrite abort / idle-timeout diagnostics.
 	if (!acc.finalText.trim()) {
 		const stderr = result.stderr ?? "";
-		const errLine =
-			stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim();
+		const errLine = stderr.match(/^\s*Error:\s*(.+)$/im)?.[1]?.trim();
 		const sessionNote = acc.sessionId ? ` (session_id=${acc.sessionId})` : "";
+		const preservedStop =
+			result.stopReason === "aborted" ||
+			result.completionSource === "abort" ||
+			result.completionSource === "idle-timeout" ||
+			result.idleTimeout === true;
 		const genericEmpty =
 			!result.errorMessage ||
 			/without a final output/i.test(result.errorMessage) ||
 			result.errorMessage === UPSTREAM_ERROR_PLACEHOLDER;
-		const mayUpgradeProviderError =
-			genericEmpty &&
-			result.stopReason !== "aborted" &&
-			result.stopReason !== "idle-timeout" &&
-			result.completionSource !== "abort" &&
-			result.completionSource !== "idle-timeout";
-		if (errLine && mayUpgradeProviderError) {
+		const mayUpgradeProviderError = genericEmpty && !preservedStop;
+		if (preservedStop) {
+			// Keep core stopReason / errorMessage; optionally annotate session id.
+			if (acc.sessionId && result.errorMessage && !result.errorMessage.includes("session_id=")) {
+				result.errorMessage = sanitizeErrorMessage(`${result.errorMessage}${sessionNote}`);
+			}
+		} else if (errLine && mayUpgradeProviderError) {
 			result.exitCode = result.exitCode || 1;
 			result.stopReason = result.stopReason === "end" ? "error" : (result.stopReason ?? "error");
 			result.errorMessage = sanitizeErrorMessage(`${errLine}${sessionNote}`);
