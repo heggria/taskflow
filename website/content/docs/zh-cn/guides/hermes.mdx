@@ -51,9 +51,12 @@ cp -R packages/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskflow
 
 | Phase | 行为 |
 |-------|------|
-| 只读 whitelist | `-t search` (无 file; READONLY_WEB=1 → web,search) |
+| 子进程隔离 | 始终 `--safe-mode`（无父级 config / rules / plugins / MCP） |
+| 只读 whitelist | `-t search` only；`READONLY_WEB=1` → `web,search`（Hermes `file` 可写，RO 不用） |
 | 会改环境 | 必须 `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
 | 带 budget 的 flow | **拒绝执行**（quiet 模式无 token/cost） |
+
+**安装坑：** MCP 的 `env:` 写在 `config.yaml`，不要依赖 `hermes mcp add … --env` 塞进 node argv。
 
 ## 下一步
 

@@ -8,11 +8,14 @@
  *     taskflow:
  *       command: "npx"
  *       args: ["-y", "-p", "hermes-taskflow", "hermes-taskflow-mcp"]
- *       # Mutating agent phases need explicit yolo opt-in in the MCP env:
  *       env:
- *         PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"
+ *         # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # only if you need mutating agents
+ *         # PI_TASKFLOW_HERMES_READONLY_WEB: "1"  # RO phases may web_extract
  *
- * Or via CLI:
+ * Prefer writing `env:` in config.yaml. Do not rely on `hermes mcp add … --env`
+ * stuffing flags into the node argv list.
+ *
+ * Or via CLI (no env):
  *   hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
  *
  * From a checkout of this repo (after `pnpm run build`):
@@ -21,7 +24,7 @@
  *
  * Hermes then launches this as a stdio MCP server and the taskflow_* tools
  * become available (prefixed mcp_taskflow_*). Each subagent runs as an
- * isolated `hermes chat -q -Q` session. This file ships compiled to
+ * isolated `hermes chat -q -Q --safe-mode` session. This file ships compiled to
  * dist/mcp/bin.js, so no `--experimental-strip-types` flag is needed.
  */
 

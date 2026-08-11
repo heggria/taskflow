@@ -369,10 +369,11 @@ Grok Build support is new in 0.2. Its CLI stream does not report token/cost usag
 
 ```bash
 hermes mcp add taskflow -- npx -y -p hermes-taskflow hermes-taskflow-mcp
-# mutating agent phases need PI_TASKFLOW_HERMES_UNSAFE_YOLO=1 on the MCP env
+# Prefer env in config.yaml (not CLI --env after args — can be stuffed into argv):
+#   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
 ```
 
-Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
+Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents run with `--safe-mode` (no parent MCP/config/rules). Read-only phases use `-t search` only — Hermes has no write-less local file toolset.
 
 [Hermes guide →](./docs/hermes-mcp.md)
 

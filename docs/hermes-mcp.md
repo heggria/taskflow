@@ -40,9 +40,10 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 | Concern | Behavior |
 |---------|----------|
 | Control plane | Full `taskflow_*` MCP roster (run, plan, verify, compile, resume, …) |
-| Execution | Each agent phase: `hermes chat -q <prompt> -Q --source tool` |
-| Read-only phases | `-t search` (no file/terminal; READONLY_WEB=1 → web,search) |
+| Execution | Each agent phase: `hermes chat -q … -Q --source tool --safe-mode` |
+| Read-only phases | `-t search` (no file/terminal; `READONLY_WEB=1` → web,search) |
 | Mutating phases | Requires `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` → `--yolo` |
+| Isolation | `--safe-mode` (no parent config / rules / plugins / MCP recursion) |
 | Session hygiene | `--source tool` keeps integration runs out of the main user session list |
 
 ## Env knobs
@@ -50,9 +51,10 @@ cp -R node_modules/hermes-taskflow/plugin/skills/taskflow ~/.hermes/skills/taskf
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `PI_TASKFLOW_HERMES_UNSAFE_YOLO` | unset | Must be `1` for mutating/default-capable phases |
+| `PI_TASKFLOW_HERMES_READONLY_WEB` | unset | `1` adds web+search on read-only phases |
 | `PI_TASKFLOW_HERMES_MAX_TURNS` | `64` | Child `--max-turns` |
 | `PI_TASKFLOW_HERMES_BIN` | `hermes` | Binary override |
-| `HERMES_HOME` | inherited | Profile / credentials home for child hermes |
+| `HERMES_HOME` | inherited | Profile / credentials home for child hermes (`.env` still loaded under `--safe-mode`) |
 
 ## Dogfood from a checkout
 

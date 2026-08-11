@@ -115,8 +115,8 @@ test("hermes argv: starts with chat -q <prompt> -Q --source tool and isolation f
 	const src = args.indexOf("--source");
 	assert.ok(src >= 0);
 	assert.equal(args[src + 1], "tool");
-	assert.ok(args.includes("--ignore-user-config"));
-	assert.ok(args.includes("--ignore-rules"));
+	assert.ok(args.includes("--safe-mode"));
+	// --safe-mode implies ignore-user-config/ignore-rules; we do not double-list them.
 	assert.ok(args.includes("-t"));
 	assert.ok(args.includes("--max-turns"));
 });

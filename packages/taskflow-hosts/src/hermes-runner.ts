@@ -20,7 +20,7 @@
  *     Hermes cannot express write-less local file tools — do not attach `file`.
  *   - mutating / default-capable → requires explicit
  *     `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1` and passes `--yolo`
- *   - children always get `--ignore-user-config --ignore-rules`
+ *   - children always get `--safe-mode` (no parent config/rules/plugins/MCP)
  *
  * Quiet mode (`-Q`): answer on stdout; `session_id:` on stderr.
  * Process handling (idle watchdog, abort, signal-kill, stderr cap, sanitize)
@@ -182,9 +182,16 @@ export function isHermesReadOnlyPhase(tools: string[] | undefined): boolean {
 		"write_file",
 		"patch",
 		"execute_code",
+		"code_execution",
 		"delegate_task",
 		"computer_use",
 		"skill_manage",
+		"memory",
+		"browser",
+		"browser_navigate",
+		"cronjob",
+		"send_message",
+		"text_to_speech",
 	]);
 	return !tools.some((t) => mutating.has(t));
 }
@@ -313,12 +320,13 @@ export interface HermesArgs {
  * Build the full `hermes chat` argv — PURE (no process.env, no spawn).
  *
  *   hermes chat -q <prompt> -Q --source tool
- *     --ignore-user-config --ignore-rules
+ *     --safe-mode
  *     [--in cwd] [-m model] [-t toolsets] [--reasoning level]
  *     [--max-turns N] [--yolo]
  *
- * Isolation: --ignore-user-config skips parent mcp_servers / config.yaml so a
- * child cannot recurse into taskflow MCP or inherit gateway tool policy.
+ * Isolation: `--safe-mode` disables user config, rules, plugins, and MCP
+ * (implies --ignore-user-config and --ignore-rules) so a child cannot recurse
+ * into taskflow MCP or inherit gateway tool policy.
  * Credentials still load from HERMES_HOME/.env (Hermes CLI contract).
  */
 export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
@@ -346,8 +354,7 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 		"--source",
 		"tool", // third-party integrations — hide from user session lists
 		// Isolate from parent Hermes profile policy / MCP / memory injection.
-		"--ignore-user-config",
-		"--ignore-rules",
+		"--safe-mode",
 		"-t",
 		toolsets,
 		"--max-turns",
