@@ -251,9 +251,9 @@ advances its generation; it does not restore files or certify them as correct.
 
 Via the tool: `{ "action": "run", "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 Via the MCP tool: `taskflow_run` with `{ "name": "audit-endpoints", "args": { "dir": "packages/api" } }`.
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ---
 
@@ -321,12 +321,12 @@ Notes:
 <!-- /host:codex -->
 <!-- host:claude -->
 - Each phase runs as an isolated `claude -p --output-format stream-json`
-  session (Claude Code 2.1.169 or newer is required for `--safe-mode`). A model
+  session (Claude Code 2.1.169 or newer is required for `--ignore-rules` + ephemeral HERMES_HOME). A model
   id that still looks like a pi-provider path (contains `/`)
   or an unresolved `{{placeholder}}` is dropped so claude falls back to its
   configured default. Known read-only requests — including an omitted tool
   list — get matching `--tools` and `--allowedTools` lists, and an explicit
-  request stays narrow. `--safe-mode` disables non-managed project/user
+  request stays narrow. `--ignore-rules` + ephemeral HERMES_HOME disables non-managed project/user
   customizations; disk setting sources and non-managed hooks are disabled as
   defense in depth. Administrator-managed policy hooks may still run. Known
   mutating tools are rejected by default because headless Claude has no OS
@@ -380,8 +380,31 @@ Notes:
   Children inherit only platform/proxy/CA and Grok/xAI/Taskflow-Grok variables;
   unrelated secrets are removed.
 <!-- /host:grok -->
+<!-- host:hermes -->
+- Each phase runs as an isolated `hermes chat -q <prompt> -Q --source tool`
+  session. Quiet mode writes the final answer to stdout and `session_id:`
+  metadata to stderr; stdout is preserved verbatim, including blank lines and
+  answer text that happens to begin with `session_id:`. Unresolved `{{placeholder}}`s are dropped;
+  pi thinking suffixes (`:xhigh`) are stripped from `-m`. Effective thinking
+  maps to `--reasoning` (`off` → `none`). Read-only phases use
+  local-read tools → `taskflow_readonly_files` (read_file+search_files). Opt-in network via
+  `PI_TASKFLOW_HERMES_READONLY_WEB=1` → `web,search`. Never attach Hermes `file`
+  under RO (writable). Children use ephemeral HERMES_HOME with an inference-only
+  filtered `auth.json`, an exact inference-provider dotenv allowlist, non-secret
+  model/fallback routing, and no parent skills/MCP/memory; both `read_file` and
+  `search_files` are confined to the resolved phase cwd. Mutating/default-capable
+  phases fail closed unless `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables
+  `--yolo`; their default surface is local `file,terminal`, while explicit web
+  aliases may add `web`. Delegation, skills, memory, browser, cron, and other
+  control-plane toolsets are denied in 0.2.9. Optional
+  `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
+  does not stream token/cost accounting, so budgeted flows fail closed at the
+  MCP adapter the same way other non-accounting hosts do when costs are
+  unobservable. Children inherit only platform/proxy/CA and common provider
+  variables; generic `HERMES_*` control-plane state and unrelated secrets are removed.
+<!-- /host:hermes -->
 
-For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
 comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.

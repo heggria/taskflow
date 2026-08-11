@@ -641,7 +641,10 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	// ---- Register per-saved-flow shortcut commands on session start ----
+	// Cached for /tf argument completions (getArgumentCompletions has no ctx).
+	let completionCwd: string | undefined;
 	const registerSavedFlowCommands = (ctx: ExtensionContext) => {
+		completionCwd = ctx.cwd;
 		const flows = listFlows(ctx.cwd);
 		for (const flow of flows) {
 			const cmdName = `tf:${flow.name}`;
@@ -1642,16 +1645,37 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- The /tf user command ----
 	pi.registerCommand("tf", {
-		description: "Taskflow: list | run <name> | show <name> | compile <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
+		description: "Taskflow: list | run <name> | show <name> | verify <name> | compile <name> | plan <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
 		getArgumentCompletions: (prefix) => {
 			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
+			// Name-taking subcommands: complete saved flow names after the sub (cwd from session_start).
+			const nameSubs = new Set(["run", "show", "verify", "compile", "plan", "analytics", "ir"]);
+			const trimmed = prefix.trimStart();
+			const space = trimmed.indexOf(" ");
+			if (space >= 0) {
+				const sub = trimmed.slice(0, space);
+				const namePrefix = trimmed.slice(space + 1).trimStart();
+				if (nameSubs.has(sub) && completionCwd !== undefined) {
+					const flows = listFlows(completionCwd);
+					const items = flows
+						.filter((f) => f.name.startsWith(namePrefix))
+						.map((f) => ({ value: `${sub} ${f.name}`, label: f.name }));
+					return items.length > 0 ? items : null;
+				}
+			}
 			const items = subs.map((s) => ({ value: s, label: s }));
-			const filtered = items.filter((i) => i.value.startsWith(prefix));
+			const filtered = items.filter((i) => i.value.startsWith(trimmed));
 			return filtered.length > 0 ? filtered : null;
 		},
 		handler: async (argStr, ctx) => {
-			const [sub, ...rest] = argStr.trim().split(/\s+/);
-			const arg = rest.join(" ");
+			completionCwd = ctx.cwd;
+			const trimmedArg = argStr.trim();
+			const separator = trimmedArg.search(/\s/u);
+			const sub = separator < 0 ? trimmedArg : trimmedArg.slice(0, separator);
+			// Preserve the selected flow name verbatim after the command separator;
+			// autocomplete may return legal names with repeated/Unicode whitespace.
+			const arg = separator < 0 ? "" : trimmedArg.slice(separator).trim();
+			const rest = arg ? arg.split(/\s+/u) : [];
 
 			if (!sub || sub === "list") {
 				const flows = listFlows(ctx.cwd);
@@ -1709,6 +1733,64 @@ export default function (pi: ExtensionAPI) {
 				} else {
 					ctx.ui.notify(JSON.stringify(flow.def, null, 2), "info");
 				}
+				return;
+			}
+
+			if (sub === "verify") {
+				if (!arg) {
+					ctx.ui.notify("Usage: /tf verify <name>", "warning");
+					return;
+				}
+				const flowName = arg;
+				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
+				if (!flowR.ok) {
+					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");
+					return;
+				}
+				const flow = flowR.value;
+				// Schema-validate first so a malformed saved flow yields a clean error
+				// (mirrors action=verify on the taskflow tool).
+				const vr = validateTaskflow(flow.def, { cwd: ctx.cwd ? String(ctx.cwd) : undefined });
+				if (!vr.ok) {
+					ctx.ui.notify(`Schema validation failed:\n${vr.errors.join("\n")}`, "error");
+					return;
+				}
+				const { verifyTaskflow } = await import("taskflow-core");
+				const result = verifyTaskflow({
+					name: flow.def.name!,
+					phases: flow.def.phases!,
+					budget: flow.def.budget,
+					concurrency: flow.def.concurrency,
+				});
+				const lines: string[] = [];
+				lines.push(`# Verification of "${flow.def.name}"`);
+				lines.push("");
+				if (result.issues.length === 0) {
+					lines.push("✅ No issues found.");
+				} else {
+					const errors = result.issues.filter((i) => i.severity === "error");
+					const warnings = result.issues.filter((i) => i.severity === "warning");
+					if (errors.length) {
+						lines.push(`## Errors (${errors.length})`);
+						for (const e of errors) lines.push(`- **${e.category}**${e.phaseId ? ` [${e.phaseId}]` : ""}: ${e.message}`);
+					}
+					if (warnings.length) {
+						lines.push(`## Warnings (${warnings.length})`);
+						for (const w of warnings) lines.push(`- ${w.category}${w.phaseId ? ` [${w.phaseId}]` : ""}: ${w.message}`);
+					}
+					lines.push("");
+					lines.push(result.ok ? "Status: PASS (no errors)" : "Status: FAIL (errors found)");
+				}
+				ctx.ui.notify(lines.join("\n"), result.ok ? "info" : "warning");
+				return;
+			}
+
+	if (sub === "save") {
+				// Saving needs an inline DSL body; that path stays on the taskflow tool.
+				ctx.ui.notify(
+					"Usage: save via the taskflow tool with action=\"save\" and define={...} (optionally purpose/tags/scope).\nThere is no standalone /tf save <name> path — the slash command only runs control-plane actions on already-saved flows.",
+					"warning",
+				);
 				return;
 			}
 

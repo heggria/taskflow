@@ -65,6 +65,7 @@ jobs:
         run: pnpm test
 
   e2e:
+    # Required status context: keep this literal stable; the job now covers all MCP hosts.
     name: e2e (codex MCP, network-free)
     runs-on: ubuntu-latest
     steps:
@@ -116,6 +117,10 @@ jobs:
       - name: Grok MCP e2e (stdio handshake + tool calls)
         run: pnpm run test:e2e-grok-mcp
 
+      # Hermes MCP uses the same network-free stdio handshake/tool-call contract.
+      - name: Hermes MCP e2e (stdio handshake + tool calls)
+        run: pnpm run test:e2e-hermes-mcp
+
   build:
     name: build (dist emit)
     runs-on: ubuntu-latest
@@ -139,7 +144,7 @@ jobs:
         run: pnpm run build
 
   packed-consumer:
-    name: packed consumer (9 packages)
+    name: packed consumer (10 packages)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

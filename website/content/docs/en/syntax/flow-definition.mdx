@@ -227,7 +227,7 @@ A few rules govern how `incremental` interacts with per-phase settings:
 
 ## Share context between phases: `contextSharing`
 
-When several phases read the same files, you can opt them all into the Shared Context Tree with a single flag. `contextSharing: true` is shorthand for `shareContext: true` on every phase. In 0.2.0, the Pi adapter injects `ctx_read`/`ctx_write` and `ctx_report`/`ctx_spawn`; Codex, Claude, OpenCode, and Grok runners do not inject these tools yet. Individual phases can still opt out with `shareContext: false`.
+When several phases read the same files, you can opt them all into the Shared Context Tree with a single flag. `contextSharing: true` is shorthand for `shareContext: true` on every phase. In 0.2.0, the Pi adapter injects `ctx_read`/`ctx_write` and `ctx_report`/`ctx_spawn`; Codex, Claude, OpenCode, Grok, and Hermes runners do not inject these tools yet. Individual phases can still opt out with `shareContext: false`.
 
 ```json title="Context sharing on"
 {

@@ -6,6 +6,7 @@
 //   entry.claude.md  — claude frontmatter + MCP tool table preamble
 //   entry.opencode.md— opencode frontmatter + MCP tool table preamble
 //   entry.grok.md    — grok frontmatter + MCP tool table preamble
+//   entry.hermes.md  — hermes frontmatter + MCP tool table preamble
 //   core.md          — the shared body (host-conditional blocks allowed)
 //   patterns.md, advanced.md, configuration.md — shared companions
 //
@@ -21,6 +22,7 @@
 //   packages/claude-taskflow/plugin/skills/taskflow/{…same four…}
 //   packages/opencode-taskflow/plugin/skills/taskflow/{…same four…}
 //   packages/grok-taskflow/plugin/skills/taskflow/{…same four…}
+//   packages/hermes-taskflow/plugin/skills/taskflow/{…same four…}
 //
 // Usage: node scripts/build-skills.mjs [--check]
 //   --check: exit 1 if any generated file differs from what's on disk.
@@ -33,7 +35,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
 const srcDir = join(root, "skills-src", "taskflow");
 
-const HOSTS = ["pi", "codex", "claude", "opencode", "grok"];
+const HOSTS = ["pi", "codex", "claude", "opencode", "grok", "hermes"];
 const COMPANIONS = ["patterns.md", "advanced.md", "configuration.md", "library.md"];
 const OUT_DIRS = {
 	pi: join(root, "packages", "pi-taskflow", "skills", "taskflow"),
@@ -41,6 +43,7 @@ const OUT_DIRS = {
 	claude: join(root, "packages", "claude-taskflow", "plugin", "skills", "taskflow"),
 	opencode: join(root, "packages", "opencode-taskflow", "plugin", "skills", "taskflow"),
 	grok: join(root, "packages", "grok-taskflow", "plugin", "skills", "taskflow"),
+	hermes: join(root, "packages", "hermes-taskflow", "plugin", "skills", "taskflow"),
 };
 
 const GENERATED_BANNER = (src) =>

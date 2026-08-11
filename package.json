@@ -1,6 +1,6 @@
 {
 	"name": "pi-taskflow-monorepo",
-	"version": "0.2.8",
+	"version": "0.2.9",
 	"private": true,
 	"description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the private CharterArc experiment.",
 	"type": "module",
@@ -9,7 +9,7 @@
 	},
 	"packageManager": "pnpm@11.17.0",
 	"scripts": {
-		"build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter charterarc build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build",
+		"build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter charterarc build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build && pnpm --filter hermes-taskflow build",
 		"build:website": "cd website && npm run build",
 		"build:skills": "node scripts/build-skills.mjs",
 		"test:pack": "pnpm run build && node scripts/smoke-packed-packages.mjs",
@@ -37,7 +37,9 @@
 		"test:e2e-opencode-mcp": "node --conditions=development --experimental-strip-types packages/opencode-taskflow/test/e2e-opencode-mcp.mts",
 		"test:e2e-grok": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok.mts",
 		"test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts",
-		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts"
+		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts",
+		"test:hermes": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/hermes-taskflow/test/*.test.ts'",
+		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-agent-core": "^0.83.0",

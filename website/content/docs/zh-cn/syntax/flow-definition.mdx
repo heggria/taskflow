@@ -227,7 +227,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 ## 在阶段间共享上下文：`contextSharing`
 
-当多个阶段读同样的文件时，你可以用一个标志把它们统统纳入共享上下文树。`contextSharing: true` 是在每个阶段上设 `shareContext: true` 的简写。0.2.0 中由 Pi adapter 注入 `ctx_read`/`ctx_write` 和 `ctx_report`/`ctx_spawn`；Codex、Claude、OpenCode 与 Grok runner 暂不注入这些工具。个别阶段仍可用 `shareContext: false` 退出。
+当多个阶段读同样的文件时，你可以用一个标志把它们统统纳入共享上下文树。`contextSharing: true` 是在每个阶段上设 `shareContext: true` 的简写。0.2.0 中由 Pi adapter 注入 `ctx_read`/`ctx_write` 和 `ctx_report`/`ctx_spawn`；Codex、Claude、OpenCode、Grok 与 Hermes runner 暂不注入这些工具。个别阶段仍可用 `shareContext: false` 退出。
 
 ```json title="开启上下文共享"
 {

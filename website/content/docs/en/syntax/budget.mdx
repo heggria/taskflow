@@ -62,7 +62,7 @@ Host support follows the usage data each CLI exposes:
 |---|---|
 | Pi, Claude Code, OpenCode | `maxUSD` and/or `maxTokens` |
 | Codex | `maxTokens` only; `maxUSD` is rejected because Codex reports no cost |
-| Grok Build 0.2.93 | None; every flow declaring `budget` is rejected because Grok reports neither tokens nor cost |
+| Grok Build 0.2.93, Hermes Agent | None; every flow declaring `budget` is rejected because these quiet-mode runners report neither tokens nor cost |
 
 The schema rejects unknown keys (`additionalProperties: false`). An empty `budget: {}` is valid but a no-op — at least one of `maxUSD` / `maxTokens` should be set.
 

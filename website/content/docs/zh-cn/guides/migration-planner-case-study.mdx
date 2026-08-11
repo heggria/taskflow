@@ -8,7 +8,7 @@ description: 在运行时规划迁移、验证计划、执行它，并循环到�
 本指南构建一个 taskflow 来安全地完成这次迁移。我们从一个一次性的"发现+规划"开始，加一个 gate 对计划做健全性检查，通过生成的子 flow 执行计划，最后用一个循环重新规划，直到旧的调用彻底消失。读完之后，你会得到一个完整、可保存的 flow，可以指向任何机械式迁移。
 
 <Callout type="info">
-  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode / Grok Build（`taskflow_run`）上的行为完全一致。宿主安装见 [Pi](/zh-cn/docs/guides/pi)、[Codex](/zh-cn/docs/guides/codex)、[Claude Code](/zh-cn/docs/guides/claude-code)、[OpenCode](/zh-cn/docs/guides/opencode) 或 [Grok Build](/zh-cn/docs/guides/grok-build) 指南。
+  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode / Grok Build / Hermes Agent（`taskflow_run`）上的行为完全一致。宿主安装见 [Pi](/zh-cn/docs/guides/pi)、[Codex](/zh-cn/docs/guides/codex)、[Claude Code](/zh-cn/docs/guides/claude-code)、[OpenCode](/zh-cn/docs/guides/opencode)、[Grok Build](/zh-cn/docs/guides/grok-build) 或 [Hermes Agent](/zh-cn/docs/guides/hermes) 指南。
 </Callout>
 
 ## 问题

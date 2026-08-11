@@ -299,7 +299,7 @@ Notes:
 - Each phase runs as an isolated process:
   `pi --mode json -p --no-session [--model …] [--thinking …] [--tools …] [--append-system-prompt <agent>] "Task: …"`.
 
-For Codex, OpenCode, or Grok, an operator can intentionally pass additional
+For Codex, OpenCode, Grok, or Hermes, an operator can intentionally pass additional
 task-specific environment variables by listing their names in the
 comma-separated `PI_TASKFLOW_CHILD_ENV_ALLOW` setting.
 - The agent's markdown body becomes the subagent's appended system prompt.

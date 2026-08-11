@@ -62,7 +62,7 @@ description: 基于已上报用量的运行级成本与 token 止损线。
 |---|---|
 | Pi、Claude Code、OpenCode | `maxUSD` 和/或 `maxTokens` |
 | Codex | 只支持 `maxTokens`；Codex 不上报 cost，因此拒绝 `maxUSD` |
-| Grok Build 0.2.93 | 全部不支持；Grok 不上报 token 或 cost，因此拒绝任何声明了 `budget` 的 flow |
+| Grok Build 0.2.93、Hermes Agent | 全部不支持；这些 quiet-mode runner 不上报 token 或 cost，因此拒绝任何声明了 `budget` 的 flow |
 
 schema 拒绝未知键（`additionalProperties: false`）。空的 `budget: {}` 合法但是空操作 —— `maxUSD` / `maxTokens` 至少应设置一个。
 

@@ -6,12 +6,12 @@ runtime-generated work (`flow{def}` / `ctx_spawn`), isolated working
 directories, or surgical re-execution after the world changes
 (`ir` / `provenance` / `why-stale` / `recompute`).
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 # Taskflow Advanced — dynamic sub-flows & workspace isolation
 
 Load this when a flow needs: runtime-generated work (`flow{def}` / `expand`) or
 isolated working directories (`cwd: temp/dedicated/worktree`).
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 ---
 
@@ -317,7 +317,7 @@ taskflow { action: "trace", runId: "<id>", json: true }   // full machine record
 /tf trace <runId> [--json]
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 ```
 taskflow_trace { runId: "<id>" }
 taskflow_trace { runId: "<id>", json: true }
@@ -326,7 +326,7 @@ taskflow_trace { runId: "<id>", json: true }
 MCP trace responses are bounded. JSON mode returns an envelope with
 `total`/`returned`/`truncated`; use `limit` (default 200, max 1000) to select the
 newest events without flooding the host context.
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 If there is no log (pre-trace run, or no sink injected), the tool reports that
 clearly — it never invents events.
@@ -351,12 +351,12 @@ taskflow { action: "replay", runId: "<id>", budgetMaxUSD: 0.05, json: true }
 /tf replay <runId> --threshold review=0.9 --budget-usd 0.05 [--json]
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 ```
 taskflow_replay { runId: "<id>", thresholds: { review: 0.9 } }
 taskflow_replay { runId: "<id>", budgetMaxUSD: 0.05, json: true }
 ```
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 **Import-graph guarantee:** `replayRun` never imports the process-spawning
 runtime or event kernel — offline replay cannot accidentally spend tokens.
@@ -399,7 +399,7 @@ passes the normal Taskflow validator (so a bad ref is caught before re-run).
 Without overrides, ordinary resume forks a new run and re-runs the non-done
 (failed/paused) phases.
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 ---
 
 ## Resume overrides (re-run one phase with a patch)
@@ -418,7 +418,7 @@ taskflow_resume { runId: "<id>", phaseId: "audit",
 
 The overrides apply to the child's def only; the parent is untouched. Without
 overrides, ordinary resume re-runs the non-done phases.
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 <!-- host:pi -->
 ---
@@ -434,7 +434,7 @@ taskflow { action: "version" }
 /tf version
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok -->
+<!-- host:codex,claude,opencode,grok,hermes -->
 ---
 
 ## Pluggable verifiers — zero-token custom static checks
@@ -491,12 +491,12 @@ are covered by `taskflow_verify`; `taskflow_lint` reports only plugin findings.
 
 `taskflow_version` reports the engine package version, the git commit the dist
 was built from, the run-state schema version, and the bound host
-(`codex`/`claude`/`opencode`/`grok`). The git commit is stamped at build time —
+(`codex`/`claude`/`opencode`/`grok`/`hermes`). The git commit is stamped at build time —
 `git` is never run at runtime.
 ```
 taskflow_version {}
 ```
-<!-- /host:codex,claude,opencode,grok -->
+<!-- /host:codex,claude,opencode,grok,hermes -->
 
 <!-- host:pi -->
 ---

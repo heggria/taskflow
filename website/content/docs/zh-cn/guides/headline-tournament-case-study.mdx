@@ -8,7 +8,7 @@ description: 生成多个竞争的标题变体，让裁判挑出最强的一条�
 本指南构建一个 taskflow 来正确地完成标题。我们先从朴素的单智能体基线开始，说明它为什么弱，再用一个 `tournament` 阶段替换它——它扇出四个竞争变体，由裁判选出赢家。读完之后，你会得到一个完整、可保存的 flow，可以在每次发布时运行。
 
 <Callout type="info">
-  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode / Grok Build（`taskflow_run`）上的行为完全一致。宿主安装见 [Pi](/zh-cn/docs/guides/pi)、[Codex](/zh-cn/docs/guides/codex)、[Claude Code](/zh-cn/docs/guides/claude-code)、[OpenCode](/zh-cn/docs/guides/opencode) 或 [Grok Build](/zh-cn/docs/guides/grok-build) 指南。
+  这是一份*模式*指南，不是宿主指南。它在 Pi（`/tf run`）和 Codex / Claude Code / OpenCode / Grok Build / Hermes Agent（`taskflow_run`）上的行为完全一致。宿主安装见 [Pi](/zh-cn/docs/guides/pi)、[Codex](/zh-cn/docs/guides/codex)、[Claude Code](/zh-cn/docs/guides/claude-code)、[OpenCode](/zh-cn/docs/guides/opencode)、[Grok Build](/zh-cn/docs/guides/grok-build) 或 [Hermes Agent](/zh-cn/docs/guides/hermes) 指南。
 </Callout>
 
 ## 问题

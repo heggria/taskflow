@@ -1,9 +1,9 @@
 ## Checklist
 
 - [ ] I opened an issue first and linked it below.
-- [ ] I read [CONTRIBUTING.md](./CONTRIBUTING.md).
-- [ ] `npm run typecheck` passes.
-- [ ] `npm test` passes (394 tests, all green).
+- [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md).
+- [ ] `pnpm run typecheck` passes.
+- [ ] `pnpm test` passes.
 - [ ] I added tests for new behavior.
 - [ ] The diff is focused — one concern per PR.
 - [ ] I signed off my commits (`git commit -s`).

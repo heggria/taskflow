@@ -10,7 +10,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export const HOST_PROBE_HOSTS = ["pi", "codex", "claude", "opencode", "grok"] as const;
+export const HOST_PROBE_HOSTS = ["pi", "codex", "claude", "opencode", "grok", "hermes"] as const;
 export type HostProbeHost = (typeof HOST_PROBE_HOSTS)[number];
 
 export const HOST_PROBE_OSES = ["macos", "linux", "windows"] as const;

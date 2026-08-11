@@ -1,7 +1,7 @@
 {
 	"name": "grok-taskflow",
-	"version": "0.2.8",
-	"description": "Run taskflow on Grok Build: a Grok subagent runner plus an MCP server (and a plug-and-play Grok plugin) that exposes the taskflow_* tools to Grok Build users.",
+	"version": "0.2.9",
+	"description": "Run taskflow on Grok Build: the npm tarball provides the Grok subagent runner and MCP server; the plugin is distributed through the repository marketplace.",
 	"keywords": [
 		"grok",
 		"grok-build",
