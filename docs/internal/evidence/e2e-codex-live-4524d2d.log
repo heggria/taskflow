@@ -1,0 +1,11 @@
+$ node --conditions=development --experimental-strip-types packages/codex-taskflow/test/e2e-codex.mts
+▶ running 3-phase taskflow on codex (real subagents + Trusted Effects)…
+
+[progress]         [progress] pick:running        [progress] pick:running        [progress] pick:running        [progress] pick:running        [progress] pick:done        [progress] pick:done use:running        [progress] pick:done use:running        [progress] pick:done use:running        [progress] pick:done use:running        [progress] pick:done use:done        [progress] pick:done use:done persist:running        [progress] pick:done use:done persist:running        [progress] pick:done use:done persist:running        [progress] pick:done use:done persist:running        [progress] pick:done use:done persist:done        [progress] pick:done use:done persist:done        
+
+✓ run finished in 27.6s — ok=true
+  phase pick.output: "Mango"
+  final output     : "MANGO"
+  total usage      : {"input":56411,"output":18,"cacheRead":29952,"cacheWrite":0,"cost":0,"contextTokens":0,"turns":3}
+
+✅ E2E PASS — live Codex data flowed A→B→C; fs.write committed with ledger-backed authority.
