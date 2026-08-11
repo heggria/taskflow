@@ -1731,12 +1731,12 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-					if (sub === "verify") {
+			if (sub === "verify") {
 				if (!arg) {
 					ctx.ui.notify("Usage: /tf verify <name>", "warning");
 					return;
 				}
-				const flowName = arg.trim().split(/\s+/)[0];
+				const flowName = arg;
 				const flowR = getFlowDiagnosed(ctx.cwd, flowName);
 				if (!flowR.ok) {
 					ctx.ui.notify(describeLoadFailure(flowR, `Flow "${flowName}"`), "error");

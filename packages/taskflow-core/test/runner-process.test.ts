@@ -136,6 +136,31 @@ test("runSubagentProcess: a clean JSON-emitting run classifies as end", async ()
 	assert.match(r.output, /answer/);
 });
 
+test("runSubagentProcess: text stdout preserves blank lines for host folding", async () => {
+	const acc = makeAcc();
+	const seen: string[] = [];
+	const r = await runSubagentProcess({
+		agent: "test",
+		task: "plain",
+		model: undefined,
+		bin: process.execPath,
+		args: ["-e", `process.stdout.write("alpha\\n\\nomega\\n");`],
+		cwd: process.cwd(),
+		stdoutFormat: "text",
+		acc,
+		foldLine: (a, line) => {
+			seen.push(line);
+			if (a.finalText) a.finalText += "\n";
+			a.finalText += line;
+			a.lastActivity = line.trim();
+			return null;
+		},
+	});
+
+	assert.deepEqual(seen, ["alpha", "", "omega"]);
+	assert.equal(r.output, "alpha\n\nomega");
+});
+
 test("runSubagentProcess completion: terminal output with a leaky handle is reaped as success", async () => {
 	const r = await terminalRun(`
 		process.stdout.write(JSON.stringify({type:"final",text:"DONE"})+"\\n");

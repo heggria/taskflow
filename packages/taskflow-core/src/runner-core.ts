@@ -715,7 +715,7 @@ export async function runSubagentProcess<TAcc extends SubagentAccumulator>(
 			terminalTimer.unref();
 		};
 		const processLine = (line: string) => {
-			if (!line.trim() || protocolError) return;
+			if (protocolError || (opts.stdoutFormat !== "text" && !line.trim())) return;
 			// Default hosts advertise a JSON/NDJSON stream. Treat malformed records
 			// as a protocol failure: silently dropping them can turn a truncated
 			// provider error into a successful phase with empty output.

@@ -8,7 +8,7 @@
  * Quiet mode (`-Q`) emits plain text on stdout (final answer).
  * Session id is printed on stderr by Hermes so piped stdout stays clean.
  * Mapping to the host-neutral contract:
- *   - output       = stdout with the leading `session_id:` line stripped
+ *   - output       = stdout answer text (session id is stderr-only metadata)
  *   - lastActivity = last non-empty stdout line
  *   - usage        = unavailable from quiet mode (emptyUsage); budgeted runs
  *                    still fail-closed at the engine when costs are required
@@ -17,7 +17,7 @@
  * Permission mapping:
  *   - read-only + local-read tools → `-t taskflow_readonly_files`
  *     (ephemeral plugin: read_file + search_files only; write_file/patch blocked)
- *   - read-only without local tools → model-only (no `-t`); network opt-in via
+ *   - read-only without local tools → explicit empty model-only `-t`; network opt-in via
  *     PI_TASKFLOW_HERMES_READONLY_WEB=1 → web,search
  *   - mutating / default-capable → requires PI_TASKFLOW_HERMES_UNSAFE_YOLO=1 + `--yolo`
  *   - isolation: ephemeral HERMES_HOME (creds + minimal config + RO plugin) and
@@ -144,10 +144,9 @@ export function newHermesAccumulator(model?: string): HermesAccumulator {
 }
 
 /**
- * Fold one stdout line from `hermes chat -Q`. Strips the leading
- * `session_id: …` meta line Hermes quiet mode prints; everything else is the
- * answer. Empty/whitespace-only lines are ignored for activity but preserved
- * inside the body once content has started.
+ * Fold one stdout line from `hermes chat -Q`. Stdout is answer text; Hermes
+ * session metadata is parsed from stderr after process exit. Empty lines are
+ * ignored for activity but preserved inside the body once content has started.
  */
 export function foldHermesQuietLine(acc: HermesAccumulator, line: string): LiveUpdate | null {
 	// Keep trailing content fidelity: only strip the CR Hermes sometimes leaves.
@@ -158,11 +157,6 @@ export function foldHermesQuietLine(acc: HermesAccumulator, line: string): LiveU
 		return null;
 	}
 
-	const sessionMatch = raw.match(/^session_id:\s*(\S+)\s*$/i);
-	if (sessionMatch) {
-		acc.sessionId = sessionMatch[1];
-		return null;
-	}
 
 	// Quiet mode can occasionally print a warning line to stdout; treat obvious
 	// fatal markers as errors rather than answer text.
@@ -467,11 +461,57 @@ export function buildHermesArgs(ctx: HermesArgsCtx): HermesArgs {
 	return { args, readOnly, toolsets };
 }
 
-/**
- * Credential files + minimal isolation config for an ephemeral HERMES_HOME.
- * Never copy parent skills/, memory, plugins, sessions, or gateway state.
- */
-const HERMES_EPHEMERAL_CREDENTIAL_FILES = [".env", "auth.json"] as const;
+/** OAuth/API credential store is copied; dotenv is filtered separately. */
+const HERMES_EPHEMERAL_CREDENTIAL_FILES = ["auth.json"] as const;
+
+/** Exact inference-provider dotenv keys allowed into an ephemeral child home. */
+const HERMES_PROVIDER_DOTENV_KEYS = new Set([
+	"OPENROUTER_API_KEY",
+	"NOUS_API_KEY",
+	"OPENAI_API_KEY",
+	"OPENAI_BASE_URL",
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_TOKEN",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"ANTHROPIC_BASE_URL",
+	"GOOGLE_API_KEY",
+	"GEMINI_API_KEY",
+	"GEMINI_BASE_URL",
+	"XAI_API_KEY",
+	"XAI_BASE_URL",
+	"GROQ_API_KEY",
+	"GROQ_BASE_URL",
+	"MISTRAL_API_KEY",
+	"MISTRAL_BASE_URL",
+	"COHERE_API_KEY",
+	"COHERE_BASE_URL",
+	"DEEPSEEK_API_KEY",
+	"DEEPSEEK_BASE_URL",
+	"TOGETHER_API_KEY",
+	"TOGETHER_BASE_URL",
+	"DASHSCOPE_API_KEY",
+	"FIREWORKS_API_KEY",
+	"HF_TOKEN",
+	"HUGGINGFACEHUB_API_TOKEN",
+	"MINIMAX_API_KEY",
+	"MINIMAX_BASE_URL",
+	"NVIDIA_API_KEY",
+	"OLLAMA_BASE_URL",
+	"OPENCODE_GO_API_KEY",
+	"ZAI_API_KEY",
+	"ZHIPU_API_KEY",
+	"GLM_API_KEY",
+]);
+
+/** Keep only explicitly supported inference-provider assignments from dotenv. */
+export function filterHermesProviderDotenv(source: string): string {
+	const kept: string[] = [];
+	for (const line of source.split(/\r?\n/)) {
+		const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+		if (match && HERMES_PROVIDER_DOTENV_KEYS.has(match[1])) kept.push(line);
+	}
+	return kept.length > 0 ? `${kept.join("\n")}\n` : "";
+}
 
 /**
  * Pull a top-level YAML mapping block (e.g. `model:`) from parent config text.
@@ -510,18 +550,26 @@ export function extractYamlTopLevelBlock(source: string, key: string): string | 
 }
 
 /** Build ephemeral config.yaml text: isolation defaults + parent model routing. */
-export function buildEphemeralHermesConfigYaml(parentHome: string): string {
+export function buildEphemeralHermesConfigYaml(
+	parentHome: string,
+	opts: { readOnly?: boolean } = {},
+): string {
+	const readOnly = opts.readOnly !== false;
 	const parts: string[] = [
 		"display:",
 		"  show_reasoning: false",
 		"mcp_servers: {}",
-		"plugins:",
-		"  enabled:",
-		"    - taskflow_readonly",
-		"  entries:",
-		"    taskflow_readonly:",
-		"      enabled: true",
 	];
+	if (readOnly) {
+		parts.push(
+			"plugins:",
+			"  enabled:",
+			"    - taskflow_readonly",
+			"  entries:",
+			"    taskflow_readonly:",
+			"      enabled: true",
+		);
+	}
 	const parentCfgPath = join(parentHome, "config.yaml");
 	if (existsSync(parentCfgPath)) {
 		try {
@@ -573,35 +621,43 @@ def register(ctx) -> None:
         "send_message", "text_to_speech", "browser_navigate", "browser",
     })
 
+    def _deny(message: str):
+        return {
+            "action": "block",
+            "message": f"taskflow read-only phase: {message}",
+        }
+
     def _pre_tool(tool_name: str = "", args=None, **kwargs):
         name = tool_name or kwargs.get("name") or ""
         if name in _BLOCK:
-            return {
-                "action": "block",
-                "message": f"taskflow read-only phase: {name} denied",
-            }
-        # Constrain local reads to the child cwd (HOME/secrets stay out of scope).
-        if name == "read_file":
-            raw = ""
-            if isinstance(args, dict):
-                raw = str(args.get("path") or args.get("file") or "")
-            if raw:
-                try:
-                    cwd = Path(os.getcwd()).resolve()
-                    target = Path(raw).expanduser()
-                    if not target.is_absolute():
-                        target = (cwd / target).resolve()
-                    else:
-                        target = target.resolve()
-                    target.relative_to(cwd)
-                except Exception:
-                    return {
-                        "action": "block",
-                        "message": (
-                            "taskflow read-only phase: path escapes phase cwd "
-                            f"({raw!r}); only paths under the working directory are allowed"
-                        ),
-                    }
+            return _deny(f"{name} denied")
+        # Constrain every path-bearing local read to the child cwd.
+        if name in {"read_file", "search_files"}:
+            if not isinstance(args, dict):
+                return _deny(f"{name} requires path arguments")
+            if name == "search_files":
+                value = args.get("path", ".")
+                raw = "." if value is None or value == "" else value
+            else:
+                raw = args.get("path") or args.get("file")
+                if raw is None or raw == "":
+                    return _deny("read_file requires a path")
+            if not isinstance(raw, str):
+                return _deny("path must be a string")
+            try:
+                cwd = Path(os.getcwd()).resolve(strict=True)
+                target = Path(raw).expanduser()
+                if not target.is_absolute():
+                    target = cwd / target
+                # Resolve existing symlink ancestors while allowing an
+                # in-cwd nonexistent final component to be searched safely.
+                target = target.resolve(strict=False)
+                target.relative_to(cwd)
+            except (OSError, RuntimeError, ValueError):
+                return _deny(
+                    "path escapes phase cwd "
+                    f"({raw!r}); only paths under the working directory are allowed"
+                )
         return None
 
     ctx.register_hook("pre_tool_call", _pre_tool)
@@ -621,9 +677,10 @@ export interface EphemeralHermesHome {
  */
 export function prepareEphemeralHermesHome(
 	parentHome: string,
-	opts: { tmpRoot?: string } = {},
+	opts: { tmpRoot?: string; readOnly?: boolean } = {},
 ): EphemeralHermesHome {
 	const root = opts.tmpRoot ?? tmpdir();
+	const readOnly = opts.readOnly !== false;
 	const home = mkdtempSync(join(root, "taskflow-hermes-"));
 	for (const name of HERMES_EPHEMERAL_CREDENTIAL_FILES) {
 		const src = join(parentHome, name);
@@ -636,12 +693,27 @@ export function prepareEphemeralHermesHome(
 			}
 		}
 	}
+	const parentDotenv = join(parentHome, ".env");
+	if (existsSync(parentDotenv)) {
+		try {
+			const providerDotenv = filterHermesProviderDotenv(readFileSync(parentDotenv, "utf8"));
+			if (providerDotenv) writeFileSync(join(home, ".env"), providerDotenv, "utf8");
+		} catch {
+			// Process environment and auth.json remain available for provider auth.
+		}
+	}
 	try {
-		writeFileSync(join(home, "config.yaml"), buildEphemeralHermesConfigYaml(parentHome), "utf8");
-		const plugDir = join(home, "plugins", "taskflow_readonly");
-		mkdirSync(plugDir, { recursive: true });
-		writeFileSync(join(plugDir, "plugin.yaml"), EPHEMERAL_RO_PLUGIN_YAML, "utf8");
-		writeFileSync(join(plugDir, "__init__.py"), EPHEMERAL_RO_PLUGIN_INIT, "utf8");
+		writeFileSync(
+			join(home, "config.yaml"),
+			buildEphemeralHermesConfigYaml(parentHome, { readOnly }),
+			"utf8",
+		);
+		if (readOnly) {
+			const plugDir = join(home, "plugins", "taskflow_readonly");
+			mkdirSync(plugDir, { recursive: true });
+			writeFileSync(join(plugDir, "plugin.yaml"), EPHEMERAL_RO_PLUGIN_YAML, "utf8");
+			writeFileSync(join(plugDir, "__init__.py"), EPHEMERAL_RO_PLUGIN_INIT, "utf8");
+		}
 	} catch (error) {
 		// Fail closed: without config/plugin, RO toolsets and show_reasoning are wrong.
 		try {
@@ -717,9 +789,38 @@ export async function runHermesAgentTask(
 	const cwd = opts.cwd ?? defaultCwd;
 	const allowUnsafeYolo = hermesUnsafeYoloEnabled();
 	const childEnv = hermesChildEnv(process.env, { allowUnsafeYolo });
+	let args: string[];
+	let readOnly: boolean;
+	try {
+		({ args, readOnly } = buildHermesArgs({
+			systemPrompt: agent.systemPrompt,
+			task,
+			model,
+			thinking,
+			tools,
+			cwd,
+			allowUnsafeYolo,
+			maxTurns: hermesMaxTurnsFromEnv(),
+			readonlyWeb: hermesReadonlyWebEnabled(),
+		}));
+	} catch (error) {
+		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			output: "",
+			stderr: message,
+			usage: emptyUsage(),
+			model,
+			errorMessage: message,
+			stopReason: "permission_denied",
+		};
+	}
+
 	let ephemeral: EphemeralHermesHome;
 	try {
-		ephemeral = prepareEphemeralHermesHome(resolveParentHermesHome(process.env));
+		ephemeral = prepareEphemeralHermesHome(resolveParentHermesHome(process.env), { readOnly });
 	} catch (error) {
 		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
 		return {
@@ -735,35 +836,6 @@ export async function runHermesAgentTask(
 		};
 	}
 	childEnv.HERMES_HOME = ephemeral.home;
-
-	let args: string[];
-	try {
-		({ args } = buildHermesArgs({
-			systemPrompt: agent.systemPrompt,
-			task,
-			model,
-			thinking,
-			tools,
-			cwd,
-			allowUnsafeYolo,
-			maxTurns: hermesMaxTurnsFromEnv(),
-			readonlyWeb: hermesReadonlyWebEnabled(),
-		}));
-	} catch (error) {
-		ephemeral.cleanup();
-		const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
-		return {
-			agent: agentName,
-			task,
-			exitCode: 1,
-			output: "",
-			stderr: message,
-			usage: emptyUsage(),
-			model,
-			errorMessage: message,
-			stopReason: "permission_denied",
-		};
-	}
 
 	const acc = newHermesAccumulator(model);
 	let result: RunResult;

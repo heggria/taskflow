@@ -113,15 +113,15 @@ test("hermes reasoning: normalizes off→none; rejects unknown", () => {
 
 // --- quiet-mode fold --------------------------------------------------------
 
-test("hermes fold: strips session_id meta; accumulates answer body", () => {
+test("hermes fold: preserves session_id-like stdout as answer text", () => {
 	const acc = newHermesAccumulator("m");
-	assert.equal(foldHermesQuietLine(acc, "session_id: 20260811_121111_f093bf"), null);
-	assert.equal(acc.sessionId, "20260811_121111_f093bf");
-	const u1 = foldHermesQuietLine(acc, "hello");
-	assert.ok(u1);
-	assert.equal(acc.finalText, "hello");
+	const line = "session_id: this-is-answer-text";
+	const update = foldHermesQuietLine(acc, line);
+	assert.ok(update);
+	assert.equal(acc.sessionId, undefined);
+	assert.equal(acc.finalText, line);
 	foldHermesQuietLine(acc, "world");
-	assert.equal(acc.finalText, "hello\nworld");
+	assert.equal(acc.finalText, `${line}\nworld`);
 	assert.equal(acc.terminalSeen, true);
 });
 
@@ -206,17 +206,23 @@ test("hermes argv: system prompt prepended to -q body", () => {
 	assert.match(q, /Task: count files/);
 });
 
-test("hermes ephemeral home: copies credentials, writes config+RO plugin, cleans up", () => {
+test("hermes ephemeral home: allowlists provider dotenv and writes config+RO plugin", () => {
 	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-"));
-	writeFileSync(join(parent, ".env"), "XAI_API_KEY=test\n");
+	writeFileSync(
+		join(parent, ".env"),
+		"XAI_API_KEY=test\nTELEGRAM_BOT_TOKEN=must-not-copy\nDATABASE_URL=must-not-copy\n",
+	);
 	writeFileSync(join(parent, "auth.json"), "{}\n");
 	writeFileSync(join(parent, "config.yaml"), "should-not-copy: true\nmodel:\n  default: test-model\n  provider: xai-oauth\n");
 	mkdirSync(join(parent, "skills"));
 	writeFileSync(join(parent, "skills", "x.md"), "nope");
-	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir() });
+	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir(), readOnly: true });
 	try {
 		assert.notEqual(eph.home, parent);
 		assert.ok(existsSync(join(eph.home, ".env")));
+		const dotenv = readFileSync(join(eph.home, ".env"), "utf8");
+		assert.match(dotenv, /XAI_API_KEY=test/);
+		assert.doesNotMatch(dotenv, /TELEGRAM_BOT_TOKEN|DATABASE_URL/);
 		assert.ok(existsSync(join(eph.home, "auth.json")));
 		assert.equal(existsSync(join(eph.home, "skills")), false);
 		const cfg = readFileSync(join(eph.home, "config.yaml"), "utf8");
@@ -229,6 +235,33 @@ test("hermes ephemeral home: copies credentials, writes config+RO plugin, cleans
 		eph.cleanup();
 	}
 	assert.equal(existsSync(eph.home), false);
+});
+
+test("hermes ephemeral home: mutating child does not load the read-only plugin", () => {
+	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-mut-"));
+	writeFileSync(join(parent, "config.yaml"), "model: test-model\n");
+	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir(), readOnly: false });
+	try {
+		const cfg = readFileSync(join(eph.home, "config.yaml"), "utf8");
+		assert.doesNotMatch(cfg, /taskflow_readonly/);
+		assert.equal(existsSync(join(eph.home, "plugins", "taskflow_readonly")), false);
+	} finally {
+		eph.cleanup();
+	}
+});
+
+test("hermes RO plugin: cwd-bounds read_file and search_files, including symlink escape", () => {
+	const parent = mkdtempSync(join(tmpdir(), "tf-hermes-parent-ro-"));
+	const eph = prepareEphemeralHermesHome(parent, { tmpRoot: tmpdir(), readOnly: true });
+	try {
+		const plugin = readFileSync(join(eph.home, "plugins", "taskflow_readonly", "__init__.py"), "utf8");
+		assert.match(plugin, /name in \{"read_file", "search_files"\}/);
+		assert.match(plugin, /args\.get\("path", "\."\)/);
+		assert.match(plugin, /resolve\(strict=False\)/);
+		assert.match(plugin, /target\.relative_to\(cwd\)/);
+	} finally {
+		eph.cleanup();
+	}
 });
 
 test("hermes stripHermesReasoningNoise: drops box header and think tags", () => {

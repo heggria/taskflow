@@ -848,6 +848,75 @@ test("findProjectFlowsDir: stops at home dir (v0.0.8.1 boundary)", async () => {
 // Edge cases and regression guards
 // ---------------------------------------------------------------------------
 
+test("findProjectFlowsDir: stops at the OS temp root as a project boundary", async () => {
+	const { findProjectFlowsDir } = await import("../src/store.ts");
+	const originalEnv = {
+		TMPDIR: process.env.TMPDIR,
+		TMP: process.env.TMP,
+		TEMP: process.env.TEMP,
+	};
+	const fakeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-taskflow-temp-boundary-"));
+	const nestedCwd = path.join(fakeTmp, "project", "child");
+	fs.mkdirSync(path.join(fakeTmp, ".pi", "taskflows"), { recursive: true });
+	fs.mkdirSync(nestedCwd, { recursive: true });
+	process.env.TMPDIR = fakeTmp;
+	process.env.TMP = fakeTmp;
+	process.env.TEMP = fakeTmp;
+
+	try {
+		assert.equal(path.resolve(os.tmpdir()), path.resolve(fakeTmp), "test must control the OS temp root");
+		assert.equal(
+			findProjectFlowsDir(nestedCwd, false),
+			null,
+			"the shared OS temp root must not become a project merely because it contains .pi",
+		);
+	} finally {
+		for (const [key, value] of Object.entries(originalEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(fakeTmp, { recursive: true, force: true });
+	}
+});
+
+test("findProjectFlowsDir: canonicalizes relative and symlink aliases before boundary checks", async () => {
+	const { findProjectFlowsDir } = await import("../src/store.ts");
+	const originalCwd = process.cwd();
+	const originalEnv = {
+		TMPDIR: process.env.TMPDIR,
+		TMP: process.env.TMP,
+		TEMP: process.env.TEMP,
+	};
+	const fakeTmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-taskflow-temp-alias-"));
+	const alias = `${fakeTmp}-link`;
+	const nested = path.join(fakeTmp, "project", "child");
+	fs.mkdirSync(path.join(fakeTmp, ".pi", "taskflows"), { recursive: true });
+	fs.mkdirSync(nested, { recursive: true });
+	fs.symlinkSync(fakeTmp, alias, process.platform === "win32" ? "junction" : "dir");
+	process.env.TMPDIR = fakeTmp;
+	process.env.TMP = fakeTmp;
+	process.env.TEMP = fakeTmp;
+
+	try {
+		process.chdir(fakeTmp);
+		assert.equal(findProjectFlowsDir(path.join("project", "child"), false), null, "relative cwd must stop at temp root");
+		process.chdir(originalCwd);
+		assert.equal(
+			findProjectFlowsDir(path.join(alias, "project", "child"), false),
+			null,
+			"a symlink alias of the temp root must not bypass the boundary",
+		);
+	} finally {
+		process.chdir(originalCwd);
+		for (const [key, value] of Object.entries(originalEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(alias, { recursive: true, force: true });
+		fs.rmSync(fakeTmp, { recursive: true, force: true });
+	}
+});
+
 test("saveRun: handles args with complex values", () => {
 	const cwd = makeTmpCwd();
 	try {
