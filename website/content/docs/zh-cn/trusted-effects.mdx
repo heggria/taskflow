@@ -1,0 +1,42 @@
+---
+title: Trusted Effects
+---
+
+> **0.3 candidate——未发布、未 GA。** 本页描述当前 Trusted Effects MVP 实现，不是 npm 发布承诺。
+
+Trusted Effects 把阶段的副作用写进合同。模型可以提出内容，但对于已准入的已声明文件目标，**resources transaction 是唯一最终提交者**。
+
+## Vertical slice
+
+仓库内的 [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/examples/trusted-effects-write.json) 声明了一个对 `out/report.md` 的 `fs.write` effect。无 LLM fixture 会执行同一条受 resources 控制的路径：
+
+```bash
+pnpm exec node --conditions=development --experimental-strip-types --test \
+  packages/taskflow-core/test/effects-e2e-fixture.test.ts
+```
+
+## 合同
+
+| 概念 | 含义 |
+|---|---|
+| `EffectIR` | 由 flow/phase 合同携带的封闭 effect 词汇 |
+| `PathRef` | 类型化的 workspace-relative 目标，不提供裸字符串 authority |
+| `SecretRef` / `ServiceRef` | 在绑定真实后端前失败关闭的类型化句柄 |
+| Labels | 跨 phase DAG 的固定 confidentiality/integrity 检查 |
+| Resource transaction | Durable snapshot → lease → intent/permit → stage → commit 或 restore/reject |
+| `why-effect` | 只读、ledger-backed 的授权与生命周期解释 |
+
+## 它不声称什么
+
+- 它不是 FileBroker，也不是完整 OS sandbox。
+- Resolve-only 宿主无法阻止所有对未声明路径的写入。
+- 这一版没有 SecretRef vault 后端。
+- 这一版没有 ServiceRef live network adapter。
+- ControlHost、receipts 与 WebUI 属于活跃的 0.3-C 后续轨道；它们不证明 0.3 已发布或 GA。
+
+## 接下来阅读
+
+- [核心概念](/zh-cn/docs/concepts)
+- [编译器与运行时](/zh-cn/docs/compiler-runtime)
+- [仓库中的 0.3 MVP 冻结定义](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md)
+- [宿主支持基线](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/conformance/workspace/host-support-baseline.json)

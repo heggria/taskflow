@@ -3,19 +3,19 @@
 import { useMemo, useState } from "react";
 
 const GRAPH_NODES = [
-	{ id: "input", title: "Input", meta: "args / files", x: 12, y: 50 },
-	{ id: "compile", title: "Compile", meta: "FlowIR build", x: 37, y: 26 },
+	{ id: "input", title: "Declare", meta: "EffectIR / PathRef", x: 12, y: 50 },
+	{ id: "compile", title: "Admit", meta: "labels · overlap", x: 37, y: 26 },
 	{
 		id: "verify",
-		title: "Verify",
-		meta: "cycles · refs · budget",
+		title: "Authorize",
+		meta: "principal · capability",
 		x: 37,
 		y: 74,
 	},
-	{ id: "fanout", title: "Fan-out", meta: "parallel review", x: 62, y: 26 },
-	{ id: "gate", title: "Gate", meta: "quality / policy", x: 62, y: 74 },
-	{ id: "cache", title: "Cache", meta: "content addressed", x: 87, y: 26 },
-	{ id: "final", title: "Return", meta: "finalOutput", x: 87, y: 74 },
+	{ id: "fanout", title: "Stage", meta: "snapshot · intent", x: 62, y: 26 },
+	{ id: "gate", title: "Commit", meta: "or restore + reject", x: 62, y: 74 },
+	{ id: "cache", title: "Ledger", meta: "durable evidence", x: 87, y: 26 },
+	{ id: "final", title: "Explain", meta: "why-effect", x: 87, y: 74 },
 ] as const;
 
 type GraphNode = (typeof GRAPH_NODES)[number];

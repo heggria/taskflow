@@ -1,460 +1,214 @@
 <div align="center">
 
-<img src="./assets/hero.png" alt="taskflow: compile, verify, and run multi-agent DAGs across six coding-agent hosts" width="100%">
+<img src="./assets/hero.png" alt="taskflow 0.3: trusted effects for coding-agent workflows" width="100%">
 
 <br />
 
-[![npm](https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=7775FF&label=npm)](https://www.npmjs.com/package/pi-taskflow)
 [![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
-[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#install-on-your-host)
-[![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#built-to-survive-real-work)
+[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#host-adapters)
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.10](#0210-organized-portable-saved-flows) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[0.3 overview](#taskflow-03-trusted-effects) · [Quickstart](#quickstart) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples) · [Changelog](./CHANGELOG.md)
 
 </div>
 
 ---
 
-# Build multi-agent systems you can inspect before they run.
+# taskflow 0.3: make agent side effects inspectable
 
-**taskflow turns agent plans into compiled task graphs**: declared once, verified before model spend, executed in isolated subagents, resumed across sessions, replayed without tokens, and recomputed from the smallest stale frontier.
+**taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 0.3 candidate, the contract also describes the effects a phase is allowed to propose.
 
-It runs on the coding agent you already use:
+> **Status: 0.3.0 Trusted Effects candidate — unreleased and not GA.** Published packages remain on the 0.2.x line until a human cuts the `v0.3.0` tag and publishes it. The claims below describe the current candidate, not a promise of the final release.
 
-**Pi · Codex · Claude Code · OpenCode · Grok Build · Hermes Agent**
+## The 0.3 idea
+
+An agent can propose content. It should not become the mutation authority merely because it can run a command.
+
+For admitted, declared filesystem-write targets, taskflow 0.3 makes the path explicit and routes the final mutation through the resources transaction:
 
 ```text
-JSON or .tf.ts
-      │
-      ▼
- validate ──► Taskflow JSON ──► FlowIR + content hash
+flow / .tf.ts
+       │
+       ▼
+  validate + verify ──► EffectIR + FlowIR hash
+       │                         │
+       │                         ▼
+       │                 admit declared targets
+       │                         │
+       ▼                         ▼
+  isolated phase ───────► stage → commit | restore + reject
                                       │
                                       ▼
-                           isolated DAG runtime
-                                      │
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                      resume        replay      recompute
+                          ledger-backed why-effect
 ```
 
-> Your host receives the final result. Intermediate transcripts stay inside the runtime unless you explicitly inspect them.
+This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to an undeclared path. Secret and service references are typed and fail closed in this cut; they do not imply a vault or network backend.
 
-## Why taskflow?
+## What is in the candidate
 
-Built-in subagent tools are excellent for one turn. The moment the work branches, retries, crosses sessions, or needs a quality gate, the plan becomes infrastructure.
-
-| | Ad-hoc agents / scripts | **taskflow** |
+| Layer | What it does | Candidate status |
 |---|---|---|
-| **Plan** | Re-derived from prose or hidden in a script | **An explicit, versionable DAG** |
-| **Before execution** | Discover mistakes while spending | **Verify structure at zero model calls** |
-| **Intermediate output** | Floods the host context | **Stays isolated in the runtime** |
-| **Failure** | Start over or reconstruct state | **Resume from persisted phase state** |
-| **Changed input** | Re-run broadly | **Explain staleness and re-run the affected frontier** |
-| **Portability** | Coupled to one agent | **One JSON contract across six hosts** |
+| **Taskflow runtime** | Declarative DAGs, 12 phase types, budgets, retries, approvals, isolation, resume, replay, trace, and recompute | Existing 0.2 foundation |
+| **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | 0.3 MVP implementation |
+| **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | 0.3 MVP implementation |
+| **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
+| **Control Plane** | ControlHost modes, frozen wire contracts, singleton/fencing, negotiation, approvals, receipts, and coordination | Active 0.3-C implementation track; not the 0.3 MVP GA claim |
+| **WebUI** | Runs, approvals, receipts, and evidence browsing | Planned in the 0.3-C sequence; not shipped in this candidate |
 
-The trade is deliberate: less arbitrary orchestration code, more **verifiability, observability, recovery, and reuse**.
+The normative MVP definition is [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
 
-## 60-second start
+## Quickstart
 
-Install taskflow on [Pi](https://pi.dev):
+The 0.3 candidate is developed from source. Use a clean checkout and Node.js **≥ 22.19.0**:
 
 ```bash
-pi install npm:pi-taskflow
+git clone https://github.com/heggria/taskflow.git
+cd taskflow
+git checkout rc/0.3.0-trusted-effects
+pnpm install
+pnpm run typecheck
+pnpm test
 ```
 
-Then ask naturally:
+Run the no-LLM Trusted Effects vertical-slice fixture:
 
-> Use taskflow to audit `src/api` in parallel and return one prioritized report.
+```bash
+pnpm exec node --conditions=development --experimental-strip-types --test \
+  packages/taskflow-core/test/effects-e2e-fixture.test.ts
+```
 
-The routing skill uses the same familiar `task` / `tasks` / `chain` shape:
+This exercises the checked-in `examples/trusted-effects-write.json` path without a live LLM. For an interactive run, use the host guide for the adapter you already run. The stable 0.2 installation path remains documented separately in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/).
+
+## Declare an effect
+
+Effects are part of the flow contract, not a free-form prompt promise:
 
 ```json
 {
-  "chain": [
-    { "agent": "scout", "task": "Map the public API under src/api." },
-    {
-      "agent": "security-reviewer",
-      "task": "Audit this surface for missing auth and unsafe input boundaries:\n{previous.output}"
-    },
-    {
-      "agent": "reviewer",
-      "task": "Turn these findings into one prioritized report:\n{previous.output}"
-    }
-  ]
-}
-```
-
-That already gives you an isolated, tracked run. When the job needs real topology, declare the graph:
-
-```json
-{
-  "name": "audit-api",
-  "args": { "dir": { "default": "src/api" } },
-  "concurrency": 4,
+  "name": "trusted-effects-write",
   "phases": [
     {
-      "id": "discover",
-      "type": "agent",
-      "agent": "scout",
-      "task": "List source files under {args.dir}. Output ONLY a JSON array of {\"path\":\"...\"} objects.",
-      "output": "json"
-    },
-    {
-      "id": "audit-each",
-      "type": "map",
-      "over": "{steps.discover.json}",
-      "as": "file",
-      "agent": "security-reviewer",
-      "task": "Audit {file.path}. Cite evidence and assign severity.",
-      "dependsOn": ["discover"]
-    },
-    {
-      "id": "report",
-      "type": "reduce",
-      "from": ["audit-each"],
-      "agent": "reviewer",
-      "task": "Synthesize one prioritized report:\n{steps.audit-each.output}",
-      "dependsOn": ["audit-each"],
+      "id": "write-report",
+      "type": "script",
+      "run": ["node", "scripts/render-report.mjs"],
+      "effects": [
+        {
+          "id": "report",
+          "kind": "fs.write",
+          "purpose": "write final report",
+          "target": {
+            "kind": "path",
+            "path": {
+              "workspace": "project",
+              "subpath": { "literalPath": "out/report.md" },
+              "intent": "create-file"
+            }
+          },
+          "confidentiality": "internal",
+          "integrity": "project"
+        }
+      ],
       "final": true
     }
   ]
 }
 ```
 
-Save it as `.pi/taskflows/audit-api.json`, then run:
+The declaration is not authorization by itself. The runtime resolves the `PathRef`, checks labels and overlaps, records the resource intent, and only then permits the transaction to stage and finalize the declared target. `taskflow_why_effect` explains the resulting authorization and ledger state without model calls.
+
+## The runtime contract
+
+The 0.2 runtime remains the foundation. A flow can be authored as portable JSON or compiled from TypeScript DSL to FlowIR:
 
 ```text
-/tf:audit-api dir=src/api
+JSON / .tf.ts
+      │
+      ▼
+validate → Taskflow JSON → FlowIR + content hash
+                                  │
+                                  ▼
+                         isolated DAG runtime
+                                  │
+                   resume · replay · recompute · trace
+                                  │
+                                  ▼
+                         finalOutput to the host
 ```
-
-On Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
-
-Large projects may organize saved definitions recursively below `.pi/taskflows/flows/`, for example `.pi/taskflows/flows/release/audit-api.json`. Legacy `.pi/taskflows/*.json` files remain discoverable and win same-scope name collisions; nested duplicates use locale-independent Unicode-scalar path order. Saving an already-discovered nested flow updates that file and its adjacent metadata in place; new flows still use the legacy top-level location. Discovery uses one shared user/project budget and fails closed if it exceeds 1,000 flows, 10,000 visited entries, 512 directories, 8 MiB of definition data, 1 MiB per definition, or 16 levels. It rejects symlinks below the trusted storage boundary through definition leaves and skips dot paths, metadata (`*.meta.json`), and compiled IR (`*.flowir.json`). The configured agent-directory boundary itself may be a symlink for compatible home-directory relocation. New-flow saves enforce the same storage-boundary policy and revalidate the physical target directory inside the write lock.
-
-A file-backed flow can opt script phases into definition-relative execution:
-
-```json
-{
-  "name": "release",
-  "scriptCwd": "flow",
-  "phases": [
-    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
-  ]
-}
-```
-
-Here `./scripts/prepare.sh` resolves from the directory containing the saved flow or `defineFile`. The default remains `"invocation"`, and an explicit phase `cwd` still takes precedence. Inline definitions have no trusted file source and therefore fail closed if they request `scriptCwd: "flow"`. If execution inherits a cwd-bridge boundary, the resolved flow source directory must remain inside that boundary.
-
-[Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
-
-## See the graph run
-
-This is real output from a Pi run—not a mock dashboard:
-
-```text
-⊗ taskflow self-improve  6/7 · blocked · $0.095
-    ✓ discover            agent   deepseek-v4-flash  10t ↑38k ↓6.7k $0.011
-  ┌ ✓ write-runner-tests  agent   claude-sonnet-4-6  10t ↑13 ↓6.6k $0.020
-  ├ ✓ write-store-tests   agent   claude-sonnet-4-6  10t ↑11 ↓10k $0.018
-  ├ ✓ write-agents-tests  agent   claude-sonnet-4-6  10t ↑28 ↓13k $0.030
-  └ ✓ fix-stability       agent   claude-sonnet-4-6  10t ↑13 ↓3.9k $0.012
-    ✓ verify              gate    BLOCK 3 type errors in test files
-    ⊘ report              reduce  skipped · Gate blocked  ↳ fix-stability
-```
-
-The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
-
-## 0.2.10: organized, portable saved flows
-
-Saved flows can now be organized below the bounded `.pi/taskflows/flows/**` convention while legacy top-level flows keep their existing precedence and behavior. A file-backed flow may opt into `scriptCwd: "flow"`, making adjacent scripts, templates, and fixtures portable as one reviewable directory bundle.
-
-Discovery, provenance, and persistence remain fail-closed: recursion has shared file/entry/directory/byte/depth budgets, symlinked descendants are excluded, source identity survives foreground/background/resume/subflow paths, and nested definition/sidecar writes revalidate the physical parent through atomic promotion. [Full 0.2.10 notes →](./CHANGELOG.md#0210--2026-08-12)
-
-## 0.2.9: Hermes Agent + verify parity
-
-Taskflow now ships on **Hermes Agent** as `hermes-taskflow`, bringing the same MCP control plane to a sixth host. Hermes children run with an ephemeral home, explicit toolsets, cwd-confined local reads, provider-only credential material, and an explicit opt-in for mutating `--yolo` phases.
-
-Pi's advertised `/tf verify <name>` command now matches the tool surface, including saved flow names containing spaces. Project discovery also stops at canonical home/temp boundaries, so ambient `/tmp/.pi` state cannot become a project by accident. [Full 0.2.9 notes →](./CHANGELOG.md#029--2026-08-11)
-
-## 0.2.8: review, then confirm
-
-Pi approvals now separate **selection** from **commit**. Choose Reject, Edit guidance, or Approve with `R` / `E` / `A`, arrows, or Tab; press Enter to confirm. The safe default is Reject, and Escape or Ctrl-C still rejects immediately.
-
-Long proposals start collapsed. Press `V` to open an inline scrollable preview while the decision footer stays visible; short proposals remain open by default. Full notes: [CHANGELOG 0.2.8](./CHANGELOG.md#028--2026-08-10).
-
-## 0.2.7: plan before spend · close the loop
-
-The 0.2 line made graphs **compiled and inspectable**. **0.2.7** makes the day-to-day loop feel finished: you can see the plan *before* any model call, and you can hear about the run *after* it finishes — without stuffing transcripts into the host.
-
-| Before spend | After spend |
-|---|---|
-| **`taskflow_plan` / `/tf plan`** — bind typed args, project phase order, mark dynamic refs, worst-case agent-call bound | **`hooks.onComplete` / `onFail` / `onBlocked`** — webhook, file, or argv-only command; summary payload only (`taskflow.hook.v1`) |
-| **`verify` / `lint`** still free | **`approval.timeoutMs` + `onExpire`** — HITL no longer waits forever |
-| **`recompute` savings line** — `reused N · rerun M · cutoff K · saved ~P%` | **`taskflow_analytics`** — last-N status, duration, fail/cache rates (read-only) |
-
-```bash
-# Zero tokens: see what would run and how expensive the worst case looks
-# MCP: taskflow_plan  ·  Pi: /tf plan my-flow '{"dir":"src"}'
-```
-
-```jsonc
-// Optional: fire-and-forget when a background run finishes
-{
-  "hooks": {
-    "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last-complete.json" }]
-  }
-}
-```
-
-MCP hosts now expose **20 tools**, including `taskflow_plan`, `taskflow_analytics`, and the Trusted Effects audit tool `taskflow_why_effect`. Starter templates: [`examples/templates/`](./examples/templates/). Full notes: [CHANGELOG](./CHANGELOG.md).
-
-## 0.2 is the compiler turn
-
-Before 0.2, taskflow executed declarative graphs. Now the graph also has a compile-time frontend, a canonical intermediate representation, an append-only decision trace, offline replay, and incremental recompute.
-
-### Author in JSON or TypeScript
-
-JSON remains the portable runtime contract. For larger flows, `taskflow-dsl` adds a compile-time TypeScript authoring layer:
-
-```ts
-import { agent, flow, json, map, reduce } from "taskflow-dsl";
-
-export default flow("audit", (ctx) => {
-  ctx.budget({ maxUSD: 2 });
-
-  const files = agent("List files under {args.dir}", {
-    agent: "scout",
-    output: json<{ path: string }[]>(),
-  });
-
-  const audits = map(files, (file) =>
-    agent(`Audit ${file.path}`, { agent: "security-reviewer" }),
-  );
-
-  return reduce(
-    [audits],
-    (parts) => agent(`Write one report:\n${parts.audits.output}`),
-    { final: true },
-  );
-});
-```
-
-```bash
-pnpm add -D taskflow-dsl
-taskflow-dsl check audit.tf.ts
-taskflow-dsl build audit.tf.ts --emit both
-# → audit.taskflow.json + audit.flowir.json
-```
-
-`.tf.ts` is **compile-time only**. Hosts execute the emitted Taskflow JSON; they never interpret TypeScript.
-
-### Compile to a contract you can reason about
-
-FlowIR canonicalizes the graph and gives it a content hash. That compiled identity makes provenance and stale analysis inspectable, while the runtime adds content-addressed caching and deterministic tools:
-
-| Operation | What it answers | Model calls |
-|---|---|---:|
-| **`plan`** | What will run, which args bind, worst-case agent calls? | **0** |
-| `verify` / `compile` / `lint` | Is the graph structurally safe / lint-clean? | **0** |
-| `ir` | What is the canonical graph and content hash? | **0** |
-| `resume` | What unfinished work remains? (forks a new run; original untouched) | Only unfinished phases |
-| `trace` | What calls and runtime decisions actually happened? | **0** to inspect |
-| `replay` | What if thresholds or budgets had been different? | **0** |
-| `why-stale` | What changed, and what depends on it? | **0** |
-| `recompute` | What is the smallest observable affected frontier? (+ savings line) | Only affected phases |
-| `analytics` | How have recent runs of this flow behaved? | **0** |
-
-[Explore the compiler and runtime →](https://heggria.github.io/taskflow/en/docs/compiler-runtime/)
 
 ## One runtime, 12 phase types
 
 | Family | Phases | Use them for |
 |---|---|---|
-| **Work** | `agent` · `parallel` · `map` · `reduce` · `script` | Single tasks, static fan-out, dynamic fan-out, aggregation, zero-token shell steps |
-| **Control** | `gate` · `approval` · `flow` · `loop` | Quality decisions, human checkpoints, composition, iterative refinement |
+| **Work** | `agent` · `parallel` · `map` · `reduce` · `script` | Single tasks, static concurrency, dynamic fan-out, aggregation, and zero-token shell steps |
+| **Control** | `gate` · `approval` · `flow` · `loop` | Quality decisions, human checkpoints, composition, and iterative refinement |
 | **Selection** | `tournament` · `race` | Best-of-N quality or first-success latency |
-| **Dynamic graph** | `expand` | Validate and execute a runtime-produced fragment, nested or grafted |
+| **Dynamic graph** | `expand` | Validate and execute a runtime-produced nested or grafted fragment |
 
-Across those phase types, the DSL provides dependencies, conditions, retries, timeouts, output contracts, budgets, workspace isolation, and explicit final-output selection. Each kind accepts only the fields that are safe and meaningful for it; freshness-sensitive phases are excluded from cross-run caching.
+Across those phase types, the runtime provides shared behavior: dependencies, conditions, retries, timeouts, output contracts, budgets, workspace isolation, explicit final-output selection, and persistence for resume. Each phase kind accepts only the fields that are safe and meaningful for it.
 
-[Read the phase reference →](https://heggria.github.io/taskflow/en/docs/syntax/phase-types)
+Useful zero-token operations include:
 
-## Runtime guarantees, not prompt conventions
-
-### Verify before spend
-
-Cycles, dangling dependencies, invalid references, impossible joins, unsafe dynamic fragments, and configuration hazards are rejected or surfaced before the expensive work starts.
-
-### Keep intermediate work out of the host context
-
-Agent-running phases execute in isolated subagent processes; control and script phases stay inside the runtime. Upstream outputs are wired into downstream inputs internally. Only `finalOutput` returns to the host unless you explicitly use `peek` or `trace`.
-
-### Survive sessions and failures
-
-Phase state is persisted atomically. Resume skips unchanged completed work; detached Pi runs can outlive the initiating session; an idle watchdog terminates stalled subagents.
-
-### Reuse work honestly
-
-Within-run resume is content-addressed. Cross-run caching is opt-in and can fingerprint Git commits, files, globs, environment variables, and TTLs. Change one declared input and only its dependents become stale.
-
-### Bound the blast radius
-
-Budgets, concurrency caps, retries, timeouts, nesting limits, dynamic-graph breadth caps, path containment, non-idempotent phase classification, and fail-closed approval behavior are runtime semantics—not suggestions in a prompt.
-
-### 0.2.1: safe dynamic cwd and Pi terminal reaping
-
-An invocation argument declared as `type: "relative-path"` may select a phase
-working directory with the exact form `cwd: "{args.package}"`. The bridge is
-default-off, requires host `resolve-only` authorization, and confines the
-canonical directory to the invocation root. Absolute paths, concatenation, and
-`{steps.*}` remain rejected; this compatibility bridge is not an OS sandbox.
-Resolve-only writer phases within one invocation are serialized before durable
-lease acquisition, so fan-out cannot self-timeout while separate processes
-remain protected by cross-process leases.
-
-Pi child agents no longer inherit ambient extensions by default. Trusted host
-settings can use an explicit extension allowlist or opt back into legacy
-inheritance. If a Pi child produces a validated final answer and terminal event
-but an extension keeps the process alive, Taskflow waits a bounded grace window,
-reaps the process group, and records `completionSource: "terminal-reap"` instead
-of reporting a false timeout.
-
-```json
-{
-  "taskflow": {
-    "piChild": {
-      "resourceProfile": "isolated",
-      "extensions": [],
-      "terminalGraceMs": 1500
-    }
-  }
-}
-```
-
-`allowlist` accepts explicit trusted extension files; `inherit` restores ambient
-Pi extension discovery as a compatibility mode. Flows cannot widen this host
-authority.
-
-[Read the core concepts →](https://heggria.github.io/taskflow/en/docs/concepts/)
-
-## Install on your host
-
-All packages require **Node.js ≥ 22.19.0**.
-
-### Pi
-
-```bash
-pi install npm:pi-taskflow
-```
-
-Pi provides the richest local experience: the `taskflow` tool, `/tf` commands, live DAG rendering, interactive approvals, background runs, and model-role setup.
-
-[Pi guide →](https://heggria.github.io/taskflow/en/docs/guides/pi)
-
-### OpenAI Codex
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-```
-
-[Codex guide →](https://heggria.github.io/taskflow/en/docs/guides/codex)
-
-### Claude Code
-
-```bash
-claude plugin marketplace add heggria/taskflow
-claude plugin install claude-taskflow@taskflow
-```
-
-[Claude Code guide →](https://heggria.github.io/taskflow/en/docs/guides/claude-code)
-
-### OpenCode
-
-```bash
-opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.10 opencode-taskflow-mcp
-```
-
-[OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
-
-### Grok Build
-
-```bash
-grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
-```
-
-Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
-
-[Grok Build guide →](https://heggria.github.io/taskflow/en/docs/guides/grok-build)
-
-### Hermes Agent
-
-```bash
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
-# Prefer env in config.yaml (not CLI --env after args — can be stuffed into argv):
-#   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
-```
-
-Hermes quiet mode does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement. Child agents use an ephemeral HERMES_HOME with only non-secret model/fallback routing, a routed-provider-only inference `auth.json`, and provider-allowlisted dotenv keys; parent MCP, skills, memory, sessions, and rules are not inherited. RO local-read → `taskflow_readonly_files`; else `taskflow_model_only` (never omit `-t`).
-
-[Hermes guide →](./docs/hermes-mcp.md)
-
-
-## Built to survive real work
-
-<div align="center">
-
-**10 packages** · **6 hosts** · **12 phase types** · **18 built-in agents** · **1,500+ tests** · **MIT**
-
-</div>
-
-```text
-                              taskflow-core
-                 ┌──────────────┼───────────────┐
-                 │              │               │
-           taskflow-dsl   pi-taskflow   taskflow-mcp-core ─┐
-                                       taskflow-hosts ─────┼─ codex-taskflow
-                                                          ├─ claude-taskflow
-                                                          ├─ opencode-taskflow
-                                                          └─ grok-taskflow / hermes-taskflow
-```
-
-`taskflow-core` is host-neutral and imports no host SDK. `taskflow-mcp-core` implements stdio JSON-RPC without an MCP SDK dependency; `taskflow-hosts` owns the shared host process runners. The five MCP delivery packages bind both layers (and core), while Pi keeps its native adapter.
-
-The test suite covers orchestration semantics, persistence and file-lock races, cache freshness, path traversal, dynamic graph hardening, cancellation, budgets, all 12 phase kinds, FlowIR/replay/recompute, TypeScript DSL erasure, host argv contracts, MCP servers, and packed consumer imports.
-
-## Documentation
-
-| Start here | When you need |
+| Operation | Question it answers |
 |---|---|
-| [Getting Started](https://heggria.github.io/taskflow/en/docs/getting-started) | Your first successful run |
-| [Concepts](https://heggria.github.io/taskflow/en/docs/concepts/) | DAGs, isolation, verification, resume, shared context |
-| [Syntax](https://heggria.github.io/taskflow/en/docs/syntax/) | Phase fields, control flow, budgets, caching, scorers |
-| [Compiler & Runtime](https://heggria.github.io/taskflow/en/docs/compiler-runtime/) | TypeScript DSL, FlowIR, replay, recompute, background runs |
-| [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, Grok, and Hermes setup |
-| [Reference](https://heggria.github.io/taskflow/en/docs/reference/) | Commands, shorthand, and exact tool surfaces |
-| [Showcase](https://heggria.github.io/taskflow/en/docs/showcase/) | Real flows and case studies |
-| [0.2.0 Frontier Assessment](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | Independent, evidence-based technical assessment (Chinese) |
+| `taskflow_plan` | What will run, what arguments bind, and what is the worst-case agent-call bound? |
+| `taskflow_verify` / `taskflow_compile` | Is the graph structurally valid and what is its canonical form? |
+| `taskflow_trace` / `taskflow_replay` | What happened, or what would a zero-token what-if replay decide? |
+| `taskflow_why_stale` / `taskflow_recompute` | What changed and what is the smallest affected frontier? |
+| `taskflow_why_effect` | Why was a declared effect allowed, staged, committed, rejected, or left unknown? |
+| `taskflow_analytics` | How have recent runs behaved? |
 
-Also see [`examples/`](./examples), the [changelog](./CHANGELOG.md), and the [release guide](./RELEASE.md).
+The MCP surface currently exposes **20 tools**. Intermediate transcripts remain inside the runtime unless you explicitly inspect them with `peek` or `trace`; the host normally receives only `finalOutput`.
 
-## Contributing
+## Host adapters
+
+The same flow contract can be delivered through six coding-agent hosts:
+
+- **Pi** — native extension, `/tf` commands, live run views, and interactive approvals.
+- **Codex** — plugin and stdio MCP server.
+- **Claude Code** — plugin and stdio MCP server.
+- **OpenCode** — MCP configuration and generated skill.
+- **Grok Build** — MCP configuration and generated skill.
+- **Hermes Agent** — MCP delivery with explicit child toolsets and isolation policy.
+
+Host support is not a blanket security guarantee. Read the [host support baseline](./conformance/workspace/host-support-baseline.json) and the [Trusted Effects documentation](./docs/internal/0.3.0-trusted-effects-mvp.md) before enabling mutating phases.
+
+## Security boundaries we state plainly
+
+- `effects[]` is a declaration and validation surface; it is not ambient authority.
+- The resources layer is the only finalizer for admitted declared filesystem effects.
+- Direct writes to declared targets are detected and restored by the MVP path.
+- Writes to undeclared paths remain host-policy dependent under resolve-only execution.
+- `SecretRef` and `ServiceRef` are typed handles only; no vault or live service adapter ships in this cut.
+- There is no FileBroker or full OS sandbox claim in 0.3 MVP.
+- Control Plane receipts and WebUI are part of the active 0.3-C track, not proof that 0.3 is released or GA.
+
+## Development
 
 ```bash
 pnpm install
 pnpm run typecheck
 pnpm test
 pnpm run build
+pnpm run build:website
 pnpm run test:pack
 ```
 
-Contributions are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the workflow and [`AGENTS.md`](./AGENTS.md) for architecture and coding conventions.
+The monorepo contains the host-neutral `taskflow-core`, Trusted Effects and resources code, the `taskflow-control` 0.3-C contract package, the TypeScript DSL, MCP/host adapters, examples, and the website. See [`AGENTS.md`](./AGENTS.md) for architecture and coding conventions.
+
+## Documentation
+
+| Start here | Use it for |
+|---|---|
+| [0.3 overview](https://heggria.github.io/taskflow/en/docs) | Candidate scope, status, and the honest security boundary |
+| [Getting Started](https://heggria.github.io/taskflow/en/docs/getting-started) | First flow and host setup |
+| [Core Concepts](https://heggria.github.io/taskflow/en/docs/concepts/) | DAGs, isolation, verification, resume, and evidence |
+| [Compiler & Runtime](https://heggria.github.io/taskflow/en/docs/compiler-runtime/) | JSON, TypeScript DSL, FlowIR, replay, and recompute |
+| [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, Grok, and Hermes |
+| [Examples](./examples) | Runnable flow definitions, including Trusted Effects |
+| [Changelog](./CHANGELOG.md) | Release history and candidate notes |
 
 ## License
 
@@ -462,8 +216,8 @@ Contributions are welcome. Start with [`CONTRIBUTING.md`](./CONTRIBUTING.md) for
 
 <div align="center">
 
-**Declare once. Verify first. Recompute only what changed.**
+**Declare the effect. Verify the path. Commit through one authority.**
 
-[Read the docs](https://heggria.github.io/taskflow/en/docs) · [Try an example](./examples) · [View releases](https://github.com/heggria/taskflow/releases)
+[Read the docs](https://heggria.github.io/taskflow/en/docs) · [Try the candidate](#quickstart) · [View releases](https://github.com/heggria/taskflow/releases)
 
 </div>

@@ -10,16 +10,16 @@ export function generateStaticParams() {
 
 const site = {
 	en: {
-		title: "taskflow — Verify before spend",
+		title: "taskflow 0.3 — Trusted Effects candidate",
 		brand: "taskflow",
 		description:
-			"Verify before spend. Resume across sessions. Recompute only what changed. taskflow is the compiled runtime for coding-agent orchestration.",
+		"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. 0.3 candidate; unreleased and not GA.",
 	},
 	"zh-cn": {
-		title: "taskflow — 花 token 前先验证",
+		title: "taskflow 0.3 — Trusted Effects candidate",
 		brand: "taskflow",
 		description:
-			"花 token 前先验证，跨会话续跑，只重算变化部分。taskflow 是面向 coding-agent 编排的 compiled runtime。",
+			"声明 coding-agent effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。0.3 candidate，未发布、未 GA。",
 	},
 } as const;
 

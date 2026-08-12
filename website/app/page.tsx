@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
-const title = "taskflow — Declarative DAG Orchestration for Coding Agents";
+const title = "taskflow 0.3 — Trusted Effects for Coding Agents";
 const description =
-	"A declarative, verifiable graph of task nodes for coding-agent subagents. Fan out, gate, loop, resume, and save as a command.";
+	"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. 0.3 candidate; unreleased and not GA.";
 const canonical = "https://heggria.github.io/taskflow/en/";
 
 export const metadata: Metadata = {

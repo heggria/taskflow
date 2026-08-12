@@ -1,464 +1,223 @@
 <div align="center">
 
-<img src="./assets/hero.zh-CN.png" alt="taskflow：跨六个编程智能体宿主编译、验证并运行多智能体 DAG" width="100%">
+<img src="./assets/hero.zh-CN.png" alt="taskflow 0.3：让 coding-agent 工作的副作用可检查" width="100%">
 
 <br />
 
-[![npm](https://img.shields.io/npm/v/pi-taskflow?style=flat-square&color=7775FF&label=npm)](https://www.npmjs.com/package/pi-taskflow)
 [![CI](https://img.shields.io/github/actions/workflow/status/heggria/taskflow/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/heggria/taskflow/actions/workflows/ci.yml)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522.19-35C99A?style=flat-square)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-35C99A?style=flat-square)](./LICENSE)
-[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#安装到你的宿主)
-[![Tests](https://img.shields.io/badge/tests-1%2C500%2B-7775FF?style=flat-square)](#为真实工作而生)
+[![Hosts](https://img.shields.io/badge/hosts-6-7775FF?style=flat-square)](#宿主适配器)
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.10 新能力](#0210可组织可携带的-saved-flow) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[0.3 总览](#taskflow-03-trusted-effects) · [快速开始](#快速开始) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples) · [变更记录](./CHANGELOG.md)
 
 </div>
 
 ---
 
-# 构建那些在运行前就能看清楚的多智能体系统。
+# taskflow 0.3：让智能体副作用可检查
 
-**taskflow 把智能体计划变成可编译的任务图**：只声明一次，在模型花费前验证，通过隔离子智能体执行，跨会话续跑，零 token 重放，并从最小陈旧前沿开始重算。
+**taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 0.3 candidate 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-它运行在你已经使用的编程智能体上：
+> **状态：0.3.0 Trusted Effects candidate——未发布、未 GA。** 在人工创建 `v0.3.0` tag 并发布前，已发布 package 仍保持 0.2.x 版本线。下文描述的是当前 candidate，不是最终发布承诺。
 
-**Pi · Codex · Claude Code · OpenCode · Grok Build · Hermes Agent**
+## 0.3 的核心想法
+
+智能体可以提出内容，但不应该因为能执行命令，就自动成为文件修改的最终权威。
+
+对于已准入、已声明的文件写入目标，taskflow 0.3 把路径写进合同，并让最终修改经过 resources transaction：
 
 ```text
-JSON 或 .tf.ts
-      │
-      ▼
-  验证 ──► Taskflow JSON ──► FlowIR + 内容哈希
+flow / .tf.ts
+       │
+       ▼
+  validate + verify ──► EffectIR + FlowIR hash
+       │                         │
+       │                         ▼
+       │                 准入已声明目标
+       │                         │
+       ▼                         ▼
+  隔离阶段 ─────────────► stage → commit | restore + reject
                                       │
                                       ▼
-                              隔离 DAG 运行时
-                                      │
-                         ┌────────────┼────────────┐
-                         ▼            ▼            ▼
-                        续跑          重放          重算
+                         ledger-backed why-effect
 ```
 
-> 宿主收到的是最终结果。中间转录留在运行时里，除非你明确要求查看。
+这**不是 OS sandbox**。在 resolve-only 宿主上，taskflow 不能阻止所有对未声明路径的写入。Secret 和 service reference 在这一版只是类型化、失败关闭的句柄，并不代表已经有 vault 或网络后端。
 
-## 为什么是 taskflow？
+## candidate 里有什么
 
-内置 subagent 工具非常适合单轮委派。但一旦工作开始分支、重试、跨会话，或需要质量门控，计划本身就成了基础设施。
-
-| | 即席 agent / 脚本 | **taskflow** |
+| 层 | 作用 | candidate 状态 |
 |---|---|---|
-| **计划** | 每次从 prose 重推，或藏在脚本里 | **显式、可版本化的 DAG** |
-| **执行前** | 边花钱边发现错误 | **零模型调用验证结构** |
-| **中间输出** | 涌入宿主上下文 | **隔离在运行时里** |
-| **失败后** | 从头开始或手工恢复状态 | **从持久化阶段状态续跑** |
-| **输入变化** | 大范围重跑 | **解释过期原因，只重跑受影响前沿** |
-| **可移植性** | 绑定单一智能体 | **同一份 JSON 合同跨六个宿主** |
+| **Taskflow runtime** | 声明式 DAG、12 种阶段、预算、重试、审批、隔离、续跑、replay、trace 与 recompute | 已有的 0.2 基础 |
+| **Trusted Effects** | 封闭的 `EffectIR`、`PathRef` / `SecretRef` / `ServiceRef`、机密性/完整性标签、effect 校验、重叠检查与 ledger-backed `why-*` | 0.3 MVP 实现 |
+| **Resource transaction** | snapshot → lease → durable intent/permit → stage → commit，或 restore and reject | 0.3 MVP 实现 |
+| **宿主适配器** | Pi、Codex、Claude Code、OpenCode、Grok Build、Hermes Agent 共用同一 flow 合同 | 已有宿主表面；能力仍按宿主区分 |
+| **Control Plane** | ControlHost 模式、冻结 wire contract、singleton/fencing、协商、审批、receipt 与协调 | 活跃的 0.3-C 实现轨；不是 0.3 MVP 的 GA 声明 |
+| **WebUI** | runs、审批、receipts 与 evidence 浏览 | 0.3-C 计划中的后续阶段；当前 candidate 未交付 |
 
-这是一项有意的取舍：少一点任意编排代码，换来更多的**可验证性、可观测性、恢复能力与复用**。
+规范性的 MVP 定义见 [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md)。0.3-C Control Plane 计划见 [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md)。
 
-## 60 秒开始
+## 快速开始
 
-在 [Pi](https://pi.dev) 上安装 taskflow：
+0.3 candidate 当前从源码开发。准备干净 checkout，并使用 Node.js **≥ 22.19.0**：
 
 ```bash
-pi install npm:pi-taskflow
+git clone https://github.com/heggria/taskflow.git
+cd taskflow
+git checkout rc/0.3.0-trusted-effects
+pnpm install
+pnpm run typecheck
+pnpm test
 ```
 
-然后自然地提出需求：
+运行不需要 LLM 的 Trusted Effects vertical-slice fixture：
 
-> 用 taskflow 并行审计 `src/api`，最后只返回一份按优先级排列的报告。
+```bash
+pnpm exec node --conditions=development --experimental-strip-types --test \
+  packages/taskflow-core/test/effects-e2e-fixture.test.ts
+```
 
-路由 skill 使用你已经熟悉的 `task` / `tasks` / `chain` 形式：
+它会在没有 live LLM 的情况下执行仓库内的 `examples/trusted-effects-write.json` 路径。要交互式运行，请按当前使用的宿主查看对应指南。稳定的 0.2 安装路径仍在[宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/)中单独说明。
+
+## 声明一个 effect
+
+Effect 是 flow 合同的一部分，不是 prompt 里的自由文本承诺：
 
 ```json
 {
-  "chain": [
-    { "agent": "scout", "task": "Map the public API under src/api." },
-    {
-      "agent": "security-reviewer",
-      "task": "Audit this surface for missing auth and unsafe input boundaries:\n{previous.output}"
-    },
-    {
-      "agent": "reviewer",
-      "task": "Turn these findings into one prioritized report:\n{previous.output}"
-    }
-  ]
-}
-```
-
-这样就已经得到一次隔离、可追踪的运行。当任务需要真正的拓扑结构时，声明整张图：
-
-```json
-{
-  "name": "audit-api",
-  "args": { "dir": { "default": "src/api" } },
-  "concurrency": 4,
+  "name": "trusted-effects-write",
   "phases": [
     {
-      "id": "discover",
-      "type": "agent",
-      "agent": "scout",
-      "task": "List source files under {args.dir}. Output ONLY a JSON array of {\"path\":\"...\"} objects.",
-      "output": "json"
-    },
-    {
-      "id": "audit-each",
-      "type": "map",
-      "over": "{steps.discover.json}",
-      "as": "file",
-      "agent": "security-reviewer",
-      "task": "Audit {file.path}. Cite evidence and assign severity.",
-      "dependsOn": ["discover"]
-    },
-    {
-      "id": "report",
-      "type": "reduce",
-      "from": ["audit-each"],
-      "agent": "reviewer",
-      "task": "Synthesize one prioritized report:\n{steps.audit-each.output}",
-      "dependsOn": ["audit-each"],
+      "id": "write-report",
+      "type": "script",
+      "run": ["node", "scripts/render-report.mjs"],
+      "effects": [
+        {
+          "id": "report",
+          "kind": "fs.write",
+          "purpose": "write final report",
+          "target": {
+            "kind": "path",
+            "path": {
+              "workspace": "project",
+              "subpath": { "literalPath": "out/report.md" },
+              "intent": "create-file"
+            }
+          },
+          "confidentiality": "internal",
+          "integrity": "project"
+        }
+      ],
       "final": true
     }
   ]
 }
 ```
 
-保存为 `.pi/taskflows/audit-api.json`，然后运行：
+声明本身并不等于授权。运行时会解析 `PathRef`、检查标签与路径重叠、记录 resource intent，然后才允许 transaction 对已声明目标执行 stage 与最终提交。`taskflow_why_effect` 可以在不调用模型的情况下解释授权结果与 ledger 状态。
+
+## 运行时合同
+
+0.2 运行时仍是基础层。Flow 可以用可移植 JSON 编写，也可以从 TypeScript DSL 编译到 FlowIR：
 
 ```text
-/tf:audit-api dir=src/api
+JSON / .tf.ts
+      │
+      ▼
+validate → Taskflow JSON → FlowIR + content hash
+                                  │
+                                  ▼
+                         隔离 DAG 运行时
+                                  │
+                   resume · replay · recompute · trace
+                                  │
+                                  ▼
+                         finalOutput 回到宿主
 ```
-
-在 Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
-
-大型项目可以把保存的定义递归组织在 `.pi/taskflows/flows/` 下，例如 `.pi/taskflows/flows/release/audit-api.json`。旧的 `.pi/taskflows/*.json` 仍可发现，并在同一作用域的重名冲突中优先；嵌套定义按与区域设置无关的 Unicode 标量路径顺序确定优先级。重新保存一个已发现的嵌套 flow 会原地更新该定义及相邻元数据；新 flow 仍写入旧版顶层位置。发现过程由用户与项目共享一套预算，超过 1,000 个 flow、10,000 个已访问目录项、512 个目录、8 MiB 定义总量、单文件 1 MiB 或 16 层深度时会安全失败。它拒绝可信存储边界以下直到定义叶子的符号链接，并跳过点路径、元数据（`*.meta.json`）和已编译 IR（`*.flowir.json`）；为兼容 home 目录迁移，配置的 agent 目录边界本身可以是符号链接。保存新 flow 时会执行相同的存储边界校验，并在写锁内重新验证目标目录的物理身份。
-
-文件支持的 flow 可以显式选择从定义文件目录运行脚本阶段：
-
-```json
-{
-  "name": "release",
-  "scriptCwd": "flow",
-  "phases": [
-    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
-  ]
-}
-```
-
-此时 `./scripts/prepare.sh` 从保存 flow 或 `defineFile` 所在目录解析。默认值仍是 `"invocation"`，显式 phase `cwd` 仍然优先；inline 定义没有可信文件来源，因此请求 `scriptCwd: "flow"` 时会安全失败。如果执行继承了 cwd bridge 边界，解析出的 flow 来源目录也必须位于该边界内。
-
-[查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
-
-## 看见整张图运行
-
-下面是真实的 Pi 运行输出，不是模拟的 dashboard：
-
-```text
-⊗ taskflow self-improve  6/7 · blocked · $0.095
-    ✓ discover            agent   deepseek-v4-flash  10t ↑38k ↓6.7k $0.011
-  ┌ ✓ write-runner-tests  agent   claude-sonnet-4-6  10t ↑13 ↓6.6k $0.020
-  ├ ✓ write-store-tests   agent   claude-sonnet-4-6  10t ↑11 ↓10k $0.018
-  ├ ✓ write-agents-tests  agent   claude-sonnet-4-6  10t ↑28 ↓13k $0.030
-  └ ✓ fix-stability       agent   claude-sonnet-4-6  10t ↑13 ↓3.9k $0.012
-    ✓ verify              gate    BLOCK 3 type errors in test files
-    ⊘ report              reduce  skipped · Gate blocked  ↳ fix-stability
-```
-
-布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
-
-## 0.2.10：可组织、可携带的 saved flow
-
-saved flow 现在可以按受限约定放在 `.pi/taskflows/flows/**` 下分目录管理，同时旧顶层 flow 的优先级和行为保持不变。文件来源可信的 flow 可显式设置 `scriptCwd: "flow"`，让相邻的脚本、模板和 fixtures 作为一个目录整体复制、审阅和版本控制。
-
-发现、来源和持久化继续 fail closed：递归扫描共享文件数、entry、目录数、字节和深度预算；排除边界下的 symlink；来源身份贯穿前台、后台、resume 与 subflow；嵌套 definition/sidecar 在 atomic promotion 各阶段重验物理父目录。[完整 0.2.10 说明 →](./CHANGELOG.md#0210--2026-08-12)
-
-## 0.2.9：Hermes Agent + verify 对齐
-
-Taskflow 现在通过 `hermes-taskflow` 支持第六个宿主 **Hermes Agent**。Hermes 子代理使用临时 home、显式工具集、cwd 内只读路径边界、仅 provider 凭据，以及对 mutating `--yolo` phase 的明确 opt-in。
-
-Pi 已公开的 `/tf verify <name>` 现在与 tool 接口一致，也能正确处理含空格的 flow 名。项目发现同时在规范化后的 home/temp 边界停止，不再把环境中的 `/tmp/.pi` 误认成项目状态。[完整 0.2.9 说明 →](./CHANGELOG.md#029--2026-08-11)
-
-## 0.2.8：先审阅，再确认
-
-Pi 审批现在把**选择**和**提交**分开：用 `R` / `E` / `A`、方向键或 Tab 选择拒绝、编辑意见或批准，再按 Enter 确认。默认停在拒绝；Escape 和 Ctrl-C 仍会立即拒绝。
-
-长提案默认折叠，按 `V` 可在原位展开并滚动审阅，决策栏始终可见；短提案默认展开。完整说明：[CHANGELOG 0.2.8](./CHANGELOG.md#028--2026-08-10)。
-
-## 0.2.7：花 token 前先计划 · 跑完闭环
-
-0.2 线把图做成了**可编译、可检查**的合同。**0.2.7** 补上日常闭环：跑之前看清计划，跑之后有人（或文件/webhook）知道结果——且从不把 transcript 塞回宿主。
-
-| 花 token 之前 | 花 token 之后 |
-|---|---|
-| **`taskflow_plan` / `/tf plan`** — 绑定 typed args、投影 phase 序、标出动态引用、给出 worst-case agent 调用上界 | **`hooks.onComplete` / `onFail` / `onBlocked`** — webhook / 文件 / 纯 argv 命令；仅摘要 payload（`taskflow.hook.v1`） |
-| **`verify` / `lint`** 仍是 0 花费 | **`approval.timeoutMs` + `onExpire`** — HITL 不再无限挂起 |
-| **`recompute` 省钱一行** — `reused N · rerun M · cutoff K · saved ~P%` | **`taskflow_analytics`** — 最近 N 次状态/耗时/失败与缓存命中率（只读） |
-
-```bash
-# 零 token：看清会跑谁、参数绑没绑上、最坏会打多少 agent 调用
-# MCP: taskflow_plan  ·  Pi: /tf plan my-flow '{"dir":"src"}'
-```
-
-```jsonc
-// 可选：background 跑完后 fire-and-forget 通知
-{
-  "hooks": {
-    "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last-complete.json" }]
-  }
-}
-```
-
-MCP 宿主现为 **20 个工具**，包括 `taskflow_plan`、`taskflow_analytics` 和 Trusted Effects 审计工具 `taskflow_why_effect`。入门模板见 [`examples/templates/`](./examples/templates/)。完整说明：[CHANGELOG](./CHANGELOG.md)。
-
-## 0.2 是编译器转身
-
-0.2 之前，taskflow 负责执行声明式图。现在，这张图还拥有编译期前端、规范化中间表示、append-only 决策 trace、离线重放，以及增量重算。
-
-### 用 JSON 或 TypeScript 编写
-
-JSON 仍是可移植的运行时合同。面对更大的 flow，`taskflow-dsl` 提供编译期 TypeScript 编写层：
-
-```ts
-import { agent, flow, json, map, reduce } from "taskflow-dsl";
-
-export default flow("audit", (ctx) => {
-  ctx.budget({ maxUSD: 2 });
-
-  const files = agent("List files under {args.dir}", {
-    agent: "scout",
-    output: json<{ path: string }[]>(),
-  });
-
-  const audits = map(files, (file) =>
-    agent(`Audit ${file.path}`, { agent: "security-reviewer" }),
-  );
-
-  return reduce(
-    [audits],
-    (parts) => agent(`Write one report:\n${parts.audits.output}`),
-    { final: true },
-  );
-});
-```
-
-```bash
-pnpm add -D taskflow-dsl
-taskflow-dsl check audit.tf.ts
-taskflow-dsl build audit.tf.ts --emit both
-# → audit.taskflow.json + audit.flowir.json
-```
-
-`.tf.ts` **只存在于编译期**。宿主执行生成的 Taskflow JSON，绝不会解释执行 TypeScript。
-
-### 编译成一份可以推理的合同
-
-FlowIR 规范化整张图，并赋予它内容哈希。这个编译身份让 provenance 与过期分析变得可检查，而运行时在其上提供内容寻址缓存与确定性工具：
-
-| 操作 | 它回答什么 | 模型调用 |
-|---|---|---:|
-| **`plan`** | 会跑谁、参数是否绑定、worst-case agent 调用上界？ | **0** |
-| `verify` / `compile` / `lint` | 结构是否安全 / lint 是否干净？ | **0** |
-| `ir` | 规范化图和内容哈希是什么？ | **0** |
-| `resume` | 还有哪些未完成工作？（派生新运行，原运行不变） | 仅未完成阶段 |
-| `trace` | 实际发生了哪些调用和运行时决策？ | 查看时 **0** |
-| `replay` | 如果阈值或预算不同，结果会怎样？ | **0** |
-| `why-stale` | 什么变了，哪些节点依赖它？ | **0** |
-| `recompute` | 最小可观测受影响前沿是什么？（含省钱一行） | 仅受影响阶段 |
-| `analytics` | 这个 flow 最近 N 次跑得怎么样？ | **0** |
-
-[探索编译器与运行时 →](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/)
 
 ## 一套运行时，12 种阶段
 
 | 家族 | 阶段 | 用途 |
 |---|---|---|
-| **工作** | `agent` · `parallel` · `map` · `reduce` · `script` | 单任务、静态并发、动态 fan-out、聚合、零 token shell 步骤 |
-| **控制** | `gate` · `approval` · `flow` · `loop` | 质量决策、人工检查点、组合、迭代改进 |
+| **工作** | `agent` · `parallel` · `map` · `reduce` · `script` | 单任务、静态并发、动态 fan-out、聚合与零 token shell 步骤 |
+| **控制** | `gate` · `approval` · `flow` · `loop` | 质量决策、人工检查点、组合与迭代改进 |
 | **选择** | `tournament` · `race` | best-of-N 质量或 first-success 延迟 |
-| **动态图** | `expand` | 校验并执行运行时产出的片段，可嵌套或提升 |
+| **动态图** | `expand` | 校验并执行运行时产出的嵌套或提升片段 |
 
-在这些阶段类型之上，DSL 提供依赖、条件、重试、超时、输出合同、预算、工作区隔离和明确的最终输出选择。每种类型只接受对它安全且有意义的字段；对新鲜度敏感的阶段不会进入跨运行缓存。
+在这些阶段类型之上，运行时提供依赖、条件、重试、超时、输出合同、预算、工作区隔离、明确的最终输出选择，以及支持 resume 的持久化。每种阶段只接受对它安全且有意义的字段。
 
-[阅读阶段参考 →](https://heggria.github.io/taskflow/zh-cn/docs/syntax/phase-types)
+常用的零 token 操作：
 
-## 运行时保证，而不是 prompt 约定
-
-### 花费前先验证
-
-环路、悬空依赖、无效引用、不可能的 join、不安全的动态片段与配置风险，会在昂贵工作开始前被拒绝或明确暴露。
-
-### 中间工作不进入宿主上下文
-
-负责 agent 工作的阶段运行在隔离的 subagent 进程中；控制阶段和 script 阶段留在运行时内部。上游输出由运行时在内部接入下游输入。除非明确使用 `peek` 或 `trace`，否则只有 `finalOutput` 返回宿主。
-
-### 穿越会话与失败
-
-阶段状态以原子方式持久化。续跑会跳过未变化的已完成工作；Pi 的 detached 运行可以活过发起会话；idle watchdog 会终止卡死的 subagent。
-
-### 诚实地复用工作
-
-运行内续跑基于内容寻址。跨运行缓存需显式开启，并可把 Git commit、文件、glob、环境变量和 TTL 纳入指纹。改变一个已声明输入，只有其依赖项会变为陈旧。
-
-### 限制爆炸半径
-
-预算、并发上限、重试、超时、嵌套深度、动态图宽度、路径包含检查、非幂等阶段分类，以及审批 fail-closed 都是运行时语义，不是写在 prompt 里的建议。
-
-### 0.2.1：安全动态 cwd 与 Pi 终态回收
-
-声明为 `type: "relative-path"` 的调用参数，可以通过严格完整的
-`cwd: "{args.package}"` 选择 phase 工作目录。该桥默认关闭，需要 Host 显式
-授权 `resolve-only`，并把 canonical 目录限制在 invocation root 内。绝对路径、
-字符串拼接和 `{steps.*}` 仍会被拒绝；这个兼容桥不是 OS sandbox。
-同一次 invocation 内的 resolve-only 写阶段会在获取持久 lease 前串行化，避免
-fan-out 自己等待自己超时，同时仍以跨进程 lease 保护其他 Taskflow 进程。
-
-Pi 子 agent 默认不再继承 ambient extensions。可信 Host 可以配置明确的扩展
-白名单，或显式恢复旧版继承行为。如果 Pi 子进程已经产出经过验证的最终答案和
-终态事件，却因扩展遗留 handle 而不退出，Taskflow 会等待有限 grace 窗口、回收
-整个进程组，并记录 `completionSource: "terminal-reap"`，而不是误报 timeout。
-
-```json
-{
-  "taskflow": {
-    "piChild": {
-      "resourceProfile": "isolated",
-      "extensions": [],
-      "terminalGraceMs": 1500
-    }
-  }
-}
-```
-
-`allowlist` 接受显式可信扩展文件；`inherit` 仅作为兼容模式恢复 Pi ambient
-extension discovery。Flow 无权扩大这项 Host 权限。
-
-[阅读核心概念 →](https://heggria.github.io/taskflow/zh-cn/docs/concepts/)
-
-## 安装到你的宿主
-
-所有包都要求 **Node.js ≥ 22.19.0**。
-
-### Pi
-
-```bash
-pi install npm:pi-taskflow
-```
-
-Pi 提供最完整的本地体验：`taskflow` 工具、`/tf` 命令、实时 DAG 渲染、交互审批、后台运行与模型角色配置。
-
-[Pi 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/pi)
-
-### OpenAI Codex
-
-```bash
-codex plugin marketplace add heggria/taskflow
-codex plugin add taskflow@taskflow
-```
-
-[Codex 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/codex)
-
-### Claude Code
-
-```bash
-claude plugin marketplace add heggria/taskflow
-claude plugin install claude-taskflow@taskflow
-```
-
-[Claude Code 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/claude-code)
-
-### OpenCode
-
-```bash
-opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.10 opencode-taskflow-mcp
-```
-
-[OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
-
-### Grok Build
-
-```bash
-grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
-```
-
-Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
-
-[Grok Build 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/grok-build)
-
-### Hermes Agent
-
-```bash
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
-# 优先在 config.yaml 写 env（不要用 CLI --env 塞进 node argv）：
-#   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
-```
-
-Hermes quiet 模式不返回 token/cost，声明了预算的 flow 会被拒绝。子代理使用临时 HERMES_HOME，只继承非 secret 的 model/fallback 路由、仅含已路由 inference provider 的 `auth.json` 与 provider allowlist dotenv；不继承父级 MCP、skills、memory、sessions 或 rules。只读 phase 默认无工具（零网络）；READONLY_WEB=1 → web,search——Hermes 只读本地读用插件 toolset `taskflow_readonly_files`。
-
-[Hermes 指南 →](./docs/hermes-mcp.md)
-
-## 为真实工作而生
-
-<div align="center">
-
-**10 个包** · **6 个宿主** · **12 种阶段** · **18 个内置 agent** · **1,500+ 测试** · **MIT**
-
-</div>
-
-```text
-                              taskflow-core
-                 ┌──────────────┼───────────────┐
-                 │              │               │
-           taskflow-dsl   pi-taskflow   taskflow-mcp-core ─┐
-                                       taskflow-hosts ─────┼─ codex-taskflow
-                                                          ├─ claude-taskflow
-                                                          ├─ opencode-taskflow
-                                                          ├─ grok-taskflow
-                                                          └─ hermes-taskflow
-```
-
-`taskflow-core` 保持宿主无关，不导入任何宿主 SDK。`taskflow-mcp-core` 在不依赖 MCP SDK 的情况下实现 stdio JSON-RPC；`taskflow-hosts` 负责共享宿主进程 runner。五个 MCP 交付包绑定这两层（以及 core），而 Pi 保留原生适配器。
-
-测试套件覆盖编排语义、持久化与文件锁竞态、缓存新鲜度、路径穿越、动态图加固、取消、预算、全部 12 种阶段、FlowIR/replay/recompute、TypeScript DSL 擦除、宿主 argv 合同、MCP server，以及打包后的 consumer imports。
-
-## 文档
-
-| 从这里开始 | 当你需要 |
+| 操作 | 它回答什么 |
 |---|---|
-| [快速开始](https://heggria.github.io/taskflow/zh-cn/docs/getting-started) | 第一次成功运行 |
-| [核心概念](https://heggria.github.io/taskflow/zh-cn/docs/concepts/) | DAG、隔离、验证、续跑、共享上下文 |
-| [语法](https://heggria.github.io/taskflow/zh-cn/docs/syntax/) | 阶段字段、控制流、预算、缓存、scorer |
-| [编译器与运行时](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/) | TypeScript DSL、FlowIR、重放、重算、后台运行 |
-| [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok、Hermes 配置 |
-| [参考](https://heggria.github.io/taskflow/zh-cn/docs/reference/) | 命令、简写与精确工具接口 |
-| [Showcase](https://heggria.github.io/taskflow/zh-cn/docs/showcase/) | 真实 flow 与案例研究 |
-| [0.2.0 前沿性评估](./docs/taskflow-0.2.0-frontier-assessment.zh-CN.md) | 基于源码、竞品与采用数据的独立技术报告 |
+| `taskflow_plan` | 会运行什么、参数如何绑定、最坏会调用多少 agent？ |
+| `taskflow_verify` / `taskflow_compile` | 图在结构上是否有效，规范化形式是什么？ |
+| `taskflow_trace` / `taskflow_replay` | 实际发生了什么，或零 token 的 what-if replay 会怎样？ |
+| `taskflow_why_stale` / `taskflow_recompute` | 什么变了，最小受影响前沿是什么？ |
+| `taskflow_why_effect` | 为什么一个声明的 effect 被允许、stage、commit、reject，或仍是 unknown？ |
+| `taskflow_analytics` | 最近的运行表现如何？ |
 
-另见 [`examples/`](./examples)、[变更日志](./CHANGELOG.md)和[发版指南](./RELEASE.md)。
+当前 MCP 表面暴露 **20 个工具**。除非明确使用 `peek` 或 `trace`，中间 transcript 会留在运行时，宿主通常只收到 `finalOutput`。
 
-## 贡献
+## 宿主适配器
+
+同一份 flow 合同可以通过六个 coding-agent 宿主交付：
+
+- **Pi**：原生扩展、`/tf` 命令、实时运行视图与交互式审批。
+- **Codex**：plugin 与 stdio MCP server。
+- **Claude Code**：plugin 与 stdio MCP server。
+- **OpenCode**：MCP 配置与生成的 skill。
+- **Grok Build**：MCP 配置与生成的 skill。
+- **Hermes Agent**：带显式子代理 toolset 与隔离策略的 MCP 交付。
+
+宿主支持不是一揽子安全保证。启用 mutating phase 前，请阅读[宿主支持基线](./conformance/workspace/host-support-baseline.json)与 [Trusted Effects 定义](./docs/internal/0.3.0-trusted-effects-mvp.md)。
+
+## 我们明确声明的安全边界
+
+- `effects[]` 是声明与校验表面，不是 ambient authority。
+- resources 层是已准入、已声明文件 effect 的唯一最终提交者。
+- MVP 路径会检测并恢复对已声明目标的直接写入。
+- 在 resolve-only 执行下，未声明路径的写入仍取决于宿主策略。
+- `SecretRef` 与 `ServiceRef` 只是类型化句柄；这一版没有 vault 或 live service adapter。
+- 0.3 MVP 不声称提供 FileBroker 或完整 OS sandbox。
+- Control Plane receipt 与 WebUI 属于活跃的 0.3-C 轨道，不证明 0.3 已发布或 GA。
+
+## 开发
 
 ```bash
 pnpm install
 pnpm run typecheck
 pnpm test
 pnpm run build
+pnpm run build:website
 pnpm run test:pack
 ```
 
-欢迎贡献。请先阅读 [`CONTRIBUTING.md`](./CONTRIBUTING.md) 了解工作流，以及 [`AGENTS.md`](./AGENTS.md) 了解架构与编码规范。
+这个 monorepo 包含 host-neutral 的 `taskflow-core`、Trusted Effects 与 resources 代码、0.3-C 合同 package `taskflow-control`、TypeScript DSL、MCP/宿主适配器、示例与网站。架构和编码约定见 [`AGENTS.md`](./AGENTS.md)。
 
-## 许可
+## 文档
+
+| 从这里开始 | 适用场景 |
+|---|---|
+| [0.3 总览](https://heggria.github.io/taskflow/zh-cn/docs) | candidate 范围、状态与诚实的安全边界 |
+| [快速开始](https://heggria.github.io/taskflow/zh-cn/docs/getting-started) | 第一个 flow 与宿主配置 |
+| [核心概念](https://heggria.github.io/taskflow/zh-cn/docs/concepts/) | DAG、隔离、验证、续跑与 evidence |
+| [编译器与运行时](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/) | JSON、TypeScript DSL、FlowIR、replay 与 recompute |
+| [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok 与 Hermes |
+| [示例](./examples) | 可运行的 flow 定义，包括 Trusted Effects |
+| [变更记录](./CHANGELOG.md) | 发布历史与 candidate 说明 |
+
+## 许可证
 
 [MIT](./LICENSE) © [heggria](https://github.com/heggria)
 
 <div align="center">
 
-**只声明一次。花费前验证。只重算变化部分。**
+**声明 effect。验证路径。让一个 authority 负责提交。**
 
-[阅读文档](https://heggria.github.io/taskflow/zh-cn/docs) · [运行示例](./examples) · [查看版本](https://github.com/heggria/taskflow/releases)
+[阅读文档](https://heggria.github.io/taskflow/zh-cn/docs) · [试用 candidate](#快速开始) · [查看 releases](https://github.com/heggria/taskflow/releases)
 
 </div>
