@@ -19,12 +19,7 @@ Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-tas
 
 ## One-time repository setup
 
-The canonical release path is the tag-triggered GitHub Actions workflow. A
-repository administrator must configure `NPM_TOKEN` for an npm account allowed
-to publish all ten package names. The workflow itself uses least-privilege
-`contents: read` plus `id-token: write` and publishes with npm provenance. Do
-not publish a release from a developer workstation: a manual publish cannot
-provide the workflow identity and source/tag guarantees enforced on reruns.
+The beta release path is `v0.3.0-beta.1`: merge the reviewed release commit to `main`, then push the tag. `.github/workflows/publish.yml` validates the `0.3.0-beta.*` prerelease family, publishes the same ten packages to npm's `beta` dist-tag with provenance, and creates a prerelease GitHub Release. Do not publish from a workstation.
 
 ## Pre-flight (always)
 
@@ -82,8 +77,8 @@ the matching annotated tag:
 ```sh
 git switch main
 git pull --ff-only origin main
-git tag -a v0.2.10 -m "Release v0.2.10"
-git push origin v0.2.10
+git tag -a v0.3.0-beta.1 -m "Release v0.3.0-beta.1"
+git push origin v0.3.0-beta.1
 ```
 
 `.github/workflows/publish.yml` then performs the complete release transaction:
@@ -119,7 +114,7 @@ pnpm view hermes-taskflow version --registry=https://registry.npmjs.org/
 ```
 
 Also verify the `Publish & Release` workflow completed successfully and that
-the non-draft, non-prerelease GitHub Release targets the tagged commit. A
+the non-draft prerelease GitHub Release targets the tagged commit. A
 partially published ten-package set is not a completed release; fix the cause
 and rerun the same tag workflow rather than creating a replacement tag or
 publishing missing packages manually.
@@ -139,24 +134,27 @@ publishing missing packages manually.
 
 ## Install (end users)
 
-```sh
-# Pi users (unchanged):
-pi install npm:pi-taskflow
+The 0.3 beta is prepared for npm's `beta` channel; after the tag workflow publishes it, use `@beta` explicitly. The stable examples below remain pinned to `0.2.10`.
 
-# Codex users (plugin):
+```sh
+# Pi users:
+pi install npm:pi-taskflow@beta
+
+# Codex users (plugin source; npm MCP package uses @beta):
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
 
-# Claude Code users (plugin):
+# Claude Code users (plugin source; npm MCP package uses @beta):
 claude plugin marketplace add heggria/taskflow
 claude plugin install claude-taskflow@taskflow
 
-# OpenCode users (MCP server):
-opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+# OpenCode users (beta MCP server):
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
 
-# Grok Build (published MCP package)
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
-# or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+# Grok Build (beta MCP package)
+grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
 
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
+# Hermes Agent (beta MCP package)
+# 0.3 beta candidate (after publication, select @beta)
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@beta hermes-taskflow-mcp
 ```

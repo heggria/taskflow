@@ -2,10 +2,9 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [0.3.0] — Unreleased (Trusted Effects candidate)
+## [0.3.0-beta.1] — 2026-08-13
 
-> **Version plan:** keep published packages at **0.2.9** until a human cuts `v0.3.0`.
-> Branch: `rc/0.3.0-trusted-effects`. **Not GA until tag + publish.**
+> **Pre-release candidate:** `0.3.0-beta.1` is prepared for npm's `beta` dist-tag. It is **not GA**. The 0.3-C Control Plane remains a follow-on candidate track, not part of this beta's shipped product definition.
 
 ### Added
 
@@ -34,7 +33,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - SecretRef/ServiceRef have **no** vault/network backends in this cut.
 - Resolve-only is not an OS sandbox. Direct writes to declared targets are detected and restored; writes outside declared targets remain host-policy dependent.
 - Historical Control Plane (`feat/0.3.0`) is **not** this release definition.
-- **Not released; not GA.**
+- **Beta release; not GA.**
 
 ## [0.2.10] — 2026-08-12
 

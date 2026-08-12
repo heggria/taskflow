@@ -21,7 +21,7 @@
 
 **taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 0.3 candidate 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-> **状态：0.3.0 Trusted Effects candidate——未发布、未 GA。** 在人工创建 `v0.3.0` tag 并发布前，已发布 package 仍保持 0.2.x 版本线。下文描述的是当前 candidate，不是最终发布承诺。
+> **状态：0.3.0-beta.1 Trusted Effects beta——beta channel，尚未 GA。** 当前 release candidate 已准备发布到 npm 的 `beta` channel；beta 包含下文所述的 Trusted Effects MVP。0.3-C Control Plane 仍是后续 candidate 轨道，不是 beta 已交付的产品表面。
 
 ## 0.3 的核心想法
 
@@ -62,7 +62,7 @@ flow / .tf.ts
 
 ## 快速开始
 
-0.3 candidate 当前从源码开发。准备干净 checkout，并使用 Node.js **≥ 22.19.0**：
+0.3 beta 可以从 npm 安装，也可以从源码 checkout 运行。准备 Node.js **≥ 22.19.0**：
 
 ```bash
 git clone https://github.com/heggria/taskflow.git
@@ -72,6 +72,15 @@ pnpm install
 pnpm run typecheck
 pnpm test
 ```
+
+以下 beta 命令在 tag workflow 完成后可用；在此之前它们只是发版目标示例，不代表 registry 已可获取。
+
+```bash
+npm install --global pi-taskflow@beta
+npm install --global codex-taskflow@beta
+```
+
+各宿主的 plugin 与 MCP 命令见[宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/)。稳定的 0.2.x 安装仍可使用精确 stable pin。
 
 运行不需要 LLM 的 Trusted Effects vertical-slice fixture：
 

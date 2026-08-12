@@ -21,7 +21,7 @@
 
 **taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 0.3 candidate, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 0.3.0 Trusted Effects candidate — unreleased and not GA.** Published packages remain on the 0.2.x line until a human cuts the `v0.3.0` tag and publishes it. The claims below describe the current candidate, not a promise of the final release.
+> **Status: 0.3.0-beta.1 Trusted Effects beta — beta channel, not GA.** This release candidate is prepared for npm's `beta` channel; the beta ships the Trusted Effects MVP described below. The 0.3-C Control Plane remains a follow-on candidate track; it is not a shipped beta surface.
 
 ## The 0.3 idea
 
@@ -62,7 +62,7 @@ The normative MVP definition is [`docs/internal/0.3.0-trusted-effects-mvp.md`](.
 
 ## Quickstart
 
-The 0.3 candidate is developed from source. Use a clean checkout and Node.js **≥ 22.19.0**:
+The 0.3 beta can be installed from npm, or exercised from a clean source checkout. Use Node.js **≥ 22.19.0**:
 
 ```bash
 git clone https://github.com/heggria/taskflow.git
@@ -72,6 +72,14 @@ pnpm install
 pnpm run typecheck
 pnpm test
 ```
+
+The beta commands below become usable after the tag workflow completes; until then they are release-target examples, not proof of registry availability.
+```bash
+npm install --global pi-taskflow@beta
+npm install --global codex-taskflow@beta
+```
+
+The host-specific plugin and MCP commands remain in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/). Stable 0.2.x installs remain available through exact stable pins.
 
 Run the no-LLM Trusted Effects vertical-slice fixture:
 

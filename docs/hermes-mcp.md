@@ -15,7 +15,7 @@ Or paste into `~/.hermes/config.yaml` (see `packages/hermes-taskflow/plugin/herm
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow@0.2.10", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow@beta", "hermes-taskflow-mcp"]
     env:
       # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases
     timeout: 600

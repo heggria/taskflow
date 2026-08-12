@@ -16,7 +16,7 @@ OpenCode 没有基于 git 的插件市场，所以你直接注册 MCP 服务器�
 ### 方式 A：CLI
 
 ```bash title="通过 CLI 注册 MCP 服务器"
-opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
 ```
 
 ### 方式 B：编辑 opencode.json
@@ -27,7 +27,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
   "mcp": {
     "taskflow": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "opencode-taskflow", "opencode-taskflow-mcp"],
+      "command": ["npx", "-y", "-p", "opencode-taskflow@beta", "opencode-taskflow-mcp"],
       "enabled": true
     }
   },

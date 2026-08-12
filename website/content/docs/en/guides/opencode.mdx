@@ -16,7 +16,7 @@ OpenCode has no git-based plugin marketplace, so you register the MCP server dir
 ### Option A: the CLI
 
 ```bash title="Register the MCP server via the CLI"
-opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
 ```
 
 ### Option B: edit opencode.json
@@ -27,7 +27,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
   "mcp": {
     "taskflow": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "opencode-taskflow", "opencode-taskflow-mcp"],
+      "command": ["npx", "-y", "-p", "opencode-taskflow@beta", "opencode-taskflow-mcp"],
       "enabled": true
     }
   },

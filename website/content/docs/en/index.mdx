@@ -3,7 +3,7 @@ title: taskflow 0.3 Documentation
 description: "Trusted Effects for coding-agent workflows: declare effects, verify typed paths, and commit admitted filesystem changes through one resource authority."
 ---
 
-> **0.3 candidate — unreleased and not GA.** The published package line remains 0.2.x until a human cuts and publishes `v0.3.0`.
+> **0.3.0-beta.1 — beta channel candidate, not GA.** This page describes the Trusted Effects MVP prepared for the beta release. The 0.3-C Control Plane remains a follow-on candidate track.
 
 taskflow is a declarative runtime for coding-agent workflows. It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate transcripts out of the host conversation. The 0.3 candidate adds **Trusted Effects**: a typed declaration and resource-controlled commit path for admitted filesystem effects.
 
@@ -47,7 +47,7 @@ taskflow is a declarative runtime for coding-agent workflows. It turns a graph i
 
 ## Install on your host
 
-The 0.3 candidate is currently developed from this repository. For the stable published host packages, follow the existing host guides and keep the package pins on the published 0.2.x line.
+The 0.3 beta is available from npm's `beta` channel, or from this repository for source-level work. Stable host guides continue to use the published 0.2.x line unless you explicitly select the beta channel.
 
 <Callout type="tip">
   Every taskflow package requires **Node.js 22.19.0 or newer**. The candidate's source and fixture checks use pnpm from the repository checkout.

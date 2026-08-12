@@ -3,7 +3,7 @@ title: taskflow 0.3 文档
 description: "面向 coding-agent 工作流的 Trusted Effects：声明 effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。"
 ---
 
-> **0.3 candidate——未发布、未 GA。** 在人工创建并发布 `v0.3.0` 前，已发布 package 仍保持 0.2.x 版本线。
+> **0.3.0-beta.1——beta channel candidate，尚未 GA。** 这个页面描述为 beta 发布准备的 Trusted Effects MVP；0.3-C Control Plane 仍是后续 candidate 轨道。
 
 taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间 transcript 留在宿主对话之外。0.3 candidate 增加了 **Trusted Effects**：为已准入的文件 effect 提供类型化声明与受 resources 控制的提交路径。
 
@@ -47,7 +47,7 @@ taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图
 
 ## 在你的宿主上使用
 
-0.3 candidate 当前从仓库源码开发。稳定的已发布宿主 package 仍请按现有宿主指南操作，并保持已发布的 0.2.x package pin。
+0.3 beta 可从 npm 的 `beta` channel 安装，也可从仓库源码运行。若未显式选择 beta，稳定宿主指南仍使用已发布的 0.2.x package pin。
 
 <Callout type="tip">
   所有 taskflow package 都要求 **Node.js 22.19.0 或更高版本**。Candidate 的源码与 fixture 检查使用仓库内的 pnpm。

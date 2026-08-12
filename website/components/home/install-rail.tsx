@@ -9,7 +9,7 @@ const HOSTS: { id: HostId; label: string; command: string; guide: string }[] = [
 	{
 		id: "pi",
 		label: "Pi",
-		command: "pi install npm:pi-taskflow",
+		command: "pi install npm:pi-taskflow@beta",
 		guide: "/docs/getting-started",
 	},
 	{
@@ -30,21 +30,21 @@ const HOSTS: { id: HostId; label: string; command: string; guide: string }[] = [
 		id: "opencode",
 		label: "OpenCode",
 		command:
-			"opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp",
+			"opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp",
 		guide: "/docs/getting-started",
 	},
 	{
 		id: "grok",
 		label: "Grok",
 		command:
-			"grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp",
+			"grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp",
 		guide: "/docs/getting-started",
 	},
 	{
 		id: "hermes",
 		label: "Hermes",
 		command:
-			"hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp",
+			"hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@beta hermes-taskflow-mcp",
 		guide: "/docs/guides/hermes",
 	},
 ];

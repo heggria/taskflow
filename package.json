@@ -1,6 +1,6 @@
 {
 	"name": "pi-taskflow-monorepo",
-	"version": "0.2.10",
+	"version": "0.3.0-beta.1",
 	"private": true,
 	"description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the private CharterArc experiment.",
 	"type": "module",

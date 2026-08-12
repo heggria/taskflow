@@ -1,18 +1,18 @@
-# rc: 0.3.0 Trusted Effects candidate (do not publish)
+# rc: 0.3.0 Trusted Effects beta.1
 
-> Draft PR body. **Not for npm publish** — published packages stay at **0.2.8** until a human cuts `v0.3.0`.
+> Draft PR body for `0.3.0-beta.1`. The beta uses npm dist-tag `beta` and is not GA.
 > This file is the source for the GitHub PR description.
 
 ## Base / Head
 
 | | |
 |---|---|
-| Base | `main` @ `4b04e0d` — fix(pi): require explicit approval confirmation (#119) |
-| Head | `rc/0.3.0-trusted-effects` @ `0551f62` (23 commits ahead of main) |
-| Status | **DRAFT — do not merge, do not publish** |
-| Post-ADV harden | `cbb4131` discovery/file-tx + `580daa0` S-H2; CI 31466355338 green |
+| Base | `main` @ `8fc6981` — current PR base |
+| Head | `rc/0.3.0-trusted-effects` @ `f5284da` (23 commits ahead of main) |
+| Status | **DRAFT — beta release preparation** |
+| Post-ADV harden | `cbb4131` discovery/file-tx + `580daa0` S-H2; CI 31613909075 green |
 
-This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `0551f62` is the exact head this PR is built from (Draft PR #122 — this PR).
+This PR supersedes the historical Draft **PR #117** (`head: codex/0.3.0-trusted-effects-candidate`). The `rc/0.3.0-trusted-effects` branch is the canonical candidate branch and its tip `f5284da` is the exact head this PR is built from (Draft PR #122 — this PR).
 
 ## Summary
 
@@ -46,14 +46,14 @@ This candidate guarantees **admitted declared filesystem write targets**. It doe
 
 | Gate | Status | Notes |
 |---|---|---|
-| L1 local | **PASS** | `e7c5e31`: monorepo typecheck PASS (local + CI node 22/24); `pnpm audit --prod` clean (RC pipeline at `6071fb2` — CI does not run audit) |
-| L2 contract | **PASS** | full unit suite 2198 pass / 0 fail / 4 skipped (local + CI node 22/24); full build PASS (CI build job); `test:pack` 9 packages + CharterArc PASS (CI packed-consumer) at exact SHA `e7c5e31` |
+| L1 local | **PASS** | Current candidate has local typecheck/test/build/pack evidence; `pnpm audit --prod` remains a separate local gate |
+| L2 contract | **PASS** | Exact-SHA CI run 31613909075: Node 22/24 tests, full build, packed consumer (10 packages) and MCP E2E all pass |
 | L3 browser/electron | N/A | — |
-| L4 real-environment | **PASS (built-MCP fixture)** | built Codex MCP comprehensive e2e 16/16 incl. TE fixture — `fs.write` committed through resources + ledger-backed why-effect — against the built dist bin (`codex-mcp-full.log`; evidence SHA `6071fb2` per build-info stamp; CI e2e job re-runs `test:e2e-codex-mcp-full` at exact SHA `e7c5e31`). **NOT** a live Codex CLI run: `test:e2e-codex` NOT rerun on the current tip (prior-candidate A→B→C historical only) |
-| L5 released | **FAIL** | no tag/publish — human gate |
+| L4 real-environment | **PASS (built-MCP fixture)** | CI exercises the built MCP artifact and checked-in no-LLM Trusted Effects fixture. Live Codex evidence is historical to the current tip and is not being overclaimed. |
+| L5 released | **FAIL** | no `v0.3.0-beta.1` tag/publish — human gate |
 | L6 ga | **FAIL** | L5 missing — **NOT GA** |
 
-Exact-SHA remote CI is **GREEN**: GitHub Actions run 31460133496 on this PR's head `e7c5e31` passed the full matrix (test node 22/24, e2e codex MCP network-free incl. built-dist comprehensive, build dist, packed consumer 9 pkgs + CharterArc, website export, process supervisor ubuntu/macos/windows, CodeQL JS/TS). A prior red run 31456747148 on `0f9cf16` (windows store tests) was fixed by the test-harness portability change in `e7c5e31`. Historical Draft PR #117 run `31167592775` passed all jobs on `1478510f` (earlier candidate SHA).
+Exact-SHA remote CI is **GREEN**: GitHub Actions run 31613909075 on this PR's head `f5284da` passed the full matrix (Node 22/24 tests, built MCP E2E, build, packed consumer, website export, process supervisor Ubuntu/macOS/Windows, CodeQL).
 
 ## Commits (rc/0.3.0-trusted-effects vs main, newest first)
 
@@ -74,5 +74,5 @@ e6efcd4 feat(effects): add resource-controlled trusted writes
 
 ## Release state
 
-- CHANGELOG: `## [0.3.0] — Unreleased (Trusted Effects candidate)` — still Unreleased.
-- **Not released; not GA.** No tag, no npm publish — blocked on explicit human authorization to cut `v0.3.0`.
+- CHANGELOG: `## [0.3.0-beta.1] — 2026-08-13` — beta prerelease.
+- **Beta not yet published; not GA.** Tag and npm publication remain human-authorized release gates.
