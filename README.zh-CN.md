@@ -13,7 +13,7 @@
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.9 新能力](#029-hermes-agent--verify-对齐) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.10 新能力](#0210可组织可携带的-saved-flow) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -167,6 +167,12 @@ pi install npm:pi-taskflow
 ```
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
+
+## 0.2.10：可组织、可携带的 saved flow
+
+saved flow 现在可以按受限约定放在 `.pi/taskflows/flows/**` 下分目录管理，同时旧顶层 flow 的优先级和行为保持不变。文件来源可信的 flow 可显式设置 `scriptCwd: "flow"`，让相邻的脚本、模板和 fixtures 作为一个目录整体复制、审阅和版本控制。
+
+发现、来源和持久化继续 fail closed：递归扫描共享文件数、entry、目录数、字节和深度预算；排除边界下的 symlink；来源身份贯穿前台、后台、resume 与 subflow；嵌套 definition/sidecar 在 atomic promotion 各阶段重验物理父目录。[完整 0.2.10 说明 →](./CHANGELOG.md#0210--2026-08-12)
 
 ## 0.2.9：Hermes Agent + verify 对齐
 
@@ -366,7 +372,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.10 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -375,7 +381,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
@@ -385,7 +391,7 @@ Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用�
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
 # 优先在 config.yaml 写 env（不要用 CLI --env 塞进 node argv）：
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
 ```

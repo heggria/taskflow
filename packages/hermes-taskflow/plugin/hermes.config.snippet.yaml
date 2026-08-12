@@ -14,7 +14,7 @@
 
 taskflow:
   command: "npx"
-  args: ["-y", "-p", "hermes-taskflow@0.2.9", "hermes-taskflow-mcp"]
+  args: ["-y", "-p", "hermes-taskflow@0.2.10", "hermes-taskflow-mcp"]
   env:
     # Uncomment for mutating agent phases (terminal / file write).
     # Leave unset for verify/plan/script-only flows.

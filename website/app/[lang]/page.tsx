@@ -25,7 +25,7 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.2.9",
+			eyebrow: "taskflow 0.2.10",
 			title: [
 				"Plan before spend.",
 				"Close the loop after.",
@@ -187,7 +187,7 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.2.9",
+			eyebrow: "taskflow 0.2.10",
 			title: ["花 token 前先计划。", "跑完闭环通知。", "只重算变化部分。"],
 			sub: "taskflow 把多代理编程工作变成可编译的运行时：声明式图、零 token preflight、隔离执行、跑完 hooks、确定性 replay，以及跨 Pi、Codex、Claude Code、OpenCode、Grok、Hermes 的增量重算。",
 			noteKicker: "面向 coding agents 的 compiled runtime",
@@ -341,7 +341,7 @@ export default async function HomePage({
 		"@context": "https://schema.org",
 		"@type": "SoftwareApplication",
 		name: "taskflow",
-		softwareVersion: "0.2.9",
+		softwareVersion: "0.2.10",
 		description: t.hero.sub,
 		applicationCategory: "DeveloperApplication",
 		operatingSystem: "Any",
