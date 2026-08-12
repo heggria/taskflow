@@ -49,6 +49,7 @@ export interface FlowOptions {
 	strictInterpolation?: boolean;
 	contextSharing?: boolean;
 	incremental?: boolean;
+	scriptCwd?: "invocation" | "flow";
 }
 
 export interface PhaseOptions<TJson = unknown> {

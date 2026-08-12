@@ -202,7 +202,7 @@ export function decompileTaskflow(def: Taskflow): string {
 	lines.push(`import { ${importList.join(", ")} } from "taskflow-dsl";`);
 	lines.push(``);
 	const flowOpts: Record<string, unknown> = {};
-	for (const key of ["description", "version", "agentScope", "strictInterpolation", "contextSharing", "incremental"] as const) {
+	for (const key of ["description", "version", "agentScope", "strictInterpolation", "contextSharing", "incremental", "scriptCwd"] as const) {
 		const value = (def as unknown as Record<string, unknown>)[key];
 		if (value !== undefined) flowOpts[key] = value;
 	}

@@ -101,10 +101,15 @@ function parentDoneABFailedC(): RunState {
 
 test("forkRunForResume: child has a new runId + parentRunId, parent untouched", () => {
 	const prev = parentDoneABFailedC();
+	prev.flowSourceFile = "/repo/.pi/taskflows/flows/release/publish.json";
+	prev.flowSourceDirIdentity = { canonicalPath: "/repo/.pi/taskflows/flows/release", device: "1", inode: "2" };
 	const prevJson = JSON.stringify(prev);
 	const child = forkRunForResume(prev);
 	assert.notEqual(child.runId, prev.runId);
 	assert.equal(child.parentRunId, prev.runId);
+	assert.equal(child.flowSourceFile, prev.flowSourceFile);
+	assert.deepEqual(child.flowSourceDirIdentity, prev.flowSourceDirIdentity);
+	assert.notEqual(child.flowSourceDirIdentity, prev.flowSourceDirIdentity);
 	assert.equal(child.status, "running");
 	// Parent is NOT mutated.
 	assert.equal(JSON.stringify(prev), prevJson);

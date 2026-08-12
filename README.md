@@ -133,6 +133,22 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 
 On Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
 
+Large projects may organize saved definitions recursively below `.pi/taskflows/flows/`, for example `.pi/taskflows/flows/release/audit-api.json`. Legacy `.pi/taskflows/*.json` files remain discoverable and win same-scope name collisions; nested duplicates use locale-independent Unicode-scalar path order. Saving an already-discovered nested flow updates that file and its adjacent metadata in place; new flows still use the legacy top-level location. Discovery uses one shared user/project budget and fails closed if it exceeds 1,000 flows, 10,000 visited entries, 512 directories, 8 MiB of definition data, 1 MiB per definition, or 16 levels. It rejects symlinks below the trusted storage boundary through definition leaves and skips dot paths, metadata (`*.meta.json`), and compiled IR (`*.flowir.json`). The configured agent-directory boundary itself may be a symlink for compatible home-directory relocation. New-flow saves enforce the same storage-boundary policy and revalidate the physical target directory inside the write lock.
+
+A file-backed flow can opt script phases into definition-relative execution:
+
+```json
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
+  ]
+}
+```
+
+Here `./scripts/prepare.sh` resolves from the directory containing the saved flow or `defineFile`. The default remains `"invocation"`, and an explicit phase `cwd` still takes precedence. Inline definitions have no trusted file source and therefore fail closed if they request `scriptCwd: "flow"`. If execution inherits a cwd-bridge boundary, the resolved flow source directory must remain inside that boundary.
+
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 
 ## See the graph run

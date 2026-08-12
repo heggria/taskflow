@@ -535,6 +535,13 @@ export const TaskflowSchema = Type.Object(
 					"Default every phase to cross-run caching (scope:'cross-run') so re-running this flow reuses unchanged phases across runs/sessions. Equivalent to setting cache:{scope:'cross-run'} on every phase; per-phase cache settings and the cross-run-blocked types (gate/approval/loop/tournament) still take precedence. Default false (run-only — each run starts fresh unless a phase opts in). A run-time `incremental` argument overrides this.",
 			}),
 		),
+		scriptCwd: Type.Optional(
+			StringEnum(["invocation", "flow"] as const, {
+				description:
+					"Default cwd for script phases without an explicit phase.cwd. 'flow' uses the saved flow or defineFile directory; default 'invocation' preserves legacy behavior.",
+				default: "invocation",
+			}),
+		),
 		/**
 		 * Flow-level idle watchdog (ms) for all agent-running phases that don't set
 		 * their own `idleTimeout`. Positive (>= 1000) overrides the host default

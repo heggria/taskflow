@@ -275,7 +275,10 @@ try {
 		trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), state.flowName, state.runId)),
 		// No requestApproval — approval phases auto-reject in detached/CI mode
 		// (safety: approval gates are never bypassed; the run records the rejection).
-		loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+		loadSavedFlow: (name: string) => {
+			const saved = getFlow(ctx.cwd, name);
+			return saved ? { def: saved.def, filePath: saved.filePath, sourceDirIdentity: saved.sourceDirIdentity } : undefined;
+		},
 	};
 	if (ctx.incremental === true) deps.cacheScopeDefault = "cross-run";
 	try {

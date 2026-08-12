@@ -15,7 +15,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { describeLoadFailure, readDefineFile, type LoadResult } from "../src/store.ts";
+import { describeLoadFailure, readDefineFile, readDefineFileWithSource, type LoadResult } from "../src/store.ts";
+import { directoryIdentity } from "../src/cwd-bridge.ts";
 
 function tmpFile(prefix: string, content: string): string {
 	const p = path.join(os.tmpdir(), `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
@@ -87,6 +88,74 @@ test("readDefineFile: handles a JSON string define value (shorthand forms parse 
 	const f = tmpFile("sh", JSON.stringify(def));
 	assert.equal((valueOf(readDefineFile(f)) as { task: string }).task, "do something");
 	fs.unlinkSync(f);
+});
+
+test("readDefineFileWithSource: binds parsed content to canonical file and parent identity", () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-define-source-"));
+	try {
+		const file = path.join(dir, "flow.json");
+		fs.writeFileSync(file, JSON.stringify({ name: "stable", phases: [] }), "utf8");
+		const loaded = valueOf(readDefineFileWithSource(file));
+		assert.equal((loaded.value as { name: string }).name, "stable");
+		assert.equal(loaded.filePath, fs.realpathSync(file));
+		assert.deepEqual(loaded.sourceDirIdentity, directoryIdentity(dir));
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("readDefineFileWithSource: enforces stable allowed-root containment", () => {
+	const allowed = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-define-allowed-"));
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-define-outside-"));
+	try {
+		const insideFile = path.join(allowed, "inside.json");
+		const outsideFile = path.join(outside, "outside.json");
+		const insideDef = { name: "inside", phases: [{ id: "p1", type: "agent", agent: "a", task: "inside" }] };
+		const outsideDef = { name: "outside", phases: [{ id: "p1", type: "agent", agent: "a", task: "outside" }] };
+		fs.writeFileSync(insideFile, JSON.stringify(insideDef));
+		fs.writeFileSync(outsideFile, JSON.stringify(outsideDef));
+		assert.equal(readDefineFileWithSource(insideFile, [fs.realpathSync(allowed)]).ok, true);
+		const escaped = readDefineFileWithSource(outsideFile, [fs.realpathSync(allowed)]);
+		assert.equal(escaped.ok, false);
+		if (!escaped.ok) assert.match(escaped.detail, /escaped or changed its canonical saved-flow root/);
+	} finally {
+		fs.rmSync(allowed, { recursive: true, force: true });
+		fs.rmSync(outside, { recursive: true, force: true });
+	}
+});
+
+test("readDefineFileWithSource: rejects a symlink definition leaf", (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-define-symlink-"));
+	try {
+		const target = path.join(dir, "target.json");
+		const link = path.join(dir, "link.json");
+		fs.writeFileSync(target, JSON.stringify({ name: "target", phases: [] }), "utf8");
+		try {
+			fs.symlinkSync(target, link, "file");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") {
+				t.skip("file symlinks unavailable");
+				return;
+			}
+			throw error;
+		}
+		const result = readDefineFileWithSource(link);
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.detail, /non-symlink/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("readDefineFileWithSource: rejects definitions above the per-file byte cap", () => {
+	const file = tmpFile("oversized", JSON.stringify({ name: "large", description: "x".repeat(1_100_000), phases: [] }));
+	try {
+		const result = readDefineFileWithSource(file);
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.detail, /1048576 byte limit/);
+	} finally {
+		fs.unlinkSync(file);
+	}
 });
 
 test("describeLoadFailure: formats a clear missing vs unparseable message", () => {

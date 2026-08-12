@@ -186,6 +186,8 @@ export function forkRunForResume(
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd: opts.cwd ?? prev.cwd,
+		...(prev.flowSourceFile !== undefined ? { flowSourceFile: prev.flowSourceFile } : {}),
+		...(prev.flowSourceDirIdentity !== undefined ? { flowSourceDirIdentity: structuredClone(prev.flowSourceDirIdentity) } : {}),
 		parentRunId: prev.runId,
 		// Preserve workspace provenance/authority so a resume cannot silently
 		// escape or downgrade the parent's cwd boundary.

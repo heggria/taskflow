@@ -154,7 +154,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 			} else {
 				diags.push(diag(file, sf, a1, "TFDSL_FLOW_OPTS_DYNAMIC", `Flow options must be a static JSON object without shorthand or spread properties.`));
 			}
-			const allowedFlowOpts = new Set(["description", "version", "agentScope", "strictInterpolation", "contextSharing", "incremental"]);
+			const allowedFlowOpts = new Set(["description", "version", "agentScope", "strictInterpolation", "contextSharing", "incremental", "scriptCwd"]);
 			for (const [key, value] of Object.entries(flowOpts)) {
 				if (!allowedFlowOpts.has(key)) {
 					diags.push(diag(file, sf, a1, "TFDSL_FLOW_OPTS_UNKNOWN", `Unknown flow option '${key}'.`));
@@ -164,6 +164,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 					(key === "description" && typeof value === "string") ||
 					(key === "version" && typeof value === "number") ||
 					(key === "agentScope" && (value === "user" || value === "project" || value === "both")) ||
+					(key === "scriptCwd" && (value === "invocation" || value === "flow")) ||
 					((key === "strictInterpolation" || key === "contextSharing" || key === "incremental") &&
 						typeof value === "boolean");
 				if (!valid) diags.push(diag(file, sf, a1, "TFDSL_FLOW_OPTS_TYPE", `Flow option '${key}' has an invalid static value.`));
@@ -460,6 +461,7 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 	if (typeof flowOpts.strictInterpolation === "boolean") taskflow.strictInterpolation = flowOpts.strictInterpolation;
 	if (typeof flowOpts.contextSharing === "boolean") taskflow.contextSharing = flowOpts.contextSharing;
 	if (typeof flowOpts.incremental === "boolean") taskflow.incremental = flowOpts.incremental;
+	if (flowOpts.scriptCwd === "invocation" || flowOpts.scriptCwd === "flow") taskflow.scriptCwd = flowOpts.scriptCwd;
 	if (topArgs) taskflow.args = topArgs;
 	if (concurrency !== undefined) taskflow.concurrency = concurrency;
 	if (budget) taskflow.budget = budget;

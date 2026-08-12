@@ -379,6 +379,7 @@ The rest of this page is the exhaustive reference — every top-level field, the
 | `strictInterpolation` | `boolean` | `false` | No | Promote validation warnings to hard errors. |
 | `contextSharing` | `boolean` | `false` | No | Enable the Shared Context Tree for all phases. |
 | `incremental` | `boolean` | `false` | No | Default every phase to cross-run caching. |
+| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | No | Default cwd for script phases without an explicit phase `cwd`. `"flow"` requires a saved flow or `defineFile` source and uses that file's directory; inherited cwd-bridge boundaries still constrain the resolved directory. |
 | `phases` | `Phase[]` (`minItems: 1`) | — | **Yes** | Ordered phase definitions. See [Phase Types](/en/docs/syntax/phase-types). |
 
 ### ArgSpec

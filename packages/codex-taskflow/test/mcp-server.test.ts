@@ -212,6 +212,34 @@ test("mcp: defineFile cannot escape cwd or the OS temp directory", async (t) => 
 	assert.match(res.error.message, /contained in the server cwd or OS temp directory/i);
 });
 
+test("mcp: defineFile rejects a lexical symlink leaf even when its target is contained", async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-mcp-define-symlink-"));
+	try {
+		const target = path.join(dir, "target.json");
+		const link = path.join(dir, "link.json");
+		fs.writeFileSync(target, JSON.stringify({
+			name: "define-symlink-target",
+			phases: [{ id: "a", type: "agent", agent: "default", task: "x", final: true }],
+		}));
+		try {
+			fs.symlinkSync(target, link, "file");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return t.skip("file symlinks unavailable");
+			throw error;
+		}
+		const [res] = await rpcRoundtrip([{
+			jsonrpc: "2.0",
+			id: 102,
+			method: "tools/call",
+			params: { name: "taskflow_verify", arguments: { defineFile: link } },
+		}]);
+		assert.equal(res.error.code, -32602);
+		assert.match(res.error.message, /defineFile must not be a symlink/i);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("mcp: tools/call unknown tool returns invalid-params", async () => {
 	const [res] = await rpcRoundtrip([
 		{ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "nope", arguments: {} } },
@@ -550,6 +578,7 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 	const os = await import("node:os");
 	const path = await import("node:path");
 	const {
+		discoverAgents,
 		executeTaskflow,
 		newRunId,
 		runsDir,
@@ -577,7 +606,7 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 			...(task === "fail-me" ? { errorMessage: "boom" } : {}),
 		});
 		const parentResult = await executeTaskflow(parent, {
-			cwd, agents: [],
+			cwd, agents: discoverAgents(cwd, "both").agents,
 			runTask: parentRunner,
 		});
 		assert.equal(parentResult.ok, false);

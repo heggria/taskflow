@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { AgentConfig } from "../src/agents.ts";
 import type { RunOptions, RunResult } from "../src/runner-core.ts";
 import { executeTaskflow, type RuntimeDeps } from "../src/runtime.ts";
-import { canUseEventKernel, eventKernelEnabled } from "../src/exec/driver.ts";
+import { canUseEventKernel, eventKernelEnabled, kernelUnsupportedReason } from "../src/exec/driver.ts";
 import type { Taskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { emptyUsage } from "../src/usage.ts";
@@ -82,6 +82,18 @@ test("canUseEventKernel: all kinds including gate", () => {
 		}),
 		true,
 	);
+});
+
+test("canUseEventKernel: workspace cwd keywords force the isolation-aware imperative runtime", () => {
+	for (const cwd of ["temp", "dedicated", "worktree"] as const) {
+		const def: Taskflow = {
+			name: `workspace-${cwd}`,
+			scriptCwd: "flow",
+			phases: [{ id: "s", type: "script", run: ["node", "-e", "1"], cwd, final: true }],
+		};
+		assert.equal(canUseEventKernel(def), false);
+		assert.match(kernelUnsupportedReason(def) ?? "", /workspace cwd.*imperative runtime/);
+	}
 });
 test("event kernel: script phase captures stdout (zero tokens)", async () => {
 	const def: Taskflow = {

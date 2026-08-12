@@ -425,6 +425,18 @@ To pass dynamic values into a script safely, pipe them through `input` (which su
   `script` phases cannot use `retry` or `output: "json"`. `timeout` defaults to `60000` and caps at `300000` ms.
 </Callout>
 
+For co-located script bundles, place the saved definition anywhere below `.pi/taskflows/flows/` and set top-level `scriptCwd: "flow"`. Nested discovery uses locale-independent Unicode-scalar path ordering and one shared user/project budget. Re-saving a discovered nested flow updates that definition and its adjacent metadata in place. Discovery rejects symlinks below the trusted storage boundary through definition leaves and fails closed above 1,000 flows, 10,000 entries, 512 directories, 8 MiB total definition data, 1 MiB per definition, or 16 levels; the configured agent-directory boundary itself may be a symlink for compatible home relocation. New-flow saves enforce the same storage-boundary policy and revalidate the physical target directory inside the write lock. A command such as `["./scripts/prepare.sh"]` then runs from the canonical directory containing that flow JSON, whose filesystem identity is revalidated immediately before spawn. The legacy default is `"invocation"`; a phase-level `cwd` still wins. Inline `define` values fail closed with `scriptCwd: "flow"` because no trusted source file exists, while `defineFile` is supported. An inherited cwd-bridge boundary also constrains the resolved flow source directory.
+
+```json title="flow-relative script bundle"
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
+  ]
+}
+```
+
 ## First success wins: `race`
 
 When several approaches can answer the same question and **latency** matters more than waiting for every branch, use `race`. Branches start together; the **first successful** completion becomes the phase output (a fast hard-fail does **not** win). Unlike `parallel` (waits for all) or `tournament` (judges quality after all variants).
