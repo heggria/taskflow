@@ -13,6 +13,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - Nested discovery is deterministic and bounded by one shared user/project budget: 1,000 flows, 10,000 entries, 512 directories, 8 MiB total definitions, 1 MiB per definition, and 16 levels. Symlinks below trusted storage boundaries through definition leaves, dot directories, sidecars, and FlowIR artifacts are excluded; duplicate flow names emit diagnostics. A configured user agent-directory boundary may itself be a symlink for home relocation, while project `.pi` boundaries remain no-follow. Re-saving a discovered nested flow updates its existing definition and adjacent library sidecar in place; listing/search avoids repeated namespace scans.
 
+### Fixed
+
+- Legacy top-level hidden JSON flows and flow names ending in `.flowir` remain discoverable, directory-entry I/O failures remain fail-soft instead of escaping `listFlows`, and nested flow/sidecar saves revalidate the physical parent at each atomic-write stage so a concurrently replaced directory cannot receive definition/sidecar bytes or a promoted final file.
+
 ### Security
 
 - Saved-flow and `defineFile` definitions are read through bounded no-follow descriptors with pre/post file identity checks. Canonical source path plus parent directory identity travel together through run persistence and are revalidated immediately before flow-relative script spawn. New project storage is validated and created one plain directory component at a time before any descendant side effect; flow and sidecar writes recheck the physical target directory before locking and each write. Flow-relative script cwd cannot expand an inherited cwd-bridge boundary.

@@ -1258,6 +1258,14 @@ function isFlowDefinitionFile(name: string): boolean {
 	return name.endsWith(".json") && !name.endsWith(".meta.json") && !name.endsWith(".flowir.json");
 }
 
+/** The 0.2.9 top-level scanner excluded only metadata sidecars. In particular,
+ * a valid flow named `release.flowir` is stored as `release.flowir.json` and
+ * must remain discoverable. The new nested convention can still reserve that
+ * suffix for generated FlowIR artifacts. */
+function isLegacyFlowDefinitionFile(name: string): boolean {
+	return name.endsWith(".json") && !name.endsWith(".meta.json");
+}
+
 function isPhysicallyContained(rootReal: string, candidateReal: string): boolean {
 	const relative = path.relative(rootReal, candidateReal);
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
@@ -1323,8 +1331,14 @@ function readDirectoryBounded(dir: string, budget: DiscoveryBudget): fs.Dirent[]
 			}
 			entries.push(entry);
 		}
+	} catch {
+		// Preserve the legacy listFlows contract: an unreadable or concurrently
+		// replaced directory is skipped rather than escaping as a process-level
+		// exception. Discard a partial read so precedence never depends on where
+		// the failure happened.
+		return [];
 	} finally {
-		handle.closeSync();
+		try { handle.closeSync(); } catch { /* unreadable/replaced directory: skip */ }
 	}
 	return entries.sort((a, b) => codePointCompare(a.name, b.name));
 }
@@ -1353,7 +1367,10 @@ function listLegacyFlowFiles(rootReal: string, budget: DiscoveryBudget): string[
 	const files: string[] = [];
 	for (const entry of readDirectoryBounded(rootReal, budget)) {
 		if (budget.exceeded) break;
-		if (entry.name.startsWith(".") || entry.isSymbolicLink() || !entry.isFile() || !isFlowDefinitionFile(entry.name)) continue;
+		// Legacy 0.2.9 discovery accepted hidden top-level JSON definitions. Keep
+		// that compatibility at the storage root; only the new recursive `flows/`
+		// convention skips hidden entries/directories.
+		if (entry.isSymbolicLink() || !entry.isFile() || !isLegacyFlowDefinitionFile(entry.name)) continue;
 		const real = canonicalRegularFile(path.join(rootReal, entry.name), rootReal);
 		if (!real || !reserveFlowCandidate(budget)) continue;
 		files.push(real);
@@ -1639,8 +1656,7 @@ export function saveFlow(
 	const fileLockPath = filePath + ".lock";
 	withLock(fileLockPath, () => {
 		assertFlowSaveTarget(target);
-		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`);
-		assertFlowSaveTarget(target);
+		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`, () => assertFlowSaveTarget(target));
 	});
 
 	// One-shot: let the user know about .pi/ directory on first save (Finding 8).
@@ -1732,10 +1748,9 @@ export function saveFlowWithMeta(
 	const fileLockPath = filePath + ".lock"; // shared lock key for flow+sidecar (R2R5)
 	withLock(fileLockPath, () => {
 		assertFlowSaveTarget(target);
-		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`);
+		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`, () => assertFlowSaveTarget(target));
 		assertFlowSaveTarget(target);
-		writeFileAtomic(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
-		assertFlowSaveTarget(target);
+		writeFileAtomic(metaPath, `${JSON.stringify(meta, null, 2)}\n`, () => assertFlowSaveTarget(target));
 	});
 	return { filePath, metaPath };
 }
@@ -1776,8 +1791,7 @@ export function bumpReuseInSidecar(cwd: string, flowName: string): number | null
 					embedding: null,
 			  };
 		assertFlowSaveTarget(target);
-		writeFileAtomic(metaPath, `${JSON.stringify(updated, null, 2)}\n`);
-		assertFlowSaveTarget(target);
+		writeFileAtomic(metaPath, `${JSON.stringify(updated, null, 2)}\n`, () => assertFlowSaveTarget(target));
 		return updated.reuseCount;
 	});
 }
@@ -2069,18 +2083,48 @@ export function isProcessAlive(pid: number): boolean {
  * then rename over the target (rename is atomic on the same filesystem). Prevents
  * a crash or concurrent write from leaving a half-written, corrupt JSON file.
  */
-export function writeFileAtomic(filePath: string, data: string): void {
+export function writeFileAtomic(filePath: string, data: string, guard?: () => void): void {
 	// Ensure parent directory exists.
+	guard?.();
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	guard?.();
 	const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+	let fd: number | undefined;
 	try {
-		fs.writeFileSync(tmp, data, "utf-8");
+		guard?.();
+		// Open the unique temp path without following a pre-existing leaf and write
+		// through the descriptor. If the parent is renamed/replaced after open,
+		// the descriptor remains bound to the original directory's file instead of
+		// redirecting content through a new symlinked lexical path.
+		const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
+		fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o666);
+		// Close the final pre-open race: if the lexical parent changed between the
+		// prior guard and openSync, fail before any definition bytes reach the fd.
+		guard?.();
+		fs.writeFileSync(fd, data, "utf-8");
+		fs.closeSync(fd);
+		fd = undefined;
+		// The directory can be renamed/replaced while the temp file is written.
+		// Revalidate immediately before the externally visible rename; on failure
+		// the guarded path is left untouched and no file is promoted.
+		guard?.();
 		fs.renameSync(tmp, filePath);
 	} catch (e) {
-		try {
-			if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
-		} catch {
-			/* ignore cleanup failure */
+		if (fd !== undefined) {
+			try { fs.closeSync(fd); } catch { /* ignore close failure */ }
+		}
+		// A guarded caller is protecting a directory-identity boundary. Once a
+		// guard or write fails, the lexical temp path may already resolve through
+		// a replacement directory/symlink; unlinking it could delete an unrelated
+		// external same-name file. Fail closed and leave any temp artifact in the
+		// original (possibly displaced) directory. Unguarded legacy callers keep
+		// the original best-effort cleanup behavior.
+		if (!guard) {
+			try {
+				if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+			} catch {
+				/* ignore cleanup failure */
+			}
 		}
 		throw e;
 	}

@@ -309,6 +309,34 @@ test("listFlows: discovers project flows recursively below the flows convention 
 	}
 });
 
+test("listFlows: preserves legacy discovery of hidden top-level JSON definitions", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		const hiddenPath = path.join(root, ".release.json");
+		fs.writeFileSync(hiddenPath, JSON.stringify(minimalFlow("hidden-legacy")), "utf8");
+
+		const loaded = getFlow(cwd, "hidden-legacy");
+		assert.ok(loaded, "0.2.9 discovered every top-level *.json except sidecars");
+		assert.equal(loaded.filePath, fs.realpathSync(hiddenPath));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
+test("saveFlow: preserves legacy discovery for flow names ending in .flowir", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const saved = saveFlow(cwd, minimalFlow("release.flowir"));
+		assert.equal(path.basename(saved.filePath), "release.flowir.json");
+		assert.equal(getFlow(cwd, "release.flowir")?.filePath, fs.realpathSync(saved.filePath));
+		assert.ok(listFlows(cwd).some((flow) => flow.name === "release.flowir"));
+	} finally {
+		cleanup(cwd);
+	}
+});
+
 test("saveFlow: updates an existing nested flow in place without creating a legacy shadow", () => {
 	const cwd = makeTmpCwd();
 	try {
@@ -505,6 +533,186 @@ test("saveFlow: revalidates a newly created target directory inside the write lo
 		assert.equal(fs.existsSync(path.join(displacedDir, "new-target-swap.json")), false);
 	} finally {
 		mutableFs.openSync = originalOpenSync;
+		syncBuiltinESMExports();
+		cleanup(cwd);
+	}
+});
+
+test("saveFlow: rejects a nested target directory swapped after validation but before atomic write", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-nested-save-swap-outside-"));
+	const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "release");
+	const displacedDir = `${nestedDir}-displaced`;
+	const nestedPath = path.join(nestedDir, "publish.json");
+	const mutableFs = createRequire(import.meta.url)("node:fs") as { openSync: typeof fs.openSync; writeFileSync: typeof fs.writeFileSync };
+	const originalOpenSync = mutableFs.openSync;
+	const originalWriteFileSync = mutableFs.writeFileSync;
+	let swapped = false;
+	let outsideDecoy = "";
+	try {
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(nestedPath, JSON.stringify(minimalFlow("nested-swap")), "utf8");
+		mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+			const target = String(args[0]);
+			const fd = Reflect.apply(originalOpenSync, mutableFs, args) as number;
+			if (!swapped && target.startsWith(`${nestedPath}.`) && target.endsWith(".tmp")) {
+				swapped = true;
+				fs.renameSync(nestedDir, displacedDir);
+				try {
+					fs.symlinkSync(outside, nestedDir, "dir");
+					outsideDecoy = path.join(outside, path.basename(target));
+					Reflect.apply(originalWriteFileSync, mutableFs, [outsideDecoy, "outside-owned", "utf8"]);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "EPERM") {
+						t.skip("directory symlinks unavailable");
+						fs.mkdirSync(nestedDir, { recursive: true });
+						return fd;
+					}
+					throw error;
+				}
+			}
+			return fd;
+		}) as typeof fs.openSync;
+		syncBuiltinESMExports();
+
+		assert.throws(
+			() => saveFlow(cwd, { ...minimalFlow("nested-swap"), description: "must not escape" }),
+			/saved flow parent directory changed before write/,
+		);
+		assert.equal(swapped, true);
+		assert.equal(fs.existsSync(path.join(outside, "publish.json")), false, "no definition may be written outside the trusted directory");
+		if (!outsideDecoy) return; // t.skip() marks but does not abort the test body.
+		assert.equal(fs.readFileSync(outsideDecoy, "utf8"), "outside-owned", "failed cleanup must not unlink an external same-name file");
+		assert.equal(
+			JSON.parse(fs.readFileSync(path.join(displacedDir, "publish.json"), "utf8")).description,
+			undefined,
+			"the displaced original definition must remain unchanged",
+		);
+	} finally {
+		mutableFs.openSync = originalOpenSync;
+		syncBuiltinESMExports();
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("saveFlow: revalidates after temp open and before writing definition bytes", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-nested-preopen-swap-outside-"));
+	const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "release");
+	const displacedDir = `${nestedDir}-displaced`;
+	const nestedPath = path.join(nestedDir, "publish.json");
+	const mutableFs = createRequire(import.meta.url)("node:fs") as { openSync: typeof fs.openSync };
+	const originalOpenSync = mutableFs.openSync;
+	let swapped = false;
+	try {
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(nestedPath, JSON.stringify(minimalFlow("nested-preopen-swap")), "utf8");
+		mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+			const target = String(args[0]);
+			if (!swapped && target.startsWith(`${nestedPath}.`) && target.endsWith(".tmp")) {
+				swapped = true;
+				fs.renameSync(nestedDir, displacedDir);
+				try {
+					fs.symlinkSync(outside, nestedDir, "dir");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "EPERM") {
+						t.skip("directory symlinks unavailable");
+						fs.mkdirSync(nestedDir, { recursive: true });
+					}
+					else throw error;
+				}
+			}
+			return Reflect.apply(originalOpenSync, mutableFs, args) as number;
+		}) as typeof fs.openSync;
+		syncBuiltinESMExports();
+
+		assert.throws(
+			() => saveFlow(cwd, { ...minimalFlow("nested-preopen-swap"), description: "must not escape" }),
+			/saved flow parent directory changed before write/,
+		);
+		assert.equal(swapped, true);
+		assert.equal(fs.existsSync(path.join(outside, "publish.json")), false);
+		for (const entry of fs.readdirSync(outside)) {
+			assert.equal(fs.readFileSync(path.join(outside, entry), "utf8"), "", "no definition bytes may be written after a pre-open directory swap");
+		}
+	} finally {
+		mutableFs.openSync = originalOpenSync;
+		syncBuiltinESMExports();
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("saveFlow: rejects a nested target directory swapped at the atomic rename sink", (t) => {
+	const cwd = makeTmpCwd();
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-nested-rename-swap-outside-"));
+	const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "release");
+	const displacedDir = `${nestedDir}-displaced`;
+	const nestedPath = path.join(nestedDir, "publish.json");
+	const mutableFs = createRequire(import.meta.url)("node:fs") as { renameSync: typeof fs.renameSync };
+	const originalRenameSync = mutableFs.renameSync;
+	let swapped = false;
+	try {
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(nestedPath, JSON.stringify(minimalFlow("nested-rename-swap")), "utf8");
+		mutableFs.renameSync = ((...args: Parameters<typeof fs.renameSync>) => {
+			const source = String(args[0]);
+			const destination = String(args[1]);
+			if (!swapped && source.startsWith(`${nestedPath}.`) && source.endsWith(".tmp") && destination === nestedPath) {
+				swapped = true;
+				Reflect.apply(originalRenameSync, mutableFs, [nestedDir, displacedDir]);
+				try {
+					fs.symlinkSync(outside, nestedDir, "dir");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "EPERM") {
+						t.skip("directory symlinks unavailable");
+						fs.mkdirSync(nestedDir, { recursive: true });
+						return Reflect.apply(originalRenameSync, mutableFs, args);
+					}
+					throw error;
+				}
+			}
+			return Reflect.apply(originalRenameSync, mutableFs, args);
+		}) as typeof fs.renameSync;
+		syncBuiltinESMExports();
+
+		assert.throws(() => saveFlow(cwd, { ...minimalFlow("nested-rename-swap"), description: "must not escape" }));
+		assert.equal(swapped, true);
+		assert.equal(fs.existsSync(path.join(outside, "publish.json")), false, "the final definition must not be promoted outside the trusted directory");
+	} finally {
+		mutableFs.renameSync = originalRenameSync;
+		syncBuiltinESMExports();
+		cleanup(cwd);
+		cleanup(outside);
+	}
+});
+
+test("listFlows: treats an entry-read failure as a skipped unreadable directory", () => {
+	const cwd = makeTmpCwd();
+	const mutableFs = createRequire(import.meta.url)("node:fs") as { opendirSync: typeof fs.opendirSync };
+	const originalOpendirSync = mutableFs.opendirSync;
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		fs.mkdirSync(root, { recursive: true });
+		fs.writeFileSync(path.join(root, "stable.json"), JSON.stringify(minimalFlow("stable")), "utf8");
+		mutableFs.opendirSync = ((...args: Parameters<typeof fs.opendirSync>) => {
+			const handle = Reflect.apply(originalOpendirSync, mutableFs, args) as fs.Dir;
+			if (path.resolve(String(args[0])) === path.resolve(root)) {
+				handle.readSync = (() => {
+					const error = new Error("simulated directory read failure") as NodeJS.ErrnoException;
+					error.code = "EIO";
+					throw error;
+				}) as typeof handle.readSync;
+			}
+			return handle;
+		}) as typeof fs.opendirSync;
+		syncBuiltinESMExports();
+
+		assert.doesNotThrow(() => listFlows(cwd));
+		assert.deepEqual(listFlows(cwd).filter((flow) => flow.scope === "project"), []);
+	} finally {
+		mutableFs.opendirSync = originalOpendirSync;
 		syncBuiltinESMExports();
 		cleanup(cwd);
 	}
