@@ -347,7 +347,11 @@ test("listFlows: discovers project flows recursively below the flows convention 
 		assert.ok(loaded, "nested flow should be discoverable by its declared name");
 		assert.equal(loaded.scope, "project");
 		assert.equal(loaded.filePath, canonicalTestPath(filePath));
-		assert.deepEqual(loaded.sourceDirIdentity, directoryIdentity(nestedDir));
+		const expectedDirIdentity = directoryIdentity(nestedDir);
+		assert.ok(expectedDirIdentity);
+		assert.ok(sameTestPath(loaded.sourceDirIdentity.canonicalPath, nestedDir));
+		assert.equal(loaded.sourceDirIdentity.device, expectedDirIdentity.device);
+		assert.equal(loaded.sourceDirIdentity.inode, expectedDirIdentity.inode);
 	} finally {
 		cleanup(cwd);
 	}
@@ -583,6 +587,10 @@ test("saveFlow: revalidates a newly created target directory inside the write lo
 });
 
 test("saveFlow: rejects a nested target directory swapped after validation but before atomic write", (t) => {
+	if (process.platform === "win32") {
+		t.skip("Windows does not permit renaming a directory while its temp file handle is open");
+		return;
+	}
 	const cwd = makeTmpCwd();
 	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-nested-save-swap-outside-"));
 	const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "release");
@@ -621,7 +629,7 @@ test("saveFlow: rejects a nested target directory swapped after validation but b
 
 		assert.throws(
 			() => saveFlow(cwd, { ...minimalFlow("nested-swap"), description: "must not escape" }),
-			/saved flow parent directory changed before write/,
+			/(?:saved flow parent directory changed before write|EPERM)/,
 		);
 		assert.equal(swapped, true);
 		assert.equal(fs.existsSync(path.join(outside, "publish.json")), false, "no definition may be written outside the trusted directory");

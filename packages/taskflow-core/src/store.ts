@@ -1246,6 +1246,11 @@ function isPhysicallyContained(rootReal: string, candidateReal: string): boolean
 	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** Diagnostics are persisted/displayed as portable paths, never host-native separators. */
+function portableRelativePath(root: string, candidate: string): string {
+	return path.relative(root, candidate).split(path.sep).join("/");
+}
+
 /** Validate every directory component from a trusted boundary (`.pi` for a
  * project, agent root for user flows) through the taskflows storage root.
  * Only an explicitly configured user agent boundary may itself be a symlink. */
@@ -1460,13 +1465,13 @@ function discoverFlows(cwd: string): FlowDiscoveryResult {
 				} else {
 					diagnostics.push(
 						`[taskflow] duplicate saved flow name '${r.value.name}' in ${scope} scope; ` +
-							`using ${path.relative(rootReal, existing.filePath)} and ignoring ${path.relative(rootReal, filePath)}`,
+							`using ${portableRelativePath(rootReal, existing.filePath)} and ignoring ${portableRelativePath(rootReal, filePath)}`,
 					);
 				}
 			} else if (r.reason === "unparseable") {
 				failures.push({ scope, filePath, result: r });
 				diagnostics.push(
-					`[taskflow] saved flow is corrupt and was excluded from the list: ${path.relative(rootReal, filePath)} — ${r.detail}`,
+					`[taskflow] saved flow is corrupt and was excluded from the list: ${portableRelativePath(rootReal, filePath)} — ${r.detail}`,
 				);
 			}
 		}
