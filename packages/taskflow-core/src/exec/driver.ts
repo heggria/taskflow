@@ -29,6 +29,7 @@ import type { AgentConfig } from "../agents.ts";
 import type { UsageStats } from "../usage.ts";
 import { pluginVerifierErrors } from "../verify.ts";
 import type { TaskflowVerifier } from "../verify.ts";
+import type { DirectoryIdentity } from "../cwd-bridge.ts";
 import {
 	clampSubFlowBudget,
 	containsInterpolationPlaceholder,
@@ -51,6 +52,7 @@ export interface EventKernelDeps {
 	eventKernel?: boolean;
 	requestApproval?: (req: KernelApprovalRequest) => Promise<KernelApprovalDecision>;
 	loadFlow?: (name: string) => Taskflow | undefined;
+	loadSavedFlow?: (name: string) => { def: Taskflow; filePath?: string; sourceDirIdentity?: DirectoryIdentity } | undefined;
 	/** Caller-supplied zero-token verifiers (see verify.ts). Run in runNested's
 	 *  plugin-error preflight before every child-flow dispatch on this engine, and
 	 *  recursed via the ...deps spread. */
@@ -211,6 +213,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		args: Record<string, unknown>;
 		stack: string[];
 		dynamic?: boolean;
+		flowSourceFile?: string;
+		flowSourceDirIdentity?: DirectoryIdentity;
 	}): Promise<NestedFlowResult> => {
 		const nestedArgs = resolveArgs(opts.def, opts.args);
 		const dynamic = deps._dynamic === true || opts.dynamic === true;
@@ -298,6 +302,8 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 			cwd: deps.cwd,
+			flowSourceFile: opts.flowSourceFile,
+			flowSourceDirIdentity: opts.flowSourceDirIdentity,
 		};
 		const child = await runEventKernel(childState, {
 			...deps,
@@ -328,6 +334,7 @@ export async function runEventKernel(state: RunState, deps: EventKernelDeps): Pr
 		globalThinking: deps.globalThinking,
 		requestApproval: deps.requestApproval,
 		loadFlow: deps.loadFlow,
+		loadSavedFlow: deps.loadSavedFlow,
 		stack: deps._stack ?? [],
 		runNested,
 	};

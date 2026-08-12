@@ -11,6 +11,7 @@
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { resolve as resolvePath } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -51,6 +52,7 @@ import {
 	type ReplayOverrides,
 	type RuntimeDeps,
 	type RuntimeResult,
+	type DirectoryIdentity,
 } from "taskflow-core";
 import { type UsageStats } from "taskflow-core";
 import { resolveArgs, type Taskflow, validateTaskflow, desugar, isShorthand } from "taskflow-core";
@@ -68,8 +70,10 @@ import {
 	DEFAULT_KEPT_RUNS,
 	DEFAULT_RUN_AGE_DAYS,
 	readDefineFile,
+	readDefineFileWithSource,
 	describeLoadFailure,
 	readMeta,
+	readMetaNextTo,
 	saveFlowWithMeta,
 	bumpReuseInSidecar,
 	deriveMeta,
@@ -422,7 +426,13 @@ function parseToolReplayOverrides(params: {
 	return o;
 }
 
-function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string): RunState {
+function makeRunState(
+	def: Taskflow,
+	args: Record<string, unknown>,
+	cwd: string,
+	flowSourceFile?: string,
+	flowSourceDirIdentity?: DirectoryIdentity,
+): RunState {
 	const info = getBuildInfo();
 	return {
 		runId: newRunId(def.name),
@@ -434,6 +444,8 @@ function makeRunState(def: Taskflow, args: Record<string, unknown>, cwd: string)
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd,
+		flowSourceFile,
+		flowSourceDirIdentity,
 		invocationRootSnapshot: directoryIdentity(cwd),
 		// Dogfood build identity: stamp every new run for diagnostics/audit.
 		host: "pi",
@@ -465,8 +477,10 @@ async function runFlow(
 	// Invocation-level incremental override: when set, wins over def.incremental.
 	// undefined → fall back to the flow's own `incremental` field (default off).
 	incrementalOverride?: boolean,
+	flowSourceFile?: string,
+	flowSourceDirIdentity?: DirectoryIdentity,
 ): Promise<RuntimeResult> {
-	const state = existing ?? makeRunState(def, args, ctx.cwd);
+	const state = existing ?? makeRunState(def, args, ctx.cwd, flowSourceFile, flowSourceDirIdentity);
 
 	const emit = (s: RunState, finalOutput?: string) => {
 		onUpdate?.({
@@ -599,7 +613,10 @@ async function runFlow(
 			// in the same package) now silently breaks all phase execution.
 			runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
 			requestApproval,
-			loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+			loadSavedFlow: (name: string) => {
+				const saved = getFlow(ctx.cwd, name);
+				return saved ? { def: saved.def, filePath: saved.filePath, sourceDirIdentity: saved.sourceDirIdentity } : undefined;
+			},
 			// Cross-run cache is opt-in. By default a real run is `run-only` (fresh
 			// each run): defaulting every phase to cross-run silently persists
 			// outputs and can serve stale results for phases whose agents read files
@@ -873,7 +890,7 @@ export default function (pi: ExtensionAPI) {
 				const text = flows.length
 					? flows
 							.map((f) => {
-								const metaR = readMeta(ctx.cwd, f.name);
+								const metaR = readMetaNextTo(f.filePath);
 							const meta = metaR.ok ? metaR.value : undefined;
 								const base = `- ${f.name} (${f.scope}): ${f.def.description ?? ""} — ${f.def.phases?.length ?? 0} phase(s)`;
 								if (meta?.purpose) {
@@ -1276,7 +1293,10 @@ export default function (pi: ExtensionAPI) {
 					globalThinking: settings.globalThinking,
 					signal,
 					runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
-					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					loadSavedFlow: (name: string) => {
+						const saved = getFlow(ctx.cwd, name);
+						return saved ? { def: saved.def, filePath: saved.filePath, sourceDirIdentity: saved.sourceDirIdentity } : undefined;
+					},
 					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				const { report, state } = await recomputeTaskflow(prev, deps, [String(params.phaseId)], { dryRun });
@@ -1291,15 +1311,20 @@ export default function (pi: ExtensionAPI) {
 
 			// resolve the definition: inline `define` / shorthand (single|parallel|chain), else saved `name`.
 			let def: Taskflow | undefined;
+			let flowSourceFile: string | undefined;
+			let flowSourceDirIdentity: DirectoryIdentity | undefined;
 
 			// Auto-parse string `define` — LLMs sometimes pass a JSON string
 			// instead of a parsed object. safeParse handles markdown fences too.
 			// `defineFile` lets verify/run share ONE on-disk draft (e.g. in /tmp).
 			let resolvedDefine: unknown = params.define;
 			if (resolvedDefine === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
-				const fromFile = readDefineFile(params.defineFile);
+				const defineFilePath = resolvePath(ctx.cwd, params.defineFile);
+				const fromFile = readDefineFileWithSource(defineFilePath);
 				if (!fromFile.ok) return errorResult(action, describeLoadFailure(fromFile, "defineFile"));
-				resolvedDefine = fromFile.value;
+				resolvedDefine = fromFile.value.value;
+				flowSourceFile = fromFile.value.filePath;
+				flowSourceDirIdentity = fromFile.value.sourceDirIdentity;
 			}
 			if (typeof resolvedDefine === "string") {
 				const parsed = safeParse(resolvedDefine);
@@ -1346,6 +1371,8 @@ export default function (pi: ExtensionAPI) {
 					return errorResult(action, `${describeLoadFailure(savedR, `Saved flow '${params.name}'`)}.${hint}`);
 				}
 				def = savedR.value.def;
+				flowSourceFile = savedR.value.filePath;
+				flowSourceDirIdentity = savedR.value.sourceDirIdentity;
 			}
 			if (!def)
 				return errorResult(
@@ -1417,7 +1444,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			// Detached (background) execution: spawn a child process and return immediately.
 			if (params.detach) {
-				const state = makeRunState(def, args, ctx.cwd);
+				const state = makeRunState(def, args, ctx.cwd, flowSourceFile, flowSourceDirIdentity);
 				state.detached = true;
 				state.detachedStartedAt = Date.now();
 				state.detachedControlVersion = DETACHED_CONTROL_VERSION;
@@ -1587,7 +1614,17 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
-			const result = await runFlow(def, args, ctx, signal, onUpdate as any, undefined, params.incremental as boolean | undefined);
+			const result = await runFlow(
+				def,
+				args,
+				ctx,
+				signal,
+				onUpdate as any,
+				undefined,
+				params.incremental as boolean | undefined,
+				flowSourceFile,
+				flowSourceDirIdentity,
+			);
 			// RFC library reuse flywheel: if this run was chosen because of a prior
 			// action=search (reusedFromSearch=true), bump the flow's reuseCount. We
 			// only bump for run-by-name of a SAVED flow (not inline define). Failures
@@ -1728,7 +1765,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 				const flow = flowR.value;
-				const metaR = readMeta(ctx.cwd, arg);
+				const metaR = readMetaNextTo(flow.filePath);
 				const meta = metaR.ok ? metaR.value : undefined;
 				if (meta) {
 					const out = { definition: flow.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };
@@ -2021,7 +2058,10 @@ export default function (pi: ExtensionAPI) {
 					agents,
 					globalThinking: settings.globalThinking,
 					runTask: createPiSubagentRunner(settings.taskflow.piChild).runTask,
-					loadFlow: (name: string) => getFlow(ctx.cwd, name)?.def,
+					loadSavedFlow: (name: string) => {
+						const saved = getFlow(ctx.cwd, name);
+						return saved ? { def: saved.def, filePath: saved.filePath, sourceDirIdentity: saved.sourceDirIdentity } : undefined;
+					},
 					trace: new FileTraceSink(traceFilePath(runsDir(ctx.cwd), prev.flowName, prev.runId)),
 				};
 				if (apply) {

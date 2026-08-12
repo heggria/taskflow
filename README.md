@@ -13,7 +13,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.9](#029-hermes-agent--verify-parity) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
+[Install](#install-on-your-host) · [Quickstart](#60-second-start) · [What's new in 0.2.10](#0210-organized-portable-saved-flows) · [0.2 compiler turn](#02-is-the-compiler-turn) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples)
 
 </div>
 
@@ -133,6 +133,22 @@ Save it as `.pi/taskflows/audit-api.json`, then run:
 
 On Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent, run the same saved definition by name through `taskflow_run`. For long DAGs, use `mode: "background"`, then manage the durable run with `taskflow_runs` (`list` / `status` / `wait` / `cancel`); list output reports active concurrency and can filter `running` or `terminal` runs.
 
+Large projects may organize saved definitions recursively below `.pi/taskflows/flows/`, for example `.pi/taskflows/flows/release/audit-api.json`. Legacy `.pi/taskflows/*.json` files remain discoverable and win same-scope name collisions; nested duplicates use locale-independent Unicode-scalar path order. Saving an already-discovered nested flow updates that file and its adjacent metadata in place; new flows still use the legacy top-level location. Discovery uses one shared user/project budget and fails closed if it exceeds 1,000 flows, 10,000 visited entries, 512 directories, 8 MiB of definition data, 1 MiB per definition, or 16 levels. It rejects symlinks below the trusted storage boundary through definition leaves and skips dot paths, metadata (`*.meta.json`), and compiled IR (`*.flowir.json`). The configured agent-directory boundary itself may be a symlink for compatible home-directory relocation. New-flow saves enforce the same storage-boundary policy and revalidate the physical target directory inside the write lock.
+
+A file-backed flow can opt script phases into definition-relative execution:
+
+```json
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
+  ]
+}
+```
+
+Here `./scripts/prepare.sh` resolves from the directory containing the saved flow or `defineFile`. The default remains `"invocation"`, and an explicit phase `cwd` still takes precedence. Inline definitions have no trusted file source and therefore fail closed if they request `scriptCwd: "flow"`. If execution inherits a cwd-bridge boundary, the resolved flow source directory must remain inside that boundary.
+
 [Follow the full quickstart →](https://heggria.github.io/taskflow/en/docs/getting-started)
 
 ## See the graph run
@@ -151,6 +167,12 @@ This is real output from a Pi run—not a mock dashboard:
 ```
 
 The layout **is** the DAG. Parallel rails expose concurrency; long edges expose dependencies; the gate explains why downstream work stopped. No separate control plane is required to understand the run.
+
+## 0.2.10: organized, portable saved flows
+
+Saved flows can now be organized below the bounded `.pi/taskflows/flows/**` convention while legacy top-level flows keep their existing precedence and behavior. A file-backed flow may opt into `scriptCwd: "flow"`, making adjacent scripts, templates, and fixtures portable as one reviewable directory bundle.
+
+Discovery, provenance, and persistence remain fail-closed: recursion has shared file/entry/directory/byte/depth budgets, symlinked descendants are excluded, source identity survives foreground/background/resume/subflow paths, and nested definition/sidecar writes revalidate the physical parent through atomic promotion. [Full 0.2.10 notes →](./CHANGELOG.md#0210--2026-08-12)
 
 ## 0.2.9: Hermes Agent + verify parity
 
@@ -355,7 +377,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.10 opencode-taskflow-mcp
 ```
 
 [OpenCode guide →](https://heggria.github.io/taskflow/en/docs/guides/opencode)
@@ -364,7 +386,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
 ```
 
 Grok Build support is new in 0.2. Its CLI stream does not report token/cost usage, so budget-declaring flows are rejected rather than silently running without enforcement.
@@ -374,7 +396,7 @@ Grok Build support is new in 0.2. Its CLI stream does not report token/cost usag
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
 # Prefer env in config.yaml (not CLI --env after args — can be stuffed into argv):
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # mutating only
 ```

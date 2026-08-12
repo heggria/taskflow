@@ -410,6 +410,18 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 }
 ```
 
+要把脚本和已保存的 flow 放在一起，可把定义文件放到 `.pi/taskflows/flows/` 的任意层级，并在 flow 顶层设置 `scriptCwd: "flow"`。运行时会从定义文件所在目录启动没有显式 `cwd` 的脚本阶段；旧的 `.pi/taskflows/*.json` 仍可发现，重新保存已发现的嵌套 flow 会原地更新定义及相邻元数据。默认 `scriptCwd` 仍是 `"invocation"`，因此现有 flow 的工作目录不会改变。嵌套发现按 Unicode 标量路径确定性排序，拒绝可信存储边界以下到定义文件叶子的全部符号链接，并按单个定义 1 MiB、用户与项目合计 8 MiB、1,000 个定义、10,000 个目录项、512 个目录和 16 层深度安全失败；为兼容 home 目录迁移，配置的 agent 目录边界本身可以是符号链接。保存新 flow 时会执行相同的边界策略，并在写锁内重新验证目标目录的物理身份。继承的 cwd bridge 边界也会约束解析出的 flow 来源目录。
+
+```json title="script — 与 flow 放在一起"
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"] }
+  ]
+}
+```
+
 要安全地把动态值传进脚本，通过 `input` 管道传入（它支持插值），而不是把值插值进 `run`：
 
 ```json title="script — 管道 stdin"

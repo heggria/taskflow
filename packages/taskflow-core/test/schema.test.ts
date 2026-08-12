@@ -16,6 +16,25 @@ test("validateTaskflow: accepts a valid flow", () => {
 	assert.equal(r.ok, true, r.errors.join("; "));
 });
 
+test("validateTaskflow: scriptCwd accepts only invocation or flow", () => {
+	for (const scriptCwd of ["invocation", "flow"]) {
+		const result = validateTaskflow({
+			name: "script-cwd",
+			scriptCwd,
+			phases: [{ id: "run", type: "script", run: "echo ok", final: true }],
+		});
+		assert.equal(result.ok, true, `${scriptCwd}: ${result.errors.join("; ")}`);
+	}
+	for (const scriptCwd of ["project", true, { base: "flow" }]) {
+		const result = validateTaskflow({
+			name: "script-cwd",
+			scriptCwd,
+			phases: [{ id: "run", type: "script", run: "echo ok", final: true }],
+		});
+		assert.equal(result.ok, false, `${JSON.stringify(scriptCwd)} must fail closed`);
+	}
+});
+
 test("validateTaskflow: rejects missing name / phases", () => {
 	assert.equal(validateTaskflow({}).ok, false);
 	assert.equal(validateTaskflow({ name: "x" }).ok, false);

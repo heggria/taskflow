@@ -51,7 +51,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-codex");
-	assert.equal(res.result.serverInfo.version, "0.2.9");
+	assert.equal(res.result.serverInfo.version, "0.2.10");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
@@ -210,6 +210,34 @@ test("mcp: defineFile cannot escape cwd or the OS temp directory", async (t) => 
 	]);
 	assert.equal(res.error.code, -32602);
 	assert.match(res.error.message, /contained in the server cwd or OS temp directory/i);
+});
+
+test("mcp: defineFile rejects a lexical symlink leaf even when its target is contained", async (t) => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-mcp-define-symlink-"));
+	try {
+		const target = path.join(dir, "target.json");
+		const link = path.join(dir, "link.json");
+		fs.writeFileSync(target, JSON.stringify({
+			name: "define-symlink-target",
+			phases: [{ id: "a", type: "agent", agent: "default", task: "x", final: true }],
+		}));
+		try {
+			fs.symlinkSync(target, link, "file");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EPERM") return t.skip("file symlinks unavailable");
+			throw error;
+		}
+		const [res] = await rpcRoundtrip([{
+			jsonrpc: "2.0",
+			id: 102,
+			method: "tools/call",
+			params: { name: "taskflow_verify", arguments: { defineFile: link } },
+		}]);
+		assert.equal(res.error.code, -32602);
+		assert.match(res.error.message, /defineFile must not be a symlink/i);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("mcp: tools/call unknown tool returns invalid-params", async () => {

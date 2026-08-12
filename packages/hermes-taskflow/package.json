@@ -1,6 +1,6 @@
 {
 	"name": "hermes-taskflow",
-	"version": "0.2.9",
+	"version": "0.2.10",
 	"description": "Run taskflow on Hermes Agent: a Hermes subagent runner plus an MCP server (and a config scaffold) that exposes the taskflow_* tools to Hermes users.",
 	"keywords": [
 		"hermes",

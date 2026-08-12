@@ -17,7 +17,6 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { renameAtomicWithRetry } from "./atomic-rename.ts";
 import { parseJsonc } from "./jsonc.ts";
 import { getAgentDir } from "./paths.ts";
 import { parseStrict } from "./interpolate.ts";
@@ -27,12 +26,15 @@ import type { UsageStats } from "./usage.ts";
 import type { DeclaredDeps } from "./flowir/meta.ts";
 import type { ScorerResult } from "./scorers.ts";
 import type { FlowMeta } from "./library/types.ts";
-import { findProjectTaskflowsDir, canonicalDiscoveryPath } from "./discovery-boundary.ts";
+import { findProjectTaskflowsDir, canonicalDiscoveryPath, sameDiscoveryPath } from "./discovery-boundary.ts";
 
 export interface SavedFlow {
 	name: string;
 	scope: "user" | "project";
+	/** Canonical physical definition path captured by the stable loader. */
 	filePath: string;
+	/** Identity of the canonical definition directory at load time. */
+	sourceDirIdentity: DirectoryIdentity;
 	def: Taskflow;
 }
 
@@ -187,6 +189,12 @@ export interface RunState {
 	createdAt: number;
 	updatedAt: number;
 	cwd: string;
+	/** Canonical source file for a saved flow or defineFile invocation. Runtime
+	 * provenance only: inline definitions omit it, and flow data cannot set it. */
+	flowSourceFile?: string;
+	/** Physical identity of `dirname(flowSourceFile)` captured atomically with the
+	 * definition. Revalidated immediately before a flow-relative script spawn. */
+	flowSourceDirIdentity?: DirectoryIdentity;
 	/** Root identity captured by a host when it creates the run. This closes the
 	 * detached launch window, but does not itself grant/taint cwd-bridge use. */
 	invocationRootSnapshot?: DirectoryIdentity;
@@ -1030,67 +1038,462 @@ function findProjectFlowsDirInternal(cwd: string, create = false): string | null
 	return path.join(canonicalCwd, ".pi", "taskflows");
 }
 
-/**
- * Read a flow definition from a file on disk. Supports raw JSON or a Markdown
- * document with a fenced ```json block. Used by the `defineFile` parameter so
- * verify/compile/run can share one persisted draft (e.g. in the OS temp dir)
- * without saving it into the project's .pi/taskflows.
- *
- * Returns a `LoadResult`: `{ ok: true, value }` on success, or
- * `{ ok: false, reason: "missing" | "unparseable", ... }` on failure. Callers
- * surface an explicit error via `describeLoadFailure`.
- */
-export function readDefineFile(filePath: string): LoadResult<unknown> {
-	return loadFile(filePath, (raw) => parseStrict(raw, { allowFence: true }));
+const MAX_FLOW_DEFINITION_BYTES = 1_048_576; // 1 MiB per JSON/JSONC/defineFile
+const MAX_DISCOVERY_TOTAL_BYTES = 8_388_608; // 8 MiB across user + project discovery
+
+interface DiscoveryBudget {
+	entries: number;
+	directories: number;
+	files: number;
+	bytes: number;
+	exceeded: boolean;
 }
 
-function readFlowFile(filePath: string, scope: "user" | "project"): LoadResult<SavedFlow> {
-	const r = loadFile(filePath, (raw) => parseJsonc(raw) as Taskflow);
+interface StableSource<T> {
+	value: T;
+	filePath: string;
+	sourceDirIdentity: DirectoryIdentity;
+	byteLength: number;
+}
+
+function sameFileStat(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
+	return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
+}
+
+function sameDirectoryIdentityValue(a: DirectoryIdentity | undefined, b: DirectoryIdentity | undefined): boolean {
+	return !!a && !!b && a.canonicalPath === b.canonicalPath && a.device === b.device && a.inode === b.inode;
+}
+
+/** Read a bounded regular file through one descriptor and bind parsed content to
+ * a canonical path + parent identity. Symlink leaves and files changed during
+ * the read fail closed. */
+function loadStableSource<T>(
+	filePath: string,
+	parse: (raw: string) => T,
+	budget?: DiscoveryBudget,
+	allowedRootReal?: string | readonly string[],
+): LoadResult<StableSource<T>> {
+	const allowedRoots = allowedRootReal === undefined
+		? []
+		: (typeof allowedRootReal === "string" ? [allowedRootReal] : [...allowedRootReal]);
+	const isAllowedSource = (candidate: string): boolean =>
+		allowedRoots.length === 0 || allowedRoots.some((root) => isPhysicallyContained(root, candidate));
+	let fd: number | undefined;
+	try {
+		const lexicalStat = fs.lstatSync(filePath, { bigint: true });
+		if (lexicalStat.isSymbolicLink() || !lexicalStat.isFile()) {
+			throw new Error("definition must be a regular non-symlink file");
+		}
+		const canonicalBefore = fs.realpathSync.native(filePath);
+		if (allowedRoots.length > 0 && (
+			!sameDiscoveryPath(canonicalBefore, path.resolve(filePath)) ||
+			!isAllowedSource(canonicalBefore)
+		)) {
+			throw new Error("definition escaped or changed its canonical saved-flow root");
+		}
+		const sourceDirBefore = directoryIdentity(path.dirname(canonicalBefore));
+		if (!sourceDirBefore) throw new Error("definition parent directory identity is unavailable");
+
+		const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
+		fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
+		const before = fs.fstatSync(fd, { bigint: true });
+		if (!before.isFile()) throw new Error("definition must remain a regular file");
+		if (before.size > BigInt(MAX_FLOW_DEFINITION_BYTES)) {
+			if (budget) budget.exceeded = true;
+			throw new Error(`definition exceeds ${MAX_FLOW_DEFINITION_BYTES} byte limit`);
+		}
+		const byteLength = Number(before.size);
+		if (budget && budget.bytes + byteLength > MAX_DISCOVERY_TOTAL_BYTES) {
+			budget.exceeded = true;
+			throw new Error(`flow discovery exceeds ${MAX_DISCOVERY_TOTAL_BYTES} cumulative byte limit`);
+		}
+		if (budget) budget.bytes += byteLength;
+
+		const buffer = Buffer.allocUnsafe(byteLength + 1);
+		let bytesRead = 0;
+		while (bytesRead < buffer.length) {
+			const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+			if (count === 0) break;
+			bytesRead += count;
+		}
+		const after = fs.fstatSync(fd, { bigint: true });
+		if (bytesRead !== byteLength || !sameFileStat(before, after)) {
+			throw new Error("definition changed while it was being read");
+		}
+
+		const lexicalAfter = fs.lstatSync(filePath, { bigint: true });
+		if (lexicalAfter.isSymbolicLink() || !sameFileStat(after, lexicalAfter)) {
+			throw new Error("definition path identity changed while it was being read");
+		}
+		const canonicalAfter = fs.realpathSync.native(filePath);
+		const sourceDirAfter = directoryIdentity(path.dirname(canonicalAfter));
+		if (
+			canonicalAfter !== canonicalBefore ||
+			(allowedRoots.length > 0 && !isAllowedSource(canonicalAfter)) ||
+			!sameDirectoryIdentityValue(sourceDirBefore, sourceDirAfter)
+		) {
+			throw new Error("definition parent directory changed while it was being read");
+		}
+
+		const raw = buffer.subarray(0, bytesRead).toString("utf8");
+		return {
+			ok: true,
+			value: {
+				value: parse(raw),
+				filePath: canonicalAfter,
+				sourceDirIdentity: sourceDirAfter!,
+				byteLength,
+			},
+		};
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		return {
+			ok: false,
+			reason: code === "ENOENT" || code === "EACCES" ? "missing" : "unparseable",
+			path: filePath,
+			detail: errMessage(error),
+		};
+	} finally {
+		if (fd !== undefined) {
+			try { fs.closeSync(fd); } catch { /* best effort */ }
+		}
+	}
+}
+
+export interface LoadedDefineFile {
+	value: unknown;
+	filePath: string;
+	sourceDirIdentity: DirectoryIdentity;
+}
+
+/** Stable defineFile loader used by execution hosts that need source provenance. */
+export function readDefineFileWithSource(
+	filePath: string,
+	allowedRootReal?: string | readonly string[],
+): LoadResult<LoadedDefineFile> {
+	const loaded = loadStableSource(filePath, (raw) => parseStrict(raw, { allowFence: true }), undefined, allowedRootReal);
+	if (!loaded.ok) return loaded;
+	return {
+		ok: true,
+		value: {
+			value: loaded.value.value,
+			filePath: loaded.value.filePath,
+			sourceDirIdentity: loaded.value.sourceDirIdentity,
+		},
+	};
+}
+
+export function readDefineFile(filePath: string): LoadResult<unknown> {
+	const loaded = readDefineFileWithSource(filePath);
+	return loaded.ok ? { ok: true, value: loaded.value.value } : loaded;
+}
+
+function readFlowFile(
+	filePath: string,
+	scope: "user" | "project",
+	budget?: DiscoveryBudget,
+	allowedRootReal?: string,
+): LoadResult<SavedFlow> {
+	const r = loadStableSource(filePath, (raw) => parseJsonc(raw) as Taskflow, budget, allowedRootReal);
 	if (!r.ok) return r;
-	if (!r.value?.name) {
+	if (!r.value.value?.name) {
 		return { ok: false, reason: "unparseable", path: filePath, detail: "parsed OK but missing required field: name" };
 	}
-	return { ok: true, value: { name: r.value.name, scope, filePath, def: r.value } };
+	return {
+		ok: true,
+		value: {
+			name: r.value.value.name,
+			scope,
+			filePath: r.value.filePath,
+			sourceDirIdentity: r.value.sourceDirIdentity,
+			def: r.value.value,
+		},
+	};
 }
 
-/** List all saved flows (project overrides user on name collision). */
+const NESTED_FLOWS_DIR = "flows";
+const MAX_NESTED_FLOW_DEPTH = 16;
+const MAX_DISCOVERY_FILES = 1_000;
+const MAX_DISCOVERY_ENTRIES = 10_000;
+const MAX_DISCOVERY_DIRS = 512;
+
+function codePointCompare(a: string, b: string): number {
+	const left = Array.from(a);
+	const right = Array.from(b);
+	const length = Math.min(left.length, right.length);
+	for (let i = 0; i < length; i++) {
+		const l = left[i]!.codePointAt(0)!;
+		const r = right[i]!.codePointAt(0)!;
+		if (l !== r) return l - r;
+	}
+	return left.length - right.length;
+}
+
+function isFlowDefinitionFile(name: string): boolean {
+	return name.endsWith(".json") && !name.endsWith(".meta.json") && !name.endsWith(".flowir.json");
+}
+
+/** The 0.2.9 top-level scanner excluded only metadata sidecars. In particular,
+ * a valid flow named `release.flowir` is stored as `release.flowir.json` and
+ * must remain discoverable. The new nested convention can still reserve that
+ * suffix for generated FlowIR artifacts. */
+function isLegacyFlowDefinitionFile(name: string): boolean {
+	return name.endsWith(".json") && !name.endsWith(".meta.json");
+}
+
+function isPhysicallyContained(rootReal: string, candidateReal: string): boolean {
+	const relative = path.relative(rootReal, candidateReal);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/** Validate every directory component from a trusted boundary (`.pi` for a
+ * project, agent root for user flows) through the taskflows storage root.
+ * Only an explicitly configured user agent boundary may itself be a symlink. */
+function validateStorageRoot(root: string, boundary: string, allowBoundarySymlink = false): string | undefined {
+	const rootAbs = path.resolve(root);
+	const boundaryAbs = path.resolve(boundary);
+	const lexicalRelative = path.relative(boundaryAbs, rootAbs);
+	if (lexicalRelative.startsWith("..") || path.isAbsolute(lexicalRelative)) return undefined;
+	// The configured trust boundary itself may be a symlink (for example a
+	// user moving ~/.pi/agent to another disk). Preserve that historical setup,
+	// while still rejecting every symlink component *below* the boundary.
+	let current = rootAbs;
+	for (;;) {
+		const atBoundary = sameDiscoveryPath(current, boundaryAbs);
+		if (atBoundary && allowBoundarySymlink) break;
+		try {
+			const stat = fs.lstatSync(current);
+			if (stat.isSymbolicLink() || !stat.isDirectory()) return undefined;
+		} catch {
+			return undefined;
+		}
+		if (atBoundary) break;
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+	try {
+		const boundaryReal = fs.realpathSync.native(boundaryAbs);
+		const rootReal = fs.realpathSync.native(rootAbs);
+		if (!fs.statSync(boundaryReal).isDirectory() || !fs.statSync(rootReal).isDirectory()) return undefined;
+		return isPhysicallyContained(boundaryReal, rootReal) ? rootReal : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function readDirectoryBounded(dir: string, budget: DiscoveryBudget): fs.Dirent[] {
+	if (budget.exceeded || budget.directories >= MAX_DISCOVERY_DIRS) {
+		budget.exceeded = true;
+		return [];
+	}
+	budget.directories++;
+	let handle: fs.Dir;
+	try {
+		handle = fs.opendirSync(dir);
+	} catch {
+		return [];
+	}
+	const entries: fs.Dirent[] = [];
+	try {
+		for (;;) {
+			const entry = handle.readSync();
+			if (!entry) break;
+			budget.entries++;
+			if (budget.entries > MAX_DISCOVERY_ENTRIES) {
+				budget.exceeded = true;
+				break;
+			}
+			entries.push(entry);
+		}
+	} catch {
+		// Preserve the legacy listFlows contract: an unreadable or concurrently
+		// replaced directory is skipped rather than escaping as a process-level
+		// exception. Discard a partial read so precedence never depends on where
+		// the failure happened.
+		return [];
+	} finally {
+		try { handle.closeSync(); } catch { /* unreadable/replaced directory: skip */ }
+	}
+	return entries.sort((a, b) => codePointCompare(a.name, b.name));
+}
+
+function reserveFlowCandidate(budget: DiscoveryBudget): boolean {
+	budget.files++;
+	if (budget.files > MAX_DISCOVERY_FILES) {
+		budget.exceeded = true;
+		return false;
+	}
+	return true;
+}
+
+function canonicalRegularFile(candidate: string, rootReal: string): string | undefined {
+	try {
+		const stat = fs.lstatSync(candidate);
+		if (stat.isSymbolicLink() || !stat.isFile()) return undefined;
+		const real = fs.realpathSync.native(candidate);
+		return isPhysicallyContained(rootReal, real) ? real : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function listLegacyFlowFiles(rootReal: string, budget: DiscoveryBudget): string[] {
+	const files: string[] = [];
+	for (const entry of readDirectoryBounded(rootReal, budget)) {
+		if (budget.exceeded) break;
+		// Legacy 0.2.9 discovery accepted hidden top-level JSON definitions. Keep
+		// that compatibility at the storage root; only the new recursive `flows/`
+		// convention skips hidden entries/directories.
+		if (entry.isSymbolicLink() || !entry.isFile() || !isLegacyFlowDefinitionFile(entry.name)) continue;
+		const real = canonicalRegularFile(path.join(rootReal, entry.name), rootReal);
+		if (!real || !reserveFlowCandidate(budget)) continue;
+		files.push(real);
+	}
+	return files;
+}
+
+/** Deterministically discover ordinary JSON files below `<root>/flows/` under
+ * one shared user+project budget. Every path component below the validated
+ * storage root must remain a regular non-symlink directory/file. */
+function listNestedFlowFiles(rootReal: string, budget: DiscoveryBudget): string[] {
+	const conventionRoot = path.join(rootReal, NESTED_FLOWS_DIR);
+	let conventionReal: string;
+	try {
+		const stat = fs.lstatSync(conventionRoot);
+		if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
+		conventionReal = fs.realpathSync.native(conventionRoot);
+		if (!isPhysicallyContained(rootReal, conventionReal)) return [];
+	} catch {
+		return [];
+	}
+
+	const found: string[] = [];
+	const visit = (dir: string, depth: number): void => {
+		if (budget.exceeded || depth > MAX_NESTED_FLOW_DEPTH) {
+			budget.exceeded = true;
+			return;
+		}
+		for (const entry of readDirectoryBounded(dir, budget)) {
+			if (budget.exceeded) break;
+			if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+			const candidate = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				try {
+					const stat = fs.lstatSync(candidate);
+					if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+					const real = fs.realpathSync.native(candidate);
+					if (!isPhysicallyContained(conventionReal, real)) continue;
+					visit(real, depth + 1);
+				} catch {
+					// Entry disappeared or changed; skip safely.
+				}
+			} else if (entry.isFile() && isFlowDefinitionFile(entry.name)) {
+				const real = canonicalRegularFile(candidate, conventionReal);
+				if (!real || !reserveFlowCandidate(budget)) continue;
+				found.push(real);
+			}
+		}
+	};
+	visit(conventionReal, 0);
+	return found.sort(codePointCompare);
+}
+
+function discoveryLimitDetail(): string {
+	return `${MAX_DISCOVERY_FILES} flows, ${MAX_DISCOVERY_ENTRIES} entries, ` +
+		`${MAX_DISCOVERY_DIRS} directories, ${MAX_DISCOVERY_TOTAL_BYTES} bytes, ` +
+		`${MAX_FLOW_DEFINITION_BYTES} bytes/file, depth ${MAX_NESTED_FLOW_DEPTH}`;
+}
+
+function warnDiscoveryLimit(): void {
+	console.warn(`[taskflow] Saved flow discovery failed closed after exceeding a safety limit (${discoveryLimitDetail()}).`);
+}
+
 /** Internal-but-exported for tests: walk-up `.pi` finder with home-dir stop. */
 export function findProjectFlowsDir(cwd: string, create = false): string | null {
 	return findProjectFlowsDirInternal(cwd, create);
 }
 
-export function listFlows(cwd: string): SavedFlow[] {
-	const map = new Map<string, SavedFlow>();
-	const dirs: Array<{ dir: string; scope: "user" | "project" }> = [{ dir: userFlowsDir(), scope: "user" }];
-	const projDir = findProjectFlowsDir(cwd);
-	if (projDir) dirs.push({ dir: projDir, scope: "project" });
+interface FlowDiscoveryResult {
+	flows: SavedFlow[];
+	/** Same-scope winners before project-over-user precedence is applied. */
+	scopedFlows: SavedFlow[];
+	failures: Array<{
+		scope: "user" | "project";
+		filePath: string;
+		result: Extract<LoadResult<SavedFlow>, { ok: false }>;
+	}>;
+	diagnostics: string[];
+	exceeded: boolean;
+}
 
-	for (const { dir, scope } of dirs) {
-		if (!fs.existsSync(dir)) continue;
-		let entries: string[];
-		try {
-			entries = fs.readdirSync(dir);
-		} catch {
-			continue;
-		}
-		for (const name of entries) {
-			if (!name.endsWith(".json")) continue;
-			// A1: sidecar .meta.json must never be scanned as a candidate flow.
-			if (name.endsWith(".meta.json")) continue;
-			const r = readFlowFile(path.join(dir, name), scope);
+/** One bounded discovery pass shared by list/get/diagnosed lookup. */
+function discoverFlows(cwd: string): FlowDiscoveryResult {
+	const map = new Map<string, SavedFlow>();
+	const scopedFlows: SavedFlow[] = [];
+	const failures: FlowDiscoveryResult["failures"] = [];
+	const diagnostics: string[] = [];
+	const budget: DiscoveryBudget = { entries: 0, directories: 0, files: 0, bytes: 0, exceeded: false };
+	const agentRoot = getAgentDir();
+	const dirs: Array<{ dir: string; boundary: string; scope: "user" | "project" }> = [
+		{ dir: userFlowsDir(), boundary: agentRoot, scope: "user" },
+	];
+	const projDir = findProjectFlowsDir(cwd);
+	if (projDir) dirs.push({ dir: projDir, boundary: path.dirname(projDir), scope: "project" });
+
+	for (const { dir, boundary, scope } of dirs) {
+		const rootReal = validateStorageRoot(dir, boundary, scope === "user");
+		if (!rootReal) continue;
+		const legacyFiles = listLegacyFlowFiles(rootReal, budget);
+		const nestedFiles = listNestedFlowFiles(rootReal, budget);
+		if (budget.exceeded) break;
+		const scopeFlows = new Map<string, SavedFlow>();
+		for (const filePath of [...legacyFiles, ...nestedFiles]) {
+			const r = readFlowFile(filePath, scope, budget, rootReal);
+			if (budget.exceeded) break;
 			if (r.ok) {
-				map.set(r.value.name, r.value); // project after user → overrides
+				// Candidates are precedence-ordered: legacy top-level first, then
+				// Unicode-scalar sorted nested paths. The first same-scope definition wins.
+				const existing = scopeFlows.get(r.value.name);
+				if (!existing) {
+					scopeFlows.set(r.value.name, r.value);
+				} else {
+					diagnostics.push(
+						`[taskflow] duplicate saved flow name '${r.value.name}' in ${scope} scope; ` +
+							`using ${path.relative(rootReal, existing.filePath)} and ignoring ${path.relative(rootReal, filePath)}`,
+					);
+				}
 			} else if (r.reason === "unparseable") {
-				// A corrupt saved flow used to be silently dropped here, so `getFlow`
-				// would later report "not found" for a file that clearly exists.
-				// Surface it loudly instead — the detail carries line/column.
-				console.warn(
-					`[taskflow] saved flow is corrupt and was excluded from the list: ${name} — ${r.detail}`,
+				failures.push({ scope, filePath, result: r });
+				diagnostics.push(
+					`[taskflow] saved flow is corrupt and was excluded from the list: ${path.relative(rootReal, filePath)} — ${r.detail}`,
 				);
 			}
 		}
+		if (budget.exceeded) break;
+		for (const flow of scopeFlows.values()) {
+			scopedFlows.push(flow);
+			map.set(flow.name, flow);
+		}
 	}
-	return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+	return {
+		flows: Array.from(map.values()).sort((a, b) => codePointCompare(a.name, b.name)),
+		scopedFlows,
+		failures,
+		diagnostics,
+		exceeded: budget.exceeded,
+	};
+}
+
+/** List all saved flows (project overrides user on name collision). */
+export function listFlows(cwd: string): SavedFlow[] {
+	const discovery = discoverFlows(cwd);
+	for (const diagnostic of discovery.diagnostics) console.warn(diagnostic);
+	if (discovery.exceeded) {
+		warnDiscoveryLimit();
+		return [];
+	}
+	return discovery.flows;
 }
 
 export function getFlow(cwd: string, name: string): SavedFlow | null {
@@ -1100,42 +1503,136 @@ export function getFlow(cwd: string, name: string): SavedFlow | null {
 /**
  * Resolve a saved flow by name with diagnosable failure. Unlike `getFlow`
  * (which returns `null` for both "no such flow" and "file exists but corrupt",
- * because corrupt files are excluded from `listFlows`), this re-reads the
- * candidate file directly so callers can report *why* a name didn't resolve.
+ * because corrupt files are excluded from `listFlows`), this consumes the same
+ * bounded discovery snapshot and reports a matching corrupt candidate without
+ * rescanning the namespace.
  */
 export function getFlowDiagnosed(cwd: string, name: string): LoadResult<SavedFlow> {
-	const found = getFlow(cwd, name);
-	if (found) return { ok: true, value: found };
-	// Not in the list — check whether a file exists for this name but is corrupt.
-	const candidates: Array<{ dir: string; scope: "user" | "project" }> = [
-		{ dir: userFlowsDir(), scope: "user" },
-	];
-	const projDir = findProjectFlowsDir(cwd);
-	if (projDir) candidates.push({ dir: projDir, scope: "project" });
-	for (const { dir, scope } of candidates) {
-		const filePath = path.join(dir, `${safeFlowDirName(name)}.json`);
-		if (fs.existsSync(filePath)) {
-			const r = readFlowFile(filePath, scope);
-			if (!r.ok) return r; // unparseable (or a missing-in-race) — surface detail
-		}
+	const discovery = discoverFlows(cwd);
+	if (discovery.exceeded) {
+		return {
+			ok: false,
+			reason: "unparseable",
+			path: name,
+			detail: `saved flow discovery exceeded a safety limit (${discoveryLimitDetail()})`,
+		};
 	}
+	const found = discovery.flows.find((flow) => flow.name === name);
+	if (found) return { ok: true, value: found };
+
+	// Preserve the old filename-based diagnosis, but consume the failures already
+	// captured by the same bounded pass. Project scope wins over user scope.
+	const expectedFilename = `${safeFlowDirName(name)}.json`;
+	const matching = discovery.failures
+		.filter((failure) => path.basename(failure.filePath) === expectedFilename)
+		.sort((a, b) => (a.scope === b.scope ? 0 : a.scope === "project" ? -1 : 1))[0];
+	if (matching) return matching.result;
 	return { ok: false, reason: "missing", path: name, detail: `no saved flow named '${name}'` };
 }
 
 let _piCreationHinted = false;
+
+function ensureProjectStorageRoot(root: string, boundary: string): void {
+	const rootAbs = path.resolve(root);
+	const boundaryAbs = path.resolve(boundary);
+	if (!sameDiscoveryPath(path.dirname(rootAbs), boundaryAbs)) {
+		throw new Error("unsafe saved-flow storage: project root is not directly below .pi");
+	}
+
+	const ensurePlainDirectory = (dir: string, parentIdentity: DirectoryIdentity): DirectoryIdentity => {
+		try {
+			const stat = fs.lstatSync(dir);
+			if (stat.isSymbolicLink() || !stat.isDirectory()) {
+				throw new Error("unsafe saved-flow storage: project storage boundary must be a non-symlink directory");
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			if (!sameDirectoryIdentityValue(parentIdentity, directoryIdentity(path.dirname(dir)))) {
+				throw new Error("unsafe saved-flow storage: project storage parent changed before creation");
+			}
+			try {
+				fs.mkdirSync(dir);
+			} catch (mkdirError) {
+				if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+			}
+			const created = fs.lstatSync(dir);
+			if (created.isSymbolicLink() || !created.isDirectory()) {
+				throw new Error("unsafe saved-flow storage: created project storage component is not a plain directory");
+			}
+		}
+		const identity = directoryIdentity(dir);
+		if (!identity || !sameDirectoryIdentityValue(parentIdentity, directoryIdentity(path.dirname(dir)))) {
+			throw new Error("unsafe saved-flow storage: project storage changed during creation");
+		}
+		return identity;
+	};
+
+	const boundaryParent = path.dirname(boundaryAbs);
+	const boundaryParentIdentity = directoryIdentity(boundaryParent);
+	if (!boundaryParentIdentity) {
+		throw new Error("unsafe saved-flow storage: project directory identity is unavailable");
+	}
+	const boundaryIdentity = ensurePlainDirectory(boundaryAbs, boundaryParentIdentity);
+	ensurePlainDirectory(rootAbs, boundaryIdentity);
+}
+
+interface FlowSaveTarget {
+	dir: string;
+	filePath: string;
+	expectedDirIdentity: DirectoryIdentity;
+}
+
+/** Preserve the path of an already-discovered flow in the requested scope.
+ * New definitions retain the legacy top-level save location. */
+function resolveFlowSaveTarget(cwd: string, flowName: string, scope: "user" | "project"): FlowSaveTarget {
+	const discovery = discoverFlows(cwd);
+	if (discovery.exceeded) {
+		throw new Error(`cannot safely resolve saved flow path: discovery exceeded a safety limit (${discoveryLimitDetail()})`);
+	}
+	const existing = discovery.scopedFlows.find((flow) => flow.scope === scope && flow.name === flowName);
+	if (existing) {
+		return {
+			dir: path.dirname(existing.filePath),
+			filePath: existing.filePath,
+			expectedDirIdentity: existing.sourceDirIdentity,
+		};
+	}
+	const requestedDir =
+		scope === "user" ? userFlowsDir() : (findProjectFlowsDir(cwd, true) ?? path.join(cwd, ".pi", "taskflows"));
+	const boundary = scope === "user" ? getAgentDir() : path.dirname(requestedDir);
+	if (scope === "project") ensureProjectStorageRoot(requestedDir, boundary);
+	else fs.mkdirSync(requestedDir, { recursive: true });
+	const dir = validateStorageRoot(requestedDir, boundary, scope === "user");
+	if (!dir) throw new Error("unsafe saved-flow storage: target is outside a trusted storage root");
+	const expectedDirIdentity = directoryIdentity(dir);
+	if (!expectedDirIdentity) throw new Error("unsafe saved-flow storage: target directory identity is unavailable");
+	return {
+		dir,
+		filePath: path.join(dir, `${safeFlowDirName(flowName)}.json`),
+		expectedDirIdentity,
+	};
+}
+
+function assertFlowSaveTarget(target: FlowSaveTarget): void {
+	if (!sameDirectoryIdentityValue(target.expectedDirIdentity, directoryIdentity(target.dir))) {
+		throw new Error("saved flow parent directory changed before write");
+	}
+}
 
 export function saveFlow(
 	cwd: string,
 	def: Taskflow,
 	scope: "user" | "project" = "project",
 ): { filePath: string } {
-	const dir = scope === "user" ? userFlowsDir() : (findProjectFlowsDir(cwd, true) ?? path.join(cwd, ".pi", "taskflows"));
 	if (!def.name || def.name.trim().length === 0) throw new Error("Flow name must not be empty");
-	fs.mkdirSync(dir, { recursive: true });
-	const safe = safeFlowDirName(def.name);
-	const filePath = path.join(dir, `${safe}.json`);
+	const target = resolveFlowSaveTarget(cwd, def.name, scope);
+	const { dir, filePath } = target;
+	assertFlowSaveTarget(target);
 	const fileLockPath = filePath + ".lock";
-	withLock(fileLockPath, () => { writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`); });
+	withLock(fileLockPath, () => {
+		assertFlowSaveTarget(target);
+		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`, () => assertFlowSaveTarget(target));
+	});
 
 	// One-shot: let the user know about .pi/ directory on first save (Finding 8).
 	if (!_piCreationHinted) {
@@ -1170,7 +1667,14 @@ function sidecarPathIn(flowFilePath: string): string {
 /** Read a flow's library sidecar. Returns a `LoadResult`; missing/unparseable
  *  are discriminated by `reason`. */
 export function readMeta(cwd: string, flowName: string): LoadResult<FlowMeta> {
-	// Try project scope first, then user — mirrors getFlow's resolution.
+	// A discovered flow owns the sidecar adjacent to its actual definition file.
+	// This preserves metadata for nested convention-directory flows and avoids
+	// accidentally pairing one with a stale top-level sidecar of the same name.
+	const saved = getFlow(cwd, flowName);
+	if (saved) return readMetaNextTo(saved.filePath);
+
+	// No flow resolved (for example, a caller is about to save a new definition):
+	// preserve the legacy ability to recover an orphaned top-level sidecar.
 	for (const scope of ["project", "user"] as const) {
 		const p = sidecarPathFor(cwd, flowName, scope);
 		if (!fs.existsSync(p)) continue;
@@ -1211,16 +1715,17 @@ export function saveFlowWithMeta(
 	meta: FlowMeta,
 	scope: "user" | "project" = "project",
 ): { filePath: string; metaPath: string } {
-	const dir = scope === "user" ? userFlowsDir() : (findProjectFlowsDir(cwd, true) ?? path.join(cwd, ".pi", "taskflows"));
 	if (!def.name || def.name.trim().length === 0) throw new Error("Flow name must not be empty");
-	fs.mkdirSync(dir, { recursive: true });
-	const safe = safeFlowDirName(def.name);
-	const filePath = path.join(dir, `${safe}.json`);
-	const metaPath = path.join(dir, `${safe}.meta.json`);
+	const target = resolveFlowSaveTarget(cwd, def.name, scope);
+	const { filePath } = target;
+	const metaPath = sidecarPathIn(filePath);
+	assertFlowSaveTarget(target);
 	const fileLockPath = filePath + ".lock"; // shared lock key for flow+sidecar (R2R5)
 	withLock(fileLockPath, () => {
-		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`);
-		writeFileAtomic(metaPath, `${JSON.stringify(meta, null, 2)}\n`);
+		assertFlowSaveTarget(target);
+		writeFileAtomic(filePath, `${JSON.stringify(def, null, 2)}\n`, () => assertFlowSaveTarget(target));
+		assertFlowSaveTarget(target);
+		writeFileAtomic(metaPath, `${JSON.stringify(meta, null, 2)}\n`, () => assertFlowSaveTarget(target));
 	});
 	return { filePath, metaPath };
 }
@@ -1233,9 +1738,16 @@ export function saveFlowWithMeta(
 export function bumpReuseInSidecar(cwd: string, flowName: string): number | null {
 	const saved = getFlow(cwd, flowName);
 	if (!saved) return null;
+	const target: FlowSaveTarget = {
+		dir: path.dirname(saved.filePath),
+		filePath: saved.filePath,
+		expectedDirIdentity: saved.sourceDirIdentity,
+	};
 	const metaPath = sidecarPathIn(saved.filePath);
+	assertFlowSaveTarget(target);
 	const lockPath = saved.filePath + ".lock";
 	return withLock(lockPath, () => {
+		assertFlowSaveTarget(target);
 		const existingR = readMetaNextTo(saved.filePath);
 		const existing = existingR.ok ? existingR.value : undefined;
 		const now = Date.now();
@@ -1253,7 +1765,8 @@ export function bumpReuseInSidecar(cwd: string, flowName: string): number | null
 					version: 1,
 					embedding: null,
 			  };
-		writeFileAtomic(metaPath, `${JSON.stringify(updated, null, 2)}\n`);
+		assertFlowSaveTarget(target);
+		writeFileAtomic(metaPath, `${JSON.stringify(updated, null, 2)}\n`, () => assertFlowSaveTarget(target));
 		return updated.reuseCount;
 	});
 }
@@ -1545,18 +2058,48 @@ export function isProcessAlive(pid: number): boolean {
  * then rename over the target (rename is atomic on the same filesystem). Prevents
  * a crash or concurrent write from leaving a half-written, corrupt JSON file.
  */
-export function writeFileAtomic(filePath: string, data: string): void {
+export function writeFileAtomic(filePath: string, data: string, guard?: () => void): void {
 	// Ensure parent directory exists.
+	guard?.();
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	guard?.();
 	const tmp = `${filePath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+	let fd: number | undefined;
 	try {
-		fs.writeFileSync(tmp, data, "utf-8");
-		renameAtomicWithRetry(tmp, filePath);
+		guard?.();
+		// Open the unique temp path without following a pre-existing leaf and write
+		// through the descriptor. If the parent is renamed/replaced after open,
+		// the descriptor remains bound to the original directory's file instead of
+		// redirecting content through a new symlinked lexical path.
+		const noFollow = process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW;
+		fd = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o666);
+		// Close the final pre-open race: if the lexical parent changed between the
+		// prior guard and openSync, fail before any definition bytes reach the fd.
+		guard?.();
+		fs.writeFileSync(fd, data, "utf-8");
+		fs.closeSync(fd);
+		fd = undefined;
+		// The directory can be renamed/replaced while the temp file is written.
+		// Revalidate immediately before the externally visible rename; on failure
+		// the guarded path is left untouched and no file is promoted.
+		guard?.();
+		fs.renameSync(tmp, filePath);
 	} catch (e) {
-		try {
-			if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
-		} catch {
-			/* ignore cleanup failure */
+		if (fd !== undefined) {
+			try { fs.closeSync(fd); } catch { /* ignore close failure */ }
+		}
+		// A guarded caller is protecting a directory-identity boundary. Once a
+		// guard or write fails, the lexical temp path may already resolve through
+		// a replacement directory/symlink; unlinking it could delete an unrelated
+		// external same-name file. Fail closed and leave any temp artifact in the
+		// original (possibly displaced) directory. Unguarded legacy callers keep
+		// the original best-effort cleanup behavior.
+		if (!guard) {
+			try {
+				if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
+			} catch {
+				/* ignore cleanup failure */
+			}
 		}
 		throw e;
 	}

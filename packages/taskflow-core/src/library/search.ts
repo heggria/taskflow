@@ -9,7 +9,7 @@
  * §5.2.2 (staleness), §5.3 (why/reuseHint templates).
  */
 
-import { getFlow, listFlows, readMeta } from "../store.ts";
+import { getFlow, listFlows, readMetaNextTo } from "../store.ts";
 import type { Taskflow } from "../schema.ts";
 import type { FlowMeta } from "./types.ts";
 import {
@@ -246,7 +246,7 @@ export async function searchLibrary(deps: LibraryDeps, input: SearchInput): Prom
 
 	const scored: Array<{ cand: ResolvedCandidate; score: number; semScore?: number; structScore: number; textScore: number }> = [];
 	for (const f of flows) {
-		const sidecarR = readMeta(deps.cwd, f.name);
+		const sidecarR = readMetaNextTo(f.filePath);
 		const sidecar = sidecarR.ok ? sidecarR.value : undefined;
 		const cand = resolveCandidate(f.def, f.scope, f.name, sidecar);
 		const qShape = {

@@ -300,7 +300,7 @@ export function resolveHermesToolsets(
 	if (unmapped.length > 0 || sets.size === 0) {
 		throw new Error(
 			`Hermes tool whitelist [${tools.join(", ")}] did not map safely to supported Hermes toolsets. ` +
-				`0.2.9 permits only local file, terminal, and explicit web aliases; ` +
+				`0.2.10 permits only local file, terminal, and explicit web aliases; ` +
 				`delegation/skills/memory/browser/cron/control-plane tools are denied.`,
 		);
 	}

@@ -41,7 +41,7 @@ import {
 	type BackgroundRunFilter,
 	type DetachedRunnerBinding,
 } from "./background.ts";
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,7 @@ import {
 	newRunId,
 	peekRun,
 	saveRun,
-	readDefineFile,
+	readDefineFileWithSource,
 	describeLoadFailure,
 	compileTaskflow,
 	verifyTaskflow,
@@ -65,6 +65,7 @@ import {
 	directoryIdentity,
 	readSubagentSettings,
 	readMeta,
+	readMetaNextTo,
 	saveFlowWithMeta,
 	bumpReuseInSidecar,
 	deriveMeta,
@@ -73,6 +74,7 @@ import {
 	type SearchInput,
 	type RuntimeDeps,
 	type RunState,
+	type DirectoryIdentity,
 	type Taskflow,
 	type VerificationIssue,
 	type TraceEvent,
@@ -747,8 +749,21 @@ const TOOLS: McpTool[] = [
 ];
 
 /** Resolve a flow from params: inline `define` (desugared), `defineFile` (disk), or saved `name`. */
-function resolvePermittedDefineFile(cwd: string, requested: string): string {
+interface PermittedDefineFile {
+	filePath: string;
+	allowedRoots: string[];
+}
+
+function resolvePermittedDefineFile(cwd: string, requested: string): PermittedDefineFile {
 	const lexical = resolve(cwd, requested);
+	try {
+		if (lstatSync(lexical).isSymbolicLink()) {
+			throw new RpcError(RPC.INVALID_PARAMS, `defineFile must not be a symlink: ${requested}`);
+		}
+	} catch (error) {
+		if (error instanceof RpcError) throw error;
+		// Missing/unreadable paths retain the normal loader diagnostic below.
+	}
 	let candidate = lexical;
 	try {
 		candidate = realpathSync(lexical);
@@ -772,23 +787,41 @@ function resolvePermittedDefineFile(cwd: string, requested: string): string {
 			`defineFile must be contained in the server cwd or OS temp directory: ${requested}`,
 		);
 	}
-	return candidate;
+	return { filePath: candidate, allowedRoots: rootCandidates };
 }
 
-function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
+interface ResolvedFlow {
+	def: Taskflow;
+	flowSourceFile?: string;
+	flowSourceDirIdentity?: DirectoryIdentity;
+}
+
+function resolveFlowWithSource(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): ResolvedFlow {
+	let flowSourceFile: string | undefined;
+	let flowSourceDirIdentity: DirectoryIdentity | undefined;
 	if (params.define === undefined && typeof params.defineFile === "string" && params.defineFile.trim()) {
-		const filePath = resolvePermittedDefineFile(cwd, params.defineFile);
-		const fromFile = readDefineFile(filePath);
+		const permitted = resolvePermittedDefineFile(cwd, params.defineFile);
+		const fromFile = readDefineFileWithSource(permitted.filePath, permitted.allowedRoots);
 		if (!fromFile.ok) throw new RpcError(RPC.INVALID_PARAMS, describeLoadFailure(fromFile, "defineFile"));
-		params = { ...params, define: fromFile.value };
+		flowSourceFile = fromFile.value.filePath;
+		flowSourceDirIdentity = fromFile.value.sourceDirIdentity;
+		params = { ...params, define: fromFile.value.value };
 	}
 	if (params.define !== undefined && params.define !== null) {
-		return isShorthand(params.define) ? desugar(params.define) : (params.define as Taskflow);
+		return {
+			def: isShorthand(params.define) ? desugar(params.define) : (params.define as Taskflow),
+			flowSourceFile,
+			flowSourceDirIdentity,
+		};
 	}
 	if (params.name) {
 		const r = getFlowDiagnosed(cwd, params.name);
 		if (!r.ok) throw new RpcError(RPC.INVALID_PARAMS, describeLoadFailure(r, `Saved flow "${params.name}"`));
-		return r.value.def;
+		return {
+			def: r.value.def,
+			flowSourceFile: r.value.filePath,
+			flowSourceDirIdentity: r.value.sourceDirIdentity,
+		};
 	}
 	throw new RpcError(RPC.INVALID_PARAMS, "Provide either `name` (a saved flow) or `define` (an inline flow).");
 }
@@ -801,6 +834,10 @@ function savedFlowLoader(cwd: string): (name: string) => Taskflow | undefined {
 		const r = getFlowDiagnosed(cwd, name);
 		return r.ok ? r.value.def : undefined;
 	};
+}
+
+function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
+	return resolveFlowWithSource(cwd, params).def;
 }
 
 /** Optional host-identity options for the MCP server (0.2.0 dogfood issue 4).
@@ -824,7 +861,14 @@ export function stampRunIdentity(state: RunState, host?: string): void {
 	if (host) state.host = host;
 }
 
-function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string, host?: string): RunState {
+function mkRunState(
+	def: Taskflow,
+	args: Record<string, unknown>,
+	cwd: string,
+	host?: string,
+	flowSourceFile?: string,
+	flowSourceDirIdentity?: DirectoryIdentity,
+): RunState {
 	const state: RunState = {
 		runId: newRunId(def.name ?? "flow"),
 		flowName: def.name ?? "flow",
@@ -835,6 +879,8 @@ function mkRunState(def: Taskflow, args: Record<string, unknown>, cwd: string, h
 		createdAt: Date.now(),
 		updatedAt: Date.now(),
 		cwd,
+		flowSourceFile,
+		flowSourceDirIdentity,
 		invocationRootSnapshot: directoryIdentity(cwd),
 	};
 	stampRunIdentity(state, host);
@@ -872,7 +918,8 @@ export function makeToolHandlers(
 				args.define === undefined && args.defineFile === undefined && typeof args.name === "string" && args.name.trim()
 					? args.name.trim()
 					: undefined;
-			const def = resolveFlow(cwd, args);
+			const resolvedFlow = resolveFlowWithSource(cwd, args);
+			const def = resolvedFlow.def;
 			const loadSaved = savedFlowLoader(cwd);
 			const structural = validateTaskflow(def, { resolveFlow: loadSaved });
 			if (!structural.ok) return textContent(`Flow is invalid:\n- ${structural.errors.join("\n- ")}`, true);
@@ -911,12 +958,19 @@ export function makeToolHandlers(
 				signal: context?.signal,
 				usageAccounting,
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
-				loadFlow: (name: string) => {
+				loadSavedFlow: (name: string) => {
 					const loaded = getFlowDiagnosed(cwd, name);
-					return loaded.ok ? loaded.value.def : undefined;
+					return loaded.ok ? { def: loaded.value.def, filePath: loaded.value.filePath, sourceDirIdentity: loaded.value.sourceDirIdentity } : undefined;
 				},
 			};
-			const state = mkRunState(def, resolvedArgs, cwd, host);
+			const state = mkRunState(
+				def,
+				resolvedArgs,
+				cwd,
+				host,
+				resolvedFlow.flowSourceFile,
+				resolvedFlow.flowSourceDirIdentity,
+			);
 			if (args.mode === "background") {
 				if (!opts?.detachedRunner) {
 					return textContent(
@@ -1110,6 +1164,10 @@ export function makeToolHandlers(
 				usageAccounting: runner.usageAccounting,
 				cwdBridgeMode: cwdBridgeModeFromEnv(),
 				trace: new FileTraceSink(traceFilePath(runsDir(cwd), child.flowName, child.runId)),
+				loadSavedFlow: (name: string) => {
+					const loaded = getFlowDiagnosed(cwd, name);
+					return loaded.ok ? { def: loaded.value.def, filePath: loaded.value.filePath, sourceDirIdentity: loaded.value.sourceDirIdentity } : undefined;
+				},
 			};
 			const cleanupConfig = {
 				maxKeep: settings.taskflow.maxKeptRuns,
@@ -1248,7 +1306,7 @@ export function makeToolHandlers(
 			const flows = listFlows(cwd);
 			if (flows.length === 0) return textContent("No saved taskflows found from this directory.");
 			const lines = flows.map((f) => {
-				const metaR = readMeta(cwd, f.name);
+				const metaR = readMetaNextTo(f.filePath);
 				const meta = metaR.ok ? metaR.value : undefined;
 				if (meta?.purpose) {
 					const purpose = meta.purpose.length > 20 ? meta.purpose.slice(0, 20) + "…" : meta.purpose;
@@ -1264,7 +1322,7 @@ export function makeToolHandlers(
 			const savedR = getFlowDiagnosed(cwd, name);
 			if (!savedR.ok) return textContent(describeLoadFailure(savedR, `Saved flow "${name}"`), true);
 			const saved = savedR.value;
-			const metaR = readMeta(cwd, name);
+			const metaR = readMetaNextTo(saved.filePath);
 			const meta = metaR.ok ? metaR.value : undefined;
 			if (meta) {
 				const out = { definition: saved.def, library: { purpose: meta.purpose, tags: meta.tags, notes: meta.notes, generality: meta.generality, reuseCount: meta.reuseCount, version: meta.version, phaseSignature: meta.phaseSignature } };

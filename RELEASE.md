@@ -82,8 +82,8 @@ the matching annotated tag:
 ```sh
 git switch main
 git pull --ff-only origin main
-git tag -a v0.2.9 -m "Release v0.2.9"
-git push origin v0.2.9
+git tag -a v0.2.10 -m "Release v0.2.10"
+git push origin v0.2.10
 ```
 
 `.github/workflows/publish.yml` then performs the complete release transaction:
@@ -126,16 +126,16 @@ publishing missing packages manually.
 
 ## Upgrade and rollback
 
-- Upgrade all host package pins as one transaction to `0.2.9`, restart/reload the
-  host's MCP/plugin registration, and verify `taskflow_version` reports `0.2.9`.
+- Upgrade all host package pins as one transaction to `0.2.10`, restart/reload the
+  host's MCP/plugin registration, and verify `taskflow_version` reports `0.2.10`.
 - This patch does not introduce a run-state migration. Keep `.pi/taskflows/` and
   existing run history in place when upgrading or rolling back.
-- Pi, Codex, Claude Code, OpenCode, and Grok users can roll back by pinning their
-  delivery package to `0.2.8` and restarting the host. Keep all taskflow package
-  versions aligned; do not mix a `0.2.9` adapter with `0.2.8` shared packages.
-- Hermes support begins in `0.2.9`; there is no `hermes-taskflow@0.2.8`. To roll
-  Hermes back, disable/remove its Taskflow MCP entry and restart Hermes rather
-  than attempting to install a nonexistent older package.
+- All six hosts can roll back by pinning their delivery package to `0.2.9` and
+  restarting/reloading the host. Keep all taskflow package versions aligned; do
+  not mix a `0.2.10` adapter with `0.2.9` shared packages.
+- Before rolling back, move any definitions from `.pi/taskflows/flows/**` back to
+  the legacy top-level taskflows directory and remove `scriptCwd: "flow"`; 0.2.9
+  does not discover the nested convention or understand that field.
 
 ## Install (end users)
 
@@ -155,8 +155,8 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build (published MCP package)
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
 # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
 ```

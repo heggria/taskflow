@@ -10,6 +10,7 @@ import { runScriptCommand } from "../src/runtime/phases/script.ts";
 import { type Taskflow, validateTaskflow } from "../src/schema.ts";
 import type { RunState } from "../src/store.ts";
 import { emptyUsage } from "../src/usage.ts";
+import { directoryIdentity } from "../src/cwd-bridge.ts";
 
 // The script phase shells out, so tests invoke `node -e` (guaranteed on PATH in
 // CI) rather than assuming any particular unix utility. String-form `run` uses
@@ -160,6 +161,171 @@ test("script run: array form spawns directly (no shell)", async () => {
 	assert.equal(res.finalOutput, "arr-ok");
 });
 
+test("script run: scriptCwd flow uses the flow file directory", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-flow-cwd-"));
+	try {
+		const invocationCwd = path.join(root, "repo");
+		const flowDir = path.join(invocationCwd, ".pi", "taskflows", "flows", "release bundle");
+		fs.mkdirSync(flowDir, { recursive: true });
+		const flowSourceFile = path.join(flowDir, "publish.json");
+		fs.writeFileSync(flowSourceFile, "{}", "utf8");
+		const def: Taskflow = {
+			name: "flow-relative",
+			scriptCwd: "flow",
+			phases: [{ id: "where", type: "script", run: [process.execPath, "-e", "process.stdout.write(process.cwd())"], final: true }],
+		};
+		const state = mkState(def);
+		state.cwd = invocationCwd;
+		state.flowSourceFile = fs.realpathSync(flowSourceFile);
+		state.flowSourceDirIdentity = directoryIdentity(flowDir);
+		const deps = { ...baseDeps(), cwd: invocationCwd };
+
+		const res = await executeTaskflow(state, deps);
+		assert.equal(res.ok, true);
+		assert.equal(res.finalOutput, fs.realpathSync(flowDir));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("script run: event kernel honors scriptCwd flow", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-kernel-flow-cwd-"));
+	try {
+		const invocationCwd = path.join(root, "repo");
+		const flowDir = path.join(invocationCwd, ".pi", "taskflows", "flows", "kernel");
+		fs.mkdirSync(flowDir, { recursive: true });
+		const flowSourceFile = path.join(flowDir, "publish.json");
+		fs.writeFileSync(flowSourceFile, "{}", "utf8");
+		const def: Taskflow = {
+			name: "kernel-flow-relative",
+			scriptCwd: "flow",
+			phases: [{ id: "where", type: "script", run: [process.execPath, "-e", "process.stdout.write(process.cwd())"], final: true }],
+		};
+		const state = mkState(def);
+		state.cwd = invocationCwd;
+		state.flowSourceFile = fs.realpathSync(flowSourceFile);
+		state.flowSourceDirIdentity = directoryIdentity(flowDir);
+		const deps = { ...baseDeps(), cwd: invocationCwd, eventKernel: true };
+
+		const res = await executeTaskflow(state, deps);
+		assert.equal(res.ok, true);
+		assert.equal(res.finalOutput, fs.realpathSync(flowDir));
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("runScriptCommand: revalidates flow cwd after its async import immediately before spawn", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-pre-spawn-swap-"));
+	try {
+		const flowDir = path.join(root, "flow");
+		const movedDir = path.join(root, "flow-moved");
+		fs.mkdirSync(flowDir);
+		fs.writeFileSync(path.join(flowDir, "identity.txt"), "original");
+		const expected = directoryIdentity(flowDir);
+		assert.ok(expected);
+		const pending = runScriptCommand({
+			interpRunText: [process.execPath, "-e", "process.stdout.write(require('node:fs').readFileSync('identity.txt','utf8'))"],
+			arrayForm: true,
+			cwd: flowDir,
+			cwdIdentity: expected,
+			timeoutMs: 5_000,
+		});
+		fs.renameSync(flowDir, movedDir);
+		fs.mkdirSync(flowDir);
+		fs.writeFileSync(path.join(flowDir, "identity.txt"), "replacement");
+		await assert.rejects(pending, /source directory identity changed after definition load/);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("script run: source directory replacement is rejected before spawn", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-source-swap-"));
+	try {
+		const invocationCwd = path.join(root, "repo");
+		const flowDir = path.join(invocationCwd, ".pi", "taskflows", "flows", "swap");
+		fs.mkdirSync(flowDir, { recursive: true });
+		const source = path.join(flowDir, "flow.json");
+		fs.writeFileSync(source, "{}", "utf8");
+		const sourceFile = fs.realpathSync(source);
+		const sourceDirIdentity = directoryIdentity(flowDir);
+		assert.ok(sourceDirIdentity);
+		fs.renameSync(flowDir, `${flowDir}-original`);
+		fs.mkdirSync(flowDir, { recursive: true });
+		const marker = path.join(root, "spawned.txt");
+		const def: Taskflow = {
+			name: "source-swap",
+			scriptCwd: "flow",
+			phases: [{
+				id: "run",
+				type: "script",
+				run: [process.execPath, "-e", "require('node:fs').writeFileSync(process.argv[1], 'ran')", marker],
+				final: true,
+			}],
+		};
+		for (const eventKernel of [false, true]) {
+			const state = mkState(def);
+			state.cwd = invocationCwd;
+			state.flowSourceFile = sourceFile;
+			state.flowSourceDirIdentity = sourceDirIdentity;
+			const res = await executeTaskflow(state, { ...baseDeps(), cwd: invocationCwd, eventKernel });
+			assert.equal(res.ok, false, `eventKernel=${eventKernel}`);
+			assert.match(res.state.phases.run.error ?? "", /source directory identity changed/);
+			assert.equal(fs.existsSync(marker), false);
+		}
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("script run: scriptCwd flow fails closed for inline definitions without provenance", async () => {
+	const def: Taskflow = {
+		name: "inline-no-source",
+		scriptCwd: "flow",
+		phases: [{ id: "run", type: "script", run: [process.execPath, "-e", "process.stdout.write('must-not-run')"], final: true }],
+	};
+	for (const eventKernel of [false, true]) {
+		const res = await executeTaskflow(mkState(def), { ...baseDeps(), eventKernel });
+		assert.equal(res.ok, false, `eventKernel=${eventKernel}`);
+		assert.match(res.state.phases.run.error ?? "", /requires stable saved-flow or defineFile provenance/);
+	}
+});
+
+test("script run: explicit phase cwd overrides scriptCwd flow", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-explicit-cwd-"));
+	try {
+		const invocationCwd = path.join(root, "repo");
+		const flowDir = path.join(invocationCwd, ".pi", "taskflows", "flows", "team");
+		const explicitCwd = path.join(invocationCwd, "packages", "api");
+		fs.mkdirSync(flowDir, { recursive: true });
+		fs.mkdirSync(explicitCwd, { recursive: true });
+		const source = path.join(flowDir, "flow.json");
+		fs.writeFileSync(source, "{}", "utf8");
+		const def: Taskflow = {
+			name: "explicit-wins",
+			scriptCwd: "flow",
+			phases: [{
+				id: "where",
+				type: "script",
+				run: [process.execPath, "-e", "process.stdout.write(process.cwd())"],
+				cwd: explicitCwd,
+				final: true,
+			}],
+		};
+		for (const eventKernel of [false, true]) {
+			const state = mkState(def);
+			state.cwd = invocationCwd;
+			state.flowSourceFile = fs.realpathSync(source);
+			const res = await executeTaskflow(state, { ...baseDeps(), cwd: invocationCwd, eventKernel });
+			assert.equal(res.ok, true, `eventKernel=${eventKernel}`);
+			assert.equal(res.finalOutput, fs.realpathSync(explicitCwd), `eventKernel=${eventKernel}`);
+		}
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("script run: 'input' is piped to stdin with interpolation", async () => {
 	const echoStdin = "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write('in['+d+']'))";
 	const def: Taskflow = {
@@ -231,6 +397,93 @@ test("script integration: agent output flows into a script via stdin", async () 
 	const res = await executeTaskflow(mkState(def), baseDeps(cannedRunner("DRAFT_TEXT")));
 	assert.equal(res.ok, true);
 	assert.equal(res.finalOutput, "SAVED:DRAFT_TEXT");
+});
+
+test("script integration: saved subflow receives its own source file directory", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-subflow-cwd-"));
+	try {
+		const invocationCwd = path.join(root, "repo");
+		const childDir = path.join(invocationCwd, ".pi", "taskflows", "flows", "children");
+		fs.mkdirSync(childDir, { recursive: true });
+		const childSource = path.join(childDir, "child.json");
+		fs.writeFileSync(childSource, "{}", "utf8");
+		const child: Taskflow = {
+			name: "child",
+			scriptCwd: "flow",
+			phases: [{ id: "where", type: "script", run: [process.execPath, "-e", "process.stdout.write(process.cwd())"], final: true }],
+		};
+		const parent: Taskflow = {
+			name: "parent",
+			phases: [{ id: "child", type: "flow", use: "child", final: true }],
+		};
+		for (const eventKernel of [false, true]) {
+			const state = mkState(parent);
+			state.cwd = invocationCwd;
+			let loads = 0;
+			const deps: RuntimeDeps = {
+				...baseDeps(),
+				cwd: invocationCwd,
+				eventKernel,
+				loadSavedFlow: (name: string) => {
+					if (name !== "child") return undefined;
+					loads++;
+					return {
+						def: child,
+						filePath: loads === 1 ? fs.realpathSync(childSource) : invocationCwd,
+						sourceDirIdentity: directoryIdentity(childDir),
+					};
+				},
+			};
+
+			const res = await executeTaskflow(state, deps);
+			assert.equal(res.ok, true, `eventKernel=${eventKernel}`);
+			assert.equal(res.finalOutput, fs.realpathSync(childDir), `eventKernel=${eventKernel}`);
+			assert.equal(loads, 1, `definition and provenance must be loaded atomically; eventKernel=${eventKernel}`);
+		}
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("script integration: saved subflow cannot expand an inherited cwd boundary", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-script-subflow-boundary-"));
+	try {
+		const boundaryDir = path.join(root, "workspace");
+		const childDir = path.join(root, "outside-flow-source");
+		fs.mkdirSync(boundaryDir, { recursive: true });
+		fs.mkdirSync(childDir, { recursive: true });
+		const childSource = path.join(childDir, "child.json");
+		fs.writeFileSync(childSource, "{}", "utf8");
+		const child: Taskflow = {
+			name: "child",
+			scriptCwd: "flow",
+			phases: [{ id: "where", type: "script", run: [process.execPath, "-e", "process.stdout.write(process.cwd())"], final: true }],
+		};
+		const parent: Taskflow = {
+			name: "parent",
+			phases: [{ id: "child", type: "flow", use: "child", final: true }],
+		};
+		const state = mkState(parent);
+		state.cwd = boundaryDir;
+		const deps: RuntimeDeps = {
+			...baseDeps(),
+			cwd: boundaryDir,
+			_cwdBoundary: fs.realpathSync(boundaryDir),
+			loadSavedFlow: (name: string) => name === "child"
+				? {
+						def: child,
+						filePath: fs.realpathSync(childSource),
+						sourceDirIdentity: directoryIdentity(childDir),
+				  }
+				: undefined,
+		};
+
+		const res = await executeTaskflow(state, deps);
+		assert.equal(res.ok, false);
+		assert.match(JSON.stringify(res.state.phases), /TF_CWD_BOUNDARY_ESCAPE/);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("script integration: skipped by an unmet 'when' condition", async () => {

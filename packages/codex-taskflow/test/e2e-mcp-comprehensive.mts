@@ -33,6 +33,7 @@ const repo = path.resolve(here, "..");
 const bin = path.join(repo, "dist", "mcp", "bin.js");
 const serverCwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-codex-mcp-effects-e2e-"));
 const workspaceControl = defaultWorkspaceControlDirectory(serverCwd);
+const expectedVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).version;
 
 assert.ok(fs.existsSync(bin), `built bin not found at ${bin} — run: npm run build -w codex-taskflow`);
 
@@ -82,7 +83,7 @@ send({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "
 const init = await waitFor(1, "initialize");
 assert.equal(init.result.protocolVersion, "2025-06-18");
 assert.equal(init.result.serverInfo.name, "taskflow-codex");
-assert.equal(init.result.serverInfo.version, "0.2.9");
+assert.equal(init.result.serverInfo.version, expectedVersion);
 ok(`initialize → ${JSON.stringify(init.result.serverInfo)}`);
 
 // notification must NOT produce a response

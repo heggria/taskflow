@@ -494,6 +494,19 @@ output is exact.
 - A non-zero exit fails the phase (stderr captured); stdout capped at 1 MB.
   No `retry`, no `output: "json"`; **excluded from cross-run cache** (may have
   side effects). Not allowed inside LLM-generated dynamic sub-flows (RCE guard).
+- Top-level `scriptCwd: "flow"` makes script phases run from the canonical saved
+  flow/`defineFile` directory. The default is `"invocation"`; explicit phase
+  `cwd` still wins. Inline definitions cannot claim file provenance and fail
+  closed in `"flow"` mode. The source directory identity is checked again just
+  before spawn, and any inherited cwd-bridge boundary still constrains it.
+- Saved flows may live at legacy `.pi/taskflows/*.json` or recursively below
+  `.pi/taskflows/flows/**/*.json`. Legacy files win same-scope duplicate names;
+  nested candidates use deterministic Unicode-scalar path order. Discovery
+  rejects symlinks below trusted storage boundaries and fails closed above 1,000
+  flows, 10,000 entries, 512 directories, 8 MiB total definitions, 1 MiB per
+  definition, or 16 levels. A configured user agent-directory boundary may be a
+  symlink; project `.pi` remains no-follow. New-flow saves enforce the same
+  boundary policy and revalidate the target directory inside the write lock.
 
 ```jsonc
 { "id": "build", "type": "script", "run": "pnpm run build", "timeout": 120000 },

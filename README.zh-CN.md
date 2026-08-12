@@ -13,7 +13,7 @@
 
 [English](./README.md) · **简体中文**
 
-[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.9 新能力](#029-hermes-agent--verify-对齐) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
+[安装](#安装到你的宿主) · [快速开始](#60-秒开始) · [0.2.10 新能力](#0210可组织可携带的-saved-flow) · [0.2 编译器转身](#02-是编译器转身) · [文档](https://heggria.github.io/taskflow/zh-cn/docs) · [示例](./examples)
 
 </div>
 
@@ -133,6 +133,22 @@ pi install npm:pi-taskflow
 
 在 Codex、Claude Code、OpenCode、Grok Build 和 Hermes Agent 上，通过 `taskflow_run` 按名称运行同一份保存定义。长任务可使用 `mode: "background"`，再用 `taskflow_runs` 执行 `list` / `status` / `wait` / `cancel`，无需担心单次 MCP 调用超时；列表会显示当前并发数，并可筛选 `running` 或 `terminal` 运行。
 
+大型项目可以把保存的定义递归组织在 `.pi/taskflows/flows/` 下，例如 `.pi/taskflows/flows/release/audit-api.json`。旧的 `.pi/taskflows/*.json` 仍可发现，并在同一作用域的重名冲突中优先；嵌套定义按与区域设置无关的 Unicode 标量路径顺序确定优先级。重新保存一个已发现的嵌套 flow 会原地更新该定义及相邻元数据；新 flow 仍写入旧版顶层位置。发现过程由用户与项目共享一套预算，超过 1,000 个 flow、10,000 个已访问目录项、512 个目录、8 MiB 定义总量、单文件 1 MiB 或 16 层深度时会安全失败。它拒绝可信存储边界以下直到定义叶子的符号链接，并跳过点路径、元数据（`*.meta.json`）和已编译 IR（`*.flowir.json`）；为兼容 home 目录迁移，配置的 agent 目录边界本身可以是符号链接。保存新 flow 时会执行相同的存储边界校验，并在写锁内重新验证目标目录的物理身份。
+
+文件支持的 flow 可以显式选择从定义文件目录运行脚本阶段：
+
+```json
+{
+  "name": "release",
+  "scriptCwd": "flow",
+  "phases": [
+    { "id": "prepare", "type": "script", "run": ["./scripts/prepare.sh"], "final": true }
+  ]
+}
+```
+
+此时 `./scripts/prepare.sh` 从保存 flow 或 `defineFile` 所在目录解析。默认值仍是 `"invocation"`，显式 phase `cwd` 仍然优先；inline 定义没有可信文件来源，因此请求 `scriptCwd: "flow"` 时会安全失败。如果执行继承了 cwd bridge 边界，解析出的 flow 来源目录也必须位于该边界内。
+
 [查看完整快速开始 →](https://heggria.github.io/taskflow/zh-cn/docs/getting-started)
 
 ## 看见整张图运行
@@ -151,6 +167,12 @@ pi install npm:pi-taskflow
 ```
 
 布局**本身就是 DAG**。并行轨道暴露并发，长边暴露依赖，gate 解释下游为什么停止。你不需要另一套控制平面才能看懂运行状态。
+
+## 0.2.10：可组织、可携带的 saved flow
+
+saved flow 现在可以按受限约定放在 `.pi/taskflows/flows/**` 下分目录管理，同时旧顶层 flow 的优先级和行为保持不变。文件来源可信的 flow 可显式设置 `scriptCwd: "flow"`，让相邻的脚本、模板和 fixtures 作为一个目录整体复制、审阅和版本控制。
+
+发现、来源和持久化继续 fail closed：递归扫描共享文件数、entry、目录数、字节和深度预算；排除边界下的 symlink；来源身份贯穿前台、后台、resume 与 subflow；嵌套 definition/sidecar 在 atomic promotion 各阶段重验物理父目录。[完整 0.2.10 说明 →](./CHANGELOG.md#0210--2026-08-12)
 
 ## 0.2.9：Hermes Agent + verify 对齐
 
@@ -350,7 +372,7 @@ claude plugin install claude-taskflow@taskflow
 
 ```bash
 opencode mcp add taskflow -- \
-  npx -y -p opencode-taskflow@0.2.9 opencode-taskflow-mcp
+  npx -y -p opencode-taskflow@0.2.10 opencode-taskflow-mcp
 ```
 
 [OpenCode 指南 →](https://heggria.github.io/taskflow/zh-cn/docs/guides/opencode)
@@ -359,7 +381,7 @@ opencode mcp add taskflow -- \
 
 ```bash
 grok mcp add taskflow -- \
-  npx -y -p grok-taskflow@0.2.9 grok-taskflow-mcp
+  npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
 ```
 
 Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用量，因此声明了预算的 flow 会被拒绝，而不是在无法执行预算约束时静默运行。
@@ -369,7 +391,7 @@ Grok Build 支持在 0.2 首次加入。其 CLI stream 不返回 token/cost 用�
 ### Hermes Agent
 
 ```bash
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
 # 优先在 config.yaml 写 env（不要用 CLI --env 塞进 node argv）：
 #   mcp_servers.taskflow.env.PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"   # 仅 mutating
 ```

@@ -60,6 +60,28 @@ test("saveFlowWithMeta: writes flow + sidecar, readMeta recovers it", () => {
 	}
 });
 
+test("saveFlowWithMeta: updates a nested flow and its adjacent sidecar in place", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const root = path.join(cwd, ".pi", "taskflows");
+		const nestedDir = path.join(root, "flows", "teams", "api");
+		const flowPath = path.join(nestedDir, "audit.json");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(flowPath, JSON.stringify(sampleDef), "utf8");
+
+		const updated = { ...sampleDef, description: "nested update" };
+		const meta = deriveMeta(updated, { purpose: "updated nested metadata" });
+		const saved = saveFlowWithMeta(cwd, updated, meta);
+
+		assert.equal(saved.filePath, fs.realpathSync(flowPath));
+		assert.equal(saved.metaPath, path.join(nestedDir, "audit.meta.json"));
+		assert.equal(fs.existsSync(path.join(root, `${sampleDef.name}.json`)), false);
+		assert.equal(metaOf(cwd, sampleDef.name)?.purpose, "updated nested metadata");
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("A1 fix: listFlows excludes .meta.json sidecar (no ghost flow)", () => {
 	const cwd = makeTmpCwd();
 	try {
@@ -98,6 +120,24 @@ test("readMeta: returns null for missing flow", () => {
 	const cwd = makeTmpCwd();
 	try {
 		assert.equal(metaOf(cwd, "does-not-exist"), null);
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("readMeta: resolves a sidecar next to a nested discovered flow", () => {
+	const cwd = makeTmpCwd();
+	try {
+		const nestedDir = path.join(cwd, ".pi", "taskflows", "flows", "teams", "api");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const flowPath = path.join(nestedDir, "audit.json");
+		fs.writeFileSync(flowPath, JSON.stringify(sampleDef), "utf8");
+		const meta = deriveMeta(sampleDef, { purpose: "nested metadata", tags: ["nested"] });
+		fs.writeFileSync(path.join(nestedDir, "audit.meta.json"), JSON.stringify(meta), "utf8");
+
+		assert.equal(metaOf(cwd, sampleDef.name)?.purpose, "nested metadata");
+		assert.equal(bumpReuseInSidecar(cwd, sampleDef.name), 1);
+		assert.equal(metaOf(cwd, sampleDef.name)?.reuseCount, 1);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}

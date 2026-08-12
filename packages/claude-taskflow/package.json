@@ -1,6 +1,6 @@
 {
 	"name": "claude-taskflow",
-	"version": "0.2.9",
+	"version": "0.2.10",
 	"description": "Run taskflow on Claude Code: the npm tarball provides the Claude subagent runner and MCP server; the plugin is distributed through the repository marketplace.",
 	"keywords": [
 		"claude",

@@ -32,6 +32,7 @@ Top-level keys of the taskflow definition object.
   "description": "Audit API auth",  // shown in /tf list and the command palette
   "concurrency": 8,                 // default max concurrent subagents (default: 8)
   "agentScope": "user",             // user | project | both (default: user)
+  "scriptCwd": "invocation",        // invocation | flow (default: invocation)
   "args": { /* see §3 */ },
   // 0.2.7: optional terminal hooks (summary payload only — never transcripts)
   // "hooks": { "onComplete": [{ "type": "file", "path": ".taskflow/hooks/last.json" }] },
@@ -46,10 +47,13 @@ Top-level keys of the taskflow definition object.
 | `concurrency` | number | `8` | Default fan-out / same-layer parallelism cap. See §4. |
 | `idleTimeout` | number | host default (`300000`) | Flow-level idle watchdog in ms (≥ 1000, or `0` to disable) for all agent-running phases that don't set their own. `0` disables the watchdog but then **every** agent-running phase MUST declare a finite wall `timeout` (≥ 1000) so the flow can never hang. A per-phase `idleTimeout` overrides this. |
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
+| `scriptCwd` | `invocation`\|`flow` | `invocation` | Default cwd policy for `script` phases. `flow` requires trusted saved-flow/`defineFile` provenance; explicit phase `cwd` wins, and inherited cwd-bridge boundaries still constrain the resolved source directory. |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `hooks` | object | — | **0.2.7.** Terminal fire-and-forget notifications: `onComplete` / `onFail` / `onBlocked` arrays of `{type:"webhook"\|"file"\|"command", …}`. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status. `https` or `http://127.0.0.1\|localhost` for webhooks; `command.run` is argv-only (no shell string). |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
 | `version` | number | `1` | Informational metadata in 0.2.x; it does not select runtime semantics or migrate a flow. |
+
+Saved definitions remain compatible at `.pi/taskflows/*.json` and may also be organized recursively below `.pi/taskflows/flows/**/*.json`. Legacy top-level files win same-scope duplicate names; nested candidates use deterministic Unicode-scalar path order. Discovery has one shared user/project budget and fails closed above 1,000 flows, 10,000 entries, 512 directories, 8 MiB total definition bytes, 1 MiB per definition, or 16 nested levels. Symlinks below trusted storage boundaries are rejected; a configured user agent-directory boundary may itself be a symlink, while project `.pi` remains no-follow. New-flow saves enforce the same boundary policy and revalidate the physical target directory inside the write lock.
 
 ---
 

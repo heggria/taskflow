@@ -286,6 +286,7 @@ export function compileTaskflowToFlowIR(def: Taskflow): CompileTaskflowToFlowIRR
 			annotations: {
 				agentScope: def.agentScope ?? "user",
 				contextSharing: def.contextSharing ?? false,
+				scriptCwd: def.scriptCwd ?? "invocation",
 			},
 		},
 	};
