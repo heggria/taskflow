@@ -47,6 +47,39 @@ function cleanup(dir: string): void {
 	fs.rmSync(dir, { recursive: true, force: true });
 }
 
+/**
+ * Compare filesystem paths by their native spelling rather than their lexical
+ * spelling. macOS commonly exposes `/var` and `/private/var` as aliases, while
+ * Windows may return an 8.3 short path from `realpathSync()` and a long path
+ * from `realpathSync.native()`. The store deliberately uses native realpaths;
+ * test fault-injection paths must use the same identity or the injected race
+ * never fires on those runners.
+ */
+function canonicalTestPath(input: string): string {
+	const absolute = path.resolve(input);
+	try {
+		return fs.realpathSync.native(absolute);
+	} catch {
+		try {
+			return path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
+		} catch {
+			return absolute;
+		}
+	}
+}
+
+function sameTestPath(left: string, right: string): boolean {
+	const a = canonicalTestPath(left);
+	const b = canonicalTestPath(right);
+	return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function isAtomicTempPath(candidate: string, target: string): boolean {
+	const canonicalCandidate = canonicalTestPath(candidate);
+	const canonicalTarget = canonicalTestPath(target);
+	return canonicalCandidate.startsWith(`${canonicalTarget}.`) && canonicalCandidate.endsWith(".tmp");
+}
+
 function minimalFlow(name: string): Taskflow {
 	return {
 		name,
@@ -313,7 +346,7 @@ test("listFlows: discovers project flows recursively below the flows convention 
 		const loaded = getFlow(cwd, "nested-publish");
 		assert.ok(loaded, "nested flow should be discoverable by its declared name");
 		assert.equal(loaded.scope, "project");
-		assert.equal(loaded.filePath, fs.realpathSync(filePath));
+		assert.equal(loaded.filePath, canonicalTestPath(filePath));
 		assert.deepEqual(loaded.sourceDirIdentity, directoryIdentity(nestedDir));
 	} finally {
 		cleanup(cwd);
@@ -330,7 +363,7 @@ test("listFlows: preserves legacy discovery of hidden top-level JSON definitions
 
 		const loaded = getFlow(cwd, "hidden-legacy");
 		assert.ok(loaded, "0.2.9 discovered every top-level *.json except sidecars");
-		assert.equal(loaded.filePath, fs.realpathSync(hiddenPath));
+		assert.equal(loaded.filePath, canonicalTestPath(hiddenPath));
 	} finally {
 		cleanup(cwd);
 	}
@@ -341,7 +374,7 @@ test("saveFlow: preserves legacy discovery for flow names ending in .flowir", ()
 	try {
 		const saved = saveFlow(cwd, minimalFlow("release.flowir"));
 		assert.equal(path.basename(saved.filePath), "release.flowir.json");
-		assert.equal(getFlow(cwd, "release.flowir")?.filePath, fs.realpathSync(saved.filePath));
+		assert.equal(getFlow(cwd, "release.flowir")?.filePath, canonicalTestPath(saved.filePath));
 		assert.ok(listFlows(cwd).some((flow) => flow.name === "release.flowir"));
 	} finally {
 		cleanup(cwd);
@@ -363,7 +396,7 @@ test("saveFlow: updates an existing nested flow in place without creating a lega
 		};
 		const saved = saveFlow(cwd, updated, "project");
 
-		assert.equal(saved.filePath, fs.realpathSync(nestedPath));
+		assert.equal(saved.filePath, canonicalTestPath(nestedPath));
 		assert.equal(fs.existsSync(path.join(root, "nested-publish.json")), false);
 		assert.equal(getFlow(cwd, "nested-publish")?.def.description, "updated in place");
 	} finally {
@@ -388,7 +421,7 @@ test("saveFlow: preserves a nested user path even when project scope has the sam
 		fs.writeFileSync(projectPath, JSON.stringify({ ...minimalFlow("shared"), description: "project" }), "utf8");
 
 		const saved = saveFlow(cwd, { ...minimalFlow("shared"), description: "user new" }, "user");
-		assert.equal(saved.filePath, fs.realpathSync(userPath));
+		assert.equal(saved.filePath, canonicalTestPath(userPath));
 		assert.equal(fs.existsSync(path.join(userRoot, "shared.json")), false);
 		assert.equal(JSON.parse(fs.readFileSync(userPath, "utf8")).description, "user new");
 		assert.equal(JSON.parse(fs.readFileSync(projectPath, "utf8")).description, "project");
@@ -423,7 +456,7 @@ test("listFlows: supports a symlinked user agent boundary without following syml
 
 		const found = listFlows(cwd).find((flow) => flow.scope === "user" && flow.name === "portable-user-flow");
 		assert.ok(found, "the trusted agent-dir boundary may itself be a symlink");
-		assert.equal(found.filePath, fs.realpathSync(path.join(userFlows, "portable.json")));
+		assert.equal(found.filePath, canonicalTestPath(path.join(userFlows, "portable.json")));
 	} finally {
 		if (previous === undefined) delete process.env.TASKFLOW_AGENT_DIR;
 		else process.env.TASKFLOW_AGENT_DIR = previous;
@@ -526,7 +559,7 @@ test("saveFlow: revalidates a newly created target directory inside the write lo
 	const originalOpenSync = mutableFs.openSync;
 	let swapped = false;
 	mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
-		if (!swapped && path.resolve(String(args[0])) === path.resolve(lockPath)) {
+		if (!swapped && sameTestPath(String(args[0]), lockPath)) {
 			swapped = true;
 			fs.renameSync(targetDir, displacedDir);
 			fs.mkdirSync(targetDir, { recursive: true });
@@ -566,7 +599,7 @@ test("saveFlow: rejects a nested target directory swapped after validation but b
 		mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
 			const target = String(args[0]);
 			const fd = Reflect.apply(originalOpenSync, mutableFs, args) as number;
-			if (!swapped && target.startsWith(`${nestedPath}.`) && target.endsWith(".tmp")) {
+			if (!swapped && isAtomicTempPath(target, nestedPath)) {
 				swapped = true;
 				fs.renameSync(nestedDir, displacedDir);
 				try {
@@ -621,7 +654,7 @@ test("saveFlow: revalidates after temp open and before writing definition bytes"
 		fs.writeFileSync(nestedPath, JSON.stringify(minimalFlow("nested-preopen-swap")), "utf8");
 		mutableFs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
 			const target = String(args[0]);
-			if (!swapped && target.startsWith(`${nestedPath}.`) && target.endsWith(".tmp")) {
+			if (!swapped && isAtomicTempPath(target, nestedPath)) {
 				swapped = true;
 				fs.renameSync(nestedDir, displacedDir);
 				try {
@@ -670,7 +703,7 @@ test("saveFlow: rejects a nested target directory swapped at the atomic rename s
 		mutableFs.renameSync = ((...args: Parameters<typeof fs.renameSync>) => {
 			const source = String(args[0]);
 			const destination = String(args[1]);
-			if (!swapped && source.startsWith(`${nestedPath}.`) && source.endsWith(".tmp") && destination === nestedPath) {
+			if (!swapped && isAtomicTempPath(source, nestedPath) && sameTestPath(destination, nestedPath)) {
 				swapped = true;
 				Reflect.apply(originalRenameSync, mutableFs, [nestedDir, displacedDir]);
 				try {
@@ -709,7 +742,7 @@ test("listFlows: treats an entry-read failure as a skipped unreadable directory"
 		fs.writeFileSync(path.join(root, "stable.json"), JSON.stringify(minimalFlow("stable")), "utf8");
 		mutableFs.opendirSync = ((...args: Parameters<typeof fs.opendirSync>) => {
 			const handle = Reflect.apply(originalOpendirSync, mutableFs, args) as fs.Dir;
-			if (path.resolve(String(args[0])) === path.resolve(root)) {
+			if (sameTestPath(String(args[0]), root)) {
 				handle.readSync = (() => {
 					const error = new Error("simulated directory read failure") as NodeJS.ErrnoException;
 					error.code = "EIO";
@@ -985,7 +1018,7 @@ test("getFlowDiagnosed: reports a corrupt nested flow by filename", async (t) =>
 		assert.equal(result.ok, false);
 		if (!result.ok) {
 			assert.equal(result.reason, "unparseable");
-			assert.equal(result.path, fs.realpathSync(filePath));
+			assert.equal(result.path, canonicalTestPath(filePath));
 		}
 	} finally {
 		cleanup(cwd);
