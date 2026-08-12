@@ -12,7 +12,7 @@ The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/ta
 ### Published MCP package (after npm publish)
 
 ```bash title="Register taskflow MCP"
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.9 hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
 ```
 
 Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
@@ -21,7 +21,7 @@ Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow@0.2.9", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow@0.2.10", "hermes-taskflow-mcp"]
     env:
       # Required for mutating agent phases (terminal / file write / coding).
       # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases

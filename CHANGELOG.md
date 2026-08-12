@@ -4,6 +4,8 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+## [0.2.10] — 2026-08-12
+
 ### Added
 
 - **Organized saved-flow discovery.** Project and user flows may be nested recursively below the bounded `flows/` convention directory (for example `.pi/taskflows/flows/release/publish.json`) while legacy top-level saved flows remain compatible and take same-scope precedence on duplicate names.

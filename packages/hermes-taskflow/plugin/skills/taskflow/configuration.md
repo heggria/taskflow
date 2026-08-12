@@ -309,7 +309,7 @@ Notes:
   phases fail closed unless `PI_TASKFLOW_HERMES_UNSAFE_YOLO=1`, which enables
   `--yolo`; their default surface is local `file,terminal`, while explicit web
   aliases may add `web`. Delegation, skills, memory, browser, cron, and other
-  control-plane toolsets are denied in 0.2.9. Optional
+  control-plane toolsets are denied in 0.2.10. Optional
   `PI_TASKFLOW_HERMES_MAX_TURNS` caps child loops (default 64). Quiet mode
   does not stream token/cost accounting, so budgeted flows fail closed at the
   MCP adapter the same way other non-accounting hosts do when costs are
