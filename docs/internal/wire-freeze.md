@@ -132,4 +132,57 @@
 
 - [ ] P1–P16 ADR 评审通过（13 Accepted + 3 Proposed: P8/P14/P15 重写版）
 - [ ] 本清单与 P-ADR 出处核对无遗漏、无额外类型
-- [ ] S2 落地 `taskflow-control` 包时回填每个类型的实际文件路径，并保持本文件同步
+- [x] S2 落地 `taskflow-control` 包时回填每个类型的实际文件路径，并保持本文件同步（见 §7）
+
+## 7. S2 落地回填（文件引用）
+
+> `packages/taskflow-control/`（RFC §21 包结构）。TE schema 只读导入；`resources/*`
+> 因 workspace-capability 冻结不导出（`smoke-packed-packages.mjs` 断言
+> `taskflow-core/resources/index` 不可解析），故镜像于 `src/schema/te-mirrors.ts`，
+> TE 仍为权威。
+
+### 7.1 🟩 REUSE — TE 只读依赖 / 镜像
+
+| Type | 落地 | 说明 |
+|------|------|------|
+| `PathRefSchema`（literalPath/argPath/segments + PathIntent） | `src/schema/te-mirrors.ts` | 镜像（TE `resources/schema.ts` 不导出） |
+| `EffectDeclSchema` / EffectIR | `taskflow-core/effects/schema` → `src/schema/index.ts` re-export | 只读导入 |
+| `SecretRef { secretId, issuer? }` | `taskflow-core/effects/types`（类型） | 只读导入 |
+| `ServiceRef { serviceId, operation? }` | `taskflow-core/effects/types`（类型） | 只读导入 |
+| `ConfidentialityLabel / IntegrityLabel` | `taskflow-core/effects/types`（类型） | Receipt.assurance.provenance |
+| `ExecutionOwner { runId, phaseId, attemptId, unitId, ancestry }` | `src/schema/te-mirrors.ts` | 镜像 |
+| `ScopedContentEvidence` | `src/schema/te-mirrors.ts` | 镜像 |
+| `WriteIntentRecord / WriteIntentStatus` | `src/schema/te-mirrors.ts` | 镜像 |
+| `HostProbeClassification` | `src/schema/te-mirrors.ts` | EnforcementCapabilities 证据面 |
+| `BoundCapabilityLifetimeSchema` | `src/schema/te-mirrors.ts` | 镜像 |
+| canonical-hash（sha256 库） | `taskflow-core/flowir/canonical-hash` → `src/schema/index.ts` re-export | 只读导入（P6） |
+
+### 7.2 🟥 NEW — wire types（全部在 `packages/taskflow-control/src/schema/`）
+
+| 类别 | 文件 |
+|------|------|
+| `ControlDomainId`/`projectId`、`ControlStoreHeader`、`ControlRegistryEntry`、`ControlStoreStatus`、`BootstrapManifest` | `header.ts` |
+| `CommandRecord`、`ControlEvent`（envelope + payload union）、`CompactionCheckpointEvent`、`CursorState` | `commands.ts` |
+| `BoundPlan`、`BoundFragment`、`SpawnTemplate` | `plan.ts` |
+| `RunStatus`、`RunStage`、`RunSnapshot` | `run.ts` |
+| `ApprovalRequest`、`ApprovalDecisionCommand`、`ApprovalMode` | `approval.ts` |
+| `CoordinatorLease`、`ConcurrencyReservation`（+ D2/D3 不变量）、`CoordinatorCommandRecord`、`CapacitySnapshot` | `coordinator.ts` |
+| `PolicyBundle`、`EnforcementCapabilities` | `policy.ts` |
+| `ArtifactRef`、`Receipt`、`ReceiptAssurance` | `evidence.ts` |
+| `NegotiationHandshake`、`ErrorEnvelope` + TF_* 全集、ExecutionProvider DTO 组（accepted\|rejected\|ambiguous） | `transport.ts` |
+| 公共标量：`CONTROL_WIRE_SCHEMA_VERSION`、UUID/SHA-256/CanonicalHashRef | `common.ts` |
+
+### 7.3 ControlHost 实现
+
+| 模块 | 文件 |
+|------|------|
+| controlMode 解析 + fail-closed 决策 | `src/modes.ts` |
+| 用户 singleton lock/endpoint/fencing + stale 恢复 + 释放 | `src/singleton.ts` |
+| hello-before-RPC 协商门 | `src/hello.ts` |
+| TE 唯一执行权威适配（P8 能力映射） | `src/te-provider.ts` |
+| ControlHost（auto/coordinated/standalone 契约 + dispatch） | `src/control-host.ts` |
+| 统一错误信封（P4 全集 + ControlError） | `src/errors.ts` |
+
+### 7.4 单元测试（`packages/taskflow-control/test/`）
+
+`modes.test.ts`（模式选择/fail-closed）、`singleton.test.ts`（fencing/竞态/stale endpoint 恢复/释放）、`hello.test.ts`（hello-before-RPC）、`te-provider.test.ts`（TE 委托 + 仅 TE 权威）、`control-host.test.ts`（模式契约 + 集成）、`schema.test.ts`（closed contract + schemaVersion + 枚举）。

@@ -4,6 +4,7 @@
 packages:
   - "packages/taskflow-core"
   - "packages/charterarc"
+  - "packages/taskflow-control"
   - "packages/taskflow-mcp-core"
   - "packages/taskflow-hosts"
   - "packages/pi-taskflow"
