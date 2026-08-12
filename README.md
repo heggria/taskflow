@@ -55,7 +55,7 @@ This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to 
 | **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | 0.3 MVP implementation |
 | **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | 0.3 MVP implementation |
 | **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
-| **Control Plane** | ControlHost modes, frozen wire contracts, singleton/fencing, negotiation, approvals, receipts, and coordination | Active 0.3-C implementation track; not the 0.3 MVP GA claim |
+| **Control Plane** | ControlHost scaffold, proposed wire contracts, singleton/fencing, and hello negotiation; future stores, approvals, receipts, and coordination | Active 0.3-C track; not shipped and not the 0.3 MVP GA claim |
 | **WebUI** | Runs, approvals, receipts, and evidence browsing | Planned in the 0.3-C sequence; not shipped in this candidate |
 
 The normative MVP definition is [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
@@ -183,7 +183,7 @@ Host support is not a blanket security guarantee. Read the [host support baselin
 - Writes to undeclared paths remain host-policy dependent under resolve-only execution.
 - `SecretRef` and `ServiceRef` are typed handles only; no vault or live service adapter ships in this cut.
 - There is no FileBroker or full OS sandbox claim in 0.3 MVP.
-- Control Plane receipts and WebUI are part of the active 0.3-C track, not proof that 0.3 is released or GA.
+- Control Plane stores, approvals, receipts, and WebUI are future 0.3-C stages, not proof that 0.3 is released or GA.
 
 ## Development
 

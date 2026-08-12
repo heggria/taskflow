@@ -34,7 +34,7 @@ const copy = {
 			sub: "taskflow turns coding-agent work into a verifiable runtime: explicit graphs, typed effect declarations, isolated execution, resource-controlled filesystem commits, and ledger-backed explanations across six hosts.",
 			noteKicker: "0.3 candidate · unreleased · not GA",
 			noteBody:
-				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. Control Plane and WebUI remain active follow-on tracks, not shipped GA claims.",
+				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. The ControlHost scaffold exists; stores, approvals, receipts, and WebUI remain future follow-on stages, not shipped GA claims.",
 			micro:
 				"Resolve-only is not an OS sandbox. Undeclared writes remain host-policy dependent.",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok · Hermes",
@@ -128,7 +128,7 @@ const copy = {
 				{
 					tag: "0.3-C",
 					title: "Control Plane follows",
-					body: "ControlHost, receipts, approvals, and WebUI are active implementation tracks, not shipped 0.3 GA surface yet.",
+					body: "The ControlHost scaffold exists; stores, receipts, approvals, and WebUI are future 0.3-C stages, not shipped 0.3 GA surface yet.",
 				},
 				{
 					tag: "Hosts",
@@ -192,7 +192,7 @@ const copy = {
 			sub: "taskflow 把 coding-agent 工作变成可验证的运行时：显式任务图、类型化 effect 声明、隔离执行、受 resources 控制的文件提交，以及覆盖六个宿主的 ledger-backed 解释。",
 			noteKicker: "0.3 candidate · 未发布 · 未 GA",
 			noteBody:
-				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。Control Plane 与 WebUI 仍是后续实现轨道，不是已交付的 GA 表面。",
+				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。ControlHost 目前是脚手架；store、审批、receipt 与 WebUI 仍是后续阶段，不是已交付的 GA 表面。",
 			micro: "Resolve-only 不是 OS sandbox。未声明写入仍取决于宿主策略。",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok · Hermes",
 			primary: "阅读文档",
@@ -285,7 +285,7 @@ const copy = {
 				{
 					tag: "0.3-C",
 					title: "Control Plane 在后面",
-					body: "ControlHost、receipts、审批与 WebUI 是活跃实现轨道，还不是已发布的 0.3 GA 表面。",
+					body: "ControlHost 目前是脚手架；store、receipt、审批与 WebUI 属于后续 0.3-C 阶段，还不是已发布的 0.3 GA 表面。",
 				},
 				{
 					tag: "Hosts",

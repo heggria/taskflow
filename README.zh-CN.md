@@ -55,7 +55,7 @@ flow / .tf.ts
 | **Trusted Effects** | 封闭的 `EffectIR`、`PathRef` / `SecretRef` / `ServiceRef`、机密性/完整性标签、effect 校验、重叠检查与 ledger-backed `why-*` | 0.3 MVP 实现 |
 | **Resource transaction** | snapshot → lease → durable intent/permit → stage → commit，或 restore and reject | 0.3 MVP 实现 |
 | **宿主适配器** | Pi、Codex、Claude Code、OpenCode、Grok Build、Hermes Agent 共用同一 flow 合同 | 已有宿主表面；能力仍按宿主区分 |
-| **Control Plane** | ControlHost 模式、冻结 wire contract、singleton/fencing、协商、审批、receipt 与协调 | 活跃的 0.3-C 实现轨；不是 0.3 MVP 的 GA 声明 |
+| **Control Plane** | ControlHost 脚手架、拟议中的 wire contract、singleton/fencing 与 hello 协商；后续再实现 store、审批、receipt 与协调 | 活跃的 0.3-C 轨道；尚未交付，也不是 0.3 MVP 的 GA 声明 |
 | **WebUI** | runs、审批、receipts 与 evidence 浏览 | 0.3-C 计划中的后续阶段；当前 candidate 未交付 |
 
 规范性的 MVP 定义见 [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md)。0.3-C Control Plane 计划见 [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md)。
@@ -183,7 +183,7 @@ validate → Taskflow JSON → FlowIR + content hash
 - 在 resolve-only 执行下，未声明路径的写入仍取决于宿主策略。
 - `SecretRef` 与 `ServiceRef` 只是类型化句柄；这一版没有 vault 或 live service adapter。
 - 0.3 MVP 不声称提供 FileBroker 或完整 OS sandbox。
-- Control Plane receipt 与 WebUI 属于活跃的 0.3-C 轨道，不证明 0.3 已发布或 GA。
+- Control Plane store、审批、receipt 与 WebUI 属于未来的 0.3-C 阶段，不证明 0.3 已发布或 GA。
 
 ## 开发
 
