@@ -25,6 +25,7 @@ the Codex form (`taskflow_verify`).
 | `taskflow_trace` | Read a run's append-only event timeline. |
 | `taskflow_replay` | Replay recorded decisions offline with optional overrides — zero model calls. |
 | `taskflow_why_stale` | Explain why phases are stale from observed and declared dependencies — zero tokens. |
+| `taskflow_why_effect` | Explain why a declared effect is authorized, from the durable resource-intent ledger (`runId` + `effectId`, optional `phaseId`; `json: true` for the full record). Declaration alone is not authorization — zero tokens, read-only. |
 | `taskflow_recompute` | Compute the stale frontier (**dry-run only** over MCP; never executes phases). |
 | `taskflow_reconcile_workspace` | After inspection/repair, accept a failed resolve-only workspace. Requires host `TASKFLOW_WORKSPACE_RECONCILE_MODE=explicit`; never restores files. |
 | `taskflow_save` | Save a reusable flow and optional library metadata. |

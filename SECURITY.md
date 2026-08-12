@@ -27,7 +27,8 @@ The runtime has intentional hardening: `realpath`-based path containment, runId 
 
 | Version | Support |
 |---------|---------|
-| Latest npm release (`v0.2.10` for this release) | ✅ Active |
+| Latest stable npm release (`v0.2.10`) | ✅ Active |
+| `0.3.0-beta.1` beta channel | ⚠️ Pre-release; test-only support |
 | Earlier versions | ❌ Unsupported — upgrade to the latest npm release |
 
 ## Disclosure

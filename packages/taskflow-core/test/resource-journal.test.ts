@@ -256,3 +256,42 @@ test("journal: content commits require exact scopes and trustworthy post-state e
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("journal: restored abort is terminal, generation-neutral, and ledger-backed", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-journal-abort-restored-"));
+	const root = path.join(dir, "repo");
+	fs.mkdirSync(root);
+	try {
+		const journal = new WriteIntentJournal({ directory: path.join(dir, "control"), journalEpoch: 1 });
+		const prepared = await journal.prepare(input(root, { commitMode: "content-snapshot" }));
+		await journal.activate([prepared.permit], OWNER);
+		await assert.rejects(
+			journal.abortRestored(prepared.intent.intentId, [evidence(root, "repo", true)], "rollback"),
+			/beforeContentId === afterContentId/,
+		);
+		const restored = [{
+			...evidence(root, "repo"),
+			afterContentId: "before-repo",
+		}];
+		const aborted = await journal.abortRestored(
+			prepared.intent.intentId,
+			restored,
+			"commit rejected; exact pre-state restored",
+			["snapshot-before-repo"],
+		);
+		assert.equal(aborted.status, "aborted-restored");
+		assert.equal(aborted.commitGeneration, undefined);
+		assert.equal(aborted.terminalReason, "commit rejected; exact pre-state restored");
+		assert.deepEqual(aborted.restorableSnapshotArtifactIds, ["snapshot-before-repo"]);
+		assert.equal(await journal.getDomainGeneration("repo"), 0);
+		assert.equal(await journal.permits.stateOf(prepared.permit.permitId), "settled");
+
+		const next = await journal.prepare(input(root, {
+			owner: { ...OWNER, attemptId: "after-restored-abort" },
+			commitMode: "content-snapshot",
+		}));
+		await journal.markUnknown(next.intent.intentId, "test cleanup");
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});

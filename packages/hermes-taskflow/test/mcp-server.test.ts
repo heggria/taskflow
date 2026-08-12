@@ -38,7 +38,7 @@ test("hermes mcp: initialize returns the protocol version + serverInfo", async (
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-hermes");
-	assert.equal(res.result.serverInfo.version, "0.2.10");
+	assert.equal(res.result.serverInfo.version, "0.3.0-beta.1");
 });
 
 test("hermes mcp: tools/list exposes the taskflow tools", async () => {
@@ -46,7 +46,7 @@ test("hermes mcp: tools/list exposes the taskflow tools", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_effect", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -76,6 +76,6 @@ test("hermes mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_effect", "taskflow_why_stale"],
 	);
 });

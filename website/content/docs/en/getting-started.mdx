@@ -5,6 +5,10 @@ description: Run your first taskflow in under five minutes.
 
 taskflow lets you describe multi-step agent work as a declarative graph. Instead of writing a script that calls subagents one by one, you declare the nodes and edges — and the runtime handles fan-out, retries, caching, and resume.
 
+<Callout type="info">
+  This guide covers the stable 0.2.x host installation path. For **0.3.0-beta.1**, start with the [Trusted Effects overview](/en/docs/trusted-effects) and select npm's `beta` channel; beta is not GA.
+</Callout>
+
 The fastest way to see it is to run something.
 
 ## A minimal taskflow
@@ -77,7 +81,7 @@ If you have not installed taskflow yet, pick your host:
 <Tabs groupId="host" items={['Pi', 'Codex', 'Claude', 'OpenCode', 'Grok', 'Hermes']}>
   <Tab value="Pi">
     ```bash title="Install pi-taskflow"
-    pi install npm:pi-taskflow
+    pi install npm:pi-taskflow@beta
     ```
   </Tab>
   <Tab value="Codex">
@@ -94,7 +98,7 @@ If you have not installed taskflow yet, pick your host:
   </Tab>
   <Tab value="OpenCode">
     ```bash title="Register OpenCode MCP"
-    opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
+    opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
     ```
   </Tab>
   <Tab value="Grok">
@@ -108,7 +112,7 @@ If you have not installed taskflow yet, pick your host:
     ```bash title="Register Grok Build MCP"
     export PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE=taskflow-readonly
     export PI_TASKFLOW_GROK_MUTATING_SANDBOX_PROFILE=taskflow-workspace
-    grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
+    grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
     # Public plugin source is not published yet. Checkout-only:
     # grok plugin install ./packages/grok-taskflow/plugin --trust
     ```
@@ -116,7 +120,7 @@ If you have not installed taskflow yet, pick your host:
   </Tab>
   <Tab value="Hermes">
     ```bash title="Register Hermes Agent MCP"
-    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
+    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@beta hermes-taskflow-mcp
     ```
     See the [Hermes Agent guide](/en/docs/guides/hermes) for read-only isolation and explicit mutating opt-in.
   </Tab>

@@ -276,19 +276,51 @@ export function cancelMcpBackgroundRun(cwd: string, runId: string, reason?: stri
 	return requestDetachedCancel(cwd, runId, reason);
 }
 
+function hasActiveAuthenticatedWorkerLease(state: RunState): boolean {
+	if (
+		state.status === "running" ||
+		state.detachedControlVersion !== DETACHED_CONTROL_VERSION ||
+		!state.detachedInstanceId ||
+		typeof state.pid !== "number"
+	) return false;
+	const registry = readDetachedProcessRegistry(state.cwd, state.runId);
+	if (!registry || registry.instanceId !== state.detachedInstanceId || registry.ownerPid !== state.pid) return false;
+	const liveness = probeProcess(state.pid);
+	const heartbeatFresh = Date.now() - registry.heartbeatAt <= HEARTBEAT_STALE_MS;
+	if (liveness !== "dead" && heartbeatFresh) return true;
+	if (liveness === "alive") killProcessTree(state.pid, "SIGKILL");
+	if (liveness === "alive" || liveness === "dead") {
+		terminateDetachedProcessTrees(state.cwd, state.runId, state.detachedInstanceId);
+		clearDetachedProcessRegistry(state.cwd, state.runId, state.detachedInstanceId);
+		return false;
+	}
+	// Unknown liveness (for example EPERM) cannot safely authorize signalling
+	// or claim that the authenticated worker has become quiescent.
+	return true;
+}
+
+export interface McpBackgroundWaitResult {
+	state: RunState | null;
+	quiescent: boolean;
+	reason: "quiescent" | "timeout" | "aborted" | "not-found";
+}
+
 export async function waitForMcpBackgroundRun(
 	cwd: string,
 	runId: string,
 	timeoutMs: number,
 	signal?: AbortSignal,
-): Promise<RunState | null> {
+): Promise<McpBackgroundWaitResult> {
 	const deadline = Date.now() + Math.max(0, timeoutMs);
 	let state = refreshDetachedRun(cwd, runId);
-	while (state?.status === "running" && Date.now() < deadline && !signal?.aborted) {
+	while (state && (state.status === "running" || hasActiveAuthenticatedWorkerLease(state))) {
+		if (signal?.aborted) return { state, quiescent: false, reason: "aborted" };
+		if (Date.now() >= deadline) return { state, quiescent: false, reason: "timeout" };
 		await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_MS, Math.max(1, deadline - Date.now()))));
 		state = refreshDetachedRun(cwd, runId);
 	}
-	return state;
+	if (!state) return { state: null, quiescent: false, reason: "not-found" };
+	return { state, quiescent: true, reason: "quiescent" };
 }
 
 /**

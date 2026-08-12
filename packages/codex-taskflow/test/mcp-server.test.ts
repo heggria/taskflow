@@ -51,7 +51,7 @@ test("mcp: initialize returns the protocol version + serverInfo codex expects", 
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-codex");
-	assert.equal(res.result.serverInfo.version, "0.2.10");
+	assert.equal(res.result.serverInfo.version, "0.3.0-beta.1");
 });
 
 test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
@@ -59,7 +59,7 @@ test("mcp: tools/list exposes the taskflow tools with schemas", async () => {
 	const names = res.result.tools.map((t: any) => t.name);
 	assert.deepEqual(
 		names.sort(),
-		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_effect", "taskflow_why_stale"],
 	);
 	for (const t of res.result.tools) {
 		assert.equal(typeof t.description, "string");
@@ -273,7 +273,7 @@ test("mcp: makeToolHandlers exposes the tools", () => {
 	const tools = makeToolHandlers(process.cwd());
 	assert.deepEqual(
 		Object.keys(tools).sort(),
-		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"],
+		["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_effect", "taskflow_why_stale"],
 	);
 });
 
@@ -581,17 +581,39 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		discoverAgents,
 		executeTaskflow,
 		newRunId,
+		readSubagentSettings,
 		runsDir,
 		saveRun,
 	} = await import("taskflow-core");
 	const { makeToolHandlers: makeCoreToolHandlers } = await import("taskflow-mcp-core/server");
 	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-mcp-resume-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	const userAgentDir = path.join(cwd, "user-agent-root");
+	process.env.PI_CODING_AGENT_DIR = userAgentDir;
 	try {
+		fs.mkdirSync(path.join(userAgentDir, "agents"), { recursive: true });
+		fs.writeFileSync(
+			path.join(userAgentDir, "agents", "resume-fixture.md"),
+			"---\nname: resume-fixture\ndescription: user resume fixture\n---\nUSER RESUME FIXTURE\n",
+		);
+		fs.writeFileSync(
+			path.join(userAgentDir, "settings.json"),
+			JSON.stringify({ subagents: { globalThinking: "high" }, taskflow: { builtInAgents: false } }),
+		);
+		const projectAgentFile = path.join(cwd, ".pi", "agents", "resume-fixture.md");
+		fs.mkdirSync(path.dirname(projectAgentFile), { recursive: true });
+		fs.writeFileSync(
+			projectAgentFile,
+			"---\nname: resume-fixture\ndescription: project resume fixture\n---\nPROJECT RESUME FIXTURE\n",
+		);
+		const settings = readSubagentSettings();
+		const { agents } = discoverAgents(cwd, "user", settings.modelRoles, settings.taskflow);
 		const def: Taskflow = {
 			name: "resume-me",
+			agentScope: "user",
 			phases: [
-				{ id: "a", type: "agent", agent: "executor", task: "stable" },
-				{ id: "b", type: "agent", agent: "executor", task: "fail-me", dependsOn: ["a"], final: true },
+				{ id: "a", type: "agent", agent: "resume-fixture", task: "stable" },
+				{ id: "b", type: "agent", agent: "resume-fixture", task: "fail-me", dependsOn: ["a"], final: true },
 			],
 		};
 		const parent: RunState = {
@@ -606,7 +628,9 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 			...(task === "fail-me" ? { errorMessage: "boom" } : {}),
 		});
 		const parentResult = await executeTaskflow(parent, {
-			cwd, agents: discoverAgents(cwd, "both").agents,
+			cwd,
+			agents,
+			globalThinking: settings.globalThinking,
 			runTask: parentRunner,
 		});
 		assert.equal(parentResult.ok, false);
@@ -615,11 +639,14 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		const parentFile = path.join(runsDir(cwd), def.name, `${parent.runId}.json`);
 		const parentBefore = fs.readFileSync(parentFile, "utf8");
 
-		const childTasks: string[] = [];
+		const childCalls: Array<{ task: string; sources: string[]; globalThinking?: string }> = [];
 		const childRunner: SubagentRunner = {
 			usageAccounting: "tokens-only",
-			runTask: async (_cwd, _agents, agent, task) => {
-				childTasks.push(task);
+			runTask: async (_cwd, childAgents, agent, task, _opts, globalThinking) => {
+				const sources = childAgents
+					.map((entry) => (entry as { source?: unknown }).source)
+					.filter((source): source is string => typeof source === "string");
+				childCalls.push({ task, sources, globalThinking });
 				return { agent, task, exitCode: 0, output: `child:${task}`, stderr: "", usage, stopReason: "end" };
 			},
 		};
@@ -640,10 +667,14 @@ test("mcp: taskflow_resume forks failed history, applies override, and preserves
 		assert.notEqual(child.runId, parent.runId);
 		assert.equal(child.parentRunId, parent.runId);
 		assert.equal(child.host, "codex");
-		assert.deepEqual(childTasks, ["fixed"], "done phase a is reused; only overridden b re-runs");
+		assert.deepEqual(childCalls.map((call) => call.task), ["fixed"], "done phase a is reused; only overridden b re-runs");
+		assert.deepEqual(childCalls[0]?.sources, ["user"], "resume honors the persisted user-only agent scope");
+		assert.equal(childCalls[0]?.globalThinking, "high", "resume preserves configured global thinking");
 		assert.equal(child.def.phases.find((phase) => phase.id === "b")?.task, "fixed");
 		assert.equal(parent.def.phases.find((phase) => phase.id === "b")?.task, "fail-me");
 	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
 });

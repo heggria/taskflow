@@ -2,7 +2,38 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
-## [Unreleased]
+## [0.3.0-beta.1] — 2026-08-13
+
+> **Pre-release candidate:** `0.3.0-beta.1` is prepared for npm's `beta` dist-tag. It is **not GA**. The 0.3-C Control Plane remains a follow-on candidate track, not part of this beta's shipped product definition.
+
+### Added
+
+- **Trusted Effects MVP** (`packages/taskflow-core/src/effects/`):
+  - EffectIR (`EFFECT_KINDS`), PathRef reuse, SecretRef/ServiceRef (type-only fail-closed)
+  - closed TypeBox EffectIR + confidentiality/integrity source-to-sink validation
+  - resource-controlled FS transaction: durable snapshot → persistent lease → journal intent/permit → stage → Commit or Restore+Reject
+  - declaration-only bridge in `effects/runtime-apply.ts`; no second changeset/gateway authority
+  - ledger-backed `whyAuthorized` / `whyContext` / `whyEffect`
+- Optional phase `effects[]`; FlowIR translate/compile/hash include effects
+- Built-in `detectEffectsIssues` (category `effects`) + `effectsLintVerifier`
+- Every imperative phase fast path finalizes declared `fs.write` through the resource transaction; event-kernel-enabled runs use the same safe imperative path
+- Honest host baseline: `conformance/workspace/host-support-baseline.json`
+- Docs: `docs/internal/0.3.0-trusted-effects-mvp.md`, `0.3.0-agent-goal.md`, `0.3.0-ga-scoreboard.md`
+- Example: `examples/trusted-effects-write.json`
+- Tests: `test/effects*.test.ts`, `test/verify-effects.test.ts`
+
+### Fixed
+
+- Resource-bearing inline/saved/expanded/`ctx_spawn` children can no longer be skipped by parent cache or resume reuse.
+- Information-flow labels compose across nested flow boundaries; unresolved dynamic definitions remain tainted, malformed non-array `effects` fail admission/compile, and `why-effect` follows DAG dependencies.
+- Durable commit/abort results survive staging/lease cleanup faults, activation double faults release leases, and clean-terminal/aged-orphan before-images are garbage-collected.
+
+### Notes
+
+- SecretRef/ServiceRef have **no** vault/network backends in this cut.
+- Resolve-only is not an OS sandbox. Direct writes to declared targets are detected and restored; writes outside declared targets remain host-policy dependent.
+- Historical Control Plane (`feat/0.3.0`) is **not** this release definition.
+- **Beta release; not GA.**
 
 ## [0.2.10] — 2026-08-12
 

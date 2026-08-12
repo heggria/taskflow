@@ -606,6 +606,12 @@ export async function stepPhase(phase: Phase, ctx: StepContext): Promise<StepRes
 			optional: phase.optional === true,
 		}),
 	];
+	if (Array.isArray((phase as { effects?: unknown }).effects) &&
+		((phase as { effects?: unknown[] }).effects?.length ?? 0) > 0) {
+		const error = "TFWS_RESOURCE_AUTHORITY_UNAVAILABLE: event-kernel step cannot execute declared effects without a resource transaction binding";
+		events.push(baseEvent(ctx, phase.id, "phase-end", { status: "failed", error }));
+		return { events, status: "failed", error, usage: emptyUsage() };
+	}
 	if (type === "flow") {
 		events.push(
 			baseEvent(ctx, phase.id, "decision", {

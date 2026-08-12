@@ -22,7 +22,7 @@ claude plugin install claude-taskflow@taskflow
 opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
 
 # Grok Build (from monorepo checkout pre-publish, or published source)
-grok mcp add taskflow -- npx -y -p grok-taskflow@0.2.10 grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
 # or: grok mcp add taskflow -- npx -y -p grok-taskflow grok-taskflow-mcp
 ```
 

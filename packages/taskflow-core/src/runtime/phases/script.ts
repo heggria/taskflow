@@ -1,6 +1,12 @@
 /**
  * Script phase — zero-token shell command execution.
  * Isolated from runtime.ts so S5 strangler can flip kinds without growing the monolith.
+ *
+ * Trusted Effects (0.3): when a phase declares `fs.write` effects, the runtime
+ * (imperative path + event-kernel step) pre-snapshots declared finals, runs the
+ * script (content via stdout only — **must not** write those finals), then
+ * promotes through the phase-level resource transaction owned by runtime.ts.
+ * Mid-phase writes to declared finals fail closed (`declared-path-bypass`).
  */
 
 import type { Phase } from "../../schema.ts";

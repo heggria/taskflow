@@ -2,6 +2,7 @@
 	"title": "Documentation",
 	"pages": [
 		"index",
+		"trusted-effects",
 		"getting-started",
 		"what-is-taskflow",
 		"compiler-runtime",

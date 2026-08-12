@@ -1,6 +1,6 @@
 {
 	"name": "taskflow-hosts",
-	"version": "0.2.10",
+	"version": "0.3.0-beta.1",
 	"description": "Shared host-runner collection for taskflow — the codex, claude, opencode, grok, and hermes SubagentRunner implementations + their argv builders and event-stream parsers. The per-host MCP servers, plugin scaffolds, and bins live in codex-taskflow / claude-taskflow / opencode-taskflow / grok-taskflow / hermes-taskflow; this package holds just the runners so a new host can be added in one place.",
 	"homepage": "https://github.com/heggria/taskflow#readme",
 	"author": "heggria <bshengtao@gmail.com>",

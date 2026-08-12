@@ -1,130 +1,115 @@
 ---
-title: taskflow Documentation
-description: Start with taskflow 0.2.7 — plan before spend, close the loop after — or jump into the compiler/runtime reference.
+title: taskflow 0.3 Documentation
+description: "Trusted Effects for coding-agent workflows: declare effects, verify typed paths, and commit admitted filesystem changes through one resource authority."
 ---
 
-taskflow is a declarative orchestration runtime for coding-agent subagents. You define a graph, **plan and verify it before token spend**, execute each phase in isolation, and return only the final result to the host conversation.
+> **0.3.0-beta.1 — beta channel candidate, not GA.** This page describes the Trusted Effects MVP prepared for the beta release. The 0.3-C Control Plane remains a follow-on candidate track.
 
-In **0.2**, that graph became a compiled contract: TypeScript authoring, FlowIR, replay, and incremental recompute. **0.2.7** closes the daily loop: zero-token `plan`, completion hooks, approval timeouts, and read-only analytics.
+taskflow is a declarative runtime for coding-agent workflows. It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate transcripts out of the host conversation. The 0.3 candidate adds **Trusted Effects**: a typed declaration and resource-controlled commit path for admitted filesystem effects.
 
-## Choose your path
+## Start with the right path
 
 <Cards>
-  <Card title="Run a flow in five minutes" href="/en/docs/getting-started">
-    Choose a host, install taskflow, and run a first planned + verified flow.
+  <Card title="Trusted Effects overview" href="/en/docs/trusted-effects">
+    Learn what `effects[]`, `PathRef`, labels, resource transactions, and `why-*` evidence mean — including the limits of resolve-only execution.
   </Card>
-  <Card title="What's new in 0.2.7" href="/en/docs/blog/plan-before-spend-0.2.7">
-    Plan before spend, hooks after finish, savings on recompute.
+  <Card title="Run the no-LLM fixture" href="/en/docs/trusted-effects#vertical-slice">
+    Exercise the checked-in filesystem-write vertical slice without a live model.
   </Card>
-  <Card title="Understand taskflow 0.2" href="/en/docs/compiler-runtime">
-    TypeScript DSL, FlowIR, deterministic replay, background runs, and minimal recompute.
+  <Card title="Run a normal flow" href="/en/docs/getting-started">
+    Install a host and run a declarative DAG with agent phases, gates, approvals, and resume.
   </Card>
-  <Card title="Why use a task graph?" href="/en/docs/what-is-taskflow">
-    The tradeoff behind declarative, inspectable, resumable agent orchestration.
+  <Card title="Understand the 0.2 foundation" href="/en/docs/compiler-runtime">
+    TypeScript authoring, FlowIR, trace, replay, background runs, and incremental recompute.
   </Card>
 </Cards>
 
-<Callout type="tip">
-  Evaluating the current line? Read **[0.2.7: plan before spend](/en/docs/blog/plan-before-spend-0.2.7)** then the **[compiler/runtime](/en/docs/compiler-runtime)** overview — not the reference front to back.
+<Callout type="warn">
+  Trusted Effects is not an OS sandbox. The 0.3 MVP protects admitted declared filesystem targets through the resources path. Under resolve-only execution, writes to undeclared paths remain host-policy dependent; SecretRef and ServiceRef have no live vault or network backend in this cut.
 </Callout>
 
-## Install on your host
-
-<Tabs groupId="host" items={['Pi', 'Codex', 'Claude Code', 'OpenCode', 'Grok Build', 'Hermes Agent']}>
-  <Tab value="Pi">
-    ```bash title="Install the Pi extension"
-    pi install npm:pi-taskflow
-    ```
-
-    Continue with the [Pi guide](/en/docs/guides/pi).
-  </Tab>
-  <Tab value="Codex">
-    ```bash title="Install the Codex plugin"
-    codex plugin marketplace add heggria/taskflow
-    codex plugin add taskflow@taskflow
-    ```
-
-    Continue with the [Codex guide](/en/docs/guides/codex).
-  </Tab>
-  <Tab value="Claude Code">
-    ```bash title="Install the Claude Code plugin"
-    claude plugin marketplace add heggria/taskflow
-    claude plugin install claude-taskflow@taskflow
-    ```
-
-    Continue with the [Claude Code guide](/en/docs/guides/claude-code).
-  </Tab>
-  <Tab value="OpenCode">
-    ```bash title="Register the OpenCode MCP server"
-    opencode mcp add taskflow -- npx -y -p opencode-taskflow opencode-taskflow-mcp
-    ```
-
-    Continue with the [OpenCode guide](/en/docs/guides/opencode).
-  </Tab>
-  <Tab value="Grok Build">
-    Follow the current package and local-build instructions in the [Grok Build guide](/en/docs/guides/grok-build).
-  </Tab>
-  <Tab value="Hermes Agent">
-    ```bash title="Register the Hermes MCP server"
-    hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@0.2.10 hermes-taskflow-mcp
-    ```
-
-    Continue with the [Hermes Agent guide](/en/docs/guides/hermes).
-  </Tab>
-</Tabs>
-
-## Learn the model
-
-<Cards>
-  <Card title="Core Concepts" href="/en/docs/concepts">
-    DAGs, phase types, interpolation, verification, isolation, and resume.
-  </Card>
-  <Card title="Syntax Reference" href="/en/docs/syntax">
-    Exact flow fields, phase requirements, control flow, caching, budgets, and scorers.
-  </Card>
-  <Card title="Guides & Recipes" href="/en/docs/guides">
-    Host walkthroughs, templates, dynamic planning, tournaments, and case studies.
-  </Card>
-  <Card title="Commands & Shorthand" href="/en/docs/reference">
-    The Pi command surface, MCP tools, and task/tasks/chain shortcuts.
-  </Card>
-</Cards>
-
-## The compiler/runtime path
+## The 0.3 contract
 
 <Steps>
   <Step>
-    **Verify before spend.** Start with `/tf verify` or `taskflow_verify`; structural errors cost zero tokens.
+    **Declare.** Attach a closed `effects[]` list to a phase. Each effect names its kind, typed target, purpose, and optional confidentiality/integrity labels.
   </Step>
   <Step>
-    **Compile the contract.** Inspect FlowIR and the content hash with `/tf ir`.
+    **Verify and admit.** Validate the EffectIR, resolve `PathRef`, check information-flow labels and mutating-path overlap, then bind the declared target to a resource intent.
   </Step>
   <Step>
-    **Resume or replay intentionally.** Resume unfinished work; replay a finished trace only for zero-token what-if decisions.
+    **Stage and commit.** The resources layer snapshots, leases, journals, stages, and atomically commits the declared filesystem target — or restores and rejects when the transaction cannot complete.
   </Step>
   <Step>
-    **Recompute the stale frontier.** Use `why-stale` before applying a minimal recompute.
+    **Explain.** Query `taskflow_why_effect` or the core `why-*` APIs for structured, ledger-backed reasons. Declaration alone is never presented as authorization.
   </Step>
 </Steps>
 
-## More resources
+## Install on your host
 
-These resources remain available, but are intentionally outside the primary documentation path:
+The 0.3 beta is available from npm's `beta` channel, or from this repository for source-level work. Stable host guides continue to use the published 0.2.x line unless you explicitly select the beta channel.
+
+<Callout type="tip">
+  Every taskflow package requires **Node.js 22.19.0 or newer**. The candidate's source and fixture checks use pnpm from the repository checkout.
+</Callout>
 
 <Cards>
-  <Card title="Templates Gallery" href="/en/docs/guides/templates">
-    Ready-to-run flows organized with the practical guides.
+  <Card title="Pi" href="/en/docs/guides/pi">
+    Native extension, `/tf` commands, run views, and interactive approvals.
   </Card>
-  <Card title="Comparisons" href="/en/docs/comparisons">
-    Compare taskflow with imperative workflows, built-in subagents, and LangGraph.
+  <Card title="Codex" href="/en/docs/guides/codex">
+    Plugin and stdio MCP delivery.
   </Card>
-  <Card title="Blog" href="/en/docs/blog">
-    Longer essays and host-specific workflow articles.
+  <Card title="Claude Code" href="/en/docs/guides/claude-code">
+    Plugin and stdio MCP delivery.
   </Card>
-  <Card title="Community" href="/en/docs/community">
-    Contribute examples, report issues, and join discussions.
+  <Card title="OpenCode" href="/en/docs/guides/opencode">
+    MCP configuration and generated skill.
   </Card>
-  <Card title="Showcase" href="/en/docs/showcase">
-    See examples of how teams use taskflow.
+  <Card title="Grok Build" href="/en/docs/guides/grok-build">
+    MCP configuration with explicit host profiles.
+  </Card>
+  <Card title="Hermes Agent" href="/en/docs/guides/hermes">
+    MCP delivery with explicit child toolsets and isolation policy.
+  </Card>
+</Cards>
+
+## Learn the foundation
+
+<Cards>
+  <Card title="Core concepts" href="/en/docs/concepts">
+    DAGs, phase types, interpolation, verification, isolation, and resume.
+  </Card>
+  <Card title="Syntax reference" href="/en/docs/syntax">
+    Flow fields, control flow, budgets, caching, and approvals.
+  </Card>
+  <Card title="Compiler & runtime" href="/en/docs/compiler-runtime">
+    JSON, TypeScript DSL, FlowIR, trace, replay, and recompute.
+  </Card>
+  <Card title="Commands & MCP tools" href="/en/docs/reference">
+    Host commands and the current 20-tool MCP surface, including `taskflow_why_effect`.
+  </Card>
+</Cards>
+
+## Release boundary
+
+The current 0.3 line has two related tracks:
+
+- **Trusted Effects MVP:** the release-bound product definition. It covers EffectIR, typed refs, labels, resource-controlled filesystem transactions, overlap admission, host-baseline honesty, and ledger-backed `why-*` explainers.
+- **0.3-C Control Plane:** a follow-on track whose current code is a ControlHost/proposed-contract scaffold. Project stores, coordination, approvals, receipts, and evidence UI are later stages; none is the 0.3 MVP GA definition, and the WebUI is not shipped in this candidate.
+
+Read the [MVP freeze in the repository](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md) and the [0.3-C plan](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3-c-control-plane-plan.md) for the normative scope.
+
+## More resources
+
+<Cards>
+  <Card title="Examples" href="https://github.com/heggria/taskflow/tree/rc/0.3.0-trusted-effects/examples">
+    Runnable flow definitions, including the Trusted Effects write fixture.
+  </Card>
+  <Card title="Changelog" href="https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/CHANGELOG.md">
+    Candidate notes, release boundaries, and the 0.2 history.
+  </Card>
+  <Card title="GitHub" href="https://github.com/heggria/taskflow">
+    Source, issues, CI, and contribution workflow.
   </Card>
 </Cards>

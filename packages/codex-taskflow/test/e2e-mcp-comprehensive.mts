@@ -26,10 +26,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { defaultWorkspaceControlDirectory } from "../../taskflow-core/src/resources/execution.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "..");
 const bin = path.join(repo, "dist", "mcp", "bin.js");
+const serverCwd = fs.mkdtempSync(path.join(os.tmpdir(), "tf-codex-mcp-effects-e2e-"));
+const workspaceControl = defaultWorkspaceControlDirectory(serverCwd);
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(repo, "package.json"), "utf8")).version;
 
 assert.ok(fs.existsSync(bin), `built bin not found at ${bin} — run: npm run build -w codex-taskflow`);
@@ -41,7 +44,7 @@ const ok = (label: string) => {
 };
 
 // --- subprocess MCP client ------------------------------------------------
-const proc = spawn("node", [bin], { cwd: repo, stdio: ["pipe", "pipe", "pipe"] });
+const proc = spawn("node", [bin], { cwd: serverCwd, stdio: ["pipe", "pipe", "pipe"] });
 const responses: any[] = [];
 let buf = "";
 proc.stdout.on("data", (d) => {
@@ -89,7 +92,7 @@ send({ jsonrpc: "2.0", method: "notifications/initialized" });
 send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
 const list = await waitFor(2, "tools/list");
 const toolNames = list.result.tools.map((t: any) => t.name).sort();
-assert.deepEqual(toolNames, ["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_stale"]);
+assert.deepEqual(toolNames, ["taskflow_analytics", "taskflow_compile", "taskflow_lint", "taskflow_list", "taskflow_peek", "taskflow_plan", "taskflow_recompute", "taskflow_reconcile_workspace", "taskflow_replay", "taskflow_resume", "taskflow_run", "taskflow_runs", "taskflow_save", "taskflow_search", "taskflow_show", "taskflow_trace", "taskflow_verify", "taskflow_version", "taskflow_why_effect", "taskflow_why_stale"]);
 for (const t of list.result.tools) {
 	assert.equal(t.inputSchema.type, "object", `${t.name} has object schema`);
 	assert.equal(typeof t.description, "string");
@@ -243,7 +246,54 @@ assert.equal(runBad.result.isError, true, "empty-phases flow is invalid");
 assert.match(runBad.result.content[0].text, /invalid|phase/i);
 ok("taskflow_run invalid flow → isError with reason");
 
-// === 9. protocol robustness: batch pipelining + errors in one burst ========
+// === 9. Trusted Effects through the built Codex MCP host ==================
+const effectRun = await callTool(12, "taskflow_run", {
+	define: {
+		name: "trusted-effects-host-e2e",
+		phases: [{
+			id: "write",
+			type: "script",
+			run: ["node", "-e", "process.stdout.write('HOST_EFFECT')"],
+			idempotent: false,
+			effects: [{
+				id: "report",
+				kind: "fs.write",
+				confidentiality: "internal",
+				integrity: "project",
+				target: {
+					kind: "path",
+					path: {
+						workspace: "project",
+						subpath: { literalPath: "out/report.txt" },
+						intent: "create-file",
+					},
+				},
+			}],
+			final: true,
+		}],
+	},
+});
+assert.equal(effectRun.result.isError, false, effectRun.result.content[0].text);
+assert.equal(fs.readFileSync(path.join(serverCwd, "out/report.txt"), "utf8"), "HOST_EFFECT");
+const effectText: string = effectRun.result.content[0].text;
+const runId = /· run ([^\s]+)/.exec(effectText)?.[1];
+assert.ok(runId, `taskflow_run did not report a run id: ${effectText}`);
+const whyEffect = await callTool(13, "taskflow_why_effect", {
+	runId,
+	phaseId: "write",
+	effectId: "report",
+	json: true,
+});
+assert.equal(whyEffect.result.isError, false, whyEffect.result.content[0].text);
+const why = JSON.parse(whyEffect.result.content[0].text);
+assert.equal(why.authorized.allowed, true);
+assert.equal(why.authorized.principalId, "local-host-invocation");
+assert.equal(why.status, "committed");
+assert.equal(why.journalStatus, "committed-content");
+assert.match(why.intentId, /^[0-9a-f-]{36}$/i);
+ok("built Codex MCP → fs.write committed through resources + ledger-backed why-effect");
+
+// === 10. protocol robustness: batch pipelining + errors in one burst =======
 send({ jsonrpc: "2.0", id: 20, method: "ping" });
 send({ jsonrpc: "2.0", id: 21, method: "does/not/exist" });
 send({ jsonrpc: "2.0", method: "notifications/somethingUnknown" }); // ignored
@@ -277,5 +327,7 @@ await sleep(50);
 if (stderr.trim()) {
 	console.log("\n⚠ server stderr (non-fatal):\n" + stderr.trim());
 }
+fs.rmSync(serverCwd, { recursive: true, force: true });
+fs.rmSync(workspaceControl, { recursive: true, force: true });
 console.log(`\n✅ COMPREHENSIVE E2E PASS — ${pass} checks against the built dist bin.`);
 process.exit(0);

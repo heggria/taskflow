@@ -1,0 +1,89 @@
+{
+  "name": "taskflow-control",
+  "version": "0.3.0",
+  "description": "0.3-C control plane core: the frozen TypeBox wire contracts (P1-P16 + wire-freeze), the ControlHost daemon/supervisor/standalone contracts, user singleton endpoint/fencing, hello-before-RPC negotiation, and the Trusted Effects (taskflow-core resources) provider as the only execution authority.",
+  "keywords": [
+    "taskflow",
+    "control-plane",
+    "control-host",
+    "wire",
+    "typebox",
+    "orchestration",
+    "trusted-effects"
+  ],
+  "license": "MIT",
+  "author": "heggria <bshengtao@gmail.com>",
+  "homepage": "https://github.com/heggria/taskflow#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heggria/taskflow.git",
+    "directory": "packages/taskflow-control"
+  },
+  "bugs": {
+    "url": "https://github.com/heggria/taskflow/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "development": "./src/schema/index.ts",
+      "types": "./dist/schema/index.d.ts",
+      "default": "./dist/schema/index.js"
+    },
+    "./control-host": {
+      "development": "./src/control-host.ts",
+      "types": "./dist/control-host.d.ts",
+      "default": "./dist/control-host.js"
+    },
+    "./*": {
+      "development": "./src/*.ts",
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "next",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./schema": {
+        "types": "./dist/schema/index.d.ts",
+        "default": "./dist/schema/index.js"
+      },
+      "./control-host": {
+        "types": "./dist/control-host.d.ts",
+        "default": "./dist/control-host.js"
+      },
+      "./*": {
+        "types": "./dist/*.d.ts",
+        "default": "./dist/*.js"
+      }
+    }
+  },
+  "dependencies": {
+    "taskflow-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "typebox": "*"
+  }
+}

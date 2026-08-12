@@ -12,6 +12,8 @@
 import type { Phase } from "./schema.ts";
 import { asArray, dependenciesOf, LOOP_DEFAULT_MAX_ITERATIONS } from "./schema.ts";
 import { type OutputContract } from "./contract.ts";
+import { detectEffectsIssues } from "./verifiers/effects-lint.ts";
+import type { ComposedEffectFlowLike } from "./effects/validate.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -26,6 +28,7 @@ export type IssueCategory =
 	| "ref-integrity"
 	| "guard-contradiction"
 	| "contract"
+	| "effects"
 	| "plugin";
 
 export interface VerificationIssue {
@@ -85,6 +88,11 @@ export interface VerifyOptions {
 	/** Caller-supplied verifiers. Run after the built-in detectors, in array
 	 *  order, against the same sanitized flow; built-in issues always come first. */
 	verifiers?: TaskflowVerifier[];
+	/** Optional saved-flow loader used to resolve `flow{use}` children during
+	 *  effect label-flow verification. When provided, resolved children are
+	 *  checked with their real effects; children the loader cannot resolve
+	 *  degrade to advisory warnings (the runtime loader remains authoritative). */
+	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -638,6 +646,8 @@ export function verifyTaskflow(flow: VerifiableFlow, options?: VerifyOptions): V
 	issues.push(...detectConcurrencyWarnings(safeFlow, succ));
 	issues.push(...detectGuardContradictions(phases));
 	issues.push(...detectContractRefMismatches(phases));
+	// Trusted Effects (0.3): static EffectIR checks when a phase carries effects[]
+	issues.push(...detectEffectsIssues(safeFlow, { resolveFlow: options?.resolveFlow }));
 
 	// Caller-supplied verifiers run last, against an isolated deep-frozen snapshot
 	// of the sanitized flow (so a verifier cannot mutate the real execution plan

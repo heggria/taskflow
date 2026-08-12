@@ -8,7 +8,7 @@ description: 编译期 .tf.ts 写法 —— rune erase 成 Taskflow JSON，再�
 S4 增加**编译期** TypeScript 前端：用 rune（`agent`、`map`、`race`…）写 `*.tf.ts`，CLI erase 成普通 Taskflow JSON。宿主仍通过 `taskflow_run` / `/tf run` 跑 **JSON**——**没有**解释执行路径，也**没有**宿主对 `.tf.ts` 的自动 build。
 
 <Callout type="info">
-  **包状态。** `taskflow-dsl` 在 monorepo 的 `packages/taskflow-dsl`。纯 JSON 作者不需要它。本发布线 manifest 为 `0.2.10`；`v0.2.10` 发布任务完成后可从 npm 安装，或使用本 monorepo 的 workspace / 本地 path。
+  **Package status.** `taskflow-dsl` lives in the monorepo (`packages/taskflow-dsl`). It is **not** required for JSON authors. Package manifests target `0.3.0-beta.1` on npm's `beta` channel; after publication, install with `npm install taskflow-dsl@beta`, or use a workspace / local path from this monorepo.
 </Callout>
 
 ## 工作流

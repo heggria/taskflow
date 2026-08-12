@@ -1,0 +1,42 @@
+---
+title: Trusted Effects
+---
+
+> **0.3.0-beta.1 — beta channel candidate, not GA.** This page describes the Trusted Effects MVP prepared for the beta release; npm publication is still a release gate.
+
+Trusted Effects makes a phase's side effects explicit. The model may propose content, but for an admitted declared filesystem target, the **resources transaction is the only finalizer**.
+
+## The vertical slice
+
+The checked-in [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/examples/trusted-effects-write.json) declares one `fs.write` effect for `out/report.md`. The no-LLM fixture exercises the same resource-controlled path:
+
+```bash
+pnpm exec node --conditions=development --experimental-strip-types --test \
+  packages/taskflow-core/test/effects-e2e-fixture.test.ts
+```
+
+## The contract
+
+| Concept | Meaning |
+|---|---|
+| `EffectIR` | Closed effect vocabulary carried by the flow/phase contract |
+| `PathRef` | Typed workspace-relative target; no bare string authority |
+| `SecretRef` / `ServiceRef` | Typed handles that fail closed until a real backend is bound |
+| Labels | Fixed confidentiality/integrity checks across the phase DAG |
+| Resource transaction | Durable snapshot → lease → intent/permit → stage → commit or restore/reject |
+| `why-effect` | Read-only, ledger-backed explanation of authorization and lifecycle |
+
+## What this does not claim
+
+- It is not a FileBroker or a full OS sandbox.
+- Resolve-only hosts cannot prevent every write to an undeclared path.
+- SecretRef has no vault backend in this cut.
+- ServiceRef has no live network adapter in this cut.
+- ControlHost is currently a scaffold; stores, approvals, receipts, and WebUI belong to later 0.3-C stages. None is proof that 0.3 is released or GA.
+
+## Read next
+
+- [Core concepts](/en/docs/concepts)
+- [Compiler & runtime](/en/docs/compiler-runtime)
+- [0.3 MVP freeze in the repository](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md)
+- [Host support baseline](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/conformance/workspace/host-support-baseline.json)

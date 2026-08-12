@@ -3,8 +3,9 @@ name: Publish & Release
 # Publishes all ten packages (taskflow-core, taskflow-mcp-core, taskflow-hosts,
 # taskflow-dsl, pi-taskflow, codex-taskflow, claude-taskflow, opencode-taskflow,
 # grok-taskflow, hermes-taskflow) to npmjs.com and creates a GitHub Release when a v* tag is
-# pushed (e.g. `git tag v0.2.0 && git push origin v0.2.0`). All ten workspace
-# versions must equal the tag.
+# pushed (e.g. `git tag v0.3.0-beta.1 && git push origin v0.3.0-beta.1`). All ten
+# publishable workspace versions must equal the tag. Stable tags use npm's
+# `latest` channel; prerelease tags such as `v0.3.0-beta.1` use `beta`.
 
 on:
   push:
@@ -87,6 +88,10 @@ jobs:
             exit 1
           fi
           VERSION="${TAG#v}"
+          if [[ "$VERSION" == *-* && "$VERSION" != 0.3.0-beta.* ]]; then
+            echo "::error::Only 0.3.0-beta.* prereleases are supported by this beta workflow (got $VERSION)"
+            exit 1
+          fi
           if grep -Fqx "## [$VERSION] — Unreleased" CHANGELOG.md; then
             echo "::error::CHANGELOG.md still marks $VERSION as Unreleased"
             exit 1
@@ -145,7 +150,7 @@ jobs:
           HERMES_PINNED="v$(node -e '
             const fs = require("fs");
             const text = fs.readFileSync("packages/hermes-taskflow/plugin/hermes.config.snippet.yaml", "utf8");
-            const match = text.match(/hermes-taskflow@(\d+\.\d+\.\d+)/);
+            const match = text.match(/hermes-taskflow@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/);
             if (!match) process.exit(2);
             process.stdout.write(match[1]);
           ')"
@@ -162,6 +167,19 @@ jobs:
         # pre-publishing name@version must never be mistaken for our release.
         run: |
           set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            NPM_TAG="${VERSION#*-}"
+            NPM_TAG="${NPM_TAG%%.*}"
+            RELEASE_PRERELEASE=true
+            if [ "$NPM_TAG" != "beta" ]; then
+              echo "::error::Prerelease $VERSION must publish with npm dist-tag beta, not $NPM_TAG"
+              exit 1
+            fi
+          else
+            NPM_TAG="latest"
+            RELEASE_PRERELEASE=false
+          fi
           tarball_for() {
             node -e '
               const fs = require("fs");
@@ -183,7 +201,7 @@ jobs:
               echo "::notice::$name@$version already published and verified — skipping"
             else
               echo "Publishing $name@$version"
-              npm publish "$tarball" --provenance --access public
+              npm publish "$tarball" --provenance --access public --tag "$NPM_TAG"
             fi
           }
           publish_one taskflow-core
@@ -280,8 +298,10 @@ jobs:
                 exit 1
                 ;;
             esac
-            if [ "$RELEASE_DRAFT" != "false" ] || [ "$RELEASE_PRERELEASE" != "false" ]; then
-              echo "::error::Existing release must be published and non-prerelease (draft=$RELEASE_DRAFT, prerelease=$RELEASE_PRERELEASE)"
+            EXPECTED_PRERELEASE="false"
+            if [[ "$VERSION" == *-* ]]; then EXPECTED_PRERELEASE="true"; fi
+            if [ "$RELEASE_DRAFT" != "false" ] || [ "$RELEASE_PRERELEASE" != "$EXPECTED_PRERELEASE" ]; then
+              echo "::error::Existing release has wrong draft/prerelease state (draft=$RELEASE_DRAFT, prerelease=$RELEASE_PRERELEASE, expected prerelease=$EXPECTED_PRERELEASE)"
               exit 1
             fi
             echo "::notice::Release $GITHUB_REF_NAME already exists with a verified target; skipping creation"
@@ -294,10 +314,14 @@ jobs:
             exit 1
           fi
 
-          gh release create "$GITHUB_REF_NAME" \
-            --notes-file /tmp/release-notes.md \
-            --title "v$VERSION" \
-            --target "$TAG_COMMIT" \
+          RELEASE_ARGS=(
+            "$GITHUB_REF_NAME"
+            --notes-file /tmp/release-notes.md
+            --title "v$VERSION"
+            --target "$TAG_COMMIT"
             --verify-tag
+          )
+          if [[ "$VERSION" == *-* ]]; then RELEASE_ARGS+=(--prerelease); fi
+          gh release create "${RELEASE_ARGS[@]}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

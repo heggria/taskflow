@@ -18,26 +18,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { findProjectVerifiersDir } from "../discovery-boundary.ts";
 import type { TaskflowVerifier } from "../verify.ts";
 
 /** The convention directory name under `.pi/taskflows/`. */
 const VERIFIERS_DIR = "verifiers";
-
-/** Find the project-scope verifiers directory (walk-up, same as flows). */
-function findProjectVerifiersDir(cwd: string): string | null {
-	const home = os.homedir();
-	let dir = cwd;
-	while (true) {
-		if (dir !== home) {
-			const candidate = path.join(dir, ".pi", "taskflows", VERIFIERS_DIR);
-			if (fs.existsSync(candidate)) return candidate;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	return null;
-}
 
 /** The user-scope verifiers directory. */
 function userVerifiersDir(): string {

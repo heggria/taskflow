@@ -1,6 +1,6 @@
 {
 	"name": "pi-taskflow-monorepo",
-	"version": "0.2.10",
+	"version": "0.3.0-beta.1",
 	"private": true,
 	"description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the private CharterArc experiment.",
 	"type": "module",
@@ -9,7 +9,7 @@
 	},
 	"packageManager": "pnpm@11.17.0",
 	"scripts": {
-		"build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter charterarc build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build && pnpm --filter hermes-taskflow build",
+		"build": "pnpm run build:skills && pnpm --filter taskflow-core build && pnpm --filter charterarc build && pnpm --filter taskflow-control build && pnpm --filter taskflow-mcp-core build && pnpm --filter taskflow-hosts build && pnpm --filter taskflow-dsl build && pnpm --filter pi-taskflow build && pnpm --filter codex-taskflow build && pnpm --filter claude-taskflow build && pnpm --filter opencode-taskflow build && pnpm --filter grok-taskflow build && pnpm --filter hermes-taskflow build",
 		"build:website": "cd website && npm run build",
 		"build:skills": "node scripts/build-skills.mjs",
 		"test:pack": "pnpm run build && node scripts/smoke-packed-packages.mjs",
@@ -48,6 +48,7 @@
 		"@earendil-works/pi-tui": "^0.83.0",
 		"@types/node": "^26",
 		"charterarc": "workspace:*",
+		"taskflow-control": "workspace:*",
 		"taskflow-core": "workspace:*",
 		"taskflow-hosts": "workspace:*",
 		"typebox": "^1.3.10",

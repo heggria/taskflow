@@ -24,7 +24,7 @@
  *   - taskflow_peek    : inspect a stored run's intermediate phase output
  *   - taskflow_trace   : read a run's append-only event trace
  *   - taskflow_replay  : re-evaluate a recorded trace under alternate knobs (zero tokens)
- *   - taskflow_why_stale / taskflow_recompute / taskflow_reconcile_workspace
+ *   - taskflow_why_stale / taskflow_why_effect / taskflow_recompute / taskflow_reconcile_workspace
  *   - taskflow_save / taskflow_search
  */
 
@@ -101,6 +101,8 @@ import {
 	readMapOf,
 	declaredReadMapOfDef,
 	formatWhyStale,
+	whyEffectFromDurableJournal,
+	formatWhyEffect,
 	recomputeTaskflow,
 	type RecomputeReport,
 	preflightTaskflow,
@@ -650,6 +652,23 @@ const TOOLS: McpTool[] = [
 		},
 	},
 	{
+		name: "taskflow_why_effect",
+		title: "Explain why a declared effect is authorized",
+		description:
+			"Given a runId + effectId (+ optional phaseId): explain authorization and lifecycle from the durable resource intent ledger. Zero tokens and read-only. A declaration without matching principal/capability/intent evidence is unauthorized.",
+		inputSchema: {
+			type: "object",
+			additionalProperties: false,
+			properties: {
+				runId: { type: "string", description: "The run whose flow definition declares the effect." },
+				effectId: { type: "string", description: "Effect id as declared on the phase (or phaseId/effectId composite)." },
+				phaseId: { type: "string", description: "Optional phase scope when the same effect id appears on multiple phases." },
+				json: { type: "boolean", description: "Return the full WhyEffect record as JSON." },
+			},
+			required: ["runId", "effectId"],
+		},
+	},
+	{
 		name: "taskflow_recompute",
 		title: "Re-run a stored run's stale frontier (dry-run only)",
 		description:
@@ -807,6 +826,16 @@ function resolveFlowWithSource(cwd: string, params: { name?: string; define?: un
 	throw new RpcError(RPC.INVALID_PARAMS, "Provide either `name` (a saved flow) or `define` (an inline flow).");
 }
 
+/** Store-backed saved-flow loader for `flow{use}` resolution in pre-run
+ *  validation. Mirrors the runtime `loadFlow` lookup; returns undefined for
+ *  names the store cannot resolve so runtime admission stays authoritative. */
+function savedFlowLoader(cwd: string): (name: string) => Taskflow | undefined {
+	return (name: string) => {
+		const r = getFlowDiagnosed(cwd, name);
+		return r.ok ? r.value.def : undefined;
+	};
+}
+
 function resolveFlow(cwd: string, params: { name?: string; define?: unknown; defineFile?: unknown }): Taskflow {
 	return resolveFlowWithSource(cwd, params).def;
 }
@@ -891,13 +920,14 @@ export function makeToolHandlers(
 					: undefined;
 			const resolvedFlow = resolveFlowWithSource(cwd, args);
 			const def = resolvedFlow.def;
-			const structural = validateTaskflow(def);
+			const loadSaved = savedFlowLoader(cwd);
+			const structural = validateTaskflow(def, { resolveFlow: loadSaved });
 			if (!structural.ok) return textContent(`Flow is invalid:\n- ${structural.errors.join("\n- ")}`, true);
 			const providedArgs = args.args && typeof args.args === "object" && !Array.isArray(args.args)
 				? args.args as Record<string, unknown>
 				: {};
 			const resolvedArgs = resolveArgs(def, providedArgs);
-			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd });
+			const invocation = validateTaskflow(def, { args: resolvedArgs, cwd, resolveFlow: loadSaved });
 			if (!invocation.ok) return textContent(`Flow invocation is invalid:\n- ${invocation.errors.join("\n- ")}`, true);
 			const usageAccounting = runner.usageAccounting;
 			if (def.budget && usageAccounting === "unavailable") {
@@ -1063,7 +1093,15 @@ export function makeToolHandlers(
 			if (action === "status") return textContent(formatBackgroundRun(state, true));
 			if (action === "wait") {
 				const timeoutMs = Math.max(0, Math.min(300_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : 30_000));
-				state = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal) ?? state;
+				const waited = await waitForMcpBackgroundRun(cwd, runId, timeoutMs, context?.signal);
+				state = waited.state ?? state;
+				if (!waited.quiescent) {
+					const reason = waited.reason === "aborted" ? "Wait was aborted" : "Wait timed out";
+					const activity = state.status === "running"
+						? "the run is still active"
+						: `the ${state.status} result is persisted but its detached worker is still finalizing`;
+					return textContent(`${reason}; ${activity}. Retry taskflow_runs wait.\nRun ${state.runId} · pid ${state.pid ?? "unknown"} · cwd ${state.cwd}`);
+				}
 				return textContent(formatBackgroundRun(state, true), state.status !== "running" && state.status !== "completed");
 			}
 			if (action === "cancel") {
@@ -1115,10 +1153,12 @@ export function makeToolHandlers(
 			}
 			const child = forkRunForResume(prev, { overrides, cwd, host });
 			const settings = readSubagentSettings();
-			const { agents } = discoverAgents(cwd, "both", settings.modelRoles, settings.taskflow);
+			const agentScope = child.def.agentScope ?? "both";
+			const { agents } = discoverAgents(cwd, agentScope, settings.modelRoles, settings.taskflow);
 			const deps: RuntimeDeps = {
 				cwd,
 				agents,
+				globalThinking: settings.globalThinking,
 				runTask: runner.runTask,
 				signal: context?.signal,
 				usageAccounting: runner.usageAccounting,
@@ -1199,6 +1239,26 @@ export function makeToolHandlers(
 			const declared = declaredReadMapOfDef(run.def);
 			const seeds = typeof args.phaseId === "string" ? [args.phaseId] : [];
 			return textContent(formatWhyStale(run.runId, run.flowName, reads, seeds, declared));
+		},
+
+		taskflow_why_effect: async (args) => {
+			const runId = String(args.runId ?? "");
+			const effectId = String(args.effectId ?? "");
+			if (!runId) return textContent("taskflow_why_effect requires `runId`.", true);
+			if (!effectId) return textContent("taskflow_why_effect requires `effectId`.", true);
+			const runR = loadRunDiagnosed(cwd, runId);
+			if (!runR.ok) return textContent(describeLoadFailure(runR, `Run "${runId}"`), true);
+			const run = runR.value;
+			const result = await whyEffectFromDurableJournal({
+				flow: run.def,
+				runId: run.runId,
+				effectId,
+				phaseId: typeof args.phaseId === "string" ? args.phaseId : undefined,
+				workspaceRoot: run.cwd,
+			});
+			if (!result.ok) return textContent(result.error, true);
+			if (args.json === true) return textContent(JSON.stringify(result.why, null, 2));
+			return textContent(formatWhyEffect(result.why));
 		},
 
 		taskflow_recompute: async (args, context) => {
