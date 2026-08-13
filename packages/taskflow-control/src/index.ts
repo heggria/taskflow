@@ -15,6 +15,7 @@ export * from "./errors.ts";
 export * from "./modes.ts";
 export * from "./hello.ts";
 export * from "./singleton.ts";
+export * from "./uds.ts";
 export * from "./te-provider.ts";
 export * from "./control-host.ts";
 
