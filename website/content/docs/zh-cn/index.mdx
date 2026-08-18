@@ -3,7 +3,7 @@ title: taskflow 0.3 文档
 description: "面向 coding-agent 工作流的 Trusted Effects：声明 effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。"
 ---
 
-> **0.3.0-beta.1.1——beta channel candidate，尚未 GA。** 这个页面描述为 beta 发布准备的 Trusted Effects MVP；0.3-C Control Plane 仍是后续 candidate 轨道。
+> **0.3.0-beta.2——beta channel candidate，尚未 GA。** Trusted Effects MVP 加上 Control Plane 切片（S2 Unix UDS + S3 最小 store）。Wire 合同仍为 PROPOSED。本切片不含 `#137` / `#95`。
 
 taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间 transcript 留在宿主对话之外。0.3 candidate 增加了 **Trusted Effects**：为已准入的文件 effect 提供类型化声明与受 resources 控制的提交路径。
 

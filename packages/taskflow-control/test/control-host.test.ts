@@ -190,3 +190,53 @@ test("control-host: stop releases the singleton so a fresh host can win", async 
 	assert.equal(status.singleton, "won");
 	second.stop();
 });
+
+test("control-host: standalone opens projectStorePath and a later host sees the same ledger (A3)", async () => {
+	const paths = makePaths();
+	const storePath = path.join(paths.controlHome, "project-store");
+	const first = new ControlHost(hostOptions(paths, { mode: "standalone", holderId: "s1", projectStorePath: storePath }));
+	await first.start();
+	first.hello(clientHello);
+	const header = await first.dispatch<{ projectId: string }>("control.store.header", undefined, { fencingEpoch: 1 });
+	assert.match(header.projectId, /^[0-9a-f-]{36}$/i);
+	const submitted = await first.dispatch<{ commitSeq: number }>("commands.submit", {
+		command: {
+			commandId: "00000000-0000-0000-0000-0000000000bb",
+			kind: "run.submit",
+			requestHash: "a".repeat(64),
+			callerPrincipal: "cli",
+			authorizationContextHash: "a".repeat(64),
+			projectId: header.projectId,
+			controlDomainId: header.projectId,
+			status: "accepted",
+			firstCommitSeq: 1,
+			lastCommitSeq: 1,
+			recordedAt: 1,
+		},
+		events: [{
+			eventId: "00000000-0000-0000-0000-0000000000cc",
+			schemaVersion: 1,
+			controlDomainId: header.projectId,
+			streamId: "command:00000000-0000-0000-0000-0000000000bb",
+			streamSeq: 1,
+			commitSeq: 1,
+			commandId: "00000000-0000-0000-0000-0000000000bb",
+			commandEventIndex: 0,
+			causationId: "00000000-0000-0000-0000-0000000000bb",
+			correlationId: "00000000-0000-0000-0000-0000000000bb",
+			projectId: header.projectId,
+			recordedAt: 1,
+			payload: { kind: "command.recorded", commandId: "00000000-0000-0000-0000-0000000000bb" },
+		}],
+	}, { fencingEpoch: 1 });
+	assert.equal(submitted.commitSeq, 1);
+	first.stop();
+
+	const second = new ControlHost(hostOptions(paths, { mode: "standalone", holderId: "s2", projectStorePath: storePath }));
+	await second.start();
+	second.hello(clientHello);
+	const status = await second.dispatch<{ header: { projectId: string }; commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 });
+	assert.equal(status.header.projectId, header.projectId);
+	assert.equal(status.commitSeq, 1);
+	second.stop();
+});

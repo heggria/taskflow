@@ -94,3 +94,27 @@ export function assertClosedControlCode(code: string): asserts code is ControlEr
 		throw new Error(`TF_COMMAND_FAILED: not a closed 0.3-C wire error code: ${code}`);
 	}
 }
+
+/** Map any thrown value to a closed wire ErrorEnvelope (P4). */
+export function errorToEnvelope(error: unknown): ErrorEnvelope {
+	if (error instanceof ControlError) return error.toEnvelope();
+	const message = error instanceof Error ? error.message : String(error);
+	return {
+		code: "TF_COMMAND_FAILED",
+		message,
+		recoveryAction: "retry-new-command",
+		sideEffects: "none",
+	};
+}
+
+/** Rehydrate a ControlError from a wire ErrorEnvelope (transport layer). */
+export function errorFromEnvelope(envelope: ErrorEnvelope): ControlError {
+	return new ControlError(envelope.code, envelope.message, {
+		recoveryAction: envelope.recoveryAction,
+		sideEffects: envelope.sideEffects,
+		...(envelope.commandId !== undefined ? { commandId: envelope.commandId } : {}),
+		...(envelope.commitSeq !== undefined ? { commitSeq: envelope.commitSeq } : {}),
+		...(envelope.controlDomainId !== undefined ? { controlDomainId: envelope.controlDomainId } : {}),
+		...(envelope.projectId !== undefined ? { projectId: envelope.projectId } : {}),
+	});
+}

@@ -4,6 +4,21 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+## [0.3.0-beta.2] — 2026-08-18
+
+> npm `beta` dist-tag. **Not GA.** Control Plane slice: S2 Unix UDS + S3-min files-only store. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). TypeBox contracts and `wire-freeze.md` remain **PROPOSED**. `taskflow-control` is **not** in the ten-package publish set (`publishConfig.tag` stays `next`).
+
+### Added
+
+- **ControlHost Unix UDS (S2).** Winner listens on a user-scoped socket; loser attaches and uses the winner fencing epoch. Auto never silently degrades to standalone. Unix-only process tests; not part of the 3-OS process-supervisor matrix.
+- **Files-only project ControlStore (S3-min).** Header + `commit-seq.json` + journal + store-self projections; exclusive writer lock; hardened UUID/`wx`/fsync/rename; process-level SIGKILL crash matrix (old-complete | new-complete | fail-closed). `ControlHost.start()` opens `projectStorePath` before dispatch on winner/standalone. Read-only RPCs: `control.store.header`, `control.store.status`. MCP `taskflow_control_status` is **not** added — that would force unpublished `taskflow-control` onto the ten-package face.
+
+### Notes
+
+- Rebased onto `0.3.0-beta.1.1` (`8fab2c9`).
+- All publishable surfaces aligned to `0.3.0-beta.2`.
+- Ready / merge / tag / npm still require a new instruction.
+
 ## [0.3.0-beta.1.1] — 2026-08-18
 
 > Hotfix on `0.3.0-beta.1`. npm `beta` dist-tag. **Not GA.** Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation).

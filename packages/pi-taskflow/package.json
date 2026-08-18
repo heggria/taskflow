@@ -1,7 +1,7 @@
 {
 	"name": "pi-taskflow",
-	"version": "0.3.0-beta.1.1",
-	"description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
+	"version": "0.3.0-beta.2",
+	"description": "A declarative, verifiable graph of task nodes for the Pi coding agent \u2014 statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
 	"keywords": [
 		"pi-package",
 		"pi",
