@@ -21,7 +21,7 @@
 
 **taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 0.3 candidate 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-> **状态：0.3.0-beta.1 Trusted Effects beta——beta channel，尚未 GA。** 当前 release candidate 已准备发布到 npm 的 `beta` channel；beta 包含下文所述的 Trusted Effects MVP。0.3-C Control Plane 仍是后续 candidate 轨道，不是 beta 已交付的产品表面。
+> **状态：0.3.0-beta.1.1 Trusted Effects beta——beta channel，尚未 GA。** 当前 release candidate 已准备发布到 npm 的 `beta` channel；beta 包含下文所述的 Trusted Effects MVP。0.3-C Control Plane 仍是后续 candidate 轨道，不是 beta 已交付的产品表面。
 
 ## 0.3 的核心想法
 

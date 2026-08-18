@@ -18,10 +18,13 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+	const searchApi = `${process.env.TASKFLOW_BASE_PATH ?? ""}/api/search`;
 	return (
 		<html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
 			<body className="flex min-h-screen flex-col antialiased">
-				<RootProvider>{children}</RootProvider>
+				<RootProvider search={{ options: { type: "static", api: searchApi } }}>
+					{children}
+				</RootProvider>
 			</body>
 		</html>
 	);

@@ -40,6 +40,7 @@ import {
 import { FileTraceSink } from "./trace.ts";
 import type { RuntimeDeps } from "./runtime.ts";
 import type { SubagentRunner } from "./host/runner-types.ts";
+import { toModuleImportSpecifier } from "./module-specifier.ts";
 
 interface DetachContext {
 	runId: string;
@@ -213,7 +214,7 @@ try {
 	let runnerLoadError: string | undefined;
 	if (ctx.runnerModule) {
 		try {
-			const runnerMod = await import(ctx.runnerModule);
+			const runnerMod = await import(toModuleImportSpecifier(ctx.runnerModule));
 			const exportName = ctx.runnerFactoryExport ?? ctx.runnerExport ?? "piSubagentRunner";
 			const exported = runnerMod[exportName];
 			const runner = ctx.runnerFactoryExport && typeof exported === "function"

@@ -1,6 +1,6 @@
 {
 	"name": "codex-taskflow",
-	"version": "0.3.0-beta.1",
+	"version": "0.3.0-beta.1.1",
 	"description": "Run taskflow on OpenAI Codex: the npm tarball provides the Codex subagent runner and MCP server; the plugin is distributed through the repository marketplace.",
 	"keywords": [
 		"codex",
