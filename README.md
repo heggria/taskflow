@@ -21,7 +21,7 @@
 
 **taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 0.3 candidate, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 0.3.0-beta.1.1 Trusted Effects beta — beta channel, not GA.** This release candidate is prepared for npm's `beta` channel; the beta ships the Trusted Effects MVP described below. The 0.3-C Control Plane remains a follow-on candidate track; it is not a shipped beta surface.
+> **Status: 0.3.0-beta.2 — beta channel, not GA.** Ships the Trusted Effects MVP plus a Control Plane slice: Unix UDS ControlHost listen/attach (S2) and a files-only project ControlStore (S3-min). Wire contracts remain **PROPOSED**. `taskflow-control` is workspace-only until a later 11-package decision. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation).
 
 ## The 0.3 idea
 
