@@ -91,22 +91,111 @@ async function writePromptToTempFile(filePath: string, prompt: string): Promise<
 	});
 }
 
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-	// Explicit override (used by tests and unusual launch setups).
-	const override = process.env.PI_TASKFLOW_PI_BIN;
-	if (override) return { command: override, args };
+/** Parent serializes this so a detached child can re-enter the same Pi JS CLI. */
+export const PI_TASKFLOW_PI_ENTRY_ENV = "PI_TASKFLOW_PI_ENTRY";
 
-	const currentScript = process.argv[1];
+const PI_CLI_SCRIPT = /(?:^|[\\/])(?:cli|pi)\.(?:js|mjs|cjs)$/;
+const WINDOWS_NPM_SHIM = /\.(cmd|bat|ps1)$/i;
+
+export type PiInvocationProbe = {
+	overrideBin?: string;
+	entry?: string;
+	currentScript?: string;
+	execPath?: string;
+	platform?: NodeJS.Platform;
+	existsSync?: (p: string) => boolean;
+	resolveInstalledCli?: () => string | undefined;
+};
+
+/**
+ * Locate the installed `pi` JS CLI. `@earendil-works/pi-coding-agent` only
+ * exports `.` and `./rpc-entry` — `import.meta.resolve("…/package.json")`
+ * (and `createRequire().resolve` of the same) throws ERR_PACKAGE_PATH_NOT_EXPORTED.
+ * Resolve the public `.` entry, then walk up to the package.json that owns it.
+ */
+export function defaultResolveInstalledPiCli(exists: (p: string) => boolean = (candidate) => fs.existsSync(candidate)): string | undefined {
+	try {
+		const entryPath = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+		let dir = path.dirname(entryPath);
+		for (let i = 0; i < 8; i++) {
+			const pkgPath = path.join(dir, "package.json");
+			if (exists(pkgPath)) {
+				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
+					name?: string;
+					bin?: string | Record<string, string>;
+				};
+				if (pkg.name === "@earendil-works/pi-coding-agent") {
+					const rel = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.pi;
+					if (!rel) return undefined;
+					const abs = path.resolve(dir, rel);
+					return exists(abs) ? abs : undefined;
+				}
+			}
+			const parent = path.dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+		return undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Absolute JS entry of the Pi CLI that launched this process (or the installed
+ * `@earendil-works/pi-coding-agent` bin). Used to spawn subagents via
+ * `process.execPath` so Windows never has to `spawn("pi")` / `spawn("pi.cmd")`.
+ */
+export function resolveParentPiCliEntry(probe: PiInvocationProbe = {}): string | undefined {
+	const exists = probe.existsSync ?? ((p) => fs.existsSync(p));
+	const currentScript = probe.currentScript ?? process.argv[1];
 	const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-	// Only re-exec the current script if it actually looks like the pi CLI entry.
-	const looksLikePi = currentScript ? /(?:^|[\\/])(?:cli|pi)\.(?:js|mjs|cjs)$/.test(currentScript) : false;
-	if (currentScript && !isBunVirtualScript && looksLikePi && fs.existsSync(currentScript)) {
-		return { command: process.execPath, args: [currentScript, ...args] };
+	if (currentScript && !isBunVirtualScript && PI_CLI_SCRIPT.test(currentScript) && exists(currentScript)) {
+		return currentScript;
+	}
+	const resolve = probe.resolveInstalledCli ?? (() => defaultResolveInstalledPiCli(exists));
+	return resolve() ?? undefined;
+}
+
+export function getPiInvocation(args: string[], probe: PiInvocationProbe = {}): { command: string; args: string[] } {
+	const exists = probe.existsSync ?? ((p) => fs.existsSync(p));
+	const platform = probe.platform ?? process.platform;
+	const execPath = probe.execPath ?? process.execPath;
+	const override = probe.overrideBin !== undefined ? probe.overrideBin : process.env.PI_TASKFLOW_PI_BIN;
+	if (override) {
+		if (WINDOWS_NPM_SHIM.test(override)) {
+			throw new Error(
+				`PI_TASKFLOW_PI_BIN points at a Windows npm shim (${override}). ` +
+					"Node spawn() cannot launch .cmd/.ps1 without a shell (ENOENT/EINVAL). " +
+					`Set PI_TASKFLOW_PI_BIN to a real executable, or ${PI_TASKFLOW_PI_ENTRY_ENV} to the installed dist/cli.js.`,
+			);
+		}
+		return { command: override, args };
 	}
 
-	const execName = path.basename(process.execPath).toLowerCase();
+	const entry = (probe.entry !== undefined ? probe.entry : process.env[PI_TASKFLOW_PI_ENTRY_ENV])?.trim();
+	if (entry && exists(entry)) {
+		return { command: execPath, args: [entry, ...args] };
+	}
+
+	const parent = resolveParentPiCliEntry({
+		currentScript: probe.currentScript ?? process.argv[1],
+		existsSync: exists,
+		resolveInstalledCli: probe.resolveInstalledCli,
+	});
+	if (parent) return { command: execPath, args: [parent, ...args] };
+
+	const pathFor = platform === "win32" ? path.win32 : path.posix;
+	const execName = pathFor.basename(execPath).toLowerCase();
 	const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
-	if (!isGenericRuntime) return { command: process.execPath, args };
+	if (!isGenericRuntime) return { command: execPath, args };
+	if (platform === "win32") {
+		throw new Error(
+			"Unable to resolve the Pi CLI JavaScript entry on Windows. " +
+				"Detached runs cannot spawn the npm `pi.cmd` shim (Node spawn ENOENT/EINVAL). " +
+				`Set ${PI_TASKFLOW_PI_ENTRY_ENV} to the installed dist/cli.js, or PI_TASKFLOW_PI_BIN to a real executable.`,
+		);
+	}
 	return { command: "pi", args };
 }
 
@@ -451,6 +540,11 @@ export function createPiSubagentRunner(raw: unknown = DEFAULT_PI_CHILD_SETTINGS)
  * `import.meta.url` is always the executing file's real path (src/runner.ts in
  * dev, dist/runner.js in prod), so this is correct under both conditions with
  * no extension guessing.
+ *
+ * The returned value is a filesystem path, not an ESM specifier. On Windows
+ * `import(C:\\…)` is protocol `c:` (issue #139). Callers that dynamically
+ * import this path must run it through `toModuleImportSpecifier` first;
+ * `detached-runner` already does.
  */
 export function runnerModulePath(): string {
 	return fileURLToPath(import.meta.url);

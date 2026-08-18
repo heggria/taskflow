@@ -28,7 +28,7 @@ import {
 import { Type, type TObject } from "typebox";
 import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuiltinAgentsToProject, syncBuiltinAgentsToProject } from "taskflow-core";
 import { renderRunResult, summarizeRun } from "./render.ts";
-import { createPiSubagentRunner, runnerModulePath } from "./runner.ts";
+import { createPiSubagentRunner, PI_TASKFLOW_PI_ENTRY_ENV, resolveParentPiCliEntry, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
 import {
@@ -1527,10 +1527,13 @@ export default function (pi: ExtensionAPI) {
 					// that pipe couples its lifetime back to the host session. The child
 					// persists import/runtime failures on __detach__, while this parent still
 					// records spawn/early-exit failures below.
+					const childEnv: NodeJS.ProcessEnv = { ...process.env, TASKFLOW_DETACHED_RUNNER: "1" };
+					const parentPiEntry = resolveParentPiCliEntry();
+					if (parentPiEntry) childEnv[PI_TASKFLOW_PI_ENTRY_ENV] = parentPiEntry;
 					const child = spawn(process.execPath, [runnerScript, tmpFile], {
 						detached: true,
 						stdio: "ignore",
-						env: { ...process.env, TASKFLOW_DETACHED_RUNNER: "1" },
+						env: childEnv,
 					});
 					spawnedChild = child;
 					// Race-safe crash guard: if the child dies before reaching a terminal

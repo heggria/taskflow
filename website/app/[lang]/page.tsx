@@ -25,14 +25,14 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.3.0-beta.1 · Trusted Effects beta",
+			eyebrow: "taskflow 0.3.0-beta.1.1 · Trusted Effects beta",
 			title: [
 				"Declare the effect.",
 				"Verify the path.",
 				"Commit through one authority.",
 			],
 			sub: "taskflow turns coding-agent work into a verifiable runtime: explicit graphs, typed effect declarations, isolated execution, resource-controlled filesystem commits, and ledger-backed explanations across six hosts.",
-			noteKicker: "0.3.0-beta.1 · beta channel · not GA",
+			noteKicker: "0.3.0-beta.1.1 · beta channel · not GA",
 			noteBody:
 				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. The ControlHost scaffold exists; stores, approvals, receipts, and WebUI remain future follow-on stages, not shipped GA claims.",
 			micro:
@@ -78,7 +78,7 @@ const copy = {
 			],
 		},
 		install: {
-			label: "0.3.0-beta.1 host installs — select the beta channel.",
+			label: "0.3.0-beta.1.1 host installs — select the beta channel.",
 			copy: "Copy",
 			copied: "Copied",
 			guide: "Guide",
@@ -187,10 +187,10 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.3.0-beta.1 · Trusted Effects beta",
+			eyebrow: "taskflow 0.3.0-beta.1.1 · Trusted Effects beta",
 			title: ["声明 effect。", "验证路径。", "让一个 authority 负责提交。"],
 			sub: "taskflow 把 coding-agent 工作变成可验证的运行时：显式任务图、类型化 effect 声明、隔离执行、受 resources 控制的文件提交，以及覆盖六个宿主的 ledger-backed 解释。",
-			noteKicker: "0.3.0-beta.1 · beta channel · 尚未 GA",
+			noteKicker: "0.3.0-beta.1.1 · beta channel · 尚未 GA",
 			noteBody:
 				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。ControlHost 目前是脚手架；store、审批、receipt 与 WebUI 仍是后续阶段，不是已交付的 GA 表面。",
 			micro: "Resolve-only 不是 OS sandbox。未声明写入仍取决于宿主策略。",
@@ -235,7 +235,7 @@ const copy = {
 			],
 		},
 		install: {
-			label: "0.3.0-beta.1 宿主安装；请显式选择 beta channel。",
+			label: "0.3.0-beta.1.1 宿主安装；请显式选择 beta channel。",
 			copy: "复制",
 			copied: "已复制",
 			guide: "指南",
@@ -341,7 +341,7 @@ export default async function HomePage({
 		"@context": "https://schema.org",
 		"@type": "SoftwareApplication",
 		name: "taskflow",
-		softwareVersion: "0.3.0-beta.1",
+		softwareVersion: "0.3.0-beta.1.1",
 		description: t.hero.sub,
 		applicationCategory: "DeveloperApplication",
 		operatingSystem: "Any",

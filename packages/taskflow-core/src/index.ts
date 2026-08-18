@@ -51,6 +51,7 @@ export * from "./library/types.ts";
 export * from "./library/meta.ts";
 export * from "./library/search.ts";
 export * from "./runner-core.ts";
+export * from "./module-specifier.ts";
 export * from "./host/runner-types.ts";
 export * from "./flowir/index.ts";
 export * from "./trace.ts";

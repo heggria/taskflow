@@ -28,13 +28,14 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { toModuleImportSpecifier } from "../../taskflow-core/src/module-specifier.ts";
 import { runnerModulePath, piSubagentRunner } from "../src/runner.ts";
 
 test("detached runnerModule: self-reported path exists and exports a SubagentRunner", async () => {
 	const p = runnerModulePath();
 	assert.ok(existsSync(p), `runnerModulePath() must exist on disk: ${p}`);
 	// The detached-runner does exactly this dynamic import — replicate it.
-	const mod = await import(p);
+	const mod = await import(toModuleImportSpecifier(p));
 	const runner = mod["piSubagentRunner"];
 	assert.ok(runner && typeof runner.runTask === "function",
 		"dynamic import of runnerModulePath() must expose piSubagentRunner.runTask");
@@ -56,7 +57,7 @@ test("detached runnerModule: compiled index.js must not resolve relative .ts spe
 test("detached runnerModule: compiled dist/runner.js (if built) is itself a valid runnerModule", async () => {
 	const distRunner = fileURLToPath(new URL("../dist/runner.js", import.meta.url));
 	if (!existsSync(distRunner)) return; // dist not built in this checkout — covered in CI's build job
-	const mod = await import(distRunner);
+	const mod = await import(toModuleImportSpecifier(distRunner));
 	assert.ok(mod.piSubagentRunner && typeof mod.piSubagentRunner.runTask === "function",
 		"dist/runner.js must export piSubagentRunner.runTask");
 	assert.equal(typeof mod.runnerModulePath, "function", "dist/runner.js must export runnerModulePath");

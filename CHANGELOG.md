@@ -2,6 +2,21 @@
 
 All notable changes to taskflow are documented here. This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+## [Unreleased]
+
+## [0.3.0-beta.1.1] — 2026-08-18
+
+> Hotfix on `0.3.0-beta.1`. npm `beta` dist-tag. **Not GA.** Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation).
+
+### Fixed
+
+- **Windows detached runs (issue #139).** `detached-runner` now converts host `runnerModule` filesystem paths to `file://` specifiers before dynamic `import()`, so a native `C:\\…\\runner.js` is no longer rejected as protocol `c:`. The Pi adapter re-enters the installed `dist/cli.js` via `process.execPath` (and serializes `PI_TASKFLOW_PI_ENTRY` into the detached child) instead of `spawn("pi")` / `spawn("pi.cmd")`, which are ENOENT/EINVAL on npm's Windows shims.
+- **Docs search 404 (issue #138).** Static GitHub Pages export now pre-renders the Fumadocs search index (`/api/search`) and the client loads it with `type: 'static'`.
+
+### Notes
+
+- All publishable surfaces aligned to `0.3.0-beta.1.1`.
+
 ## [0.3.0-beta.1] — 2026-08-13
 
 > **Pre-release candidate:** `0.3.0-beta.1` is prepared for npm's `beta` dist-tag. It is **not GA**. The 0.3-C Control Plane remains a follow-on candidate track, not part of this beta's shipped product definition.
