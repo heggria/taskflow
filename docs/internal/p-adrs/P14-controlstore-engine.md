@@ -42,6 +42,8 @@
 
 ### 实施门（S3，非 wire-freeze 门）
 
+> beta.2 已批 **S3 store 引擎实施门**（原子批、单写者、symlink 硬化、recovery-vs-mutation）。**不改**本 ADR Status：仍为 Proposed。
+
 - 原子批 crash/power-loss 矩阵（写前/写中/写后重开：旧完整态 | 新完整态 | fail-closed，绝无未验证混合态）。
 - 并发写者/单写者证明；fencing 与 stale owner 拒绝。
 - temporary-path symlink 硬化（archive Round 53 教训: 随机 UUID + 独占 `"wx"` 创建 + EEXIST 重试；rename 目标被并发替换为 symlink 的残余竞态必须 fail closed 或文档化为 OS 下限）。

@@ -18,6 +18,7 @@ export * from "./singleton.ts";
 export * from "./uds.ts";
 export * from "./te-provider.ts";
 export * from "./control-host.ts";
+export * from "./store/index.ts";
 
 // Convenience: the wire protocol major used by the negotiation gate.
 export { PROTOCOL_MAJOR } from "./schema/transport.ts";

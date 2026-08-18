@@ -31,7 +31,9 @@ import {
 	type SingletonPaths,
 } from "./singleton.ts";
 import { connectUdsClient, startUdsServer, type UdsClient, type UdsServer } from "./uds.ts";
+import { openControlStore, type ControlStore } from "./store/index.ts";
 import { CONTROL_WIRE_SCHEMA_VERSION, PROTOCOL_MAJOR, type NegotiationHandshake } from "./schema/index.ts";
+import type { CommandRecord, ControlEvent } from "./schema/index.ts";
 import type { ExecutionProvider } from "./te-provider.ts";
 import type { RunSnapshot } from "./schema/run.ts";
 
@@ -103,6 +105,8 @@ export class ControlHost {
 	#udsServer?: UdsServer;
 	#udsClient?: UdsClient;
 	#leaseTimer?: NodeJS.Timeout;
+	#store?: ControlStore;
+	#standaloneLeasePath?: string;
 
 	constructor(options: ControlHostOptions) {
 		if (!options.provider || options.provider.kind !== "te-resources") {
@@ -220,7 +224,10 @@ export class ControlHost {
 					break;
 				}
 			}
+			this.#openProjectStore();
 		} catch (error) {
+			try { this.#store?.close(); } catch { /* best effort */ }
+			this.#store = undefined;
 			this.#state = "failed-closed";
 			if (error instanceof ControlError) throw error;
 			throw bootstrapFailed(`ControlHost could not start in ${this.mode} mode: ${error instanceof Error ? error.message : String(error)}`);
@@ -260,6 +267,23 @@ export class ControlHost {
 			case "control.probe": {
 				return await this.provider.probe() as unknown as T;
 			}
+			case "control.store.header": {
+				return this.#requireStore().header as unknown as T;
+			}
+			case "control.store.status": {
+				return this.#requireStore().snapshot() as unknown as T;
+			}
+			case "commands.submit": {
+				const body = params as { command?: CommandRecord; events?: ControlEvent[] };
+				if (!body || typeof body !== "object" || body.command === undefined || !Array.isArray(body.events)) {
+					throw new ControlError(
+						"TF_COMMAND_FAILED",
+						"commands.submit requires { command, events }",
+						{ recoveryAction: "retry-new-command", sideEffects: "none" },
+					);
+				}
+				return this.#requireStore().appendBatch({ command: body.command, events: body.events }) as unknown as T;
+			}
 			case "runs.status": {
 				const runId = typeof params === "object" && params !== null && "runId" in params
 					? String((params as { runId: unknown }).runId)
@@ -295,6 +319,14 @@ export class ControlHost {
 		if (this.#leaseTimer) {
 			clearInterval(this.#leaseTimer);
 			this.#leaseTimer = undefined;
+		}
+		if (this.#store) {
+			try { this.#store.close(); } catch { /* best effort */ }
+			this.#store = undefined;
+		}
+		if (this.#standaloneLeasePath) {
+			try { fs.unlinkSync(this.#standaloneLeasePath); } catch { /* best effort */ }
+			this.#standaloneLeasePath = undefined;
 		}
 		const server = this.#udsServer;
 		this.#udsServer = undefined;
@@ -376,6 +408,32 @@ export class ControlHost {
 		}
 		this.#holderId = holderId;
 		this.#fencingEpoch = 1;
+		this.#standaloneLeasePath = leasePath;
+	}
+
+	#openProjectStore(): void {
+		const storePath = this.#options.projectStorePath;
+		if (!storePath) return;
+		// Attached clients read store state over UDS; only the writer opens it.
+		if (this.#singleton === "attached") return;
+		try {
+			this.#store = openControlStore(storePath);
+		} catch (error) {
+			throw bootstrapFailed(
+				`could not open project ControlStore at ${storePath}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	#requireStore(): ControlStore {
+		if (!this.#store) {
+			throw new ControlError(
+				"TF_JOURNAL_UNAVAILABLE",
+				"ControlHost has no project store open (pass projectStorePath and start as winner/standalone)",
+				{ recoveryAction: "none", sideEffects: "none" },
+			);
+		}
+		return this.#store;
 	}
 }
 
