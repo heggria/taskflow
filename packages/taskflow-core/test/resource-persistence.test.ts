@@ -43,7 +43,7 @@ test("persistent mutex removes only the exact stale immutable queue ticket", asy
 	fs.writeFileSync(stalePath, JSON.stringify({
 		kind: "ticket",
 		pid: 424242,
-		birthToken: "stale-owner",
+		birthToken: "stale",
 		birthTokenKind: "native",
 		token,
 		ticket: 1,
@@ -53,7 +53,7 @@ test("persistent mutex removes only the exact stale immutable queue ticket", asy
 	try {
 		const mutex = new PersistentFileMutex(lockPath, {
 			pollMs: 1,
-			processIdentity: { pid: 7, birthToken: "current-owner", birthTokenKind: "native" },
+			processIdentity: { pid: 7, birthToken: "current", birthTokenKind: "native" },
 			inspectProcess: () => ({ alive: false }),
 		});
 		const release = await mutex.acquire();
@@ -82,13 +82,13 @@ test("process identity reclaims only mismatched comparable native birth tokens",
 		() => ({ alive: true }),
 	), false, "alive owners with no comparable native token fail closed");
 	assert.equal(isPersistedOwnerStale(
-		{ pid: 7, birthToken: "prior-process", birthTokenKind: "native" },
-		{ pid: 7, birthToken: "current-process", birthTokenKind: "native" },
+		{ pid: 7, birthToken: "prior", birthTokenKind: "native" },
+		{ pid: 7, birthToken: "curproc", birthTokenKind: "native" },
 		() => ({ alive: true }),
 	), true, "same-PID native tokens remain exactly comparable");
 	assert.equal(isPersistedOwnerStale(
-		{ pid: 7, birthToken: "opaque:first-isolate", birthTokenKind: "opaque" },
-		{ pid: 7, birthToken: "opaque:second-isolate", birthTokenKind: "opaque" },
+		{ pid: 7, birthToken: "iso1", birthTokenKind: "opaque" },
+		{ pid: 7, birthToken: "iso2", birthTokenKind: "opaque" },
 		() => ({ alive: true }),
 	), false, "same-PID opaque tokens from separate worker isolates fail closed");
 

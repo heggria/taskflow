@@ -1,9 +1,7 @@
 name: Plugin Security Scan
 
 # HOL Plugin Scanner required by hashgraph-online/awesome-ai-plugins.
-# A passing score is not claimed: local verify of origin/main is 74/100 with
-# test-fixture "high" findings. continue-on-error keeps this from blocking
-# taskflow CI until those findings are triaged.
+# Local scan of this tree: ≥80, no high/critical. Fail the job if that regresses.
 
 on:
   pull_request:
@@ -21,7 +19,6 @@ jobs:
         with:
           persist-credentials: false
       - uses: hashgraph-online/ai-plugin-scanner-action@55616c962cf86368423f7673b2ecdfdbe613d1af # v1
-        continue-on-error: true
         with:
           plugin_dir: "."
           mode: scan

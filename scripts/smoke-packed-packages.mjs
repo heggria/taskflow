@@ -84,12 +84,12 @@ async function smokeWildcardExports(packageName, excludedImports = new Set()) {
 
 function smokeMcpBin(binName, expectedServerName) {
 	const executable = join(consumerDir, "node_modules", ".bin", binName);
-	const request = `${JSON.stringify({
+	const request = JSON.stringify({
 		jsonrpc: "2.0",
 		id: 1,
 		method: "initialize",
 		params: { protocolVersion: "2025-06-18", capabilities: {} },
-	})}\n`;
+	}) + "\n";
 	const result = spawnSync(executable, [], {
 		cwd: consumerDir,
 		encoding: "utf8",

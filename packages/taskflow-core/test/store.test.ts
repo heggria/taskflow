@@ -2204,14 +2204,14 @@ test("L1: releasing an old handle never unlinks a replacement lock", () => {
 			fs.renameSync(lockPath, displacedPath);
 			fs.writeFileSync(
 				lockPath,
-				JSON.stringify({ pid: process.pid, ts: Date.now(), token: "successor" }),
+				JSON.stringify({ pid: process.pid, ts: Date.now(), token: "redacted" }),
 				{ flag: "wx" },
 			);
 		});
 
 		assert.equal(
 			JSON.parse(fs.readFileSync(lockPath, "utf-8")).token,
-			"successor",
+			"redacted",
 			"old finally block must leave the successor's inode untouched",
 		);
 	} finally {

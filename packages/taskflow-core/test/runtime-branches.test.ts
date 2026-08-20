@@ -1,5 +1,5 @@
 /**
- * Tests for approval phases, gate eval (zero-token checks), gate onBlock:retry,
+ * Tests for approval phases, gate evaluation (zero-token checks), gate onBlock:retry,
  * budget enforcement, when guards, join:"any", optional deps, and flow sub-workflows.
  *
  * These are the critical runtime logic branches that had zero test coverage.

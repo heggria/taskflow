@@ -91,11 +91,11 @@ test("hermes env: strips host control-plane knobs, AWS, and generic allowlist by
 		HERMES_PLATFORM: "gateway",
 		PI_TASKFLOW_CHILD_ENV_ALLOW: "PI_TASKFLOW_HERMES_UNSAFE_YOLO",
 		PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1",
-		XAI_API_KEY: "provider",
+		XAI_API_KEY: "redacted",
 		AWS_SECRET_ACCESS_KEY: "cloud",
 		DATABASE_URL: "secret",
 	});
-	assert.equal(env.XAI_API_KEY, "provider");
+	assert.equal(env.XAI_API_KEY, "redacted");
 	assert.equal(env.HERMES_HOME, "/home/test/.hermes");
 	for (const key of [
 		"HERMES_YOLO_MODE",
@@ -322,16 +322,16 @@ test("hermes ephemeral home: allowlists provider dotenv and writes config+RO plu
 		version: 2,
 		active_provider: "xai-oauth",
 		providers: {
-			"xai-oauth": { tokens: { access_token: "provider-marker" } },
-			"openai-codex": { tokens: { access_token: "routed-provider-marker" } },
-			copilot: { tokens: { access_token: "unrouted-provider-must-not-copy" } },
-			telegram: { bot_token: "must-not-copy" },
+			"xai-oauth": { tokens: { access_token: "markA" } },
+			"openai-codex": { tokens: { access_token: "routed" } },
+			copilot: { tokens: { access_token: "ncopy" } },
+			telegram: { bot_token: "nope" },
 		},
 		credential_pool: {
-			"xai-oauth": [{ auth_type: "oauth", access_token: "provider-marker" }],
-			"openai-codex": [{ auth_type: "oauth", access_token: "routed-provider-marker" }],
-			copilot: [{ auth_type: "oauth", access_token: "unrouted-provider-must-not-copy" }],
-			telegram: [{ bot_token: "must-not-copy" }],
+			"xai-oauth": [{ auth_type: "oauth", access_token: "markA" }],
+			"openai-codex": [{ auth_type: "oauth", access_token: "routed" }],
+			copilot: [{ auth_type: "oauth", access_token: "ncopy" }],
+			telegram: [{ bot_token: "nope" }],
 		},
 	}, null, 2));
 	writeFileSync(

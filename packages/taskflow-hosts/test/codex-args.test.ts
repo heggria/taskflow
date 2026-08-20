@@ -123,12 +123,12 @@ test("codex env: keeps auth/runtime keys and drops unrelated secrets", () => {
 	const env = codexChildEnv({
 		PATH: "/bin",
 		HOME: "/home/test",
-		OPENAI_API_KEY: "provider",
+		OPENAI_API_KEY: "redacted",
 		CODEX_HOME: "/codex",
 		DATABASE_URL: "secret",
 		UNRELATED_TOKEN: "secret",
 	});
-	assert.equal(env.OPENAI_API_KEY, "provider");
+	assert.equal(env.OPENAI_API_KEY, "redacted");
 	assert.equal(env.CODEX_HOME, "/codex");
 	assert.equal(env.PATH, "/bin");
 	assert.equal(env.DATABASE_URL, undefined);
@@ -138,12 +138,12 @@ test("codex env: keeps auth/runtime keys and drops unrelated secrets", () => {
 test("codex env: operator can explicitly allow a task-specific credential", () => {
 	const env = codexChildEnv({
 		PI_TASKFLOW_CHILD_ENV_ALLOW: "NPM_TOKEN,TASKFLOW_CWD_BRIDGE_MODE,TASKFLOW_WORKSPACE_RECONCILE_MODE",
-		NPM_TOKEN: "explicit",
+		NPM_TOKEN: "ok",
 		TASKFLOW_CWD_BRIDGE_MODE: "resolve-only",
 		TASKFLOW_WORKSPACE_RECONCILE_MODE: "explicit",
 		DATABASE_URL: "secret",
 	});
-	assert.equal(env.NPM_TOKEN, "explicit");
+	assert.equal(env.NPM_TOKEN, "ok");
 	assert.equal(env.TASKFLOW_CWD_BRIDGE_MODE, undefined, "host cwd authority is never delegable to a child");
 	assert.equal(env.TASKFLOW_WORKSPACE_RECONCILE_MODE, undefined, "host reconciliation authority is never delegable to a child");
 	assert.equal(env.DATABASE_URL, undefined);

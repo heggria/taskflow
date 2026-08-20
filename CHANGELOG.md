@@ -4,6 +4,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Chore
+
+- HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
+
 ## [0.3.0-beta.1.2] — 2026-08-20
 
 > Hotfix on `0.3.0-beta.1.1`. npm `beta` dist-tag. **Not GA.** Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). Does **not** steal `0.3.0-beta.2`.
