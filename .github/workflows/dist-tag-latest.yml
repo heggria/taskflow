@@ -1,0 +1,86 @@
+name: Move npm latest dist-tag
+
+# Points npm `latest` at an already-published version. Does not publish
+# tarballs and does not change the `beta` tag. Use this to promote a version
+# that already went out on `beta` (publish.yml still publishes prereleases to
+# `beta` only).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Already-published version to mark as npm latest
+        required: true
+        type: string
+
+concurrency:
+  group: dist-tag-latest
+  cancel-in-progress: false
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Point latest at the published version
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            0.3.0-beta.1.2) ;;
+            *)
+              echo "::error::This workflow currently admits only 0.3.0-beta.1.2 (got $VERSION)"
+              exit 1
+              ;;
+          esac
+          pkgs=(
+            taskflow-core
+            taskflow-mcp-core
+            taskflow-hosts
+            taskflow-dsl
+            pi-taskflow
+            codex-taskflow
+            claude-taskflow
+            opencode-taskflow
+            grok-taskflow
+            hermes-taskflow
+          )
+          has_version() {
+            local pkg="$1"
+            VERSION="$VERSION" npm view "$pkg" versions --json | node -e '
+              const fs = require("fs");
+              const want = process.env.VERSION;
+              const raw = JSON.parse(fs.readFileSync(0, "utf8"));
+              const versions = Array.isArray(raw) ? raw : [raw];
+              process.exit(versions.includes(want) ? 0 : 1);
+            '
+          }
+          for p in "${pkgs[@]}"; do
+            if ! has_version "$p"; then
+              echo "::error::$p@$VERSION is not on the registry"
+              exit 1
+            fi
+            current="$(npm view "$p" dist-tags.latest)"
+            if [ "$current" = "$VERSION" ]; then
+              echo "$p latest already $VERSION"
+              continue
+            fi
+            echo "Moving $p latest $current -> $VERSION"
+            npm dist-tag add "$p@$VERSION" latest
+          done
+          for p in "${pkgs[@]}"; do
+            got="$(npm view "$p" dist-tags.latest)"
+            if [ "$got" != "$VERSION" ]; then
+              echo "::error::$p latest is $got, expected $VERSION"
+              exit 1
+            fi
+            echo "$p latest=$got"
+          done
