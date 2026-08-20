@@ -2,7 +2,7 @@
 
 import ts from "typescript";
 import { diag } from "../ast.ts";
-import { mergeOpts } from "../opts.ts";
+import { isTaskFileOptsLiteral, mergeOpts } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
 import type { EmitContext } from "../context.ts";
 
@@ -46,7 +46,7 @@ export function eraseBranchAgent(
 ): Record<string, unknown> {
 	const first = call.arguments[0];
 	const second = call.arguments[1] as ts.Expression | undefined;
-	const optsOnly = !!(first && ts.isObjectLiteralExpression(first) && !second);
+	const optsOnly = !!(isTaskFileOptsLiteral(first) && !second);
 	const branch: Record<string, unknown> = {};
 	if (!optsOnly && first) {
 		const erased = eraseStringish(ctx.sf, ctx.file, first, itemParam, ctx.phases, ctx.diags);
@@ -56,17 +56,17 @@ export function eraseBranchAgent(
 		}
 	}
 	const bopts = mergeBranchAgentOpts(ctx, optsOnly ? first : second, role);
-	if (typeof bopts.taskFile === "string" && typeof branch.task === "string" && branch.task.length > 0) {
+	const xor = typeof bopts.taskFile === "string" && typeof branch.task === "string" && branch.task.length > 0;
+	if (xor) {
 		ctx.diags.push({
 			code: "TFDSL_TASKFILE_XOR",
 			severity: "error",
 			message: `${role}: 'task' and 'taskFile' are mutually exclusive`,
 			file: ctx.file,
 		});
-		delete branch.task;
 	}
 	Object.assign(branch, bopts);
-	if (branch.taskFile) delete branch.task;
+	if (typeof branch.taskFile === "string" && !xor) delete branch.task;
 	return branch;
 }
 

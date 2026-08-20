@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { buildSource } from "../src/build.ts";
+import { buildSource, eraseSource } from "../src/build.ts";
 import { checkFile, checkSource } from "../src/check.ts";
 import { decompileTaskflow } from "../src/decompile.ts";
 import { flow, agent, TfDslEraseOnlyError, type ArgSpec } from "../src/index.ts";
@@ -357,6 +357,22 @@ test("decompile: race/expand imports + object def fail-closed + dependsOn preser
 	const r = buildSource(src, "xor.tf.ts");
 	assert.equal(r.ok, false);
 	assert.match(format(r), /TFDSL_TASKFILE_XOR|mutually exclusive/);
+	const erased = eraseSource(src, "xor.tf.ts");
+	assert.equal(erased.ok, false);
+	const phase = (erased.taskflow?.phases as Array<{ task?: string; taskFile?: string }> | undefined)?.[0];
+	assert.equal(phase?.task, "inline");
+	assert.equal(phase?.taskFile, "prompts/review.md");
+	});
+
+	test("build: agent({ model }) is not opts-only", () => {
+	const src = `
+	import { flow, agent } from "taskflow-dsl";
+	export default flow("opts", () => agent({ model: "opus" }));
+	`;
+	const r = buildSource(src, "opts.tf.ts");
+	assert.equal(r.ok, false);
+	assert.match(format(r), /TFDSL_RUNE_ARG|Expected static string/);
+	assert.doesNotMatch(format(r), /unknown option 'model'/i);
 	});
 
 	test("build: parallel branch agent({ taskFile })", () => {

@@ -6,7 +6,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Added
 
-- **`taskFile` load-time include (issue #143).** A phase or parallel branch may declare `taskFile` instead of `task`. Trusted loaders (`defineFile` / saved flow) resolve the literal path against the definition file's directory (same class of source as `scriptCwd: "flow"`), inline the UTF-8 body into `task`, and delete `taskFile` before validate / interpolate / cache / FlowIR. XOR with `task`; leftover `taskFile` on inline `define` is `TF_TASKFILE_NO_PROVENANCE`; generated sub-flows reject it as `TF_DYNAMIC_RESOURCE_FORBIDDEN`. Path is not interpolated. Include cap is 256 KiB. TS DSL: `agent({ taskFile: "prompts/x.md" })`.
+- **`taskFile` load-time include (issue #143).** A phase or parallel branch may declare `taskFile` instead of `task`. Trusted loaders (`defineFile` / saved flow) resolve the literal path against the definition file's directory (same class of source as `scriptCwd: "flow"`), inline the UTF-8 body into `task`, and delete `taskFile` before validate / interpolate / cache / FlowIR. XOR with `task`; leftover `taskFile` on inline `define` is `TF_TASKFILE_NO_PROVENANCE`; generated sub-flows reject it as `TF_DYNAMIC_RESOURCE_FORBIDDEN`. Path is not interpolated. Include cap is 256 KiB (`taskFile exceeds`). TS DSL: `agent({ taskFile: "prompts/x.md" })` only — a bare `agent({ model })` is not opts-only. Compile XOR keeps both fields. Nested inline `def` is not inlined. `taskflow-dsl` check does not read the file.
 
 ### Chore
 

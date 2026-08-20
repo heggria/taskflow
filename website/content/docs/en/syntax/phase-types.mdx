@@ -570,7 +570,7 @@ Every phase accepts these fields. Some are ignored or forbidden on specific phas
 | `type` | `string` | `"agent"` | One of the twelve phase types (`agent`…`script`, `race`, `expand`). |
 | `agent` | `string` | first discovered | Agent name. Must use hyphens. |
 | `task` | `string` | — | Task prompt. Supports interpolation. Required for `agent`/`map`/`reduce`/`loop`/`tournament` (unless `branches` or `taskFile` is used). |
-| `taskFile` | `string` | — | Load-time include. A literal path relative to the flow definition directory. Trusted loaders (`defineFile` / saved flow) inline the UTF-8 body into `task` and delete `taskFile` before validate / interpolate / cache / FlowIR. Mutually exclusive with `task`. Path is **not** interpolated. Forbidden on inline `define` and on generated `flow{def}` / expand. Cap: 256 KiB. |
+| `taskFile` | `string` | — | Load-time include. A literal path relative to the flow definition directory. Trusted loaders (`defineFile` / saved flow) inline the UTF-8 body into `task` and delete `taskFile` before validate / interpolate / cache / FlowIR. Mutually exclusive with `task`. Path is **not** interpolated. Forbidden on inline `define` and on generated `flow{def}` / expand. Cap: 256 KiB. `taskflow-dsl` compile/`check` does **not** read the file. |
 | `dependsOn` | `string[]` | `[]` | Phase ids that must complete before this phase starts. Forms the DAG edges. |
 | `join` | `"all" \| "any"` | `"all"` | `"all"` waits for every dependency; `"any"` runs as soon as one completes. |
 | `when` | `string` | — | Conditional guard. Skips the phase unless the expression is truthy. Parse errors fail open. |

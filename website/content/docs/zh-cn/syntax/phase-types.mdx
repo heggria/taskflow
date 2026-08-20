@@ -570,7 +570,7 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | `type` | `string` | `"agent"` | 十二种阶段类型之一。 |
 | `agent` | `string` | 第一个发现的 agent | agent 名称。必须用连字符。 |
 | `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches` 或 `taskFile`）。 |
-| `taskFile` | `string` | — | 加载期 include。相对于 flow 定义文件目录的字面路径。可信加载器（`defineFile` / 已保存 flow）把 UTF-8 正文写入 `task` 并删除 `taskFile`，之后 validate / interpolate / cache / FlowIR 只看见 `task`。与 `task` 互斥。路径**不**插值。禁止出现在 inline `define` 和生成的 `flow{def}` / expand 上。上限：256 KiB。 |
+| `taskFile` | `string` | — | 加载期 include。相对于 flow 定义文件目录的字面路径。可信加载器（`defineFile` / 已保存 flow）把 UTF-8 正文写入 `task` 并删除 `taskFile`，之后 validate / interpolate / cache / FlowIR 只看见 `task`。与 `task` 互斥。路径**不**插值。禁止出现在 inline `define` 和生成的 `flow{def}` / expand 上。上限：256 KiB。`taskflow-dsl` 编译/`check` **不**读这个文件。 |
 | `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
 | `join` | `"all" \| "any"` | `"all"` | `"all"` 等待每个依赖；`"any"` 在任一完成后即运行。 |
 | `when` | `string` | — | 条件守卫。除非表达式为真，否则跳过阶段。解析错误 fail-open。 |

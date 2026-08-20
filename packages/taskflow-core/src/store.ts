@@ -1250,11 +1250,12 @@ export function materializeTaskFiles(
 		const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(flowDir, raw);
 		const loaded = loadStableSource(resolved, (text) => text, undefined, flowDir, MAX_TASK_FILE_BYTES);
 		if (!loaded.ok) {
+			const cause = loaded.detail.replace(/\bdefinition exceeds\b/, "taskFile exceeds");
 			return {
 				ok: false,
 				reason: loaded.reason,
 				path: raw,
-				detail: `${loc}: cannot read taskFile '${raw}' — ${loaded.detail}`,
+				detail: `${loc}: cannot read taskFile '${raw}' — ${cause}`,
 			};
 		}
 		holder.task = loaded.value.value;

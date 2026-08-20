@@ -12,6 +12,7 @@ import { interpolate } from "../src/interpolate.ts";
 import { desugar, validateTaskflow } from "../src/schema.ts";
 import {
 	getFlow,
+	MAX_TASK_FILE_BYTES,
 	readDefineFile,
 	readDefineFileWithSource,
 	type LoadResult,
@@ -353,4 +354,58 @@ test("inline shorthand leftover taskFile is TF_TASKFILE_NO_PROVENANCE after desu
 	const result = validateTaskflow(flow);
 	assert.equal(result.ok, false);
 	assert.match(result.errors.join("\n"), /TF_TASKFILE_NO_PROVENANCE/);
+});
+
+test("taskFile over the 256 KiB cap fails closed and names taskFile", () => {
+	const dir = tmpDir();
+	try {
+		fs.mkdirSync(path.join(dir, "prompts"));
+		fs.writeFileSync(path.join(dir, "prompts", "huge.md"), "x".repeat(MAX_TASK_FILE_BYTES + 1), "utf8");
+		const file = writeJson(dir, "flow.json", {
+			name: "huge",
+			phases: [{ id: "p", type: "agent", taskFile: "prompts/huge.md", final: true }],
+		});
+		const loaded = readDefineFileWithSource(file);
+		assert.equal(loaded.ok, false);
+		if (!loaded.ok) {
+			assert.match(loaded.detail, /taskFile exceeds/);
+			assert.match(loaded.detail, new RegExp(String(MAX_TASK_FILE_BYTES)));
+			assert.doesNotMatch(loaded.detail, /definition exceeds/);
+		}
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("nested inline def taskFile is not inlined and stays fail-closed", () => {
+	const dir = tmpDir();
+	try {
+		fs.mkdirSync(path.join(dir, "prompts"));
+		fs.writeFileSync(path.join(dir, "prompts", "child.md"), "nested-body", "utf8");
+		const file = writeJson(dir, "flow.json", {
+			name: "outer",
+			phases: [
+				{
+					id: "child",
+					type: "flow",
+					def: {
+						name: "inner",
+						phases: [{ id: "c", type: "agent", taskFile: "prompts/child.md", final: true }],
+					},
+					final: true,
+				},
+			],
+		});
+		const def = valueOf(readDefineFile(file)) as {
+			phases: Array<{ def?: { phases: Array<{ task?: string; taskFile?: string }> } }>;
+		};
+		const inner = def.phases[0]!.def!.phases[0]!;
+		assert.equal(inner.taskFile, "prompts/child.md");
+		assert.equal(inner.task, undefined);
+		const leftover = validateTaskflow(def.phases[0]!.def);
+		assert.equal(leftover.ok, false);
+		assert.match(leftover.errors.join("\n"), /TF_TASKFILE_NO_PROVENANCE/);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
 });

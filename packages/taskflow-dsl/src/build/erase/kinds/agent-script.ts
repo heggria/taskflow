@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { mergeOpts, phaseIdFromBinding } from "../opts.ts";
+import { isTaskFileOptsLiteral, mergeOpts, phaseIdFromBinding } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
 import type { PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
@@ -20,7 +20,7 @@ export function emitAgent(
 	};
 	const taskArg = call.arguments[0];
 	const optsArg = call.arguments[1] as ts.Expression | undefined;
-	const optsOnly = !!(taskArg && ts.isObjectLiteralExpression(taskArg) && !optsArg);
+	const optsOnly = !!(isTaskFileOptsLiteral(taskArg) && !optsArg);
 	if (!optsOnly && taskArg) {
 		const erased = eraseStringish(ctx.sf, ctx.file, taskArg, itemParam, ctx.phases, ctx.diags);
 		if (erased) {
@@ -37,8 +37,9 @@ export function emitAgent(
 				message: `'task' and 'taskFile' are mutually exclusive`,
 				file: ctx.file,
 			});
+		} else {
+			delete draft.raw.task;
 		}
-		delete draft.raw.task;
 	}
 	if (typeof opts.id === "string") draft.id = opts.id;
 	else draft.id = phaseIdFromBinding(idBase, opts);
