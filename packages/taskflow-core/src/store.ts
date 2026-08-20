@@ -1040,6 +1040,9 @@ function findProjectFlowsDirInternal(cwd: string, create = false): string | null
 
 const MAX_FLOW_DEFINITION_BYTES = 1_048_576; // 1 MiB per JSON/JSONC/defineFile
 const MAX_DISCOVERY_TOTAL_BYTES = 8_388_608; // 8 MiB across user + project discovery
+/** Tighter cap for included phase instructions (not the flow DAG itself). */
+export const MAX_TASK_FILE_BYTES = 262_144;
+const TASKFILE_PLACEHOLDER = /\{[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*\}/;
 
 interface DiscoveryBudget {
 	entries: number;
@@ -1072,6 +1075,7 @@ function loadStableSource<T>(
 	parse: (raw: string) => T,
 	budget?: DiscoveryBudget,
 	allowedRootReal?: string | readonly string[],
+	maxBytes: number = MAX_FLOW_DEFINITION_BYTES,
 ): LoadResult<StableSource<T>> {
 	const allowedRoots = allowedRootReal === undefined
 		? []
@@ -1098,9 +1102,9 @@ function loadStableSource<T>(
 		fd = fs.openSync(filePath, fs.constants.O_RDONLY | noFollow);
 		const before = fs.fstatSync(fd, { bigint: true });
 		if (!before.isFile()) throw new Error("definition must remain a regular file");
-		if (before.size > BigInt(MAX_FLOW_DEFINITION_BYTES)) {
+		if (before.size > BigInt(maxBytes)) {
 			if (budget) budget.exceeded = true;
-			throw new Error(`definition exceeds ${MAX_FLOW_DEFINITION_BYTES} byte limit`);
+			throw new Error(`definition exceeds ${maxBytes} byte limit`);
 		}
 		const byteLength = Number(before.size);
 		if (budget && budget.bytes + byteLength > MAX_DISCOVERY_TOTAL_BYTES) {
@@ -1166,6 +1170,99 @@ export interface LoadedDefineFile {
 	sourceDirIdentity: DirectoryIdentity;
 }
 
+function collectTaskHolders(
+	def: unknown,
+	out: Array<{ holder: Record<string, unknown>; loc: string }>,
+): void {
+	if (!def || typeof def !== "object") return;
+	const d = def as Record<string, unknown>;
+	if (Array.isArray(d.phases)) {
+		d.phases.forEach((phase, i) => {
+			if (!phase || typeof phase !== "object" || Array.isArray(phase)) return;
+			const p = phase as Record<string, unknown>;
+			const id = typeof p.id === "string" && p.id ? p.id : `phases[${i}]`;
+			out.push({ holder: p, loc: `Phase '${id}'` });
+			if (Array.isArray(p.branches)) {
+				p.branches.forEach((branch, j) => {
+					if (!branch || typeof branch !== "object" || Array.isArray(branch)) return;
+					out.push({ holder: branch as Record<string, unknown>, loc: `Phase '${id}' branches[${j}]` });
+				});
+			}
+		});
+		return;
+	}
+	if (typeof d.taskFile === "string" || typeof d.task === "string") {
+		out.push({ holder: d, loc: "Shorthand" });
+	}
+	for (const key of ["chain", "tasks"] as const) {
+		const list = d[key];
+		if (!Array.isArray(list)) continue;
+		list.forEach((step, i) => {
+			if (!step || typeof step !== "object" || Array.isArray(step)) return;
+			out.push({ holder: step as Record<string, unknown>, loc: `Shorthand ${key}[${i}]` });
+		});
+	}
+}
+
+/** Inline each `taskFile` into `task` and delete the field. Trusted loaders only. */
+export function materializeTaskFiles(
+	def: unknown,
+	provenance: { filePath: string; sourceDirIdentity: DirectoryIdentity },
+): LoadResult<unknown> {
+	const holders: Array<{ holder: Record<string, unknown>; loc: string }> = [];
+	collectTaskHolders(def, holders);
+	const flowDir = provenance.sourceDirIdentity.canonicalPath;
+	for (const { holder, loc } of holders) {
+		if (!Object.hasOwn(holder, "taskFile")) continue;
+		const raw = holder.taskFile;
+		if (typeof raw !== "string" || !raw.trim()) {
+			return {
+				ok: false,
+				reason: "unparseable",
+				path: provenance.filePath,
+				detail: `${loc}: taskFile must be a non-empty path`,
+			};
+		}
+		if (typeof holder.task === "string") {
+			return {
+				ok: false,
+				reason: "unparseable",
+				path: provenance.filePath,
+				detail: `${loc}: 'task' and 'taskFile' are mutually exclusive`,
+			};
+		}
+		if (TASKFILE_PLACEHOLDER.test(raw)) {
+			return {
+				ok: false,
+				reason: "unparseable",
+				path: provenance.filePath,
+				detail: `${loc}: taskFile path is not interpolated (${raw})`,
+			};
+		}
+		if (raw.split(/[/\\]/).includes("..")) {
+			return {
+				ok: false,
+				reason: "unparseable",
+				path: raw,
+				detail: `${loc}: taskFile '${raw}' escapes the flow definition directory`,
+			};
+		}
+		const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(flowDir, raw);
+		const loaded = loadStableSource(resolved, (text) => text, undefined, flowDir, MAX_TASK_FILE_BYTES);
+		if (!loaded.ok) {
+			return {
+				ok: false,
+				reason: loaded.reason,
+				path: raw,
+				detail: `${loc}: cannot read taskFile '${raw}' — ${loaded.detail}`,
+			};
+		}
+		holder.task = loaded.value.value;
+		delete holder.taskFile;
+	}
+	return { ok: true, value: def };
+}
+
 /** Stable defineFile loader used by execution hosts that need source provenance. */
 export function readDefineFileWithSource(
 	filePath: string,
@@ -1173,10 +1270,15 @@ export function readDefineFileWithSource(
 ): LoadResult<LoadedDefineFile> {
 	const loaded = loadStableSource(filePath, (raw) => parseStrict(raw, { allowFence: true }), undefined, allowedRootReal);
 	if (!loaded.ok) return loaded;
+	const materialized = materializeTaskFiles(loaded.value.value, {
+		filePath: loaded.value.filePath,
+		sourceDirIdentity: loaded.value.sourceDirIdentity,
+	});
+	if (!materialized.ok) return materialized;
 	return {
 		ok: true,
 		value: {
-			value: loaded.value.value,
+			value: materialized.value,
 			filePath: loaded.value.filePath,
 			sourceDirIdentity: loaded.value.sourceDirIdentity,
 		},
@@ -1199,14 +1301,20 @@ function readFlowFile(
 	if (!r.value.value?.name) {
 		return { ok: false, reason: "unparseable", path: filePath, detail: "parsed OK but missing required field: name" };
 	}
+	const materialized = materializeTaskFiles(r.value.value, {
+		filePath: r.value.filePath,
+		sourceDirIdentity: r.value.sourceDirIdentity,
+	});
+	if (!materialized.ok) return materialized;
+	const def = materialized.value as Taskflow;
 	return {
 		ok: true,
 		value: {
-			name: r.value.value.name,
+			name: def.name,
 			scope,
 			filePath: r.value.filePath,
 			sourceDirIdentity: r.value.sourceDirIdentity,
-			def: r.value.value,
+			def,
 		},
 	};
 }

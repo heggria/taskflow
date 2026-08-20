@@ -20,14 +20,26 @@ export function emitAgent(
 	};
 	const taskArg = call.arguments[0];
 	const optsArg = call.arguments[1] as ts.Expression | undefined;
-	if (taskArg) {
+	const optsOnly = !!(taskArg && ts.isObjectLiteralExpression(taskArg) && !optsArg);
+	if (!optsOnly && taskArg) {
 		const erased = eraseStringish(ctx.sf, ctx.file, taskArg, itemParam, ctx.phases, ctx.diags);
 		if (erased) {
 			draft.raw.task = erased.text;
 			for (const d of erased.deps) draft.dependsOn.add(d);
 		}
 	}
-	const opts = mergeOpts(ctx.sf, ctx.file, optsArg, ctx.diags, ctx.phases);
+	const opts = mergeOpts(ctx.sf, ctx.file, optsOnly ? taskArg : optsArg, ctx.diags, ctx.phases);
+	if (typeof opts.taskFile === "string") {
+		if (typeof draft.raw.task === "string" && draft.raw.task.length > 0) {
+			ctx.diags.push({
+				code: "TFDSL_TASKFILE_XOR",
+				severity: "error",
+				message: `'task' and 'taskFile' are mutually exclusive`,
+				file: ctx.file,
+			});
+		}
+		delete draft.raw.task;
+	}
 	if (typeof opts.id === "string") draft.id = opts.id;
 	else draft.id = phaseIdFromBinding(idBase, opts);
 	Object.assign(draft.raw, opts);

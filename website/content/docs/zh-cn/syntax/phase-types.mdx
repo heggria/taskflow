@@ -569,7 +569,8 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 | `id` | `string` | — | **必需。** 唯一标识符，在 `dependsOn` 和 `{steps.<id>.output}` 中被引用。用连字符，不用下划线。 |
 | `type` | `string` | `"agent"` | 十二种阶段类型之一。 |
 | `agent` | `string` | 第一个发现的 agent | agent 名称。必须用连字符。 |
-| `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches`）。 |
+| `task` | `string` | — | 任务 prompt。支持插值。对 `agent`/`map`/`reduce`/`loop`/`tournament` 必需（除非用 `branches` 或 `taskFile`）。 |
+| `taskFile` | `string` | — | 加载期 include。相对于 flow 定义文件目录的字面路径。可信加载器（`defineFile` / 已保存 flow）把 UTF-8 正文写入 `task` 并删除 `taskFile`，之后 validate / interpolate / cache / FlowIR 只看见 `task`。与 `task` 互斥。路径**不**插值。禁止出现在 inline `define` 和生成的 `flow{def}` / expand 上。上限：256 KiB。 |
 | `dependsOn` | `string[]` | `[]` | 此阶段启动前必须完成的阶段 id。构成 DAG 边。 |
 | `join` | `"all" \| "any"` | `"all"` | `"all"` 等待每个依赖；`"any"` 在任一完成后即运行。 |
 | `when` | `string` | — | 条件守卫。除非表达式为真，否则跳过阶段。解析错误 fail-open。 |
@@ -688,7 +689,10 @@ gate 审查上游输出并给出裁决。`PASS` 让流程继续；`BLOCK` 中止
 
 | 错误 | 原因 | 修复 |
 |---|---|---|
-| `Phase 'x' (agent) requires 'task'` | `task` 缺失或为空。 | 加一个 `task` 字符串。 |
+| `Phase 'x' (agent) requires 'task'` | `task` 缺失或为空。 | 加一个 `task` 字符串或 `taskFile`。 |
+| `'task' and 'taskFile' are mutually exclusive` | 两个字段同时存在。 | 只保留其中一个。 |
+| `TF_TASKFILE_NO_PROVENANCE` | 在 inline `define` 上使用了 `taskFile`。 | 改用 `defineFile` 或已保存 flow。 |
+| `TF_DYNAMIC_RESOURCE_FORBIDDEN` | 在生成的子流上使用了 `taskFile`。 | 把 prompt 写成 `task`。 |
 | `expect requires output:"json"` | 设了 `expect` 但 `output` 是 `"text"`。 | 设 `output: "json"`。 |
 | `agent 'x' uses underscores` | agent 名含 `_`。 | 改用连字符。 |
 

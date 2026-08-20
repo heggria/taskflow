@@ -59,6 +59,8 @@ export interface PhaseOptions<TJson = unknown> {
 	thinking?: string;
 	tools?: string[];
 	cwd?: string;
+	/** Load-time include path; mutually exclusive with a positional task string. */
+	taskFile?: string;
 	output?: "text" | "json" | JsonExpectMarker<TJson>;
 	expect?: unknown;
 	when?: string;
@@ -129,7 +131,12 @@ export function flow(
 	return eraseOnly("flow");
 }
 
-export function agent<TJson = unknown>(_task: TemplateInput, _opts?: PhaseOptions<TJson>): PhaseRef<TJson> {
+export function agent<TJson = unknown>(_task: TemplateInput, _opts?: PhaseOptions<TJson>): PhaseRef<TJson>;
+export function agent<TJson = unknown>(_opts: PhaseOptions<TJson> & { taskFile: string }): PhaseRef<TJson>;
+export function agent<TJson = unknown>(
+	_taskOrOpts: TemplateInput | (PhaseOptions<TJson> & { taskFile: string }),
+	_opts?: PhaseOptions<TJson>,
+): PhaseRef<TJson> {
 	return eraseOnly("agent");
 }
 

@@ -134,7 +134,7 @@ export function mergeOpts(
 			continue;
 		}
 
-		if (key === "agent" || key === "model" || key === "thinking" || key === "when" || key === "join" || key === "cwd") {
+		if (key === "agent" || key === "model" || key === "thinking" || key === "when" || key === "join" || key === "cwd" || key === "taskFile") {
 			const v = staticValue();
 			if (typeof v === "string") out[key] = v;
 			else if (v !== undefined) diags.push(diag(file, sf, p.initializer, "TFDSL_RUNE_OPTS", `Option '${key}' must be a string.`));
