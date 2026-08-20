@@ -138,6 +138,7 @@ test("every repository workflow pins third-party actions to verified full SHAs",
 		["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
 		["github/codeql-action/init", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
 		["github/codeql-action/analyze", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
+		["hashgraph-online/ai-plugin-scanner-action", "55616c962cf86368423f7673b2ecdfdbe613d1af"],
 	]);
 	const files = readdirSync(workflowDir).filter((file) => /\.ya?ml$/.test(file));
 	assert.ok(files.length > 0, "no workflow files found");
