@@ -165,9 +165,9 @@ export function getPiInvocation(args: string[], probe: PiInvocationProbe = {}): 
 	if (override) {
 		if (WINDOWS_NPM_SHIM.test(override)) {
 			throw new Error(
-				`PI_TASKFLOW_PI_BIN points at a Windows npm shim (${override}). ` +
+				"PI_TASKFLOW_PI_BIN points at a Windows npm shim (" + override + "). " +
 					"Node spawn() cannot launch .cmd/.ps1 without a shell (ENOENT/EINVAL). " +
-					`Set PI_TASKFLOW_PI_BIN to a real executable, or ${PI_TASKFLOW_PI_ENTRY_ENV} to the installed dist/cli.js.`,
+					"Set PI_TASKFLOW_PI_BIN to a real executable, or " + PI_TASKFLOW_PI_ENTRY_ENV + " to the installed dist/cli.js.",
 			);
 		}
 		return { command: override, args };
