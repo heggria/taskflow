@@ -24,5 +24,6 @@ jobs:
         continue-on-error: true
         with:
           plugin_dir: "."
+          mode: scan
           min_score: 80
           fail_on_severity: high
