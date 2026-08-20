@@ -467,5 +467,5 @@ export function eraseSource(sourceText: string, file = "flow.tf.ts"): EraseResul
 	if (budget) taskflow.budget = budget;
 
 	const ok = !diags.some((d) => d.severity === "error");
-	return { ok, taskflow: ok ? taskflow : undefined, diagnostics: diags };
+	return { ok, taskflow, diagnostics: diags };
 }

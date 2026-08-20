@@ -4,6 +4,14 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- **`taskFile` load-time include (issue #143).** A phase or parallel branch may declare `taskFile` instead of `task`. Trusted loaders (`defineFile` / saved flow) resolve the literal path against the definition file's directory (same class of source as `scriptCwd: "flow"`), inline the UTF-8 body into `task`, and delete `taskFile` before validate / interpolate / cache / FlowIR. XOR with `task`; leftover `taskFile` on inline `define` is `TF_TASKFILE_NO_PROVENANCE`; generated sub-flows reject it as `TF_DYNAMIC_RESOURCE_FORBIDDEN`. Path is not interpolated. Include cap is 256 KiB (`taskFile exceeds`). TS DSL: `agent({ taskFile: "prompts/x.md" })` only — a bare `agent({ model })` is not opts-only. Compile XOR keeps both fields. Nested inline `def` is not inlined. `taskflow-dsl` check does not read the file.
+
+### Chore
+
+- Absorb open Dependabot PRs into this line: pnpm/action-setup 6.0.10 (#129); codeql-action 4.37.7 (#145, #146); Pi 0.84.2 + typebox ^1.3.14 + biome 2.5.8 + @types/node 26.2.0 (#147); next 16.3.1 (#136); lucide-react ^1.31.0 (#135); fumadocs-ui 16.14.4 (#134); fumadocs-mdx 15.2.3 (#133). `fumadocs-core` stays 16.14.0 (no Dependabot PR). Pin workspace `nanoid` override 3.3.17 → 3.3.18 (Dependabot alert #33, GHSA-2v37-7h3g-55p8).
+
 ## [0.3.0-beta.1.1] — 2026-08-18
 
 > Hotfix on `0.3.0-beta.1`. npm `beta` dist-tag. **Not GA.** Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation).

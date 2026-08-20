@@ -258,7 +258,7 @@ For every field on every phase type, see the [Phase Types](/en/docs/syntax/phase
 
 ## Shorthand: skip the DAG for simple work
 
-For one-off delegations you don't need to author a full `phases` DAG. taskflow accepts three shorthand shapes that the runtime's `desugar()` expands into a complete flow before validation. A spec is recognized as shorthand when it has **no** `phases` array **but** has one of `task`, `tasks`, or `chain`.
+For one-off delegations you don't need to author a full `phases` DAG. taskflow accepts three shorthand shapes that the runtime's `desugar()` expands into a complete flow before validation. A spec is recognized as shorthand when it has **no** `phases` array **but** has one of `task`, `taskFile`, `tasks`, or `chain`.
 
 ### One task
 
@@ -266,7 +266,7 @@ For one-off delegations you don't need to author a full `phases` DAG. taskflow a
 { "task": "Summarize src/", "agent": "explorer" }
 ```
 
-Desugars to one `agent` phase (id `"main"`, `final: true`). Optional `agent`, `context`, and `contextLimit` carry through.
+Desugars to one `agent` phase (id `"main"`, `final: true`). Optional `agent`, `context`, and `contextLimit` carry through. A file-backed shorthand may use `taskFile` instead of `task` — the trusted loader inlines the file before desugar.
 
 ### Parallel tasks
 
@@ -379,7 +379,7 @@ The rest of this page is the exhaustive reference — every top-level field, the
 | `strictInterpolation` | `boolean` | `false` | No | Promote validation warnings to hard errors. |
 | `contextSharing` | `boolean` | `false` | No | Enable the Shared Context Tree for all phases. |
 | `incremental` | `boolean` | `false` | No | Default every phase to cross-run caching. |
-| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | No | Default cwd for script phases without an explicit phase `cwd`. `"flow"` requires a saved flow or `defineFile` source and uses that file's directory; inherited cwd-bridge boundaries still constrain the resolved directory. |
+| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | No | Default cwd for script phases without an explicit phase `cwd`. `"flow"` requires a saved flow or `defineFile` source and uses that file's directory; inherited cwd-bridge boundaries still constrain the resolved directory. `taskFile` is the same class of trusted source: resolved against the definition file's directory at load time, never at runtime. |
 | `phases` | `Phase[]` (`minItems: 1`) | — | **Yes** | Ordered phase definitions. See [Phase Types](/en/docs/syntax/phase-types). |
 
 ### ArgSpec

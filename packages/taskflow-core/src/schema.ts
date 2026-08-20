@@ -93,7 +93,13 @@ const CACHE_FINGERPRINT_PREFIXES = ["git:", "glob:", "glob!:", "file:", "env:"] 
 const CACHE_CROSS_RUN_BLOCKED_TYPES = ["gate", "approval", "loop", "tournament", "script", "race", "expand"] as const;
 const ParallelTaskSchema = Type.Object(
 	{
-		task: Type.String({ description: "Task for this parallel branch (supports interpolation)" }),
+		task: Type.Optional(Type.String({ description: "Task for this parallel branch (supports interpolation)" })),
+		taskFile: Type.Optional(
+			Type.String({
+				description:
+					"Load-time include: a literal path, relative to the flow definition directory, whose UTF-8 body is inlined into `task` by a trusted loader (defineFile / saved flow). Mutually exclusive with `task`. Path is not interpolated.",
+			}),
+		),
 		agent: Type.Optional(Type.String({ description: "Override the phase agent for this branch" })),
 		cwd: Type.Optional(
 			Type.String({
@@ -164,6 +170,12 @@ const PhaseSchema = Type.Object(
 		type: Type.Optional(StringEnum(PHASE_TYPES, { description: "Phase kind", default: "agent" })),
 		agent: Type.Optional(Type.String({ description: "Agent name to run this phase" })),
 		task: Type.Optional(Type.String({ description: "Task prompt (supports interpolation placeholders)" })),
+		taskFile: Type.Optional(
+			Type.String({
+				description:
+					"Load-time include: a literal path, relative to the flow definition directory, whose UTF-8 body is inlined into `task` by a trusted loader (defineFile / saved flow). Mutually exclusive with `task`. Path is not interpolated. Forbidden on inline `define` and on generated `flow{def}` / expand.",
+			}),
+		),
 
 		// map fan-out
 		over: Type.Optional(
@@ -613,7 +625,9 @@ type JoinMode = (typeof JOIN_MODES)[number];
 
 export interface ShorthandStep {
 	agent?: string;
-	task: string;
+	task?: string;
+	/** Load-time include path; trusted loaders inline this into `task` before desugar. */
+	taskFile?: string;
 	/** Files to pre-read and inject before the task (pass-through to Phase.context). */
 	context?: string[];
 	/** Max characters per context file (pass-through to Phase.contextLimit). */
@@ -632,7 +646,8 @@ export function isShorthand(def: unknown): boolean {
 	return (
 		(Array.isArray(d.chain) && d.chain.length > 0) ||
 		(Array.isArray(d.tasks) && d.tasks.length > 0) ||
-		typeof d.task === "string"
+		typeof d.task === "string" ||
+		typeof d.taskFile === "string"
 	);
 }
 
@@ -647,7 +662,10 @@ function readStep(s: unknown): ShorthandStep {
 	if (typeof s === "string") return { task: s };
 	if (s && typeof s === "object") {
 		const o = s as Record<string, unknown>;
-		const step: ShorthandStep = { agent: typeof o.agent === "string" ? o.agent : undefined, task: String(o.task ?? "") };
+		const step: ShorthandStep = { agent: typeof o.agent === "string" ? o.agent : undefined };
+		if (typeof o.task === "string") step.task = o.task;
+		if (typeof o.taskFile === "string") step.taskFile = o.taskFile;
+		if (step.task === undefined && step.taskFile === undefined) step.task = "";
 		const ctx = readContextList(o.context);
 		if (ctx) step.context = ctx;
 		if (typeof o.contextLimit === "number") step.contextLimit = o.contextLimit;
@@ -655,6 +673,11 @@ function readStep(s: unknown): ShorthandStep {
 		return step;
 	}
 	return { task: "" };
+}
+
+function applyShorthandTask(target: { task?: string; taskFile?: string }, step: ShorthandStep): void {
+	if (step.task !== undefined) target.task = step.task;
+	if (step.taskFile !== undefined) target.taskFile = step.taskFile;
 }
 
 /**
@@ -693,7 +716,8 @@ export function desugar(def: unknown): Taskflow {
 		}
 		const steps = d.chain.map(readStep);
 		const phases: Phase[] = steps.map((s, i) => {
-			const phase: Phase = { id: `step${i + 1}`, type: "agent", task: s.task };
+			const phase: Phase = { id: `step${i + 1}`, type: "agent" };
+			applyShorthandTask(phase, s);
 			if (s.agent) phase.agent = s.agent;
 			if (s.context) phase.context = s.context;
 			if (s.contextLimit !== undefined) phase.contextLimit = s.contextLimit;
@@ -712,7 +736,8 @@ export function desugar(def: unknown): Taskflow {
 	if (Array.isArray(d.tasks) && d.tasks.length > 0) {
 		const steps = d.tasks.map(readStep);
 		const branches: ParallelTask[] = steps.map((s) => {
-			const b: ParallelTask = { task: s.task };
+			const b: ParallelTask = {};
+			applyShorthandTask(b, s);
 			if (s.agent) b.agent = s.agent;
 			// Per-branch literal cwd (workspace keywords are rejected by validation).
 			if (s.cwd) b.cwd = s.cwd;
@@ -731,8 +756,10 @@ export function desugar(def: unknown): Taskflow {
 	}
 
 	// single task → one agent phase (the spec itself is the step)
-	if (typeof d.task === "string") {
-		const phase: Phase = { id: "main", type: "agent", task: d.task, final: true };
+	if (typeof d.task === "string" || typeof d.taskFile === "string") {
+		const phase: Phase = { id: "main", type: "agent", final: true };
+		if (typeof d.task === "string") phase.task = d.task;
+		if (typeof d.taskFile === "string") phase.taskFile = d.taskFile;
 		if (typeof d.agent === "string") phase.agent = d.agent;
 		const ctx = readContextList(d.context);
 		if (ctx) phase.context = ctx;
@@ -790,6 +817,9 @@ export interface ValidationOptions {
 	 *  with their real effects; children the loader cannot resolve degrade to
 	 *  advisory warnings (the runtime loader remains the authoritative gate). */
 	resolveFlow?: (name: string) => ComposedEffectFlowLike | undefined;
+	/** When true, leftover `taskFile` is allowed (DSL compile / pre-load check).
+	 *  XOR and dynamic-subflow bans still apply. Runtime loaders must inline. */
+	allowTaskFile?: boolean;
 }
 
 type ArgSpecRecord = Record<string, unknown> & {
@@ -1070,6 +1100,21 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		if (ids.has(p.id)) errors.push(`Duplicate phase id: ${p.id}`);
 		ids.add(p.id);
+		const phaseTaskFile = (p as { taskFile?: unknown }).taskFile;
+		const hasTaskFile = typeof phaseTaskFile === "string";
+		if (hasTaskFile && typeof p.task === "string") {
+			errors.push(`Phase '${p.id}': 'task' and 'taskFile' are mutually exclusive`);
+		} else if (hasTaskFile) {
+			if (opts.dynamic) {
+				errors.push(
+					`TF_DYNAMIC_RESOURCE_FORBIDDEN: Phase '${p.id}': generated sub-flows cannot declare taskFile`,
+				);
+			} else if (!opts.allowTaskFile) {
+				errors.push(
+					`TF_TASKFILE_NO_PROVENANCE: Phase '${p.id}': taskFile requires a file-backed definition (defineFile or saved flow)`,
+				);
+			}
+		}
 
 		// Array-shaped fields must actually be arrays. Several passes below (and
 		// verify/compile/collectRefs downstream) iterate these; a non-array is
@@ -1155,7 +1200,19 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			p.branches.forEach((b, i) => {
 				if (!b || typeof b !== "object" || Array.isArray(b))
 					errors.push(`Phase '${p.id}': branches[${i}] must be an object with a 'task', got ${b === null ? "null" : typeof b}`);
-				else if (typeof (b as { task?: unknown }).task !== "string")
+				else if (typeof (b as { task?: unknown }).task === "string" && typeof (b as { taskFile?: unknown }).taskFile === "string")
+					errors.push(`Phase '${p.id}': branches[${i}]: 'task' and 'taskFile' are mutually exclusive`);
+				else if (typeof (b as { taskFile?: unknown }).taskFile === "string") {
+					if (opts.dynamic) {
+						errors.push(
+							`TF_DYNAMIC_RESOURCE_FORBIDDEN: Phase '${p.id}' branches[${i}]: generated sub-flows cannot declare taskFile`,
+						);
+					} else if (!opts.allowTaskFile) {
+						errors.push(
+							`TF_TASKFILE_NO_PROVENANCE: Phase '${p.id}' branches[${i}]: taskFile requires a file-backed definition (defineFile or saved flow)`,
+						);
+					}
+				} else if (typeof (b as { task?: unknown }).task !== "string")
 					errors.push(`Phase '${p.id}': branches[${i}].task must be a string`);
 				else {
 					// Per-branch cwd: a literal path is honored per-branch; a reserved
@@ -1201,13 +1258,13 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 
 		// Per-type requirements
 		if (type === "agent") {
-			if (!p.task) errors.push(`Phase '${p.id}' (agent) requires 'task'`);
+			if (!p.task && !hasTaskFile) errors.push(`Phase '${p.id}' (agent) requires 'task'`);
 		}
 		if (type === "gate") {
 			// A scoring gate can decide without an LLM task: deterministic pass →
 			// auto-pass; deterministic fail → judge (when present) or explicit BLOCK.
 			const hasScore = (p as { score?: unknown }).score !== undefined;
-			if (!p.task && !hasScore) errors.push(`Phase '${p.id}' (gate) requires 'task' (or 'score')`);
+			if (!p.task && !hasScore && !hasTaskFile) errors.push(`Phase '${p.id}' (gate) requires 'task' (or 'score')`);
 		}
 		if (type === "gate" && Array.isArray(p.eval)) {
 			// eval entries are interpolated + parsed at runtime (expr.indexOf/.slice);
@@ -1304,7 +1361,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 				errors.push(
 					`Phase '${p.id}' (map): 'over' must be a string interpolation ref (e.g. "{steps.scan.json}"), not a ${Array.isArray(p.over) ? "literal array" : typeof p.over}. To fan out over a fixed list, emit it from an upstream phase and reference that phase's .json.`,
 				);
-			if (!p.task) errors.push(`Phase '${p.id}' (map) requires 'task'`);
+			if (!p.task && !hasTaskFile) errors.push(`Phase '${p.id}' (map) requires 'task'`);
 		}
 		if (type === "parallel") {
 			if (!p.branches || p.branches.length === 0)
@@ -1333,7 +1390,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		if (type === "reduce") {
 			if (!p.from || p.from.length === 0) errors.push(`Phase '${p.id}' (reduce) requires 'from'`);
-			if (!p.task) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
+			if (!p.task && !hasTaskFile) errors.push(`Phase '${p.id}' (reduce) requires 'task'`);
 			// reduceStrategy / batchSize (reduce-only).
 			const strat = (p as { reduceStrategy?: unknown }).reduceStrategy;
 			if (strat !== undefined && strat !== "tree" && strat !== "one-shot") {
@@ -1371,7 +1428,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 			}
 		}
 		if (type === "loop") {
-			if (!p.task) errors.push(`Phase '${p.id}' (loop) requires 'task' (the iteration body)`);
+			if (!p.task && !hasTaskFile) errors.push(`Phase '${p.id}' (loop) requires 'task' (the iteration body)`);
 			if (!p.until) errors.push(`Phase '${p.id}' (loop) requires 'until' (the stop condition)`);
 			if (p.maxIterations !== undefined) {
 				if (typeof p.maxIterations !== "number" || !Number.isFinite(p.maxIterations) || p.maxIterations < 1) {
@@ -1383,7 +1440,7 @@ export function validateTaskflow(def: unknown, opts: ValidationOptions = {}): Va
 		}
 		if (type === "tournament") {
 			const hasBranches = Array.isArray(p.branches) && p.branches.length > 0;
-			if (!hasBranches && !p.task) {
+			if (!hasBranches && !p.task && !hasTaskFile) {
 				errors.push(`Phase '${p.id}' (tournament) requires 'task' (the competitor prompt) or non-empty 'branches'`);
 			}
 			if (p.variants !== undefined) {
