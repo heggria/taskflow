@@ -38,7 +38,7 @@ test("hermes mcp: initialize returns the protocol version + serverInfo", async (
 	assert.equal(res.result.protocolVersion, "2025-06-18");
 	assert.ok(res.result.capabilities.tools, "advertises tools capability");
 	assert.equal(res.result.serverInfo.name, "taskflow-hermes");
-	assert.equal(res.result.serverInfo.version, "0.3.0-beta.1.1");
+	assert.equal(res.result.serverInfo.version, "0.3.0-beta.1.2");
 });
 
 test("hermes mcp: tools/list exposes the taskflow tools", async () => {

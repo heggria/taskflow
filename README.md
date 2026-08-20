@@ -21,7 +21,7 @@
 
 **taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 0.3 candidate, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 0.3.0-beta.1.1 Trusted Effects beta — beta channel, not GA.** This release candidate is prepared for npm's `beta` channel; the beta ships the Trusted Effects MVP described below. The 0.3-C Control Plane remains a follow-on candidate track; it is not a shipped beta surface.
+> **Status: 0.3.0-beta.1.2 Trusted Effects beta — beta channel, not GA.** This release candidate is prepared for npm's `beta` channel; the beta ships the Trusted Effects MVP described below. The 0.3-C Control Plane remains a follow-on candidate track; it is not a shipped beta surface.
 
 ## The 0.3 idea
 
