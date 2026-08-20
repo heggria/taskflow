@@ -45,7 +45,7 @@ Top-level keys of the taskflow definition object.
 | `concurrency` | number | `8` | Default fan-out / same-layer parallelism cap. See §4. |
 | `idleTimeout` | number | host default (`300000`) | Flow-level idle watchdog in ms (≥ 1000, or `0` to disable) for all agent-running phases that don't set their own. `0` disables the watchdog but then **every** agent-running phase MUST declare a finite wall `timeout` (≥ 1000) so the flow can never hang. A per-phase `idleTimeout` overrides this. |
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
-| `scriptCwd` | `invocation`\|`flow` | `invocation` | Default cwd policy for `script` phases. `flow` requires trusted saved-flow/`defineFile` provenance; explicit phase `cwd` wins, and inherited cwd-bridge boundaries still constrain the resolved source directory. |
+| `scriptCwd` | `invocation`\|`flow` | `invocation` | Default cwd policy for `script` phases. `flow` requires trusted saved-flow/`defineFile` provenance; explicit phase `cwd` wins, and inherited cwd-bridge boundaries still constrain the resolved source directory. `taskFile` is the same class of load-time trusted source (see §2). |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
 | `hooks` | object | — | **0.2.7.** Terminal fire-and-forget notifications: `onComplete` / `onFail` / `onBlocked` arrays of `{type:"webhook"\|"file"\|"command", …}`. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status. `https` or `http://127.0.0.1\|localhost` for webhooks; `command.run` is argv-only (no shell string). |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
@@ -87,10 +87,11 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 | `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
 | `type` | all | `agent` | One of the **12** phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, **race**, **expand**). |
 | `agent` | all | first available | Agent name; resolved from the scoped pool. |
-| `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types. |
+| `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types unless `taskFile` is set. |
+| `taskFile` | agent, gate, map, reduce, parallel/race branch | — | Load-time include. Literal path relative to the flow definition directory. Trusted loaders inline UTF-8 into `task` and delete the field. XOR with `task`. Path is **not** interpolated. Cap 256 KiB. Not `context`. |
 | `over` | map | — | **Required for map.** Must resolve to an array. |
 | `as` | map | `item` | Loop variable bound per item. |
-| `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]`. |
+| `branches` | parallel, race | — | **Required** (≥1 for parallel; ≥2 for race). `[{task, agent?}]` or `{taskFile, agent?}`. |
 | `cancelLosers` | race | `true` | Abort in-flight losers after first **success** (best-effort AbortSignal). |
 | `from` | reduce | — | **Required for reduce.** Phase ids whose outputs are aggregated. `{previous.output}` resolves to **all completed `from[]` outputs** in from-array order (one → raw; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`). |
 | `reduceStrategy` | reduce | `one-shot` | `one-shot` = a single reducer call over all aggregated inputs. `tree` = batched intermediate reducer rounds (see `batchSize`); useful when aggregated input would exceed one prompt. `tree` forces the imperative runtime (event kernel falls back). |

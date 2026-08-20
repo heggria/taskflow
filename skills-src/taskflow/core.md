@@ -154,6 +154,24 @@ large definition on every call and keeps a durable draft you can diff. Falls
 back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
 (saved flow).
 
+### Long instructions: `taskFile` (load-time include, not `context`)
+
+A phase or parallel branch may set `taskFile` **instead of** `task`. Trusted
+loaders (`defineFile` / saved flow) resolve the **literal** path against the
+definition directory — same class of source as `scriptCwd: "flow"` — inline the
+UTF-8 body into `task`, and **delete** `taskFile` before validate / interpolate
+/ cache / FlowIR. Runtime never sees `taskFile`.
+
+- XOR with `task`. Path is a static import: **not interpolated**, no `..`, no
+  symlink leaf, must stay physically inside the flow directory. Cap 256 KiB.
+- Inline leftover → `TF_TASKFILE_NO_PROVENANCE`. Generated sub-flows →
+  `TF_DYNAMIC_RESOURCE_FORBIDDEN`.
+- Do **not** put durable instructions in `context`. `context` is cwd-relative,
+  default-truncated at 8k, wrapped as `## File:`, marked unreplayable, and
+  forbidden in dynamic sub-flows.
+- TS DSL: `agent({ taskFile: "prompts/x.md" })`. `taskflow-dsl check` / erase
+  emit the field and do **not** read the file.
+
 ### DSL shape
 
 ```jsonc

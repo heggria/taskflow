@@ -19,7 +19,7 @@ Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-tas
 
 ## One-time repository setup
 
-The beta release path is `v0.3.0-beta.1.1`: merge the reviewed release commit to `main`, then push the tag. `.github/workflows/publish.yml` validates the `0.3.0-beta.*` prerelease family, publishes the same ten packages to npm's `beta` dist-tag with provenance, and creates a prerelease GitHub Release. Do not publish from a workstation.
+The beta release path is `v0.3.0-beta.1.2`: merge the reviewed release commit to `main`, then push the tag. `.github/workflows/publish.yml` validates the `0.3.0-beta.*` prerelease family, publishes the same ten packages to npm's `beta` dist-tag with provenance, and creates a prerelease GitHub Release. Do not publish from a workstation.
 
 ## Pre-flight (always)
 
@@ -77,8 +77,8 @@ the matching annotated tag:
 ```sh
 git switch main
 git pull --ff-only origin main
-git tag -a v0.3.0-beta.1.1 -m "Release v0.3.0-beta.1.1"
-git push origin v0.3.0-beta.1.1
+git tag -a v0.3.0-beta.1.2 -m "Release v0.3.0-beta.1.2"
+git push origin v0.3.0-beta.1.2
 ```
 
 `.github/workflows/publish.yml` then performs the complete release transaction:
