@@ -10,7 +10,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Chore
 
-- Absorb open Dependabot PRs into this line: pnpm/action-setup 6.0.10 (#129); codeql-action 4.37.7 (#145, #146); Pi 0.84.2 + typebox ^1.3.14 + biome 2.5.8 + @types/node 26.2.0 (#147); next 16.3.1 (#136); lucide-react ^1.31.0 (#135); fumadocs-ui 16.14.4 (#134); fumadocs-mdx 15.2.3 (#133). `fumadocs-core` stays 16.14.0 (no Dependabot PR).
+- Absorb open Dependabot PRs into this line: pnpm/action-setup 6.0.10 (#129); codeql-action 4.37.7 (#145, #146); Pi 0.84.2 + typebox ^1.3.14 + biome 2.5.8 + @types/node 26.2.0 (#147); next 16.3.1 (#136); lucide-react ^1.31.0 (#135); fumadocs-ui 16.14.4 (#134); fumadocs-mdx 15.2.3 (#133). `fumadocs-core` stays 16.14.0 (no Dependabot PR). Pin workspace `nanoid` override 3.3.17 → 3.3.18 (Dependabot alert #33, GHSA-2v37-7h3g-55p8).
 
 ## [0.3.0-beta.1.1] — 2026-08-18
 

@@ -85,7 +85,7 @@ test("publish workflow pins actions and isolates npm provenance from release per
 		uses.filter((use) => use.includes("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7")).length,
 		2,
 	);
-	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6")));
+	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6")));
 	assert.ok(uses.some((use) => use.includes("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7")));
 	assert.doesNotMatch(source, /uses:\s+\S+@v\d+/);
 
@@ -132,12 +132,12 @@ test("every repository workflow pins third-party actions to verified full SHAs",
 	const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
 	const trustedPins = new Map([
 		["actions/checkout", "3d3c42e5aac5ba805825da76410c181273ba90b1"],
-		["pnpm/action-setup", "0ebf47130e4866e96fce0953f49152a61190b271"],
+		["pnpm/action-setup", "0977fd99725f1db4007ccb2928dbb4e90d06cc86"],
 		["actions/setup-node", "820762786026740c76f36085b0efc47a31fe5020"],
 		["actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9"],
 		["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
-		["github/codeql-action/init", "f205ea1c3313d32999d8d6a48b4f6530d4437b38"],
-		["github/codeql-action/analyze", "f205ea1c3313d32999d8d6a48b4f6530d4437b38"],
+		["github/codeql-action/init", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
+		["github/codeql-action/analyze", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
 	]);
 	const files = readdirSync(workflowDir).filter((file) => /\.ya?ml$/.test(file));
 	assert.ok(files.length > 0, "no workflow files found");
