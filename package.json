@@ -51,7 +51,7 @@
 		"taskflow-control": "workspace:*",
 		"taskflow-core": "workspace:*",
 		"taskflow-hosts": "workspace:*",
-		"typebox": "^1.3.14",
+		"typebox": "^1.3.17",
 		"typescript": "^7.0.2"
 	}
 }
