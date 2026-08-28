@@ -8,7 +8,8 @@
 //   entry.grok.md    — grok frontmatter + MCP tool table preamble
 //   entry.hermes.md  — hermes frontmatter + MCP tool table preamble
 //   core.md          — the shared body (host-conditional blocks allowed)
-//   patterns.md, advanced.md, configuration.md — shared companions
+//   patterns.md, advanced.md, configuration.md, library.md — shared companions
+//   commands.pi.md   — Pi-only operator command sidecar
 //
 // Host-conditional blocks use HTML comment markers on their own lines; the
 // host field is a comma-list, kept when it contains the build target:
@@ -17,12 +18,12 @@
 // Marker lines are always stripped. Nesting is not supported (build error).
 //
 // Outputs (generated, committed; drift-guarded by skills-build.test.ts):
-//   packages/pi-taskflow/skills/taskflow/{SKILL.md,patterns.md,advanced.md,configuration.md}
-//   packages/codex-taskflow/plugin/skills/taskflow/{…same four…}
-//   packages/claude-taskflow/plugin/skills/taskflow/{…same four…}
-//   packages/opencode-taskflow/plugin/skills/taskflow/{…same four…}
-//   packages/grok-taskflow/plugin/skills/taskflow/{…same four…}
-//   packages/hermes-taskflow/plugin/skills/taskflow/{…same four…}
+//   packages/pi-taskflow/skills/taskflow/{SKILL.md,patterns.md,advanced.md,configuration.md,library.md,commands.md}
+//   packages/codex-taskflow/plugin/skills/taskflow/{…same shared four…}
+//   packages/claude-taskflow/plugin/skills/taskflow/{…same shared four…}
+//   packages/opencode-taskflow/plugin/skills/taskflow/{…same shared four…}
+//   packages/grok-taskflow/plugin/skills/taskflow/{…same shared four…}
+//   packages/hermes-taskflow/plugin/skills/taskflow/{…same shared four…}
 //
 // Usage: node scripts/build-skills.mjs [--check]
 //   --check: exit 1 if any generated file differs from what's on disk.
@@ -37,6 +38,7 @@ const srcDir = join(root, "skills-src", "taskflow");
 
 const HOSTS = ["pi", "codex", "claude", "opencode", "grok", "hermes"];
 const COMPANIONS = ["patterns.md", "advanced.md", "configuration.md", "library.md"];
+const HOST_COMPANIONS = { pi: ["commands.pi.md"] };
 const OUT_DIRS = {
 	pi: join(root, "packages", "pi-taskflow", "skills", "taskflow"),
 	codex: join(root, "packages", "codex-taskflow", "plugin", "skills", "taskflow"),
@@ -111,9 +113,10 @@ export function buildAll() {
 			filterForHost(core, host, "core.md").trim() +
 			"\n";
 		files.push({ path: join(OUT_DIRS[host], "SKILL.md"), content: skill });
-		for (const c of COMPANIONS) {
+		for (const c of [...COMPANIONS, ...(HOST_COMPANIONS[host] ?? [])]) {
+			const outputName = c.endsWith(`.${host}.md`) ? c.slice(0, -`.${host}.md`.length) + ".md" : c;
 			const body = GENERATED_BANNER(c) + "\n" + filterForHost(read(c), host, c).trim() + "\n";
-			files.push({ path: join(OUT_DIRS[host], c), content: body });
+			files.push({ path: join(OUT_DIRS[host], outputName), content: body });
 		}
 	}
 	return files;

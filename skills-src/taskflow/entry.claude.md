@@ -1,6 +1,6 @@
 ---
 name: taskflow
-description: Orchestrate multi-phase subagent workflows with Taskflow. Use whenever a request spans a whole project or many items — deeply exploring / 探索 / auditing / 审计 / analyzing a codebase, reviewing or migrating many files or modules in parallel, cross-checked/adversarial review, codebase-wide research, or any repeatable orchestration you want to save and rerun. Prefer this over ad-hoc parallel work when the task has multiple phases (discover → work → review → report) or dynamic fan-out over a discovered list. Drives the taskflow_* MCP tools.
+description: Use Taskflow to delegate or orchestrate bounded work with isolated subagents: use cheaper or specialized agents, preserve your context, apply specialized skills or narrower tools, run independent work in parallel, coordinate dependent steps, review or verify results, process many discovered items, and keep long-running work tracked, resumable, or reusable. Common uses include research, engineering, software development, audits, migrations, data or document analysis, and repeatable workflows. Drives the taskflow_* MCP tools.
 ---
 
 # Taskflow (Claude Code)

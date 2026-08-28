@@ -1,12 +1,14 @@
 ---
 name: taskflow
-description: Orchestrate multi-phase subagent workflows with pi-taskflow. Use whenever a request spans a whole project or many items — deeply exploring / 探索 / auditing / 审计 / analyzing a codebase, reviewing or migrating many files or modules in parallel, cross-checked/adversarial review, codebase-wide research, or any repeatable orchestration you want to save and rerun. Prefer this over ad-hoc parallel subagents when the work has multiple phases or dynamic fan-out over a discovered list. Also supports subagent-style shorthand (single / parallel / chain) for simple non-DAG delegations you want tracked, resumable, or saveable.
+description: Use Taskflow to delegate or orchestrate bounded work with isolated subagents: use cheaper or specialized agents, preserve your context, apply specialized skills or narrower tools, run independent work in parallel, coordinate dependent steps, review or verify results, process many discovered items, and keep long-running work tracked, resumable, or reusable. Common uses include research, engineering, software development, audits, migrations, data or document analysis, and repeatable workflows.
 ---
 
 # Taskflow
 
-**Host binding (pi):** everything below is driven through the `taskflow` tool
-(`action: "run" | "plan" | "verify" | "analytics" | …`) and the `/tf` slash commands.
-Where an example shows a host-neutral invocation like `verify`, use the pi form
-(`action: "verify"` or `/tf verify`). Prefer **`action: "plan"` / `/tf plan`**
-before spending tokens on a non-trivial flow.
+**Host binding (pi):** use the `taskflow` tool for Taskflow operations such as `agents`, `verify`, `plan`, and `run`. Prefer `plan` before a non-trivial `run`.
+
+Taskflow runs bounded subagent work as a tracked, verifiable graph.
+
+Use it to delegate work efficiently, preserve your context, isolate capabilities, run independent work concurrently, connect real dependencies, verify results, and keep long-running or reusable execution tracked.
+
+Taskflow scales from one delegated subagent to larger graphs with parallel work, dependencies, verification, repeated items, and runtime-discovered structure.

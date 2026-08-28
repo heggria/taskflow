@@ -1,881 +1,733 @@
-Build and run **declarative, multi-phase workflows** of subagents. The runtime
-holds intermediate results and the phase DAG, so your main context only receives
-the final answer — not every step's transcript.
+## 1. Decide whether Taskflow helps
 
-## Documentation map (progressive loading)
+Decide from the execution shape. Look for useful delegation, concurrency, dependency, verification, isolation, specialization, or execution control.
 
-This file teaches the core: phase types, control flow, interpolation, and the
-mistakes that break flows. Load the companion files **only when needed**:
+### Signal: Bounded delegation
 
-| File | Load when you need |
-|------|--------------------|
-| `patterns.md` | **Designing a non-trivial flow.** Proven flow archetypes (audit fan-out, self-healing rework, plan→approve→execute, dynamic replanning, tournament synthesis, incremental audit), anti-patterns, and the production-flow quality checklist. |
-<!-- host:pi -->
-| `advanced.md` | Shared Context Tree (`ctx_*` tools, `ctx_spawn` sub-graphs), workspace isolation (`cwd: temp/dedicated/worktree`), dynamic sub-flow (`flow{def}`) contracts & security caps, and the **incremental recompute suite** (`ir` / `provenance` / `why-stale` / `recompute` / `cache-clear`). |
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-| `advanced.md` | Dynamic sub-flow (`flow{def}`) contracts & security caps, workspace isolation (`cwd: temp/dedicated/worktree`), immutable resume (`taskflow_resume`), and build/host identity (`taskflow_version`). |
-<!-- /host:codex,claude,opencode,grok,hermes -->
-| `configuration.md` | Every knob: per-phase `model`/`thinking`/`tools`/`cwd`, concurrency model, agent discovery, `settings.json`, cross-run caching (`cache`, `fingerprint`, per-item map caching), args, storage paths. **TypeScript DSL CLI** (`taskflow-dsl` / S4). |
-| `library.md` | **Before authoring a non-trivial flow — SEARCH the reusable-flow library.** Save reusable flows with `purpose`+`tags` so future search finds them; reuse + generalize instead of rewriting from scratch. The compounding flywheel. |
+A substantial bounded part can be delegated without requiring frequent coordination from you.
 
-> Rule of thumb: writing a flow with ≥ 4 phases, a gate, or any fan-out?
-> **Read `patterns.md` first** — it will make the flow better, not just valid.
+→ **Benefit:** Use a cheaper or more specialized subagent while preserving your context.
+→ **Likely shape:** one subagent
 
-## When to use
+### Signal: Independent work
 
-- A task needs **several coordinated steps** (discover → work → review → report).
-- You need to **fan out over many items** (audit every endpoint, summarize every file).
-- You want **cross-checked / adversarial review** before reporting.
-- You want a **repeatable** orchestration you can save and rerun by name.
-- The same expensive analysis will be **re-run as the repo evolves** (use
-  `incremental: true` + fingerprints — see `configuration.md` §8).
+Several bounded parts are independent.
 
-## When NOT to use
+→ **Benefit:** Run them concurrently in isolated contexts.
+→ **Likely shape:** small parallel fan-out
 
-- A **single-file, single-step** change you can do directly — just do it.
-- **Interactive debugging** where each step depends on watching live output.
-- Work that is **one bash command** — run it yourself, don't wrap it in a flow.
-<!-- host:pi -->
-- A single quick delegation with no tracking needs — the plain `subagent` tool
-  is fine (though the shorthand below gives you resume + save for free).
-<!-- /host:pi -->
+### Signal: Real dependency
 
-## Flow design ladder
+B genuinely needs A's result.
 
-Match the flow's sophistication to the task. Don't stop at level 1 when the
-task deserves level 3 — the higher levels are where taskflow pays for itself.
+→ **Benefit:** Make that dependency explicit and tracked.
+→ **Likely shape:** chain / dependency
 
-| Level | Shape | Reach for it when |
-|-------|-------|-------------------|
-| 0 | shorthand `task` / `tasks` / `chain` | one-off delegation, simple sequence |
-| 1 | linear DAG with `dependsOn` | fixed steps, each consuming the last |
-| 2 | discover → `map` fan-out → `gate` → `reduce` | many items, needs review before reporting |
-| 3 | + `eval` zero-token gates, `expect` contracts, `retry`, `onBlock: "retry"`, `budget`, `optional` fallbacks | production-grade: self-healing, cost stop-loss, fails precisely |
-| 4 | + `loop`, `tournament`, `flow{def}` / `expand`, `race` | the work itself is discovered at runtime; one shot is unreliable; try parallel approaches and keep the first win |
-| 5 | + `incremental: true`, `cache.fingerprint` | the flow re-runs as the repo changes; only re-pay for what changed |
+### Signal: Independent verification
 
-**A production-grade flow (level 3+) usually has:** machine checks before LLM
-checks (`eval`, `script`), an `expect` contract on every JSON-emitting phase,
-`retry` on contract-checked phases, a `budget`, `optional: true` on
-degradable phases with a downstream fallback, and exactly one `final` phase.
-`patterns.md` shows each of these composed into full archetypes.
+Production benefits from separate verification or judgment.
 
-## Shorthand (non-DAG)
+→ **Benefit:** Separate making the result from checking it.
+→ **Likely shape:** producer → verifier/gate
 
-Skip the DSL entirely for simple delegations. The runtime desugars these into a
-proper flow, so you still get progress, persistence, and resume.
+### Signal: Runtime-discovered items
 
-```jsonc
-// single  — one agent, one task
-{ "task": "Summarize the architecture of src/", "agent": "explorer" }
+You must discover an unknown set of similar items and then perform the same bounded work on each.
 
-// parallel — run several tasks at once, outputs merged
-{ "tasks": [
-  { "task": "Audit auth in src/api", "agent": "analyst" },
-  { "task": "Audit input validation in src/api", "agent": "analyst" }
-] }
+→ **Benefit:** Discover once, then process the resulting items under controlled fan-out.
+→ **Likely shape:** discover → bounded map
 
-// chain — run sequentially; reference the prior step with {previous.output}
-{ "chain": [
-  { "task": "List the public API of src/lib", "agent": "scout" },
-  { "task": "Write docs for:\n{previous.output}", "agent": "writer" }
-] }
+### Signal: Context-heavy exploration
+
+Substantial exploration would consume much of your context.
+
+→ **Benefit:** Isolate that exploration in one or more subagents and return only the useful result.
+→ **Likely shape:** one or more subagents
+
+### Signal: Specialized execution profile
+
+A part of the task benefits from a different model, reasoning level, specialized skill, or narrower tool set.
+
+→ **Benefit:** Give that work its own execution profile.
+→ **Likely shape:** one subagent or DAG
+
+### Signal: Execution control or persistence
+
+Timeout, budget, tracking, persistence/resume, or reuse would improve execution.
+
+→ **Benefit:** Put the delegated work behind explicit execution controls and tracked state.
+→ **Likely shape:** one subagent or DAG
+
+Taskflow is useful when one or more of these signals changes the execution plan in a concrete way: who performs the work, what context it consumes, which capabilities it uses, what can run concurrently, what depends on what, how results are checked, or how execution is bounded and preserved.
+
+**Single-agent Taskflow is useful when delegation itself helps:**
+
+**cheaper model/reasoning • context isolation • specialized skills • narrower tools • timeout/budget control • tracked execution • persistence/resume**
+
+If one or more signals changes how the task should be executed, choose the shape that captures that benefit. If none does, direct execution is usually simpler.
+
+## 2. Choose the smallest useful shape
+
+Start with the smallest shape that represents the real structure of the work.
+
+```text
+One bounded delegated objective
+→ one subagent
+
+A few known independent tasks
+→ small parallel fan-out
+
+B genuinely needs A
+→ chain / dependency
+
+An unknown set of similar items
+→ discover → bounded map
+
+A result needs deterministic proof
+→ producer → deterministic verifier
+
+A result needs independent judgment
+→ producer → reviewer/gate
+
+Many outputs genuinely need synthesis inside the flow
+→ fan-out → reducer
 ```
 
-- `agent` is optional (defaults to the first available agent).
-- `context` (optional, per step or top-level in single mode): file paths to
-  pre-read and inject before the task — same as the full-DSL `Phase.context`
-  (per-file `contextLimit`, default 8000 chars). In **parallel `tasks` mode**
-  all branches SHARE the union of step contexts. In **chain mode** declare
-  `context` on individual steps; a top-level `context` is ignored (with a warning).
-- `cwd` (optional, top-level or per-step): working directory for the subagent —
-  same as the full-DSL `Phase.cwd`. A top-level `cwd` is the default for every
-  step; a per-step `cwd` overrides it. For **single** and **chain** it lands on
-  each `Phase.cwd` (full workspace-keyword lifecycle: `temp`/`dedicated`/
-  `worktree`). For **parallel `tasks`**, the top-level `cwd` is the shared phase
-  cwd, and each branch may set its own **literal-path** `cwd` (mixed branch cwds
-  are honored independently). Per-branch workspace keywords are **rejected**
-  (the workspace lifecycle is per-phase — use the top-level `cwd` for isolation).
-- Add `name` to label the run.
-- Precedence if several are given: `chain` > `tasks` > `task`.
-<!-- host:pi -->
-- You can pass these as top-level tool params **or** inside `define`.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-- Pass these as the `define` argument to `taskflow_run`.
-<!-- /host:codex,claude,opencode,grok,hermes -->
+Escalate when the work contains a requirement that the simpler shapes do not represent:
 
-## How to author a taskflow
+```text
+Measurable iterative correction
+→ bounded loop
 
-<!-- host:pi -->
-Call the `taskflow` tool. To run a brand-new flow you write inline, pass
-`action: "run"` with a `define` object. To run a saved flow, pass `name`.
-**Before running a non-trivial flow, `action: "verify"` it — zero tokens,
-catches cycles / missing deps / undefined refs / contract typos.**
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-Call `taskflow_run` with an inline `define` object, or `name` for a saved flow.
-**Before running a non-trivial flow, `taskflow_plan` it (or at least
-`taskflow_verify`) — zero tokens: binds args, projects the phase plan + budget
-bound, and catches cycles / missing deps / undefined refs / contract typos.**
-<!-- /host:codex,claude,opencode,grok,hermes -->
+Competing approaches are genuinely useful
+→ tournament
 
-### Iterating on a big flow? Use `defineFile` (write once, verify / edit / run by path)
+The first successful acceptable result should win
+→ race
 
-For a non-trivial flow you'll iterate on, **write the definition to a file**
-(typically in the OS tmp dir) and point every call at it with `defineFile`:
+Runtime data determines the graph structure
+→ dynamic flow / expand
+
+Repeated changing inputs should reuse unaffected work
+→ incremental / recompute
+```
+
+These are adaptive starting shapes, not recipes.
+
+**Add each mechanism when it represents a real property of the work.** Use a reducer when synthesis belongs inside the flow; a dependency when later work genuinely needs earlier output; retries for a justified recovery mode; and advanced control flow when the task actually requires it.
+
+**Structure should represent a real execution constraint or benefit.**
+
+### Before you author
+
+For a non-trivial flow, establish the execution environment before writing agent references:
+
+```text
+execution root
+→ discover actual agents and their scopes
+→ confirm consequential execution configuration
+→ choose bounds for expensive work
+→ author
+```
 
 <!-- host:pi -->
-```jsonc
-// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
-// 2. verify, iterate, run — all reference the SAME file by path:
-{ "action": "verify", "defineFile": "/tmp/audit.json" }        // zero tokens
-{ "action": "compile", "defineFile": "/tmp/audit.json" }        // diagram + report
-{ "action": "run",    "defineFile": "/tmp/audit.json", "args": { … } }
+In Pi, discover the actual roster before relying on named agents:
+
+```json
+{ "action": "agents" }
 ```
 <!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-```jsonc
-// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
-// 2. verify, iterate, run — all reference the SAME file by path:
-{ "name": "taskflow_plan",   "arguments": { "defineFile": "/tmp/audit.json", "args": { … } } }  // zero tokens: bind + plan + budget bound
-{ "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
-{ "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
-{ "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers
-{ "name": "taskflow_run",    "arguments": { "defineFile": "/tmp/audit.json" } }
+
+Use agents you actually discovered and carry their scope into the flow when scoped agents matter.
+
+Choose an agent whose capability ceiling covers the work. Phase-level tools may narrow that capability envelope, never expand it. Selected skills provide specialized instructions and context; they do not grant additional tools.
+
+## 3. Quick-start examples
+
+Use shorthand when ordinary delegation does not require a full DAG.
+
+The examples below assume the selected agents are project-scoped. Replace `<discovered-agent>` with an agent you actually discovered and use the matching `agentScope`.
+
+Legal scopes are:
+
+```text
+user | project | both
 ```
-<!-- /host:codex,claude,opencode,grok,hermes -->
 
-The file can be raw JSON **or** a Markdown doc with a fenced ```json block
-(`write` the JSON form, or paste the flow into a note and fence it). Between
-calls, edit the file (not the call) and re-`verify`. This avoids re-sending a
-large definition on every call and keeps a durable draft you can diff. Falls
-back cleanly: precedence is `define` (inline) > `defineFile` (disk) > `name`
-(saved flow).
+Resource values in this skill are illustrative bounds chosen for each example, not Taskflow defaults. Choose timeout, concurrency, and budget from the actual work and environment.
 
-### Long instructions: `taskFile` (load-time include, not `context`)
+### One bounded subagent
 
-A phase or parallel branch may set `taskFile` **instead of** `task`. Trusted
-loaders (`defineFile` / saved flow) resolve the **literal** path against the
-definition directory — same class of source as `scriptCwd: "flow"` — inline the
-UTF-8 body into `task`, and **delete** `taskFile` before validate / interpolate
-/ cache / FlowIR. Runtime never sees `taskFile`.
-
-- XOR with `task`. Path is a static import: **not interpolated**, no `..`, no
-  symlink leaf, must stay physically inside the flow directory. Cap 256 KiB.
-- Inline leftover → `TF_TASKFILE_NO_PROVENANCE`. Generated sub-flows →
-  `TF_DYNAMIC_RESOURCE_FORBIDDEN`.
-- Do **not** put durable instructions in `context`. `context` is cwd-relative,
-  default-truncated at 8k, wrapped as `## File:`, marked unreplayable, and
-  forbidden in dynamic sub-flows.
-- TS DSL: `agent({ taskFile: "prompts/x.md" })`. `taskflow-dsl check` / erase
-  emit the field and do **not** read the file.
-
-### DSL shape
-
-```jsonc
+```json
 {
-  "name": "audit-endpoints",
-  "description": "Audit API endpoints for missing auth",
-  "args": { "dir": { "default": "src/routes" } },
-  "concurrency": 8,
-  "budget": { "maxUSD": 2.00 },
-  "agentScope": "user",            // user | project | both
-  "phases": [
-    { "id": "discover", "type": "agent", "agent": "scout",
-      "task": "List endpoints under {args.dir}. Output ONLY a JSON array [{\"route\":\"\",\"file\":\"\"}].",
-      "output": "json",
-      "expect": { "type": "array", "items": { "type": "object", "required": ["route", "file"] } },
-      "retry": { "max": 2, "backoffMs": 0 } },
-    { "id": "audit", "type": "map", "over": "{steps.discover.json}", "as": "item",
-      "agent": "analyst", "task": "Audit {item.route} ({item.file}) for missing auth.",
-      "dependsOn": ["discover"] },
-    { "id": "review", "type": "gate", "agent": "reviewer",
-      "task": "Remove false positives from:\n{steps.audit.output}\nVERDICT: PASS or BLOCK.",
-      "dependsOn": ["audit"] },
-    { "id": "report", "type": "reduce", "from": ["review"], "agent": "writer",
-      "task": "Write a final report:\n{steps.review.output}", "dependsOn": ["review"],
-      "final": true }
+  "agentScope": "project",
+  "task": "Inspect src/auth for authentication entry points. Return a concise inventory with file paths and one-line purposes. Stop after the relevant auth paths are covered.",
+  "agent": "<discovered-agent>"
+}
+```
+
+Use this when one bounded delegation captures the useful execution boundary.
+
+Keep the objective, scope, evidence, and stopping condition visible in the task.
+
+### Small parallel fan-out
+
+```json
+{
+  "agentScope": "project",
+  "concurrency": 2,
+  "tasks": [
+    {
+      "task": "Inspect src/api for authentication checks. Return only concrete findings with file paths. Stop after the scoped API files are covered.",
+      "agent": "<discovered-agent>"
+    },
+    {
+      "task": "Inspect src/api for input-validation checks. Return only concrete findings with file paths. Stop after the scoped API files are covered.",
+      "agent": "<discovered-agent>"
+    }
   ]
 }
 ```
 
-### Phase types (12)
+Use this when the tasks are known, independent, and independently useful.
 
-| type | meaning | details |
-|------|---------|---------|
-| `agent` | one subagent runs `task` | this file |
-| `parallel` | run static `branches[]` concurrently (all complete) | this file |
-| `map` | fan out over `over` (an array) — one subagent per item, `{item}` bound | this file |
-| `gate` | quality/review step that can **halt the flow** | Gate phases below |
-| `reduce` | aggregate `from[]` phases into one output | this file |
-| `approval` | **human-in-the-loop** pause: approve / reject / edit | Approval phases below |
-| `flow` | run a **sub-flow** as one phase — saved (`use`) or runtime-generated (`def`) | summary below; deep contract in `advanced.md` |
-| `loop` | repeat a body until a condition / convergence / `maxIterations` | Loop phases below |
-| `tournament` | run N competing `variants`, a `judge` picks best or aggregates | Tournament phases below |
-| `script` | run a **shell command** (no LLM, zero tokens) — stdout is the output | Script phases below |
-| `race` | run `branches[]` concurrently; **first success wins** (unlike parallel) | Race phases below |
-| `expand` | run a dynamic fragment (`def`); `nested` (isolated) or `graft` (promote onto parent) | Expand phases below |
+Keep the fan-out small. Add synthesis when the flow itself genuinely needs to own synthesis.
 
-### Control-flow fields (any phase)
+### Dependency chain
 
-| field | meaning |
-|-------|---------|
-| `when` | conditional guard — skip the phase unless the expression is truthy. Supports `{refs}`, `== != < > <= >=`, `&& \|\| !`, parentheses, quoted strings/numbers. Parse errors fail **open** (phase runs). |
-| `join` | dependency join: `"all"` (default — wait for every dep) or `"any"` (OR-join — run as soon as one dep completes). |
-| `retry` | `{ "max": N, "backoffMs": ms, "factor": k }` — retry a failing subagent up to N times; delay is `backoffMs * factor^attempt` (`factor:1`=fixed, `2`=exponential). |
-| `timeout` | max ms per subagent call (>= 1000). On expiry the subagent is aborted and the phase fails with a `timedOut` marker — deterministic, **never retried**. Caps EACH call, so a map/parallel/race/loop/tournament phase's wall time is per item/iteration/variant (a tournament's judge call gets its own cap too). Script phases keep their own child-process timeout (default 60s, max 300s). Not supported on approval/flow/expand. Pair with `optional: true` + a downstream fallback phase to degrade instead of failing the run. |
-| `expect` | output contract for `output: "json"` phases (agent/gate/reduce/loop): a JSON-Schema-like shape `{type, properties, required, items, enum}` validated the moment the subagent finishes. A violation fails the phase with per-path diagnostics (e.g. `$.score: required key is missing`) and is retryable under the phase's explicit `retry`. `verify`/`compile` also statically warn when a `{steps.X.json.field}` ref names a field absent from X's declared contract. |
-| `idempotent` | side-effect classification. Default `true` (safe to cache + auto-retry). Set `false` on phases with **irreversible side effects** (webhook POSTs, deploys, DB writes, file mutations): transient provider errors are **not** auto-retried (an explicit `retry{}` IS still honored — it's your declaration that repeats are acceptable) and the result is **never cached** in any scope (within-run resume, cross-run, `incremental` — the phase re-runs every time). The phase state records `sideEffect: true` (rendered as ⚡). |
-| `effects` | **[0.3 Trusted Effects]** declared side-effect bag for this phase — typed `fs.read` / `fs.write` / `fs.delete` / `secret.read` / `service.call` declarations with PathRef/SecretRef/ServiceRef targets and optional confidentiality/integrity labels. See **Trusted Effects** below. |
-| `optional` | fail-soft — a failed/blocked phase won't abort the run; downstream sees empty output. Pair with a fallback phase guarded by `when`. |
-| `cache` | per-phase reuse policy (`run-only` default / `cross-run` / `off`). See `configuration.md` §8. |
-
-### Conditional routing (when + gate/branches)
-
-Pair `when` with an upstream phase that emits a decision to build real if/else
-routing. Use `join: "any"` on the merge phase so it runs whichever branch fired.
-For static (non-conditional) concurrency, a `parallel` phase runs fixed
-`branches[]` instead — `{ "type": "parallel", "branches": [{"task":"..."}, {"task":"...","agent":"reviewer"}] }`.
-
-```jsonc
-{ "id": "triage", "type": "agent", "agent": "analyst", "output": "json",
-  "task": "Classify the task. Output ONLY {\"route\":\"deep\"} or {\"route\":\"quick\"}.",
-  "expect": { "type": "object", "required": ["route"], "properties": { "route": { "enum": ["deep", "quick"] } } } },
-{ "id": "deep",  "when": "{steps.triage.json.route} == deep",  "dependsOn": ["triage"], "agent": "analyst", "task": "..." },
-{ "id": "quick", "when": "{steps.triage.json.route} == quick", "dependsOn": ["triage"], "agent": "executor-fast", "task": "..." },
-{ "id": "report", "type": "reduce", "from": ["deep","quick"], "join": "any",
-  "dependsOn": ["deep","quick"], "agent": "writer", "task": "...", "final": true }
+```json
+{
+  "agentScope": "project",
+  "chain": [
+    {
+      "task": "Inventory the public API exported from src/lib. Return symbols, signatures, and source paths.",
+      "agent": "<discovered-agent>"
+    },
+    {
+      "task": "Using this inventory, identify missing or stale public API documentation. Base the assessment on the supplied inventory and return a prioritized fix list:\n{previous.output}",
+      "agent": "<discovered-agent>"
+    }
+  ]
+}
 ```
 
-> **⚠️ Breaking change (0.2.0 dogfood fix):** a `reduce` phase's `{previous.output}` now aggregates **all** completed `from[]` sources (in from-array order), not just the last completed dependency. If your reduce task referenced `{previous.output}` expecting only the last dep, it now receives every `from[]` output. Use explicit `{steps.ID.output}` refs to address individual sources. For large aggregations, set `reduceStrategy: "tree"` + `batchSize` to run batched intermediate reducer rounds (forces the imperative runtime).
+Use a chain when the second step genuinely needs the first step's output.
 
-> `when` should reference **upstream** (`dependsOn`) phases — a ref to a phase
-> that hasn't completed resolves empty and the guard is treated as false. Note
-> the `expect` enum on the router: it converts "the router said `Deep` with a
-> capital D and both branches silently skipped" into an immediate retryable
-> failure at the router.
+When the steps are independently useful, parallel work is the simpler shape.
 
-### Gate phases (quality control)
+### Full-DAG essentials
 
-A `gate` phase runs an agent to review upstream output and can **block the rest
-of the workflow**. The runtime needs to read a verdict from the agent's output.
-There are three ways to provide one, in order of robustness:
+Use a full DAG when you need named phases, explicit dependencies, structured intermediate data, verification, maps, gates, reducers, or other graph behavior.
 
-**1. JSON contract (most robust — preferred).** Set `output: "json"` + an `expect`
-enum so the output is machine-validated. A verdict that isn't exactly `"pass"` or
-`"block"` (wrong case, extra formatting, a synonym) fails the `expect` contract and
-is retried — the verdict can never be silently misread.
+A normal top-level flow definition is an object containing a name and phases:
 
-```jsonc
-{ "id": "review", "type": "gate", "agent": "reviewer", "dependsOn": ["impl"],
-  "output": "json",
-  "expect": { "type": "object",
-    "properties": { "verdict": { "enum": ["pass", "block"] }, "reason": { "type": "string" } },
-    "required": ["verdict", "reason"] },
-  "task": "Review the diff. Respond ONLY with JSON: {\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}" }
+```json
+{
+  "name": "example-flow",
+  "phases": [
+    {
+      "id": "first",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "task": "Produce one bounded result."
+    },
+    {
+      "id": "second",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "dependsOn": ["first"],
+      "task": "Use this upstream result:\n\n{steps.first.output}",
+      "final": true
+    }
+  ]
+}
 ```
 
-**2. Explicit text marker.** End the task by asking the agent to emit a final line
-`VERDICT: PASS` or `VERDICT: BLOCK` (also accepts OK/FAIL/STOP/REJECT/HALT; common
-Markdown emphasis like `VERDICT: **BLOCK**` is tolerated). JSON objects such as
-`{"continue": false, "reason": "missing auth checks"}` / `{"verdict": "block"}` also work.
+The ordinary mechanics are:
 
-**3. Auto-appended format suffix.** If a free-text gate's task does **not** already
-ask for a `VERDICT:` marker (and has no JSON contract), the runtime automatically
-appends the exact format instruction. You don't need to remember to add it — but
-writing it yourself (option 2) makes the intent explicit in your flow.
+```text
+full flow
+→ { name, phases: [...] }
 
-On **BLOCK**, downstream phases are skipped and the run ends as `blocked` with the
-reason surfaced. Unparseable gate **model output fails closed** (treated as BLOCK):
-a gate that cannot reach a verdict cannot be trusted to pass (issue #54). Note
-that *config* slips (an unresolved `score.target`, malformed `scorers`) are
-different and still fail **open** with a warning — those are authoring errors that
-degrade to the historical behavior, not a judge that couldn't decide. An explicit
-non-blocking JSON verdict (e.g. `{"verdict":"No issues found"}`) is a semantic PASS,
-not ambiguity.
+phase B needs phase A
+→ dependsOn: ["A"]
 
-**Zero-token machine checks (`eval`) — use these before spending tokens.**
-List machine-checkable assertions in `eval`. If **all** pass, the gate
-auto-passes with **no LLM call**; if any fails, it falls through to the LLM
-`task` (the qualitative residue). Each entry supports the `when` operators plus
-`X contains Y` (substring). A parse error fails **open**.
+prior text output
+→ {steps.A.output}
 
-```jsonc
-{ "id": "quality", "type": "gate", "dependsOn": ["build","test"],
-  "eval": ["{steps.build.output} contains BUILD SUCCESS", "{steps.test.json.failures} == 0"],
-  "task": "Review the diff for subtle logic errors a linter can't catch. VERDICT: PASS or BLOCK." }
+prior structured output
+→ {steps.A.json}
+→ {steps.A.json.field}
+
+map item
+→ {item}
+→ {item.field}
+
+immediately previous chain result
+→ {previous.output}
 ```
 
-**Self-healing (`onBlock: "retry"`).** By default a blocking gate halts the run
-(`onBlock: "halt"`). With `onBlock: "retry"` the gate instead **re-runs its
-upstream `dependsOn` phases and re-evaluates**, up to `retry.max` rounds (or
-until PASS / budget / abort) — a generate→critique→regenerate rework loop. See
-`patterns.md` for the full archetype.
+Four rules cover most ordinary DAG authoring:
 
-```jsonc
-{ "id": "spec-gate", "type": "gate", "onBlock": "retry", "retry": { "max": 3 },
-  "dependsOn": ["implement"],
-  "task": "Does the implementation satisfy ALL acceptance criteria? VERDICT: PASS or BLOCK with reasons." }
+1. **Array order is not a dependency.** If phase B needs phase A, declare the dependency explicitly.
+2. **References and dependencies belong together.** When a phase consumes `{steps.A...}`, make A an upstream dependency.
+3. **Use structured output for machine-consumed data.** Declare JSON output and an appropriate contract when later phases depend on its shape.
+4. **Make the intended result path explicit.** Mark the phase that should provide the flow's result when the flow has multiple possible endpoints.
+
+## 4. Proven task patterns
+
+Treat these as adaptive starting shapes.
+
+### Discover → bounded map
+
+**Use when:** the item set is unknown until runtime, but each discovered item can be handled independently.
+
+```text
+bounded discovery
+→ bounded item set
+→ narrow work over each item
 ```
 
-**Scoring gates (`score`) — graded, composable, auditable quality checks.**
-Where `eval` gives boolean assertions, `score` runs deterministic scorers
-against a target string at **zero tokens**, combines them into a [0,1] score,
-and only escalates to an LLM when they can't decide. The structured result is
-the gate's `.json` — downstream phases read `{steps.<gate>.json.combined}` /
-`.json.results.0.passed` and route on quality, not just pass/fail.
+Example:
 
-| field | meaning |
-|-------|---------|
-| `target` | interpolation ref for the scored string (default `{previous.output}`) |
-| `scorers` | array of checks: `exact-match` (`value`), `contains` (`value`), `regex` (`pattern`, optional `negate`), `json-schema` (`schema`, an `expect`-style contract), `length-range` (`min`/`max`), `code-compiles` (`language`: javascript\|typescript) |
-| `combine` | `all` (default) / `any` / `weighted` |
-| `weights` | weighted only — one entry per scorer, **+1 trailing entry for the judge** when present |
-| `threshold` | weighted only — combined-score cutoff in (0,1], default 0.5 |
-| `judge` | optional LLM-as-judge fallback `{agent?, task}` — runs when the deterministics fail (and, for `all`/`any`, whenever configured); sees the target + scorer report; returns `{"score": 0-1, "verdict": "pass"\|"block", "reason"}` |
-
-Decision order: (1) deterministics pass **and the judge cannot veto** →
-**auto-PASS, zero LLM tokens** — that means: no judge configured, or `weighted`
-where the deterministic score is a lower bound already clearing the threshold
-(the judge could not drop it). With `all`/`any` + a judge the judge **always
-runs** — its verdict is authoritative (it may check what scorers cannot, e.g.
-factuality); (2) fail + `judge` → judge decides; (3) fail + `task` → the gate
-task runs with the scorer report appended; (4) fail + no fallback → **explicit
-BLOCK** (a deterministic failure is not ambiguity). Fail-closed: an unparseable
-judge → BLOCK (issue #54); unresolved `target` with no fallback → PASS +
-warning (config slip, not a judge verdict); malformed `score` → the plain LLM
-gate. **Security:** LLM-generated dynamic sub-flows
-(`flow{def}`) may not use `code-compiles` (compiler execution) or `regex`
-(ReDoS) scorers — same hardening class as the `script` block.
-
-```jsonc
-{ "id": "quality", "type": "gate", "dependsOn": ["gen"],
-  "score": {
-    "target": "{steps.gen.output}",
-    "scorers": [
-      { "type": "json-schema", "name": "shape", "schema": { "type": "object", "required": ["summary", "risks"] } },
-      { "type": "regex", "name": "no-placeholders", "pattern": "TODO|TBD", "negate": true },
-      { "type": "length-range", "name": "substantive", "min": 200 }
-    ],
-    "combine": "weighted", "weights": [3, 2, 1, 2], "threshold": 0.8,
-    "judge": { "agent": "reviewer", "task": "Score the analysis quality 0-1: depth, evidence, actionability." }
-  } }
-// downstream: { "when": "{steps.quality.json.combined} >= 0.9", ... }
+```json
+{
+  "name": "inspect-migration-candidates",
+  "agentScope": "project",
+  "concurrency": 3,
+  "phases": [
+    {
+      "id": "discover",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "output": "json",
+      "expect": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["path", "reason"],
+          "properties": {
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+          }
+        }
+      },
+      "retry": { "max": 0 },
+      "timeout": 60000,
+      "task": "Identify at most 6 migration candidates matching the stated criterion. Return only [{\"path\":\"...\",\"reason\":\"...\"}]. Exclude generated and vendor files. Stop when the bounded candidate set is complete."
+    },
+    {
+      "id": "inspect-each",
+      "type": "map",
+      "over": "{steps.discover.json}",
+      "as": "item",
+      "agent": "<discovered-agent>",
+      "concurrency": 3,
+      "retry": { "max": 0 },
+      "timeout": 120000,
+      "dependsOn": ["discover"],
+      "task": "Assess {item.path} for the requested migration. Return exact evidence and one recommended disposition. Stop after this item."
+    }
+  ]
+}
 ```
 
-### Approval phases (human-in-the-loop)
+**Adapt:** tighten the discovery criterion, maximum item count, evidence requirement, per-call timeout, and concurrency.
 
-An `approval` phase pauses the run and asks the operator to **Approve / Reject /
-Edit**. Distinct from `gate` (an *agent* reviewing): this is a *human* deciding.
-The (interpolated) `task` is the prompt shown.
+A runtime-discovered map may still plan with an **unbounded static agent-call estimate** because the planner cannot know the discovered array length before execution. A prompt-level item limit is useful, but it is not a statically proven fan-out bound. Use a run-wide budget when you need a hard spend stop-loss.
 
-- **Approve** → continue; the phase output is `(approve)`.
-- **Reject** → halt the flow (same mechanism as a blocking gate).
-- **Edit** → the typed note becomes this phase's `output` — inject guidance
-  mid-run and reference it downstream with `{steps.<id>.output}`.
-- **Non-interactive** runs (headless/CI/print mode) **auto-reject** and record it.
-- **Background (detached)** runs **auto-reject** (no interactive approver);
-  downstream sees the rejection; the flow continues (fail-open).
+When the items are already known or can be discovered deterministically more cheaply, start from the known list instead.
+
+### Producer → deterministic verifier
+
+**Use when:** a machine check can reliably establish the acceptance criterion.
+
+```text
+subagent produces
+→ test / script / schema / lint / typecheck / drift check
+```
+
+Example:
+
+```json
+{
+  "name": "produce-and-verify",
+  "agentScope": "project",
+  "phases": [
+    {
+      "id": "produce",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "retry": { "max": 0 },
+      "timeout": 180000,
+      "task": "Produce the requested structured artifact using only the required fields."
+    },
+    {
+      "id": "verify",
+      "type": "script",
+      "dependsOn": ["produce"],
+      "run": ["./scripts/verify-output"],
+      "input": "{steps.produce.output}",
+      "timeout": 30000,
+      "final": true
+    }
+  ]
+}
+```
+
+Use deterministic verification when it establishes the acceptance criterion reliably. Reserve model judgment for criteria that actually require judgment.
+
+### Producer → independent reviewer/gate
+
+**Use when:** production and judgment should remain separate and deterministic proof is insufficient.
+
+```json
+{
+  "name": "produce-and-review",
+  "agentScope": "project",
+  "phases": [
+    {
+      "id": "produce",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "retry": { "max": 0 },
+      "timeout": 150000,
+      "task": "Produce the bounded deliverable with evidence for each material claim."
+    },
+    {
+      "id": "review",
+      "type": "gate",
+      "agent": "<discovered-reviewer>",
+      "dependsOn": ["produce"],
+      "output": "json",
+      "expect": {
+        "type": "object",
+        "required": ["verdict", "reason"],
+        "properties": {
+          "verdict": { "enum": ["pass", "block"] },
+          "reason": { "type": "string" }
+        }
+      },
+      "retry": { "max": 0 },
+      "timeout": 90000,
+      "task": "Independently judge the deliverable below against the stated criteria. Check the evidence rather than the producer's confidence.\n\nDELIVERABLE:\n{steps.produce.output}\n\nReturn only {\"verdict\":\"pass\"|\"block\",\"reason\":\"...\"}.",
+      "final": true
+    }
+  ]
+}
+```
+
+Give the reviewer the criteria and evidence it needs while preserving genuine separation from production.
+
+A structured contract validates the result shape; retry remains a separate recovery decision.
+
+A gate that is intentionally the sole path to the final result may produce a gate-exhaustion warning. That warning describes the consequence of blocking; it does not by itself mean you should add a bypass.
+
+Use this pattern when independent judgment affects acceptance.
+
+### Fan-out → reducer when synthesis belongs inside the flow
+
+**Use when:** multiple upstream outputs genuinely require fresh-context synthesis, a reusable final contract, or an in-flow final result.
+
+```text
+bounded independent subagents
+→ one reducer
+```
+
+Example:
+
+```json
+{
+  "name": "synthesize-findings",
+  "agentScope": "project",
+  "phases": [
+    {
+      "id": "inspect-a",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "retry": { "max": 0 },
+      "timeout": 120000,
+      "task": "Inspect the first bounded area. Return concise findings with evidence."
+    },
+    {
+      "id": "inspect-b",
+      "type": "agent",
+      "agent": "<discovered-agent>",
+      "retry": { "max": 0 },
+      "timeout": 120000,
+      "task": "Inspect the second independent bounded area. Return concise findings with evidence."
+    },
+    {
+      "id": "summary",
+      "type": "reduce",
+      "from": ["inspect-a", "inspect-b"],
+      "agent": "<discovered-agent>",
+      "retry": { "max": 0 },
+      "timeout": 150000,
+      "task": "Synthesize the upstream findings below into one deduplicated prioritized report. Preserve evidence, reconcile conflicts explicitly, and omit unsupported claims.\n\n{previous.output}",
+      "final": true
+    }
+  ]
+}
+```
+
+For a reducer, `from` identifies its upstream inputs and establishes those dependency edges. `{previous.output}` supplies the aggregated completed `from` outputs.
+
+Define the synthesis contract explicitly: deduplication, ranking, conflict handling, evidence preservation, and stopping condition.
+
+When a few compact results can be combined directly in your current context, direct synthesis is usually enough.
+
+## 5. Adapt the pattern safely
+
+Start from the selected shape, then adapt the controls that materially change execution.
+
+| Weak adaptation | Better adaptation |
+|---|---|
+| “Investigate the repository and summarize.” | “Inspect `src/auth/**` for missing authorization checks; cite file/line evidence; exclude tests/generated code; return at most 10 findings; stop after the scoped files.” |
+| Use the strongest model and highest reasoning on every phase. | Match capability to the phase: simple reading/discovery → lower reasoning; ordinary analysis → moderate; difficult bounded judgment → higher only when justified. |
+| Give every subagent broad ambient capability. | Select specialized skills where useful and narrow tools within the chosen agent's declared capability envelope. |
+| Set only `idleTimeout` for open-ended investigation. | Set a finite per-call `timeout` on expensive agent work. `idleTimeout` detects inactivity; an active subagent can continue without becoming idle. |
+| Retry expensive reasoning automatically. | Begin with no author-declared phase retry unless another attempt has a concrete recoverable rationale. |
+| Pair every `expect` contract with retry. | Use `expect` to enforce the contract. Decide retry separately. |
+| Raise concurrency because work is read-only. | Size concurrency to independent, bounded, affordable work. Start small and raise it only when useful. |
+| Omit a budget because the flow is not a large fan-out. | Add a run-wide stop-loss when execution can expand or become expensive. |
+| Inject large context and still ask for broad discovery. | Known sources → focused context. Unknown sources → bounded discovery. Use both only when both are necessary. |
+| Add reviewer → cross-check → reducer → final model by habit. | Stop at the first mechanism that establishes the result: deterministic proof, one independent judgment, or direct synthesis when cheap. |
+
+> **Output length does not bound investigation cost.**
+
+A request for “five bullets” can still trigger extensive search, tool calls, and reasoning.
+
+Bound the objective, scope, evidence, stopping condition, per-call execution time, concurrency, and spend—not only the answer length.
+
+> **Read-only does not mean cheap.**
+
+A read-only subagent can still inspect thousands of files, consume substantial context, invoke expensive reasoning, or run for a long time.
+
+A compact expensive phase usually looks like:
+
+```json
+{
+  "id": "analyze",
+  "type": "agent",
+  "agent": "<discovered-agent>",
+  "retry": { "max": 0 },
+  "timeout": 110000,
+  "task": "Answer one bounded question over the stated scope. Cite required evidence. Exclude unrelated material. Stop when the acceptance criterion is established or the scoped evidence is exhausted."
+}
+```
+
+The timeout and concurrency values in these examples are illustrative.
+
+For agent-running phases, `timeout` caps each subagent call. It is not necessarily a deadline for the entire phase or flow: a map, retrying phase, tournament, or multi-call reduction may make more than one subagent call.
+
+`idleTimeout` is separate. It detects inactivity rather than total elapsed execution time.
+
+`retry.max: 0` disables **author-declared phase retries**. Taskflow may still automatically retry failures it classifies as transient. A Taskflow phase `timeout` expiry itself is treated as deterministic and is not transient-retried.
+
+An `expect` contract also does not imply retry. A contract violation fails the attempt and is eligible for the phase's explicit retry policy; without one, the contract failure is not automatically retried as a transient error.
+
+A retry repeats work. On broad analysis, repository investigation, or synthesis, that can multiply wall time and cost.
+
+Match model and reasoning to the phase:
+
+```text
+simple reading / exact discovery
+→ lower reasoning
+
+ordinary static or semantic analysis
+→ moderate reasoning
+
+difficult bounded judgment
+→ higher reasoning when justified
+```
+
+A strong calling model can deliberately delegate simpler work to a cheaper subagent.
+
+### Context versus discovery
+
+```text
+Known sources
+→ focused context
+
+Unknown sources
+→ bounded discovery
+
+Both
+→ only when both are genuinely necessary
+```
+
+Preloaded context can reduce exploration, but excessive context plus broad discovery can pay for the same information twice.
+
+## 6. Preflight → verify → plan → run
+
+After establishing the pre-author checkpoint above, verify and plan the exact invocation you intend to execute.
+
+```text
+verify
+→ plan with real args
+→ inspect
+→ run
+```
+
+For a non-trivial flow you are iterating on, a stable `defineFile` can keep verification, planning, and execution pointed at the same definition:
 
 <!-- host:pi -->
-Place one before the expensive part of a flow (a big fan-out, a mutation) —
-see the plan→approve→execute archetype in `patterns.md`.
+```json
+{ "action": "verify", "defineFile": "/tmp/audit-auth.json" }
+```
+
+```json
+{
+  "action": "plan",
+  "defineFile": "/tmp/audit-auth.json",
+  "args": { "dir": "src/api" }
+}
+```
+
+Inspect the plan, then run the same intended definition and arguments:
+
+```json
+{
+  "action": "run",
+  "defineFile": "/tmp/audit-auth.json",
+  "args": { "dir": "src/api" }
+}
+```
 <!-- /host:pi -->
 <!-- host:codex,claude,opencode,grok,hermes -->
-> **MCP-host caveat (Codex / Claude Code / OpenCode / Grok / Hermes):** MCP-driven runs are
-> non-interactive, so an `approval` phase **auto-rejects**. Prefer a `gate`
-> (agent review) in flows you run through the `taskflow_*` tools; use `approval`
-> only in flows a human runs interactively.
+Use the corresponding host MCP tools with the same definition and arguments:
+
+```json
+{ "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit-auth.json" } }
+```
+
+```json
+{ "name": "taskflow_plan", "arguments": { "defineFile": "/tmp/audit-auth.json", "args": { "dir": "src/api" } } }
+```
+
+Inspect the plan, then call `taskflow_run` with the same `defineFile` and arguments.
 <!-- /host:codex,claude,opencode,grok,hermes -->
 
-### Sub-flows (composition) — summary
+If the definition or consequential arguments change, plan again.
 
-A `flow` phase runs another taskflow as a single phase and bubbles up its final
-output. Two mutually-exclusive sources:
+`verify` performs structural/static checks such as graph validity, references, dependencies, cycles, contracts, and verifier findings.
 
-- **Saved** (`use`): `{ "type": "flow", "use": "deep-research", "with": { "topic": "{item}" } }`
-  — args via `with` (string values interpolate); recursion is detected and rejected.
-- **Runtime-generated** (`def`): `{ "type": "flow", "def": "{steps.plan.json}" }`
-  — an upstream planner emits a whole flow as JSON; the runtime validates it
-  (cycles / dangling refs / security caps) then runs it nested. This is how a
-  planner decides *at runtime* what work to spawn — the declarative answer to a
-  code-mode `for`/`if` loop.
+`plan` binds invocation arguments, performs validation and verification, projects topological phase order and dynamic or unresolved bindings, and estimates a worst-case agent-call bound without spawning subagents.
 
-The `def` output contract, fail-open semantics (`defError`), nesting/breadth
-caps, and the iterative-replanning pattern (`loop` + `flow{def}`) are in
-`advanced.md`. The plan→execute and replan archetypes are in `patterns.md`.
+A runtime-discovered map can legitimately produce an `unbounded` static call estimate because its item count is not known at planning time.
 
-### Loop phases (iterate until done)
+Structural validity and a plausible plan are necessary checks, but they do not by themselves establish that the flow is well-scoped, affordable, operationally available, or configured with appropriate resource and recovery choices.
 
-A `loop` phase runs its body repeatedly, exposing each iteration's output as
-`{steps.<thisId>.output}` / `.json` so the next round can react to the last. It
-stops on the first of: `until` truthy, **convergence** (output stops changing),
-or `maxIterations` (hard cap, required). The runtime always terminates.
+For saved or reused flows, consider `strictInterpolation: true` when unresolved interpolation should be treated as validation errors rather than remain unresolved placeholders with diagnostics.
 
-- `until` — stop condition, same operators as `when` (a parse error stops the loop, fail-safe).
-- `maxIterations` — hard iteration cap (required).
-- `convergence` — `true` to stop early when an iteration's output equals the previous one.
-- `reflexion` — `true` to feed each iteration a structured summary of the prior one (see below).
+## 7. When execution fails
 
-```jsonc
-{
-  "id": "refine", "type": "loop", "agent": "executor",
-  "maxIterations": 5,
-  "until": "{steps.refine.json.done} == true",
-  "convergence": true,
-  "task": "Improve the draft. When nothing else needs fixing, output JSON {\"done\":true,\"draft\":\"...\"}; otherwise {\"done\":false,\"draft\":\"...\"}.",
-  "output": "json",
-  "expect": { "type": "object", "required": ["done", "draft"] },
-  "final": true
-}
+Do not make rerun or resume your first move.
+
+```text
+stop
+→ classify
+→ inspect evidence
+→ decide
 ```
 
-**Reflexion memory (`reflexion: true`).** By default each iteration sees only
-the prior *output* — the *reason* it wasn't good enough (an `expect` contract
-violation, an error, the unmet `until`) is discarded, so models repeat mistakes.
-With `reflexion: true`, every iteration after the first receives a structured
-failure summary of the prior one via the `{reflexion}` placeholder
-(auto-appended if the task omits it, with a one-time warning; capped at 2000
-chars): contract diagnostics like `$.done: required key is missing`, the
-(sanitized) error, or the unmet stop condition, plus a truncated output
-snippet. Iteration 1 sees a sentinel.
+| Failure class | Examples | Response |
+|---|---|---|
+| Configuration / authoring | unknown agent, wrong scope, unsupported model, invalid dependency/interpolation | Repair the definition or invocation. Do not retry unchanged. |
+| Transport / provider / process | provider/network failure, child/process failure, protocol/stream failure | Inspect runtime evidence first. Retry only when a transient explanation is plausible and repeating the work is safe. |
+| Output / contract / quality | malformed structured output, failed `expect`, bounded result misses acceptance criteria | A bounded explicit retry or targeted rework may fit. Change something that addresses the failure. |
+| Timeout / budget | per-call timeout reached, spend stop-loss reached | Reassess objective, scope, stopping condition, model, timeout, budget, or fan-out before spending again. |
 
-Semantics shift to enable self-correction: **body failures become feedback
-instead of terminating the loop**. Timeout/abort/over-budget still hard-stop,
-and if `maxIterations` exhausts with the last iteration failed, the phase fails
-(reflexion defers failure, never erases it). Cost is bounded by `maxIterations`
-+ the run `budget`.
+Recovery mechanisms do not explain why execution failed.
 
-```jsonc
-{ "id": "emit-plan", "type": "loop", "reflexion": true, "maxIterations": 4,
-  "output": "json", "expect": { "type": "object", "required": ["steps", "done"] },
-  "until": "{steps.emit-plan.json.done} == true",
-  "task": "Emit the migration plan as JSON {steps:[...], done:bool}.\n{reflexion}" }
+Use retry, resume, recompute, or rerun only after deciding why that mechanism fits the observed condition.
+
+Remember that Taskflow may already absorb failures it classifies as transient before returning a phase failure. Do not assume another whole-flow rerun is needed merely because a provider or transport problem occurred internally.
+
+Do not repeat an unchanged failed flow merely because another execution is available.
+
+## 8. Advanced shapes
+
+Use advanced shapes when they represent a real property of the work.
+
+### Bounded loop
+
+```text
+bounded phase
+→ evaluate measurable stop condition
+→ repeat up to a fixed maximum
 ```
 
-### Tournament phases (N variants, judge picks best)
+Use when each iteration can make measurable progress toward a clear stop condition.
 
-A `tournament` phase runs `variants` competing attempts in parallel, then a
-**judge** sub-phase selects the winner (`mode: "best"`) or merges them
-(`mode: "aggregate"`). Use it when one shot is unreliable and you want the best
-of several drafts, or a synthesis of diverse approaches.
+Avoid when “better” is vague or one bounded pass is enough.
 
-- `variants` — number of competing variants spawned from `task` (default 3, max 20).
-  For genuinely different *approaches*, use `branches` instead — an explicit
-  array of `{task, agent?}` definitions (e.g. one conservative, one aggressive).
-- `mode` — `"best"` (judge picks one winner, default) or `"aggregate"` (judge merges all).
-- `judge` — the judge's rubric/instructions. `judgeAgent` — optional judge agent
-  (defaults to the phase `agent`; use a stronger model here).
-- **Winner format — prefer JSON.** Have the judge return `{"winner": <n>}` (and an
-  optional `"reason"`); the runtime also reads a `WINNER: <n>` line (`#3` and
-  common Markdown emphasis like `WINNER: **3**` are tolerated — issue #54).
-  JSON is more robust than a text marker: there's no formatting the model can
-  get subtly wrong.
-- Fail-open: if the judge's pick is still unparseable, variant 1 is returned
-  (work is never lost — the variants are already computed, so blocking would be
-  worse than picking a safe default).
+### Tournament
 
-```jsonc
-{
-  "id": "headline", "type": "tournament", "agent": "executor",
-  "variants": 3, "mode": "best",
-  "judge": "Pick the clearest, most accurate headline. Return JSON {\"winner\": <n>, \"reason\": \"...\"}.",
-  "task": "Write one headline for the article below.\n\n{steps.draft.output}",
-  "dependsOn": ["draft"], "final": true
-}
+```text
+independent competing approaches
+→ judge
+→ selected or aggregated result
 ```
 
-### Script phases (shell commands, zero tokens)
+Use when competing approaches are genuinely useful and independent judgment can distinguish them.
 
-A `script` phase runs a **shell command** directly — no subagent, no tokens — and
-captures its stdout as the phase output. Use it to anchor LLM phases to ground
-truth: builds, tests, `git`, formatters, scoring scripts. **Prefer a `script`
-phase over asking an agent to run a command** — it is cheaper, faster, and the
-output is exact.
+Avoid when deterministic work or one strong approach is sufficient.
 
-- `run` — **required**. A **string** runs through a shell; an **array** is
-  spawned directly (execvp, no shell). A string `run` containing an
-  interpolation placeholder is **rejected at validation** (shell-injection
-  guard) — use the array form or `input` for dynamic values.
-- `input` — optional text piped to stdin (supports interpolation).
-- `timeout` — optional ms cap (1000–300000, default 60000); SIGTERM → SIGKILL on expiry.
-- A non-zero exit fails the phase (stderr captured); stdout capped at 1 MB.
-  No `retry`, no `output: "json"`; **excluded from cross-run cache** (may have
-  side effects). Not allowed inside LLM-generated dynamic sub-flows (RCE guard).
-- Top-level `scriptCwd: "flow"` makes script phases run from the canonical saved
-  flow/`defineFile` directory. The default is `"invocation"`; explicit phase
-  `cwd` still wins. Inline definitions cannot claim file provenance and fail
-  closed in `"flow"` mode. The source directory identity is checked again just
-  before spawn, and any inherited cwd-bridge boundary still constrains it.
-- Saved flows may live at legacy `.pi/taskflows/*.json` or recursively below
-  `.pi/taskflows/flows/**/*.json`. Legacy files win same-scope duplicate names;
-  nested candidates use deterministic Unicode-scalar path order. Discovery
-  rejects symlinks below trusted storage boundaries and fails closed above 1,000
-  flows, 10,000 entries, 512 directories, 8 MiB total definitions, 1 MiB per
-  definition, or 16 levels. A configured user agent-directory boundary may be a
-  symlink; project `.pi` remains no-follow. New-flow saves enforce the same
-  boundary policy and revalidate the target directory inside the write lock.
+### Race
 
-```jsonc
-{ "id": "build", "type": "script", "run": "pnpm run build", "timeout": 120000 },
-{ "id": "score", "type": "script", "run": ["python", "score.py"],
-  "input": "{steps.analyze.output}", "dependsOn": ["analyze"], "final": true }
+```text
+several independent attempts
+→ first successful acceptable result wins
 ```
 
-### Trusted Effects (`effects[]` — declared side effects, 0.3)
+Use when the first successful result is sufficient and latency matters more than comparing every output.
 
-> **One-line authority: the model proposes content; the resources runtime is
-> the only commit authority.** A phase declares *what* it intends to touch;
-> for admitted declared `fs.write` targets the runtime runs the
-> resource-controlled **file transaction** — durable snapshot → persistent
-> lease → journal intent/permit → stage → **Commit** or **Restore+Reject** —
-> and no other code finalizes declared content.
+Avoid when all outputs are required or quality comparison must happen after completion.
 
-Trusted Effects (0.3 MVP) adds an optional `effects[]` bag to **any** phase: a
-closed vocabulary of typed side-effect declarations. `verify` / `compile`
-statically check the bag (unknown kinds, malformed targets, and illegal
-label flows surface as `[effects]` issues), and a run admits every declared
-target through PathRef resolution — lease, durable intent, mutation permit —
-**before** the phase body executes. Start from the runnable example
-**`examples/trusted-effects-write.json`** (a `script` phase that declares one
-`fs.write` and commits it via the resource transaction — no LLM involved).
+### Dynamic flow / expand
 
-Each effect:
-
-| field | meaning |
-|-------|---------|
-| `id` | stable id within the flow — the handle the why-* audit explains |
-| `kind` | `fs.read` · `fs.write` · `fs.delete` · `secret.read` · `service.call` |
-| `target` | `{ kind: "path", path: <PathRef> }`, or the `secret` / `service` handle shapes |
-| `confidentiality` | optional label `public` · `internal` · `secret` — a higher label must not flow to a lower sink |
-| `integrity` | optional label `untrusted` · `project` · `verified` — lower integrity must not overwrite higher |
-| `purpose` | free-text note surfaced by the why-* explainers (**not** authority) |
-
-**PathRef shape** — the FS target, always relative to a workspace scope:
-
-```jsonc
-"target": {
-  "kind": "path",
-  "path": {
-    "workspace": "project",                       // scope the path resolves in
-    "subpath": { "literalPath": "out/report.md" }, // or { "argPath": "out" } / { "segments": [ { "segment": "out" } ] }
-    "intent": "create-file"   // create-file | create-directory | existing-file | existing-directory | executable
-  }
-}
+```text
+runtime result
+→ bounded generated graph or fragment
+→ execute
 ```
 
-**Phase output is the payload.** With one declared `fs.write`, the phase's
-output becomes the staged file content (see the example: `process.stdout.write`
-= the report). With several `fs.write` effects, the phase must emit JSON
-mapping each effect id to its content (`{ "report": "…", "backup": "…" }`).
-Commit promotes each file atomically; a later failure restores every admitted
-file to its durable pre-state, and a direct write by the agent/script to a
-**declared final path** is detected and restored — only the resource
-transaction may finalize declared content.
+Use when runtime discovery genuinely determines graph structure.
 
-**Only `fs.write` has a bound runtime backend in this cut.** The other kinds
-are valid to declare and verify, but fail **closed** (no bound resource
-backend): `fs.delete` is not supported by the file transaction, and
-`secret.read` / `service.call` have no vault/network adapters in 0.3 — do not
-author a flow expecting them to do anything yet.
+Keep generated work explicitly bounded.
 
-<!-- host:codex,claude,opencode,grok,hermes -->
-**Audit with `taskflow_why_effect` (zero tokens, read-only).** Pass `runId` +
-`effectId` (add `phaseId` to disambiguate a repeated id; `json: true` for the
-full record) to explain a declared effect's authorization and lifecycle from
-the durable resource-intent ledger — principal, capability binding, intent id,
-journal status, and lifecycle (`declared` / `staged` / `committed` /
-`rejected` / `unknown`). **Declaration alone is not authorization**: if no
-durable intent admitted the effect for this run/phase, `authorized.allowed` is
-`false` (fail-closed).
-<!-- /host:codex,claude,opencode,grok,hermes -->
+Avoid when the topology is already known.
 
-**What this is NOT (honesty baseline):**
+### Incremental / recompute
 
-- **No FileBroker sandbox.** Every host's PathRef support is *resolve-only*;
-  this is not an OS sandbox, and no host claims a FileBroker guarantee.
-- **Undeclared paths are not protected.** Only writes to *declared* final
-  targets are detected and restored; writes outside the declared set remain
-  host-policy dependent.
-- **`secret.read` / `service.call` are type-only fail-closed** (see above) —
-  valid declarations, no backend in the MVP.
-
-### Race phases (first success wins)
-
-A `race` phase runs static `branches[]` concurrently and **returns the first
-branch that finishes successfully** (failed settles do **not** win — a slower
-success still wins over a fast hard-fail). Unlike `parallel` (waits for all) or
-`tournament` (judges quality after all variants), use race when latency matters
-more than comparing every approach.
-
-- `branches` — **required**, at least two `{task, agent?}`.
-- `cancelLosers` — optional boolean (default `true`). After the first **success**,
-  abort other branches via `AbortSignal` (best-effort — host must honor the
-  signal). Set `false` to let losers finish naturally.
-- Phase `usage` **aggregates all branches** (including aborted partials) so
-  budgets stay honest.
-- Output of the winning branch becomes the race phase output; a warning records
-  which branch won.
-
-```jsonc
-{
-  "id": "quick", "type": "race",
-  "branches": [
-    { "task": "Answer with a short heuristic…", "agent": "executor" },
-    { "task": "Answer with a thorough search…", "agent": "researcher" }
-  ],
-  "final": true
-}
+```text
+previous tracked execution
++ changed inputs
+→ identify affected work
+→ reuse unchanged work where supported
+→ recompute what changed
 ```
 
-### Expand phases (dynamic fragment: nested or graft)
+Use when repeated runs over changing inputs benefit from preserving unaffected work.
 
-An `expand` phase runs a **fragment Taskflow** from `def` (inline object,
-phases array, or interpolated `{steps.plan.json}`). Two modes:
+Do not assume every phase or side effect is reusable.
 
-| `expandMode` | Behavior |
-|--------------|----------|
-| `nested` (default) | Run as an isolated sub-flow (like `flow{def}`); child phase ids stay **off** the parent. |
-| `graft` | After success, **promote** child phase states onto the parent as `<expandId>-<childId>` so later phases can read `{steps.grow-leaf.output}`. |
+Load `advanced.md` before authoring these mechanisms when their exact semantics matter.
 
-- `def` — **required** for expand.
-- `maxNodes` — optional cap on fragment phase count (default 50, hard max 100).
-- Dynamic validation + nesting caps match `flow{def}` (see `advanced.md`).
-- Prefer `expand` when the planner fragment is a first-class kind; prefer
-  `flow` + `use` for saved reusable flows; prefer `flow` + `def` when you want
-  the classic nested sub-flow without graft promote.
+## 9. Need more detail?
 
-```jsonc
-{
-  "id": "grow", "type": "expand", "expandMode": "graft",
-  "def": "{steps.plan.json}",
-  "dependsOn": ["plan"], "final": true
-}
-```
+Load only the sidecar that answers the next concrete question.
 
-### Budget (observed-usage stop-loss)
-
-Add a run-wide stop-loss at the top level. Ordinary budgeted DAG layers and
-`map`/`parallel`/`tournament` fan-out use serial call admission. Once reported
-cost/tokens exceed the threshold, no new model call is started; the run ends as
-`blocked` with partial outputs preserved. An admitted call may cross the
-threshold. A `race` necessarily starts competing branches together, so all
-already-active race branches may contribute overshoot. This is never a
-zero-overshoot guarantee.
-
-```jsonc
-{ "name": "...", "budget": { "maxUSD": 1.50, "maxTokens": 2000000 }, "phases": [ ... ] }
-```
-
-**Any flow with a fan-out should have a `budget`** — a map over a
-mis-discovered 500-item array is otherwise unbounded spend.
-
-Host accounting matters: Codex reports tokens but not cost, so Codex accepts
-`maxTokens` and rejects `maxUSD`. Grok 0.2.93 and Hermes quiet mode report
-neither, so both reject every flow declaring `budget`. Pi, Claude Code, and
-OpenCode accept both dimensions.
-
-### Strict interpolation
-
-By default an unresolved placeholder (typo'd `{steps.X.output}`, missing
-`{args.Y}`) resolves to an empty string and validation issues a *warning* —
-the flow still runs, possibly doing subtly wrong work. Set
-`"strictInterpolation": true` at the flow level to promote unresolved
-placeholders and missing-dep/arg warnings to **hard errors**. Recommended for
-any flow you save — a saved flow will be run later with args you're not
-watching.
-
-## Interpolation
-
-- `{args.X}` — invocation argument
-- `{steps.ID.output}` — a prior phase's text output
-- `{steps.ID.json}` / `{steps.ID.json.field}` — prior output parsed as JSON
-- `{item}` / `{item.field}` — current item inside a `map` phase
-- `{previous.output}` — the immediately-upstream phase output. For `reduce` phases, this resolves to **all completed `from[]` outputs** in from-array order: one completed input → its raw output; many → `### <id>\n\n<output>` sections joined by `\n\n---\n\n`. `join: "any"` includes only completed branches (skipped/failed are omitted). Explicit `{steps.ID.output}` refs are unaffected.
-- `{loop.iteration}` / `{loop.lastOutput}` / `{loop.maxIterations}` — inside a `loop` body: the 1-based round, the prior iteration's output, and the cap
-- `{reflexion}` — inside a `loop` body with `reflexion: true`: the structured failure summary of the prior iteration (sentinel on iteration 1)
-
-Interpolation also runs on a scoring gate's `score.target` and `score.judge.task`
-— refs there need `dependsOn` like any other `{steps.X}` use.
-
-## Rules that make flows work
-
-1. For a `map` phase, make the upstream phase **emit a JSON array** and set
-   `output: "json"` on it. Tell that agent to output **only** JSON, and pin the
-   shape with an `expect` contract + `retry`.
-2. Give each phase a clear, single responsibility.
-3. Reference upstream results explicitly with `{steps.ID...}` and set `dependsOn`.
-4. Mark the result-bearing phase with `"final": true` (else the last phase wins).
-5. Machine checks before LLM checks: `script` for ground truth, gate `eval`
-   before gate `task`, `expect` before a downstream "did it parse?" phase.
-6. **Decision phases should emit structured output, not free text.** Any phase
-   whose output is a *decision* a downstream phase (or the runtime) acts on — a
-   gate verdict, a router's branch, a tournament winner, a judge's score — should
-   use `output: "json"` + an `expect` enum/contract so the decision is
-   machine-validated. Free-text markers (`VERDICT:`, `WINNER:`, `SCORE:`) are
-   tolerated and Markdown-emphasis-tolerant (issue #54), but a JSON contract is
-   strictly more robust: there's no formatting the model can get subtly wrong, and
-   a malformed decision fails the contract (retryable) instead of being silently
-   mis-read.
-7. `verify` before `run` for anything non-trivial (zero tokens).
-
-## Common mistakes (the runtime rejects these at validation time)
-
-### 1. Referencing `{steps.X}` without `dependsOn: ["X"]`
-
-```jsonc
-// ❌ WRONG — 'fix-issues' runs in parallel with 'code-review-1' and sees the
-// literal string "{steps.code-review-1.output}" instead of the review text.
-{ "id": "code-review-1", "type": "agent", "task": "review code" },
-{ "id": "fix-issues", "type": "agent",
-  "task": "fix {steps.code-review-1.output}" }   // ← no dependsOn!
-```
-
-Validation rejects this: `Phase 'fix-issues': task references
-{steps.code-review-1.*} but 'code-review-1' is not in dependsOn. ...`
-**Always declare the chain:**
-
-```jsonc
-// ✅ RIGHT
-{ "id": "code-review-1", "type": "agent", "task": "review code" },
-{ "id": "fix-issues", "type": "agent",
-  "task": "fix {steps.code-review-1.output}",
-  "dependsOn": ["code-review-1"] }
-```
-
-Tip: write the `task` first (it tells you what each phase needs), then scan for
-`{steps.*}` references and add the matching `dependsOn`.
-Exception: phases with `join: "any"` are exempt (they deliberately wait for only
-one dep and may reference others as informational context).
-
-### 2. Assuming the runtime knows "this is a chain"
-
-Phase order in the `phases` array is **documentation, not execution order**.
-The DAG comes from `dependsOn`. Four phases listed in order with no `dependsOn`
-are four **parallel** phases, all racing in layer 0. Use the shorthand `chain`
-if you literally want `a → b → c → d`, or write explicit `dependsOn`.
-
-### 3. Underscores in ids / invented agent names
-
-Phase ids and agent names use **hyphens** (`audit-each`, `risk-reviewer`).
-An unknown agent name fails the phase with the list of available agents.
+| Load | When it is worth loading |
+|---|---|
+| `patterns.md` | You need deeper adaptive patterns, richer compositions, anti-patterns, or larger worked examples. |
+| `configuration.md` | You need exact fields, precedence, agent/model settings, scopes, tools, skills, context, timeout, retry, budget, caching, or host-specific configuration. |
+| `advanced.md` | You need exact mechanics for loops, races, tournaments, dynamic/generated flows, resume, replay, recompute, caching, background execution, isolation, or other specialized runtime features. |
+| `library.md` | You want to find, save, adapt, generalize, tag, or reuse flows instead of authoring one from scratch. Reuse only when the existing control structure actually fits the task. |
 <!-- host:pi -->
-Check with `action: "agents"` instead of guessing.
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-Built-in agents: `executor`, `executor-code` (complex, multi-file),
-`executor-fast` (trivial), `executor-ui`, `scout` (cheap recon), `planner`,
-`analyst`, `critic`, `reviewer`, `risk-reviewer`, `security-reviewer`,
-`plan-arbiter`, `final-arbiter`, `test-engineer`, `doc-writer`, `verifier`,
-`recover`, `visual-explorer`. **Do not invent agent names** — omit `agent` to
-use the default. Use cheap agents (`scout`) for discovery and strong agents
-(`critic`, `final-arbiter`) for gates/judging.
-<!-- /host:codex,claude,opencode,grok,hermes -->
-
-<!-- host:pi -->
-## Actions (all 20)
-
-| action | what it does |
-|--------|--------------|
-| `run` | Run an inline `define` or a saved `name` (+ optional `args`). Add `detach: true` for background (returns runId immediately). Add `incremental: true` to default every phase to cross-run cache reuse. |
-| `save` | Persist `define` (scope `project` default / `user`); becomes `/tf:<name>`. Project overrides user on collision. |
-| `resume` | Continue a paused/failed run by `runId`. Cache-aware: `done` phases are reused, only the unfinished tail re-runs. |
-| `list` | List saved flows. |
-| `agents` | List available agents (never invent names). |
-| `verify` | Static-check a `define` or saved `name` — cycles, missing deps, undefined refs, contract-ref typos. Zero tokens. |
-| `compile` | Render a flow as a Mermaid diagram + verification report. Zero tokens. |
-| `plan` | **Preflight plan (0.2.7).** Bind typed `args`, structural verify + optional lint, topo-ordered phase plan with bound/unresolved/dynamic bindings, and worst-case agent-call bound (`budget.maxAgentCalls`). Zero tokens — no subagent is spawned. Prefer this before any non-trivial `run`. |
-| `analytics` | **Read-only last-N aggregation (0.2.7).** Status histogram, p50/p95 duration, per-phase fail/cache rates for a saved flow `name`. No writes, no auto-tune. |
-| `ir` | Compile to **FlowIR** — the canonical intermediate representation with a content hash per phase. Use to diff two versions of a flow or confirm a definition change actually changed a phase's fingerprint. Zero tokens. |
-| `provenance` | Show a completed run's **observed read-sets** — which phases actually read which upstream outputs at runtime (may be narrower than `dependsOn`). Requires `runId`. Zero tokens. |
-| `trace` | Show a completed run's **deterministic-replay event trace** — each subagent call's input/output + the runtime's own decisions (gate verdicts, when-guard results, cache hits, unreplayable markers). `runId` required; `--json` for the complete machine-readable record. Zero tokens, read-only. |
-| `replay` | **Offline what-if** on a recorded trace: re-evaluate under alternate gate thresholds, budget caps, or model routes **without calling the model** (zero tokens). Reports per-phase `reused` / `would-block` / `verdict-flipped` / `would-exceed-budget` / `needs-live-rerun`. `runId` required; optional `thresholds`, `budgetMaxUSD`, `budgetMaxTokens`, `models`; `--json` for the full `ReplayReport`. |
-| `why-stale` | Given `runId` (+ optional `phaseId` as the assumed-changed seed): with no seed, prints the observed dependency graph; with a seed, computes the **transitive stale frontier** — exactly which phases would need re-running and why (observed ∪ declared edges). Zero tokens. |
-| `recompute` | Re-run **only the stale frontier** of a stored run from a seed `phaseId`. **Defaults to `dryRun: true`** (reports what would re-run, zero tokens). Pass `dryRun: false` to actually re-execute the seed + frontier and persist the updated run. |
-| `reconcile-workspace` | Explicitly reconcile a dirty resolve-only cwd workspace after acknowledging the risk. |
-| `version` | Report package version, build commit, run-state schema version, and host identity. Zero tokens. |
-| `cache-clear` | Clear the cross-run memoization store. |
-| `search` | Search the reusable-flow **library** by purpose/tags (structural + CJK-aware keyword scoring). Find a flow to reuse before authoring a new one. |
-| `init` | Model-roles configuration. `mode: "show"` is read-only; `apply-defaults` requires `force: true`; `interactive` needs a UI session. |
-
-**The incremental loop** (`ir` → `why-stale` → `recompute`) is taskflow's
-cheapest superpower: after a repo change, re-pay for only the affected phases
-of a prior run instead of re-running the whole flow. Full workflow with an
-example in `advanced.md`.
-
-## Background (detached) runs
-
-Add `detach: true` to `action: "run"` to spawn the flow in a detached child
-process. Returns immediately with the `runId`; the flow survives the host
-session exiting. Poll via `/tf runs` or resume by `runId`. Approval phases
-auto-reject in detached mode; a crashed detached process persists
-`status: "failed"` (resumable).
+| `commands.md` | You need user-facing Taskflow commands or want to explain interactive Taskflow operation to a human. |
 <!-- /host:pi -->
 
-## Operating a run (lifecycle & inspection)
-
-A run moves through: **running →** `completed` (a `final` phase produced output)
-**/** `blocked` (gate BLOCK, approval rejected, or `budget` hit) **/** `failed`
-(a non-`optional` phase errored) **/** `paused` (aborted).
-<!-- host:pi -->
-`failed` and `paused` are resumable.
-<!-- /host:pi -->
-
-<!-- host:pi -->
-- **Resume forks immutable history.** `action: "resume"` accepts only a
-  `failed` or `paused` run, creates a new child `runId` with `parentRunId`,
-  reuses completed unaffected phases, and never overwrites the parent. Optional
-  `phaseId` + `resumeTask`/`resumeModel`/`resumeTimeout`/`resumeIdleTimeout`
-  overrides patch the failed/in-flight phase on the child only.
-- **Resume vs. re-run vs. recompute.** Resume when inputs are unchanged and you
-  want to continue the tail (fixed a gate, raised the budget). Re-run from
-  scratch when the task text changed. **Recompute** when the *world* changed
-  (a file, a commit) and you want to re-pay for only the affected phases.
-- **Inspect runs.** `/tf runs` lists recent runs; `/tf show <name>` prints a
-  saved flow's definition. Run state:
-  `<project .pi>/taskflows/runs/<flowName>/<runId>.json` (gitignored).
-- **Peek at intermediate outputs.** `/tf peek <runId>` lists phases (status +
-  output size); `/tf peek <runId> <phaseId>` prints that phase's stored output —
-  `--json` for parsed JSON, `--item <n>` for one section of a fan-out,
-  `--limit <chars>` (default 4000, max 32000). Read-only, human-invoked: the
-  context-isolation contract still holds — peek is the debugging escape hatch
-  when one phase of many produced garbage.
-
-## User commands
-
-- `/tf list` · `/tf run <name> [args]` · `/tf show <name>` · `/tf runs` · `/tf resume <runId>`
-- `/tf verify` · `/tf compile <name> [lr|td]` · `/tf ir <name>`
-- `/tf peek <runId> [phaseId] [--json] [--item <n>] [--limit <chars>]`
-- `/tf provenance <runId>` · `/tf trace <runId> [--json]` · `/tf replay <runId> [--threshold phase=n] [--budget-usd n] [--json]`
-- `/tf why-stale <runId> [phaseId]` · `/tf recompute <runId> <phaseId> [--apply]` (dry-run by default)
-- `/tf reconcile-workspace --ack` · `/tf version`
-- `/tf init` — interactive model-roles setup
-- `/tf:<name> [args]` — shortcut for each saved flow
-<!-- /host:pi -->
-<!-- host:codex,claude,opencode,grok,hermes -->
-`taskflow_run` reports a `runId`. If the final output looks wrong, don't
-re-run blind — `taskflow_peek` the run: omit `phaseId` to list phase statuses
-and output sizes, then peek the suspicious phase (`json: true` for parsed
-output, `item: n` for one fan-out section). Output is hard-truncated
-(default 4000 chars, max 32000) so a peek never floods your context.
-
-For a flow that may outlive one MCP tool call, set `mode: "background"` on
-`taskflow_run`. It returns immediately; use `taskflow_runs` with `action:
-"status"`, `"wait"`, or `"cancel"` and the returned `runId`. A bounded `wait`
-can be called repeatedly, and completion returns the persisted final output.
-Use `action: "list"` with optional `status: "running" | "terminal"` to see
-active concurrency. Starting a sixth active run warns that Taskflow has no
-hidden global cross-host concurrency or budget coordinator.
-
-Use `taskflow_trace` to inspect the append-only event log for a finished run,
-then `taskflow_replay` to re-judge it under alternate thresholds/budget **offline
-(zero tokens)** — e.g. "would a 0.9 gate threshold have blocked this run?"
-
-For flows re-run as the repo evolves, pass `incremental: true` to
-`taskflow_run` — every phase defaults to **cross-run cache reuse**: identical
-input → $0 instant hit. Per-phase `cache.fingerprint` entries
-(`git:HEAD`, `glob!:src/**/*.ts`, `file:package.json`) invalidate on world
-changes; a cached `map` re-executes only changed items. See `configuration.md` §8.
-<!-- /host:codex,claude,opencode,grok,hermes -->
+Load sidecars progressively: start here, then load the one that answers the next concrete decision.
