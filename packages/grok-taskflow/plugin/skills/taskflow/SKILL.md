@@ -1,6 +1,13 @@
 ---
 name: taskflow
-description: Use Taskflow to delegate or orchestrate bounded work with isolated subagents: use cheaper or specialized agents, preserve your context, apply specialized skills or narrower tools, run independent work in parallel, coordinate dependent steps, review or verify results, process many discovered items, and keep long-running work tracked, resumable, or reusable. Common uses include research, engineering, software development, audits, migrations, data or document analysis, and repeatable workflows. Drives the taskflow_* MCP tools.
+description: >-
+  Use Taskflow to delegate or orchestrate bounded work with isolated subagents:
+  use cheaper or specialized agents, preserve your context, apply specialized
+  skills or narrower tools, run independent work in parallel, coordinate dependent
+  steps, review or verify results, process many discovered items, and keep long-running
+  work tracked, resumable, or reusable. Common uses include research, engineering,
+  software development, audits, migrations, data or document analysis, and repeatable
+  workflows. Drives the taskflow_* MCP tools.
 ---
 
 <!-- GENERATED FILE — do not edit. Source: skills-src/taskflow/entry.grok.md + core.md (npm run build:skills) -->

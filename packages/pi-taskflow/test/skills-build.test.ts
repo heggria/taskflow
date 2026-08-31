@@ -11,8 +11,34 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { parse as parseYaml } from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+
+function parseSkillFrontmatter(name: string, text: string): string {
+	const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+	assert.ok(match, `${name} SKILL.md must have leading YAML frontmatter`);
+
+	let frontmatter: unknown;
+	assert.doesNotThrow(
+		() => {
+			frontmatter = parseYaml(match[1]);
+		},
+		`${name} SKILL.md frontmatter must parse as YAML`,
+	);
+	assert.ok(
+		frontmatter !== null && typeof frontmatter === "object" && !Array.isArray(frontmatter),
+		`${name} SKILL.md frontmatter must be a YAML mapping`,
+	);
+	const metadata = frontmatter as { name?: unknown; description?: unknown };
+	assert.equal(metadata.name, "taskflow", `${name} SKILL.md frontmatter name`);
+	assert.equal(typeof metadata.description, "string", `${name} SKILL.md frontmatter description type`);
+	assert.ok(
+		typeof metadata.description === "string" && metadata.description.trim().length > 0,
+		`${name} SKILL.md frontmatter description must be non-empty`,
+	);
+	return metadata.description as string;
+}
 
 test("skills: generated skill files are in sync with skills-src (build-skills --check)", () => {
 	try {
@@ -103,7 +129,7 @@ test("skills: host-conditional filtering removed the other host's content", asyn
 		} else {
 			assert.doesNotMatch(text, /\| `commands\.md` \|/, `${name} SKILL.md must not reference commands.md`);
 		}
-		const description = text.match(/^description:\s*(.+)$/m)?.[1] ?? "";
+		const description = parseSkillFrontmatter(name, text);
 		assert.match(description, /delegate or orchestrate bounded work with isolated subagents/, `${name} activation description must use bounded delegation`);
 		assert.match(description, /cheaper or specialized agents/, `${name} activation description must name a concrete delegation benefit`);
 		assert.doesNotMatch(description, /Orchestrate multi-phase subagent workflows/);
