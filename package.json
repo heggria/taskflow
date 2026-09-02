@@ -42,16 +42,16 @@
 		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "^0.84.2",
-		"@earendil-works/pi-ai": "^0.84.2",
-		"@earendil-works/pi-coding-agent": "^0.84.2",
-		"@earendil-works/pi-tui": "^0.84.2",
+		"@earendil-works/pi-agent-core": "^0.84.4",
+		"@earendil-works/pi-ai": "^0.84.4",
+		"@earendil-works/pi-coding-agent": "^0.84.4",
+		"@earendil-works/pi-tui": "^0.84.4",
 		"@types/node": "^26",
 		"charterarc": "workspace:*",
 		"taskflow-control": "workspace:*",
 		"taskflow-core": "workspace:*",
 		"taskflow-hosts": "workspace:*",
-		"typebox": "^1.3.14",
+		"typebox": "^1.3.22",
 		"typescript": "^7.0.2"
 	}
 }
