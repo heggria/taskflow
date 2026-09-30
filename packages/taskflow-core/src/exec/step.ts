@@ -351,6 +351,7 @@ async function runOneAgent(
 				agentName,
 				effectiveTask,
 				{
+					runId: ctx.state.runId,
 					model: phase.model,
 					thinking: phase.thinking,
 					tools: phase.tools,
