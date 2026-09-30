@@ -80,12 +80,12 @@ test("publish workflow pins actions and isolates npm provenance from release per
 	const source = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
 	const uses = source.match(/^\s*- uses: .+$/gm) ?? [];
 	assert.equal(uses.length, 4);
-	for (const use of uses) assert.match(use, /@[0-9a-f]{40} # v\d+$/);
+	for (const use of uses) assert.match(use, /@[0-9a-f]{40} # v\d+(?:\.\d+\.\d+)?$/);
 	assert.equal(
 		uses.filter((use) => use.includes("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7")).length,
 		2,
 	);
-	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6")));
+	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0")));
 	assert.ok(uses.some((use) => use.includes("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7")));
 	assert.doesNotMatch(source, /uses:\s+\S+@v\d+/);
 
@@ -128,33 +128,68 @@ test("publish workflow smokes, publishes, and verifies one deterministic tarball
 	assert.doesNotMatch(workflow, /pnpm publish --filter/);
 });
 
+// Enumerate uses directives before parsing their refs/comments. A restrictive
+// match must never silently skip an action when Dependabot changes its comment.
+function verifyActionPins(source: string, trustedPins: ReadonlyMap<string, string>, file: string): number {
+	let count = 0;
+	for (const line of source.split("\n")) {
+		if (!/^\s*(?:-\s+)?uses:/.test(line)) continue;
+		const match = line.match(/^\s*(?:-\s+)?uses:\s+([^@\s]+)@([0-9a-f]{40})\s+#\s+(v\d+(?:\.\d+\.\d+)?)\s*$/);
+		assert.ok(match, `${file}: action must use a full commit SHA and a major or semver comment: ${line.trim()}`);
+		const [, action, revision] = match;
+		assert.equal(trustedPins.get(action!), revision, `${file}: ${action} is not pinned to its verified tag commit`);
+		count++;
+	}
+	return count;
+}
+
+test("action pin validation accepts major and semver comments without skipping either", () => {
+	const sha = "ea17c68df8912ef543352723c149a84f56e3d413";
+	const pins = new Map([["pnpm/action-setup", sha]]);
+	assert.equal(verifyActionPins(`  - uses: pnpm/action-setup@${sha} # v6\n    uses: pnpm/action-setup@${sha} # v6.1.0`, pins, "fixture"), 2);
+	for (const use of [
+		`pnpm/action-setup@${"0".repeat(40)} # v6.1.0`,
+		`unknown/action@${sha} # v6.1.0`,
+		"pnpm/action-setup@v6.1.0 # v6.1.0",
+		`pnpm/action-setup@${sha}`,
+		`pnpm/action-setup@${sha} # v6.1`,
+		`"pnpm/action-setup@${sha}" # v6.1.0`,
+		"",
+	]) {
+		assert.throws(() => verifyActionPins(`  - uses: ${use}`, pins, "fixture"), `must reject: ${use}`);
+	}
+});
+
 test("every repository workflow pins third-party actions to verified full SHAs", () => {
 	const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
 	const trustedPins = new Map([
 		["actions/checkout", "3d3c42e5aac5ba805825da76410c181273ba90b1"],
-		["pnpm/action-setup", "0977fd99725f1db4007ccb2928dbb4e90d06cc86"],
+		["pnpm/action-setup", "ea17c68df8912ef543352723c149a84f56e3d413"], // v6.1.0
 		["actions/setup-node", "820762786026740c76f36085b0efc47a31fe5020"],
 		["actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9"],
-		["actions/deploy-pages", "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128"],
-		["github/codeql-action/init", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
-		["github/codeql-action/analyze", "ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd"],
-		["hashgraph-online/ai-plugin-scanner-action", "55616c962cf86368423f7673b2ecdfdbe613d1af"],
+		["actions/deploy-pages", "368f82528645a54fb793d4d04e342629a3f51346"],
+		["github/codeql-action/init", "cdf488f595d80d6e07e03d4674febd5ab45fa938"], // v4.37.9
+		["github/codeql-action/analyze", "cdf488f595d80d6e07e03d4674febd5ab45fa938"],
+		["hashgraph-online/ai-plugin-scanner-action", "484da6f8e99a057233b939ab50450a14a68f5a1c"],
 	]);
 	const files = readdirSync(workflowDir).filter((file) => /\.ya?ml$/.test(file));
 	assert.ok(files.length > 0, "no workflow files found");
 	let actionCount = 0;
 	for (const file of files) {
-		const source = readFileSync(new URL(file, workflowDir), "utf8");
-		for (const line of source.split("\n")) {
-			const match = line.match(/^\s*(?:-\s+)?uses:\s+([^@\s]+)@([^\s]+)(?:\s+#\s+(v\d+))?\s*$/);
-			if (!match) continue;
-			actionCount++;
-			const [, action, revision, versionComment] = match;
-			assert.match(revision ?? "", /^[0-9a-f]{40}$/, `${file}: action must use a full commit SHA: ${line.trim()}`);
-			assert.match(versionComment ?? "", /^v\d+$/, `${file}: pinned action must retain a major-version comment`);
-			assert.equal(trustedPins.get(action ?? ""), revision, `${file}: ${action} is not pinned to its verified tag commit`);
-		}
-		assert.doesNotMatch(source, /^\s*(?:-\s+)?uses:\s+[^\s]+@(?![0-9a-f]{40}\b)/m, `${file}: mutable action ref`);
+		actionCount += verifyActionPins(readFileSync(new URL(file, workflowDir), "utf8"), trustedPins, file);
 	}
 	assert.ok(actionCount > 0, "no third-party actions found");
+});
+
+test("scanner upgrades retain the high-severity and minimum-score gates", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/plugin-scanner.yml", import.meta.url), "utf8");
+	assert.match(workflow, /min_score: 80/);
+	assert.match(workflow, /fail_on_severity: high/);
+	assert.match(workflow, /install_cisco: "true"/);
+	assert.match(workflow, /cisco_skill_scan: "on"/);
+	assert.match(workflow, /cisco_policy: balanced/);
+	assert.match(workflow, /if: always\(\)\n        run: node scripts\/verify-plugin-scan-coverage\.mjs plugin-security-report\.json/);
+	assert.match(workflow, /online: "false"/);
+	assert.match(workflow, /submission_enabled: "false"/);
+	assert.doesNotMatch(workflow, /continue-on-error:\s*true/);
 });
