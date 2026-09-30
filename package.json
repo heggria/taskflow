@@ -39,19 +39,20 @@
 		"test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts",
 		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts",
 		"test:hermes": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/hermes-taskflow/test/*.test.ts'",
-		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts"
+		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts",
+		"test:pi:peers": "node scripts/verify-pi-peers.mjs && pnpm run test:pi"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "^0.84.2",
-		"@earendil-works/pi-ai": "^0.84.2",
-		"@earendil-works/pi-coding-agent": "^0.84.2",
-		"@earendil-works/pi-tui": "^0.84.2",
+		"@earendil-works/pi-agent-core": "^0.85.1",
+		"@earendil-works/pi-ai": "^0.85.1",
+		"@earendil-works/pi-coding-agent": "^0.85.1",
+		"@earendil-works/pi-tui": "^0.85.1",
 		"@types/node": "^26",
 		"charterarc": "workspace:*",
 		"taskflow-control": "workspace:*",
 		"taskflow-core": "workspace:*",
 		"taskflow-hosts": "workspace:*",
-		"typebox": "^1.3.14",
+		"typebox": "^1.3.30",
 		"typescript": "^7.0.2"
 	}
 }
