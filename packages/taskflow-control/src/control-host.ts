@@ -226,8 +226,7 @@ export class ControlHost {
 			}
 			this.#openProjectStore();
 		} catch (error) {
-			try { this.#store?.close(); } catch { /* best effort */ }
-			this.#store = undefined;
+			this.stop();
 			this.#state = "failed-closed";
 			if (error instanceof ControlError) throw error;
 			throw bootstrapFailed(`ControlHost could not start in ${this.mode} mode: ${error instanceof Error ? error.message : String(error)}`);
@@ -348,6 +347,7 @@ export class ControlHost {
 			this.#releaseSingleton = undefined;
 		}
 		this.#singleton = "none";
+		this.#holderId = undefined;
 		this.#fencingEpoch = 0;
 		this.#state = "stopped";
 	}
@@ -388,6 +388,7 @@ export class ControlHost {
 		const identity = this.#options.processIdentity ?? defaultProcessIdentity();
 		try {
 			const fd = fs.openSync(leasePath, "wx", 0o600);
+			this.#standaloneLeasePath = leasePath;
 			try {
 				fs.writeFileSync(fd, JSON.stringify({
 					version: 1,

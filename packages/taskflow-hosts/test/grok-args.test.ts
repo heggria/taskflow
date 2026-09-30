@@ -39,11 +39,11 @@ test("grok env: keeps host credentials/config and drops unrelated secrets", () =
 	const env = grokChildEnv({
 		PATH: "/bin",
 		HOME: "/home/test",
-		XAI_API_KEY: "provider",
+		XAI_API_KEY: "redacted",
 		PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE: "safe",
 		DATABASE_URL: "secret",
 	});
-	assert.equal(env.XAI_API_KEY, "provider");
+	assert.equal(env.XAI_API_KEY, "redacted");
 	assert.equal(env.PI_TASKFLOW_GROK_READONLY_SANDBOX_PROFILE, "safe");
 	assert.equal(env.DATABASE_URL, undefined);
 });

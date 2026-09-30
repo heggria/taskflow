@@ -4,7 +4,7 @@ import { mergeOpts } from "../opts.ts";
 import { eraseStringish } from "../templates.ts";
 import type { PhaseDraft } from "../types.ts";
 import { type EmitContext, nextSyntheticId, register } from "../context.ts";
-import { mergeBranchAgentOpts } from "./branch-opts.ts";
+import { eraseBranchAgent } from "./branch-opts.ts";
 
 export function emitTournament(
 	ctx: EmitContext,
@@ -39,26 +39,7 @@ export function emitTournament(
 							});
 							continue;
 						}
-						const erased = eraseStringish(
-							ctx.sf,
-							ctx.file,
-							el.arguments[0]!,
-							undefined,
-							ctx.phases,
-							ctx.diags,
-							);
-							const b: Record<string, unknown> = {};
-							if (erased) {
-								b.task = erased.text;
-								for (const dep of erased.deps) draft.dependsOn.add(dep);
-							}
-						const bopts = mergeBranchAgentOpts(
-							ctx,
-							el.arguments[1] as ts.Expression | undefined,
-							`tournament branch ${bi + 1}`,
-						);
-						Object.assign(b, bopts);
-						branches.push(b);
+						branches.push(eraseBranchAgent(ctx, el, undefined, `tournament branch ${bi + 1}`, draft.dependsOn));
 					} else {
 						ctx.diags.push({
 							code: "TFDSL_BRANCH_KIND",

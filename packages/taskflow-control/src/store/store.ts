@@ -67,6 +67,7 @@ interface JournalBatch {
 }
 
 interface WriterLock {
+	ownerId: string;
 	pid: number;
 	acquiredAt: number;
 }
@@ -77,9 +78,11 @@ export class ControlStore {
 	#commitSeq: number;
 	#status: ControlStoreStatus = "healthy";
 	#closed = false;
+	readonly #releaseWriter: () => void;
 	#commandIndex = new Map<string, CommandRecord>();
 
-	constructor(storePath: string, header: ControlStoreHeader, commitSeq: number, commands: readonly CommandRecord[]) {
+	constructor(storePath: string, header: ControlStoreHeader, commitSeq: number, commands: readonly CommandRecord[], releaseWriter: () => void) {
+		this.#releaseWriter = releaseWriter;
 		this.storePath = storePath;
 		this.#header = header;
 		this.#commitSeq = commitSeq;
@@ -165,21 +168,30 @@ export class ControlStore {
 			command,
 			events,
 		};
-		crashDuringJournalAppend(journalPath(this.storePath));
-		appendJsonLineDurable(journalPath(this.storePath), record);
-		writeJsonAtomicHardened(commitSeqPath(this.storePath), { commitSeq: nextSeq });
-		this.#commandIndex.set(command.commandId, command);
-		maybeCrash("projection-rebuild");
-		writeJsonAtomicHardened(commandIndexPath(this.storePath), Object.fromEntries(this.#commandIndex));
-		this.#commitSeq = nextSeq;
-		this.#status = "healthy";
+		// Once persistence begins, a failure can leave a complete or torn journal
+		// record behind. Only reopening/recovery can establish its outcome; never
+		// reuse this instance's old sequence number after an ambiguous write.
+		try {
+			crashDuringJournalAppend(journalPath(this.storePath));
+			appendJsonLineDurable(journalPath(this.storePath), record);
+			writeJsonAtomicHardened(commitSeqPath(this.storePath), { commitSeq: nextSeq });
+			const nextIndex = new Map(this.#commandIndex);
+			nextIndex.set(command.commandId, command);
+			maybeCrash("projection-rebuild");
+			writeJsonAtomicHardened(commandIndexPath(this.storePath), Object.fromEntries(nextIndex));
+			this.#commandIndex = nextIndex;
+			this.#commitSeq = nextSeq;
+		} catch (error) {
+			this.#status = "fail-closed";
+			throw durabilityFailed(`control store persistence failed; close and reopen to recover: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		return { commitSeq: nextSeq, command };
 	}
 
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		releaseWriterLock(this.storePath);
+		this.#releaseWriter();
 	}
 
 	#assertOpen(): void {
@@ -190,7 +202,7 @@ export class ControlStore {
 export function openControlStore(storePath: string, options: OpenControlStoreOptions = {}): ControlStore {
 	const resolved = path.resolve(storePath);
 	ensureDirectory(resolved);
-	acquireWriterLock(resolved);
+	const releaseWriter = acquireWriterLock(resolved);
 
 	try {
 		const existingHeader = readHeader(resolved);
@@ -204,13 +216,13 @@ export function openControlStore(storePath: string, options: OpenControlStoreOpt
 			ensureDirectory(path.join(resolved, COMMANDS_DIR));
 			ensureDirectory(path.join(resolved, RECEIPTS_DIR));
 			fsyncDirectory(resolved);
-			return new ControlStore(resolved, header, 0, []);
+			return new ControlStore(resolved, header, 0, [], releaseWriter);
 		}
 
 		const recovered = recoverFromJournal(resolved, existingHeader);
-		return new ControlStore(resolved, existingHeader, recovered.commitSeq, recovered.commands);
+		return new ControlStore(resolved, existingHeader, recovered.commitSeq, recovered.commands, releaseWriter);
 	} catch (error) {
-		releaseWriterLock(resolved);
+		releaseWriter();
 		throw error;
 	}
 }
@@ -332,53 +344,100 @@ function truncateTornJournal(filePath: string): void {
 	}
 }
 
-function acquireWriterLock(storePath: string): void {
+/** Publish a fully written owner atomically; a visible lock is never half-written. */
+function acquireWriterLock(storePath: string): () => void {
 	const lockPath = path.join(storePath, LOCK_NAME);
-	for (let attempt = 0; attempt < 3; attempt++) {
+	const owner: WriterLock = { ownerId: crypto.randomUUID(), pid: process.pid, acquiredAt: Date.now() };
+	const contents = JSON.stringify(owner);
+	const candidatePath = path.join(storePath, `.${LOCK_NAME}-${owner.ownerId}`);
+	const fd = fs.openSync(candidatePath, "wx", 0o600);
+	try {
 		try {
-			const fd = fs.openSync(lockPath, "wx", 0o600);
-			try {
-				fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, acquiredAt: Date.now() } satisfies WriterLock));
-				fs.fsyncSync(fd);
-			} finally {
-				fs.closeSync(fd);
-			}
-			fsyncDirectory(storePath);
-			return;
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			if (!isLockHolderAlive(lockPath)) {
-				try { fs.unlinkSync(lockPath); } catch { /* retry wx */ }
-				continue;
-			}
-			throw durabilityFailed(`control store already has a live writer at ${storePath}`);
+			fs.writeFileSync(fd, contents);
+			fs.fsyncSync(fd);
+		} finally {
+			fs.closeSync(fd);
 		}
+		for (let attempt = 0; attempt < 3; attempt++) {
+			try {
+				// Hard-link creation is exclusive, unlike rename (which overwrites).
+				fs.linkSync(candidatePath, lockPath);
+				fsyncDirectory(storePath);
+				return () => releaseWriterLock(lockPath, contents);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				if (reclaimDeadWriter(lockPath)) continue;
+				throw durabilityFailed(`control store already has a live or unverified writer at ${storePath}`);
+			}
+		}
+		throw durabilityFailed(`could not acquire control store writer lock at ${storePath}`);
+	} finally {
+		try { fs.unlinkSync(candidatePath); } catch { /* best effort */ }
 	}
-	throw durabilityFailed(`could not acquire control store writer lock at ${storePath}`);
 }
 
-function releaseWriterLock(storePath: string): void {
-	const lockPath = path.join(storePath, LOCK_NAME);
+function releaseWriterLock(lockPath: string, contents: string): void {
 	try {
-		const raw = JSON.parse(fs.readFileSync(lockPath, "utf8")) as WriterLock;
-		if (raw.pid !== process.pid) return;
+		assertNotSymlink(lockPath);
+		// The exact acquisition owns the lock, not every store in this process.
+		if (fs.readFileSync(lockPath, "utf8") !== contents) return;
 		fs.unlinkSync(lockPath);
 	} catch {
 		/* best effort */
 	}
 }
 
-function isLockHolderAlive(lockPath: string): boolean {
+function reclaimDeadWriter(lockPath: string): boolean {
+	let contents: string;
 	try {
-		const raw = JSON.parse(fs.readFileSync(lockPath, "utf8")) as WriterLock;
-		if (typeof raw.pid !== "number") return false;
-		process.kill(raw.pid, 0);
+		assertNotSymlink(lockPath);
+		contents = fs.readFileSync(lockPath, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+		throw error;
+	}
+	if (!isVerifiedDeadWriter(contents)) return false;
+	// Serialize reclamation of this exact generation. Without this claim, two
+	// reclaimers can both observe a dead PID and one can unlink the other's
+	// newly acquired lock. A crashed reclaimer leaves an unverified claim:
+	// fail closed for operator recovery rather than risk a second writer.
+	const generation = crypto.createHash("sha256").update(contents).digest("hex");
+	const claimPath = `${lockPath}.reclaim-${generation}`;
+	try {
+		fs.mkdirSync(claimPath, { mode: 0o700 });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw error;
+	}
+	try {
+		assertNotSymlink(lockPath);
+		if (fs.readFileSync(lockPath, "utf8") !== contents) return true;
+		if (!isVerifiedDeadWriter(contents)) return false;
+		fs.unlinkSync(lockPath);
 		return true;
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-		// EPERM: process exists but we cannot signal it — treat as live.
-		if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+		throw error;
+	} finally {
+		fs.rmdirSync(claimPath);
+	}
+}
+
+function isVerifiedDeadWriter(contents: string): boolean {
+	try {
+		const raw: unknown = JSON.parse(contents);
+		if (!raw || typeof raw !== "object" || !("pid" in raw)
+			|| typeof raw.pid !== "number" || !Number.isSafeInteger(raw.pid) || raw.pid <= 0
+			|| !("acquiredAt" in raw) || typeof raw.acquiredAt !== "number"
+			|| !Number.isSafeInteger(raw.acquiredAt) || raw.acquiredAt < 0
+			|| ("ownerId" in raw && (typeof raw.ownerId !== "string"
+				|| !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw.ownerId)))) return false;
+		process.kill(raw.pid, 0);
 		return false;
+	} catch (error) {
+		// Empty, malformed, inaccessible, and EPERM locks are unverified/live.
+		// Only the OS confirming that the recorded process is gone allows steal.
+		return (error as NodeJS.ErrnoException).code === "ESRCH";
 	}
 }
 

@@ -212,3 +212,65 @@ test("store: writeFile/appendFile/createWriteStream in control src stay on metad
 	}
 	assert.ok(hits.length > 0, "expected to find control-metadata writes");
 });
+
+for (const target of ["journal/000001.jsonl", "commit-seq.json", "projections/commands.json"]) {
+	test(`store: I/O failure at ${target} rejects later writes until recovery`, () => {
+		const storePath = makeStorePath();
+		const store = openControlStore(storePath);
+		const obstacle = path.join(storePath, target);
+		fs.rmSync(obstacle, { force: true });
+		fs.mkdirSync(obstacle);
+		const first = submitBatch();
+		const second = submitBatch({ commandId: "00000000-0000-0000-0000-000000000003" });
+		try {
+			assert.throws(() => store.appendBatch(first), (error: unknown) => {
+				assert.ok(error instanceof ControlError);
+				assert.equal(error.code, "TF_DURABILITY_FAILED");
+				return true;
+			});
+			assert.equal(store.status, "fail-closed");
+			assert.equal(store.commitSeq, 0);
+			assert.equal(store.readCommand(first.command.commandId), undefined);
+			fs.rmdirSync(obstacle);
+			assert.throws(() => store.appendBatch(second), /fail-closed; refusing mutation/);
+		} finally {
+			store.close();
+		}
+		const recovered = openControlStore(storePath);
+		try {
+			const committed = target.startsWith("journal/") ? 0 : 1;
+			assert.equal(recovered.commitSeq, committed);
+			assert.equal(recovered.status, "healthy");
+			assert.equal(Boolean(recovered.readCommand(first.command.commandId)), committed === 1);
+			assert.equal(recovered.appendBatch(second).commitSeq, committed + 1);
+			const journal = fs.readFileSync(path.join(storePath, "journal/000001.jsonl"), "utf8")
+				.trim().split("\n").map((line) => (JSON.parse(line) as { commitSeq: number }).commitSeq);
+			assert.deepEqual(journal, committed === 1 ? [1, 2] : [1]);
+		} finally {
+			recovered.close();
+		}
+	});
+}
+
+for (const contents of ["", "{", "{}", '{"pid":0}', '{"pid":-1}', '{"pid":"123"}', '{"pid":2147483647}',
+	'{"pid":2147483647,"acquiredAt":-1}', '{"pid":2147483647,"acquiredAt":1,"ownerId":"invalid"}']) {
+	test(`store: unverified writer lock ${JSON.stringify(contents)} is never stolen`, () => {
+		const storePath = makeStorePath();
+		fs.mkdirSync(storePath);
+		const lock = path.join(storePath, "writer.lock");
+		fs.writeFileSync(lock, contents);
+		assert.throws(() => openControlStore(storePath), /unverified writer/);
+		assert.equal(fs.readFileSync(lock, "utf8"), contents);
+	});
+}
+
+test("store: a replaced same-process lock is not removed by an old owner", () => {
+	const storePath = makeStorePath();
+	const store = openControlStore(storePath);
+	const lock = path.join(storePath, "writer.lock");
+	const replacement = JSON.stringify({ pid: process.pid, ownerId: "other-acquisition", acquiredAt: Date.now() });
+	fs.unlinkSync(lock);
+	fs.writeFileSync(lock, replacement);
+	store.close();
+	assert.equal(fs.readFileSync(lock, "utf8"), replacement);
+});

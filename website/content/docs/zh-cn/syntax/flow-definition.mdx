@@ -258,7 +258,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 
 ## 简写：简单工作跳过 DAG
 
-对一次性委派，你不需要写一个完整的 `phases` DAG。taskflow 接受三种简写形状，运行时的 `desugar()` 会在校验前把它们展开成完整 flow。当一个 spec **没有** `phases` 数组、**但**有 `task`、`tasks` 或 `chain` 之一时，它被识别为简写。
+对一次性委派，你不需要写一个完整的 `phases` DAG。taskflow 接受三种简写形状，运行时的 `desugar()` 会在校验前把它们展开成完整 flow。当一个 spec **没有** `phases` 数组、**但**有 `task`、`taskFile`、`tasks` 或 `chain` 之一时，它被识别为简写。
 
 ### 单个任务
 
@@ -266,7 +266,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 { "task": "Summarize src/", "agent": "explorer" }
 ```
 
-反糖化为一个 `agent` 阶段（id `"main"`、`final: true`）。可选的 `agent`、`context`、`contextLimit` 会透传。
+反糖化为一个 `agent` 阶段（id `"main"`、`final: true`）。可选的 `agent`、`context`、`contextLimit` 会透传。文件来源的简写可以用 `taskFile` 代替 `task` —— 可信加载器会在反糖化之前把文件内联进去。
 
 ### 并行任务
 
@@ -379,7 +379,7 @@ description: 把阶段包成一个 taskflow 的顶层字段。
 | `strictInterpolation` | `boolean` | `false` | 否 | 把校验警告提升为硬错误。 |
 | `contextSharing` | `boolean` | `false` | 否 | 为所有阶段启用共享上下文树。 |
 | `incremental` | `boolean` | `false` | 否 | 把每个阶段默认为跨运行缓存。 |
-| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | 否 | 未显式设置阶段 `cwd` 时，脚本阶段使用的默认工作目录。`"flow"` 仅适用于已保存 flow 或 `defineFile`，并使用定义文件所在目录；继承的 cwd bridge 边界仍会约束解析结果。 |
+| `scriptCwd` | `"invocation" \| "flow"` | `"invocation"` | 否 | 未显式设置阶段 `cwd` 时，脚本阶段使用的默认工作目录。`"flow"` 仅适用于已保存 flow 或 `defineFile`，并使用定义文件所在目录；继承的 cwd bridge 边界仍会约束解析结果。`taskFile` 属于同一类可信来源：在加载期相对定义文件目录解析，不会在运行时再读。 |
 | `phases` | `Phase[]`（`minItems: 1`） | — | **是** | 有序阶段定义。见[阶段类型](/zh-cn/docs/syntax/phase-types)。 |
 
 ### ArgSpec

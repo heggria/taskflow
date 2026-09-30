@@ -50,6 +50,14 @@
 - recovery racing mutation 的 fail-closed 路径。
 - 每个入口（MCP / CLI / taskflowd）在首次 mutation/provider 调用前执行同一 gate。
 
+### beta.2 implementation safety notes (2026-09-30)
+
+- Any persistence error after a batch begins makes that store instance `fail-closed`. It cannot append again until closed and reopened; recovery replays the authoritative journal before choosing the next sequence. A thrown write can still have committed a complete journal record.
+- Writer ownership is a fully written, fsynced unique owner file published with an exclusive hard link. Empty, malformed, inaccessible, or possibly-live owners are never stolen.
+- Dead-owner reclamation uses a generation-specific exclusive claim, then rechecks the original owner before unlinking. Concurrent stale observers cannot remove a replacement writer. Close only releases the exact acquisition's owner record.
+- A process killed while holding a reclamation claim can leave the store unavailable. This draft deliberately fails closed instead of automatically stealing an ambiguous claim. Operator recovery must establish that no writer or reclaimer remains and preserve the journal; it must not delete lock files while processes may still be running.
+- These are S3-min implementation details, not a wire freeze, GA claim, or expanded admission/receipt/approval scope. This ADR remains **Proposed**.
+
 ## Wire impact (TypeBox)
 
 - `ControlStoreHeaderSchema`、`ControlStoreStatus`（store 健康/恢复状态）新增。

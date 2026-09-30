@@ -17,7 +17,8 @@ packages:
   - "website"
 overrides:
   brace-expansion: 5.0.9
-  nanoid: 3.3.17
+  # Dependabot alert #33 / GHSA-2v37-7h3g-55p8: nanoid < 3.3.18
+  nanoid: 3.3.18
   postcss: 8.5.23
   sharp: 0.35.3
   # Dependabot high/medium open alerts: undici < 8.9.0 (CRLF, cache, cookie, desync)

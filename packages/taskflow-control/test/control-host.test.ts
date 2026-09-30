@@ -240,3 +240,31 @@ test("control-host: standalone opens projectStorePath and a later host sees the 
 	assert.equal(status.commitSeq, 1);
 	second.stop();
 });
+
+for (const mode of ["standalone", "auto"] as const) {
+	test(`control-host: ${mode} store-open failure rolls back resources before retry`, {
+		skip: mode === "auto" && process.platform === "win32",
+	}, async (t) => {
+		const paths = makePaths();
+		const projectStorePath = path.join(paths.controlHome, "project-store");
+		fs.writeFileSync(projectStorePath, "not a directory");
+		const clearTimer = t.mock.method(globalThis, "clearInterval");
+		const failed = new ControlHost(hostOptions(paths, { mode, projectStorePath, holderId: "failed" }));
+		t.after(() => failed.stop());
+		await assert.rejects(failed.start(), /could not open project ControlStore/);
+		assert.equal(failed.state, "failed-closed");
+		assert.equal(failed.status.singleton, "none");
+		assert.equal(failed.status.holderId, undefined);
+		assert.equal(fs.existsSync(path.join(paths.controlHome, "standalone-lease.json")), false);
+		assert.equal(fs.existsSync(paths.lockPath), false);
+		assert.equal(fs.existsSync(paths.endpointPath), false);
+		if (mode === "auto") assert.equal(clearTimer.mock.calls.length, 1, "lease-renewal timer must be cleared");
+		fs.unlinkSync(projectStorePath);
+		const fresh = new ControlHost(hostOptions(paths, { mode, projectStorePath, holderId: "fresh" }));
+		t.after(() => fresh.stop());
+		assert.equal((await fresh.start()).state, "started");
+		fresh.stop();
+		// The failed instance is also restartable without explicit cleanup.
+		assert.equal((await failed.start()).state, "started");
+	});
+}

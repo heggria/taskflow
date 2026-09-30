@@ -46,7 +46,7 @@ export function buildSource(sourceText: string, file = "flow.tf.ts", opts: Build
 	const diagnostics = [...erased.diagnostics];
 	const validate = opts.validate !== false;
 	if (validate) {
-		const v = validateTaskflow(erased.taskflow);
+		const v = validateTaskflow(erased.taskflow, { allowTaskFile: true });
 		if (!v.ok) {
 			for (const e of v.errors) {
 				diagnostics.push({
@@ -165,7 +165,7 @@ function buildJsonFile(abs: string, opts: BuildOptions): BuildResult {
 		? parsed as Record<string, unknown>
 		: {};
 	if (Array.isArray(asRec.phases)) {
-		const v = validateTaskflow(parsed);
+		const v = validateTaskflow(parsed, { allowTaskFile: true });
 		if (!v.ok) {
 			for (const e of v.errors) {
 				diagnostics.push({ code: "TFDSL_CORE_VALIDATE", severity: "error", message: e, file: abs });
@@ -185,7 +185,7 @@ function buildJsonFile(abs: string, opts: BuildOptions): BuildResult {
 			});
 			return { ok: false, diagnostics, file: abs };
 		}
-		const v = validateTaskflow(taskflow);
+		const v = validateTaskflow(taskflow, { allowTaskFile: true });
 		if (!v.ok) {
 			for (const e of v.errors) {
 				diagnostics.push({ code: "TFDSL_CORE_VALIDATE", severity: "error", message: e, file: abs });

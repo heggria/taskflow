@@ -121,10 +121,10 @@ test("opencode env: keeps provider/runtime keys and drops unrelated secrets", ()
 		PATH: "/bin",
 		HOME: "/home/test",
 		OPENCODE_CONFIG: "/safe/config.json",
-		ANTHROPIC_API_KEY: "provider",
+		ANTHROPIC_API_KEY: "redacted",
 		DATABASE_URL: "secret",
 	});
-	assert.equal(env.ANTHROPIC_API_KEY, "provider");
+	assert.equal(env.ANTHROPIC_API_KEY, "redacted");
 	assert.equal(env.OPENCODE_CONFIG, "/safe/config.json");
 	assert.equal(env.DATABASE_URL, undefined);
 });

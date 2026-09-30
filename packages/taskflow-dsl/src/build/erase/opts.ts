@@ -7,6 +7,17 @@ import type { Diagnostic } from "../../diagnostics.ts";
 import { calleeName, diag, evalLiteral } from "./ast.ts";
 import { phaseByBinding, type PhaseDraft } from "./types.ts";
 
+/** True only when the object literal itself names `taskFile` (not any options bag). */
+export function isTaskFileOptsLiteral(expr: ts.Expression | undefined): boolean {
+	if (!expr || !ts.isObjectLiteralExpression(expr)) return false;
+	return expr.properties.some((p) => {
+		if (!ts.isPropertyAssignment(p) && !ts.isShorthandPropertyAssignment(p)) return false;
+		const name = p.name;
+		return (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name))
+			&& name.text === "taskFile";
+	});
+}
+
 /** Extra option keys allowed without TFDSL_RUNE_OPTS_UNKNOWN (sugar / kind-specific). */
 export type MergeOptsExtra = {
 	allowKeys?: ReadonlySet<string>;
@@ -134,7 +145,7 @@ export function mergeOpts(
 			continue;
 		}
 
-		if (key === "agent" || key === "model" || key === "thinking" || key === "when" || key === "join" || key === "cwd") {
+		if (key === "agent" || key === "model" || key === "thinking" || key === "when" || key === "join" || key === "cwd" || key === "taskFile") {
 			const v = staticValue();
 			if (typeof v === "string") out[key] = v;
 			else if (v !== undefined) diags.push(diag(file, sf, p.initializer, "TFDSL_RUNE_OPTS", `Option '${key}' must be a string.`));

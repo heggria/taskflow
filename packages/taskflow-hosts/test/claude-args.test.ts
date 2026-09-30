@@ -90,19 +90,19 @@ test("claude child env: keeps platform/provider settings and drops unrelated sec
 	const env = claudeChildEnv({
 		PATH: "/bin",
 		HOME: "/home/test",
-		ANTHROPIC_API_KEY: "anthropic-secret",
+		ANTHROPIC_API_KEY: "redacted",
 		AWS_PROFILE: "bedrock-profile",
 		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
 		https_proxy: "http://proxy.test",
-		OPENAI_API_KEY: "must-not-leak",
-		NPM_TOKEN: "must-not-leak",
+		OPENAI_API_KEY: "nope",
+		NPM_TOKEN: "nope",
 		DATABASE_URL: "must-not-leak",
 		NODE_OPTIONS: "--require /tmp/inject.cjs",
 	});
 	assert.deepEqual(env, {
 		PATH: "/bin",
 		HOME: "/home/test",
-		ANTHROPIC_API_KEY: "anthropic-secret",
+		ANTHROPIC_API_KEY: "redacted",
 		AWS_PROFILE: "bedrock-profile",
 		GOOGLE_APPLICATION_CREDENTIALS: "/tmp/vertex.json",
 		https_proxy: "http://proxy.test",

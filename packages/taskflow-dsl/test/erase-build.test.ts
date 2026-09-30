@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { buildSource } from "../src/build.ts";
+import { buildSource, eraseSource } from "../src/build.ts";
 import { checkFile, checkSource } from "../src/check.ts";
 import { decompileTaskflow } from "../src/decompile.ts";
 import { flow, agent, TfDslEraseOnlyError, type ArgSpec } from "../src/index.ts";
@@ -322,21 +322,74 @@ test("decompile: race/expand imports + object def fail-closed + dependsOn preser
 	assert.match(withExpand, /expandMode: "graft"/);
 
 	assert.throws(
-		() =>
-			decompileTaskflow({
-				name: "bad",
-				phases: [
-					{
-						id: "g",
-						type: "expand",
-						def: { name: "inner", phases: [{ id: "c", type: "agent", task: "x" }] },
-						final: true,
-					},
-				],
-			}),
-		/TFDSL_DECOMPILE_UNSUPPORTED/,
+	() =>
+		decompileTaskflow({
+			name: "bad",
+			phases: [
+				{
+					id: "g",
+					type: "expand",
+					def: { name: "inner", phases: [{ id: "c", type: "agent", task: "x" }] },
+					final: true,
+				},
+			],
+		}),
+	/TFDSL_DECOMPILE_UNSUPPORTED/,
 	);
-});
+	});
+
+	test("build: agent({ taskFile }) emits taskFile and no task", () => {
+	const src = `
+	import { flow, agent } from "taskflow-dsl";
+	export default flow("review", () => agent({ taskFile: "prompts/review.md", final: true }));
+	`;
+	const r = buildSource(src, "review.tf.ts");
+	assert.equal(r.ok, true, format(r));
+	assert.equal(r.taskflow?.phases?.[0]?.taskFile, "prompts/review.md");
+	assert.equal(r.taskflow?.phases?.[0]?.task, undefined);
+	});
+
+	test("build: agent(task, { taskFile }) is XOR", () => {
+	const src = `
+	import { flow, agent } from "taskflow-dsl";
+	export default flow("xor", () => agent("inline", { taskFile: "prompts/review.md" }));
+	`;
+	const r = buildSource(src, "xor.tf.ts");
+	assert.equal(r.ok, false);
+	assert.match(format(r), /TFDSL_TASKFILE_XOR|mutually exclusive/);
+	const erased = eraseSource(src, "xor.tf.ts");
+	assert.equal(erased.ok, false);
+	const phase = (erased.taskflow?.phases as Array<{ task?: string; taskFile?: string }> | undefined)?.[0];
+	assert.equal(phase?.task, "inline");
+	assert.equal(phase?.taskFile, "prompts/review.md");
+	});
+
+	test("build: agent({ model }) is not opts-only", () => {
+	const src = `
+	import { flow, agent } from "taskflow-dsl";
+	export default flow("opts", () => agent({ model: "opus" }));
+	`;
+	const r = buildSource(src, "opts.tf.ts");
+	assert.equal(r.ok, false);
+	assert.match(format(r), /TFDSL_RUNE_ARG|Expected static string/);
+	assert.doesNotMatch(format(r), /unknown option 'model'/i);
+	});
+
+	test("build: parallel branch agent({ taskFile })", () => {
+	const src = `
+	import { flow, agent, parallel } from "taskflow-dsl";
+	export default flow("fan", () => parallel([
+	agent({ taskFile: "prompts/a.md" }),
+	agent({ taskFile: "prompts/b.md" }),
+	]));
+	`;
+	const r = buildSource(src, "fan.tf.ts");
+	assert.equal(r.ok, true, format(r));
+	const branches = r.taskflow?.phases?.[0]?.branches as Array<{ task?: string; taskFile?: string }> | undefined;
+	assert.equal(branches?.[0]?.taskFile, "prompts/a.md");
+	assert.equal(branches?.[1]?.taskFile, "prompts/b.md");
+	assert.equal(branches?.[0]?.task, undefined);
+	});
 
 function format(r: { diagnostics?: { code: string; message: string }[] }): string {
 	return (r.diagnostics ?? []).map((d) => `${d.code}: ${d.message}`).join("\n");

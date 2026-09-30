@@ -343,8 +343,9 @@ export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> 
 					} else {
 						socket.destroy();
 						reject(errorFromEnvelope(raw.error as ErrorEnvelope));
+						return;
 					}
-					return;
+					continue;
 				}
 				if (raw.type === "rpc-result") {
 					const id = raw.id;
@@ -354,7 +355,7 @@ export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> 
 					pending.delete(id);
 					if (raw.ok === true) entry.resolve(raw.result);
 					else entry.reject(errorFromEnvelope(raw.error as ErrorEnvelope));
-					return;
+					continue;
 				}
 			}
 		});

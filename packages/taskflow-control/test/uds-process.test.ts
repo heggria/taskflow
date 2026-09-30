@@ -177,7 +177,11 @@ test("uds: two OS processes compete — winner listens, loser attaches over the 
 		TF_TEST_CONTROL_HOME: root,
 		TF_TEST_HOLDER_ID: "loser-proc",
 	});
-	const attachedLine = await waitForLine(loser, "ATTACHED ");
+	// Subscribe to both lines before awaiting either: stdout may coalesce them.
+	const [attachedLine, probeLine] = await Promise.all([
+		waitForLine(loser, "ATTACHED "),
+		waitForLine(loser, "PROBE "),
+	]);
 	const attached = parseJsonLine(attachedLine, "ATTACHED ");
 	assert.equal(attached.state, "started");
 	assert.equal(attached.singleton, "attached");
@@ -185,7 +189,6 @@ test("uds: two OS processes compete — winner listens, loser attaches over the 
 	assert.equal(attached.fencingEpoch, winnerStatus.fencingEpoch, "loser must receive the winner's epoch over the socket");
 
 	// A2b: the winner answers control.probe over UDS (proxied by the attached client).
-	const probeLine = await waitForLine(loser, "PROBE ");
 	const probe = parseJsonLine(probeLine, "PROBE ");
 	assert.equal(probe.outcome, "accepted");
 	assert.equal((probe.capabilities as Record<string, unknown>)?.processIsolation, "none");

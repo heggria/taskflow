@@ -307,7 +307,7 @@ test("workspace policy digest is canonical, sorted, and path/principal/secret fr
 	const withUnsignedHostData = {
 		...first,
 		principalId: "principal-must-not-hash",
-		bootstrapSecret: "secret-must-not-hash",
+		bootstrapSecret: "redacted",
 	};
 	assert.equal(computeSandboxPolicyDigest(withUnsignedHostData, backend), first.policyDigest);
 	await assert.rejects(
