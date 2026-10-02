@@ -25,14 +25,14 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 1.0.0 · Taskflow release candidate",
+			eyebrow: "taskflow 1.0.0 · Declarative workflows",
 			title: [
 				"Declare the effect.",
 				"Verify the path.",
 				"Commit through one authority.",
 			],
 			sub: "taskflow turns coding-agent work into a verifiable runtime: explicit graphs, typed effect declarations, isolated execution, resource-controlled filesystem commits, and ledger-backed explanations across six hosts.",
-			noteKicker: "1.0.0 · release candidate · not yet published",
+			noteKicker: "1.0.0 · Public contract and support boundaries",
 			noteBody:
 				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. ControlHost has experimental Unix UDS/store code; admission, parked approvals, receipts, global coordination and WebUI remain outside the stable API.",
 			micro:
@@ -78,14 +78,14 @@ const copy = {
 			],
 		},
 		install: {
-			label: "1.0.0 host installs — available after publication.",
+			label: "1.0.0 host installation commands.",
 			copy: "Copy",
 			copied: "Copied",
 			guide: "Guide",
 		},
 		capabilities: {
 			title: "A mutation boundary, not a prompt promise.",
-			sub: "The candidate makes side effects explicit without claiming a sandbox it does not have.",
+			sub: "Taskflow 1.0 makes side effects explicit without claiming a sandbox it does not have.",
 			items: [
 				{
 					title: "Declare",
@@ -187,10 +187,10 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 1.0.0 · Taskflow release candidate",
+			eyebrow: "taskflow 1.0.0 · Declarative workflows",
 			title: ["声明 effect。", "验证路径。", "让一个 authority 负责提交。"],
 			sub: "taskflow 把 coding-agent 工作变成可验证的运行时：显式任务图、类型化 effect 声明、隔离执行、受 resources 控制的文件提交，以及覆盖六个宿主的 ledger-backed 解释。",
-			noteKicker: "1.0.0 · 发布候选 · 尚未发布",
+			noteKicker: "1.0.0 · 公开合同与支持边界",
 			noteBody:
 				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。ControlHost 有 private workspace Unix UDS/store 代码；admission、parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。",
 			micro: "Resolve-only 不是 OS sandbox。未声明写入仍取决于宿主策略。",
@@ -235,14 +235,14 @@ const copy = {
 			],
 		},
 		install: {
-			label: "1.0.0 宿主安装；发布完成后可用。",
+			label: "1.0.0 宿主安装指引。",
 			copy: "复制",
 			copied: "已复制",
 			guide: "指南",
 		},
 		capabilities: {
 			title: "这是修改边界，不是 prompt 承诺。",
-			sub: "candidate 把副作用显式化，但不声称不存在的 sandbox。",
+			sub: "Taskflow 1.0 把副作用显式化，但不声称不存在的 sandbox。",
 			items: [
 				{
 					title: "声明",
@@ -497,7 +497,7 @@ export default async function HomePage({
 				<section className="home-final">
 					<div className="home-frame home-final__inner">
 						<div>
-							<p className="home-kicker">taskflow 1.0 · release candidate</p>
+							<p className="home-kicker">taskflow 1.0 · declarative workflows</p>
 							<h2>{t.cta.title}</h2>
 							<p>{t.cta.body}</p>
 						</div>

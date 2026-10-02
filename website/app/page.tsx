@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
-const title = "taskflow 0.3 — Trusted Effects for Coding Agents";
+const title = "taskflow 1.0 — Trusted Effects for Coding Agents";
 const description =
-	"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. 1.0.0; release candidate; not yet published.";
+	"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. Taskflow 1.0 public contract.";
 const canonical = "https://heggria.github.io/taskflow/en/";
 
 export const metadata: Metadata = {

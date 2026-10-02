@@ -1,8 +1,9 @@
 # Taskflow 1.0 release guide
 
-Taskflow `1.0.0` is a release candidate in this checkout. Preparing or merging
-this PR does not publish it. Publish only after the gates below pass on the
-final release commit and the release owner authorizes the tag.
+This guide coordinates the ten-package Taskflow `1.0.0` release. Preparing
+or merging a release change does not publish it. Publish only after the gates
+below pass on the final release commit and the release owner authorizes the
+tag. GitHub Releases and the npm registry record the completed publication.
 
 ## Public contract and package set
 
@@ -127,7 +128,7 @@ missing adapter. The legacy beta dist-tag promotion workflow is not needed.
 
 ## Install and verify after publication
 
-These are release-target examples until the tag workflow completes:
+Use exact 1.0 pins for host installation, then verify the installed version:
 
 ```sh
 pi install npm:pi-taskflow@1.0.0

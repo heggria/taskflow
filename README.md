@@ -11,7 +11,7 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[1.0 overview](#taskflow-03-trusted-effects) · [Quickstart](#quickstart) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples) · [Changelog](./CHANGELOG.md)
+[1.0 overview](#taskflow-10-declarative-coding-agent-workflows) · [Quickstart](#quickstart) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples) · [Changelog](./CHANGELOG.md)
 
 </div>
 
@@ -19,9 +19,9 @@
 
 # taskflow 1.0: declarative coding-agent workflows
 
-**taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 1.0 release candidate, the contract also describes the effects a phase is allowed to propose.
+**taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In Taskflow 1.0, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 1.0.0 release candidate — not yet tagged or published.** The ten public packages stabilize the existing DAG runtime, DSL, six host adapters and resource transactions for admitted declared filesystem targets. Pi interactive approvals are supported; MCP/headless approval auto-rejects. `taskflow-control` is private workspace experimental with proposed wire contracts; CharterArc retains a separate experimental release. The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the required verification and remaining gates.
+> **Taskflow 1.0 public contract.** The ten public packages stabilize the existing DAG runtime, DSL, six host adapters and resource transactions for admitted declared filesystem targets. Pi interactive approvals are supported; MCP/headless approval auto-rejects. `taskflow-control` is private workspace experimental with proposed wire contracts; CharterArc retains a separate experimental release. The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the verification gates. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases) and the [npm registry](https://www.npmjs.com/package/pi-taskflow).
 
 ## The declared-effect contract
 
@@ -49,9 +49,9 @@ This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to 
 
 ## The 1.0 public contract
 
-| Layer | What it does | Candidate status |
+| Layer | What it does | Support boundary |
 |---|---|---|
-| **Taskflow runtime** | Declarative DAGs, 12 phase types, budgets, retries, approvals, isolation, resume, replay, trace, and recompute | Stable contract; current acceptance required |
+| **Taskflow runtime** | Declarative DAGs, 12 phase types, budgets, retries, approvals, isolation, resume, replay, trace, and recompute | Stable runtime contract |
 | **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | Declared-target contract |
 | **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | Declared-target contract |
 | **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
@@ -62,24 +62,25 @@ The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the stable
 
 ## Quickstart
 
-The 1.0 candidate can be exercised from this source checkout; exact npm pins become usable after publication. Use Node.js **≥ 22.19.0**:
+Use Node.js **≥ 22.19.0**. To run from the 1.0 source checkout:
 
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout release/taskflow-1.0
+git checkout v1.0.0
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-The 1.0 commands below become usable after the tag workflow completes; until then they are release-target examples, not proof of registry availability.
+Install the host adapter with an exact 1.0 version:
+
 ```bash
 npm install --global pi-taskflow@1.0.0
 npm install --global codex-taskflow@1.0.0
 ```
 
-The host-specific plugin and MCP commands remain in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/). Until publication, use a previously published exact version or the source checkout.
+The host-specific plugin and MCP commands remain in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/).
 
 Run the no-LLM Trusted Effects vertical-slice fixture:
 
@@ -210,13 +211,13 @@ The monorepo contains the host-neutral `taskflow-core`, Trusted Effects and reso
 
 | Start here | Use it for |
 |---|---|
-| [1.0 overview](https://heggria.github.io/taskflow/en/docs) | Candidate scope, status, and the honest security boundary |
+| [1.0 overview](https://heggria.github.io/taskflow/en/docs) | 1.0 scope, support, and the security boundary |
 | [Getting Started](https://heggria.github.io/taskflow/en/docs/getting-started) | First flow and host setup |
 | [Core Concepts](https://heggria.github.io/taskflow/en/docs/concepts/) | DAGs, isolation, verification, resume, and evidence |
 | [Compiler & Runtime](https://heggria.github.io/taskflow/en/docs/compiler-runtime/) | JSON, TypeScript DSL, FlowIR, replay, and recompute |
 | [Host Guides](https://heggria.github.io/taskflow/en/docs/guides/) | Pi, Codex, Claude Code, OpenCode, Grok, and Hermes |
 | [Examples](./examples) | Runnable flow definitions, including Trusted Effects |
-| [Changelog](./CHANGELOG.md) | Release history and candidate notes |
+| [Changelog](./CHANGELOG.md) | Release history and version notes |
 
 ## License
 
@@ -226,6 +227,6 @@ The monorepo contains the host-neutral `taskflow-core`, Trusted Effects and reso
 
 **Declare the effect. Verify the path. Commit through one authority.**
 
-[Read the docs](https://heggria.github.io/taskflow/en/docs) · [Try the candidate](#quickstart) · [View releases](https://github.com/heggria/taskflow/releases)
+[Read the docs](https://heggria.github.io/taskflow/en/docs) · [Install Taskflow 1.0](#quickstart) · [View releases](https://github.com/heggria/taskflow/releases)
 
 </div>

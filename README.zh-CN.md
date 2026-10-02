@@ -19,9 +19,9 @@
 
 # taskflow 1.0：声明式 coding-agent 工作流
 
-**taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 1.0 发布候选中，这份合同还可以描述每个阶段被允许提出的副作用。
+**taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 Taskflow 1.0 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-> **状态：1.0.0 发布候选——尚未打 tag 或发布。** 十个公开包的稳定范围是已有 DAG runtime、DSL、六个宿主适配器和已准入声明文件目标的 resource transaction。Pi 支持交互审批；MCP/headless 审批自动拒绝。`taskflow-control` 是 private workspace 实验，wire 合同仍为 proposed；CharterArc 保留独立 experimental 发布线。[1.0 发布计划](./docs/internal/1.0.0-release-plan.md)列出全面验证与剩余闸门。
+> **Taskflow 1.0 公开合同。** 十个公开包的稳定范围是已有 DAG runtime、DSL、六个宿主适配器和已准入声明文件目标的 resource transaction。Pi 支持交互审批；MCP/headless 审批自动拒绝。`taskflow-control` 是 private workspace 实验，wire 合同仍为 proposed；CharterArc 保留独立 experimental 发布线。[1.0 发布计划](./docs/internal/1.0.0-release-plan.md)列出验证闸门。实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases) 与 [npm registry](https://www.npmjs.com/package/pi-taskflow)。
 
 ## 声明文件副作用合同
 
@@ -49,9 +49,9 @@ flow / .tf.ts
 
 ## 1.0 公开合同
 
-| 层 | 作用 | candidate 状态 |
+| 层 | 作用 | 支持边界 |
 |---|---|---|
-| **Taskflow runtime** | 声明式 DAG、12 种阶段、预算、重试、审批、隔离、续跑、replay、trace 与 recompute | 稳定合同；仍需当前候选验收 |
+| **Taskflow runtime** | 声明式 DAG、12 种阶段、预算、重试、审批、隔离、续跑、replay、trace 与 recompute | 稳定 runtime 合同 |
 | **Trusted Effects** | 封闭的 `EffectIR`、`PathRef` / `SecretRef` / `ServiceRef`、机密性/完整性标签、effect 校验、重叠检查与 ledger-backed `why-*` | 声明目标合同 |
 | **Resource transaction** | snapshot → lease → durable intent/permit → stage → commit，或 restore and reject | 声明目标合同 |
 | **宿主适配器** | Pi、Codex、Claude Code、OpenCode、Grok Build、Hermes Agent 共用同一 flow 合同 | 已有宿主表面；能力仍按宿主区分 |
@@ -62,25 +62,25 @@ flow / .tf.ts
 
 ## 快速开始
 
-1.0 候选可从源码 checkout 运行；精确 npm pin 在发布完成后可用。准备 Node.js **≥ 22.19.0**：
+准备 Node.js **≥ 22.19.0**。从 1.0 源码 checkout 运行：
 
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout release/taskflow-1.0
+git checkout v1.0.0
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-以下 1.0 命令在 tag workflow 完成后可用；在此之前它们只是发版目标示例，不代表 registry 已可获取。
+使用精确 1.0 版本安装宿主适配器：
 
 ```bash
 npm install --global pi-taskflow@1.0.0
 npm install --global codex-taskflow@1.0.0
 ```
 
-各宿主的 plugin 与 MCP 命令见[宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/)。发布之前可使用已有的精确版本，或源码 checkout。
+各宿主的 plugin 与 MCP 命令见[宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/)。也可从源码 checkout 运行。
 
 运行不需要 LLM 的 Trusted Effects vertical-slice fixture：
 
@@ -211,13 +211,13 @@ pnpm run test:pack
 
 | 从这里开始 | 适用场景 |
 |---|---|
-| [1.0 总览](https://heggria.github.io/taskflow/zh-cn/docs) | candidate 范围、状态与诚实的安全边界 |
+| [1.0 总览](https://heggria.github.io/taskflow/zh-cn/docs) | 1.0 范围、支持与安全边界 |
 | [快速开始](https://heggria.github.io/taskflow/zh-cn/docs/getting-started) | 第一个 flow 与宿主配置 |
 | [核心概念](https://heggria.github.io/taskflow/zh-cn/docs/concepts/) | DAG、隔离、验证、续跑与 evidence |
 | [编译器与运行时](https://heggria.github.io/taskflow/zh-cn/docs/compiler-runtime/) | JSON、TypeScript DSL、FlowIR、replay 与 recompute |
 | [宿主指南](https://heggria.github.io/taskflow/zh-cn/docs/guides/) | Pi、Codex、Claude Code、OpenCode、Grok 与 Hermes |
 | [示例](./examples) | 可运行的 flow 定义，包括 Trusted Effects |
-| [变更记录](./CHANGELOG.md) | 发布历史与 candidate 说明 |
+| [变更记录](./CHANGELOG.md) | 发布历史与版本说明 |
 
 ## 许可证
 
@@ -227,6 +227,6 @@ pnpm run test:pack
 
 **声明 effect。验证路径。让一个 authority 负责提交。**
 
-[阅读文档](https://heggria.github.io/taskflow/zh-cn/docs) · [试用 candidate](#快速开始) · [查看 releases](https://github.com/heggria/taskflow/releases)
+[阅读文档](https://heggria.github.io/taskflow/zh-cn/docs) · [安装 Taskflow 1.0](#快速开始) · [查看 releases](https://github.com/heggria/taskflow/releases)
 
 </div>
