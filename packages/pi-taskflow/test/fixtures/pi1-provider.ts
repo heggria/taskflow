@@ -62,7 +62,7 @@ export default function (pi: ExtensionAPI) {
 		return fauxAssistantMessage("CHILD_OK");
 	}));
 	pi.registerProvider("taskflow-e2e", {
-		api: "taskflow-e2e-api", baseUrl: "http://127.0.0.1", apiKey: "synthetic-local-fixture",
+		api: "taskflow-e2e-api", baseUrl: "http://127.0.0.1", apiKey: handshake,
 		models: [{ id: "fixture", name: "Local fixture", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 4096 }],
 		streamSimple: core.streamSimple,
 	});

@@ -8,9 +8,9 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
 
-## [1.0.0] — Unreleased
+## [1.0.0] — 2026-10-02
 
-> **Release candidate; not tagged or published.** The ten existing public Taskflow packages target npm `latest` after release gates pass. This heading must be dated only when the release is authorized. The mature DAG/DSL/host/declared-filesystem-transaction contract is the stable scope; the unfinished control-plane RFC is not a 1.0 completion claim.
+> The ten existing public Taskflow packages target npm `latest` through the authorized tag workflow after release gates pass. The mature DAG/DSL/host/declared-filesystem-transaction contract is the stable scope; the unfinished control-plane RFC is not a 1.0 completion claim. A dated changelog alone is not evidence of completed publication.
 
 ### Changed
 
@@ -27,13 +27,13 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 - Reject cross-project attachment to the experimental single-store control host, preserve corrupt or identity-less ledgers, and isolate malformed UDS handshakes to the offending connection.
 - Make release reruns accept valid non-draft GitHub releases, validate real changelog dates, and require every package's release dist-tag before creating a stable release.
 - Correct macOS canonical-path test fixtures and wait for detached child completion before removing their workspaces. Add real Pi CLI and clean-installed package regressions alongside live Codex/Claude checks.
-- Update the documentation site's Next.js, sharp and baseline-browser-mapping dependencies to patched versions.
+- Update Next.js, sharp, baseline-browser-mapping, Undici and brace-expansion to patched versions; the complete workspace dependency audit, including development dependencies, reports zero vulnerabilities.
 
 ### Support boundaries
 
 - Pi interactive approval is supported; MCP/headless approval auto-rejects. Grok flows with budgets are rejected when usage cannot be observed.
 - Declared filesystem effects use resource transactions. Resolve-only is not an OS sandbox; undeclared writes remain host-policy dependent. Secret/service references have no live backend. Event-kernel fallback and journal capacity limits remain explicit.
-- Preparing this PR does not authorize merge, tag, npm publication or website deployment. Current evidence is tracked separately in `docs/internal/1.0.0-ga-scoreboard.md`.
+- Registry artifacts, tag and GitHub Release are verified separately from source preparation. Current evidence is tracked in `docs/internal/1.0.0-ga-scoreboard.md`.
 
 ## [0.3.0-beta.2] — 2026-08-18
 
