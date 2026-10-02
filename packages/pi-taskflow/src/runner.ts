@@ -455,6 +455,9 @@ export async function runAgentTask(
 		args.push(`Task: ${task}`);
 		const invocation = getPiInvocation(args);
 		const childEnv = { ...process.env, ...ctxEnv };
+		// The owning run wins over an inherited parent marker. Direct callers
+		// without an identity keep the existing environment behavior.
+		if (opts.runId !== undefined) childEnv.PI_SUBAGENT_RUN_ID = opts.runId;
 		// A child agent is not a host principal. Never let it inherit the
 		// operator's resolve-only bridge opt-in and mint equivalent authority.
 		delete childEnv[CWD_BRIDGE_MODE_ENV];

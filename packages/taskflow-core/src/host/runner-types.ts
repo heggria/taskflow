@@ -87,6 +87,9 @@ export interface LiveUpdate {
 
 /** Per-run knobs the engine passes to whichever host runner executes the task. */
 export interface RunOptions {
+	/** Owning Taskflow state's run identity, supplied by the runtime rather than
+	 * flow input. Hosts may expose it to their children; direct callers may omit it. */
+	runId?: string;
 	model?: string;
 	thinking?: string;
 	tools?: string[];
