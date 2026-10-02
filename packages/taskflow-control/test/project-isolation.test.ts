@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ControlHost, type ControlHostOptions } from "../src/control-host.ts";
 import { createTeExecutionProvider, type TeExecutionAuthority } from "../src/te-provider.ts";
+import { openControlStore } from "../src/store/index.ts";
 import { singletonPaths, type SingletonPaths } from "../src/singleton.ts";
 import { PROTOCOL_MAJOR, type NegotiationHandshake } from "../src/schema/transport.ts";
 
@@ -51,11 +52,14 @@ const clientHello: NegotiationHandshake = {
 	buildInfo: { packageVersion: "0.3.0", gitCommit: "abc", schemaVersion: 1 },
 };
 
-test("project isolation: a different project fails closed before any ledger mutation", async (t) => {
+for (const existing of [false, true]) {
+test(`project isolation: a different ${existing ? "existing" : "new"} project fails closed before any ledger mutation`, async (t) => {
  const paths = makePaths();
  const a = path.join(paths.controlHome, "a");
  const b = path.join(paths.controlHome, "b");
  const winner = new ControlHost(hostOptions(paths, { projectStorePath: a }));
+ if (existing) openControlStore(b).close();
+ const bBefore = existing ? fs.readFileSync(path.join(b, "header")) : undefined;
  const other = new ControlHost(hostOptions(paths, { projectStorePath: b }));
  t.after(() => { other.stop(); winner.stop(); });
  await winner.start();
@@ -64,9 +68,12 @@ test("project isolation: a different project fails closed before any ledger muta
  await assert.rejects(other.start(), /project store|projectStorePath/);
  assert.equal(other.state, "failed-closed");
  assert.deepEqual(fs.readFileSync(path.join(a, "header")), before);
- assert.equal(fs.existsSync(b), false);
+ assert.equal(fs.existsSync(b), existing);
+ if (existing) assert.deepEqual(fs.readFileSync(path.join(b, "header")), bBefore);
  assert.equal((await winner.dispatch<{ commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 })).commitSeq, 0);
 });
+
+}
 
 test("project isolation: attached clients without a project cannot access the winner ledger", async (t) => {
  const paths = makePaths();
