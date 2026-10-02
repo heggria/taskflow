@@ -102,12 +102,13 @@ jobs:
         run: pnpm run test:pi:peers
         env:
           PI_TEST_PEER_VERSION: ${{ matrix.pi }}
-      - name: Build and exercise real Pi 1.0 CLI, children, and RPC approvals
+      - name: Build and exercise real Pi 1.0 CLI, approvals, and crash recovery
         if: matrix.pi == '1.0.0'
         run: |
           pnpm --filter taskflow-core build
           pnpm --filter pi-taskflow build
           pnpm run test:e2e-pi
+          pnpm run test:e2e-pi-crash-resume
 
   e2e:
     # Required status context: keep this literal stable; the job now covers all MCP hosts.

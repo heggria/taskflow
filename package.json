@@ -41,7 +41,8 @@
 		"test:hermes": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/hermes-taskflow/test/*.test.ts'",
 		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts",
 		"test:pi:peers": "node scripts/verify-pi-peers.mjs && pnpm run test:pi",
-		"test:e2e-pi": "node --experimental-strip-types packages/pi-taskflow/test/e2e-pi1.mts"
+		"test:e2e-pi": "node --experimental-strip-types packages/pi-taskflow/test/e2e-pi1.mts",
+		"test:e2e-pi-crash-resume": "node --experimental-strip-types packages/pi-taskflow/test/e2e-pi-crash-resume.mts"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-agent-core": "1.0.0",

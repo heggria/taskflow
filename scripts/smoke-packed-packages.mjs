@@ -224,14 +224,22 @@ try {
 	const installedPiTests = join(consumerDir, "pi-e2e", "test");
 	mkdirSync(join(installedPiTests, "fixtures"), { recursive: true });
 	symlinkSync(join(consumerDir, "node_modules", "pi-taskflow", "dist"), join(consumerDir, "pi-e2e", "dist"), "junction");
-	for (const relative of ["e2e-pi1.mts", "fixtures/pi1-provider.ts"]) {
+	const piProcessSuites = [
+		{ file: "e2e-pi1.mts", timeoutMs: 420_000 },
+		{ file: "e2e-pi-crash-resume.mts", timeoutMs: 180_000 },
+	];
+	for (const relative of [...piProcessSuites.map(({ file }) => file), "fixtures/pi1-provider.ts"]) {
 		copyFileSync(join(repo, "packages", "pi-taskflow", "test", relative), join(installedPiTests, relative));
 	}
 	process.stdout.write("packed Pi 1.0 real-process fixture regressions:\n");
-	run(process.execPath, ["--experimental-strip-types", join(installedPiTests, "e2e-pi1.mts")], {
-		cwd: consumerDir,
-		stdio: "inherit",
-	});
+	for (const { file, timeoutMs } of piProcessSuites) {
+		process.stdout.write(`packed Pi suite: ${file}\n`);
+		run(process.execPath, ["--experimental-strip-types", join(installedPiTests, file)], {
+			cwd: consumerDir,
+			stdio: "inherit",
+			timeout: timeoutMs,
+		});
+	}
 
 	const publicImports = [
 		"taskflow-core",

@@ -1,79 +1,142 @@
 {
   "schemaVersion": 1,
   "baselineId": "taskflow-workspace-trusted-effects-v0.3.0-mvp",
-  "notes": "Honest cells for 0.3 Trusted Effects MVP. resolve-only is not a FileBroker sandbox. Empty claims removed.",
   "cells": [
     {
-      "host": "pi",
-      "resourceDomain": "filesystem",
-      "capability": "pathref-resolve",
-      "status": "supported",
-      "guarantee": "resolve-only",
-      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+      "target": {
+        "host": "pi",
+        "hostVersion": "0.80.6",
+        "hostBinarySha256": "af302f231437eaf6f37691bce4b34234fcb626bcb5eb3910d4fc3f6519bf78ca",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "script": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "fileBroker": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "decision": {
+        "owner": "taskflow-conformance",
+        "status": "rejected",
+        "reason": "Historical exact-target resolve-only observation; AgentExecutor and FileBroker enforcement suites have not passed. Not approved for sandboxed execution."
+      }
     },
     {
-      "host": "codex",
-      "resourceDomain": "filesystem",
-      "capability": "pathref-resolve",
-      "status": "supported",
-      "guarantee": "resolve-only",
-      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+      "target": {
+        "host": "codex",
+        "hostVersion": "codex-cli 0.144.0-alpha.4",
+        "hostBinarySha256": "fba7b05624324ce44777b174fe6da1bcf08ef8cba634d85ecfaacbd8fa49aa8d",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "script": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "fileBroker": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "decision": {
+        "owner": "taskflow-conformance",
+        "status": "rejected",
+        "reason": "Historical exact-target resolve-only observation; AgentExecutor and FileBroker enforcement suites have not passed. Not approved for sandboxed execution."
+      }
     },
     {
-      "host": "claude",
-      "resourceDomain": "filesystem",
-      "capability": "pathref-resolve",
-      "status": "supported",
-      "guarantee": "resolve-only",
-      "evidence": "packages/taskflow-core/src/resources/execution.ts"
+      "target": {
+        "host": "opencode",
+        "hostVersion": "1.17.13",
+        "hostBinarySha256": "5124dfe29f6b4552a71a00d1b60427229c58576cb3e2bff5c884cd7c12d66bdb",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "script": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "fileBroker": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "decision": {
+        "owner": "taskflow-conformance",
+        "status": "rejected",
+        "reason": "Historical exact-target resolve-only observation; AgentExecutor and FileBroker enforcement suites have not passed. Not approved for sandboxed execution."
+      }
     },
     {
-      "host": "opencode",
-      "resourceDomain": "filesystem",
-      "capability": "pathref-resolve",
-      "status": "supported",
-      "guarantee": "resolve-only",
-      "evidence": "packages/taskflow-core/src/resources/execution.ts"
-    },
-    {
-      "host": "grok",
-      "resourceDomain": "filesystem",
-      "capability": "pathref-resolve",
-      "status": "supported",
-      "guarantee": "resolve-only",
-      "evidence": "packages/taskflow-core/src/resources/execution.ts"
-    },
-    {
-      "host": "*",
-      "resourceDomain": "filesystem",
-      "capability": "file-broker",
-      "status": "unsupported",
-      "guarantee": "none",
-      "evidence": "No host has passed FileBroker adversarial baseline; do not claim sandbox."
-    },
-    {
-      "host": "node-local",
-      "resourceDomain": "filesystem",
-      "capability": "trusted-effects-resource-transaction",
-      "status": "supported",
-      "guarantee": "pathref-lease-journal-permit-commit-or-restore",
-      "evidence": "packages/taskflow-core/src/resources/file-transaction.ts + test/resource-file-transaction.test.ts"
-    },
-    {
-      "host": "*",
-      "resourceDomain": "secret",
-      "capability": "secretref-backend",
-      "status": "unsupported",
-      "guarantee": "type-only-fail-closed",
-      "evidence": "SecretRef validated; no vault adapter in 0.3 MVP"
-    },
-    {
-      "host": "*",
-      "resourceDomain": "service",
-      "capability": "serviceref-adapter",
-      "status": "unsupported",
-      "guarantee": "type-only-fail-closed",
-      "evidence": "ServiceRef validated; no live adapter in 0.3 MVP"
+      "target": {
+        "host": "grok",
+        "hostVersion": "grok 0.2.99 (b1b49ccb71a7)",
+        "hostBinarySha256": "01bcacec12e7c2a164d23975f1595400ff7f3cbd74f50b1858f6a5a14eb9ff81",
+        "os": "macos",
+        "osVersion": "26.3",
+        "osBuild": "25D125",
+        "arch": "arm64",
+        "sandboxMechanismVersion": "sandbox-exec:25D125",
+        "backendId": "taskflow-resolve-only",
+        "backendCapabilityVersion": "1",
+        "backendCapabilitiesSha256": "51d4209b8df2e42a80e64a6e4c66c16c14bfe40854e0c149b73742549a8583c1",
+        "baselinePolicyId": "taskflow-resolve-only"
+      },
+      "classification": "resolve-only",
+      "agent": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "script": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "fileBroker": {
+        "path": "conformance/workspace/results/macos-26.3-arm64-25D125.json",
+        "sha256": "1047183e9e64d2b347f0a9dd0066cccacab40d761125e5aba152aefe37e484c4"
+      },
+      "decision": {
+        "owner": "taskflow-conformance",
+        "status": "rejected",
+        "reason": "Historical exact-target resolve-only observation; AgentExecutor and FileBroker enforcement suites have not passed. Not approved for sandboxed execution."
+      }
     }
   ]
 }

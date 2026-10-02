@@ -10,13 +10,13 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [1.0.0] — 2026-10-02
 
-> The ten existing public Taskflow packages target npm `latest` through the authorized tag workflow after release gates pass. The mature DAG/DSL/host/declared-filesystem-transaction contract is the stable scope; the unfinished control-plane RFC is not a 1.0 completion claim. A dated changelog alone is not evidence of completed publication.
+> Publication is blocked on historical accepted-spec closure and real Pi 1.0 compatibility. The ten existing public packages target npm `latest` only after these gates and the authorized tag workflow pass. A dated changelog is not evidence of completed publication; experimental packaging does not waive accepted requirements.
 
 ### Changed
 
 - Align the root, ten public packages, plugin manifests and all MCP installation templates to `1.0.0`; retain exact internal dependency rewriting, deterministic packed consumers, npm provenance and all security gates.
 - Validate the complete release contract before packing or publishing, including package membership, version/pin agreement, experimental-package isolation and dated release notes.
-- Keep `taskflow-control` private and workspace-only, with proposed experimental wire contracts. Admission, parked approvals/CAS/receipts, global coordination, Windows pipes and WebUI remain outside the stable contract. CharterArc keeps its independent experimental release path.
+- Keep `taskflow-control` private and workspace-only while its accepted decisions and proposed wire details await full implementation/acceptance. Admission, parked approvals/CAS/receipts, global coordination and WebUI remain incomplete and cannot be waived by this packaging boundary. CharterArc keeps its independent experimental release path.
 - Prepare Pi 1.0 compatibility and owning-run identity propagation; release acceptance requires current packed-extension, real-process, retry, approval, TUI/RPC and resume evidence.
 - Integrate dependency/Actions maintenance with retained Cisco skill-scan coverage. Historical scans using different analyzer versions do not prove historical findings were fixed.
 
@@ -24,7 +24,10 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - Let Pi finish transient retries and overflow compaction before deciding that an assistant error is terminal; preserve successful post-run compaction exits on Pi 0.80.3 and count tool-reported model usage once.
 - Route Pi RPC approval through supported dialogs; reject cancellation, unavailable dialogs and aborted edits. Validate shorthand calls without an explicit action through the actual Pi tool schema.
+- Persist every Pi/MCP runtime checkpoint instead of dropping rapid updates. Recover a Pi foreground approval checkpoint only after the owner is proven dead, the physical project identity matches, and the DAG proves other work cannot still be dispatched. Fork a new run and preserve the original bytes; living/unknown owners and potentially active children remain rejected.
 - Reject cross-project attachment to the experimental single-store control host, preserve corrupt or identity-less ledgers, and isolate malformed UDS handshakes to the offending connection.
+- Bound UDS frames and initial handshake time; validate response discriminants, IDs and epochs before use. Keep unknown TE handles ambiguous, isolate store records from caller mutation, and reject copied/moved/replaced store identities before journal recovery.
+- Restore the default host baseline's strict evidence format. Separate six-host implementation notes from the normative sandbox allowlist; no target receives a new sandbox approval.
 - Make release reruns accept valid non-draft GitHub releases, validate real changelog dates, and require every package's release dist-tag before creating a stable release.
 - Correct macOS canonical-path test fixtures and wait for detached child completion before removing their workspaces. Add real Pi CLI and clean-installed package regressions alongside live Codex/Claude checks.
 - Update Next.js, sharp, baseline-browser-mapping, Undici and brace-expansion to patched versions; the complete workspace dependency audit, including development dependencies, reports zero vulnerabilities.

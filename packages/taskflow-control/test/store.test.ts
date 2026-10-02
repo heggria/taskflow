@@ -38,6 +38,39 @@ const UUID = "00000000-0000-0000-0000-000000000001";
 const UUID2 = "00000000-0000-0000-0000-000000000002";
 const SHA256 = "a".repeat(64);
 
+function storeBytes(root: string): Record<string, string> {
+	const files: Record<string, string> = {};
+	for (const name of fs.readdirSync(root, { recursive: true }) as string[]) {
+		const file = path.join(root, name);
+		if (fs.statSync(file).isFile()) files[name] = fs.readFileSync(file).toString("base64");
+	}
+	return files;
+}
+
+for (const replacement of ["copied", "moved", "replaced-in-place"] as const) {
+	test(`store: ${replacement} identity must not be silently reused or rewritten`, () => {
+		const originalPath = makeStorePath();
+		const store = openControlStore(originalPath);
+		store.appendBatch(submitBatch());
+		store.close();
+		let candidatePath = `${originalPath}-candidate`;
+		if (replacement === "moved") fs.renameSync(originalPath, candidatePath);
+		else {
+			fs.cpSync(originalPath, candidatePath, { recursive: true });
+			if (replacement === "replaced-in-place") {
+				fs.renameSync(originalPath, `${originalPath}-old`);
+				fs.renameSync(candidatePath, originalPath);
+				candidatePath = originalPath;
+			}
+		}
+		const before = storeBytes(candidatePath);
+		assert.throws(() => openControlStore(candidatePath), (error: unknown) =>
+			error instanceof ControlError && error.code === "TF_DURABILITY_FAILED"
+			&& /directory identity.*explicit.*rebind/i.test(error.message));
+		assert.deepEqual(storeBytes(candidatePath), before, "identity and ledger evidence must remain byte-identical");
+	});
+}
+
 function submitBatch(overrides: Partial<CommandRecord> = {}): {
 	command: CommandRecord;
 	events: ControlEvent[];

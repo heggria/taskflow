@@ -238,6 +238,15 @@ export function openControlStore(storePath: string, options: OpenControlStoreOpt
 			return new ControlStore(resolved, header, 0, [], releaseWriter);
 		}
 
+		// Recovery may rewrite projections, so verify the authoritative binding
+		// first. A copied/moved/replaced store is not proof of the same project.
+		// Never reset UUIDs or rewrite historical evidence to make it attach.
+		const binding = existingHeader.directoryBinding;
+		const stat = fs.statSync(resolved);
+		if (binding.canonicalPath !== fs.realpathSync(resolved)
+			|| binding.device !== String(stat.dev) || binding.inode !== String(stat.ino)) {
+			throw durabilityFailed("control store directory identity changed; explicit verified rebind or a new project store is required");
+		}
 		const recovered = recoverFromJournal(resolved, existingHeader);
 		return new ControlStore(resolved, existingHeader, recovered.commitSeq, recovered.commands, releaseWriter);
 	} catch (error) {

@@ -34,6 +34,13 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (text.startsWith("HOST:")) {
 			const which = text.slice(5);
+			if (which === "crash-seed") return fauxAssistantMessage(fauxToolCall("taskflow", { action: "run", define: { name: "real-crash", phases: [
+				{ id: "once", type: "script", run: (process.env.TASKFLOW_E2E_CRASH_SLOW === "1" ? "sleep 1.1; " : "") + "printf once >> crash-once.txt; printf FIRST" },
+				{ id: "second", type: "script", run: "printf twice >> crash-second.txt; printf SECOND", dependsOn: ["once"] },
+				{ id: "review", type: "approval", task: "Hold for deliberate process crash", dependsOn: ["second"] },
+				{ id: "recover", type: "agent", agent: "executor", task: "CHILD_IDENTITY", dependsOn: ["review"], final: true },
+			] } }));
+			if (which.startsWith("crash-resume:")) return fauxAssistantMessage(fauxToolCall("taskflow", { action: "resume", runId: which.slice(13) }));
 			if (which === "version") return fauxAssistantMessage(fauxToolCall("taskflow", { action: "version" }));
 			if (which === "codemode") return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text(await tools.taskflow({action:"version"}));' }));
 			if (which === "shorthand") return fauxAssistantMessage(fauxToolCall("taskflow", { task: "CHILD_OK", agent: "executor" }));
@@ -52,6 +59,7 @@ export default function (pi: ExtensionAPI) {
 			] } }));
 			throw new Error(`Unknown fixture host request: ${which}`);
 		}
+		if (text.includes("CHILD_IDENTITY")) return fauxAssistantMessage(process.env.PI_SUBAGENT_RUN_ID ?? "MISSING_ID");
 		if (text.includes("CHILD_USAGE")) return fauxAssistantMessage(fauxToolCall("fixture_meter", {}));
 		if (text.includes("WRITE_TOKEN")) return fauxAssistantMessage(fauxToolCall("ctx_write", { key: "handshake", value: handshake }));
 		if (text.includes("READ_TOKEN")) return fauxAssistantMessage(fauxToolCall("ctx_read", { key: "handshake" }));

@@ -12,6 +12,7 @@
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolve as resolvePath } from "node:path";
+import { randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -98,6 +99,8 @@ import {
 	getBuildInfo,
 	forkRunForResume,
 	validateResumeRequest,
+	resumeSourceAfterOwnerExit,
+	isQuiescentApprovalCheckpoint,
 	type ResumeOverrides,
 	cwdBridgeModeFromEnv,
 	directoryIdentity,
@@ -479,6 +482,7 @@ async function runFlow(
 	flowSourceDirIdentity?: DirectoryIdentity,
 ): Promise<RuntimeResult> {
 	const state = existing ?? makeRunState(def, args, ctx.cwd, flowSourceFile, flowSourceDirIdentity);
+	state.foregroundOwner = { version: 1, pid: process.pid, instanceId: randomUUID(), startedAt: Date.now() };
 
 	const emit = (s: RunState, finalOutput?: string) => {
 		onUpdate?.({
@@ -487,15 +491,22 @@ async function runFlow(
 		});
 	};
 
-	// Throttled persistence: avoid disk writes on every sub-item event.
-	let lastPersist = 0;
+	// Runtime persist is checkpoint-only; streaming/UI updates use onProgress.
+	// Every checkpoint must survive a process kill before the next UI frame.
 	const cleanupConfig = { maxKeep: DEFAULT_KEPT_RUNS, maxAgeDays: DEFAULT_RUN_AGE_DAYS };
-	const persistThrottled = (s: RunState) => {
-		const now = Date.now();
-		if (now - lastPersist >= 1000) {
-			lastPersist = now;
-			saveRun(s, cleanupConfig);
+	const waitingApprovals = new Set<string>();
+	const lifecycleKey = (s: RunState) => JSON.stringify([s.status, Object.values(s.phases).map((phase) => [phase.id, phase.status]).sort()]);
+	let lastLifecycleKey = "";
+	const persistCheckpoint = (s: RunState) => {
+		const running = Object.values(s.phases).filter((phase) => phase.status === "running").map((phase) => phase.id);
+		if (s.foregroundOwner) {
+			delete s.foregroundOwner.approvalWait;
+			if (running.length && running.every((id) => waitingApprovals.has(id)) && isQuiescentApprovalCheckpoint(s, running)) {
+				s.foregroundOwner.approvalWait = running.sort();
+			}
 		}
+		saveRun(s, cleanupConfig);
+		lastLifecycleKey = lifecycleKey(s);
 	};
 
 	// ~8fps heartbeat drives all rendering: it naturally caps the frame rate
@@ -509,9 +520,22 @@ async function runFlow(
 		(heartbeat as { unref?: () => void }).unref?.();
 	}
 
-	const requestApproval = createApprovalRequester(ctx, def.name, signal);
+	const approver = createApprovalRequester(ctx, def.name, signal);
+	const requestApproval: RuntimeDeps["requestApproval"] = approver ? async (request) => {
+		// Save completed upstream phases and the waiting phase before requesting
+		// user input. SIGKILL cannot run a trailing timer or finally block.
+		waitingApprovals.add(request.phaseId);
+		try {
+			persistCheckpoint(state);
+			return await approver(request);
+		} finally {
+			waitingApprovals.delete(request.phaseId);
+			persistCheckpoint(state);
+		}
+	} : undefined;
 
 	try {
+		persistCheckpoint(state);
 		// Discover settings/agents inside try so a YAML/IO crash in
 		// discoverAgents or readSubagentSettings (F-001) is caught and
 		// the heartbeat timer is cleared by the finally block below.
@@ -548,7 +572,11 @@ async function runFlow(
 			agents,
 			globalThinking: settings.globalThinking,
 			signal,
-			persist: persistThrottled,
+			persist: persistCheckpoint,
+			// Phase starts arrive via onProgress before child execution. Persist
+			// their status changes to invalidate an earlier approval-only marker;
+			// streaming text/token updates retain the same key and never write.
+			onProgress: (s) => { if (lifecycleKey(s) !== lastLifecycleKey) persistCheckpoint(s); },
 			// Deterministic-replay trace (best-effort, fail-open). Records each
 			// subagent call + runtime decisions to an append-only JSONL so a future
 			// `replay` can re-evaluate the run offline. Absent in tests = no-op.
@@ -1102,7 +1130,9 @@ export default function (pi: ExtensionAPI) {
 					return errorResult(action, "action=resume requires 'runId'");
 				const prevR = loadRunDiagnosed(ctx.cwd, params.runId);
 				if (!prevR.ok) return errorResult(action, describeLoadFailure(prevR, `Run "${params.runId}"`));
-				const prev = prevR.value;
+				const source = resumeSourceAfterOwnerExit(prevR.value, { cwd: ctx.cwd });
+				if (!source.ok) return errorResult(action, source.errors.join("; "));
+				const prev = source.value;
 				// Build overrides if any override field is supplied (requires phaseId).
 				const hasOverrideField =
 					params.resumeTask !== undefined ||
@@ -1125,6 +1155,14 @@ export default function (pi: ExtensionAPI) {
 				if (!resumable.ok) {
 					const prefix = overrides ? "Invalid resume overrides:\n- " : "";
 					return errorResult(action, `${prefix}${resumable.errors.join(overrides ? "\n- " : "; ")}`);
+				}
+				if (prevR.value.status === "running") {
+					const current = loadRunDiagnosed(ctx.cwd, params.runId);
+					if (!current.ok || JSON.stringify(current.value) !== JSON.stringify(prevR.value)) {
+						return errorResult(action, "Interrupted checkpoint changed during recovery admission; retry from its current state");
+					}
+					const rechecked = resumeSourceAfterOwnerExit(current.value, { cwd: ctx.cwd });
+					if (!rechecked.ok) return errorResult(action, rechecked.errors.join("; "));
 				}
 				const child = forkRunForResume(prev, { overrides, cwd: ctx.cwd, host: "pi" });
 				const result = await runFlow(child.def, child.args, ctx, signal, onUpdate as any, child);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -7,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import {
 	FILE_BROKER_EVIDENCE_CHECKS,
+	HOST_PROBE_HOSTS,
 	HOST_PROBE_VERSION,
 	hostProbeTargetsEqual,
 	isExactHostProbeTarget,
@@ -19,6 +21,19 @@ import {
 	type HostProbeTarget,
 	type HostSupportBaseline,
 } from "../src/resources/baseline.ts";
+
+test("checked-in default host baseline verifies its actual evidence without granting a sandbox", () => {
+	const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+	const verified = loadVerifiedHostSupportBaseline({ repositoryRoot });
+	assert.ok(verified.cells.length > 0, "the baseline must preserve the existing exact-target probe evidence");
+	assert.deepEqual(validateHostSupportBaseline(verified), []);
+	assert.deepEqual(verified.cells.map((cell) => cell.target.host).sort(), ["codex", "grok", "opencode", "pi"]);
+	for (const cell of verified.cells) {
+		assert.equal(cell.classification, "resolve-only");
+		assert.equal(cell.decision.status, "rejected");
+		assert.equal(matchSandboxedHostTarget(verified, cell.target).ok, false);
+	}
+});
 
 const target: HostProbeTarget = {
 	host: "codex",
@@ -98,6 +113,61 @@ function fixture(classification: "sandboxed-single-root" | "resolve-only" = "san
 	fs.writeFileSync(baselinePath, JSON.stringify(value));
 	return { repositoryRoot, evidencePath, baselinePath, baseline: value };
 }
+
+for (const host of HOST_PROBE_HOSTS) {
+	test(`trusted baseline schema: ${host} fixture loads without granting sandbox authority`, () => {
+		const f = fixture("resolve-only");
+		try {
+			const cell = f.baseline.cells[0];
+			cell.target = { ...cell.target, host };
+			cell.decision = { owner: "test", status: "rejected", reason: "synthetic host-schema fixture only" };
+			const evidenceBody = JSON.stringify(evidenceBundle(result("resolve-only", cell.target)));
+			fs.writeFileSync(f.evidencePath, evidenceBody);
+			for (const kind of ["agent", "script", "fileBroker"] as const) cell[kind].sha256 = sha256(evidenceBody);
+			fs.writeFileSync(f.baselinePath, JSON.stringify(f.baseline));
+			const verified = loadVerifiedHostSupportBaseline({ repositoryRoot: f.repositoryRoot });
+			assert.equal(verified.cells[0].target.host, host);
+			assert.equal(matchSandboxedHostTarget(verified, cell.target).ok, false);
+		} finally {
+			fs.rmSync(f.repositoryRoot, { recursive: true, force: true });
+		}
+	});
+}
+
+test("host baseline schema accepts exactly the six host identifiers and rejects aliases", () => {
+	assert.deepEqual([...HOST_PROBE_HOSTS].sort(), ["claude", "codex", "grok", "hermes", "opencode", "pi"]);
+	for (const host of ["unknown", "Pi", "*", ""]) {
+		const value = baseline("a".repeat(64), "resolve-only");
+		value.cells[0].target = { ...value.cells[0].target, host: host as HostProbeTarget["host"] };
+		assert.ok(validateHostSupportBaseline(value).some((error) => error.includes("target.host is invalid")), host);
+	}
+});
+
+test("probe collector honors the Hermes binary override without claiming sandbox support", { skip: process.platform === "win32" }, () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-hermes-probe-fixture-"));
+	try {
+		const binary = path.join(root, "hermes-fixture");
+		const body = '#!/bin/sh\nprintf "hermes-probe-fixture 1.0\\n"\n';
+		fs.writeFileSync(binary, body, { mode: 0o755 });
+		const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+		const proc = spawnSync(process.execPath, [path.join(repositoryRoot, "scripts/workspace-probes/run.mjs")], {
+			env: { ...process.env, PATH: "/usr/bin:/bin", PI_TASKFLOW_HERMES_BIN: binary },
+			encoding: "utf8",
+			timeout: 15_000,
+		});
+		assert.equal(proc.status, 0, proc.stderr);
+		const bundle = JSON.parse(proc.stdout) as HostProbeEvidenceBundle;
+		const observed = bundle.results.find((probe) => probe.target.host === "hermes");
+		assert.ok(observed, "Hermes override must identify a target even when hermes is absent from PATH");
+		assert.equal(observed.target.hostVersion, "hermes-probe-fixture 1.0");
+		assert.equal(observed.target.hostBinarySha256, sha256(body));
+		assert.equal(observed.classification, "resolve-only");
+		assert.equal(observed.agent.pass, false);
+		assert.equal(observed.fileBroker.pass, false);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test("host baseline authorizes only a trusted-loader verified exact sandbox cell", () => {
 	const sandboxed = fixture();
