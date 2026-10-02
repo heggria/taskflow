@@ -134,16 +134,21 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 		socket.write(encodeFrame(frame));
 	};
 	const failClosed = (frame: UdsFrame): void => {
-		send(frame);
-		destroyed = true;
-		socket.destroy();
+		try {
+			send(frame);
+		} finally {
+			destroyed = true;
+			buffer = "";
+			socket.destroy();
+		}
 	};
 
 	socket.setEncoding("utf8");
 	socket.on("data", (chunk: string) => {
+		if (destroyed) return;
 		buffer += chunk;
 		let index: number;
-		while ((index = buffer.indexOf("\n")) >= 0) {
+		while (!destroyed && (index = buffer.indexOf("\n")) >= 0) {
 			const line = buffer.slice(0, index).trim();
 			buffer = buffer.slice(index + 1);
 			if (!line) continue;
@@ -159,8 +164,18 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 				} as UdsFrame);
 				return;
 			}
-			void handleFrame(raw);
+			// A final rejection boundary also covers failures while encoding the
+			// error response; no connection may produce an unhandled rejection.
+			void handleFrame(raw).catch(() => {
+				destroyed = true;
+				buffer = "";
+				socket.destroy();
+			});
 		}
+	});
+	socket.on("close", () => {
+		destroyed = true;
+		buffer = "";
 	});
 	socket.on("error", () => {
 		destroyed = true;
@@ -168,60 +183,73 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 	});
 
 	const handleFrame = async (raw: Record<string, unknown>): Promise<void> => {
-		if (raw.type === "hello") {
-			if (greeted) {
-				failClosed({ type: "hello-ack", ok: false, error: errorToEnvelope(protocolError("duplicate hello on a control channel")) });
-				return;
-			}
-			const verdict = gate.hello(raw.hello);
-			if (!verdict.ok) {
-				failClosed({ type: "hello-ack", ok: false, error: verdict.error.toEnvelope() });
-				return;
-			}
-			greeted = true;
-			send({
-				type: "hello-ack",
-				ok: true,
-				serverHello: gate.serverHello,
-				fencingEpoch: options.getFencingEpoch(),
-			});
-			return;
-		}
-		if (raw.type === "rpc") {
-			if (!greeted) {
-				failClosed({
-					type: "rpc-result",
-					id: typeof raw.id === "number" ? raw.id : 0,
-					ok: false,
-					error: errorToEnvelope(protocolError("hello must precede any RPC on this control channel")),
+		if (destroyed) return;
+		try {
+			if (raw.type === "hello") {
+				if (greeted) {
+					failClosed({ type: "hello-ack", ok: false, error: errorToEnvelope(protocolError("duplicate hello on a control channel")) });
+					return;
+				}
+				const verdict = gate.hello(raw.hello);
+				if (!verdict.ok) {
+					failClosed({ type: "hello-ack", ok: false, error: verdict.error.toEnvelope() });
+					return;
+				}
+				const fencingEpoch = options.getFencingEpoch();
+				greeted = true;
+				send({
+					type: "hello-ack",
+					ok: true,
+					serverHello: gate.serverHello,
+					fencingEpoch,
 				});
 				return;
 			}
-			const id = raw.id;
-			if (typeof id !== "number") {
-				failClosed({ type: "rpc-result", id: 0, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a numeric id")) });
+			if (raw.type === "rpc") {
+				if (!greeted) {
+					failClosed({
+						type: "rpc-result",
+						id: typeof raw.id === "number" ? raw.id : 0,
+						ok: false,
+						error: errorToEnvelope(protocolError("hello must precede any RPC on this control channel")),
+					});
+					return;
+				}
+				const id = raw.id;
+				if (typeof id !== "number") {
+					failClosed({ type: "rpc-result", id: 0, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a numeric id")) });
+					return;
+				}
+				const method = typeof raw.method === "string" ? raw.method : "";
+				if (!method) {
+					failClosed({ type: "rpc-result", id, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a method name")) });
+					return;
+				}
+				const fencingEpoch = typeof raw.fencingEpoch === "number" ? raw.fencingEpoch : 0;
+				try {
+					const result = await options.handleRpc(method, raw.params, fencingEpoch);
+					send({ type: "rpc-result", id, ok: true, result });
+				} catch (error) {
+					send({ type: "rpc-result", id, ok: false, error: errorToEnvelope(error) });
+				}
 				return;
 			}
-			const method = typeof raw.method === "string" ? raw.method : "";
-			if (!method) {
-				failClosed({ type: "rpc-result", id, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a method name")) });
-				return;
-			}
-			const fencingEpoch = typeof raw.fencingEpoch === "number" ? raw.fencingEpoch : 0;
-			try {
-				const result = await options.handleRpc(method, raw.params, fencingEpoch);
-				send({ type: "rpc-result", id, ok: true, result });
-			} catch (error) {
-				send({ type: "rpc-result", id, ok: false, error: errorToEnvelope(error) });
-			}
-			return;
+			failClosed({
+				type: greeted ? "rpc-result" : "hello-ack",
+				...(greeted ? { id: 0 } : {}),
+				ok: false,
+				error: errorToEnvelope(protocolError(`unknown control wire frame type ${JSON.stringify(raw.type)}`)),
+			} as UdsFrame);
+		} catch (error) {
+			// Catch synchronous negotiation failures before the data loop can
+			// dispatch another pipelined frame on this failed connection.
+			failClosed({
+				type: greeted ? "rpc-result" : "hello-ack",
+				...(greeted ? { id: typeof raw.id === "number" ? raw.id : 0 } : {}),
+				ok: false,
+				error: errorToEnvelope(error),
+			} as UdsFrame);
 		}
-		failClosed({
-			type: greeted ? "rpc-result" : "hello-ack",
-			...(greeted ? { id: 0 } : {}),
-			ok: false,
-			error: errorToEnvelope(protocolError(`unknown control wire frame type ${JSON.stringify(raw.type)}`)),
-		} as UdsFrame);
 	};
 }
 

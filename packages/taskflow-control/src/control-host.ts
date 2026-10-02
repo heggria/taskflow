@@ -35,6 +35,7 @@ import { openControlStore, type ControlStore } from "./store/index.ts";
 import { CONTROL_WIRE_SCHEMA_VERSION, PROTOCOL_MAJOR, type NegotiationHandshake } from "./schema/index.ts";
 import type { CommandRecord, ControlEvent } from "./schema/index.ts";
 import type { ExecutionProvider } from "./te-provider.ts";
+import type { ControlStoreHeader } from "./schema/index.ts";
 import type { RunSnapshot } from "./schema/run.ts";
 
 export interface ControlHostOptions {
@@ -219,6 +220,7 @@ export class ControlHost {
 						this.#holderId = result.holderId;
 						this.#fencingEpoch = client.fencingEpoch;
 						this.#udsClient = client;
+						await this.#verifyAttachedProjectStore(client);
 					}
 					this.#state = "started";
 					break;
@@ -242,7 +244,13 @@ export class ControlHost {
 	 * control plane (its own hello happened on the wire at connect time).
 	 */
 	async dispatch<T>(method: string, params: unknown, context: { fencingEpoch: number }): Promise<T> {
+		if (this.#state !== "started") {
+			throw bootstrapFailed("ControlHost must be started before dispatch");
+		}
 		if (this.#singleton === "attached" && this.#udsClient !== undefined) {
+			if ((method.startsWith("control.store.") || method === "commands.submit") && !this.#options.projectStorePath) {
+				throw bootstrapFailed("projectStorePath is required for attached project store RPCs");
+			}
 			return this.#udsClient.rpc<T>(method, params, context.fencingEpoch);
 		}
 		if (!this.#helloGate.greeted) {
@@ -410,6 +418,24 @@ export class ControlHost {
 		this.#holderId = holderId;
 		this.#fencingEpoch = 1;
 		this.#standaloneLeasePath = leasePath;
+	}
+
+	/** Until multi-mount routing exists, never silently use another project's ledger. */
+	async #verifyAttachedProjectStore(client: UdsClient): Promise<void> {
+		const storePath = this.#options.projectStorePath;
+		if (!storePath) return;
+		try {
+			const header = await client.rpc<ControlStoreHeader>("control.store.header");
+			const canonicalPath = fs.realpathSync(storePath);
+			const stat = fs.statSync(canonicalPath);
+			if (header.directoryBinding.canonicalPath !== canonicalPath
+				|| header.directoryBinding.device !== String(stat.dev)
+				|| header.directoryBinding.inode !== String(stat.ino)) {
+				throw new Error("winner is bound to a different project store; multi-mount routing is unavailable");
+			}
+		} catch (error) {
+			throw bootstrapFailed(`cannot attach project store ${storePath}: ${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	#openProjectStore(): void {

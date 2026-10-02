@@ -207,6 +207,14 @@ export function openControlStore(storePath: string, options: OpenControlStoreOpt
 	try {
 		const existingHeader = readHeader(resolved);
 		if (existingHeader === undefined) {
+			// A missing identity is only an uninitialized store when nothing else
+			// exists. Never assign a new project ID or reset an existing ledger.
+			// Other contenders can be preparing their unpublished lock files.
+			const candidateName = /^\.writer\.lock-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+			if (fs.readdirSync(resolved, { withFileTypes: true }).some((entry) =>
+				entry.name !== LOCK_NAME && !(entry.isFile() && candidateName.test(entry.name)))) {
+				throw durabilityFailed(`missing control store header in nonempty store at ${resolved}`);
+			}
 			const header = createHeader(resolved, options);
 			writeJsonAtomicHardened(headerPath(resolved), header);
 			maybeCrash("header-fsynced");
@@ -243,9 +251,14 @@ function createHeader(storePath: string, options: OpenControlStoreOptions): Cont
 
 function readHeader(storePath: string): ControlStoreHeader | undefined {
 	const file = headerPath(storePath);
-	if (!fs.existsSync(file)) return undefined;
 	assertNotSymlink(file);
-	const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+	if (!fs.existsSync(file)) return undefined;
+	let raw: unknown;
+	try {
+		raw = JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch {
+		throw durabilityFailed(`unreadable control store header at ${file}`);
+	}
 	if (!Value.Check(ControlStoreHeaderSchema, raw)) {
 		throw durabilityFailed(`malformed control store header at ${file}`);
 	}
@@ -256,14 +269,9 @@ function recoverFromJournal(
 	storePath: string,
 	header: ControlStoreHeader,
 ): { commitSeq: number; commands: CommandRecord[] } {
-	ensureDirectory(path.join(storePath, JOURNAL_DIR));
-	ensureDirectory(path.join(storePath, PROJECTIONS_DIR));
-	ensureDirectory(path.join(storePath, COMMANDS_DIR));
-	ensureDirectory(path.join(storePath, RECEIPTS_DIR));
-
 	const batches = readJournalBatches(journalPath(storePath));
-	truncateTornJournal(journalPath(storePath));
 	const commands: CommandRecord[] = [];
+	const commandIds = new Set<string>();
 	let commitSeq = 0;
 	for (const batch of batches) {
 		if (batch.recordKind !== "commit-batch") {
@@ -278,6 +286,19 @@ function recoverFromJournal(
 		) {
 			throw durabilityFailed("journal command identity does not match store header");
 		}
+		if (commandIds.has(batch.command.commandId)
+			|| batch.command.firstCommitSeq !== batch.commitSeq
+			|| batch.command.lastCommitSeq !== batch.commitSeq) {
+			throw durabilityFailed("journal command has duplicate identity or inconsistent commit sequence");
+		}
+		for (const [index, event] of batch.events.entries()) {
+			if (event.projectId !== header.projectId || event.controlDomainId !== header.controlDomainId
+				|| event.commitSeq !== batch.commitSeq || event.commandId !== batch.command.commandId
+				|| event.commandEventIndex !== index) {
+				throw durabilityFailed("journal event identity or sequence does not match its batch");
+			}
+		}
+		commandIds.add(batch.command.commandId);
 		commands.push(batch.command);
 		commitSeq = batch.commitSeq;
 	}
@@ -288,6 +309,13 @@ function recoverFromJournal(
 			`mixed state: commit-seq.json (${onDiskSeq}) is ahead of journal (${commitSeq})`,
 		);
 	}
+	// Validate the complete authoritative state before any recovery write. A
+	// torn tail is recoverable only when the preceding ledger is consistent.
+	truncateTornJournal(journalPath(storePath));
+	ensureDirectory(path.join(storePath, JOURNAL_DIR));
+	ensureDirectory(path.join(storePath, PROJECTIONS_DIR));
+	ensureDirectory(path.join(storePath, COMMANDS_DIR));
+	ensureDirectory(path.join(storePath, RECEIPTS_DIR));
 	writeJsonAtomicHardened(commitSeqPath(storePath), { commitSeq });
 	writeJsonAtomicHardened(
 		commandIndexPath(storePath),
@@ -298,18 +326,24 @@ function recoverFromJournal(
 
 function readCommitSeqFile(storePath: string): number | undefined {
 	const file = commitSeqPath(storePath);
-	if (!fs.existsSync(file)) return undefined;
 	assertNotSymlink(file);
-	const raw = JSON.parse(fs.readFileSync(file, "utf8")) as { commitSeq?: unknown };
-	if (typeof raw.commitSeq !== "number" || !Number.isInteger(raw.commitSeq) || raw.commitSeq < 0) {
+	if (!fs.existsSync(file)) return undefined;
+	let raw: unknown;
+	try {
+		raw = JSON.parse(fs.readFileSync(file, "utf8"));
+	} catch {
+		throw durabilityFailed(`unreadable commit-seq.json at ${file}`);
+	}
+	if (!raw || typeof raw !== "object" || !("commitSeq" in raw)
+		|| typeof raw.commitSeq !== "number" || !Number.isSafeInteger(raw.commitSeq) || raw.commitSeq < 0) {
 		throw durabilityFailed(`malformed commit-seq.json at ${file}`);
 	}
 	return raw.commitSeq;
 }
 
 function readJournalBatches(filePath: string): JournalBatch[] {
-	if (!fs.existsSync(filePath)) return [];
 	assertNotSymlink(filePath);
+	if (!fs.existsSync(filePath)) return [];
 	const raw = fs.readFileSync(filePath);
 	const text = raw.toString("utf8");
 	const lines = text.split("\n");
@@ -323,6 +357,14 @@ function readJournalBatches(filePath: string): JournalBatch[] {
 			parsed = JSON.parse(line);
 		} catch {
 			throw durabilityFailed("journal contains a complete but unreadable line");
+		}
+		if (!parsed || typeof parsed !== "object"
+			|| !("recordKind" in parsed) || parsed.recordKind !== "commit-batch"
+			|| !("commitSeq" in parsed) || !Number.isSafeInteger(parsed.commitSeq)
+			|| !("command" in parsed) || !Value.Check(CommandRecordSchema, parsed.command)
+			|| !("events" in parsed) || !Array.isArray(parsed.events) || parsed.events.length === 0
+			|| !parsed.events.every((event: unknown) => Value.Check(ControlEventSchema, event))) {
+			throw durabilityFailed("journal contains a malformed commit batch");
 		}
 		batches.push(parsed as JournalBatch);
 	}
