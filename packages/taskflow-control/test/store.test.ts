@@ -18,7 +18,7 @@ import {
 	type CommandRecord,
 	type ControlEvent,
 } from "../src/schema/index.ts";
-import { openControlStore } from "../src/store/index.ts";
+import { ControlStore, openControlStore } from "../src/store/index.ts";
 
 const tempRoots: string[] = [];
 
@@ -136,6 +136,108 @@ test("store: run.submit + events commit atomically and survive reopen (A3)", () 
 		assert.equal(loaded.requestHash, SHA256);
 	} finally {
 		second.close();
+	}
+});
+
+test("store: duplicates fail closed without result disclosure or ledger writes, including after reopen", () => {
+	const storePath = makeStorePath();
+	let store = openControlStore(storePath, { projectId: UUID, controlDomainId: UUID });
+	const original = submitBatch();
+	const committed = store.appendBatch(original);
+	const journalPath = path.join(storePath, "journal", "000001.jsonl");
+	const journal = fs.readFileSync(journalPath);
+	const sequence = fs.readFileSync(path.join(storePath, "commit-seq.json"));
+	const projection = fs.readFileSync(path.join(storePath, "projections", "commands.json"));
+	try {
+		for (const restarted of [false, true]) {
+			if (restarted) {
+				store.close();
+				store = openControlStore(storePath);
+			}
+			for (const overrides of [{}, { requestHash: "b".repeat(64) }, { callerPrincipal: "other-principal" }, { authorizationContextHash: "b".repeat(64) }]) {
+				assert.throws(() => store.appendBatch(submitBatch(overrides)), (error: unknown) => {
+					assert.ok(error instanceof ControlError);
+					assert.equal(error.code, "TF_IDEMPOTENCY_CONFLICT");
+					assert.equal(error.sideEffects, "none");
+					assert.match(error.message, /authorized command-result replay is not implemented/);
+					return true;
+				});
+				assert.equal(store.commitSeq, committed.commitSeq);
+				assert.equal(store.status, "healthy");
+				assert.deepEqual(store.readCommand(original.command.commandId), committed.command);
+				assert.deepEqual(fs.readFileSync(journalPath), journal, "duplicate must not append events");
+				assert.deepEqual(fs.readFileSync(path.join(storePath, "commit-seq.json")), sequence);
+				assert.deepEqual(fs.readFileSync(path.join(storePath, "projections", "commands.json")), projection);
+			}
+		}
+	} finally {
+		store.close();
+	}
+});
+
+test("store: authority records are isolated from input and returned object mutations", () => {
+	const storePath = makeStorePath();
+	let store = openControlStore(storePath, { projectId: UUID, controlDomainId: UUID });
+	try {
+		const batch = submitBatch({ responseArtifactRef: {
+			digest: "sha256:" + SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
+		} });
+		const expectedCommand = structuredClone(batch.command);
+		const expectedHeader = structuredClone(store.header);
+		const committed = store.appendBatch(batch);
+		const journalPath = path.join(storePath, "journal", "000001.jsonl");
+		const originalJournal = fs.readFileSync(journalPath);
+		batch.command.responseArtifactRef!.digest = "mutated-input";
+		batch.events[0]!.payload = { kind: "command.recorded", commandId: UUID };
+		committed.command.callerPrincipal = "mutated-return";
+		committed.command.responseArtifactRef!.size = 99;
+		const read = store.readCommand(UUID2)!;
+		read.commandId = UUID;
+		read.responseArtifactRef!.mediaType = "mutated-read";
+		const header = store.header;
+		header.projectId = UUID2;
+		header.directoryBinding.canonicalPath = "mutated-header";
+		const snapshot = store.snapshot();
+		snapshot.header.controlDomainId = UUID2;
+		snapshot.header.directoryBinding.canonicalPath = "mutated-snapshot";
+		assert.deepEqual(store.header, expectedHeader);
+		assert.deepEqual(store.readCommand(UUID2), expectedCommand);
+		assert.deepEqual(fs.readFileSync(journalPath), originalJournal);
+		// A later append serializes the full command index. An aliased record
+		// must not poison that projection or the identity of subsequent events.
+		const next = submitBatch({ commandId: UUID });
+		store.appendBatch(next);
+		const projection = JSON.parse(fs.readFileSync(path.join(storePath, "projections", "commands.json"), "utf8"));
+		assert.deepEqual(projection[UUID2], expectedCommand);
+		store.close();
+		store = openControlStore(storePath);
+		assert.deepEqual(store.header, expectedHeader);
+		assert.deepEqual(store.readCommand(UUID2), expectedCommand);
+		assert.equal(store.commitSeq, 2);
+	} finally {
+		store.close();
+	}
+});
+
+test("store: constructor isolates recovered authority records from caller-owned inputs", () => {
+	const storePath = makeStorePath();
+	const opened = openControlStore(storePath);
+	const header = opened.header;
+	opened.close();
+	const command = submitBatch({ responseArtifactRef: {
+		digest: "sha256:" + SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
+	} }).command;
+	const expectedHeader = structuredClone(header);
+	const expectedCommand = structuredClone(command);
+	const recovered = new ControlStore(storePath, header, 1, [command], () => {});
+	try {
+		header.directoryBinding.canonicalPath = "mutated-constructor-input";
+		command.callerPrincipal = "mutated-constructor-input";
+		command.responseArtifactRef!.digest = "mutated-constructor-input";
+		assert.deepEqual(recovered.header, expectedHeader);
+		assert.deepEqual(recovered.readCommand(command.commandId), expectedCommand);
+	} finally {
+		recovered.close();
 	}
 });
 

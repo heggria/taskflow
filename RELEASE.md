@@ -37,11 +37,12 @@ from the repository, separately from their npm delivery packages.
 
 `taskflow-control` is private, workspace-only and experimental. Its Unix UDS
 and store implementation does not constitute a complete control plane:
-BoundPlan admission, global concurrency, parked approvals/CAS/receipts,
+BoundPlan admission, authorized command-result replay, global concurrency, parked approvals/CAS/receipts,
 registry coordination, Windows named pipes and WebUI are incomplete.
 CharterArc retains its separate experimental version/tag/workflow and is
-excluded from the ten-package transaction. Neither experiment is a Taskflow
-1.0 stable API. Resolve-only path checks are not an OS sandbox; undeclared
+excluded from the ten-package transaction. These packaging boundaries do not
+waive accepted specifications: 1.0 publication remains blocked on their
+implementation and acceptance. Resolve-only path checks are not an OS sandbox; undeclared
 writes remain host-policy dependent. SecretRef/ServiceRef have no live
 vault/service backend. High-scale journals and full kernel parity are not
 claimed; the optional event kernel still falls back for unsupported features.

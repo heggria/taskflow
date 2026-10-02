@@ -192,7 +192,7 @@ validate → Taskflow JSON → FlowIR + content hash
 - 在 resolve-only 执行下，未声明路径的写入仍取决于宿主策略。
 - `SecretRef` 与 `ServiceRef` 只是类型化句柄；这一版没有 vault 或 live service adapter。
 - 0.3 MVP 不声称提供 FileBroker 或完整 OS sandbox。
-- Control Plane admission、parked 审批、receipt、全局协调与 WebUI 尚未完成，不属于 1.0 稳定 API。
+- Control Plane admission、经授权的命令结果重放、parked 审批、receipt、全局协调与 WebUI 尚未完成；1.0 发布等待已接受 spec 的实现与验收闭环。可信调用者身份与实时披露授权就绪前，重复控制命令会被拒绝；请求中的审计字段不能授予访问权限。
 
 ## 开发
 

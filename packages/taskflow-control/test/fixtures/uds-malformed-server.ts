@@ -8,6 +8,8 @@ let mutations = 0;
 let failEpoch = process.env.TF_TEST_FAIL_EPOCH === "1";
 const server = await startUdsServer({
 	endpointPath,
+	maxFrameBytes: Number(process.env.TF_TEST_MAX_FRAME_BYTES ?? 4096),
+	helloTimeoutMs: 300,
 	serverHello: {
 		protocolMajor: PROTOCOL_MAJOR,
 		supportedReadSchemas: ["taskflow.wire.v1"],
@@ -23,7 +25,9 @@ const server = await startUdsServer({
 		}
 		return 1;
 	},
-	handleRpc: async (method) => {
+	handleRpc: async (method, params, fencingEpoch) => {
+		if (method === "echo") return params;
+		if (method === "inspect-epoch") return { fencingEpoch };
 		if (method === "mutate") mutations++;
 		return { mutations };
 	},

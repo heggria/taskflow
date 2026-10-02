@@ -242,6 +242,85 @@ test("control-host: standalone opens projectStorePath and a later host sees the 
 });
 
 for (const mode of ["standalone", "auto"] as const) {
+	test(`commands.submit: ${mode} duplicate and concurrent retries fail closed before writes or TE execution`, {
+		skip: mode === "auto" && process.platform === "win32",
+	}, async (t) => {
+		const paths = makePaths();
+		const projectStorePath = path.join(paths.controlHome, "project-store");
+		const provider = fakeProvider();
+		const prepare = t.mock.method(provider, "prepare", async () => assert.fail("journal submission must not prepare TE work"));
+		const submit = t.mock.method(provider, "submit", async () => assert.fail("journal submission must not execute TE work"));
+		const options = hostOptions(paths, { mode, provider, holderId: "command-owner", projectStorePath });
+		let owner = new ControlHost(options);
+		let caller = owner;
+		t.after(() => { if (caller !== owner) caller.stop(); owner.stop(); });
+		const start = async () => {
+			await owner.start();
+			owner.hello(clientHello);
+			if (mode === "auto") {
+				// Exercise the real commands.submit wire path, not just appendBatch.
+				caller = new ControlHost(hostOptions(paths, { mode: "coordinated", provider, projectStorePath }));
+				await caller.start();
+			} else caller = owner;
+		};
+		await start();
+		const header = await caller.dispatch<{ projectId: string; controlDomainId: string }>("control.store.header", undefined, { fencingEpoch: 1 });
+		const identity = { projectId: header.projectId, controlDomainId: header.controlDomainId };
+		const commandId = "00000000-0000-0000-0000-0000000000dd";
+		const body = {
+			command: {
+				commandId, kind: "run.submit", requestHash: "a".repeat(64), callerPrincipal: "cli",
+				authorizationContextHash: "a".repeat(64), ...identity, status: "accepted",
+				firstCommitSeq: 1, lastCommitSeq: 1, recordedAt: 1,
+			},
+			events: [{
+				eventId: "00000000-0000-0000-0000-0000000000ee", schemaVersion: 1,
+				...identity, streamId: `command:${commandId}`, streamSeq: 1, commitSeq: 1,
+				commandId, commandEventIndex: 0, causationId: commandId, correlationId: commandId,
+				recordedAt: 1, payload: { kind: "command.recorded", commandId },
+			}],
+		};
+		// Two requests can be pending on the same connection, but only one batch
+		// may commit. The synchronous single-writer append never re-executes it.
+		const concurrent = await Promise.allSettled([0, 1].map(() => caller.dispatch("commands.submit", body, { fencingEpoch: 1 })));
+		assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 1);
+		const rejected = concurrent.find((result) => result.status === "rejected");
+		assert.ok(rejected && rejected.status === "rejected");
+		assert.ok(rejected.reason instanceof ControlError);
+		assert.equal(rejected.reason.code, "TF_IDEMPOTENCY_CONFLICT");
+		const journalPath = path.join(projectStorePath, "journal", "000001.jsonl");
+		const journal = fs.readFileSync(journalPath);
+		const sequence = fs.readFileSync(path.join(projectStorePath, "commit-seq.json"));
+		const projection = fs.readFileSync(path.join(projectStorePath, "projections", "commands.json"));
+		assert.equal(journal.toString("utf8").trim().split("\n").length, 1);
+		for (const restarted of [false, true]) {
+			if (restarted) {
+				if (caller !== owner) caller.stop();
+				owner.stop();
+				owner = new ControlHost(options);
+				await start();
+			}
+			for (const overrides of [{}, { requestHash: "b".repeat(64) }, { callerPrincipal: "other-principal" }, { authorizationContextHash: "b".repeat(64) }]) {
+				await assert.rejects(caller.dispatch("commands.submit", { ...body, command: { ...body.command, ...overrides } }, { fencingEpoch: 1 }), (error: unknown) => {
+					assert.ok(error instanceof ControlError);
+					assert.equal(error.code, "TF_IDEMPOTENCY_CONFLICT");
+					assert.equal(error.sideEffects, "none");
+					assert.match(error.message, /authorized command-result replay is not implemented/);
+					return true;
+				});
+				const status = await caller.dispatch<{ commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 });
+				assert.equal(status.commitSeq, 1);
+				assert.deepEqual(fs.readFileSync(journalPath), journal);
+				assert.deepEqual(fs.readFileSync(path.join(projectStorePath, "commit-seq.json")), sequence);
+				assert.deepEqual(fs.readFileSync(path.join(projectStorePath, "projections", "commands.json")), projection);
+			}
+		}
+		assert.equal(prepare.mock.calls.length, 0);
+		assert.equal(submit.mock.calls.length, 0);
+	});
+}
+
+for (const mode of ["standalone", "auto"] as const) {
 	test(`control-host: ${mode} store-open failure rolls back resources before retry`, {
 		skip: mode === "auto" && process.platform === "win32",
 	}, async (t) => {

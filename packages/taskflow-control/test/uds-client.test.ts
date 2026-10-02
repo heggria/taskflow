@@ -29,7 +29,7 @@ class TestSocket extends EventEmitter {
 	destroy(): void { this.emit("close"); }
 }
 
-async function connect(t: TestContext): Promise<{ client: UdsClient; socket: TestSocket }> {
+async function connect(t: TestContext, maxFrameBytes?: number): Promise<{ client: UdsClient; socket: TestSocket }> {
 	const socket = new TestSocket();
 	t.mock.method(net, "connect", () => {
 		queueMicrotask(() => socket.emit("connect"));
@@ -37,7 +37,7 @@ async function connect(t: TestContext): Promise<{ client: UdsClient; socket: Tes
 	});
 	syncBuiltinESMExports();
 	t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
-	const client = await connectUdsClient({ endpointPath: "/test-only", clientHello: hello, rpcTimeoutMs: 1_000 });
+	const client = await connectUdsClient({ endpointPath: "/test-only", clientHello: hello, rpcTimeoutMs: 1_000, maxFrameBytes });
 	t.after(() => client.close());
 	return { client, socket };
 }
@@ -51,6 +51,47 @@ test("uds client: all coalesced replies settle without another data event", asyn
 	const results = Promise.all([client.rpc("one"), client.rpc("two"), client.rpc("three")]);
 	socket.emit("data", success(3, "three") + success(1, "one") + success(2, "two"));
 	assert.deepEqual(await results, ["one", "two", "three"]);
+});
+
+test("uds client: byte budget applies per frame, including split multibyte input", async (t) => {
+	const { client, socket } = await connect(t, 4096);
+	const payload = "界".repeat(1000);
+	const results = Promise.all([client.rpc("one"), client.rpc("two")]);
+	const first = success(1, payload);
+	socket.emit("data", first.slice(0, 500));
+	// This event exceeds the limit in total, but each individual frame fits.
+	socket.emit("data", first.slice(500) + success(2, payload));
+	assert.deepEqual(await results, [payload, payload]);
+});
+
+test("uds client: malformed failure rejects every pending RPC and stops pipelined replies", async (t) => {
+	const { client, socket } = await connect(t);
+	const results = Promise.allSettled([client.rpc("one"), client.rpc("two")]);
+	socket.emit("data", JSON.stringify({ type: "rpc-result", id: 1, ok: false }) + "\n" + success(2, "must not resolve"));
+	for (const result of await results) {
+		assert.equal(result.status, "rejected");
+		if (result.status === "rejected") assert.equal((result.reason as ControlError).code, "TF_JOURNAL_UNAVAILABLE");
+	}
+	await assert.rejects(client.rpc("after-close"), { code: "TF_JOURNAL_UNAVAILABLE" });
+});
+
+test("uds client: a negative reply id fails closed and rejects all pending RPCs", async (t) => {
+	const { client, socket } = await connect(t);
+	const results = Promise.allSettled([client.rpc("one"), client.rpc("two")]);
+	socket.emit("data", success(-1, "invalid") + success(1, "must not resolve"));
+	for (const result of await results) {
+		assert.equal(result.status, "rejected");
+		if (result.status === "rejected") assert.ok(result.reason instanceof ControlError);
+	}
+	await assert.rejects(client.rpc("after failure"), /closed/);
+});
+
+test("uds client: unterminated multibyte input closes at its byte limit", async (t) => {
+	const { client, socket } = await connect(t, 4096);
+	const result = client.rpc("one");
+	socket.emit("data", "界".repeat(1000));
+	socket.emit("data", "界".repeat(400));
+	await assert.rejects(result, { code: "TF_JOURNAL_UNAVAILABLE" });
 });
 
 test("uds client: split frame followed by coalesced replies drains completely", async (t) => {

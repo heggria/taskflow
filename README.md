@@ -192,7 +192,7 @@ Host support is not a blanket security guarantee. Read the [host support baselin
 - Writes to undeclared paths remain host-policy dependent under resolve-only execution.
 - `SecretRef` and `ServiceRef` are typed handles only; no vault or live service adapter ships in this cut.
 - There is no FileBroker or full OS sandbox claim in 0.3 MVP.
-- Control Plane admission, parked approvals, receipts, global coordination and WebUI are incomplete workspace experiments, outside the 1.0 stable API.
+- Control Plane admission, authorized command-result replay, parked approvals, receipts, global coordination and WebUI remain incomplete. Publication of 1.0 is blocked pending closure of the accepted specifications. Duplicate control commands fail closed until verified caller identity and live disclosure authorization exist; request audit fields do not grant access.
 
 ## Development
 

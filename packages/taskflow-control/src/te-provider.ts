@@ -154,7 +154,8 @@ export function createTeExecutionProvider(te: TeExecutionAuthority): ExecutionPr
 			controlDomainId: req.controlDomainId,
 		});
 		if ("providerJobHandle" in result && typeof result.providerJobHandle === "string") {
-			if (typeof (result as TeSubmitHandle).poll === "function") {
+			if (["poll", "cancel", "collect", "reconcile"].every((method) =>
+				typeof (result as unknown as Record<string, unknown>)[method] === "function")) {
 				handles.set(result.providerJobHandle, result as TeSubmitHandle);
 			}
 			return { outcome: "accepted", providerJobHandle: result.providerJobHandle };
@@ -167,25 +168,25 @@ export function createTeExecutionProvider(te: TeExecutionAuthority): ExecutionPr
 	const poll = async (req: { providerJobHandle: string }): Promise<PollResult> => {
 		const handle = handles.get(req.providerJobHandle);
 		if (handle) return handle.poll();
-		return statelessFallback(req.providerJobHandle).poll();
+		return unavailableHandleOutcome(req.providerJobHandle);
 	};
 
 	const cancel = async (req: { providerJobHandle: string }): Promise<CancelResult> => {
 		const handle = handles.get(req.providerJobHandle);
 		if (handle) return handle.cancel();
-		return statelessFallback(req.providerJobHandle).cancel();
+		return unavailableHandleOutcome(req.providerJobHandle);
 	};
 
 	const collect = async (req: { providerJobHandle: string }): Promise<CollectResult> => {
 		const handle = handles.get(req.providerJobHandle);
 		if (handle) return handle.collect();
-		return statelessFallback(req.providerJobHandle).collect();
+		return unavailableHandleOutcome(req.providerJobHandle);
 	};
 
 	const reconcile = async (req: { providerJobHandle: string }): Promise<ReconcileResult> => {
 		const handle = handles.get(req.providerJobHandle);
 		if (handle) return handle.reconcile();
-		return statelessFallback(req.providerJobHandle).reconcile();
+		return unavailableHandleOutcome(req.providerJobHandle);
 	};
 
 	return {
@@ -202,16 +203,14 @@ export function createTeExecutionProvider(te: TeExecutionAuthority): ExecutionPr
 }
 
 /**
- * Stateless fallback: a job id alone can still be observed via provider
- * RPCs; S4 wires the real TE handle registry. Used only when submit returned
- * a plain accepted union instead of a live handle.
+ * A job id alone proves neither provider state nor cancellation. Until a
+ * durable handle registry can recover live authority, keep the result
+ * ambiguous so callers cannot infer quiescence or release committed capacity.
  */
-function statelessFallback(providerJobHandle: string): Pick<TeSubmitHandle, "poll" | "cancel" | "collect" | "reconcile"> {
+function unavailableHandleOutcome(providerJobHandle: string): { outcome: "ambiguous"; message: string } {
 	return {
-		poll: async (): Promise<PollResult> => ({ outcome: "accepted", status: "running" }),
-		cancel: async (): Promise<CancelResult> => ({ outcome: "accepted", cancelled: true }),
-		collect: async (): Promise<CollectResult> => ({ outcome: "accepted", providerJobHandle }),
-		reconcile: async (): Promise<ReconcileResult> => ({ outcome: "accepted", providerState: "running" }),
+		outcome: "ambiguous",
+		message: `live TE handle unavailable for ${JSON.stringify(providerJobHandle)}; provider outcome and side effects cannot be established`,
 	};
 }
 

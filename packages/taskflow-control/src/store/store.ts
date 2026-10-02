@@ -7,6 +7,11 @@
  * lock file. Atomic writes use UUID temp + wx + fsync + rename, and fail
  * closed if the destination is a symlink.
  *
+ * Authorized command-result replay is not implemented. Caller principal and
+ * authorizationContextHash are request-supplied audit fields, not a live
+ * authorization boundary. Duplicate commands fail closed before persistence
+ * until the host can authorize disclosure of a prior durable result.
+ *
  * P14 ADR Status stays Proposed. This is the S3 engine implementation gate.
  */
 import * as crypto from "node:crypto";
@@ -84,13 +89,13 @@ export class ControlStore {
 	constructor(storePath: string, header: ControlStoreHeader, commitSeq: number, commands: readonly CommandRecord[], releaseWriter: () => void) {
 		this.#releaseWriter = releaseWriter;
 		this.storePath = storePath;
-		this.#header = header;
+		this.#header = structuredClone(header);
 		this.#commitSeq = commitSeq;
-		for (const command of commands) this.#commandIndex.set(command.commandId, command);
+		for (const command of commands) this.#commandIndex.set(command.commandId, structuredClone(command));
 	}
 
 	get header(): ControlStoreHeader {
-		return this.#header;
+		return structuredClone(this.#header);
 	}
 
 	get commitSeq(): number {
@@ -103,12 +108,13 @@ export class ControlStore {
 
 	readCommand(commandId: string): CommandRecord | undefined {
 		this.#assertOpen();
-		return this.#commandIndex.get(commandId);
+		const command = this.#commandIndex.get(commandId);
+		return command === undefined ? undefined : structuredClone(command);
 	}
 
 	snapshot(): ControlStoreSnapshot {
 		this.#assertOpen();
-		return { header: this.#header, commitSeq: this.#commitSeq, status: this.#status };
+		return { header: this.header, commitSeq: this.#commitSeq, status: this.#status };
 	}
 
 	appendBatch(input: CommitBatchInput): { commitSeq: number; command: CommandRecord } {
@@ -136,7 +142,7 @@ export class ControlStore {
 		}
 
 		const nextSeq = this.#commitSeq + 1;
-		const command: CommandRecord = {
+		let command: CommandRecord = {
 			...input.command,
 			projectId: this.#header.projectId,
 			controlDomainId: this.#header.controlDomainId,
@@ -146,15 +152,20 @@ export class ControlStore {
 		if (!Value.Check(CommandRecordSchema, command)) {
 			throw durabilityFailed("CommandRecord failed schema check");
 		}
+		// Keep authoritative records independent of both caller-owned nested
+		// input and the copies returned by append/read/snapshot boundaries.
+		command = structuredClone(command);
 		if (this.#commandIndex.has(command.commandId)) {
+			// Matching audit fields cannot authorize disclosure (RFC §9.4).
+			// This S3 path only appends a journal batch; it never submits TE work.
 			throw new ControlError(
 				"TF_IDEMPOTENCY_CONFLICT",
-				`command ${command.commandId} is already committed`,
+				`command ${command.commandId} is already committed; authorized command-result replay is not implemented without a live authorization boundary`,
 				{ recoveryAction: "none", sideEffects: "none" },
 			);
 		}
 		const events: ControlEvent[] = input.events.map((event, index) => ({
-			...event,
+			...structuredClone(event),
 			projectId: this.#header.projectId,
 			controlDomainId: this.#header.controlDomainId,
 			commitSeq: nextSeq,
@@ -185,7 +196,7 @@ export class ControlStore {
 			this.#status = "fail-closed";
 			throw durabilityFailed(`control store persistence failed; close and reopen to recover: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		return { commitSeq: nextSeq, command };
+		return { commitSeq: nextSeq, command: structuredClone(command) };
 	}
 
 	close(): void {

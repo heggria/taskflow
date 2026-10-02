@@ -22,9 +22,10 @@
 
 import * as fs from "node:fs";
 import * as net from "node:net";
+import { Value } from "typebox/value";
 import { bootstrapFailed, ControlError, errorFromEnvelope, errorToEnvelope, protocolError } from "./errors.ts";
 import { createHelloGate } from "./hello.ts";
-import type { ErrorEnvelope, NegotiationHandshake } from "./schema/transport.ts";
+import { ErrorEnvelopeSchema, NegotiationHandshakeSchema, type ErrorEnvelope, type NegotiationHandshake } from "./schema/transport.ts";
 
 // ---------------------------------------------------------------------------
 // Wire frames
@@ -38,8 +39,48 @@ export type UdsFrame =
 	| { type: "rpc-result"; id: number; ok: true; result: unknown }
 	| { type: "rpc-result"; id: number; ok: false; error: ErrorEnvelope };
 
-function encodeFrame(frame: UdsFrame): string {
-	return JSON.stringify(frame) + "\n";
+/** Per-frame UTF-8 limit; large plans/evidence can use up to 16 MiB by default. */
+export const UDS_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
+function frameLimit(value = UDS_MAX_FRAME_BYTES): number {
+	if (!Number.isSafeInteger(value) || value < 1) throw new RangeError("maxFrameBytes must be a positive safe integer");
+	return value;
+}
+
+function isWireCounter(value: unknown): value is number {
+	return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function encodeFrame(frame: UdsFrame, maxBytes = UDS_MAX_FRAME_BYTES): string {
+	const encoded = JSON.stringify(frame);
+	if (Buffer.byteLength(encoded, "utf8") > maxBytes) throw new Error(`control wire frame exceeds ${maxBytes} bytes`);
+	return encoded + "\n";
+}
+
+/** Bound each frame before appending; coalesced frames have independent budgets. */
+function frameReader(maxBytes: number) {
+	let buffer = "";
+	let bytes = 0;
+	const clear = (): void => { buffer = ""; bytes = 0; };
+	return {
+		clear,
+		push(chunk: string, onLine: (line: string) => boolean): void {
+			let start = 0;
+			while (start < chunk.length) {
+				const end = chunk.indexOf("\n", start);
+				const part = chunk.slice(start, end < 0 ? undefined : end);
+				const addedBytes = Buffer.byteLength(part, "utf8");
+				if (bytes + addedBytes > maxBytes) throw new Error(`control wire frame exceeds ${maxBytes} bytes`);
+				buffer += part;
+				bytes += addedBytes;
+				if (end < 0) return;
+				const line = buffer.trim();
+				clear();
+				if (line && !onLine(line)) return;
+				start = end + 1;
+			}
+		},
+	};
 }
 
 function parseFrame(line: string): Record<string, unknown> {
@@ -68,6 +109,10 @@ export interface UdsServerOptions {
 	requiredFeatures?: readonly string[];
 	/** The winner's current fencing epoch, sent in the hello-ack (P16). */
 	getFencingEpoch: () => number;
+	/** Absolute deadline for the first valid hello (default 5s). */
+	helloTimeoutMs?: number;
+	/** Maximum UTF-8 bytes per frame, excluding newline (default 16 MiB). */
+	maxFrameBytes?: number;
 	/** Dispatch one RPC after a successful per-connection hello. */
 	handleRpc: (method: string, params: unknown, fencingEpoch: number) => Promise<unknown>;
 }
@@ -84,6 +129,7 @@ export interface UdsServer {
  * owns the singleton lock and must release it.
  */
 export function startUdsServer(options: UdsServerOptions): Promise<UdsServer> {
+	frameLimit(options.maxFrameBytes);
 	const sockets = new Set<net.Socket>();
 	const server = net.createServer((socket) => {
 		sockets.add(socket);
@@ -126,19 +172,25 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 	// Per-connection hello gate (P4): the first frame must be a hello.
 	const gate = createHelloGate(options.serverHello, { requiredFeatures: options.requiredFeatures });
 	let greeted = false;
-	let buffer = "";
+	const maxFrameBytes = frameLimit(options.maxFrameBytes);
+	const reader = frameReader(maxFrameBytes);
 	let destroyed = false;
+	const helloTimer = setTimeout(() => {
+		destroyed = true;
+		reader.clear();
+		socket.destroy();
+	}, options.helloTimeoutMs ?? 5_000);
 
 	const send = (frame: UdsFrame): void => {
 		if (destroyed) return;
-		socket.write(encodeFrame(frame));
+		socket.write(encodeFrame(frame, maxFrameBytes));
 	};
 	const failClosed = (frame: UdsFrame): void => {
 		try {
 			send(frame);
 		} finally {
 			destroyed = true;
-			buffer = "";
+			reader.clear();
 			socket.destroy();
 		}
 	};
@@ -146,39 +198,34 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 	socket.setEncoding("utf8");
 	socket.on("data", (chunk: string) => {
 		if (destroyed) return;
-		buffer += chunk;
-		let index: number;
-		while (!destroyed && (index = buffer.indexOf("\n")) >= 0) {
-			const line = buffer.slice(0, index).trim();
-			buffer = buffer.slice(index + 1);
-			if (!line) continue;
-			let raw: Record<string, unknown>;
-			try {
-				raw = parseFrame(line);
-			} catch (error) {
-				failClosed({
-					type: greeted ? "rpc-result" : "hello-ack",
-					...(greeted ? { id: 0 } : {}),
-					ok: false,
-					error: errorToEnvelope(error),
-				} as UdsFrame);
-				return;
-			}
-			// A final rejection boundary also covers failures while encoding the
-			// error response; no connection may produce an unhandled rejection.
-			void handleFrame(raw).catch(() => {
-				destroyed = true;
-				buffer = "";
-				socket.destroy();
+		try {
+			reader.push(chunk, (line) => {
+				const raw = parseFrame(line);
+				// Synchronous negotiation completes before a pipelined frame is read.
+				void handleFrame(raw).catch(() => {
+					destroyed = true;
+					reader.clear();
+					socket.destroy();
+				});
+				return !destroyed;
 			});
+		} catch (error) {
+			try {
+				failClosed({ type: greeted ? "rpc-result" : "hello-ack", ...(greeted ? { id: 0 } : {}), ok: false, error: errorToEnvelope(error) } as UdsFrame);
+			} catch {
+				// Even encoding a rejection must remain local to the offending socket.
+				socket.destroy();
+			}
 		}
 	});
 	socket.on("close", () => {
+		clearTimeout(helloTimer);
 		destroyed = true;
-		buffer = "";
+		reader.clear();
 	});
 	socket.on("error", () => {
 		destroyed = true;
+		reader.clear();
 		socket.destroy();
 	});
 
@@ -197,6 +244,7 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 				}
 				const fencingEpoch = options.getFencingEpoch();
 				greeted = true;
+				clearTimeout(helloTimer);
 				send({
 					type: "hello-ack",
 					ok: true,
@@ -216,8 +264,8 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 					return;
 				}
 				const id = raw.id;
-				if (typeof id !== "number") {
-					failClosed({ type: "rpc-result", id: 0, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a numeric id")) });
+				if (!isWireCounter(id)) {
+					failClosed({ type: "rpc-result", id: 0, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a non-negative safe integer id")) });
 					return;
 				}
 				const method = typeof raw.method === "string" ? raw.method : "";
@@ -225,7 +273,12 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 					failClosed({ type: "rpc-result", id, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a method name")) });
 					return;
 				}
-				const fencingEpoch = typeof raw.fencingEpoch === "number" ? raw.fencingEpoch : 0;
+				// Preserve the legacy omitted-epoch default, not malformed values.
+				const fencingEpoch = raw.fencingEpoch === undefined ? 0 : raw.fencingEpoch;
+				if (!isWireCounter(fencingEpoch)) {
+					failClosed({ type: "rpc-result", id, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a non-negative safe integer fencingEpoch")) });
+					return;
+				}
 				try {
 					const result = await options.handleRpc(method, raw.params, fencingEpoch);
 					send({ type: "rpc-result", id, ok: true, result });
@@ -264,6 +317,8 @@ export interface UdsClientOptions {
 	connectTimeoutMs?: number;
 	/** Budget for a single RPC round-trip (default 10s). */
 	rpcTimeoutMs?: number;
+	/** Maximum UTF-8 bytes per frame, excluding newline (default 16 MiB). */
+	maxFrameBytes?: number;
 }
 
 export interface UdsClient {
@@ -286,10 +341,11 @@ export interface UdsClient {
 export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> {
 	const connectTimeoutMs = options.connectTimeoutMs ?? 5_000;
 	const rpcTimeoutMs = options.rpcTimeoutMs ?? 10_000;
+	const maxFrameBytes = frameLimit(options.maxFrameBytes);
 
 	return new Promise((resolve, reject) => {
 		const socket = net.connect(options.endpointPath);
-		let buffer = "";
+		const reader = frameReader(maxFrameBytes);
 		let settled = false;
 		let closed = false;
 		let nextId = 1;
@@ -302,6 +358,15 @@ export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> 
 			pending.clear();
 		};
 
+		const failClosed = (error: ControlError): void => {
+			closed = true;
+			reader.clear();
+			clearTimeout(timer);
+			if (!settled) { settled = true; reject(error); }
+			rejectPending(error);
+			socket.destroy();
+		};
+
 		const timer = setTimeout(() => {
 			if (settled) return;
 			settled = true;
@@ -311,7 +376,11 @@ export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> 
 		}, connectTimeoutMs);
 
 		socket.on("connect", () => {
-			socket.write(encodeFrame({ type: "hello", hello: options.clientHello }));
+			try {
+				socket.write(encodeFrame({ type: "hello", hello: options.clientHello }, maxFrameBytes));
+			} catch (error) {
+				failClosed(controlUnavailable(`control hello could not be sent: ${error instanceof Error ? error.message : String(error)}`));
+			}
 		});
 
 		socket.on("error", (error) => {
@@ -326,69 +395,62 @@ export function connectUdsClient(options: UdsClientOptions): Promise<UdsClient> 
 
 		socket.setEncoding("utf8");
 		socket.on("data", (chunk: string) => {
-			buffer += chunk;
-			let index: number;
-			while ((index = buffer.indexOf("\n")) >= 0) {
-				const line = buffer.slice(0, index).trim();
-				buffer = buffer.slice(index + 1);
-				if (!line) continue;
-				let raw: Record<string, unknown>;
-				try {
-					raw = parseFrame(line);
-				} catch (error) {
-					rejectPending(controlUnavailable(`control endpoint ${options.endpointPath} sent a malformed frame: ${error instanceof Error ? error.message : String(error)}`));
-					continue;
-				}
-				if (raw.type === "hello-ack") {
-					if (settled) continue;
-					settled = true;
-					clearTimeout(timer);
-					if (raw.ok === true) {
-						if (typeof raw.fencingEpoch !== "number" || raw.serverHello === undefined) {
-							reject(controlUnavailable(`control endpoint ${options.endpointPath} sent a malformed hello-ack`));
-							socket.destroy();
-							return;
-						}
-						wireEpoch = raw.fencingEpoch;
-						wireServerHello = raw.serverHello as NegotiationHandshake;
-						const client: UdsClient = {
-							endpointPath: options.endpointPath,
-							get fencingEpoch() {
-								return wireEpoch;
-							},
-							get serverHello() {
-								return wireServerHello as NegotiationHandshake;
-							},
-							rpc: <T>(method: string, params?: unknown, fencingEpoch?: number) =>
-								rpc<T>(socket, pending, () => closed, () => wireEpoch, () => nextId++, rpcTimeoutMs, method, params, fencingEpoch),
-							close: () => {
-								closed = true;
-								rejectPending(controlUnavailable(`control client for ${options.endpointPath} is closed`));
-								socket.destroy();
-							},
-						};
-						resolve(client);
-					} else {
-						socket.destroy();
-						reject(errorFromEnvelope(raw.error as ErrorEnvelope));
-						return;
+			if (closed) return;
+			try {
+				reader.push(chunk, (line) => {
+					const raw = parseFrame(line);
+					if (raw.type !== "hello-ack" && raw.type !== "rpc-result") throw new Error("unexpected frame type");
+					if (typeof raw.ok !== "boolean" || (raw.ok === false && !Value.Check(ErrorEnvelopeSchema, raw.error))) {
+						throw new Error("failure reply must match ErrorEnvelope and have a boolean ok");
 					}
-					continue;
-				}
-				if (raw.type === "rpc-result") {
-					const id = raw.id;
-					if (typeof id !== "number") continue;
+					// Reject opposite-branch members without forbidding future metadata.
+					// Void successful RPCs may omit result, and null is a valid result.
+					if ((raw.ok && Object.hasOwn(raw, "error")) || (!raw.ok && (
+						raw.type === "hello-ack"
+							? Object.hasOwn(raw, "serverHello") || Object.hasOwn(raw, "fencingEpoch")
+							: Object.hasOwn(raw, "result")
+					))) throw new Error("reply contains contradictory success and failure members");
+					if (raw.type === "hello-ack") {
+						if (settled) throw new Error("duplicate hello-ack");
+						if (raw.ok === false) {
+							failClosed(errorFromEnvelope(raw.error as ErrorEnvelope));
+							return false;
+						}
+						if (!isWireCounter(raw.fencingEpoch) || !Value.Check(NegotiationHandshakeSchema, raw.serverHello)) {
+							throw new Error("malformed hello-ack");
+						}
+						settled = true;
+						clearTimeout(timer);
+						wireEpoch = raw.fencingEpoch as number;
+						wireServerHello = raw.serverHello as NegotiationHandshake;
+						resolve({
+							endpointPath: options.endpointPath,
+							get fencingEpoch() { return wireEpoch; },
+							get serverHello() { return wireServerHello as NegotiationHandshake; },
+							rpc: <T>(method: string, params?: unknown, fencingEpoch?: number) =>
+								rpc<T>(socket, pending, () => closed, () => wireEpoch, () => nextId++, rpcTimeoutMs, maxFrameBytes, method, params, fencingEpoch),
+							close: () => failClosed(controlUnavailable(`control client for ${options.endpointPath} is closed`)),
+						});
+						return true;
+					}
+					if (!settled || !isWireCounter(raw.id)) throw new Error("malformed rpc-result");
+					const id = raw.id as number;
 					const entry = pending.get(id);
-					if (!entry) continue;
-					pending.delete(id);
-					if (raw.ok === true) entry.resolve(raw.result);
-					else entry.reject(errorFromEnvelope(raw.error as ErrorEnvelope));
-					continue;
-				}
+					if (entry) {
+						pending.delete(id);
+						if (raw.ok === true) entry.resolve(raw.result);
+						else entry.reject(errorFromEnvelope(raw.error as ErrorEnvelope));
+					}
+					return true;
+				});
+			} catch (error) {
+				failClosed(controlUnavailable(`control endpoint ${options.endpointPath} sent a malformed frame: ${error instanceof Error ? error.message : String(error)}`));
 			}
 		});
 
 		socket.on("close", () => {
+			closed = true;
+			reader.clear();
 			if (!settled) {
 				settled = true;
 				clearTimeout(timer);
@@ -407,6 +469,7 @@ function rpc<T>(
 	getEpoch: () => number,
 	nextId: () => number,
 	rpcTimeoutMs: number,
+	maxFrameBytes: number,
 	method: string,
 	params: unknown,
 	fencingEpoch?: number,
@@ -438,7 +501,7 @@ function rpc<T>(
 			fencingEpoch: fencingEpoch ?? getEpoch(),
 		};
 		try {
-			socket.write(encodeFrame(frame));
+			socket.write(encodeFrame(frame, maxFrameBytes));
 		} catch (error) {
 			pending.delete(id);
 			clearTimeout(rpcTimer);
