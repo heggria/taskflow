@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Consumer smoke for the private CharterArc artifact without publishing it.
+ * Consumer smoke for the separate experimental CharterArc artifact without publishing it.
  *
  * Packs taskflow-core + taskflow-hosts + charterarc with pnpm (so workspace:* is
  * rewritten), installs those tarballs into a fresh npm project, then exercises
@@ -9,7 +9,7 @@
  * including the Grok bootstrap wiring applications copy from the README.
  *
  * Packing runs from a disposable workspace with an isolated pnpm store so the
- * smoke never relinks the repository node_modules. CharterArc stays private —
+ * smoke never relinks the repository node_modules. CharterArc stays on its independent experimental channel —
  * it is not listed in RELEASE_PACKAGE_NAMES.
  */
 

@@ -1,7 +1,7 @@
 {
 	"name": "pi-taskflow",
-	"version": "0.3.0-beta.2",
-	"description": "A declarative, verifiable graph of task nodes for the Pi coding agent \u2014 statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
+	"version": "1.0.0",
+	"description": "A declarative, verifiable graph of task nodes for the Pi coding agent — statically verified before it runs, with dynamic fan-out, gates, isolated subagent context, resumable runs, and saveable commands.",
 	"keywords": [
 		"pi-package",
 		"pi",
@@ -63,10 +63,10 @@
 		"typebox": "*"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "0.85.1",
-		"@earendil-works/pi-ai": "0.85.1",
-		"@earendil-works/pi-coding-agent": "0.85.1",
-		"@earendil-works/pi-tui": "0.85.1",
+		"@earendil-works/pi-agent-core": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-tui": "1.0.0",
 		"typebox": "1.3.30"
 	}
 }

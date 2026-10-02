@@ -11,23 +11,23 @@
 
 **English** · [简体中文](./README.zh-CN.md)
 
-[0.3 overview](#taskflow-03-trusted-effects) · [Quickstart](#quickstart) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples) · [Changelog](./CHANGELOG.md)
+[1.0 overview](#taskflow-03-trusted-effects) · [Quickstart](#quickstart) · [Docs](https://heggria.github.io/taskflow/en/docs) · [Examples](./examples) · [Changelog](./CHANGELOG.md)
 
 </div>
 
 ---
 
-# taskflow 0.3: make agent side effects inspectable
+# taskflow 1.0: declarative coding-agent workflows
 
-**taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 0.3 candidate, the contract also describes the effects a phase is allowed to propose.
+**taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In the 1.0 release candidate, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 0.3.0-beta.2 — beta channel, not GA.** Ships the Trusted Effects MVP plus a Control Plane slice: Unix UDS ControlHost listen/attach (S2) and a files-only project ControlStore (S3-min). Wire contracts remain **PROPOSED**. `taskflow-control` is workspace-only until a later 11-package decision. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation).
+> **Status: 1.0.0 release candidate — not yet tagged or published.** The ten public packages stabilize the existing DAG runtime, DSL, six host adapters and resource transactions for admitted declared filesystem targets. Pi interactive approvals are supported; MCP/headless approval auto-rejects. `taskflow-control` is private workspace experimental with proposed wire contracts; CharterArc retains a separate experimental release. The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the required verification and remaining gates.
 
-## The 0.3 idea
+## The declared-effect contract
 
 An agent can propose content. It should not become the mutation authority merely because it can run a command.
 
-For admitted, declared filesystem-write targets, taskflow 0.3 makes the path explicit and routes the final mutation through the resources transaction:
+For admitted, declared filesystem-write targets, taskflow 1.0 makes the path explicit and routes the final mutation through the resources transaction:
 
 ```text
 flow / .tf.ts
@@ -47,39 +47,39 @@ flow / .tf.ts
 
 This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to an undeclared path. Secret and service references are typed and fail closed in this cut; they do not imply a vault or network backend.
 
-## What is in the candidate
+## The 1.0 public contract
 
 | Layer | What it does | Candidate status |
 |---|---|---|
-| **Taskflow runtime** | Declarative DAGs, 12 phase types, budgets, retries, approvals, isolation, resume, replay, trace, and recompute | Existing 0.2 foundation |
-| **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | 0.3 MVP implementation |
-| **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | 0.3 MVP implementation |
+| **Taskflow runtime** | Declarative DAGs, 12 phase types, budgets, retries, approvals, isolation, resume, replay, trace, and recompute | Stable contract; current acceptance required |
+| **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | Declared-target contract |
+| **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | Declared-target contract |
 | **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
-| **Control Plane** | ControlHost scaffold, proposed wire contracts, singleton/fencing, and hello negotiation; future stores, approvals, receipts, and coordination | Active 0.3-C track; not shipped and not the 0.3 MVP GA claim |
-| **WebUI** | Runs, approvals, receipts, and evidence browsing | Planned in the 0.3-C sequence; not shipped in this candidate |
+| **Control Plane** | Unix UDS singleton/fencing and files-only store; proposed wire contracts and incomplete admission/parked approvals/receipts/coordination | Private workspace experiment; excluded from stable API |
+| **WebUI** | Runs, approvals, receipts, and evidence browsing | Planned; excluded from stable API |
 
-The normative MVP definition is [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
+The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the stable scope and acceptance gates. The filesystem-transaction details are in [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
 
 ## Quickstart
 
-The 0.3 beta can be installed from npm, or exercised from a clean source checkout. Use Node.js **≥ 22.19.0**:
+The 1.0 candidate can be exercised from this source checkout; exact npm pins become usable after publication. Use Node.js **≥ 22.19.0**:
 
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout rc/0.3.0-trusted-effects
+git checkout release/taskflow-1.0
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-The beta commands below become usable after the tag workflow completes; until then they are release-target examples, not proof of registry availability.
+The 1.0 commands below become usable after the tag workflow completes; until then they are release-target examples, not proof of registry availability.
 ```bash
-npm install --global pi-taskflow@beta
-npm install --global codex-taskflow@beta
+npm install --global pi-taskflow@1.0.0
+npm install --global codex-taskflow@1.0.0
 ```
 
-The host-specific plugin and MCP commands remain in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/). Stable 0.2.x installs remain available through exact stable pins.
+The host-specific plugin and MCP commands remain in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/). Until publication, use a previously published exact version or the source checkout.
 
 Run the no-LLM Trusted Effects vertical-slice fixture:
 
@@ -88,7 +88,7 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
   packages/taskflow-core/test/effects-e2e-fixture.test.ts
 ```
 
-This exercises the checked-in `examples/trusted-effects-write.json` path without a live LLM. For an interactive run, use the host guide for the adapter you already run. The stable 0.2 installation path remains documented separately in the [host guides](https://heggria.github.io/taskflow/en/docs/guides/).
+This exercises the checked-in `examples/trusted-effects-write.json` path without a live LLM. For an interactive run, use the host guide for the adapter you already run. The [release guide](./RELEASE.md) covers packed-consumer validation and release gates.
 
 ## Declare an effect
 
@@ -191,7 +191,7 @@ Host support is not a blanket security guarantee. Read the [host support baselin
 - Writes to undeclared paths remain host-policy dependent under resolve-only execution.
 - `SecretRef` and `ServiceRef` are typed handles only; no vault or live service adapter ships in this cut.
 - There is no FileBroker or full OS sandbox claim in 0.3 MVP.
-- Control Plane stores, approvals, receipts, and WebUI are future 0.3-C stages, not proof that 0.3 is released or GA.
+- Control Plane admission, parked approvals, receipts, global coordination and WebUI are incomplete workspace experiments, outside the 1.0 stable API.
 
 ## Development
 
@@ -210,7 +210,7 @@ The monorepo contains the host-neutral `taskflow-core`, Trusted Effects and reso
 
 | Start here | Use it for |
 |---|---|
-| [0.3 overview](https://heggria.github.io/taskflow/en/docs) | Candidate scope, status, and the honest security boundary |
+| [1.0 overview](https://heggria.github.io/taskflow/en/docs) | Candidate scope, status, and the honest security boundary |
 | [Getting Started](https://heggria.github.io/taskflow/en/docs/getting-started) | First flow and host setup |
 | [Core Concepts](https://heggria.github.io/taskflow/en/docs/concepts/) | DAGs, isolation, verification, resume, and evidence |
 | [Compiler & Runtime](https://heggria.github.io/taskflow/en/docs/compiler-runtime/) | JSON, TypeScript DSL, FlowIR, replay, and recompute |

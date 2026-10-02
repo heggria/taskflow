@@ -24,18 +24,9 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const RELEASE_PACKAGE_NAMES = [
-	"taskflow-core",
-	"taskflow-mcp-core",
-	"taskflow-hosts",
-	"taskflow-dsl",
-	"pi-taskflow",
-	"codex-taskflow",
-	"claude-taskflow",
-	"opencode-taskflow",
-	"grok-taskflow",
-	"hermes-taskflow",
-];
+import { STABLE_PACKAGE_NAMES, verifyReleaseContract } from "./verify-release-contract.mjs";
+
+export const RELEASE_PACKAGE_NAMES = STABLE_PACKAGE_NAMES;
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -108,6 +99,7 @@ export function packDeterministicPackage(packageDir, destination) {
 }
 
 export function packReleasePackages(destination, packageNames = RELEASE_PACKAGE_NAMES, verifyDeterminism = true) {
+	verifyReleaseContract(repo);
 	const absoluteDestination = resolve(destination);
 	rmSync(absoluteDestination, { recursive: true, force: true });
 	mkdirSync(absoluteDestination, { recursive: true });

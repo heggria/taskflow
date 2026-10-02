@@ -1,7 +1,7 @@
 {
 	"name": "taskflow-control",
 	"version": "0.3.0-beta.2",
-	"description": "0.3-C control plane core (proposed wire): ControlHost daemon/supervisor/standalone contracts, Unix UDS singleton attach, files-only project ControlStore, hello-before-RPC negotiation, and the Trusted Effects (taskflow-core resources) provider as the only execution authority. TypeBox contracts and wire-freeze.md remain PROPOSED — not frozen.",
+	"description": "Experimental workspace-only control plane: Unix UDS singleton attach and files-only project store. Proposed wire contracts; admission, parked approvals, receipts, registry coordination and WebUI are incomplete and excluded from the Taskflow 1.0 public contract.",
 	"keywords": [
 		"taskflow",
 		"control-plane",
@@ -58,32 +58,11 @@
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"prepublishOnly": "npm run build"
 	},
-	"publishConfig": {
-		"access": "public",
-		"tag": "next",
-		"exports": {
-			".": {
-				"types": "./dist/index.d.ts",
-				"default": "./dist/index.js"
-			},
-			"./schema": {
-				"types": "./dist/schema/index.d.ts",
-				"default": "./dist/schema/index.js"
-			},
-			"./control-host": {
-				"types": "./dist/control-host.d.ts",
-				"default": "./dist/control-host.js"
-			},
-			"./*": {
-				"types": "./dist/*.d.ts",
-				"default": "./dist/*.js"
-			}
-		}
-	},
 	"dependencies": {
 		"taskflow-core": "workspace:*"
 	},
 	"peerDependencies": {
 		"typebox": "*"
-	}
+	},
+	"private": true
 }

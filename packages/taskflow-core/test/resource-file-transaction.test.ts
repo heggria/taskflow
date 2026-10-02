@@ -312,7 +312,7 @@ test("resource file transaction: later promotion failure rolls back every earlie
 			journal,
 			leaseTimeoutMs: 500,
 			permitTtlMs: 5_000,
-			authorizationScopeRoot: root,
+			authorizationScopeRoot: fs.realpathSync(root),
 		});
 		const result = await tx.commit([
 			{ effectId: "a", content: "A" },
@@ -351,10 +351,10 @@ test("resource file transaction: post-terminal lease cleanup failure never makes
 			journal,
 			leaseTimeoutMs: 500,
 			permitTtlMs: 5_000,
-			authorizationScopeRoot: root,
+			authorizationScopeRoot: fs.realpathSync(root),
 		});
 		const result = await tx.commit([{ effectId: "a", content: "A" }]);
-		assert.equal(result.ok, true);
+		assert.equal(result.ok, true, JSON.stringify(result));
 		assert.equal(fs.readFileSync(path.join(root, "a.txt"), "utf8"), "A");
 		assert.equal((await journal.listIntents())[0]?.status, "committed-content");
 		assert.ok(warnings.some((warning) => /lease cleanup deferred/.test(warning)));
@@ -390,7 +390,7 @@ test("resource file transaction: post-commit staged cleanup failure remains dura
 			journal,
 			leaseTimeoutMs: 500,
 			permitTtlMs: 5_000,
-			authorizationScopeRoot: root,
+			authorizationScopeRoot: fs.realpathSync(root),
 			cleanupStaging: () => {
 				cleanupCalls++;
 				throw new Error("injected staged cleanup failure");
@@ -398,7 +398,7 @@ test("resource file transaction: post-commit staged cleanup failure remains dura
 		} as Parameters<typeof prepareResourceFileTransaction>[0] & { cleanupStaging: () => void };
 		const tx = await prepareResourceFileTransaction(options);
 		const result = await tx.commit([{ effectId: "a", content: "A" }]);
-		assert.equal(result.ok, true);
+		assert.equal(result.ok, true, JSON.stringify(result));
 		assert.equal(cleanupCalls, 1);
 		assert.equal(fs.readFileSync(path.join(root, "a.txt"), "utf8"), "A");
 		assert.equal((await journal.listIntents())[0]?.status, "committed-content");
@@ -432,7 +432,7 @@ test("resource file transaction: activation plus journal-inspection double fault
 				journal: new ActivationAndInspectionFailJournal({ directory: control, journalEpoch: 1 }),
 				leaseTimeoutMs: 500,
 				permitTtlMs: 5_000,
-				authorizationScopeRoot: root,
+				authorizationScopeRoot: fs.realpathSync(root),
 			}),
 			/injected journal inspection failure/,
 		);

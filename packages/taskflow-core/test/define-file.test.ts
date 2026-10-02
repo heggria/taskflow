@@ -114,8 +114,10 @@ test("readDefineFileWithSource: enforces stable allowed-root containment", () =>
 		const outsideDef = { name: "outside", phases: [{ id: "p1", type: "agent", agent: "a", task: "outside" }] };
 		fs.writeFileSync(insideFile, JSON.stringify(insideDef));
 		fs.writeFileSync(outsideFile, JSON.stringify(outsideDef));
-		assert.equal(readDefineFileWithSource(insideFile, [fs.realpathSync(allowed)]).ok, true);
-		const escaped = readDefineFileWithSource(outsideFile, [fs.realpathSync(allowed)]);
+		// Constrained saved-flow loading receives canonical paths from discovery.
+		// A lexical alias must not be confused with a changed directory/symlink.
+		assert.equal(readDefineFileWithSource(fs.realpathSync(insideFile), [fs.realpathSync(allowed)]).ok, true);
+		const escaped = readDefineFileWithSource(fs.realpathSync(outsideFile), [fs.realpathSync(allowed)]);
 		assert.equal(escaped.ok, false);
 		if (!escaped.ok) assert.match(escaped.detail, /escaped or changed its canonical saved-flow root/);
 	} finally {

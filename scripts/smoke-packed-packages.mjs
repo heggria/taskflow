@@ -11,25 +11,14 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { chmodSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packReleasePackages } from "./pack-release-packages.mjs";
+import { RELEASE_PACKAGE_NAMES, packReleasePackages } from "./pack-release-packages.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packageNames = [
-	"taskflow-core",
-	"taskflow-mcp-core",
-	"taskflow-hosts",
-	"taskflow-dsl",
-	"pi-taskflow",
-	"codex-taskflow",
-	"claude-taskflow",
-	"opencode-taskflow",
-	"grok-taskflow",
-	"hermes-taskflow",
-];
+const packageNames = RELEASE_PACKAGE_NAMES;
 const rootManifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 const peerNames = [
 	"typebox",
@@ -226,6 +215,23 @@ try {
 		if (previousPiBin === undefined) delete process.env.PI_TASKFLOW_PI_BIN;
 		else process.env.PI_TASKFLOW_PI_BIN = previousPiBin;
 	}
+
+	// Reuse the real-process regression harness as external test fixtures. Its
+	// relative dist imports and SDK resolution must come from this clean install,
+	// while the published dist files remain untouched.
+	// Node intentionally refuses to strip TypeScript inside node_modules. Keep
+	// only these test files outside it, with dist linked to the installed package.
+	const installedPiTests = join(consumerDir, "pi-e2e", "test");
+	mkdirSync(join(installedPiTests, "fixtures"), { recursive: true });
+	symlinkSync(join(consumerDir, "node_modules", "pi-taskflow", "dist"), join(consumerDir, "pi-e2e", "dist"), "junction");
+	for (const relative of ["e2e-pi1.mts", "fixtures/pi1-provider.ts"]) {
+		copyFileSync(join(repo, "packages", "pi-taskflow", "test", relative), join(installedPiTests, relative));
+	}
+	process.stdout.write("packed Pi 1.0 real-process fixture regressions:\n");
+	run(process.execPath, ["--experimental-strip-types", join(installedPiTests, "e2e-pi1.mts")], {
+		cwd: consumerDir,
+		stdio: "inherit",
+	});
 
 	const publicImports = [
 		"taskflow-core",

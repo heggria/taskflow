@@ -8,6 +8,33 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
 
+## [1.0.0] — Unreleased
+
+> **Release candidate; not tagged or published.** The ten existing public Taskflow packages target npm `latest` after release gates pass. This heading must be dated only when the release is authorized. The mature DAG/DSL/host/declared-filesystem-transaction contract is the stable scope; the unfinished control-plane RFC is not a 1.0 completion claim.
+
+### Changed
+
+- Align the root, ten public packages, plugin manifests and all MCP installation templates to `1.0.0`; retain exact internal dependency rewriting, deterministic packed consumers, npm provenance and all security gates.
+- Validate the complete release contract before packing or publishing, including package membership, version/pin agreement, experimental-package isolation and dated release notes.
+- Keep `taskflow-control` private and workspace-only, with proposed experimental wire contracts. Admission, parked approvals/CAS/receipts, global coordination, Windows pipes and WebUI remain outside the stable contract. CharterArc keeps its independent experimental release path.
+- Prepare Pi 1.0 compatibility and owning-run identity propagation; release acceptance requires current packed-extension, real-process, retry, approval, TUI/RPC and resume evidence.
+- Integrate dependency/Actions maintenance with retained Cisco skill-scan coverage. Historical scans using different analyzer versions do not prove historical findings were fixed.
+
+### Fixed
+
+- Let Pi finish transient retries and overflow compaction before deciding that an assistant error is terminal; preserve successful post-run compaction exits on Pi 0.80.3 and count tool-reported model usage once.
+- Route Pi RPC approval through supported dialogs; reject cancellation, unavailable dialogs and aborted edits. Validate shorthand calls without an explicit action through the actual Pi tool schema.
+- Reject cross-project attachment to the experimental single-store control host, preserve corrupt or identity-less ledgers, and isolate malformed UDS handshakes to the offending connection.
+- Make release reruns accept valid non-draft GitHub releases, validate real changelog dates, and require every package's release dist-tag before creating a stable release.
+- Correct macOS canonical-path test fixtures and wait for detached child completion before removing their workspaces. Add real Pi CLI and clean-installed package regressions alongside live Codex/Claude checks.
+- Update the documentation site's Next.js, sharp and baseline-browser-mapping dependencies to patched versions.
+
+### Support boundaries
+
+- Pi interactive approval is supported; MCP/headless approval auto-rejects. Grok flows with budgets are rejected when usage cannot be observed.
+- Declared filesystem effects use resource transactions. Resolve-only is not an OS sandbox; undeclared writes remain host-policy dependent. Secret/service references have no live backend. Event-kernel fallback and journal capacity limits remain explicit.
+- Preparing this PR does not authorize merge, tag, npm publication or website deployment. Current evidence is tracked separately in `docs/internal/1.0.0-ga-scoreboard.md`.
+
 ## [0.3.0-beta.2] — 2026-08-18
 
 > npm `beta` dist-tag. **Not GA.** Control Plane slice: S2 Unix UDS + S3-min files-only store. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). TypeBox contracts and `wire-freeze.md` remain **PROPOSED**. `taskflow-control` is **not** in the ten-package publish set (`publishConfig.tag` stays `next`).

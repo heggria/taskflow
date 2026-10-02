@@ -3,6 +3,8 @@ title: 在 Pi 上使用 taskflow
 description: 在 Pi 编程智能体上安装、运行、保存和续跑 taskflow。
 ---
 
+> **1.0.0 发布目标。** 下列精确 npm pin 在发布完成后可用；当前 checkout 仍是发布候选。
+
 如果你已经在用 [Pi](https://pi.dev) 把工作委托给子代理，taskflow 把这些一次性的委托变成有名字、可续跑、多步骤的工作流。你把工作描述成一个图——fan-out、gate、loop，你需要什么就写什么——只有最终结果回到你的上下文里。
 
 本页走完整个弧线：安装、运行你的第一个 flow、保存它、按名字运行它，以及接好模型角色。读完时你会有一个一行就能干一件实事的可复用命令。
@@ -14,7 +16,7 @@ description: 在 Pi 编程智能体上安装、运行、保存和续跑 taskflow
 taskflow 是一个 Pi 扩展。装一次就行：
 
 ```bash title="安装 pi-taskflow"
-pi install npm:pi-taskflow@beta
+pi install npm:pi-taskflow@1.0.0
 ```
 
 就这样。这个扩展注册了一个模型可以自动调用的 `taskflow` 工具，外加一个给你的 `/tf` 命令。启动不需要任何模型侧的配置。

@@ -30,7 +30,7 @@ import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuilti
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { createPiSubagentRunner, PI_TASKFLOW_PI_ENTRY_ENV, resolveParentPiCliEntry, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
-import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
+import { createApprovalRequester } from "./approval-view.ts";
 import {
 	executeTaskflow,
 	recomputeTaskflow,
@@ -45,8 +45,6 @@ import {
 	formatPreflightReport,
 	analyzeFlowRuns,
 	formatAnalyticsReport,
-	type ApprovalDecision,
-	type ApprovalRequest,
 	type RecomputeReport,
 	type ReplayReport,
 	type ReplayOverrides,
@@ -153,10 +151,10 @@ const ShorthandStep = Type.Object(
 );
 
 const TaskflowParamsSchema = Type.Object({
-	action: StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
+	action: Type.Optional(StringEnum(["run", "save", "resume", "list", "agents", "init", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "cache-clear", "search", "version"] as const, {
 		description: "What to do: run a flow, save a definition, resume a paused run, list saved flows, list available agents, init model role configuration, verify the DAG, compile the DAG to a Mermaid diagram + verification report, preflight-plan a flow (zero tokens), aggregate last-N run analytics, compile to FlowIR + content hash, show observed readSet provenance, show a run's event trace, offline-replay a trace under alternate knobs (zero tokens), explain why a run is stale, minimally recompute a stale run, explicitly reconcile a dirty resolve-only workspace, clear the cross-run memoization cache, or report the taskflow build/host identity (version)",
 		default: "run",
-	}),
+	})),
 	name: Type.Optional(Type.String({ description: "Name of a saved flow (for run/save without inline define)" })),
 	define: Type.Optional(
 		Type.Unknown({
@@ -511,59 +509,7 @@ async function runFlow(
 		(heartbeat as { unref?: () => void }).unref?.();
 	}
 
-	// Human-in-the-loop approver — only when an interactive UI is available.
-	// Renders a centered modal popup (TUI overlay) with a scrollable viewport
-	// so long upstream output (e.g. a plan) can be reviewed in full before
-	// deciding (mouse wheel / ↑↓ / PgUp / PgDn to scroll).
-	const requestApproval = ctx.hasUI
-		? async (req: ApprovalRequest): Promise<ApprovalDecision> => {
-				const choice = await ctx.ui.custom<ApprovalChoice>(
-					(tui, theme, _kb, done) => {
-						const view = new ApprovalViewComponent(
-							theme,
-							{
-								title: `Taskflow approval — ${def.name}/${req.phaseId}`,
-								message: req.message,
-								upstream: req.upstream,
-							},
-							done,
-							() => tui.terminal.rows,
-						);
-						const onAbort = () => done("reject");
-						signal?.addEventListener("abort", onAbort, { once: true });
-						return {
-							render: (w: number) => view.render(w),
-							invalidate: () => view.invalidate(),
-							handleInput: (data: string) => {
-								view.handleInput(data);
-								tui.requestRender();
-							},
-							dispose: () => {
-								view.dispose();
-								signal?.removeEventListener("abort", onAbort);
-							},
-						};
-					},
-					{
-						overlay: true,
-						overlayOptions: {
-							width: "80%",
-							minWidth: 60,
-							maxHeight: "85%",
-							anchor: "center",
-						},
-					},
-				);
-				if (choice === "reject") return { decision: "reject" };
-				if (choice === "edit") {
-					const note = await ctx.ui.input("Guidance passed downstream as this phase's output", "type guidance…", {
-						signal,
-					});
-					return { decision: "edit", note: note ?? "" };
-				}
-				return { decision: "approve" };
-			}
-		: undefined;
+	const requestApproval = createApprovalRequester(ctx, def.name, signal);
 
 	try {
 		// Discover settings/agents inside try so a YAML/IO crash in
@@ -748,7 +694,7 @@ export default function (pi: ExtensionAPI) {
 		name: "taskflow",
 		label: "Taskflow",
 		description: [
-			"IMPORTANT: Before using this tool for the first time in a session, invoke skill_load('taskflow') to read the full documentation (DSL syntax, examples, best practices). This tool description is a reference, not a tutorial.",
+			"IMPORTANT: Before using this tool for the first time in a session, use Pi's read tool to load the taskflow SKILL.md at the path listed in the available skills to read the full documentation (DSL syntax, examples, best practices). This tool description is a reference, not a tutorial.",
 			"Shorthand (same API as subagent): pass `task` (+optional `agent`) for one task, `tasks:[{task,agent?}]` for parallel, or `chain:[{task,agent?}]` for sequential (use {previous.output}).",
 			"DSL: use action=run with an inline `define` (you write the DAG) or a saved `name`. All 12 phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, race, expand) form a DAG; intermediate outputs stay out of your context — only the final phase output is returned.",
 			"Every delegation is tracked (runId), resumable across sessions, and saveable as /tf:<name> via action=save.",
@@ -761,7 +707,7 @@ export default function (pi: ExtensionAPI) {
 		parameters: TaskflowParamsSchema,
 		promptSnippet: "Declare a verifiable graph of subagent tasks (single, parallel, chain, or full DAG) — tracked, resumable, context-isolated. The runtime validates the graph before running. Replaces the subagent tool.",
 		promptGuidelines: [
-			"BEFORE FIRST USE: invoke skill_load('taskflow') to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nUse taskflow for ALL delegation — single tasks, parallel, chain, or full DAG orchestration. It fully replaces the subagent tool: every delegation is tracked with a runId, resumable across sessions, context-isolated (only final output returns), and saveable as /tf:<name>. Do NOT call the subagent tool directly; use taskflow shorthand (task/tasks/chain) for simple cases instead.",
+			"BEFORE FIRST USE: use Pi's read tool to load the taskflow SKILL.md at the path listed in the available skills to read the full skill documentation (DSL syntax, phase types, examples, best practices). This tool description is a condensed reference only — the skill is the authoritative guide.\n\nUse taskflow for ALL delegation — single tasks, parallel, chain, or full DAG orchestration. It fully replaces the subagent tool: every delegation is tracked with a runId, resumable across sessions, context-isolated (only final output returns), and saveable as /tf:<name>. Do NOT call the subagent tool directly; use taskflow shorthand (task/tasks/chain) for simple cases instead.",
 			"For complex multi-phase work (explore / 审计 / analyze the project, auditing endpoints, reviewing or migrating many files/modules, cross-checked research), use the full DSL with phases. For taskflow map phases, have the upstream phase emit a JSON array and set output:'json'.",
 			"For taskflow map phases, have the upstream phase emit a JSON array and set output:'json'.",
 		],

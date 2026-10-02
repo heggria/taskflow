@@ -8,25 +8,32 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Errors as SchemaErrors } from "typebox/value";
-import { Value } from "typebox/value";
+import { validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import { TaskflowParams } from "../src/index.ts";
+
+function validateParams(arguments_: JsonObject): Record<string, unknown> {
+	return validateToolArguments(
+		{ name: "taskflow", description: "Taskflow", parameters: TaskflowParams },
+		{ type: "toolCall", id: "test", name: "taskflow", arguments: arguments_ },
+	) as Record<string, unknown>;
+}
 
 // ---------------------------------------------------------------------------
 // action enum validation
 // ---------------------------------------------------------------------------
 
 test("TaskflowParams: action=version is valid", () => {
-	const r = Value.Decode(TaskflowParams, { action: "version" });
+	const r = validateParams({ action: "version" });
 	assert.equal(r.action, "version");
 });
 
 test("TaskflowParams: action=run is valid (default)", () => {
-	const r = Value.Decode(TaskflowParams, { action: "run" });
+	const r = validateParams({ action: "run" });
 	assert.equal(r.action, "run");
 });
 
 test("TaskflowParams: action=resume is valid", () => {
-	const r = Value.Decode(TaskflowParams, { action: "resume" });
+	const r = validateParams({ action: "resume" });
 	assert.equal(r.action, "resume");
 });
 
@@ -47,12 +54,12 @@ test("TaskflowParams: non-string action is rejected", () => {
 // ---------------------------------------------------------------------------
 
 test("TaskflowParams: shorthand single mode with cwd", () => {
-	const r = Value.Decode(TaskflowParams, { action: "run", agent: "executor", task: "do something", cwd: "/repo" });
+	const r = validateParams({ action: "run", agent: "executor", task: "do something", cwd: "/repo" });
 	assert.equal(r.cwd, "/repo");
 });
 
 test("TaskflowParams: shorthand parallel (tasks) with cwd", () => {
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "run",
 		tasks: [
 			{ task: "a", cwd: "/branch-a" },
@@ -67,7 +74,7 @@ test("TaskflowParams: shorthand parallel (tasks) with cwd", () => {
 });
 
 test("TaskflowParams: shorthand chain with per-step cwd", () => {
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "run",
 		chain: [
 			{ task: "a", cwd: "/step-a" },
@@ -80,7 +87,7 @@ test("TaskflowParams: shorthand chain with per-step cwd", () => {
 });
 
 test("TaskflowParams: shorthand workspace keyword cwd is valid", () => {
-	const r = Value.Decode(TaskflowParams, { action: "run", task: "x", cwd: "temp" });
+	const r = validateParams({ action: "run", task: "x", cwd: "temp" });
 	assert.equal(r.cwd, "temp");
 });
 
@@ -89,12 +96,12 @@ test("TaskflowParams: shorthand workspace keyword cwd is valid", () => {
 // ---------------------------------------------------------------------------
 
 test("TaskflowParams: resume with runId only is valid", () => {
-	const r = Value.Decode(TaskflowParams, { action: "resume", runId: "run-abc" });
+	const r = validateParams({ action: "resume", runId: "run-abc" });
 	assert.equal(r.runId, "run-abc");
 });
 
 test("TaskflowParams: resume with phaseId + task override", () => {
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "resume",
 		runId: "run-abc",
 		phaseId: "my-phase",
@@ -105,7 +112,7 @@ test("TaskflowParams: resume with phaseId + task override", () => {
 });
 
 test("TaskflowParams: resume with all override fields", () => {
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "resume",
 		runId: "run-abc",
 		phaseId: "p1",
@@ -123,7 +130,7 @@ test("TaskflowParams: resume with all override fields", () => {
 test("TaskflowParams: resume with resumeTimeout must be number >= 1000", () => {
 	// At the schema level, timeout is just a Number. Validation via resume.ts
 	// enforces >= 1000. The schema allows it to be any non-negative number.
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "resume",
 		runId: "run-abc",
 		phaseId: "p1",
@@ -135,7 +142,7 @@ test("TaskflowParams: resume with resumeTimeout must be number >= 1000", () => {
 test("TaskflowParams: resume without phaseId but with override field is schema-valid", () => {
 	// The schema accepts this shape; runtime validation in resume.ts catches
 	// missing phaseId when overrides are supplied.
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "resume",
 		runId: "run-abc",
 		resumeTask: "retry",
@@ -150,7 +157,7 @@ test("TaskflowParams: resume without phaseId but with override field is schema-v
 // ---------------------------------------------------------------------------
 
 test("TaskflowParams: action=version with additional fields is schema-valid", () => {
-	const r = Value.Decode(TaskflowParams, {
+	const r = validateParams({
 		action: "version",
 		name: "optional-extra",
 	});
@@ -158,18 +165,25 @@ test("TaskflowParams: action=version with additional fields is schema-valid", ()
 	assert.equal(r.name, "optional-extra");
 });
 
-test("TaskflowParams: undefined/empty object gets default action", () => {
-	const r = Value.Decode(TaskflowParams, {});
-	assert.equal(r.action, "run");
+test("TaskflowParams: Pi SDK accepts omitted action without inserting defaults", () => {
+	const shapes: JsonObject[] = [{}, { task: "x" }, { tasks: [{ task: "x" }] }, { chain: [{ task: "x" }] }];
+	for (const args of shapes) {
+		const r = validateParams(args);
+		assert.equal(r.action, undefined, "dispatch supplies the run default; SDK does not");
+	}
 });
 
-test("TaskflowParams: extra unknown properties are stripped", () => {
-	const r = Value.Decode(TaskflowParams, {
+test("TaskflowParams: extra unknown properties follow the real SDK contract", () => {
+	const r = validateParams({
 		action: "run",
 		task: "x",
-		unknownField: "should-be-stripped",
-	} as unknown as Record<string, unknown>);
+		unknownField: "allowed-extra",
+	});
 	assert.equal(r.action, "run");
 	assert.equal(r.task, "x");
-	assert.equal((r as unknown as Record<string, unknown>).unknownField, undefined);
+	assert.equal(r.unknownField, "allowed-extra", "SDK preserves allowed additional properties");
+});
+
+test("TaskflowParams: the Pi SDK rejects unknown operations", () => {
+	assert.throws(() => validateParams({ action: "invalid-action" }), /Validation failed/);
 });

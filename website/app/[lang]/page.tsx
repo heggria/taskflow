@@ -25,16 +25,16 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.3.0-beta.2 · Trusted Effects beta",
+			eyebrow: "taskflow 1.0.0 · Taskflow release candidate",
 			title: [
 				"Declare the effect.",
 				"Verify the path.",
 				"Commit through one authority.",
 			],
 			sub: "taskflow turns coding-agent work into a verifiable runtime: explicit graphs, typed effect declarations, isolated execution, resource-controlled filesystem commits, and ledger-backed explanations across six hosts.",
-			noteKicker: "0.3.0-beta.2 · beta channel · not GA",
+			noteKicker: "1.0.0 · release candidate · not yet published",
 			noteBody:
-				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. The ControlHost scaffold exists; stores, approvals, receipts, and WebUI remain future follow-on stages, not shipped GA claims.",
+				"An agent can propose content. For admitted declared targets, the resources transaction is the only finalizer. ControlHost has experimental Unix UDS/store code; admission, parked approvals, receipts, global coordination and WebUI remain outside the stable API.",
 			micro:
 				"Resolve-only is not an OS sandbox. Undeclared writes remain host-policy dependent.",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok · Hermes",
@@ -78,7 +78,7 @@ const copy = {
 			],
 		},
 		install: {
-			label: "0.3.0-beta.2 host installs — select the beta channel.",
+			label: "1.0.0 host installs — available after publication.",
 			copy: "Copy",
 			copied: "Copied",
 			guide: "Guide",
@@ -102,8 +102,8 @@ const copy = {
 			],
 		},
 		ledger: {
-			title: "0.3 is the trusted-effects turn.",
-			sub: "The 0.2 runtime remains the graph engine; the candidate adds a typed, inspectable boundary around declared filesystem effects.",
+			title: "1.0 stabilizes the workflow contract.",
+			sub: "The mature DAG runtime, DSL and six adapters share a typed, inspectable boundary around declared filesystem effects.",
 			items: [
 				{
 					tag: "EffectIR",
@@ -128,7 +128,7 @@ const copy = {
 				{
 					tag: "0.3-C",
 					title: "Control Plane follows",
-					body: "The ControlHost scaffold exists; stores, receipts, approvals, and WebUI are future 0.3-C stages, not shipped 0.3 GA surface yet.",
+					body: "ControlHost has private workspace Unix UDS/store code; admission, parked approvals, receipts, global coordination and WebUI remain outside the stable API.",
 				},
 				{
 					tag: "Hosts",
@@ -187,12 +187,12 @@ const copy = {
 			localeZh: "中文",
 		},
 		hero: {
-			eyebrow: "taskflow 0.3.0-beta.2 · Trusted Effects beta",
+			eyebrow: "taskflow 1.0.0 · Taskflow release candidate",
 			title: ["声明 effect。", "验证路径。", "让一个 authority 负责提交。"],
 			sub: "taskflow 把 coding-agent 工作变成可验证的运行时：显式任务图、类型化 effect 声明、隔离执行、受 resources 控制的文件提交，以及覆盖六个宿主的 ledger-backed 解释。",
-			noteKicker: "0.3.0-beta.2 · beta channel · 尚未 GA",
+			noteKicker: "1.0.0 · 发布候选 · 尚未发布",
 			noteBody:
-				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。ControlHost 目前是脚手架；store、审批、receipt 与 WebUI 仍是后续阶段，不是已交付的 GA 表面。",
+				"智能体可以提出内容。对于已准入的已声明目标，resources transaction 是唯一最终提交者。ControlHost 有 private workspace Unix UDS/store 代码；admission、parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。",
 			micro: "Resolve-only 不是 OS sandbox。未声明写入仍取决于宿主策略。",
 			hosts: "Pi · Codex · Claude Code · OpenCode · Grok · Hermes",
 			primary: "阅读文档",
@@ -235,7 +235,7 @@ const copy = {
 			],
 		},
 		install: {
-			label: "0.3.0-beta.2 宿主安装；请显式选择 beta channel。",
+			label: "1.0.0 宿主安装；发布完成后可用。",
 			copy: "复制",
 			copied: "已复制",
 			guide: "指南",
@@ -259,8 +259,8 @@ const copy = {
 			],
 		},
 		ledger: {
-			title: "0.3 是 Trusted Effects 转身。",
-			sub: "0.2 运行时仍是图引擎；candidate 在声明的文件 effect 周围增加类型化、可检查的边界。",
+			title: "1.0 稳定工作流合同。",
+			sub: "成熟 DAG runtime、DSL 与六宿主适配器共享声明文件 effect 的类型化、可检查边界。",
 			items: [
 				{
 					tag: "EffectIR",
@@ -285,7 +285,7 @@ const copy = {
 				{
 					tag: "0.3-C",
 					title: "Control Plane 在后面",
-					body: "ControlHost 目前是脚手架；store、receipt、审批与 WebUI 属于后续 0.3-C 阶段，还不是已发布的 0.3 GA 表面。",
+					body: "ControlHost 有 private workspace Unix UDS/store 代码；admission、parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。",
 				},
 				{
 					tag: "Hosts",
@@ -341,7 +341,7 @@ export default async function HomePage({
 		"@context": "https://schema.org",
 		"@type": "SoftwareApplication",
 		name: "taskflow",
-		softwareVersion: "0.3.0-beta.2",
+		softwareVersion: "1.0.0",
 		description: t.hero.sub,
 		applicationCategory: "DeveloperApplication",
 		operatingSystem: "Any",
@@ -497,7 +497,7 @@ export default async function HomePage({
 				<section className="home-final">
 					<div className="home-frame home-final__inner">
 						<div>
-							<p className="home-kicker">taskflow 0.3 · candidate</p>
+							<p className="home-kicker">taskflow 1.0 · release candidate</p>
 							<h2>{t.cta.title}</h2>
 							<p>{t.cta.body}</p>
 						</div>

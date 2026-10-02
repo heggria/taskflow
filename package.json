@@ -1,8 +1,8 @@
 {
 	"name": "pi-taskflow-monorepo",
-	"version": "0.3.0-beta.2",
+	"version": "1.0.0",
 	"private": true,
-	"description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the private CharterArc experiment.",
+	"description": "Monorepo for the Taskflow engine and DSL, host adapters, delivery packages, documentation, and the separately released CharterArc experiment.",
 	"type": "module",
 	"engines": {
 		"node": ">=22.19.0"
@@ -40,13 +40,14 @@
 		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts",
 		"test:hermes": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/hermes-taskflow/test/*.test.ts'",
 		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts",
-		"test:pi:peers": "node scripts/verify-pi-peers.mjs && pnpm run test:pi"
+		"test:pi:peers": "node scripts/verify-pi-peers.mjs && pnpm run test:pi",
+		"test:e2e-pi": "node --experimental-strip-types packages/pi-taskflow/test/e2e-pi1.mts"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "^0.85.1",
-		"@earendil-works/pi-ai": "^0.85.1",
-		"@earendil-works/pi-coding-agent": "^0.85.1",
-		"@earendil-works/pi-tui": "^0.85.1",
+		"@earendil-works/pi-agent-core": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-tui": "1.0.0",
 		"@types/node": "^26",
 		"charterarc": "workspace:*",
 		"taskflow-control": "workspace:*",

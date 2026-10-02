@@ -79,9 +79,9 @@ test("packed consumer: verify the pre-stable CharterArc artifact without publish
 		"pnpm pack does not accept --store-dir and must not point a fresh store at repository node_modules",
 	);
 
-	const releasePacker = await read("scripts/pack-release-packages.mjs");
+	const releasePacker = await read("scripts/verify-release-contract.mjs");
 	const releaseNamesSource =
-		/export const RELEASE_PACKAGE_NAMES = \[([\s\S]*?)\];/.exec(releasePacker)?.[1] ?? "";
+		/export const STABLE_PACKAGE_NAMES = \[([\s\S]*?)\];/.exec(releasePacker)?.[1] ?? "";
 	const releaseNames = [...releaseNamesSource.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 	assert.equal(
 		releaseNames.includes("charterarc"),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import { sha512Integrity, verifyRegistryIdentity } from "../../../scripts/verify-published-package.mjs";
@@ -114,6 +115,7 @@ test("publish workflow verifies every package after registry mutation", () => {
 		"claude-taskflow",
 		"opencode-taskflow",
 		"grok-taskflow",
+		"hermes-taskflow",
 	]) {
 		assert.match(workflow, new RegExp(`verify_one ${pkg}`));
 	}
@@ -192,4 +194,66 @@ test("scanner upgrades retain the high-severity and minimum-score gates", () => 
 	assert.match(workflow, /online: "false"/);
 	assert.match(workflow, /submission_enabled: "false"/);
 	assert.doesNotMatch(workflow, /continue-on-error:\s*true/);
+});
+
+
+test("publish workflow rejects candidate release notes before packing or publishing", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+	const gate = workflow.indexOf("node scripts/verify-release-contract.mjs --published");
+	assert.ok(gate >= 0, "dated release contract is mandatory");
+	assert.ok(gate < workflow.indexOf("Create deterministic release tarballs"), "reject drift before preparing release artifacts");
+	assert.ok(gate < workflow.indexOf("npm publish"), "reject drift before npm mutation");
+});
+
+
+test("existing GitHub releases rerun under set -e with typed false/true state and reject malformed booleans", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+	const start = workflow.indexOf('            RELEASE_TAG="');
+	assert.ok(start >= 0, "existing release validation block missing");
+	const end = workflow.indexOf("\n          fi", start);
+	assert.ok(end > start, "existing release validation block incomplete");
+	// Execute the actual workflow's rerun branch rather than a duplicate of
+	// its jq filters. No gh/network call is needed for existing metadata.
+	const script = `set -euo pipefail\n${workflow.slice(start, end)}`;
+	const cases: [string, Record<string, unknown>, string, boolean][] = [
+		["stable false/false", { draft: false, prerelease: false }, "1.0.0", true],
+		["beta false/true", { draft: false, prerelease: true }, "1.0.0-beta.1", true],
+		["draft true", { draft: true, prerelease: false }, "1.0.0", false],
+		["stable prerelease true", { draft: false, prerelease: true }, "1.0.0", false],
+		["beta prerelease false", { draft: false, prerelease: false }, "1.0.0-beta.1", false],
+	];
+	for (const field of ["draft", "prerelease"]) {
+		for (const value of [null, undefined, "false", 0, {}, []]) {
+			const state: Record<string, unknown> = { draft: false, prerelease: false };
+			if (value === undefined) delete state[field]; else state[field] = value;
+			cases.push([`${field} ${value === undefined ? "missing" : JSON.stringify(value)}`, state, "1.0.0", false]);
+		}
+	}
+	for (const [name, state, version, accepted] of cases) {
+		const result = spawnSync("bash", ["-c", script], {
+			encoding: "utf8",
+			env: { ...process.env, VERSION: version, GITHUB_REF_NAME: `v${version}`, TAG_COMMIT: "deadbeef",
+				RELEASE_JSON: JSON.stringify({ tag_name: `v${version}`, target_commitish: "deadbeef", ...state }) },
+		});
+		assert.equal(result.error, undefined, `${name}: could not execute workflow branch`);
+		if (accepted) {
+			assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+			assert.match(result.stdout, /verified target; skipping creation/, name);
+		} else {
+			assert.notEqual(result.status, 0, `${name}: malformed/incompatible state must fail closed`);
+			assert.doesNotMatch(result.stdout, /skipping creation/, name);
+		}
+	}
+});
+
+
+test("publish job verifies registry channels after every artifact and gates GitHub Release creation", () => {
+	const workflow = readFileSync(new URL("../../../.github/workflows/publish.yml", import.meta.url), "utf8");
+	const publish = workflowJob(workflow, "publish");
+	const guard = publish.indexOf('node scripts/verify-release-dist-tags.mjs "$VERSION" "$NPM_TAG"');
+	assert.ok(guard > publish.indexOf("verify_one hermes-taskflow"), "verify channels only after all ten provenance/integrity checks");
+	assert.ok(guard >= 0, "npm channel check is mandatory");
+	assert.doesNotMatch(publish, /continue-on-error:\s*true/);
+	const release = workflowJob(workflow, "release");
+	assert.match(release, /needs: publish/);
 });

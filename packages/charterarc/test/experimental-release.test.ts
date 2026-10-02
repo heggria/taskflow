@@ -23,9 +23,9 @@ test("experimental release: package and workflow cannot promote latest", async (
 	assert.equal(manifest.publishConfig?.access, "public");
 	assert.equal(manifest.scripts?.prepublishOnly, "npm run build");
 
-	const stablePacker = await read("scripts/pack-release-packages.mjs");
+	const stablePacker = await read("scripts/verify-release-contract.mjs");
 	const stableNames =
-		/export const RELEASE_PACKAGE_NAMES = \[([\s\S]*?)\];/.exec(stablePacker)?.[1] ?? "";
+		/export const STABLE_PACKAGE_NAMES = \[([\s\S]*?)\];/.exec(stablePacker)?.[1] ?? "";
 	assert.doesNotMatch(stableNames, /["']charterarc["']/);
 
 	const stableWorkflow = await read(".github/workflows/publish.yml");

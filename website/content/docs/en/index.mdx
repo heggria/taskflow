@@ -1,11 +1,11 @@
 ---
-title: taskflow 0.3 Documentation
+title: taskflow 1.0 Documentation
 description: "Trusted Effects for coding-agent workflows: declare effects, verify typed paths, and commit admitted filesystem changes through one resource authority."
 ---
 
-> **0.3.0-beta.2 — beta channel candidate, not GA.** Trusted Effects MVP plus a Control Plane slice (S2 Unix UDS + S3-min store). Wire contracts remain PROPOSED. `#137` / `#95` are not in this slice.
+> **1.0.0 release candidate — not yet published.** The stable scope is the mature DAG runtime, DSL, six host adapters and admitted declared-filesystem transactions. Control Plane wire contracts remain proposed and workspace-only; parked approvals, receipts, global coordination and WebUI are excluded.
 
-taskflow is a declarative runtime for coding-agent workflows. It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate transcripts out of the host conversation. The 0.3 candidate adds **Trusted Effects**: a typed declaration and resource-controlled commit path for admitted filesystem effects.
+taskflow is a declarative runtime for coding-agent workflows. It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate transcripts out of the host conversation. The 1.0 contract includes **Trusted Effects**: a typed declaration and resource-controlled commit path for admitted filesystem effects.
 
 ## Start with the right path
 
@@ -28,7 +28,7 @@ taskflow is a declarative runtime for coding-agent workflows. It turns a graph i
   Trusted Effects is not an OS sandbox. The 0.3 MVP protects admitted declared filesystem targets through the resources path. Under resolve-only execution, writes to undeclared paths remain host-policy dependent; SecretRef and ServiceRef have no live vault or network backend in this cut.
 </Callout>
 
-## The 0.3 contract
+## The declared-effect contract
 
 <Steps>
   <Step>
@@ -47,7 +47,7 @@ taskflow is a declarative runtime for coding-agent workflows. It turns a graph i
 
 ## Install on your host
 
-The 0.3 beta is available from npm's `beta` channel, or from this repository for source-level work. Stable host guides continue to use the published 0.2.x line unless you explicitly select the beta channel.
+Install `@1.0.0` after the release workflow completes. Until then, use the reviewed source checkout or a previously published exact version. These examples do not prove npm availability.
 
 <Callout type="tip">
   Every taskflow package requires **Node.js 22.19.0 or newer**. The candidate's source and fixture checks use pnpm from the repository checkout.
@@ -93,20 +93,20 @@ The 0.3 beta is available from npm's `beta` channel, or from this repository for
 
 ## Release boundary
 
-The current 0.3 line has two related tracks:
+The stable contract and workspace experiments have separate release boundaries:
 
 - **Trusted Effects MVP:** the release-bound product definition. It covers EffectIR, typed refs, labels, resource-controlled filesystem transactions, overlap admission, host-baseline honesty, and ledger-backed `why-*` explainers.
-- **0.3-C Control Plane:** a follow-on track whose current code is a ControlHost/proposed-contract scaffold. Project stores, coordination, approvals, receipts, and evidence UI are later stages; none is the 0.3 MVP GA definition, and the WebUI is not shipped in this candidate.
+- **Experimental Control Plane:** private workspace Unix UDS/store code with proposed wire contracts; admission, parked approvals, receipts, global coordination and WebUI remain incomplete and excluded from the stable API.
 
-Read the [MVP freeze in the repository](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md) and the [0.3-C plan](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3-c-control-plane-plan.md) for the normative scope.
+Read the [MVP freeze in the repository](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md) and the [0.3-C plan](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3-c-control-plane-plan.md) for the normative scope.
 
 ## More resources
 
 <Cards>
-  <Card title="Examples" href="https://github.com/heggria/taskflow/tree/rc/0.3.0-trusted-effects/examples">
+  <Card title="Examples" href="https://github.com/heggria/taskflow/tree/main/examples">
     Runnable flow definitions, including the Trusted Effects write fixture.
   </Card>
-  <Card title="Changelog" href="https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/CHANGELOG.md">
+  <Card title="Changelog" href="https://github.com/heggria/taskflow/blob/main/CHANGELOG.md">
     Candidate notes, release boundaries, and the 0.2 history.
   </Card>
   <Card title="GitHub" href="https://github.com/heggria/taskflow">

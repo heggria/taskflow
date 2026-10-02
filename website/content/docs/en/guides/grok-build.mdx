@@ -3,6 +3,8 @@ title: Using taskflow on Grok Build
 description: Install taskflow as a Grok Build plugin and orchestrate multi-phase workflows via MCP.
 ---
 
+> **1.0.0 release target.** The exact npm pins below become available after publication. This checkout is still a release candidate.
+
 [Grok Build](https://docs.x.ai/build/overview) is xAI's terminal coding agent. Taskflow's published path is its MCP server; a plugin scaffold is also available in the repository checkout.
 
 This page walks through install, verify, first run, permissions, and long-running flows. The full reference lives in [`docs/grok-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/grok-mcp.md) in the repo.
@@ -12,7 +14,7 @@ This page walks through install, verify, first run, permissions, and long-runnin
 ### Published MCP package (recommended)
 
 ```bash title="Register taskflow MCP"
-grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@1.0.0 grok-taskflow-mcp
 ```
 
 Requires **Node.js ≥ 22.19.0**. The MCP protocol code has no MCP SDK dependency. A public Grok plugin marketplace/source is not published yet; do not substitute an imaginary source string.
@@ -170,7 +172,7 @@ MCP-driven runs are non-interactive, so an `approval` phase **auto-rejects** (fa
 ```bash title="Manual MCP registration"
 pnpm add -g grok-taskflow
 grok mcp add taskflow -- grok-taskflow-mcp
-# or: grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
+# or: grok mcp add taskflow -- npx -y -p grok-taskflow@1.0.0 grok-taskflow-mcp
 ```
 
 ## Remove
