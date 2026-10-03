@@ -4,6 +4,8 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vm from "node:vm";
+import { CONSOLE_JS } from "../src/web-console/view.ts";
 import { test, type TestContext } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { startWebConsole, type WebConsoleOptions, type WebConsoleServer, type WebConsoleAuthorization } from "../src/web-console.ts";
@@ -89,7 +91,8 @@ test("web console: live authorization runs for every request and revocation deni
 	const denied = await fetch(console.url + scoped("/runs"), { headers });
 	assert.equal(denied.status, 403);
 	assert.match(await denied.text(), /TF_AUTHORITY_REVOKED/);
-	assert.equal(auth.length, 3);
+	assert.equal(auth.length, 5);
+	assert.deepEqual(auth.map((a) => a.purpose), ["execute", "disclose", "execute", "disclose", "execute"]);
 	assert.equal(calls, 2);
 	assert.equal(auth[0]!.projectId, projectId);
 	assert.equal(auth[0]!.controlDomainId, domainId);
@@ -197,7 +200,7 @@ test("web console: actual ControlHost dispatch serves live status/header through
 	const projects = await (await fetch(console.url + "/api/projects", { headers })).json() as { result: { projectId: string }[] };
 	assert.equal(projects.result.length, 1);
 	assert.notEqual(projects.result[0]!.projectId, "00000000-0000-0000-0000-000000000000");
-	assert.equal(liveChecks, 2);
+	assert.equal(liveChecks, 4);
 });
 
 test("web console: invalid intents and oversized bodies cannot reach owner", async (t) => {
@@ -218,4 +221,96 @@ test("web console: expired bootstrap cannot create session", async (t) => {
 	await delay(30);
 	const response = await fetch(console.url + "/api/session", { method: "POST", headers: { Origin: console.url, "Content-Type": "application/json" }, body: JSON.stringify({ token: console.bootstrapToken }) });
 	assert.equal(response.status, 401);
+});
+
+function deferred<T = void>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((done) => { resolve = done; });
+	return { promise, resolve };
+}
+
+for (const boundary of ["execute", "call", "disclose"] as const) {
+	for (const invalidation of ["logout", "expiry", "close", "disconnect"] as const) {
+		test(`web console: ${invalidation} during ${boundary} prevents later dispatch/disclosure`, { timeout: 5000 }, async (t) => {
+			const entered = deferred();
+			const resume = deferred();
+			const finished = deferred();
+			let calls = 0;
+			const console = await launch(t, {
+				sessionTtlMs: invalidation === "expiry" ? 200 : 60_000,
+				authorize: async ({ purpose }) => {
+					if (purpose === boundary) { entered.resolve(); await resume.promise; finished.resolve(); }
+					return { call: async () => {
+						calls++;
+						if (boundary === "call") { entered.resolve(); await resume.promise; finished.resolve(); }
+						return { secret: "private-result" };
+					} };
+				},
+			});
+			const headers = await session(console);
+			const controller = new AbortController();
+			const pending = fetch(console.url + scoped(`/approvals/${approvalId}/decisions`), { method: "POST", headers, body: JSON.stringify(decision()), signal: controller.signal }).then(async (r) => ({ status: r.status, text: await r.text() }), () => null);
+			await entered.promise;
+			if (invalidation === "logout") assert.equal((await fetch(console.url + "/api/session", { method: "DELETE", headers })).status, 200);
+			if (invalidation === "expiry") await delay(220);
+			if (invalidation === "close") await console.close();
+			if (invalidation === "disconnect") { controller.abort(); await pending; await delay(20); }
+			resume.resolve();
+			await finished.promise;
+			const result = await pending;
+			await delay(10);
+			assert.equal(calls, boundary === "execute" ? 0 : 1);
+			if (invalidation === "logout" || invalidation === "expiry") {
+				assert.equal(result?.status, 401);
+				assert.doesNotMatch(result!.text, /private-result/);
+			} else assert.equal(result, null);
+		});
+	}
+}
+
+for (const failure of [false, true]) {
+	test(`web console: revocation during owner call suppresses delayed ${failure ? "error" : "result"} without replaying mutation`, async (t) => {
+		const entered = deferred(); const resume = deferred();
+		let revoked = false; let calls = 0;
+		const purposes: string[] = [];
+		const console = await launch(t, { authorize: async ({ purpose }) => {
+			purposes.push(purpose);
+			if (revoked) throw new ControlError("TF_AUTHORITY_REVOKED", "revoked");
+			return { call: async () => {
+				calls++; entered.resolve(); await resume.promise;
+				if (failure) throw new ControlError("TF_STALE_VERSION", "private-result");
+				return { secret: "private-result" };
+			} };
+		} });
+		const headers = await session(console);
+		const pending = fetch(console.url + scoped(`/approvals/${approvalId}/decisions`), { method: "POST", headers, body: JSON.stringify(decision()) });
+		await entered.promise; revoked = true; resume.resolve();
+		const response = await pending;
+		assert.equal(response.status, 403);
+		assert.doesNotMatch(await response.text(), /private-result/);
+		assert.equal(calls, 1);
+		assert.deepEqual(purposes, ["execute", "disclose"]);
+	});
+}
+
+test("web console UI: older evidence response cannot overwrite a newer request in the same project", async () => {
+	const elements = new Map<string, { value: string; textContent: string; addEventListener: () => void }>();
+	const getElementById = (id: string) => {
+		if (!elements.has(id)) elements.set(id, { value: "", textContent: "", addEventListener: () => {} });
+		return elements.get(id)!;
+	};
+	const reads = [deferred<{ ok: boolean; json: () => Promise<unknown> }>(), deferred<{ ok: boolean; json: () => Promise<unknown> }>()];
+	let index = 0;
+	const context = vm.createContext({ document: { getElementById, querySelectorAll: () => [] }, fetch: (url: string) => url === "/api/session" ? new Promise(() => {}) : reads[index++]!.promise });
+	vm.runInContext(CONSOLE_JS, context);
+	vm.runInContext(`state.project = { projectId: '${projectId}', controlDomainId: '${domainId}' }; state.runs = [{}];`, context);
+	getElementById("run-choice").value = runId;
+	const old = vm.runInContext("evidence('receipt')", context) as Promise<void>;
+	const current = vm.runInContext("evidence('stale')", context) as Promise<void>;
+	reads[1]!.resolve({ ok: true, json: async () => ({ result: { current: true } }) });
+	await current;
+	reads[0]!.resolve({ ok: true, json: async () => ({ result: { obsolete: true } }) });
+	await old;
+	assert.match(getElementById("evidence-output").textContent, /current/);
+	assert.doesNotMatch(getElementById("evidence-output").textContent, /obsolete/);
 });

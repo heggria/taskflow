@@ -16,7 +16,7 @@ export const CONSOLE_CSS = `:root{color-scheme:light;--ink:#192a30;--muted:#6777
 
 export const CONSOLE_JS = String.raw`'use strict';
 const $ = (id) => document.getElementById(id);
-const state = { csrf: '', features: {}, project: null, projects: [], runs: [], generation: 0, commands: new Map() };
+const state = { csrf: '', features: {}, project: null, projects: [], runs: [], generation: 0, evidenceGeneration: 0, commands: new Map() };
 function node(tag, text, className) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (className) e.className = className; return e; }
 function clear(e) { e.replaceChildren(); }
 function notice(text, error = false) { $('notice').textContent = text; $('notice').className = error ? 'error' : ''; }
@@ -100,10 +100,13 @@ $('refresh-projects').addEventListener('click', () => { void projects(); }); $('
 $('logout').addEventListener('click', async () => { try { await api('/api/session', undefined, 'DELETE'); location.reload(); } catch (e) { notice(message(e), true); } });
 async function evidence(kind) {
  const p = state.project; const runId = $('run-choice').value; if (!p || !runId || !state.runs.length) return;
- const g = state.generation; $('evidence-output').textContent = 'Loading evidence…';
- try { let url = projectUrl(p, '/runs/' + encodeURIComponent(runId) + (kind === 'receipt' ? '/receipt' : '/why')); if (kind !== 'receipt') url += '&kind=' + kind; if (kind === 'effect') url += '&effectId=' + encodeURIComponent($('effect-id').value); if ($('phase-id').value) url += '&phaseId=' + encodeURIComponent($('phase-id').value); const data = await api(url); if (g !== state.generation) return; $('evidence-output').textContent = data.result === null && kind === 'receipt' ? 'No final Receipt has been issued for this run.' : JSON.stringify(data.result, null, 2); }
- catch (e) { if (g === state.generation) $('evidence-output').textContent = message(e); }
+ const g = state.generation; const e = ++state.evidenceGeneration; const effectId = $('effect-id').value; const phaseId = $('phase-id').value;
+ const current = () => g === state.generation && e === state.evidenceGeneration && runId === $('run-choice').value && effectId === $('effect-id').value && phaseId === $('phase-id').value;
+ $('evidence-output').textContent = 'Loading evidence…';
+ try { let url = projectUrl(p, '/runs/' + encodeURIComponent(runId) + (kind === 'receipt' ? '/receipt' : '/why')); if (kind !== 'receipt') url += '&kind=' + kind; if (kind === 'effect') url += '&effectId=' + encodeURIComponent(effectId); if (phaseId) url += '&phaseId=' + encodeURIComponent(phaseId); const data = await api(url); if (!current()) return; $('evidence-output').textContent = data.result === null && kind === 'receipt' ? 'No final Receipt has been issued for this run.' : JSON.stringify(data.result, null, 2); }
+ catch (error) { if (current()) $('evidence-output').textContent = message(error); }
 }
+for (const id of ['run-choice', 'effect-id', 'phase-id']) $(id).addEventListener('input', () => { state.evidenceGeneration++; $('evidence-output').textContent = 'Choose an evidence view for the current selection.'; });
 $('receipt').addEventListener('click', () => { void evidence('receipt'); }); $('why-stale').addEventListener('click', () => { void evidence('stale'); }); $('why-effect').addEventListener('click', () => { void evidence('effect'); });
 void api('/api/session').then(connected).catch(() => {});
 `;

@@ -31,6 +31,8 @@ export interface WebConsoleControlClient {
 }
 export interface WebConsoleAuthorization {
 	operation: WebConsoleOperation;
+	/** Re-check before dispatch and before disclosing its result; no second call. */
+	purpose: "execute" | "disclose";
 	/** Random browser-session handle, NEVER a claimed principal. */
 	sessionId: string;
 	projectId?: string;
@@ -38,7 +40,8 @@ export interface WebConsoleAuthorization {
 }
 export interface WebConsoleOptions {
 	/** Required live check. Resolve verified identity from trusted launcher state,
-	 * never from HTTP input/sessionId alone. Re-check project/operation policy. */
+	 * never from HTTP input/sessionId alone. Re-check project/operation policy for
+	 * both purposes. The owner must also enforce live policy at mutation commit. */
 	authorize: (request: WebConsoleAuthorization) => Promise<WebConsoleControlClient>;
 	port?: number;
 	/** Absolute browser session lifetime, default 30 minutes. */
@@ -108,6 +111,8 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 	const bootstrapExpiresAt = Date.now() + positive(options.bootstrapTtlMs ?? 5 * 60_000, "bootstrapTtlMs");
 	const bootstrapToken = token();
 	let bootstrapUsed = false;
+	let closed = false;
+	let closing: Promise<void> | undefined;
 	let origin = "";
 	let authority = "";
 	const sessions = new Map<string, Session>();
@@ -132,12 +137,18 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 		response.setHeader("X-Content-Type-Options", "nosniff");
 		response.setHeader("Referrer-Policy", "no-referrer");
 		response.setHeader("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'");
+		const assertConnected = (): void => {
+			if (closed || request.aborted || request.socket.destroyed || response.destroyed || response.writableEnded) throw new HttpFailure(503, "Console request closed");
+		};
+		let assertSession: (() => void) | undefined;
 		const send = (status: number, value: unknown): void => {
+			assertConnected();
 			response.statusCode = status;
 			response.setHeader("Content-Type", "application/json; charset=utf-8");
 			response.end(JSON.stringify(value));
 		};
 		try {
+			assertConnected();
 			if (request.headers.host !== authority) throw new HttpFailure(403, "Invalid console Host");
 			if (request.headers.origin !== undefined && request.headers.origin !== origin) throw new HttpFailure(403, "Invalid console Origin");
 			const site = request.headers["sec-fetch-site"];
@@ -156,6 +167,7 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 			if (mutating && request.headers.origin !== origin) throw new HttpFailure(403, "Console mutations require same Origin");
 			if (url.pathname === "/api/session" && method === "POST") {
 				const body = await jsonBody(request);
+				assertConnected();
 				onlyKeys(body, ["token"]);
 				if (bootstrapUsed || Date.now() >= bootstrapExpiresAt || !sameSecret(body.token, bootstrapToken)) throw new HttpFailure(401, "Invalid or expired launcher token");
 				// Consume synchronously before any await: concurrent exchanges cannot reuse it.
@@ -174,6 +186,13 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 				sessions.delete(sessionId);
 				throw new HttpFailure(401, "Console session expired; launch a new session");
 			}
+			assertSession = () => {
+				assertConnected();
+				if (sessions.get(sessionId) !== session || Date.now() >= session.expiresAt) {
+					if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+					throw new HttpFailure(401, "Console session expired; launch a new session");
+				}
+			};
 			if (mutating && !sameSecret(request.headers["x-taskflow-csrf"], session.csrf)) throw new HttpFailure(403, "Invalid CSRF token");
 			if (url.pathname === "/api/session") {
 				if (method === "DELETE") {
@@ -209,6 +228,7 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 					operation = "approval.decide";
 					params.approvalRequestId = uuid(segments[4], "approvalRequestId");
 					const body = await jsonBody(request);
+					assertSession();
 					onlyKeys(body, ["commandId", "runId", "expectedRunVersion", "decision", "editArtifactRef"]);
 					params.commandId = uuid(body.commandId, "commandId");
 					params.runId = uuid(body.runId, "runId");
@@ -223,10 +243,24 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 					} else if (body.editArtifactRef !== undefined) throw new HttpFailure(400, "editArtifactRef requires edit decision");
 				} else throw new HttpFailure(404, "Unknown console route");
 			}
-			const client = await options.authorize({ operation, sessionId, ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}), ...(typeof params.controlDomainId === "string" ? { controlDomainId: params.controlDomainId } : {}) });
-			const result = await client.call(operation, params);
-			send(200, { result });
+			const authorization = { operation, sessionId, ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}), ...(typeof params.controlDomainId === "string" ? { controlDomainId: params.controlDomainId } : {}) };
+			assertSession();
+			const client = await options.authorize({ ...authorization, purpose: "execute" });
+			assertSession();
+			// A mutation is dispatched once. Revocation while it executes suppresses its
+			// response; authoritative cancellation/commit fencing remains the owner's job.
+			let outcome: { ok: true; result: unknown } | { ok: false; error: unknown };
+			try { outcome = { ok: true, result: await client.call(operation, params) }; }
+			catch (error) { outcome = { ok: false, error }; }
+			assertSession();
+			await options.authorize({ ...authorization, purpose: "disclose" });
+			assertSession();
+			if (!outcome.ok) throw outcome.error;
+			send(200, { result: outcome.result });
 		} catch (error) {
+			if (closed || request.aborted || request.socket.destroyed || response.destroyed || response.writableEnded) { response.destroy(); return; }
+			// Do not disclose a delayed owner error to an expired or logged-out session.
+			try { assertSession?.(); } catch (sessionError) { error = sessionError; }
 			if (response.headersSent) { response.destroy(); return; }
 			if (error instanceof HttpFailure) send(error.status, { error: { message: error.message } });
 			else if (error instanceof ControlError) {
@@ -235,9 +269,12 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 			} else send(500, { error: { message: "Control service request failed" } });
 		}
 	}
-	return { url: origin, bootstrapToken, close: async () => {
+	return { url: origin, bootstrapToken, close: () => {
+		if (closing) return closing;
+		closed = true;
 		sessions.clear();
 		for (const socket of sockets) socket.destroy();
-		await new Promise<void>((resolve) => server.close(() => resolve()));
+		closing = new Promise<void>((resolve) => server.close(() => resolve()));
+		return closing;
 	} };
 }
