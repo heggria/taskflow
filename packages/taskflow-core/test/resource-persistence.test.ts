@@ -37,7 +37,7 @@ test("persistent mutex removes only the exact stale immutable queue ticket", asy
 	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-stale-"));
 	const lockPath = path.join(directory, "state.lock");
 	const queueDirectory = `${lockPath}.queue`;
-	fs.mkdirSync(queueDirectory, { recursive: true });
+	(await new PersistentFileMutex(lockPath).acquire())();
 	const token = crypto.randomUUID();
 	const stalePath = path.join(queueDirectory, `ticket-${token}.json`);
 	fs.writeFileSync(stalePath, JSON.stringify({
@@ -280,4 +280,117 @@ test("persistent mutex: durable terminal ticket survives worker-local cleanup lo
 		await Promise.all([first?.terminate(), second?.terminate()]);
 		fs.rmSync(directory, { recursive: true, force: true });
 	}
+});
+
+for (const fault of ["replacement", "symlink", "missing", "unanchored", "corrupt-anchor"] as const) {
+	test(`persistent mutex rejects ${fault} queue without destroying evidence`, async (t) => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-identity-"));
+		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+		const lock = path.join(directory, "lock");
+		const queue = `${lock}.queue`;
+		const anchor = `${queue}.identity`;
+		const target = path.join(directory, "preserved");
+		const release = await new PersistentFileMutex(lock).acquire();
+		if (fault === "unanchored") fs.unlinkSync(anchor);
+		else if (fault === "corrupt-anchor") fs.writeFileSync(anchor, "broken anchor");
+		else {
+			fs.renameSync(queue, target);
+			if (fault === "replacement") fs.mkdirSync(queue);
+			if (fault === "symlink") fs.symlinkSync(target, queue, "dir");
+		}
+		const before = fs.existsSync(anchor) ? fs.readFileSync(anchor) : undefined;
+		await assert.rejects(new PersistentFileMutex(lock, { pollMs: 1 }).acquire({ timeoutMs: 25 }), /TFWS_MUTEX_IDENTITY/);
+		assert.deepEqual(fs.existsSync(anchor) ? fs.readFileSync(anchor) : undefined, before);
+		if (fault === "missing") assert.equal(fs.existsSync(queue), false);
+		// Restore the isolated fixture so the original holder can release normally.
+		if (fault === "unanchored" || fault === "corrupt-anchor") {
+			const stat = fs.statSync(queue);
+			fs.writeFileSync(anchor, JSON.stringify({ dev: stat.dev, ino: stat.ino }));
+		} else {
+			if (fault === "replacement") fs.rmdirSync(queue);
+			if (fault === "symlink") fs.unlinkSync(queue);
+			fs.renameSync(target, queue);
+		}
+		release();
+	});
+}
+
+test("persistent mutex never grants a lost waiting ticket", async (t) => {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-lost-"));
+	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+	const lock = path.join(directory, "lock");
+	const queue = `${lock}.queue`;
+	const release = await new PersistentFileMutex(lock).acquire();
+	const original = fs.readdirSync(queue);
+	const pending = new PersistentFileMutex(lock, { pollMs: 1 }).acquire({ timeoutMs: 500 });
+	const rejected = assert.rejects(pending, /own waiting ticket was lost/);
+	const ticket = fs.readdirSync(queue).find((name) => name.startsWith("ticket-") && !original.includes(name));
+	assert.ok(ticket);
+	fs.unlinkSync(path.join(queue, ticket));
+	release();
+	await rejected;
+	(await new PersistentFileMutex(lock).acquire())();
+});
+
+for (const replacement of ["owner", "inode"] as const) {
+	test(`persistent mutex release and deferred cleanup preserve changed ${replacement}`, async (t) => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-foreign-"));
+		t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+		t.mock.method(console, "warn", () => undefined);
+		const lock = path.join(directory, "lock");
+		const queue = `${lock}.queue`;
+		const release = await new PersistentFileMutex(lock).acquire();
+		const ticket = path.join(queue, fs.readdirSync(queue).find((name) => name.startsWith("ticket-"))!);
+		const bytes = fs.readFileSync(ticket);
+		if (replacement === "inode") {
+			fs.renameSync(ticket, `${ticket}.preserved`);
+			fs.writeFileSync(ticket, bytes);
+		} else {
+			const record = JSON.parse(bytes.toString());
+			fs.writeFileSync(ticket, JSON.stringify({ ...record, birthToken: "replacement-owner" }));
+		}
+		const preserved = fs.readFileSync(ticket);
+		release();
+		assert.deepEqual(fs.readFileSync(ticket), preserved);
+		await assert.rejects(new PersistentFileMutex(lock).acquire(), /CLEANUP/);
+		assert.deepEqual(fs.readFileSync(ticket), preserved);
+	});
+}
+
+test("persistent mutex abort preserves a changed waiting owner", async (t) => {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-abort-identity-"));
+	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+	const lock = path.join(directory, "lock");
+	const queue = `${lock}.queue`;
+	const release = await new PersistentFileMutex(lock).acquire();
+	const original = fs.readdirSync(queue);
+	const controller = new AbortController();
+	const pending = new PersistentFileMutex(lock).acquire({ signal: controller.signal });
+	const rejected = assert.rejects(pending, /aborted/);
+	const name = fs.readdirSync(queue).find((entry) => entry.startsWith("ticket-") && !original.includes(entry));
+	assert.ok(name);
+	const ticket = path.join(queue, name);
+	const record = JSON.parse(fs.readFileSync(ticket, "utf8"));
+	const replacement = JSON.stringify({ ...record, birthToken: "different-owner" });
+	fs.writeFileSync(ticket, replacement);
+	controller.abort();
+	await rejected;
+	assert.equal(fs.readFileSync(ticket, "utf8"), replacement);
+	release();
+});
+
+test("persistent mutex stale cleanup preserves a record replaced during process inspection", async (t) => {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-mutex-stale-identity-"));
+	t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+	const lock = path.join(directory, "lock");
+	(await new PersistentFileMutex(lock).acquire())();
+	const token = crypto.randomUUID();
+	const ticket = path.join(`${lock}.queue`, `ticket-${token}.json`);
+	const old = { kind: "ticket", pid: 424242, birthToken: "old", birthTokenKind: "native", token, ticket: 1, createdAt: 1, state: "held" };
+	fs.writeFileSync(ticket, JSON.stringify(old));
+	const replacement = JSON.stringify({ ...old, birthToken: "replacement" });
+	await assert.rejects(new PersistentFileMutex(lock, {
+		inspectProcess: () => { fs.writeFileSync(ticket, replacement); return { alive: false }; },
+	}).acquire(), /record changed during cleanup/);
+	assert.equal(fs.readFileSync(ticket, "utf8"), replacement);
 });
