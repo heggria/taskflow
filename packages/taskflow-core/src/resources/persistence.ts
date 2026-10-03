@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { bindMutexQueue } from "./mutex-bootstrap.ts";
 
 /** Exact, platform-native process-birth identity when the platform exposes one.
  * Never return an uptime estimate or a lower-precision timestamp: incomparable
@@ -123,7 +124,7 @@ export function defaultProcessInspector(pid: number): ObservedProcess {
 			: { alive: true, birthToken, birthTokenKind: "native" };
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code !== "EPERM") return { alive: false };
+		if (code === "ESRCH") return { alive: false };
 		const birthToken = readProcessBirthToken(pid);
 		return birthToken === undefined
 			? { alive: true }
@@ -329,47 +330,8 @@ export class PersistentFileMutex {
 	}
 
 	#bindQueue(queueDirectory: string): FileIdentity {
-		// A sibling durable anchor lets a fresh process detect replacement even
-		// when the old queue and its live tickets have been renamed out of view.
-		const anchor = `${queueDirectory}.identity`;
-		ensureDirectory(path.dirname(queueDirectory));
-		let created = false;
-		try {
-			fs.lstatSync(queueDirectory);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			// Never recreate a missing queue from an established namespace.
-			try {
-				fs.lstatSync(anchor);
-				throw new Error("TFWS_MUTEX_IDENTITY: anchored mutex queue is missing");
-			} catch (anchorError) {
-				if ((anchorError as NodeJS.ErrnoException).code !== "ENOENT") throw anchorError;
-			}
-			try { fs.mkdirSync(queueDirectory, { mode: 0o700 }); created = true; }
-			catch (mkdirError) { if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError; }
-		}
-		const stat = fs.lstatSync(queueDirectory);
-		if (!stat.isDirectory()) throw new Error("TFWS_MUTEX_IDENTITY: queue must be a real directory");
-		const identity = { dev: stat.dev, ino: stat.ino };
-		const temp = `${anchor}.tmp.${crypto.randomUUID()}`;
-		if (created) try {
-			const fd = fs.openSync(temp, "wx", 0o600);
-			try { fs.writeFileSync(fd, JSON.stringify(identity)); fs.fsyncSync(fd); }
-			finally { fs.closeSync(fd); }
-			try { fs.linkSync(temp, anchor); fsyncDirectory(path.dirname(anchor)); }
-			catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-		} finally { try { fs.unlinkSync(temp); } catch { /* unpublished temporary file */ } }
-		const fd = fs.openSync(anchor, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-		try {
-			const anchorStat = fs.fstatSync(fd);
-			if (!anchorStat.isFile() || !sameIdentity(anchorStat, fs.lstatSync(anchor))) {
-				throw new Error("TFWS_MUTEX_IDENTITY: invalid queue anchor");
-			}
-			const saved = JSON.parse(fs.readFileSync(fd, "utf8")) as FileIdentity;
-			if (!sameIdentity(saved, identity)) throw new Error("TFWS_MUTEX_IDENTITY: mutex queue was replaced");
-		} finally { fs.closeSync(fd); }
-		this.#assertQueue(queueDirectory, identity);
-		return identity;
+		return bindMutexQueue(queueDirectory, this.identity,
+			(owner) => ownerIsStale(owner, this.identity, this.inspectProcess), fsyncDirectory);
 	}
 
 	#removeTicketBestEffort(ticketPath: string, pending: PendingRelease, terminalOnly = true): boolean {
