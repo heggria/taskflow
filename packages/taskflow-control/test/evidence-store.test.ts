@@ -508,3 +508,107 @@ for (const point of ["file-fsynced", "file-published"]) {
 		assert.deepEqual(f.read().receipts, {});
 	});
 }
+
+for (const level of ["root", "artifacts", "sha256", "bucket"] as const) {
+	for (const replacement of ["symlink", "directory"] as const) {
+		test(`evidence publication: ${level} ${replacement} replacement after fsync fails closed without redirected cleanup`, async (t) => {
+			const f = fixture(t);
+			const foreign = fixture(t);
+			const bytes = Buffer.from("confined publication");
+			const hash = createHash("sha256").update(bytes).digest("hex");
+			const parts = ["artifacts", "sha256", hash.slice(0, 2)];
+			const depth = { root: 0, artifacts: 1, sha256: 2, bucket: 3 }[level];
+			const replaced = path.join(f.root, ...parts.slice(0, depth));
+			const moved = path.join(foreign.root, "moved");
+			let staged = "";
+			const store = await createEvidenceStore({ ...f.options, onDurabilityPoint: (point) => {
+				if (point !== "file-fsynced") return;
+				staged = fs.readdirSync(path.join(f.root, ...parts)).find((file) => file.startsWith("."))!;
+				fs.renameSync(replaced, moved);
+				if (replacement === "symlink") fs.symlinkSync(moved, replaced, "dir");
+				else {
+					fs.mkdirSync(path.join(replaced, ...parts.slice(depth)), { recursive: true });
+					fs.writeFileSync(path.join(replaced, ...parts.slice(depth), staged), "replacement forensic data");
+				}
+			} });
+			await assert.rejects(store.stageArtifact(bytes, META), isCode("TF_DURABILITY_FAILED"));
+			const movedBucket = path.join(moved, ...parts.slice(depth));
+			assert.equal(fs.existsSync(path.join(movedBucket, hash)), false, "no published digest outside original directory");
+			assert.deepEqual(fs.readFileSync(path.join(movedBucket, staged)), bytes, "original staging bytes preserved");
+			if (replacement === "directory") assert.equal(fs.readFileSync(path.join(replaced, ...parts.slice(depth), staged), "utf8"), "replacement forensic data");
+		});
+	}
+}
+
+test("evidence publication: replacement after publish cannot acknowledge and cannot delete moved staging", async (t) => {
+	const f = fixture(t);
+	const foreign = fixture(t);
+	const bytes = Buffer.from("published then replaced");
+	const hash = createHash("sha256").update(bytes).digest("hex");
+	const bucket = path.join(f.root, "artifacts", "sha256", hash.slice(0, 2));
+	const moved = path.join(foreign.root, "moved");
+	const store = await createEvidenceStore({ ...f.options, onDurabilityPoint: (point) => {
+		if (point === "file-published") { fs.renameSync(bucket, moved); fs.symlinkSync(moved, bucket, "dir"); }
+	} });
+	await assert.rejects(store.stageArtifact(bytes, META), isCode("TF_DURABILITY_FAILED"));
+	assert.equal(fs.readdirSync(moved).length, 2, "both digest and forensic staging bytes retained");
+});
+
+for (const kind of ["artifact", "receipt"] as const) {
+	test(`evidence ${kind}: revoke during final async ledger read denies disclosure`, async (t) => {
+		const f = fixture(t);
+		const ref = await (await f.open()).stageArtifact(Buffer.from("revoked before disclosure"), META);
+		f.terminal([ref]);
+		await (await f.open()).issueFinalReceipt(RUN);
+		const entered = barrier();
+		const resume = barrier();
+		let policyChecks = 0;
+		const store = await createEvidenceStore({ ...f.options,
+			authorize: async (...args) => { policyChecks++; return f.options.authorize(...args); },
+			ledger: { ...f.options.ledger, read: async () => {
+				if (policyChecks === 1) { entered.release(); await resume.waiting; }
+				return f.read();
+			} },
+		});
+		const reading = kind === "artifact" ? store.readArtifact(actor, { kind: "run", id: RUN }, ref) : store.readReceipt(actor, RUN);
+		await entered.waiting;
+		f.revoke();
+		resume.release();
+		await assert.rejects(reading, isCode("TF_AUTHORITY_REVOKED"));
+		assert.equal(policyChecks, 2);
+	});
+}
+
+test("evidence disclosure: serialized owner fence orders removal before reads and blocks mutations through authorization", async (t) => {
+	const f = fixture(t);
+	const ref = await (await f.open()).stageArtifact(Buffer.from("fenced output"), META);
+	f.terminal([ref]);
+	let tail = Promise.resolve();
+	let held = false;
+	const withWriter: EvidenceStoreOptions["ledger"]["withWriter"] = async (operation) => {
+		const predecessor = tail;
+		const released = barrier();
+		tail = released.waiting;
+		await predecessor;
+		assert.equal(held, false);
+		held = true;
+		try { return await operation(f.read()); } finally { held = false; released.release(); }
+	};
+	const entered = barrier();
+	const resume = barrier();
+	const store = await createEvidenceStore({ ...f.options,
+		ledger: { ...f.options.ledger, withWriter },
+		authorize: async (...args) => { assert.equal(held, true); entered.release(); await resume.waiting; return f.options.authorize(...args); },
+	});
+	const reading = store.readArtifact(actor, { kind: "run", id: RUN }, ref);
+	await entered.waiting;
+	let removed = false;
+	const removal = withWriter(async () => { f.edit((view) => { view.runs[RUN].artifactRefs = []; }); removed = true; });
+	await Promise.resolve();
+	assert.equal(removed, false, "journal mutator cannot run during the disclosure fence");
+	resume.release();
+	assert.equal((await reading).toString(), "fenced output");
+	await removal;
+	assert.equal(removed, true);
+	await assert.rejects(store.readArtifact(actor, { kind: "run", id: RUN }, ref), isCode("TF_POLICY_DENIED"));
+});

@@ -62,7 +62,12 @@ export interface EvidenceStoreOptions {
 	storePath: string;
 	ledger: {
 		read(): EvidenceLedgerView | Promise<EvidenceLedgerView>;
-		/** Hold the SAME writer fence until the returned operation Promise settles. */
+		/**
+		 * Hold the SAME writer fence until the returned operation Promise settles,
+		 * including disclosures. ALL journal/projection mutations must use this
+		 * fence; reads within it must not recursively acquire it. Authorization
+		 * must evaluate current policy at completion, not return a cached grant.
+		 */
 		withWriter<T>(operation: (view: EvidenceLedgerView) => Promise<T>): Promise<T>;
 		/** Atomic journal marker + tip CAS, called INSIDE the existing writer fence. */
 		commitReceiptOnce(runId: string, prepared: PreparedEvidenceReceipt): Promise<void>;
@@ -100,6 +105,9 @@ export interface PreparedEvidenceReceipt extends IssuedEvidenceReceipt {
 	receipt: Receipt;
 	expectedTip: { commitSeq: number; hash: string };
 }
+
+interface DirectoryIdentity { path: string; device: number; inode: number }
+interface ArtifactPath { file: string; directories: DirectoryIdentity[] }
 
 const HEX = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -187,9 +195,13 @@ export class EvidenceStore {
 		});
 	}
 
-	#path(ref: ArtifactRef, create: boolean): string {
+	#path(ref: ArtifactRef, create: boolean): ArtifactPath {
 		validRef(ref);
 		let current = this.#root;
+		const root = fs.lstatSync(current);
+		if (!root.isDirectory() || root.isSymbolicLink() || fs.realpathSync(current) !== current
+			|| String(root.dev) !== this.#identity.device || String(root.ino) !== this.#identity.inode) fail("evidence root identity changed");
+		const directories: DirectoryIdentity[] = [{ path: current, device: root.dev, inode: root.ino }];
 		for (const part of ["artifacts", "sha256", ref.digest.slice(0, 2)]) {
 			current = path.join(current, part);
 			if (create && !fs.existsSync(current)) {
@@ -198,17 +210,36 @@ export class EvidenceStore {
 				try { fs.fsyncSync(parentFd); } finally { fs.closeSync(parentFd); }
 			}
 			const st = fs.lstatSync(current);
-			if (!st.isDirectory() || st.isSymbolicLink()) fail("artifact directory is not a confined regular directory");
+			if (!st.isDirectory() || st.isSymbolicLink() || fs.realpathSync(current) !== current) fail("artifact directory is not a confined regular directory");
+			directories.push({ path: current, device: st.dev, inode: st.ino });
 		}
 		const file = path.join(current, ref.digest);
 		try { if (!fs.lstatSync(file).isFile()) fail("artifact destination is not a regular file"); }
 		catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-		return file;
+		return { file, directories };
+	}
+
+	// Revalidate every ancestor at durability boundaries, including before any
+	// cleanup. Portable Node path APIs cannot guarantee confinement against a
+	// hostile same-UID process replacing paths between individual syscalls.
+	#assertDirectories(directories: readonly DirectoryIdentity[]): void {
+		for (const directory of directories) {
+			const st = fs.lstatSync(directory.path);
+			if (!st.isDirectory() || st.isSymbolicLink() || st.dev !== directory.device || st.ino !== directory.inode
+				|| fs.realpathSync(directory.path) !== directory.path) fail("artifact directory identity changed");
+		}
 	}
 
 	#read(ref: ArtifactRef): Buffer {
-		const file = this.#path(ref, false);
-		const bytes = fs.readFileSync(file);
+		const { file, directories } = this.#path(ref, false);
+		this.#assertDirectories(directories);
+		const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		let bytes: Buffer;
+		try {
+			if (!fs.fstatSync(fd).isFile()) fail("artifact is not a regular file");
+			bytes = fs.readFileSync(fd);
+		} finally { fs.closeSync(fd); }
+		this.#assertDirectories(directories);
 		if (bytes.length !== ref.size || digest(bytes) !== ref.digest) fail("artifact bytes do not match committed reference");
 		return bytes;
 	}
@@ -216,22 +247,40 @@ export class EvidenceStore {
 	#stage(bytes: Uint8Array, metadata: Omit<ArtifactRef, "digest" | "size">): ArtifactRef {
 		if (metadata.redactionClass === "secret") throw new ControlError("TF_POLICY_DENIED", "secret material must use SecretRef, not the generic artifact store");
 		const ref: ArtifactRef = { ...metadata, size: bytes.length, digest: digest(bytes) };
-		const file = this.#path(ref, true);
+		const { file, directories } = this.#path(ref, true);
 		if (fs.existsSync(file)) { this.#read(ref); return ref; }
 		const temp = path.join(path.dirname(file), `.${crypto.randomUUID()}`);
+		this.#assertDirectories(directories);
 		const fd = fs.openSync(temp, "wx", 0o600);
+		const tempIdentity = fs.fstatSync(fd);
 		try {
 			try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 			this.#options.onDurabilityPoint?.("file-fsynced");
+			this.#assertDirectories(directories);
+			const staged = fs.lstatSync(temp);
+			if (!staged.isFile() || staged.dev !== tempIdentity.dev || staged.ino !== tempIdentity.ino) fail("staged artifact identity changed");
 			try { fs.linkSync(temp, file); }
 			catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 				this.#read(ref);
 			}
+			this.#assertDirectories(directories);
 			const directoryFd = fs.openSync(path.dirname(file), "r");
 			try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
 			this.#options.onDurabilityPoint?.("file-published");
-		} finally { fs.unlinkSync(temp); }
+			this.#assertDirectories(directories);
+			this.#read(ref);
+		} finally {
+			// Preserve forensic staging bytes if the original directory or file was
+			// replaced. In particular, never follow a replacement symlink to clean up.
+			let unchanged = false;
+			try {
+				this.#assertDirectories(directories);
+				const staged = fs.lstatSync(temp);
+				unchanged = staged.isFile() && staged.dev === tempIdentity.dev && staged.ino === tempIdentity.ino;
+			} catch { /* Untrusted cleanup path: leave it alone. */ }
+			if (unchanged) fs.unlinkSync(temp);
+		}
 		return ref;
 	}
 
@@ -316,27 +365,37 @@ export class EvidenceStore {
 		return { receipt, receiptRef, manifestProofRef, expectedTip };
 	}
 
-	async #authorize(actor: unknown, target: { kind: "run" | "command"; id: string }, artifactRef?: ArtifactRef): Promise<EvidenceLedgerView> {
-		const view = await this.#options.ledger.read();
-		this.#validateView(view);
-		const decision = await this.#options.authorize(actor, { projectId: view.projectId, controlDomainId: view.controlDomainId, target, ...(artifactRef ? { artifactRef } : {}) });
-		if (!decision || typeof decision.principal !== "string" || decision.principal.length === 0
-			|| !HEX.test(decision.authorizationContextHash)) throw new ControlError("TF_POLICY_DENIED", "evidence authorization decision unavailable");
-		// Reachability is read afresh AFTER asynchronous policy evaluation, never
-		// cached from a previous request or inferred from the policy audit hash.
-		const current = await this.#options.ledger.read();
-		this.#validateView(current);
-		return current;
+	async #disclose<T>(actor: unknown, target: { kind: "run" | "command"; id: string }, artifactRef: ArtifactRef | undefined,
+		read: (view: EvidenceLedgerView) => T): Promise<T> {
+		return this.#write(async (view) => {
+			const authorize = () => this.#options.authorize(actor, { projectId: view.projectId, controlDomainId: view.controlDomainId,
+				target, ...(artifactRef ? { artifactRef } : {}) });
+			const validateDecision = (decision: Awaited<ReturnType<EvidenceStoreOptions["authorize"]>>) => {
+				if (!decision || typeof decision.principal !== "string" || decision.principal.length === 0
+					|| !HEX.test(decision.authorizationContextHash)) throw new ControlError("TF_POLICY_DENIED", "evidence authorization decision unavailable");
+			};
+			validateDecision(await authorize());
+			// The owner fence protects this fresh projection through disclosure. A
+			// final live policy check must follow the last asynchronous ledger read:
+			// revocation during that read may not reuse the earlier decision.
+			const current = await this.#options.ledger.read();
+			this.#validateView(current);
+			validateDecision(await authorize());
+			this.#validateView(current);
+			// No await between final authorization, reachability and filesystem read.
+			return read(current);
+		});
 	}
 
 	async readArtifact(actor: unknown, target: { kind: "run" | "command"; id: string }, ref: ArtifactRef): Promise<Buffer> {
-		const view = await this.#authorize(actor, target, ref);
-		validRef(ref);
-		const refs = target.kind === "run"
-			? (Object.hasOwn(view.runs, target.id) ? view.runs[target.id].artifactRefs : [])
-			: (Object.hasOwn(view.commands, target.id) && view.commands[target.id].responseArtifactRef ? [view.commands[target.id].responseArtifactRef!] : []);
-		if (!refs.some((candidate) => sameRef(candidate, ref))) throw new ControlError("TF_POLICY_DENIED", "artifact has no authorized ledger reference");
-		return this.#read(ref);
+		return this.#disclose(actor, target, ref, (view) => {
+			validRef(ref);
+			const refs = target.kind === "run"
+				? (Object.hasOwn(view.runs, target.id) ? view.runs[target.id].artifactRefs : [])
+				: (Object.hasOwn(view.commands, target.id) && view.commands[target.id].responseArtifactRef ? [view.commands[target.id].responseArtifactRef!] : []);
+			if (!refs.some((candidate) => sameRef(candidate, ref))) throw new ControlError("TF_POLICY_DENIED", "artifact has no authorized ledger reference");
+			return this.#read(ref);
+		});
 	}
 
 	#verifyReceipt(view: EvidenceLedgerView, runId: string, issued: IssuedEvidenceReceipt): Receipt {
@@ -359,17 +418,18 @@ export class EvidenceStore {
 	}
 
 	async readReceipt(actor: unknown, runId: string): Promise<{ receipt: Receipt; verification: { artifactIntegrity: "verified" | "unknown" } }> {
-		const view = await this.#authorize(actor, { kind: "run", id: runId });
-		if (!Object.hasOwn(view.receipts, runId)) throw new ControlError("TF_POLICY_DENIED", "run has no issued Receipt");
-		const receipt = this.#verifyReceipt(view, runId, view.receipts[runId]);
-		let artifactIntegrity: "verified" | "unknown" = "verified";
-		for (const ref of receipt.artifactRefs) {
-			try { this.#read(ref); } catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") artifactIntegrity = "unknown";
-				else throw error;
+		return this.#disclose(actor, { kind: "run", id: runId }, undefined, (view) => {
+			if (!Object.hasOwn(view.receipts, runId)) throw new ControlError("TF_POLICY_DENIED", "run has no issued Receipt");
+			const receipt = this.#verifyReceipt(view, runId, view.receipts[runId]);
+			let artifactIntegrity: "verified" | "unknown" = "verified";
+			for (const ref of receipt.artifactRefs) {
+				try { this.#read(ref); } catch (error) {
+					if ((error as NodeJS.ErrnoException).code === "ENOENT") artifactIntegrity = "unknown";
+					else throw error;
+				}
 			}
-		}
-		return { receipt, verification: { artifactIntegrity } };
+			return { receipt, verification: { artifactIntegrity } };
+		});
 	}
 
 	#floor(view: EvidenceLedgerView): number {
