@@ -197,7 +197,10 @@ test("uds: a legitimate MiB-sized payload round-trips under the default client b
 	assert.deepEqual(await server.probe(), { mutations: 0 });
 });
 
-test("uds: malformed failure replies cannot crash a real client process", UNIX_ONLY, async (t) => {
+// This matrix starts 26 clients sequentially, each with a 2s watchdog below.
+// Allow their cumulative startup cost plus server readiness/cleanup on busy CI
+// runners; the per-client watchdog still catches a hung or leaked process.
+test("uds: malformed failure replies cannot crash a real client process", { ...UNIX_ONLY, timeout: 60_000 }, async (t) => {
 	const healthy = await isolatedServer(t);
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-bad-peer-"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
