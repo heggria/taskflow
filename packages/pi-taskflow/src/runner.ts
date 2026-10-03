@@ -266,8 +266,16 @@ function foldPiEventLine(acc: PiEventAccumulator, line: string) {
 		resetPiFinal(acc);
 	} else if (
 		type === "message_start" || type === "message_update" ||
-		type.startsWith("tool_execution_") || type.startsWith("tool_")
+		type.startsWith("tool_execution_") || type.startsWith("tool_") || type === "auto_retry_start"
 	) {
+		resetPiFinal(acc);
+	} else if (type === "compaction_start" || type === "auto_compaction_start") {
+		// Post-run compaction is activity even after agent_end willRetry:false.
+		// Revoke terminal reaping without erasing prior clean-exit evidence:
+		// Pi 0.80.3 compacts after agent_end but emits no agent_settled.
+		// An explicit compaction retry below invalidates that completed answer.
+		acc.terminalGeneration = undefined;
+	} else if ((type === "compaction_end" || type === "auto_compaction_end") && eventWillRetry(event) === true) {
 		resetPiFinal(acc);
 	}
 
@@ -282,8 +290,13 @@ function foldPiEventLine(acc: PiEventAccumulator, line: string) {
 						? message.errorMessage
 						: `Pi assistant stopped with ${reason}`;
 				acc.finalGeneration = undefined;
-			} else if (reason !== "toolUse" && acc.finalText.trim()) {
-				acc.finalGeneration = acc.generation;
+			} else {
+				// message_end:error is an attempt failure, not a session failure.
+				// Retain it until a successful response so clean/legacy exits still
+				// fail closed while retry and overflow compaction can recover.
+				acc.fatalError = undefined;
+				acc.errorMessage = undefined;
+				if (reason !== "toolUse" && acc.finalText.trim()) acc.finalGeneration = acc.generation;
 			}
 		}
 	} else if (type === "error") {
@@ -309,12 +322,15 @@ function piCompletionPolicy(terminalGraceMs: number): CompletionPolicy<PiEventAc
 		terminalGraceMs,
 		classifyEvent(acc, event) {
 			const type = eventType(event);
-			if (acc.fatalError || type === "error") return "fatal";
-			if (type === "agent_settled") return "terminal-candidate";
+			if (type === "error" || (type === "message_end" && acc.stopReason === "aborted")) return "fatal";
+			// agent_end and auto_retry_end can still precede overflow compaction.
+			// Only settlement makes an assistant attempt error authoritative.
+			if (type === "agent_settled") return acc.fatalError ? "fatal" : "terminal-candidate";
 			if (type === "agent_end") return eventWillRetry(event) === false ? "terminal-candidate" : "activity";
 			if (
 				type === "agent_start" || type === "turn_start" ||
-				type.startsWith("message_") || type.startsWith("tool_execution_") || type.startsWith("tool_")
+				type.startsWith("message_") || type.startsWith("tool_execution_") || type.startsWith("tool_") ||
+				type.startsWith("auto_retry_") || type.startsWith("compaction_") || type.startsWith("auto_compaction_")
 			) return "activity";
 			return "ignore";
 		},
@@ -455,6 +471,9 @@ export async function runAgentTask(
 		args.push(`Task: ${task}`);
 		const invocation = getPiInvocation(args);
 		const childEnv = { ...process.env, ...ctxEnv };
+		// The owning run wins over an inherited parent marker. Direct callers
+		// without an identity keep the existing environment behavior.
+		if (opts.runId !== undefined) childEnv.PI_SUBAGENT_RUN_ID = opts.runId;
 		// A child agent is not a host principal. Never let it inherit the
 		// operator's resolve-only bridge opt-in and mint equivalent authority.
 		delete childEnv[CWD_BRIDGE_MODE_ENV];

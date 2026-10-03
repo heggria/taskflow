@@ -2,13 +2,13 @@
 title: Trusted Effects
 ---
 
-> **0.3.0-beta.1.2——beta channel candidate，尚未 GA。** 本页描述为 beta 发布准备的 Trusted Effects MVP；npm 发布仍是发版闸门。
+> **Taskflow 1.0 公开合同。** 稳定范围是成熟 DAG runtime、DSL、六宿主适配器和已准入的声明文件事务。Control Plane wire 合同仍为 proposed，只在 workspace 实验；parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。
 
 Trusted Effects 把阶段的副作用写进合同。模型可以提出内容，但对于已准入的已声明文件目标，**resources transaction 是唯一最终提交者**。
 
 ## Vertical slice
 
-仓库内的 [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/examples/trusted-effects-write.json) 声明了一个对 `out/report.md` 的 `fs.write` effect。无 LLM fixture 会执行同一条受 resources 控制的路径：
+仓库内的 [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/main/examples/trusted-effects-write.json) 声明了一个对 `out/report.md` 的 `fs.write` effect。无 LLM fixture 会执行同一条受 resources 控制的路径：
 
 ```bash
 pnpm exec node --conditions=development --experimental-strip-types --test \
@@ -32,11 +32,11 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 - Resolve-only 宿主无法阻止所有对未声明路径的写入。
 - 这一版没有 SecretRef vault 后端。
 - 这一版没有 ServiceRef live network adapter。
-- ControlHost 当前是脚手架；store、审批、receipts 与 WebUI 属于后续的 0.3-C 阶段。它们不证明 0.3 已发布或 GA。
+- ControlHost 有实验性 Unix UDS 和 files-only store 代码。admission、parked 审批/receipt、协调、Windows pipe 与 WebUI 尚未完成，不属于 1.0 稳定 API。
 
 ## 接下来阅读
 
 - [核心概念](/zh-cn/docs/concepts)
 - [编译器与运行时](/zh-cn/docs/compiler-runtime)
-- [仓库中的 0.3 MVP 冻结定义](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md)
-- [宿主支持基线](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/conformance/workspace/host-support-baseline.json)
+- [仓库中的 0.3 MVP 冻结定义](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md)
+- [宿主支持基线](https://github.com/heggria/taskflow/blob/main/conformance/workspace/host-support-baseline.json)

@@ -45,6 +45,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import {
 	discoverAgents,
 	executeTaskflow,
@@ -91,7 +92,7 @@ import {
 import type { SubagentRunner, AgentConfig } from "taskflow-core";
 import { getBuildInfo, type BuildInfo } from "taskflow-core";
 import { builtinVerifiers, discoverVerifiers } from "taskflow-core";
-import { forkRunForResume, validateResumeRequest, type ResumeOverrides } from "taskflow-core";
+import { forkRunForResume, resumeSourceAfterOwnerExit, validateResumeRequest, type ResumeOverrides } from "taskflow-core";
 import {
 	runsDir,
 	traceFilePath,
@@ -1015,20 +1016,15 @@ export function makeToolHandlers(
 			deps.trace = new FileTraceSink(traceFilePath(runsDir(cwd), state.flowName, state.runId));
 			if (args.incremental === true) (deps as RuntimeDeps & { cacheScopeDefault?: string }).cacheScopeDefault = "cross-run";
 
-			// Persist run state (throttled + final) so taskflow_peek / resume can read
-			// intermediate phase outputs after the run — same contract as the pi adapter.
+			// Runtime persist is checkpoint-only, not a streaming update. Every
+			// completed phase must reach disk before subsequent work starts.
 			const cleanupConfig = {
 				maxKeep: settings.taskflow.maxKeptRuns,
 				maxAgeDays: settings.taskflow.maxRunAgeDays,
 			};
-			let lastPersist = 0;
-			deps.persist = (s) => {
-				const now = Date.now();
-				if (now - lastPersist >= 1000) {
-					lastPersist = now;
-					saveRun(s, cleanupConfig);
-				}
-			};
+			deps.persist = (s) => saveRun(s, cleanupConfig);
+			state.foregroundOwner = { version: 1, pid: process.pid, instanceId: randomUUID(), startedAt: Date.now() };
+			saveRun(state, cleanupConfig);
 
 			let terminalPersistError: string | undefined;
 			let res: Awaited<ReturnType<typeof executeTaskflow>>;
@@ -1130,7 +1126,9 @@ export function makeToolHandlers(
 			if (!runId) return textContent("taskflow_resume requires `runId`.", true);
 			const prevR = loadRunDiagnosed(cwd, runId);
 			if (!prevR.ok) return textContent(describeLoadFailure(prevR, `Run "${runId}"`), true);
-			const prev = prevR.value;
+			const source = resumeSourceAfterOwnerExit(prevR.value, { cwd });
+			if (!source.ok) return textContent(source.errors.join("; "), true);
+			const prev = source.value;
 			const hasOverrideField =
 				args.task !== undefined || args.model !== undefined ||
 				args.timeout !== undefined || args.idleTimeout !== undefined;
@@ -1150,6 +1148,14 @@ export function makeToolHandlers(
 			if (!resumable.ok) {
 				const prefix = overrides ? "Invalid resume overrides:\n- " : "";
 				return textContent(`${prefix}${resumable.errors.join(overrides ? "\n- " : "; ")}`, true);
+			}
+			if (prevR.value.status === "running") {
+				const current = loadRunDiagnosed(cwd, runId);
+				if (!current.ok || JSON.stringify(current.value) !== JSON.stringify(prevR.value)) {
+					return textContent("Interrupted run changed before resume admission; reload and retry.", true);
+				}
+				const admitted = resumeSourceAfterOwnerExit(current.value, { cwd });
+				if (!admitted.ok) return textContent(admitted.errors.join("; "), true);
 			}
 			const child = forkRunForResume(prev, { overrides, cwd, host });
 			const settings = readSubagentSettings();
@@ -1173,8 +1179,12 @@ export function makeToolHandlers(
 				maxKeep: settings.taskflow.maxKeptRuns,
 				maxAgeDays: settings.taskflow.maxRunAgeDays,
 			};
-			let lastPersist = 0;
-			deps.persist = (s) => { if (Date.now() - lastPersist >= 1000) { lastPersist = Date.now(); saveRun(s, cleanupConfig); } };
+			deps.persist = (s) => saveRun(s, cleanupConfig);
+			// MCP has no interactive approval requester, so it never records an
+			// approvalWait marker. A dead owner alone cannot authorize recovery of
+			// a potentially active script/agent child.
+			child.foregroundOwner = { version: 1, pid: process.pid, instanceId: randomUUID(), startedAt: Date.now() };
+			saveRun(child, cleanupConfig);
 			let terminalPersistError: string | undefined;
 			const res = await executeTaskflow(child, deps).finally(() => {
 				terminalPersistError = persistTerminalRun(child, cleanupConfig);

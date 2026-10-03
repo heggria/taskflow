@@ -83,6 +83,7 @@ const BIN_ENV = {
 	claude: "PI_TASKFLOW_CLAUDE_BIN",
 	opencode: "PI_TASKFLOW_OPENCODE_BIN",
 	grok: "PI_TASKFLOW_GROK_BIN",
+	hermes: "PI_TASKFLOW_HERMES_BIN",
 };
 
 function commandPath(command) {

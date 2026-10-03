@@ -42,7 +42,7 @@ fan-out work), so you usually don't have to name them explicitly.
 Codex has sandbox profiles, not a strict per-tool-name whitelist. A phase whose
 effective `tools` are read-only maps to `codex exec -s read-only`; a mutating
 tool or an omitted list maps to `-s workspace-write`.
-`danger-full-access` is never selected automatically.
+Unrestricted filesystem access is never selected automatically.
 
 Thinking resolves phase → agent → global and is passed as
 `model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
@@ -187,10 +187,10 @@ Inside a codex session, just ask — codex will call the tools:
 > Run the "release-train" taskflow.
 ```
 
-> **Note on approvals.** In non-interactive `codex exec`, MCP tool calls require
-> approval; pass `--dangerously-bypass-approvals-and-sandbox` for unattended
-> automation (only in an already-sandboxed environment). Interactive `codex`
-> prompts for approval normally.
+> **Note on approvals.** Review the host's MCP approval policy interactively
+> before unattended execution. Keep the filesystem sandbox enabled and limit
+> MCP access to the tools needed by the workflow. If the configured policy
+> requires a human decision, complete it interactively before continuing.
 
 ## Remove
 

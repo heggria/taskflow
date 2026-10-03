@@ -1715,6 +1715,7 @@ async function executePhaseInner(
 		}
 		opts?.promptCalls?.push(task);
 		const runOptions = {
+			runId: state.runId,
 			model: phase.model,
 			thinking: phase.thinking,
 			tools: phase.tools,

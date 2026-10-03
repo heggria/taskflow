@@ -3,6 +3,8 @@ title: 在 Claude Code 上使用 taskflow
 description: 将 taskflow 作为 Claude Code 插件安装，通过 MCP 编排多阶段工作流。
 ---
 
+> **Taskflow 1.0 安装。** 使用下列精确 npm pin；实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases)。
+
 [Claude Code](https://claude.com/product/claude-code) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。插件注册 MCP server 与路由 skill；协议层不依赖 MCP SDK。
 
 本页带你走完整个流程：安装插件、确认 MCP 服务器已就绪、通过工具调用运行一个 flow，并理解权限与长时运行 flow 的模型。
@@ -22,7 +24,7 @@ claude plugin install claude-taskflow@taskflow
 
 <Steps>
   <Step>
-    **注册 MCP 服务器。** 插件声明了一个通过 `npx -y -p claude-taskflow claude-taskflow-mcp` 启动的 `taskflow` 服务器，让 Claude Code 能通过 stdio 访问运行时。`npx` 的版本锁定绑定了确切运行的代码——无需全局安装任何东西。
+    **注册 MCP 服务器。** 插件声明了一个通过 `npx -y -p claude-taskflow@1.0.0 claude-taskflow-mcp` 启动的 `taskflow` 服务器，让 Claude Code 能通过 stdio 访问运行时。`npx` 的版本锁定绑定了确切运行的代码——无需全局安装任何东西。
   </Step>
   <Step>
     **安装路由 skill。** 一个内置 skill 教会 Claude Code 何时该调用 taskflow 工具，这样你不必记住它们的名字。

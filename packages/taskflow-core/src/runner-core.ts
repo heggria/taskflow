@@ -200,8 +200,10 @@ export function foldEventLine(acc: EventAccumulator, line: string): LiveUpdate |
 	} else {
 		acc.truncated = true;
 	}
-	if (msg.role !== "assistant") return null;
-	acc.usage.turns++;
+	// Pi tools may call models (including nested codemode calls). Their result
+	// already contains the aggregate usage: account only this top-level record,
+	// never nestedCalls or the redundant agent_end history.
+	if (msg.role !== "assistant" && msg.role !== "toolResult") return null;
 	const u = (msg as any).usage;
 	if (u) {
 		acc.usage.input += u.input || 0;
@@ -209,8 +211,12 @@ export function foldEventLine(acc: EventAccumulator, line: string): LiveUpdate |
 		acc.usage.cacheRead += u.cacheRead || 0;
 		acc.usage.cacheWrite += u.cacheWrite || 0;
 		acc.usage.cost += u.cost?.total || 0;
-		acc.usage.contextTokens = u.totalTokens || 0;
+		// Context size describes the main assistant's latest call, not a tool's
+		// independent model context. It is a gauge rather than an additive total.
+		if (msg.role === "assistant") acc.usage.contextTokens = u.totalTokens || 0;
 	}
+	if (msg.role !== "assistant") return null;
+	acc.usage.turns++;
 	if (!acc.model && (msg as any).model) acc.model = (msg as any).model;
 	if ((msg as any).stopReason) acc.stopReason = (msg as any).stopReason;
 	if ((msg as any).errorMessage) {

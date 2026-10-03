@@ -190,3 +190,160 @@ test("control-host: stop releases the singleton so a fresh host can win", async 
 	assert.equal(status.singleton, "won");
 	second.stop();
 });
+
+test("control-host: standalone opens projectStorePath and a later host sees the same ledger (A3)", async () => {
+	const paths = makePaths();
+	const storePath = path.join(paths.controlHome, "project-store");
+	const first = new ControlHost(hostOptions(paths, { mode: "standalone", holderId: "s1", projectStorePath: storePath }));
+	await first.start();
+	first.hello(clientHello);
+	const header = await first.dispatch<{ projectId: string }>("control.store.header", undefined, { fencingEpoch: 1 });
+	assert.match(header.projectId, /^[0-9a-f-]{36}$/i);
+	const submitted = await first.dispatch<{ commitSeq: number }>("commands.submit", {
+		command: {
+			commandId: "00000000-0000-0000-0000-0000000000bb",
+			kind: "run.submit",
+			requestHash: "a".repeat(64),
+			callerPrincipal: "cli",
+			authorizationContextHash: "a".repeat(64),
+			projectId: header.projectId,
+			controlDomainId: header.projectId,
+			status: "accepted",
+			firstCommitSeq: 1,
+			lastCommitSeq: 1,
+			recordedAt: 1,
+		},
+		events: [{
+			eventId: "00000000-0000-0000-0000-0000000000cc",
+			schemaVersion: 1,
+			controlDomainId: header.projectId,
+			streamId: "command:00000000-0000-0000-0000-0000000000bb",
+			streamSeq: 1,
+			commitSeq: 1,
+			commandId: "00000000-0000-0000-0000-0000000000bb",
+			commandEventIndex: 0,
+			causationId: "00000000-0000-0000-0000-0000000000bb",
+			correlationId: "00000000-0000-0000-0000-0000000000bb",
+			projectId: header.projectId,
+			recordedAt: 1,
+			payload: { kind: "command.recorded", commandId: "00000000-0000-0000-0000-0000000000bb" },
+		}],
+	}, { fencingEpoch: 1 });
+	assert.equal(submitted.commitSeq, 1);
+	first.stop();
+
+	const second = new ControlHost(hostOptions(paths, { mode: "standalone", holderId: "s2", projectStorePath: storePath }));
+	await second.start();
+	second.hello(clientHello);
+	const status = await second.dispatch<{ header: { projectId: string }; commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 });
+	assert.equal(status.header.projectId, header.projectId);
+	assert.equal(status.commitSeq, 1);
+	second.stop();
+});
+
+for (const mode of ["standalone", "auto"] as const) {
+	test(`commands.submit: ${mode} duplicate and concurrent retries fail closed before writes or TE execution`, {
+		skip: mode === "auto" && process.platform === "win32",
+	}, async (t) => {
+		const paths = makePaths();
+		const projectStorePath = path.join(paths.controlHome, "project-store");
+		const provider = fakeProvider();
+		const prepare = t.mock.method(provider, "prepare", async () => assert.fail("journal submission must not prepare TE work"));
+		const submit = t.mock.method(provider, "submit", async () => assert.fail("journal submission must not execute TE work"));
+		const options = hostOptions(paths, { mode, provider, holderId: "command-owner", projectStorePath });
+		let owner = new ControlHost(options);
+		let caller = owner;
+		t.after(() => { if (caller !== owner) caller.stop(); owner.stop(); });
+		const start = async () => {
+			await owner.start();
+			owner.hello(clientHello);
+			if (mode === "auto") {
+				// Exercise the real commands.submit wire path, not just appendBatch.
+				caller = new ControlHost(hostOptions(paths, { mode: "coordinated", provider, projectStorePath }));
+				await caller.start();
+			} else caller = owner;
+		};
+		await start();
+		const header = await caller.dispatch<{ projectId: string; controlDomainId: string }>("control.store.header", undefined, { fencingEpoch: 1 });
+		const identity = { projectId: header.projectId, controlDomainId: header.controlDomainId };
+		const commandId = "00000000-0000-0000-0000-0000000000dd";
+		const body = {
+			command: {
+				commandId, kind: "run.submit", requestHash: "a".repeat(64), callerPrincipal: "cli",
+				authorizationContextHash: "a".repeat(64), ...identity, status: "accepted",
+				firstCommitSeq: 1, lastCommitSeq: 1, recordedAt: 1,
+			},
+			events: [{
+				eventId: "00000000-0000-0000-0000-0000000000ee", schemaVersion: 1,
+				...identity, streamId: `command:${commandId}`, streamSeq: 1, commitSeq: 1,
+				commandId, commandEventIndex: 0, causationId: commandId, correlationId: commandId,
+				recordedAt: 1, payload: { kind: "command.recorded", commandId },
+			}],
+		};
+		// Two requests can be pending on the same connection, but only one batch
+		// may commit. The synchronous single-writer append never re-executes it.
+		const concurrent = await Promise.allSettled([0, 1].map(() => caller.dispatch("commands.submit", body, { fencingEpoch: 1 })));
+		assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 1);
+		const rejected = concurrent.find((result) => result.status === "rejected");
+		assert.ok(rejected && rejected.status === "rejected");
+		assert.ok(rejected.reason instanceof ControlError);
+		assert.equal(rejected.reason.code, "TF_IDEMPOTENCY_CONFLICT");
+		const journalPath = path.join(projectStorePath, "journal", "000001.jsonl");
+		const journal = fs.readFileSync(journalPath);
+		const sequence = fs.readFileSync(path.join(projectStorePath, "commit-seq.json"));
+		const projection = fs.readFileSync(path.join(projectStorePath, "projections", "commands.json"));
+		assert.equal(journal.toString("utf8").trim().split("\n").length, 1);
+		for (const restarted of [false, true]) {
+			if (restarted) {
+				if (caller !== owner) caller.stop();
+				owner.stop();
+				owner = new ControlHost(options);
+				await start();
+			}
+			for (const overrides of [{}, { requestHash: "b".repeat(64) }, { callerPrincipal: "other-principal" }, { authorizationContextHash: "b".repeat(64) }]) {
+				await assert.rejects(caller.dispatch("commands.submit", { ...body, command: { ...body.command, ...overrides } }, { fencingEpoch: 1 }), (error: unknown) => {
+					assert.ok(error instanceof ControlError);
+					assert.equal(error.code, "TF_IDEMPOTENCY_CONFLICT");
+					assert.equal(error.sideEffects, "none");
+					assert.match(error.message, /authorized command-result replay is not implemented/);
+					return true;
+				});
+				const status = await caller.dispatch<{ commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 });
+				assert.equal(status.commitSeq, 1);
+				assert.deepEqual(fs.readFileSync(journalPath), journal);
+				assert.deepEqual(fs.readFileSync(path.join(projectStorePath, "commit-seq.json")), sequence);
+				assert.deepEqual(fs.readFileSync(path.join(projectStorePath, "projections", "commands.json")), projection);
+			}
+		}
+		assert.equal(prepare.mock.calls.length, 0);
+		assert.equal(submit.mock.calls.length, 0);
+	});
+}
+
+for (const mode of ["standalone", "auto"] as const) {
+	test(`control-host: ${mode} store-open failure rolls back resources before retry`, {
+		skip: mode === "auto" && process.platform === "win32",
+	}, async (t) => {
+		const paths = makePaths();
+		const projectStorePath = path.join(paths.controlHome, "project-store");
+		fs.writeFileSync(projectStorePath, "not a directory");
+		const clearTimer = t.mock.method(globalThis, "clearInterval");
+		const failed = new ControlHost(hostOptions(paths, { mode, projectStorePath, holderId: "failed" }));
+		t.after(() => failed.stop());
+		await assert.rejects(failed.start(), /could not open project ControlStore/);
+		assert.equal(failed.state, "failed-closed");
+		assert.equal(failed.status.singleton, "none");
+		assert.equal(failed.status.holderId, undefined);
+		assert.equal(fs.existsSync(path.join(paths.controlHome, "standalone-lease.json")), false);
+		assert.equal(fs.existsSync(paths.lockPath), false);
+		assert.equal(fs.existsSync(paths.endpointPath), false);
+		if (mode === "auto") assert.equal(clearTimer.mock.calls.length, 1, "lease-renewal timer must be cleared");
+		fs.unlinkSync(projectStorePath);
+		const fresh = new ControlHost(hostOptions(paths, { mode, projectStorePath, holderId: "fresh" }));
+		t.after(() => fresh.stop());
+		assert.equal((await fresh.start()).state, "started");
+		fresh.stop();
+		// The failed instance is also restartable without explicit cleanup.
+		assert.equal((await failed.start()).state, "started");
+	});
+}

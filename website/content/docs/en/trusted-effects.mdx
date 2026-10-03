@@ -2,13 +2,13 @@
 title: Trusted Effects
 ---
 
-> **0.3.0-beta.1.2 — beta channel candidate, not GA.** This page describes the Trusted Effects MVP prepared for the beta release; npm publication is still a release gate.
+> **Taskflow 1.0 public contract.** The stable scope is the mature DAG runtime, DSL, six host adapters and admitted declared-filesystem transactions. Control Plane wire contracts remain proposed and workspace-only; parked approvals, receipts, global coordination and WebUI are excluded.
 
 Trusted Effects makes a phase's side effects explicit. The model may propose content, but for an admitted declared filesystem target, the **resources transaction is the only finalizer**.
 
 ## The vertical slice
 
-The checked-in [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/examples/trusted-effects-write.json) declares one `fs.write` effect for `out/report.md`. The no-LLM fixture exercises the same resource-controlled path:
+The checked-in [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/main/examples/trusted-effects-write.json) declares one `fs.write` effect for `out/report.md`. The no-LLM fixture exercises the same resource-controlled path:
 
 ```bash
 pnpm exec node --conditions=development --experimental-strip-types --test \
@@ -32,11 +32,11 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 - Resolve-only hosts cannot prevent every write to an undeclared path.
 - SecretRef has no vault backend in this cut.
 - ServiceRef has no live network adapter in this cut.
-- ControlHost is currently a scaffold; stores, approvals, receipts, and WebUI belong to later 0.3-C stages. None is proof that 0.3 is released or GA.
+- ControlHost has experimental Unix UDS and files-only store code. Admission, parked approvals/receipts, coordination, Windows pipes and WebUI remain incomplete and are outside the 1.0 stable API.
 
 ## Read next
 
 - [Core concepts](/en/docs/concepts)
 - [Compiler & runtime](/en/docs/compiler-runtime)
-- [0.3 MVP freeze in the repository](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md)
-- [Host support baseline](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/conformance/workspace/host-support-baseline.json)
+- [0.3 MVP freeze in the repository](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md)
+- [Host support baseline](https://github.com/heggria/taskflow/blob/main/conformance/workspace/host-support-baseline.json)

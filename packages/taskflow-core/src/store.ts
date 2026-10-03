@@ -203,6 +203,12 @@ export interface RunState {
 	cwdRootBinding?: DirectoryIdentity;
 	/** OS PID of a detached runner process (set only for background runs). */
 	pid?: number;
+	/** Foreground host instance that owns a running checkpoint. startedAt is
+	 * audit metadata, not an OS birth token. Missing/unobservable owner identity
+	 * must never be interpreted as proof that execution stopped. */
+	foregroundOwner?: { version: 1; pid: number; instanceId: string; startedAt: number; approvalWait?: string[] };
+	/** Audit of the narrow approval checkpoint recovered into this fork. */
+	foregroundInterruption?: { kind: "approval-owner-exit"; ownerPid: number; ownerInstanceId: string; detectedAt: number };
 	/** True for runs spawned via `detach: true` (background execution). */
 	detached?: boolean;
 	/** Wall-clock launch time for detached lifecycle/orphan diagnostics. */

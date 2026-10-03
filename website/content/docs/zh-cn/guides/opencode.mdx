@@ -3,6 +3,8 @@ title: 在 OpenCode 上使用 taskflow
 description: 在 OpenCode 上将 taskflow 注册为 MCP 服务器，编排多阶段工作流。
 ---
 
+> **Taskflow 1.0 安装。** 使用下列精确 npm pin；实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases)。
+
 [OpenCode](https://opencode.ai) 通过协议层不依赖 MCP SDK 的 MCP server 暴露 taskflow；每个阶段作为隔离的 `opencode run` 进程运行。
 
 本页带你走完整个流程：注册 MCP 服务器、确认它已就绪、通过工具调用运行一个 flow，并理解权限与模型解析模型。
@@ -16,7 +18,7 @@ OpenCode 没有基于 git 的插件市场，所以你直接注册 MCP 服务器�
 ### 方式 A：CLI
 
 ```bash title="通过 CLI 注册 MCP 服务器"
-opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@1.0.0 opencode-taskflow-mcp
 ```
 
 ### 方式 B：编辑 opencode.json
@@ -27,7 +29,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-
   "mcp": {
     "taskflow": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "opencode-taskflow@beta", "opencode-taskflow-mcp"],
+      "command": ["npx", "-y", "-p", "opencode-taskflow@1.0.0", "opencode-taskflow-mcp"],
       "enabled": true
     }
   },

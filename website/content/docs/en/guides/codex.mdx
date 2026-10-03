@@ -3,6 +3,8 @@ title: Using taskflow on Codex
 description: Install taskflow as a Codex plugin and orchestrate multi-phase workflows via MCP.
 ---
 
+> **Taskflow 1.0 installation.** Use the exact npm pins below. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases).
+
 [Codex](https://github.com/openai/codex) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Codex, taskflow ships as a plugin that registers an MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
 
 This page walks through the whole arc: install the plugin, confirm the MCP server is live, run a flow through a tool call, and configure things for long-running work.
@@ -22,7 +24,7 @@ That single `plugin add` does three things at once:
 
 <Steps>
   <Step>
-    **Registers the MCP server.** The plugin's `.mcp.json` declares a `taskflow` server launched via `npx codex-taskflow-mcp`, so Codex can reach the runtime over stdio.
+    **Registers the MCP server.** The plugin's `.mcp.json` declares a `taskflow` server launched via `npx -y -p codex-taskflow@1.0.0 codex-taskflow-mcp`, so Codex can reach the runtime over stdio.
   </Step>
   <Step>
     **Installs the routing skill.** A bundled skill teaches Codex when to reach for the taskflow tools, so you don't have to remember their names.

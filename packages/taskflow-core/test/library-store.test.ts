@@ -74,7 +74,7 @@ test("saveFlowWithMeta: updates a nested flow and its adjacent sidecar in place"
 		const saved = saveFlowWithMeta(cwd, updated, meta);
 
 		assert.equal(saved.filePath, fs.realpathSync(flowPath));
-		assert.equal(saved.metaPath, path.join(nestedDir, "audit.meta.json"));
+		assert.equal(saved.metaPath, fs.realpathSync(path.join(nestedDir, "audit.meta.json")));
 		assert.equal(fs.existsSync(path.join(root, `${sampleDef.name}.json`)), false);
 		assert.equal(metaOf(cwd, sampleDef.name)?.purpose, "updated nested metadata");
 	} finally {

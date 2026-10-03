@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, "../../..");
+const version: string = JSON.parse(fs.readFileSync(path.join(here, "../package.json"), "utf8")).version;
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), "taskflow-dsl-dist-e2e-"));
 
 function exec(command: string, args: string[], cwd = repo): string {
@@ -18,7 +19,7 @@ try {
 	exec("pnpm", ["--filter", "taskflow-dsl", "build"]);
 	const cli = path.join(repo, "packages/taskflow-dsl/dist/cli.js");
 	assert.equal(fs.existsSync(cli), true, "dist/cli.js must exist after build");
-	assert.match(exec(process.execPath, [cli, "--version"]), /^0\.2\.1\s*$/);
+	assert.equal(exec(process.execPath, [cli, "--version"]).trim(), version);
 
 	const project = path.join(temp, "project");
 	fs.mkdirSync(project);
@@ -49,7 +50,7 @@ try {
 	fs.writeFileSync(path.join(install, "package.json"), JSON.stringify({ private: true }));
 	exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...tgz], install);
 	const installedCli = path.join(install, "node_modules/.bin/taskflow-dsl");
-	assert.match(exec(installedCli, ["--version"], install), /^0\.2\.1\s*$/);
+	assert.equal(exec(installedCli, ["--version"], install).trim(), version);
 	const installedSource = path.join(install, "installed.tf.ts");
 	fs.writeFileSync(installedSource, `import { flow, agent } from "taskflow-dsl";\nexport default flow("installed", () => agent("ok", { context: ["README.md"], cache: { scope: "off" } }));\n`);
 	assert.match(exec(installedCli, ["check", "installed.tf.ts", "--cwd", install], install), /^ok\s*$/);
