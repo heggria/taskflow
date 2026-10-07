@@ -5,6 +5,17 @@ or merging a release change does not publish it. Publish only after the gates
 below pass on the final release commit and the release owner authorizes the
 tag. GitHub Releases and the npm registry record the completed publication.
 
+## Current preparation status
+
+**Unreleased 1.0.0; Draft PR #142 targets `main` from the retained historical
+branch `rc/0.3.0-beta.2`.** The branch name is not a beta.2 release target.
+Latest published prerelease remains `v0.3.0-beta.1.2`. See the
+[track reconciliation](./docs/internal/1.0.0-release-plan.md#release-track-reconciliation-2026-10-07).
+The complete approved Control Plane, including its WebUI, must be implemented
+and accepted before 1.0 can ship; the current private package is not a waiver.
+The 2026-10-07 metadata task keeps the PR Draft and performs no merge, tag or
+publication. Commands below describe later gated release work.
+
 ## Public contract and package set
 
 The stable contract is the existing declarative DAG runtime: twelve phase

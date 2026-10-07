@@ -21,7 +21,7 @@
 
 **taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In Taskflow 1.0, the contract also describes the effects a phase is allowed to propose.
 
-> **Taskflow 1.0 public contract.** The ten public packages stabilize the existing DAG runtime, DSL, six host adapters and resource transactions for admitted declared filesystem targets. Pi interactive approvals are supported; MCP/headless approval auto-rejects. `taskflow-control` is private workspace experimental with proposed wire contracts; CharterArc retains a separate experimental release. The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the verification gates. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases) and the [npm registry](https://www.npmjs.com/package/pi-taskflow).
+> **Status: 1.0.0 development candidate — unreleased.** Latest published prerelease: `v0.3.0-beta.1.2`. Draft PR [#142](https://github.com/heggria/taskflow/pull/142) targets `main`; its head `rc/0.3.0-beta.2` retains the historical branch name, while 1.0.0 supersedes the beta.2 release target. The complete approved Control Plane, including WebUI, remains required before 1.0 publication; its current private workspace status is not a waiver. See the [release plan](./docs/internal/1.0.0-release-plan.md) and [acceptance scoreboard](./docs/internal/1.0.0-ga-scoreboard.md).
 
 ## The declared-effect contract
 
@@ -47,7 +47,7 @@ flow / .tf.ts
 
 This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to an undeclared path. Secret and service references are typed and fail closed in this cut; they do not imply a vault or network backend.
 
-## The 1.0 public contract
+## The 1.0 target and current implementation
 
 | Layer | What it does | Support boundary |
 |---|---|---|
@@ -55,8 +55,8 @@ This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to 
 | **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | Declared-target contract |
 | **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | Declared-target contract |
 | **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
-| **Control Plane** | Unix UDS singleton/fencing and files-only store; proposed wire contracts and incomplete admission/parked approvals/receipts/coordination | Private workspace experiment; excluded from stable API |
-| **WebUI** | Runs, approvals, receipts, and evidence browsing | Planned; excluded from stable API |
+| **Control Plane** | Unix UDS singleton/fencing and files-only store; proposed wire contracts and incomplete admission/parked approvals/receipts/coordination | Currently private workspace; complete Control Plane required for 1.0 acceptance |
+| **WebUI** | Runs, approvals, receipts, and evidence browsing | Incomplete; required for 1.0 acceptance |
 
 The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the stable scope and acceptance gates. The filesystem-transaction details are in [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
 
@@ -67,13 +67,13 @@ Use Node.js **≥ 22.19.0**. To run from the 1.0 source checkout:
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout v1.0.0
+git checkout --track origin/rc/0.3.0-beta.2
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-Install the host adapter with an exact 1.0 version:
+**The following installation commands apply only after 1.0.0 is published; use the candidate source checkout above today.**
 
 ```bash
 npm install --global pi-taskflow@1.0.0

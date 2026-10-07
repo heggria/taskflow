@@ -21,7 +21,7 @@
 
 **taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 Taskflow 1.0 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-> **Taskflow 1.0 公开合同。** 十个公开包的稳定范围是已有 DAG runtime、DSL、六个宿主适配器和已准入声明文件目标的 resource transaction。Pi 支持交互审批；MCP/headless 审批自动拒绝。`taskflow-control` 是 private workspace 实验，wire 合同仍为 proposed；CharterArc 保留独立 experimental 发布线。[1.0 发布计划](./docs/internal/1.0.0-release-plan.md)列出验证闸门。实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases) 与 [npm registry](https://www.npmjs.com/package/pi-taskflow)。
+> **状态：1.0.0 开发候选，尚未发布。** 最新已发布 prerelease 是 `v0.3.0-beta.1.2`。Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 目标为 `main`；head `rc/0.3.0-beta.2` 沿用历史分支名，当前发布目标已由 beta.2 改为 1.0.0。完整已批准 Control Plane（包括 WebUI）仍是 1.0 发布前必须完成并验收的范围；当前 private workspace 状态不能豁免这些要求。[发布计划](./docs/internal/1.0.0-release-plan.md)和[验收账本](./docs/internal/1.0.0-ga-scoreboard.md)记录范围与阻塞项。
 
 ## 声明文件副作用合同
 
@@ -47,7 +47,7 @@ flow / .tf.ts
 
 这**不是 OS sandbox**。在 resolve-only 宿主上，taskflow 不能阻止所有对未声明路径的写入。Secret 和 service reference 在这一版只是类型化、失败关闭的句柄，并不代表已经有 vault 或网络后端。
 
-## 1.0 公开合同
+## 1.0 目标与当前实现
 
 | 层 | 作用 | 支持边界 |
 |---|---|---|
@@ -55,8 +55,8 @@ flow / .tf.ts
 | **Trusted Effects** | 封闭的 `EffectIR`、`PathRef` / `SecretRef` / `ServiceRef`、机密性/完整性标签、effect 校验、重叠检查与 ledger-backed `why-*` | 声明目标合同 |
 | **Resource transaction** | snapshot → lease → durable intent/permit → stage → commit，或 restore and reject | 声明目标合同 |
 | **宿主适配器** | Pi、Codex、Claude Code、OpenCode、Grok Build、Hermes Agent 共用同一 flow 合同 | 已有宿主表面；能力仍按宿主区分 |
-| **Control Plane** | Unix UDS singleton/fencing、files-only store 与拟议 wire contract；admission、parked 审批、receipt 和全局协调尚未完成 | private workspace 实验，不属于稳定 API |
-| **WebUI** | runs、审批、receipts 与 evidence 浏览 | 计划中，不属于稳定 API |
+| **Control Plane** | Unix UDS singleton/fencing、files-only store 与拟议 wire contract；admission、parked 审批、receipt 和全局协调尚未完成 | 当前 private workspace；完整 Control Plane 是 1.0 必须完成的验收范围 |
+| **WebUI** | runs、审批、receipts 与 evidence 浏览 | 尚未完成；1.0 必须完成的验收范围 |
 
 [1.0 发布计划](./docs/internal/1.0.0-release-plan.md)定义稳定范围与验收闸门。文件事务细节见 [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md)。0.3-C Control Plane 计划见 [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md)。
 
@@ -67,13 +67,13 @@ flow / .tf.ts
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout v1.0.0
+git checkout --track origin/rc/0.3.0-beta.2
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-使用精确 1.0 版本安装宿主适配器：
+**以下命令仅在 1.0.0 正式发布后适用；当前请使用上面的候选源码 checkout。**
 
 ```bash
 npm install --global pi-taskflow@1.0.0

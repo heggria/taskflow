@@ -8,9 +8,9 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
 
-## [1.0.0] — 2026-10-02
+## [1.0.0] — Unreleased
 
-> Publication is blocked on historical accepted-spec closure and real Pi 1.0 compatibility. The ten existing public packages target npm `latest` only after these gates and the authorized tag workflow pass. A dated changelog is not evidence of completed publication; experimental packaging does not waive accepted requirements.
+> **Draft PR #142 targets 1.0.0; `rc/0.3.0-beta.2` is its historical branch name.** Latest published prerelease remains `v0.3.0-beta.1.2`. Publication is blocked on historical accepted-spec closure and real Pi 1.0 compatibility. The ten existing public packages target npm `latest` only after these gates and the authorized tag workflow pass. A dated changelog is not evidence of completed publication; experimental packaging does not waive accepted requirements.
 
 ### Changed
 
@@ -40,7 +40,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [0.3.0-beta.2] — 2026-08-18
 
-> npm `beta` dist-tag. **Not GA.** Control Plane slice: S2 Unix UDS + S3-min files-only store. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). TypeBox contracts and `wire-freeze.md` remain **PROPOSED**. `taskflow-control` is **not** in the ten-package publish set (`publishConfig.tag` stays `next`).
+> **Historical unpublished candidate; superseded by the 1.0.0 target above.** The intended channel was npm `beta`; no `v0.3.0-beta.2` tag or publication occurred. **Not GA.** Control Plane slice: S2 Unix UDS + S3-min files-only store. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). TypeBox contracts and `wire-freeze.md` remain **PROPOSED**. `taskflow-control` is **not** in the ten-package publish set (`publishConfig.tag` stays `next`).
 
 ### Added
 
