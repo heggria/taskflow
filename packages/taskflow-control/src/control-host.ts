@@ -303,6 +303,7 @@ export class ControlHost {
 					stage: "received",
 					slot: "none",
 					needsOperator: false,
+					runVersion: 0,
 				};
 				return snapshot as unknown as T;
 			}

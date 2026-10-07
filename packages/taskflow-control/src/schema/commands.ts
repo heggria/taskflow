@@ -8,14 +8,17 @@
  */
 
 import { createHash } from "node:crypto";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
+import { canonicalJson } from "taskflow-core/flowir/hash";
 import { StringEnum } from "taskflow-core/typebox-helpers";
 import {
 	CONTROL_WIRE_SCHEMA_VERSION,
 	Sha256HexSchema,
 	UuidSchema,
 } from "./common.ts";
-import type { ArtifactRef } from "./evidence.ts";
+import { ArtifactRefSchema, ReceiptSchema, type ArtifactRef } from "./evidence.ts";
+import { ApprovalRequestSchema } from "./approval.ts";
+import { RunSnapshotSchema } from "./run.ts";
 
 // ---------------------------------------------------------------------------
 // Command kinds (closed union; P15/P16 kinds, plus the base run command)
@@ -23,11 +26,12 @@ import type { ArtifactRef } from "./evidence.ts";
 
 export const CommandKindSchema = StringEnum([
 	"run.submit",
+	"run.cancel",
 	"approval.decide",
 	"coordinator.setMaxActiveRuns",
 	"coordinator.forceRelease",
 ]);
-export type CommandKind = "run.submit" | "approval.decide" | "coordinator.setMaxActiveRuns" | "coordinator.forceRelease";
+export type CommandKind = "run.submit" | "run.cancel" | "approval.decide" | "coordinator.setMaxActiveRuns" | "coordinator.forceRelease";
 
 export const CommandStatusSchema = StringEnum(["accepted", "completed", "failed"]);
 export type CommandStatus = "accepted" | "completed" | "failed";
@@ -48,18 +52,7 @@ export const CommandRecordSchema = Type.Object(
 		status: CommandStatusSchema,
 		firstCommitSeq: Type.Integer({ minimum: 1 }),
 		lastCommitSeq: Type.Integer({ minimum: 1 }),
-		responseArtifactRef: Type.Optional(
-			Type.Object(
-				{
-					digest: Type.String({ minLength: 1 }),
-					size: Type.Integer({ minimum: 0 }),
-					mediaType: Type.String({ minLength: 1 }),
-					storageClass: Type.String({ minLength: 1 }),
-					redactionClass: Type.String({ minLength: 1 }),
-				},
-				{ additionalProperties: false },
-			),
-		),
+		responseArtifactRef: Type.Optional(ArtifactRefSchema),
 		recordedAt: Type.Integer({ minimum: 0 }),
 	},
 	{ additionalProperties: false },
@@ -85,7 +78,7 @@ export type CommandRecord = {
 //  §17 approval.*; run terminal). Additive extension bumps schemaVersion.
 // ---------------------------------------------------------------------------
 
-export const ControlEventPayloadSchema = Type.Union([
+export const LegacyControlEventPayloadSchema = Type.Union([
 	Type.Object(
 		{ kind: Type.Literal("command.recorded"), commandId: UuidSchema },
 		{ additionalProperties: false },
@@ -149,43 +142,26 @@ export const ControlEventPayloadSchema = Type.Union([
 		{ additionalProperties: false },
 	),
 ]);
-export type ControlEventPayload = {
-	kind: "command.recorded";
-	commandId: string;
-} | {
-	kind: "reconcile.started";
-	attempt: number;
-} | {
-	kind: "reconcile.settled";
-	outcome: "running" | "terminal" | "exhausted";
-	terminalStatus?: "completed" | "failed" | "blocked" | "cancelled";
-} | {
-	kind: "dispatch.acknowledged";
-	providerJobHandle?: string;
-} | {
-	kind: "dispatch.rejected";
-	reason: string;
-} | {
-	kind: "dispatch.ambiguous";
-} | {
-	kind: "run.terminal";
-	status: "completed" | "failed" | "blocked" | "cancelled";
-} | {
-	kind: "approval.pending";
-	approvalRequestId: string;
-} | {
-	kind: "approval.settled";
-	decision: "approved" | "rejected" | "expired" | "cancelled";
-} | {
-	kind: "compaction.checkpoint";
-	throughCommitSeq: number;
-};
+/** V2 carries complete approval and lifecycle facts. V1 remains read-only. */
+export const ControlEventPayloadSchema = Type.Union([
+	...LegacyControlEventPayloadSchema.anyOf.filter((schema) => !["approval.pending", "approval.settled"].includes(schema.properties.kind.const as string)),
+	Type.Object({ kind: Type.Literal("approval.pending"), approvalRequestId: UuidSchema, request: ApprovalRequestSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("approval.settled"), approvalRequestId: UuidSchema, decision: StringEnum(["approved", "rejected", "edited", "expired", "cancelled"]) }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("run.snapshot"), run: RunSnapshotSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("approval.release.queued"), approvalRequestId: UuidSchema, intentId: UuidSchema, reservationId: UuidSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("approval.release.completed"), approvalRequestId: UuidSchema, intentId: UuidSchema, reservationId: UuidSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("approval.readmission.queued"), approvalRequestId: UuidSchema, intentId: UuidSchema, reservationId: UuidSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("approval.readmission.completed"), approvalRequestId: UuidSchema, intentId: UuidSchema, reservationId: UuidSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("receipt.issued"), receipt: ReceiptSchema }, { additionalProperties: false }),
+	Type.Object({ kind: Type.Literal("artifact.recorded"), runId: UuidSchema, commandKind: CommandKindSchema, artifact: ArtifactRefSchema }, { additionalProperties: false }),
+]);
+export type ControlEventPayload = Static<typeof ControlEventPayloadSchema> | Static<typeof LegacyControlEventPayloadSchema>;
 
 // ---------------------------------------------------------------------------
 // ControlEvent (P12 / RFC §10) — ledger envelope
 // ---------------------------------------------------------------------------
 
-export const ControlEventSchema = Type.Object(
+const CurrentControlEventSchema = Type.Object(
 	{
 		eventId: UuidSchema,
 		schemaVersion: Type.Literal(CONTROL_WIRE_SCHEMA_VERSION),
@@ -203,9 +179,13 @@ export const ControlEventSchema = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+export const ControlEventSchema = Type.Union([
+	CurrentControlEventSchema,
+	Type.Object({ ...CurrentControlEventSchema.properties, schemaVersion: Type.Literal(1), payload: LegacyControlEventPayloadSchema }, { additionalProperties: false }),
+]);
 export type ControlEvent = {
 	eventId: string;
-	schemaVersion: typeof CONTROL_WIRE_SCHEMA_VERSION;
+	schemaVersion: 1 | typeof CONTROL_WIRE_SCHEMA_VERSION;
 	controlDomainId: string;
 	streamId: string;
 	streamSeq: number;
@@ -260,17 +240,3 @@ export function commandRequestHash(body: unknown): string {
 	return createHash("sha256").update(canonicalJson(body), "utf8").digest("hex");
 }
 
-function canonicalJson(value: unknown): string {
-	if (value === null) return "null";
-	if (typeof value === "boolean" || typeof value === "number") return JSON.stringify(value);
-	if (typeof value === "string") return JSON.stringify(value);
-	if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-	if (typeof value === "object") {
-		const record = value as Record<string, unknown>;
-		const keys = Object.keys(record)
-			.filter((key) => record[key] !== undefined)
-			.sort();
-		return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
-	}
-	return "null";
-}

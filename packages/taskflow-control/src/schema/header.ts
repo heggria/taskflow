@@ -44,7 +44,7 @@ export const ControlStoreHeaderSchema = Type.Object(
 	{
 		projectId: ProjectIdSchema,
 		controlDomainId: ControlDomainIdSchema,
-		schemaVersion: Type.Literal(CONTROL_WIRE_SCHEMA_VERSION),
+		schemaVersion: Type.Union([Type.Literal(1), Type.Literal(CONTROL_WIRE_SCHEMA_VERSION)]),
 		directoryBinding: DirectoryBindingSchema,
 	},
 	{ additionalProperties: false },
@@ -52,7 +52,7 @@ export const ControlStoreHeaderSchema = Type.Object(
 export type ControlStoreHeader = {
 	projectId: ProjectId;
 	controlDomainId: ControlDomainId;
-	schemaVersion: typeof CONTROL_WIRE_SCHEMA_VERSION;
+	schemaVersion: 1 | typeof CONTROL_WIRE_SCHEMA_VERSION;
 	directoryBinding: DirectoryBinding;
 };
 
