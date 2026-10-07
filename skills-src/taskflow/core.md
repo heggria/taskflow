@@ -128,18 +128,18 @@ For a non-trivial flow you'll iterate on, **write the definition to a file**
 
 <!-- host:pi -->
 ```jsonc
-// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
+// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[...]} object)
 // 2. verify, iterate, run — all reference the SAME file by path:
 { "action": "verify", "defineFile": "/tmp/audit.json" }        // zero tokens
 { "action": "compile", "defineFile": "/tmp/audit.json" }        // diagram + report
-{ "action": "run",    "defineFile": "/tmp/audit.json", "args": { … } }
+{ "action": "run",    "defineFile": "/tmp/audit.json", "args": { ... } }
 ```
 <!-- /host:pi -->
 <!-- host:codex,claude,opencode,grok,hermes -->
 ```jsonc
-// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[…]} object)
+// 1. write /tmp/audit.json with the `write` tool (a full {name, phases:[...]} object)
 // 2. verify, iterate, run — all reference the SAME file by path:
-{ "name": "taskflow_plan",   "arguments": { "defineFile": "/tmp/audit.json", "args": { … } } }  // zero tokens: bind + plan + budget bound
+{ "name": "taskflow_plan",   "arguments": { "defineFile": "/tmp/audit.json", "args": { ... } } }  // zero tokens: bind + plan + budget bound
 { "name": "taskflow_verify", "arguments": { "defineFile": "/tmp/audit.json" } }  // zero tokens
 { "name": "taskflow_compile", "arguments": { "defineFile": "/tmp/audit.json" } }  // diagram
 { "name": "taskflow_lint",   "arguments": { "defineFile": "/tmp/audit.json" } }  // script-lint + custom verifiers
@@ -569,7 +569,7 @@ Each effect:
 **Phase output is the payload.** With one declared `fs.write`, the phase's
 output becomes the staged file content (see the example: `process.stdout.write`
 = the report). With several `fs.write` effects, the phase must emit JSON
-mapping each effect id to its content (`{ "report": "…", "backup": "…" }`).
+mapping each effect id to its content (`{ "report": "...", "backup": "..." }`).
 Commit promotes each file atomically; a later failure restores every admitted
 file to its durable pre-state, and a direct write by the agent/script to a
 **declared final path** is detected and restored — only the resource
@@ -623,8 +623,8 @@ more than comparing every approach.
 {
   "id": "quick", "type": "race",
   "branches": [
-    { "task": "Answer with a short heuristic…", "agent": "executor" },
-    { "task": "Answer with a thorough search…", "agent": "researcher" }
+    { "task": "Answer with a short heuristic...", "agent": "executor" },
+    { "task": "Answer with a thorough search...", "agent": "researcher" }
   ],
   "final": true
 }

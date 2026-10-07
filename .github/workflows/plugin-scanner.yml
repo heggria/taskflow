@@ -22,5 +22,14 @@ jobs:
         with:
           plugin_dir: "."
           mode: scan
+          format: json
+          output: plugin-security-report.json
+          pr_comment: "off"
           min_score: 80
           fail_on_severity: high
+      - name: Show complete scanner findings
+        if: always()
+        run: |
+          if [ -f plugin-security-report.json ]; then
+            cat plugin-security-report.json
+          fi
