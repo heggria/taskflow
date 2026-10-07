@@ -133,6 +133,22 @@ function validRef(ref: ArtifactRef): void {
 
 function sameRef(a: ArtifactRef, b: ArtifactRef): boolean { return canonicalJson(a) === canonicalJson(b); }
 
+/** Resolve committed run artifacts without inventing Receipt metadata for live runs.
+ * Callers outside EvidenceStore must supply the validated owner ledger view. */
+export function evidenceRunArtifactRefs(view: EvidenceLedgerView, runId: string): readonly ArtifactRef[] {
+	if (Object.hasOwn(view.runs, runId)) return view.runs[runId].artifactRefs;
+	const scoped = view.events.filter(({ event }) => event.correlationId === runId);
+	if (!scoped.some(({ event }) => event.payload.kind === "run.snapshot" && event.payload.run.runId === runId
+		&& event.payload.run.projectId === view.projectId && event.payload.run.controlDomainId === view.controlDomainId)) return [];
+	const refs: ArtifactRef[] = [];
+	for (const { event } of scoped) {
+		if (event.payload.kind !== "artifact.recorded" || event.payload.runId !== runId) continue;
+		const ref = event.payload.artifact;
+		if (!refs.some(candidate => sameRef(candidate, ref))) refs.push(ref);
+	}
+	return refs;
+}
+
 /** Logical compaction only. No method in this class deletes journal or blobs. */
 export class EvidenceStore {
 	readonly #options: EvidenceStoreOptions;
@@ -391,7 +407,7 @@ export class EvidenceStore {
 		return this.#disclose(actor, target, ref, (view) => {
 			validRef(ref);
 			const refs = target.kind === "run"
-				? (Object.hasOwn(view.runs, target.id) ? view.runs[target.id].artifactRefs : [])
+				? evidenceRunArtifactRefs(view, target.id)
 				: (Object.hasOwn(view.commands, target.id) && view.commands[target.id].responseArtifactRef ? [view.commands[target.id].responseArtifactRef!] : []);
 			if (!refs.some((candidate) => sameRef(candidate, ref))) throw new ControlError("TF_POLICY_DENIED", "artifact has no authorized ledger reference");
 			return this.#read(ref);

@@ -3,139 +3,181 @@ import { after, test } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { ControlHost, type ControlHostOptions } from "../src/control-host.ts";
-import { createTeExecutionProvider, type TeExecutionAuthority } from "../src/te-provider.ts";
+import { randomBytes, randomUUID } from "node:crypto";
+import { ControlHost } from "../src/control-host.ts";
+import { ControlError } from "../src/errors.ts";
+import { RuntimeTeExecutionProvider } from "../src/runtime-provider.ts";
+import { ProjectRegistry } from "../src/project-registry.ts";
+import { AUTHORIZATION_CAPABILITIES, answerAuthorizationChallenge, createAuthorizationAuthority, type AuthorizationChallenge } from "../src/authorization.ts";
 import { openControlStore } from "../src/store/index.ts";
-import { singletonPaths, type SingletonPaths } from "../src/singleton.ts";
-import { PROTOCOL_MAJOR, type NegotiationHandshake } from "../src/schema/transport.ts";
+import { singletonPaths } from "../src/singleton.ts";
+import type { RunSnapshot } from "../src/schema/run.ts";
 
 const tempRoots: string[] = [];
-
-function makePaths(): SingletonPaths {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-control-host-"));
-	tempRoots.push(root);
-	return singletonPaths(root);
-}
-
 after(() => {
-	for (const root of tempRoots) {
-		try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* best effort */ }
-	}
+	for (const root of tempRoots) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fakeProvider() {
-	const te: TeExecutionAuthority = {
-		assurance: "resolve-only-no-sandbox",
-		probe: async () => ({ classification: "resolve-only" as const, baselinePolicyId: "taskflow-resolve-only", hostProbeSha256: "a".repeat(64) }),
-		prepare: async () => ({ outcome: "accepted" as const, fulfillment: { preparationId: "prep", enforcementCapabilities: { resolution: "contained", mutationMediation: "brokered", processIsolation: "none", revocation: "admission-only", baselinePolicyId: "b", hostProbeSha256: "a".repeat(64) } } }),
-		submit: async () => ({ outcome: "accepted" as const, providerJobHandle: "job" }),
-		watch: async function* () { yield { kind: "terminal" as const, outcome: "completed" as const }; },
+function fixture() {
+	const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "tf-isolation-"));
+	tempRoots.push(root);
+	const projectRoot = path.join(root, "project-a");
+	fs.mkdirSync(projectRoot);
+	const storePath = path.join(projectRoot, ".taskflow", "control");
+	const paths = singletonPaths(path.join(root, "home"));
+	const secret = randomBytes(32);
+	const authorization = createAuthorizationAuthority({
+		ownerUid: process.getuid!(), bootstrapSecret: secret, hostBaseline: AUTHORIZATION_CAPABILITIES,
+		loadLivePolicy: (_principal, binding) => ({ host: { capabilities: AUTHORIZATION_CAPABILITIES.map(kind => ({ kind, scopeRoot: binding.projectRoot })) } }),
+	});
+	const provider = new RuntimeTeExecutionProvider(path.join(root, "provider"));
+	let registry: ProjectRegistry;
+	let owner: ControlHost;
+	const clients: ControlHost[] = [];
+	const start = async () => {
+		registry = new ProjectRegistry(path.join(root, "registry.json"));
+		const mount = registry.mount(storePath, projectRoot);
+		owner = new ControlHost({ mode: "auto", provider, authorization, registry, singletonPaths: paths });
+		await owner.start();
+		return mount;
 	};
-	return createTeExecutionProvider(te);
+	const attach = async (projectStorePath?: string) => {
+		const client = new ControlHost({ mode: "coordinated", provider, singletonPaths: paths, projectStorePath });
+		clients.push(client);
+		await client.start();
+		assert.equal(client.status.singleton, "attached");
+		return client;
+	};
+	const authenticate = async (client: ControlHost, projectId: string) => {
+		const challenge = await rpc<AuthorizationChallenge>(client, "auth.challenge", { projectId });
+		assert.equal(challenge.binding.projectId, projectId);
+		assert.deepEqual(await rpc(client, "auth.authenticate", { challengeId: challenge.id, proof: answerAuthorizationChallenge(secret, challenge) }), { authenticated: true });
+		return challenge.binding;
+	};
+	const stop = () => { for (const client of clients) client.stop(); owner?.stop(); registry?.close(); };
+	return { root, projectRoot, storePath, provider, start, attach, authenticate, stop,
+		mount: (store: string, project: string) => registry.mount(store, project) };
 }
 
-function hostOptions(paths: SingletonPaths, overrides: Partial<ControlHostOptions> = {}): ControlHostOptions {
-	return {
-		provider: fakeProvider(),
-		singletonPaths: paths,
-		controlHome: paths.controlHome,
-		...overrides,
-	};
+function rpc<T = unknown>(client: ControlHost, method: string, params?: unknown): Promise<T> {
+	return client.dispatch<T>(method, params, { fencingEpoch: client.status.fencingEpoch });
 }
-
-const clientHello: NegotiationHandshake = {
-	protocolMajor: PROTOCOL_MAJOR,
-	supportedReadSchemas: ["taskflow.wire.v1"],
-	supportedWriteSchemas: ["taskflow.wire.v1"],
-	requiredFeatures: [],
-	offeredFeatures: [],
-	buildInfo: { packageVersion: "0.3.0", gitCommit: "abc", schemaVersion: 1 },
-};
+function denied(error: unknown) {
+	assert.ok(error instanceof ControlError);
+	assert.ok(["TF_POLICY_DENIED", "TF_AUTHORITY_REVOKED"].includes(error.code));
+	assert.equal(error.sideEffects, "none");
+	return true;
+}
+function durableBytes(directory: string): Record<string, Buffer> {
+	const files: Record<string, Buffer> = {};
+	for (const entry of fs.readdirSync(directory, { recursive: true, withFileTypes: true })) {
+		if (entry.isFile()) {
+			const file = path.join(entry.parentPath, entry.name);
+			files[path.relative(directory, file)] = fs.readFileSync(file);
+		}
+	}
+	return files;
+}
 
 for (const existing of [false, true]) {
-test(`project isolation: a different ${existing ? "existing" : "new"} project fails closed before any ledger mutation`, async (t) => {
- const paths = makePaths();
- const a = path.join(paths.controlHome, "a");
- const b = path.join(paths.controlHome, "b");
- const winner = new ControlHost(hostOptions(paths, { projectStorePath: a }));
- if (existing) openControlStore(b).close();
- const bBefore = existing ? fs.readFileSync(path.join(b, "header")) : undefined;
- const other = new ControlHost(hostOptions(paths, { projectStorePath: b }));
- t.after(() => { other.stop(); winner.stop(); });
- await winner.start();
- winner.hello(clientHello);
- const before = fs.readFileSync(path.join(a, "header"));
- await assert.rejects(other.start(), /project store|projectStorePath/);
- assert.equal(other.state, "failed-closed");
- assert.deepEqual(fs.readFileSync(path.join(a, "header")), before);
- assert.equal(fs.existsSync(b), existing);
- if (existing) assert.deepEqual(fs.readFileSync(path.join(b, "header")), bBefore);
- assert.equal((await winner.dispatch<{ commitSeq: number }>("control.store.status", undefined, { fencingEpoch: 1 })).commitSeq, 0);
-});
-
+	test(`project isolation: another ${existing ? "existing" : "new"} project attaches transport but cannot access or mutate a ledger`, async (t) => {
+		const f = fixture();
+		t.after(f.stop);
+		const b = path.join(f.root, "project-b", ".taskflow", "control");
+		let otherProjectId: string = randomUUID();
+		if (existing) {
+			const store = openControlStore(b);
+			otherProjectId = store.header.projectId;
+			store.close();
+		}
+		const bBefore = existing ? durableBytes(b) : undefined;
+		const mount = await f.start();
+		const before = durableBytes(f.storePath);
+		const other = await f.attach(b);
+		for (const method of ["control.store.header", "control.store.status", "commands.submit", "runs.list"]) {
+			await assert.rejects(rpc(other, method, { projectId: otherProjectId }), denied);
+		}
+		await assert.rejects(rpc(other, "auth.challenge", { projectId: otherProjectId }), denied);
+		// A valid session for A still cannot use an explicit B routing identity.
+		await f.authenticate(other, mount.store.header.projectId);
+		for (const method of ["control.store.header", "control.store.status", "commands.submit", "runs.list"]) {
+			await assert.rejects(rpc(other, method, { projectId: otherProjectId }), denied);
+			await assert.rejects(rpc(other, method, { controlDomainId: randomUUID() }), denied);
+		}
+		assert.deepEqual(durableBytes(f.storePath), before);
+		assert.equal(mount.store.snapshot().commitSeq, 0);
+		assert.equal(fs.existsSync(b), existing);
+		if (existing) assert.deepEqual(durableBytes(b), bBefore);
+	});
 }
 
-test("project isolation: attached clients without a project cannot access the winner ledger", async (t) => {
- const paths = makePaths();
- const winner = new ControlHost(hostOptions(paths, { projectStorePath: path.join(paths.controlHome, "a") }));
- const other = new ControlHost(hostOptions(paths));
- t.after(() => { other.stop(); winner.stop(); });
- await winner.start();
- await other.start();
- for (const method of ["control.store.header", "control.store.status", "commands.submit"]) {
-  await assert.rejects(other.dispatch(method, {}, { fencingEpoch: other.status.fencingEpoch }), /project store|projectStorePath/);
- }
- assert.equal((await other.dispatch<{ state: string }>("control.status", undefined, { fencingEpoch: other.status.fencingEpoch })).state, "started");
+test("project isolation: attached clients without a project or authentication cannot read the winner ledger", async (t) => {
+	const f = fixture();
+	t.after(f.stop);
+	await f.start();
+	const before = durableBytes(f.storePath);
+	const other = await f.attach();
+	for (const method of ["control.store.header", "control.store.status", "commands.submit"]) {
+		await assert.rejects(rpc(other, method, {}), /projectStorePath/);
+	}
+	for (const method of ["runs.list", "projects.list"]) await assert.rejects(rpc(other, method, {}), denied);
+	assert.equal((await rpc<{ state: string }>(other, "control.status")).state, "started");
+	assert.deepEqual(durableBytes(f.storePath), before);
 });
 
-test("project isolation: same canonical project attaches and recovers after winner restart", async (t) => {
- const paths = makePaths();
- const a = path.join(paths.controlHome, "a");
- const alias = path.join(paths.controlHome, "alias");
- const winner = new ControlHost(hostOptions(paths, { projectStorePath: a }));
- const other = new ControlHost(hostOptions(paths, { projectStorePath: alias }));
- const restarted = new ControlHost(hostOptions(paths, { projectStorePath: a }));
- t.after(() => { other.stop(); winner.stop(); restarted.stop(); });
- await winner.start();
- fs.symlinkSync(a, alias);
- await other.start();
- const header = await other.dispatch<{ projectId: string }>("control.store.header", undefined, { fencingEpoch: other.status.fencingEpoch });
- assert.equal(other.status.singleton, "attached");
- const submitted = await other.dispatch<{ commitSeq: number }>("commands.submit", {
-		command: {
-			commandId: "00000000-0000-0000-0000-0000000000bb",
-			kind: "run.submit",
-			requestHash: "a".repeat(64),
-			callerPrincipal: "cli",
-			authorizationContextHash: "a".repeat(64),
-			projectId: header.projectId,
-			controlDomainId: header.projectId,
-			status: "accepted",
-			firstCommitSeq: 1,
-			lastCommitSeq: 1,
-			recordedAt: 1,
-		},
-		events: [{
-			eventId: "00000000-0000-0000-0000-0000000000cc",
-			schemaVersion: 1,
-			controlDomainId: header.projectId,
-			streamId: "command:00000000-0000-0000-0000-0000000000bb",
-			streamSeq: 1,
-			commitSeq: 1,
-			commandId: "00000000-0000-0000-0000-0000000000bb",
-			commandEventIndex: 0,
-			causationId: "00000000-0000-0000-0000-0000000000bb",
-			correlationId: "00000000-0000-0000-0000-0000000000bb",
-			projectId: header.projectId,
-			recordedAt: 1,
-			payload: { kind: "command.recorded", commandId: "00000000-0000-0000-0000-0000000000bb" },
-		}],
-	}, { fencingEpoch: other.status.fencingEpoch });
- assert.equal(submitted.commitSeq, 1);
- other.stop();
- winner.stop();
- await restarted.start();
- restarted.hello(clientHello);
- assert.equal((await restarted.dispatch<{ projectId: string }>("control.store.header", undefined, { fencingEpoch: restarted.status.fencingEpoch })).projectId, header.projectId);
- assert.equal((await restarted.dispatch<{ commitSeq: number }>("control.store.status", undefined, { fencingEpoch: restarted.status.fencingEpoch })).commitSeq, 1);
+test("project isolation: authenticated project A cannot read or mutate mounted project B", async (t) => {
+	const f = fixture();
+	t.after(f.stop);
+	const a = await f.start();
+	const rootB = path.join(f.root, "project-b");
+	fs.mkdirSync(rootB);
+	const b = f.mount(path.join(rootB, ".taskflow", "control"), rootB);
+	const other = await f.attach(f.storePath);
+	await f.authenticate(other, a.store.header.projectId);
+	const beforeA = durableBytes(f.storePath), beforeB = durableBytes(b.store.storePath);
+	for (const method of ["control.store.header", "control.store.status", "commands.submit", "runs.list"]) {
+		await assert.rejects(rpc(other, method, {
+			projectId: b.store.header.projectId, controlDomainId: b.store.header.controlDomainId,
+			commandId: randomUUID(), kind: "run.submit", flow: { name: "forbidden", phases: [{ id: "work", type: "script", run: "printf forbidden > effects.txt" }] },
+		}), denied);
+	}
+	assert.deepEqual(durableBytes(f.storePath), beforeA);
+	assert.deepEqual(durableBytes(b.store.storePath), beforeB);
+	assert.equal(fs.existsSync(path.join(rootB, "effects.txt")), false);
+});
+
+test("project isolation: same canonical project authenticates through an alias and recovers after winner restart", async (t) => {
+	const f = fixture();
+	t.after(f.stop);
+	const a = await f.start();
+	const alias = path.join(f.root, "alias");
+	fs.symlinkSync(f.storePath, alias);
+	const other = await f.attach(alias);
+	const binding = await f.authenticate(other, a.store.header.projectId);
+	assert.equal(binding.projectRoot, f.projectRoot);
+	const header = await rpc(other, "control.store.header");
+	const body = { commandId: randomUUID(), kind: "run.submit", flow: { name: "isolated", phases: [{ id: "work", type: "script", run: "printf 'once\n' >> effects.txt; printf isolated-runtime" }] } };
+	const accepted = await rpc<{ runId: string }>(other, "commands.submit", body);
+	const completed = await rpc<RunSnapshot>(other, "runs.wait", { runId: accepted.runId });
+	assert.equal(completed.status, "completed");
+	assert.equal(completed.slot, "released");
+	const status = await rpc<{ commitSeq: number }>(other, "control.store.status");
+	assert.ok(status.commitSeq > 0);
+	const before = durableBytes(f.storePath);
+	f.stop();
+	await f.start();
+	const reattached = await f.attach(alias);
+	assert.deepEqual(await f.authenticate(reattached, a.store.header.projectId), binding);
+	assert.deepEqual(await rpc(reattached, "control.store.header"), header);
+	assert.equal((await rpc<{ commitSeq: number }>(reattached, "control.store.status")).commitSeq, status.commitSeq);
+	const restartedBytes = durableBytes(f.storePath);
+	assert.equal(JSON.stringify(await rpc(reattached, "commands.submit", body)), JSON.stringify(accepted));
+	assert.deepEqual(await rpc(reattached, "runs.get", { runId: accepted.runId }), completed);
+	assert.deepEqual(durableBytes(f.storePath), restartedBytes);
+	// Startup renews the writer lock and rebuilds disposable command projections.
+	// Authoritative header, sequence and journal bytes remain fixed across restart.
+	for (const file of ["header", "commit-seq.json", "journal/000001.jsonl"]) {
+		assert.deepEqual(restartedBytes[file], before[file]);
+	}
+	assert.equal(fs.readFileSync(path.join(f.projectRoot, "effects.txt"), "utf8"), "once\n");
 });

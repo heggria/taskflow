@@ -454,7 +454,7 @@ export function acquireUserSingleton(options: SingletonOptions): SingletonAcquir
 		}
 
 		// 5) Identity-bound reclaim of a dead owner (fail-closed).
-		const reclaimed = reclaimStaleLock(paths, existing, identity, inspect, now, endpoint, leaseTtlMs);
+		const reclaimed = reclaimStaleLock(paths, existing, identity, inspect, now, endpoint, leaseTtlMs, holderId);
 		if (reclaimed) {
 			const stat = fs.statSync(paths.lockPath, { bigint: true });
 			published = { dev: stat.dev, ino: stat.ino };
@@ -484,6 +484,7 @@ function reclaimStaleLock(
 	now: () => number,
 	endpoint: string,
 	leaseTtlMs: number,
+	holderId: string,
 ): boolean {
 	const claimFilePath = claimPath(paths);
 	const claim: ClaimRecord = {
@@ -539,7 +540,7 @@ function reclaimStaleLock(
 		fsyncDirectory(paths.controlHome);
 		publishLockByHardLink(paths.lockPath, {
 			version: SINGLETON_LOCK_VERSION,
-			holderId: claim.claimantId,
+			holderId,
 			pid: identity.pid,
 			birthToken: identity.birthToken,
 			birthTokenKind: identity.birthTokenKind,
@@ -548,7 +549,7 @@ function reclaimStaleLock(
 			acquiredAt: now(),
 		});
 		writeLease(paths, {
-			holderId: claim.claimantId,
+			holderId,
 			fencingEpoch: existing.fencingEpoch + 1,
 			endpoint,
 			expiresAt: now() + leaseTtlMs,

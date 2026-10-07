@@ -12,7 +12,7 @@ import { UuidSchema } from "./schema/common.ts";
 import { ControlError } from "./errors.ts";
 import { CONSOLE_HTML, CONSOLE_JS, CONSOLE_CSS } from "./web-console/view.ts";
 
-export type WebConsoleOperation = "control.status" | "projects.list" | "runs.list" | "runs.get" | "approvals.list" | "approval.decide" | "receipts.get" | "evidence.why";
+export type WebConsoleOperation = "control.status" | "projects.list" | "runs.list" | "runs.get" | "approvals.list" | "approval.decide" | "approvals.stageEdit" | "receipts.get" | "evidence.why";
 export interface WebConsoleProject {
 	projectId: string;
 	controlDomainId: string;
@@ -50,6 +50,8 @@ export interface WebConsoleOptions {
 	bootstrapTtlMs?: number;
 	/** Owner enables only after its output-edit ArtifactRef contract is wired. */
 	approvalEditWithArtifactRef?: boolean;
+	/** Owner supports staging output text as a same-run artifact. */
+	approvalOutputEdit?: boolean;
 }
 export interface WebConsoleServer {
 	readonly url: string;
@@ -117,7 +119,7 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 	let authority = "";
 	const sessions = new Map<string, Session>();
 	const sockets = new Set<Socket>();
-	const features = { approvalEditWithArtifactRef: options.approvalEditWithArtifactRef === true };
+	const features = { approvalEditWithArtifactRef: options.approvalEditWithArtifactRef === true, approvalOutputEdit: options.approvalOutputEdit === true };
 
 	const server = http.createServer((request, response) => { void handle(request, response); });
 	server.requestTimeout = 10_000;
@@ -224,12 +226,20 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 						if (params.kind === "effect") params.effectId = boundedText(url.searchParams.get("effectId"), "effectId");
 						if (url.searchParams.has("phaseId")) params.phaseId = boundedText(url.searchParams.get("phaseId"), "phaseId");
 					} else throw new HttpFailure(404, "Unknown console route");
+				} else if (segments[3] === "runs" && segments[5] === "approval-output" && segments.length === 6 && method === "POST") {
+					if (!features.approvalOutputEdit) throw new HttpFailure(409, "Output editing is unavailable on this control service");
+					operation = "approvals.stageEdit";
+					params.runId = uuid(segments[4], "runId");
+					const body = await jsonBody(request); assertSession();
+					onlyKeys(body, ["content"]);
+					if (typeof body.content !== "string" || !body.content.trim() || body.content.includes("\0")) throw new HttpFailure(400, "Output text must be nonempty and contain no NUL characters");
+					params.editKind = "output"; params.content = body.content;
 				} else if (segments[3] === "approvals" && segments[5] === "decisions" && segments.length === 6 && method === "POST") {
 					operation = "approval.decide";
 					params.approvalRequestId = uuid(segments[4], "approvalRequestId");
 					const body = await jsonBody(request);
 					assertSession();
-					onlyKeys(body, ["commandId", "runId", "expectedRunVersion", "decision", "editArtifactRef"]);
+					onlyKeys(body, ["commandId", "runId", "expectedRunVersion", "decision", "editArtifactRef", "editKind"]);
 					params.commandId = uuid(body.commandId, "commandId");
 					params.runId = uuid(body.runId, "runId");
 					if (!Number.isSafeInteger(body.expectedRunVersion) || Number(body.expectedRunVersion) < 0) throw new HttpFailure(400, "expectedRunVersion must be a non-negative safe integer");
@@ -240,7 +250,9 @@ export async function startWebConsole(options: WebConsoleOptions): Promise<WebCo
 						if (!features.approvalEditWithArtifactRef) throw new HttpFailure(409, "Approval editing is unavailable on this control service");
 						if (!Value.Check(ArtifactRefSchema, body.editArtifactRef)) throw new HttpFailure(400, "edit requires a valid editArtifactRef");
 						params.editArtifactRef = body.editArtifactRef as ArtifactRef;
-					} else if (body.editArtifactRef !== undefined) throw new HttpFailure(400, "editArtifactRef requires edit decision");
+						if (body.editKind !== undefined && body.editKind !== "output") throw new HttpFailure(400, "Console edits support output only");
+						params.editKind = "output";
+					} else if (body.editArtifactRef !== undefined || body.editKind !== undefined) throw new HttpFailure(400, "editArtifactRef requires edit decision");
 				} else throw new HttpFailure(404, "Unknown console route");
 			}
 			const authorization = { operation, sessionId, ...(typeof params.projectId === "string" ? { projectId: params.projectId } : {}), ...(typeof params.controlDomainId === "string" ? { controlDomainId: params.controlDomainId } : {}) };

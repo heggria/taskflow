@@ -18,23 +18,31 @@ export interface CoordinatorIdentity { principal: string; ownerId: string; opera
 export interface CoordinatorAdmissionProof {
 	reservationId: string; projectId: string; projectControlDomainId: string; runId: string; projectAdmitCommitSeq: number; runVersion: number;
 }
-/** Explicit absence must come from the trusted project admission gate. A null
- * observation or failed read never authorizes TTL capacity reclamation. */
+/** Read-only absence is informational and never authorizes capacity release. */
 export interface CoordinatorAdmissionAbsence {
 	status: "not-admitted"; reservationId: string; projectId: string; projectControlDomainId: string; runId: string; runVersion: number;
 }
-export type CoordinatorAdmissionObservation = CoordinatorAdmissionProof | CoordinatorAdmissionAbsence | null;
+export interface CoordinatorAbandonmentProof {
+	status: "abandoned"; reservationId: string; projectId: string; projectControlDomainId: string; runId: string;
+	runVersion: number; abandonmentCommitSeq: number;
+}
+export type CoordinatorAdmissionDecision = CoordinatorAdmissionProof | CoordinatorAbandonmentProof;
+export type CoordinatorAdmissionObservation = CoordinatorAdmissionDecision | CoordinatorAdmissionAbsence | null;
 export interface CoordinatorReleaseProof extends CoordinatorAdmissionProof {
 	proofId: string; status: string; stage: string; requiresReadmission: boolean;
 	providerNoLiveProcessTree: boolean; noAmbiguousJobs: boolean; reconcileTimeoutOnly: boolean;
 }
-export type CoordinatorOperation = "reserve" | "commit" | "renew" | "markOrphanSuspect" | "normalRelease" | "forceRelease" | "setMaxActiveRuns" | "readReservation" | "readCommand" | "snapshot";
+export type CoordinatorOperation = "dispatch" | "reserve" | "commit" | "renew" | "markOrphanSuspect" | "normalRelease" | "forceRelease" | "setMaxActiveRuns" | "readReservation" | "readCommand" | "snapshot";
 /** Configured only by the trusted host service. Context is opaque service
  * authority, never a wire-body principal or caller-supplied quiescence bool. */
 export interface CoordinatorAuthority<Context> {
 	readLease(): CoordinatorLease | null | Promise<CoordinatorLease | null>;
 	authorize(context: Context, operation: CoordinatorOperation, reservation?: ConcurrencyReservation): CoordinatorIdentity | Promise<CoordinatorIdentity>;
 	readAdmission(reservation: ConcurrencyReservation): CoordinatorAdmissionObservation | Promise<CoordinatorAdmissionObservation>;
+	/** Explicit project journal CAS against the SAME writer fence as admission.
+	 * Existing admission wins; otherwise durably tombstone this reservation.
+	 * Omission is safe: expired reservations retain capacity until reconciled. */
+	abandonAdmissionIfAbsent?(reservation: ConcurrencyReservation): CoordinatorAdmissionDecision | Promise<CoordinatorAdmissionDecision>;
 	readRelease(reservation: ConcurrencyReservation): CoordinatorReleaseProof | Promise<CoordinatorReleaseProof>;
 }
 export interface CoordinatorStoreOptions<Context> {
@@ -199,6 +207,22 @@ export class UserCoordinatorStore<Context> {
 			const row = state.reservations[id]; if (row) this.#owner(row, identity!); return row;
 		});
 	}
+	/** Hold the durable capacity fence through asynchronous preparation and the
+	 * synchronous provider launch. Preparation must not launch work or re-enter
+	 * this coordinator. The returned activation must not await: its project
+	 * binding/auth checks and actual runtime activation occur in one JS turn. */
+	async withDispatch<T>(id: string, context: Context, prepare: (row: StoredReservation) => Promise<() => T>): Promise<T> {
+		validId(id);
+		let activate: (() => T) | undefined;
+		let result!: T;
+		await this.#transaction("dispatch", context, id, async (state, identity) => {
+			const row = this.#row(state, id); this.#owner(row, identity!);
+			if (row.reservation.state !== "committed") fail("TF_ADMISSION_BINDING_CONFLICT", "dispatch requires a committed reservation");
+			activate = await prepare(structuredClone(row));
+			if (typeof activate !== "function") fail("TF_COMMAND_FAILED", "dispatch preparation must return a synchronous activation");
+		}, undefined, () => { result = activate!(); });
+		return result;
+	}
 	async readCommand(id: string, context: Context): Promise<StoredCoordinatorCommand | undefined> {
 		validId(id);
 		return this.#transaction("readCommand", context, undefined, async (state, identity) => {
@@ -243,7 +267,7 @@ export class UserCoordinatorStore<Context> {
 			if (!isAdmissionProof(proof) || !matchesProof({ ...row, reservation: proposed }, proof)) fail("TF_ADMISSION_BINDING_CONFLICT", "project ledger does not prove this admission");
 			row.reservation = { ...proposed, state: "committed", coordinatorEpoch: this.#options.epoch };
 			delete row.reservation.reservedExpiresAt;
-			row.admitRunVersion = proof.runVersion; row.updatedAt = now; return row;
+			row.admitRunVersion = proof!.runVersion; row.updatedAt = now; return row;
 		});
 	}
 	async renew(id: string, input: { ttlMs?: number }, context: Context): Promise<StoredReservation> {
@@ -341,7 +365,15 @@ export class UserCoordinatorStore<Context> {
 		for (const row of Object.values(state.reservations)) {
 			if (row.reservation.state !== "reserved" || row.reservation.reservedExpiresAt! > now) continue;
 			let proof: CoordinatorAdmissionObservation;
-			try { proof = await this.#options.authority.readAdmission(structuredClone(row.reservation)); }
+			try {
+				proof = await this.#options.authority.readAdmission(structuredClone(row.reservation));
+				// An ordinary observer cannot close the late-admit race. Only the
+				// explicit durable ADMIT/ABANDON arbitration may free a slot.
+				if (!isAdmissionProof(proof) && this.#options.authority.abandonAdmissionIfAbsent) {
+					await this.#fence(this.#now(now));
+					proof = await this.#options.authority.abandonAdmissionIfAbsent(structuredClone(row.reservation));
+				}
+			}
 			catch { this.#now(now); continue; } // An unavailable project ledger retains its slot.
 			const observedNow = this.#now(now); await this.#fence(observedNow);
 			if (!proof || proof.reservationId !== row.reservation.reservationId || bindingKey(proof) !== bindingKey(row.reservation)) continue;
@@ -351,15 +383,20 @@ export class UserCoordinatorStore<Context> {
 				row.reservation.state = "committed"; row.reservation.projectAdmitCommitSeq = proof.projectAdmitCommitSeq;
 				row.reservation.coordinatorEpoch = this.#options.epoch; row.admitRunVersion = proof.runVersion;
 				delete row.reservation.reservedExpiresAt; row.updatedAt = observedNow;
-			} else if ("status" in proof && proof.status === "not-admitted" && Number.isSafeInteger(proof.runVersion) && proof.runVersion >= 0) {
+			} else if ("status" in proof && proof.status === "abandoned"
+				&& Number.isSafeInteger(proof.abandonmentCommitSeq) && proof.abandonmentCommitSeq > 0
+				&& Number.isSafeInteger(proof.runVersion) && proof.runVersion >= 0) {
 				row.reservation.state = "expired"; delete row.reservation.reservedExpiresAt; row.updatedAt = observedNow;
 			}
 		}
 	}
-	async #transaction<T>(action: string, context: Context | undefined, id: string | undefined, apply: (state: CoordinatorState, identity: CoordinatorIdentity | undefined, now: number) => Promise<T>, authorizationReservation?: ConcurrencyReservation): Promise<T> {
+	async #transaction<T>(action: string, context: Context | undefined, id: string | undefined, apply: (state: CoordinatorState, identity: CoordinatorIdentity | undefined, now: number) => Promise<T>, authorizationReservation?: ConcurrencyReservation, afterCommit?: () => void): Promise<T> {
 		if (this.#closed) fail("TF_DURABILITY_FAILED", "coordinator store is closed");
 		this.#binding();
-		const release = await this.#mutex.acquire({ timeoutMs: 30_000, signal: AbortSignal.timeout(30_000) });
+		const release = await this.#mutex.acquire({ timeoutMs: 30_000, signal: AbortSignal.timeout(30_000) }).catch((error: unknown) => {
+			if (error instanceof ControlError) throw error;
+			throw new ControlError("TF_DURABILITY_FAILED", `coordinator writer fence failed: ${error instanceof Error ? error.message : String(error)}`, { recoveryAction: "operator", sideEffects: "none" });
+		});
 		try {
 			if (this.#closed) fail("TF_DURABILITY_FAILED", "coordinator store closed during lock admission");
 			this.#binding(); const file = path.join(this.storePath, "coordinator.json"), identityFile = path.join(this.storePath, "coordinator.identity.json");
@@ -410,6 +447,14 @@ export class UserCoordinatorStore<Context> {
 				if (process.env[COORDINATOR_CRASH_ENV] === "after-state-write") process.kill(process.pid, "SIGKILL");
 			}
 			if (action === "snapshot") Object.assign(value as object, { commitSeq: state.commitSeq, fencingEpoch: state.fencingEpoch });
+			// No await may be inserted between the last live fence/publication and
+			// provider activation. The mutex is released only in finally below.
+			if (afterCommit) {
+				if (this.#closed) fail("TF_DURABILITY_FAILED", "coordinator store closed before dispatch activation");
+				this.#binding();
+				if (this.#now(currentTime) >= leaseExpiresAt) fail("TF_AUTHORITY_REVOKED", "coordinator lease expired before dispatch activation");
+				afterCommit();
+			}
 			return structuredClone(value);
 		} catch (error) {
 			if (error instanceof ControlError) throw error;

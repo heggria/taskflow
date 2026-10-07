@@ -1,7 +1,7 @@
 {
 	"name": "taskflow-control",
 	"version": "0.3.0-beta.2",
-	"description": "Experimental workspace-only control plane: Unix UDS singleton attach and files-only project store. Proposed wire contracts; admission, parked approvals, receipts, registry coordination and WebUI are incomplete and excluded from the Taskflow 1.0 public contract.",
+	"description": "Private Taskflow control-plane candidate with authenticated project routing, durable approvals, coordinated TE execution, receipts, CLI, MCP and a local console. Publication requires release-owner integration and acceptance.",
 	"keywords": [
 		"taskflow",
 		"control-plane",
@@ -52,17 +52,23 @@
 	},
 	"files": [
 		"dist",
-		"README.md"
+		"README.md",
+		"GUIDE.md"
 	],
 	"scripts": {
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"prepublishOnly": "npm run build"
 	},
 	"dependencies": {
-		"taskflow-core": "workspace:*"
+		"taskflow-core": "workspace:*",
+		"taskflow-mcp-core": "workspace:*"
 	},
 	"peerDependencies": {
 		"typebox": "*"
 	},
-	"private": true
+	"private": true,
+	"bin": {
+		"taskflow-control": "./dist/control-cli.js",
+		"taskflow-project-admin": "./dist/project-admin-cli.js"
+	}
 }

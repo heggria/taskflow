@@ -46,6 +46,13 @@ function authority(max = 2, epoch = 1) {
 				? { status: "not-admitted" as const, reservationId: row.reservationId, projectId: row.projectId, projectControlDomainId: row.projectControlDomainId, runId: row.runId, runVersion: 0 }
 				: { ...row, projectAdmitCommitSeq: row.projectAdmitCommitSeq!, runVersion: 1, ...admissionOverride };
 		},
+		abandonAdmissionIfAbsent: async (row) => {
+			if (admissionUnavailable) throw new Error("project unavailable");
+			const observed = await options.authority.readAdmission(row);
+			if (observed && !("status" in observed)) return observed;
+			return { status: "abandoned" as const, reservationId: row.reservationId, projectId: row.projectId,
+				projectControlDomainId: row.projectControlDomainId, runId: row.runId, runVersion: 0, abandonmentCommitSeq: 1 };
+		},
 		readRelease: async (row) => { await releaseHook?.(); return { ...row, projectAdmitCommitSeq: row.projectAdmitCommitSeq!, runVersion: 2, proofId: "trusted-ledger-provider-proof", status: "completed", stage: "terminal", requiresReadmission: false, providerNoLiveProcessTree: true, noAmbiguousJobs: true, reconcileTimeoutOnly: false, ...releaseOverride }; },
 	} };
 	let admissionDirectory: string | undefined;
@@ -412,3 +419,106 @@ test("P16 copied/moved authority, tampered audit and symlink state fail closed",
 	fs.symlinkSync(path.join(directory, "outside.json"), path.join(directory, "coordinator.json"));
 	await assert.rejects(openCoordinatorStore(directory, auth.options), errorCode("TF_DURABILITY_FAILED")); assert.equal(fs.readFileSync(path.join(directory, "outside.json"), "utf8"), original);
 });
+
+async function waitForQueueSize(directory: string, minimum: number): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		const entries = fs.readdirSync(path.join(directory, "writer.lock.queue"));
+		if (entries.length >= minimum) return;
+		await sleep(5);
+	}
+	assert.fail(`expected ${minimum} actual persistent mutex contenders`);
+}
+
+test("P16 dispatch holds persistent capacity fence through preparation and synchronous launch against another process", { timeout: 20_000 }, async () => {
+	const directory = makePath(), auth = authority(1), store = await openCoordinatorStore(directory, auth.options);
+	const entered = deferred(), proceed = deferred();
+	let activations = 0, releaseFinished = false;
+	try {
+		const input = binding(), row = await admitted(store, auth.context, input);
+		const dispatch = store.withDispatch(input.reservationId, auth.context, async (observed) => {
+			assert.deepEqual(observed, row); entered.resolve(); await proceed.promise;
+			return () => {
+				assert.equal(releaseFinished, false);
+				assert.equal(JSON.parse(bytes(directory)).reservations[input.reservationId].reservation.state, "committed");
+				activations++; return "activated";
+			};
+		});
+		await entered.promise;
+		const releasing = runWorker({ path: directory, mode: "forceRelease", max: 1,
+			identity: { principal: "operator:one", ownerId: "owner:operator", operator: true }, input,
+			commandId: randomUUID() }).then((result) => { releaseFinished = true; return result; });
+		await waitForQueueSize(directory, 2);
+		assert.equal(releaseFinished, false); assert.equal(activations, 0);
+		assert.equal(JSON.parse(bytes(directory)).reservations[input.reservationId].reservation.state, "committed");
+		proceed.resolve(); assert.equal(await dispatch, "activated");
+		assert.equal((await releasing).data?.ok, true); assert.equal(activations, 1);
+		assert.equal((await store.readReservation(input.reservationId, auth.context))?.reservation.state, "released");
+		await assert.rejects(store.withDispatch(input.reservationId, auth.context, async () => () => { activations++; }), errorCode("TF_ADMISSION_BINDING_CONFLICT"));
+		assert.equal(activations, 1);
+	} finally { proceed.resolve(); store.close(); }
+});
+
+for (const changed of ["epoch", "expired", "revoked", "closed"] as const) {
+	test(`P16 dispatch denies ${changed} authority after asynchronous preparation before activation`, async () => {
+		const directory = makePath(), auth = authority(1), store = await openCoordinatorStore(directory, auth.options);
+		const entered = deferred(), proceed = deferred(); let activations = 0;
+		try {
+			const input = binding(); await admitted(store, auth.context, input); const before = bytes(directory);
+			const dispatch = store.withDispatch(input.reservationId, auth.context, async () => {
+				entered.resolve(); await proceed.promise; return () => { activations++; };
+			});
+			await entered.promise;
+			if (changed === "epoch") auth.lease(2);
+			else if (changed === "expired") auth.lease(1, true);
+			else if (changed === "revoked") auth.revoke();
+			else store.close();
+			proceed.resolve();
+			await assert.rejects(dispatch, errorCode(changed === "closed" ? "TF_DURABILITY_FAILED" : "TF_AUTHORITY_REVOKED"));
+			assert.equal(activations, 0); assert.equal(bytes(directory), before);
+		} finally { proceed.resolve(); store.close(); }
+	});
+}
+
+test("P16 preparing dispatch cannot make a second process overbook committed capacity", { timeout: 20_000 }, async () => {
+	const directory = makePath(), auth = authority(1), store = await openCoordinatorStore(directory, auth.options);
+	const entered = deferred(), proceed = deferred(); let activated = false;
+	try {
+		const input = binding(); await admitted(store, auth.context, input);
+		const dispatch = store.withDispatch(input.reservationId, auth.context, async () => {
+			entered.resolve(); await proceed.promise; return () => { activated = true; };
+		});
+		await entered.promise;
+		const racing = runWorker({ path: directory, mode: "reserve", max: 1,
+			identity: { principal: "other", ownerId: "other", operator: false }, input: binding() });
+		await waitForQueueSize(directory, 2); assert.equal(activated, false);
+		proceed.resolve(); await dispatch;
+		assert.equal((await racing).data?.code, "TF_CAPACITY_EXCEEDED");
+		assert.equal((await store.snapshot(auth.context)).capacity.active, 1);
+	} finally { proceed.resolve(); store.close(); }
+});
+
+for (const changed of ["expired", "closed"] as const) {
+	test(`P16 dispatch denies ${changed} during final awaited lease read`, async () => {
+		const directory = makePath(), auth = authority(1), store = await openCoordinatorStore(directory, auth.options);
+		const entered = deferred(), proceed = deferred(); let preparing = false, activations = 0;
+		const readLease = auth.options.authority.readLease;
+		try {
+			const input = binding(); await admitted(store, auth.context, input);
+			auth.options.authority.readLease = async () => {
+				const lease = await readLease();
+				if (preparing) {
+					entered.resolve(); await proceed.promise;
+					if (changed === "expired") lease!.expiresAt = Date.now() - 1;
+				}
+				return lease;
+			};
+			const dispatch = store.withDispatch(input.reservationId, auth.context, async () => {
+				preparing = true; return () => { activations++; };
+			});
+			await entered.promise; if (changed === "closed") store.close(); proceed.resolve();
+			await assert.rejects(dispatch, errorCode(changed === "closed" ? "TF_DURABILITY_FAILED" : "TF_AUTHORITY_REVOKED"));
+			assert.equal(activations, 0);
+		} finally { proceed.resolve(); store.close(); }
+	});
+}

@@ -51,9 +51,11 @@ test("schema: closed contracts reject unknown fields (additionalProperties: fals
 test("schema: schemaVersion is pinned on envelope documents", () => {
 	const header = ControlStoreHeaderSchema as { properties?: Record<string, unknown> };
 	assert.ok(header.properties && "schemaVersion" in header.properties);
-	const event = ControlEventSchema as { properties?: Record<string, unknown> };
-	assert.ok(event.properties && "schemaVersion" in event.properties);
-	assert.equal(CONTROL_WIRE_SCHEMA_VERSION, 1);
+	assert.equal(CONTROL_WIRE_SCHEMA_VERSION, 2);
+	assert.equal(Value.Check(ControlEventSchema, { ...event(), schemaVersion: 1 }), true, "legacy envelopes remain readable");
+	assert.equal(Value.Check(ControlEventSchema, event()), true, "current envelopes carry version 2");
+	assert.equal(Value.Check(ControlEventSchema, { ...event(), schemaVersion: 3 }), false, "unknown future version is rejected");
+	assert.equal(Value.Check(ControlEventSchema, { ...event(), schemaVersion: undefined }), false);
 });
 
 test("schema: RunStatus / RunStage are the exact frozen enums (P5)", () => {
@@ -169,6 +171,7 @@ test("schema: RunSnapshot carries status + stage + slot + needsOperator", () => 
 		slot: "orphan-suspect",
 		needsOperator: true,
 		projectAdmitCommitSeq: 3,
+		runVersion: 4,
 	};
 	assert.equal(Value.Check(RunSnapshotSchema, snapshot), true);
 	assert.equal(Value.Check(RunSnapshotSchema, { ...snapshot, needsOperator: undefined }), false);

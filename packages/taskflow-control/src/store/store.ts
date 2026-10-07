@@ -1,19 +1,14 @@
 /**
- * Files-only ControlStore (beta.2 S3-minimum).
- *
- * Layout: header + commit-seq.json + journal/ + projections/ + empty
- * commands/ + receipts/. Journal is the authority; projections are
- * store-self only (submitted-command index). Single writer via exclusive
- * lock file. Atomic writes use UUID temp + wx + fsync + rename, and fail
- * closed if the destination is a symlink.
- *
- * Authorized command-result replay is not implemented. Caller principal and
- * authorizationContextHash are request-supplied audit fields, not a live
- * authorization boundary. Duplicate commands fail closed before persistence
- * until the host can authorize disclosure of a prior durable result.
- *
- * P14 ADR Status stays Proposed. This is the S3 engine implementation gate.
+ * Authoritative per-project append journal. A lifetime OS writer lock excludes
+ * competing hosts; an async fence serializes evidence work with lifecycle CAS.
+ * V1 submit records stay readable. Chained V2 batches atomically bind run state,
+ * approvals/outboxes, commands and immutable responses, admission decisions,
+ * receipts and evidence metadata. Corrupt or incomplete bytes are preserved.
+ * Storage ports are trusted in-process APIs: live authorization belongs to the
+ * service/host before lookup and again before result disclosure.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ArtifactRef, Receipt, BuildInfoWire, ReceiptAssurance } from "../schema/evidence.ts";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -30,12 +25,16 @@ import {
 	type ControlStoreStatus,
 } from "../schema/index.ts";
 
+import { JOURNAL_GENESIS, journalHash, validJournalBatch, ProjectStateSchema, type JournalBatch, type LifecycleBatch, type AdmissionBinding, type AdmissionDecision } from "./journal.ts";
+import type { ApprovalRun, ApprovalJournalState, ApprovalMutation, ApprovalCommit, ApprovalJournalEvent, CommandBinding } from "../approval-service.ts";
+export type { AdmissionBinding, AdmissionDecision } from "./journal.ts";
 export const CONTROL_CRASH_ENV = "TASKFLOW_CONTROL_CRASH_AT";
 
 export type ControlCrashPoint =
 	| "header-fsynced"
 	| "journal-append"
-	| "projection-rebuild";
+	| "projection-rebuild"
+ | "lifecycle-committed";
 
 const LOCK_NAME = "writer.lock";
 const HEADER_NAME = "header";
@@ -64,13 +63,6 @@ export interface ControlStoreSnapshot {
 	status: ControlStoreStatus;
 }
 
-interface JournalBatch {
-	recordKind: "commit-batch";
-	commitSeq: number;
-	command: CommandRecord;
-	events: ControlEvent[];
-}
-
 interface WriterLock {
 	ownerId: string;
 	pid: number;
@@ -85,13 +77,26 @@ export class ControlStore {
 	#closed = false;
 	readonly #releaseWriter: () => void;
 	#commandIndex = new Map<string, CommandRecord>();
+ #states = new Map<string, ApprovalJournalState>();
+ #responses = new Map<string, { record: CommandRecord; responseJson: string; state: ApprovalJournalState }>();
+ #admissions = new Map<string, AdmissionDecision>();
+ #tip = JOURNAL_GENESIS;
+ #writerProof: string;
+ #headerProof: string;
+ #writing = false;
+ #fence = new AsyncLocalStorage<symbol>();
+ #fenceOwner?: symbol;
+ #fenceQueue: Promise<unknown> = Promise.resolve();
 
-	constructor(storePath: string, header: ControlStoreHeader, commitSeq: number, commands: readonly CommandRecord[], releaseWriter: () => void) {
+	constructor(storePath: string, header: ControlStoreHeader, commitSeq: number, commands: readonly CommandRecord[], releaseWriter: () => void, batches: JournalBatch[] = []) {
 		this.#releaseWriter = releaseWriter;
 		this.storePath = storePath;
+  this.#writerProof = fs.readFileSync(path.join(storePath, LOCK_NAME), "utf8");
+  this.#headerProof = fs.readFileSync(path.join(storePath, HEADER_NAME), "utf8");
 		this.#header = structuredClone(header);
 		this.#commitSeq = commitSeq;
 		for (const command of commands) this.#commandIndex.set(command.commandId, structuredClone(command));
+ for (const batch of batches) this.#apply(batch);
 	}
 
 	get header(): ControlStoreHeader {
@@ -118,11 +123,12 @@ export class ControlStore {
 	}
 
 	appendBatch(input: CommitBatchInput): { commitSeq: number; command: CommandRecord } {
-		this.#assertOpen();
+		this.#assertOpen(); this.#assertFence();
 		if (this.#status === "fail-closed") {
 			throw durabilityFailed("control store is fail-closed; refusing mutation");
 		}
-		if (input.command.kind !== "run.submit") {
+		try { this.readJournal(); } catch (error) { this.#status = "fail-closed"; throw durabilityFailed(String(error)); }
+  if (input.command.kind !== "run.submit") {
 			throw durabilityFailed(`beta.2 store only accepts run.submit; got ${input.command.kind}`);
 		}
 		if (input.events.length === 0) {
@@ -192,6 +198,7 @@ export class ControlStore {
 			writeJsonAtomicHardened(commandIndexPath(this.storePath), Object.fromEntries(nextIndex));
 			this.#commandIndex = nextIndex;
 			this.#commitSeq = nextSeq;
+   this.#apply(record);
 		} catch (error) {
 			this.#status = "fail-closed";
 			throw durabilityFailed(`control store persistence failed; close and reopen to recover: ${error instanceof Error ? error.message : String(error)}`);
@@ -199,15 +206,172 @@ export class ControlStore {
 		return { commitSeq: nextSeq, command: structuredClone(command) };
 	}
 
+ /** Trusted in-process storage ports; callers must authorize disclosure. */
+ readRun(runId: string): ApprovalRun | undefined { this.readJournal(); return structuredClone(this.#states.get(runId)?.run); }
+ listRuns(): ApprovalRun[] { this.readJournal(); return [...this.#states.values()].map(s => structuredClone(s.run)); }
+ readRunState(runId: string): ApprovalJournalState | undefined { this.readJournal(); return structuredClone(this.#states.get(runId)); }
+ readApproval(id: string) { this.readJournal(); for (const s of this.#states.values()) { const request = s.approvals.find(a => a.approvalRequestId === id); if (request) return structuredClone(request); } }
+ listApprovals() { this.readJournal(); return [...this.#states.values()].flatMap(s => structuredClone(s.approvals)); }
+ readOutbox(runId: string) { this.readJournal(); return structuredClone(this.#states.get(runId)?.outbox ?? []); }
+ readCommittedCommand(binding: CommandBinding): { record: CommandRecord; responseJson: string } | undefined {
+  this.readJournal(); this.#assertIdentity(binding.projectId, binding.controlDomainId);
+  const record = this.#commandIndex.get(binding.commandId); if (!record) return;
+  if (record.callerPrincipal !== binding.callerPrincipal) throw new ControlError("TF_CROSS_PRINCIPAL_COMMAND", "command belongs to another principal");
+  if (record.kind !== binding.kind || record.requestHash !== binding.requestHash) throw new ControlError("TF_IDEMPOTENCY_CONFLICT", "command identity has different request content");
+  const saved = this.#responses.get(binding.commandId);
+  if (!saved) throw durabilityFailed("committed command has no immutable response");
+  return structuredClone({ record: saved.record, responseJson: saved.responseJson });
+ }
+ createRun(run: ApprovalRun, events: readonly ApprovalJournalEvent[] = [], result?: {command: CommandRecord; responseJson: string}): ApprovalRun {
+  this.#assertOpen(); if (this.#states.has(run.runId)) throw new ControlError("TF_IDEMPOTENCY_CONFLICT", "run already exists");
+  const state = { run: structuredClone(run), approvals: [], outbox: [] };
+  this.#commitLifecycle(state, events, result?.command, result?.responseJson); return structuredClone(run);
+ }
+ mutateRun(runId: string, expectedRunVersion: number, build: (state: ApprovalJournalState, meta: {commitSeq: number}) => ApprovalMutation, binding?: CommandBinding): ApprovalCommit {
+  this.#assertOpen();
+  if (binding) {
+   const previous = this.readCommittedCommand(binding);
+   if (previous) { const saved = this.#responses.get(binding.commandId)!; return {...structuredClone(saved.state), commitSeq: saved.record.lastCommitSeq, responseJson: saved.responseJson}; }
+  }
+  if (this.#writing) throw durabilityFailed("nested project mutations are forbidden");
+  const state = this.#states.get(runId);
+  if (!state || state.run.runVersion !== expectedRunVersion) throw new ControlError("TF_STALE_VERSION", "run version changed");
+  this.#writing = true;
+  try {
+   const next = build(structuredClone(state), {commitSeq: this.#commitSeq + 1});
+   if (next.run.runId !== runId || next.run.runVersion !== expectedRunVersion + 1) throw durabilityFailed("mutation must advance the same run exactly once");
+   if (binding && next.command && (next.command.commandId !== binding.commandId || next.command.requestHash !== binding.requestHash || next.command.callerPrincipal !== binding.callerPrincipal || next.command.kind !== binding.kind)) throw durabilityFailed("mutation command differs from checked identity");
+   this.#commitLifecycle({run:next.run, approvals:next.approvals, outbox:next.outbox}, next.events, next.command, next.responseJson);
+   return {...structuredClone({run:next.run, approvals:next.approvals, outbox:next.outbox}), commitSeq:this.#commitSeq, ...(next.responseJson !== undefined ? {responseJson:next.responseJson}: {})};
+  } finally { this.#writing = false; }
+ }
+ readAdmission(binding: AdmissionBinding): AdmissionDecision | undefined {
+  this.readJournal(); this.#assertIdentity(binding.projectId, binding.projectControlDomainId);
+  const prior = this.#admissions.get(binding.reservationId);
+  if (prior && prior.runId !== binding.runId) throw durabilityFailed("reservation is bound to another run");
+  if(prior) return structuredClone(prior);
+  const run=this.#states.get(binding.runId)?.run;
+  if(run?.reservationId===binding.reservationId&&run.projectAdmitCommitSeq) return {...binding,status:"admitted",decisionCommitSeq:run.projectAdmitCommitSeq,runVersion:run.runVersion};
+  return undefined;
+ }
+ admitRun(binding: AdmissionBinding, expectedRunVersion: number): AdmissionDecision { return this.decideAdmission(binding, "admitted", expectedRunVersion); }
+ abandonAdmissionIfAbsent(binding: AdmissionBinding): AdmissionDecision { return this.decideAdmission(binding, "abandoned"); }
+ decideAdmission(binding: AdmissionBinding, status: "admitted" | "abandoned", expectedRunVersion?: number): AdmissionDecision {
+  const prior = this.readAdmission(binding); if (prior) return prior;
+  const old = this.#states.get(binding.runId);
+  // Upgrade pre-existing admission facts before allowing an abandonment decision.
+  if (old?.run.reservationId === binding.reservationId && old.run.projectAdmitCommitSeq) return { ...binding, status:"admitted", decisionCommitSeq:old.run.projectAdmitCommitSeq, runVersion:old.run.runVersion };
+  if (status === "admitted" && (!old || old.run.status !== "running" || !["linked","queued"].includes(old.run.stage) || old.run.requiresReadmission || old.run.runVersion !== expectedRunVersion)) throw new ControlError("TF_STALE_VERSION", "admission run version changed");
+  const decision: AdmissionDecision = {...binding, status, decisionCommitSeq:this.#commitSeq+1, runVersion: status === "admitted" ? old!.run.runVersion+1 : old?.run.runVersion ?? 0};
+  const projection = status === "admitted" ? {...structuredClone(old!), run:{...old!.run, status:"running" as const, stage:"admitted" as const, slot:"reserved" as const, reservationId:binding.reservationId, projectAdmitCommitSeq:decision.decisionCommitSeq, runVersion:decision.runVersion}} : undefined;
+  this.#commitLifecycle(projection, [], undefined, undefined, decision); return structuredClone(decision);
+ }
+ get journalTip(): {commitSeq:number; hash:string} { this.#assertOpen(); return {commitSeq:this.#commitSeq,hash:this.#tip}; }
+ readJournal(): JournalBatch[] {
+  this.#assertOpen();
+  const batches=readJournalBatches(journalPath(this.storePath)); let tip=JOURNAL_GENESIS,seq=0;
+  for (const b of batches) {
+   if (b.commitSeq !== ++seq || b.events.some(e=>e.projectId!==this.#header.projectId||e.controlDomainId!==this.#header.controlDomainId) || b.recordKind==="lifecycle-batch" && b.previousHash!==tip) throw durabilityFailed("journal changed or lost identity");
+   tip=b.recordKind==="lifecycle-batch"?b.contentHash:journalHash(b);
+  }
+  if(seq!==this.#commitSeq||tip!==this.#tip) throw durabilityFailed("journal differs from held writer state");
+  const file=journalPath(this.storePath); if(fs.existsSync(file)) {const bytes=fs.readFileSync(file); if(bytes.length&&bytes.at(-1)!==10) throw durabilityFailed("journal has torn trailing evidence");}
+  return structuredClone(batches);
+ }
+ withWriter<T>(operation:()=>Promise<T>):Promise<T> {
+  if(this.#fenceOwner && this.#fence.getStore()===this.#fenceOwner) return operation();
+  const task=this.#fenceQueue.then(async()=>{
+   this.#assertOpen(); const owner=Symbol("project-writer"); this.#fenceOwner=owner;
+   try { return await this.#fence.run(owner,operation); } finally { this.#fenceOwner=undefined; }
+  }); this.#fenceQueue=task.catch(()=>{}); return task;
+ }
+ recordRunEvidence(runId:string, metadata:{buildInfo:BuildInfoWire;assurance:ReceiptAssurance}):void {
+  const records=this.readJournal();
+  const prior=records.find(b=>b.recordKind==="lifecycle-batch"&&b.evidenceMetadata?.runId===runId) as LifecycleBatch|undefined;
+  if(prior) {if(JSON.stringify(prior.evidenceMetadata)!==JSON.stringify({runId,...metadata})) throw durabilityFailed("run evidence metadata is immutable"); return;}
+  const old=this.#states.get(runId); if(!old) throw durabilityFailed("run does not exist");
+  const next={...structuredClone(old),run:{...old.run,runVersion:old.run.runVersion+1}};
+  this.#commitLifecycle(next,[],undefined,undefined,undefined,{evidenceMetadata:{runId,...metadata}});
+ }
+ appendReceipt(runId:string, evidence:{receipt:Receipt;receiptRef:ArtifactRef;manifestProofRef:ArtifactRef}, expectedBatchTip:{commitSeq:number;hash:string}):void {
+  this.#checkTip(expectedBatchTip);
+  if(this.readJournal().some(b=>b.recordKind==="lifecycle-batch"&&b.receipt?.runId===runId)) throw new ControlError("TF_IDEMPOTENCY_CONFLICT","receipt already issued");
+  const old=this.#states.get(runId); if(!old||evidence.receipt.runId!==runId||!["completed","failed","blocked","cancelled"].includes(old.run.status)) throw durabilityFailed("receipt requires same terminal run");
+  const next={...structuredClone(old),run:{...old.run,runVersion:old.run.runVersion+1}};
+  this.#commitLifecycle(next,[{eventId:crypto.randomUUID(),recordedAt:Date.now(),payload:{kind:"receipt.issued",receipt:evidence.receipt}}],undefined,undefined,undefined,evidence);
+ }
+ appendCheckpoint(throughCommitSeq:number, expectedBatchTip:{commitSeq:number;hash:string}):void {
+  this.#checkTip(expectedBatchTip);
+  const run=[...this.#states.values()][0]; if(!run||throughCommitSeq<1||throughCommitSeq>this.#commitSeq) throw durabilityFailed("invalid compaction checkpoint");
+  const next={...structuredClone(run),run:{...run.run,runVersion:run.run.runVersion+1}};
+  this.#commitLifecycle(next,[{eventId:crypto.randomUUID(),recordedAt:Date.now(),payload:{kind:"compaction.checkpoint",throughCommitSeq}}]);
+ }
+ #checkTip(tip:{commitSeq:number;hash:string}) { this.readJournal(); if(tip.commitSeq!==this.#commitSeq||tip.hash!==this.#tip) throw new ControlError("TF_STALE_VERSION","journal tip changed"); }
+
+ #assertIdentity(projectId: string, controlDomainId: string) {
+  if (projectId !== this.#header.projectId || controlDomainId !== this.#header.controlDomainId) throw durabilityFailed("project/domain differs from authoritative store header");
+ }
+ #apply(batch: JournalBatch) {
+  this.#tip = batch.recordKind === "lifecycle-batch" ? batch.contentHash : journalHash(batch);
+  if (batch.command) this.#commandIndex.set(batch.command.commandId, structuredClone(batch.command));
+  if (batch.recordKind !== "lifecycle-batch") return;
+  if (batch.projection) this.#states.set(batch.projection.run.runId, structuredClone(batch.projection));
+  if (batch.admission) this.#admissions.set(batch.admission.reservationId, structuredClone(batch.admission));
+  if (batch.command && batch.responseJson !== undefined && batch.projection) this.#responses.set(batch.command.commandId, {record:structuredClone(batch.command), responseJson:batch.responseJson, state:structuredClone(batch.projection)});
+ }
+ #commitLifecycle(projection: ApprovalJournalState | undefined, facts: readonly ApprovalJournalEvent[], command?: CommandRecord, responseJson?: string, admission?: AdmissionDecision, evidence?: Pick<LifecycleBatch,"receipt"|"receiptRef"|"manifestProofRef"|"evidenceMetadata">) {
+  this.#assertOpen(); this.#assertFence(); this.readJournal(); if (this.#status === "fail-closed") throw durabilityFailed("store is fail-closed");
+  if (projection) {
+   this.#assertIdentity(projection.run.projectId, projection.run.controlDomainId);
+   if (!Value.Check(ProjectStateSchema, projection) || projection.approvals.some(a => a.runId !== projection.run.runId) || projection.outbox.some(o => o.runId !== projection.run.runId)) throw durabilityFailed("invalid project projection");
+  }
+  const seq = this.#commitSeq + 1;
+  if(projection) {
+   const previous=this.#states.get(projection.run.runId);
+   for(const intent of projection.outbox) {
+    if(intent.kind!=="approval.readmission" || previous?.outbox.some(old=>old.intentId===intent.intentId)) continue;
+    const r=intent.reservation, run=projection.run, winner=this.#admissions.get(r.reservationId);
+    if(winner || admission || r.projectId!==run.projectId || r.projectControlDomainId!==run.controlDomainId || r.runId!==run.runId || run.reservationId!==r.reservationId || intent.projectAdmitCommitSeq!==seq || run.projectAdmitCommitSeq!==seq || run.stage!=="admitted") throw new ControlError("TF_STALE_VERSION","readmission lost admission arbitration or binding changed");
+    admission={reservationId:r.reservationId,projectId:r.projectId,projectControlDomainId:r.projectControlDomainId,runId:r.runId,status:"admitted",decisionCommitSeq:seq,runVersion:run.runVersion};
+   }
+  }
+  if (command) {
+   this.#assertIdentity(command.projectId, command.controlDomainId);
+   if (this.#commandIndex.has(command.commandId)) throw new ControlError("TF_IDEMPOTENCY_CONFLICT", "command already exists");
+   command = {...structuredClone(command), firstCommitSeq:seq, lastCommitSeq:seq};
+   if (responseJson === undefined || !projection) throw durabilityFailed("lifecycle command requires immutable response and projection");
+   try { JSON.parse(responseJson); } catch { throw durabilityFailed("invalid command response JSON"); }
+  } else if (responseJson !== undefined) throw durabilityFailed("response requires a command");
+  const id = crypto.randomUUID(), runId = projection?.run.runId ?? admission!.runId;
+  const entries: ApprovalJournalEvent[] = facts.length ? structuredClone([...facts]) : [{eventId:id, recordedAt:Date.now(), payload: projection ? {kind:"run.snapshot", run:projection.run} : {kind:"reconcile.started", attempt:1}}];
+  const events: ControlEvent[] = entries.map((fact,index) => ({...fact, schemaVersion:2, projectId:this.#header.projectId, controlDomainId:this.#header.controlDomainId, streamId:runId, streamSeq:seq, commitSeq:seq, causationId:command?.commandId ?? id, correlationId:runId, ...(command ? {commandId:command.commandId,commandEventIndex:index}: {})}));
+  const body: Omit<LifecycleBatch,"contentHash"> = {recordKind:"lifecycle-batch", schemaVersion:2, commitSeq:seq, previousHash:this.#tip, events, ...(projection ? {projection:structuredClone(projection)}:{}), ...(command ? {command}:{}), ...(responseJson !== undefined ? {responseJson}:{}), ...(admission ? {admission}: {}), ...evidence};
+  const batch: LifecycleBatch = {...body, contentHash:journalHash(body)};
+  if (!validJournalBatch(batch)) throw durabilityFailed("lifecycle batch schema invalid");
+  try {
+   crashDuringJournalAppend(journalPath(this.storePath)); appendJsonLineDurable(journalPath(this.storePath), batch);
+   maybeCrash("lifecycle-committed");
+   writeJsonAtomicHardened(commitSeqPath(this.storePath), {commitSeq:seq});
+   this.#apply(batch); this.#commitSeq = seq;
+  } catch (e) { this.#status = "fail-closed"; throw durabilityFailed(`lifecycle persistence failed: ${String(e)}`); }
+ }
+
 	close(): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#releaseWriter();
 	}
 
-	#assertOpen(): void {
-		if (this.#closed) throw durabilityFailed("control store is closed");
-	}
+ #assertFence():void { if(this.#fenceOwner && this.#fence.getStore()!==this.#fenceOwner) throw new ControlError("TF_STALE_VERSION","project writer is held by another operation"); }
+ #assertOpen(): void {
+  if (this.#closed) throw durabilityFailed("control store is closed");
+  const st=fs.lstatSync(this.storePath), binding=this.#header.directoryBinding;
+  for(const child of [LOCK_NAME,HEADER_NAME,JOURNAL_DIR,PROJECTIONS_DIR,COMMANDS_DIR,RECEIPTS_DIR]) assertNotSymlink(path.join(this.storePath,child));
+  if(fs.readFileSync(path.join(this.storePath,HEADER_NAME),"utf8")!==this.#headerProof) throw durabilityFailed("durable project header changed");
+  if(fs.readFileSync(path.join(this.storePath,LOCK_NAME),"utf8")!==this.#writerProof) throw durabilityFailed("project writer ownership changed");
+  if(st.isSymbolicLink()||String(st.dev)!==binding.device||String(st.ino)!==binding.inode||fs.realpathSync(this.storePath)!==binding.canonicalPath) throw durabilityFailed("store directory identity changed");
+ }
+
 }
 
 export function openControlStore(storePath: string, options: OpenControlStoreOptions = {}): ControlStore {
@@ -241,14 +405,16 @@ export function openControlStore(storePath: string, options: OpenControlStoreOpt
 		// Recovery may rewrite projections, so verify the authoritative binding
 		// first. A copied/moved/replaced store is not proof of the same project.
 		// Never reset UUIDs or rewrite historical evidence to make it attach.
-		const binding = existingHeader.directoryBinding;
+		if (options.projectId && options.projectId !== existingHeader.projectId || options.controlDomainId && options.controlDomainId !== existingHeader.controlDomainId) throw durabilityFailed("requested identity differs from existing store");
+  const binding = existingHeader.directoryBinding;
 		const stat = fs.statSync(resolved);
 		if (binding.canonicalPath !== fs.realpathSync(resolved)
 			|| binding.device !== String(stat.dev) || binding.inode !== String(stat.ino)) {
 			throw durabilityFailed("control store directory identity changed; explicit verified rebind or a new project store is required");
 		}
-		const recovered = recoverFromJournal(resolved, existingHeader);
-		return new ControlStore(resolved, existingHeader, recovered.commitSeq, recovered.commands, releaseWriter);
+		for (const child of [JOURNAL_DIR,PROJECTIONS_DIR,COMMANDS_DIR,RECEIPTS_DIR]) assertNotSymlink(path.join(resolved,child));
+  const recovered = recoverFromJournal(resolved, existingHeader);
+		return new ControlStore(resolved, existingHeader, recovered.commitSeq, recovered.commands, releaseWriter, recovered.batches);
 	} catch (error) {
 		releaseWriter();
 		throw error;
@@ -288,40 +454,39 @@ function readHeader(storePath: string): ControlStoreHeader | undefined {
 function recoverFromJournal(
 	storePath: string,
 	header: ControlStoreHeader,
-): { commitSeq: number; commands: CommandRecord[] } {
-	const batches = readJournalBatches(journalPath(storePath));
-	const commands: CommandRecord[] = [];
-	const commandIds = new Set<string>();
-	let commitSeq = 0;
-	for (const batch of batches) {
-		if (batch.recordKind !== "commit-batch") {
-			throw durabilityFailed("journal contains an unknown record kind");
-		}
-		if (batch.commitSeq !== commitSeq + 1) {
-			throw durabilityFailed(`journal commitSeq gap: expected ${commitSeq + 1}, got ${batch.commitSeq}`);
-		}
-		if (
-			batch.command.projectId !== header.projectId
-			|| batch.command.controlDomainId !== header.controlDomainId
-		) {
-			throw durabilityFailed("journal command identity does not match store header");
-		}
-		if (commandIds.has(batch.command.commandId)
-			|| batch.command.firstCommitSeq !== batch.commitSeq
-			|| batch.command.lastCommitSeq !== batch.commitSeq) {
-			throw durabilityFailed("journal command has duplicate identity or inconsistent commit sequence");
-		}
-		for (const [index, event] of batch.events.entries()) {
-			if (event.projectId !== header.projectId || event.controlDomainId !== header.controlDomainId
-				|| event.commitSeq !== batch.commitSeq || event.commandId !== batch.command.commandId
-				|| event.commandEventIndex !== index) {
-				throw durabilityFailed("journal event identity or sequence does not match its batch");
-			}
-		}
-		commandIds.add(batch.command.commandId);
-		commands.push(batch.command);
-		commitSeq = batch.commitSeq;
-	}
+): { commitSeq: number; commands: CommandRecord[]; batches: JournalBatch[] } {
+ const batches = readJournalBatches(journalPath(storePath));
+ const commands: CommandRecord[] = [], commandIds = new Set<string>();
+ const runs = new Map<string, ApprovalJournalState>(), admissions = new Set<string>();
+ let commitSeq = 0, tip = JOURNAL_GENESIS;
+ for (const batch of batches) {
+  if (batch.commitSeq !== commitSeq + 1) throw durabilityFailed("journal sequence gap");
+  if (batch.command) {
+   const c = batch.command;
+   if (c.projectId !== header.projectId || c.controlDomainId !== header.controlDomainId || commandIds.has(c.commandId) || c.firstCommitSeq !== batch.commitSeq || c.lastCommitSeq !== batch.commitSeq) throw durabilityFailed("journal command binding/sequence invalid");
+   commandIds.add(c.commandId); commands.push(c);
+  }
+  for (const [index,event] of batch.events.entries()) {
+   if (event.projectId !== header.projectId || event.controlDomainId !== header.controlDomainId || event.commitSeq !== batch.commitSeq || (batch.command && (event.commandId !== batch.command.commandId || event.commandEventIndex !== index)) || (!batch.command && event.commandId !== undefined)) throw durabilityFailed("journal event binding/sequence invalid");
+  }
+  if (batch.recordKind === "lifecycle-batch") {
+   if (batch.previousHash !== tip) throw durabilityFailed("journal hash chain mismatch");
+   if (batch.command && (batch.responseJson === undefined || !batch.projection)) throw durabilityFailed("missing immutable command response");
+   if (batch.responseJson !== undefined) { if (!batch.command) throw durabilityFailed("orphan command response"); try { JSON.parse(batch.responseJson); } catch { throw durabilityFailed("invalid immutable response"); } }
+   if (batch.projection) {
+    const state = batch.projection, run = state.run, old = runs.get(run.runId);
+    if (run.projectId !== header.projectId || run.controlDomainId !== header.controlDomainId || state.approvals.some(a => a.runId !== run.runId) || state.outbox.some(o => o.runId !== run.runId) || (old && run.runVersion !== old.run.runVersion + 1)) throw durabilityFailed("journal projection binding/version invalid");
+    runs.set(run.runId,state);
+   }
+   if (batch.admission) {
+    const d = batch.admission;
+    if (d.projectId !== header.projectId || d.projectControlDomainId !== header.controlDomainId || d.decisionCommitSeq !== batch.commitSeq || admissions.has(d.reservationId)) throw durabilityFailed("admission binding invalid");
+    admissions.add(d.reservationId);
+   }
+   tip = batch.contentHash;
+  } else tip = journalHash(batch);
+  commitSeq = batch.commitSeq;
+ }
 
 	const onDiskSeq = readCommitSeqFile(storePath);
 	if (onDiskSeq !== undefined && onDiskSeq > commitSeq) {
@@ -331,7 +496,7 @@ function recoverFromJournal(
 	}
 	// Validate the complete authoritative state before any recovery write. A
 	// torn tail is recoverable only when the preceding ledger is consistent.
-	truncateTornJournal(journalPath(storePath));
+	// Damaged/torn evidence is preserved; recovery never rewrites journal bytes.
 	ensureDirectory(path.join(storePath, JOURNAL_DIR));
 	ensureDirectory(path.join(storePath, PROJECTIONS_DIR));
 	ensureDirectory(path.join(storePath, COMMANDS_DIR));
@@ -341,7 +506,7 @@ function recoverFromJournal(
 		commandIndexPath(storePath),
 		Object.fromEntries(commands.map((command) => [command.commandId, command])),
 	);
-	return { commitSeq, commands };
+	return { commitSeq, commands, batches };
 }
 
 function readCommitSeqFile(storePath: string): number | undefined {
@@ -366,9 +531,10 @@ function readJournalBatches(filePath: string): JournalBatch[] {
 	if (!fs.existsSync(filePath)) return [];
 	const raw = fs.readFileSync(filePath);
 	const text = raw.toString("utf8");
-	const lines = text.split("\n");
+	if (raw.length && raw[raw.length-1] !== 10) throw durabilityFailed("incomplete journal tail; preserve evidence for explicit recovery");
+ const lines = text.split("\n");
 	const complete = text.endsWith("\n") ? lines.slice(0, -1) : lines.slice(0, -1);
-	// Torn tail (no terminating newline on last line) is discarded — old-complete.
+	// Every authoritative line must be complete; damaged bytes remain untouched.
 	const batches: JournalBatch[] = [];
 	for (const line of complete) {
 		if (!line) continue;
@@ -378,36 +544,14 @@ function readJournalBatches(filePath: string): JournalBatch[] {
 		} catch {
 			throw durabilityFailed("journal contains a complete but unreadable line");
 		}
-		if (!parsed || typeof parsed !== "object"
-			|| !("recordKind" in parsed) || parsed.recordKind !== "commit-batch"
-			|| !("commitSeq" in parsed) || !Number.isSafeInteger(parsed.commitSeq)
-			|| !("command" in parsed) || !Value.Check(CommandRecordSchema, parsed.command)
-			|| !("events" in parsed) || !Array.isArray(parsed.events) || parsed.events.length === 0
-			|| !parsed.events.every((event: unknown) => Value.Check(ControlEventSchema, event))) {
-			throw durabilityFailed("journal contains a malformed commit batch");
-		}
+  if (!validJournalBatch(parsed)) throw durabilityFailed("journal contains a malformed commit batch");
 		batches.push(parsed as JournalBatch);
 	}
 	return batches;
 }
 
-function truncateTornJournal(filePath: string): void {
-	if (!fs.existsSync(filePath)) return;
-	assertNotSymlink(filePath);
-	const raw = fs.readFileSync(filePath);
-	if (raw.length === 0 || raw[raw.length - 1] === 0x0a) return;
-	const lastNewline = raw.lastIndexOf(0x0a);
-	const fd = fs.openSync(filePath, "r+");
-	try {
-		fs.ftruncateSync(fd, lastNewline === -1 ? 0 : lastNewline + 1);
-		fs.fsyncSync(fd);
-	} finally {
-		fs.closeSync(fd);
-	}
-}
-
 /** Publish a fully written owner atomically; a visible lock is never half-written. */
-function acquireWriterLock(storePath: string): () => void {
+export function acquireWriterLock(storePath: string): () => void {
 	const lockPath = path.join(storePath, LOCK_NAME);
 	const owner: WriterLock = { ownerId: crypto.randomUUID(), pid: process.pid, acquiredAt: Date.now() };
 	const contents = JSON.stringify(owner);
@@ -560,19 +704,7 @@ function appendJsonLineDurable(filePath: string, record: unknown): void {
 	assertNotSymlink(filePath);
 	ensureDirectory(path.dirname(filePath));
 	const existed = fs.existsSync(filePath);
-	if (existed) {
-		const raw = fs.readFileSync(filePath);
-		if (raw.length > 0 && raw[raw.length - 1] !== 0x0a) {
-			const lastNewline = raw.lastIndexOf(0x0a);
-			const repairFd = fs.openSync(filePath, "r+");
-			try {
-				fs.ftruncateSync(repairFd, lastNewline === -1 ? 0 : lastNewline + 1);
-				fs.fsyncSync(repairFd);
-			} finally {
-				fs.closeSync(repairFd);
-			}
-		}
-	}
+ if (existed) { const raw=fs.readFileSync(filePath); if(raw.length&&raw.at(-1)!==10) throw durabilityFailed("refusing append after incomplete journal tail"); }
 	const fd = fs.openSync(filePath, "a", 0o600);
 	try {
 		const data = Buffer.from(`${JSON.stringify(record)}\n`);
@@ -598,16 +730,22 @@ function assertNotSymlink(filePath: string): void {
 }
 
 function ensureDirectory(directory: string): void {
-	fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+	assertNotSymlink(directory);
+ fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+ assertNotSymlink(directory);
 }
 
 function fsyncDirectory(directory: string): void {
 	try {
 		const fd = fs.openSync(directory, "r");
 		try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-	} catch {
-		/* some filesystems refuse directory fsync */
-	}
+ } catch (error) {
+  const code=(error as NodeJS.ErrnoException).code;
+  // Only explicit platform lack of directory-fsync support is tolerated.
+  // I/O, capacity and permission failures must never become a successful commit.
+  if(code === "EINVAL" || code === "ENOTSUP" || process.platform === "win32" && (code === "EISDIR" || code === "EPERM")) return;
+  throw error;
+ }
 }
 
 function durabilityFailed(message: string): ControlError {

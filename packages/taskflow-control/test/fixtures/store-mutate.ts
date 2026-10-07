@@ -23,7 +23,7 @@ const projectId = process.env.TF_TEST_PROJECT_ID ?? "00000000-0000-0000-0000-000
 const domainId = process.env.TF_TEST_DOMAIN_ID ?? "00000000-0000-0000-0000-000000000001";
 
 try {
-	const store = openControlStore(storePath, { projectId, controlDomainId: domainId });
+	const store = openControlStore(storePath, action === "init" || process.env.TF_TEST_PROJECT_ID || process.env.TF_TEST_DOMAIN_ID ? { projectId, controlDomainId: domainId } : {});
 	if (action === "mutate") {
 		store.appendBatch({
 			command: {

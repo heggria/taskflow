@@ -236,6 +236,8 @@ test("singleton: reclaim bumps the fencing epoch so the old holder is fenced out
 	const second = acquireUserSingleton({ paths, holderId: "holder-b", inspectProcess: deadOwnerInspector() });
 	assert.equal(second.status, "won");
 	assert.equal(second.fencingEpoch, 2);
+	assert.equal(JSON.parse(fs.readFileSync(paths.lockPath, "utf8")).holderId, second.holderId);
+	assert.equal(JSON.parse(fs.readFileSync(paths.leasePath, "utf8")).holderId, second.holderId);
 	// Old holder's RPC with epoch 1 must now be rejected by the lease gate.
 	assert.throws(() => assertFencing({ holderId: "holder-b", fencingEpoch: 2, endpoint: paths.endpointPath, expiresAt: 0 }, 1), ControlError);
 	second.release();

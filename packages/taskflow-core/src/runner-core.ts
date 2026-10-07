@@ -399,8 +399,29 @@ const SIGNAL_EXIT_CODES: Readonly<Record<(typeof EXTERNAL_SIGNALS)[number], numb
 	SIGHUP: 129,
 };
 let handlingExternalSignal = false;
+let gracefulSignalOwner: ((signal: (typeof EXTERNAL_SIGNALS)[number]) => void) | undefined;
+let gracefulSignalDeadline: ReturnType<typeof setTimeout> | undefined;
+/** A process-owning launcher may persist cancellation before reaping its children.
+ * Only one trusted in-process owner can claim this bounded shutdown window. */
+export function registerGracefulSignalOwner(owner: NonNullable<typeof gracefulSignalOwner>): () => void {
+	if (gracefulSignalOwner) throw new Error("a graceful process signal owner is already registered");
+	gracefulSignalOwner = owner;
+	return () => {
+		if (gracefulSignalOwner !== owner) return;
+		gracefulSignalOwner = undefined;
+		if (gracefulSignalDeadline) clearTimeout(gracefulSignalDeadline);
+		gracefulSignalDeadline = undefined;
+	};
+}
 for (const signal of EXTERNAL_SIGNALS) {
 	process.on(signal, () => {
+		if (gracefulSignalOwner) {
+			if (!gracefulSignalDeadline) gracefulSignalDeadline = setTimeout(() => {
+				killAllChildren();
+				process.exit(SIGNAL_EXIT_CODES[signal]);
+			}, 10000);
+			try { gracefulSignalOwner(signal); return; } catch { /* fail into default process cleanup */ }
+		}
 		if (handlingExternalSignal) return;
 		handlingExternalSignal = true;
 		killAllChildren();

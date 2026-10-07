@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -11,7 +11,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { startWebConsole, type WebConsoleOptions, type WebConsoleServer, type WebConsoleAuthorization } from "../src/web-console.ts";
 import { ControlError } from "../src/errors.ts";
 import { ControlHost, defaultServerHello } from "../src/control-host.ts";
-import { createTeExecutionProvider } from "../src/te-provider.ts";
+import { RuntimeTeExecutionProvider } from "../src/runtime-provider.ts";
+import { ProjectRegistry } from "../src/project-registry.ts";
+import { createAuthorizationAuthority } from "../src/authorization.ts";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const domainId = "22222222-2222-4222-8222-222222222222";
@@ -173,25 +175,26 @@ test("web console: session expiry and logout stop API access", async (t) => {
 });
 
 test("web console: actual ControlHost dispatch serves live status/header through injected bridge", async (t) => {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "tf-console-host-"));
+	const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "tf-console-host-"));
 	fs.mkdirSync(path.join(root, "home"));
 	t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-	const unavailable = async (): Promise<never> => { throw new Error("Provider execution is outside this status-only integration test"); };
-	const host = new ControlHost({ mode: "standalone", controlHome: path.join(root, "home"), projectStorePath: path.join(root, "project"), provider: createTeExecutionProvider({ assurance: "resolve-only-no-sandbox", probe: unavailable, prepare: unavailable, submit: unavailable, watch: async function* () { throw new Error("No test execution provider"); } }) });
+	const projectRoot = path.join(root, "project"); fs.mkdirSync(projectRoot);
+	const registry = new ProjectRegistry(path.join(root, "registry.json"));
+	const mount = registry.mount(path.join(projectRoot, ".taskflow/control"), projectRoot);
+	const binding = { projectId: mount.store.header.projectId, controlDomainId: mount.store.header.controlDomainId, projectRoot };
+	const authorization = createAuthorizationAuthority({ ownerUid: process.getuid!(), bootstrapSecret: randomBytes(32), hostBaseline: ["project.read"],
+		loadLivePolicy: () => ({ host: { capabilities: [{ kind: "project.read", scopeRoot: projectRoot }] } }) });
+	const context = authorization.issueStandalone(binding);
+	t.after(() => registry.close());
+	const host = new ControlHost({ mode: "standalone", controlHome: path.join(root, "home"), registry, authorization, provider: new RuntimeTeExecutionProvider(path.join(root, "provider")) });
 	t.after(() => host.stop());
 	await host.start();
 	assert.equal(host.hello(defaultServerHello()).ok, true);
 	let liveChecks = 0;
 	const console = await launch(t, { authorize: async () => {
 		liveChecks++;
-		return { call: async (operation) => {
-			if (operation === "control.status") return host.dispatch(operation, {}, { fencingEpoch: host.status.fencingEpoch });
-			if (operation === "projects.list") {
-				const header = await host.dispatch<{ projectId: string; controlDomainId: string }>("control.store.header", {}, { fencingEpoch: host.status.fencingEpoch });
-				return [{ projectId: header.projectId, controlDomainId: header.controlDomainId, path: root }];
-			}
-			throw new ControlError("TF_FEATURE_REQUIRED", "Owner lifecycle integration pending");
-		} };
+		await authorization.authorize(context, { ...binding, operation: "read" });
+		return { call: (operation, params) => host.dispatchAuthenticated(context, operation, params) };
 	} });
 	const headers = await session(console);
 	const status = await (await fetch(console.url + "/api/status", { headers })).json() as { result: { state: string; singleton: string } };
@@ -313,4 +316,49 @@ test("web console UI: older evidence response cannot overwrite a newer request i
 	await old;
 	assert.match(getElementById("evidence-output").textContent, /current/);
 	assert.doesNotMatch(getElementById("evidence-output").textContent, /obsolete/);
+});
+
+
+test("web console UI stages output text, uses the refreshed version and replays one decision after a lost response", async () => {
+ class Element {
+  value = ""; textContent = ""; hidden = false; disabled = false; placeholder = ""; className = "";
+  children: Element[] = []; attributes = new Map<string,string>(); listeners = new Map<string,()=>Promise<void>>();
+  classList = { toggle() {} };
+  readonly tag: string;
+  constructor(tag = "div") { this.tag = tag; }
+  append(...elements: Element[]) { this.children.push(...elements); }
+  replaceChildren() { this.children = []; }
+  setAttribute(name: string, value: string) { this.attributes.set(name,value); }
+  addEventListener(name: string, callback: ()=>Promise<void>) { this.listeners.set(name,callback); }
+  querySelectorAll(tag: string): Element[] { return this.children.flatMap(child => [...(child.tag === tag ? [child] : []), ...child.querySelectorAll(tag)]); }
+ }
+ const elements = new Map<string,Element>();
+ const getElementById = (id:string) => { if(!elements.has(id)) elements.set(id,new Element()); return elements.get(id)!; };
+ const artifact = { digest: "a".repeat(64), size: 13, mediaType: "text/plain; charset=utf-8", storageClass: "project", redactionClass: "internal" };
+ const requests: {url:string;body?:Record<string,unknown>}[] = []; let decisions = 0;
+ const context = vm.createContext({ document: { getElementById, querySelectorAll:()=>[], createElement:(tag:string)=>new Element(tag) }, crypto:{randomUUID},
+  fetch: async(url:string,options?:{body?:string}) => {
+   if(url === "/api/session") return new Promise(()=>{});
+   const body = options?.body ? JSON.parse(options.body) as Record<string,unknown> : undefined;
+   requests.push({url,body});
+   let result:unknown;
+   if(url.includes("/approval-output?")) result = artifact;
+   else if(url.includes("/approvals?")) result = [{approvalRequestId:approvalId,status:"pending",expectedRunVersion:4}];
+   else if(url.includes("/decisions?")) { decisions++; if(decisions===1) return {ok:false,status:503,json:async()=>({error:{message:"response lost"}})}; result={committed:true}; }
+   else throw new Error("Unexpected request " + url);
+   return {ok:true,status:200,json:async()=>({result})};
+  }
+ });
+ vm.runInContext(CONSOLE_JS,context);
+ vm.runInContext(`state.features={approvalEditWithArtifactRef:true,approvalOutputEdit:true}; refreshProject=async()=>{}; renderApprovals([{approvalRequestId:'${approvalId}',runId:'${runId}',expectedRunVersion:3,status:'pending',allowedDecisions:['approve','reject','edit'],deadline:Date.now()+10000}],{projectId:'${projectId}',controlDomainId:'${domainId}'});`,context);
+ const textarea = getElementById("approvals").querySelectorAll("textarea")[0]!;
+ assert.equal(textarea.attributes.get("aria-label"),"Edited output"); textarea.value="edited output";
+ const button=getElementById("approvals").querySelectorAll("button").find(item=>item.textContent==="Edit")!;
+ await button.listeners.get("click")!(); await button.listeners.get("click")!();
+ assert.equal(requests.filter(item=>item.url.includes("/approval-output?")).length,1);
+ assert.deepEqual(requests[0]!.body,{content:"edited output"});
+ const sent=requests.filter(item=>item.url.includes("/decisions?")); assert.equal(sent.length,2);
+ assert.deepEqual(sent[0]!.body,sent[1]!.body);
+ assert.equal(sent[0]!.body!.expectedRunVersion,4); assert.equal(sent[0]!.body!.editKind,"output");
+ assert.deepEqual(sent[0]!.body!.editArtifactRef,artifact);
 });

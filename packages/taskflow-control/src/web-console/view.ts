@@ -47,20 +47,31 @@ function renderRuns(runs, project) {
  for (const id of ['receipt', 'why-stale', 'why-effect']) $(id).disabled = runs.length === 0;
 }
 function renderApprovals(approvals, project) {
- clear($('approvals')); $('edit-capability').textContent = state.features.approvalEditWithArtifactRef ? 'Editing requires an existing, authorized output ArtifactRef.' : 'Editing is not supported by the connected control service.';
+ clear($('approvals')); $('edit-capability').textContent = state.features.approvalOutputEdit ? 'Enter the revised output, then choose Edit to continue the run.' : state.features.approvalEditWithArtifactRef ? 'Editing requires an existing, authorized output ArtifactRef.' : 'Editing is not supported by the connected control service.';
  if (!approvals.length) empty($('approvals'), 'No approval requests in this project.');
  for (const a of approvals) {
   const card = node('div', undefined, 'card'); card.append(node('h3', a.message || a.approvalRequestId), node('p', 'Run ' + a.runId + ' · version ' + a.expectedRunVersion + ' · ' + a.status, 'mono muted'), node('p', 'Deadline: ' + new Date(a.deadline).toLocaleString(), 'muted'));
-  const editRef = node('textarea'); editRef.placeholder = 'Output ArtifactRef JSON'; editRef.setAttribute('aria-label', 'Output ArtifactRef JSON'); editRef.hidden = !state.features.approvalEditWithArtifactRef || !a.allowedDecisions.includes('edit'); card.append(editRef);
+  let preparedEdit; const editRef = node('textarea'); editRef.placeholder = state.features.approvalOutputEdit ? 'Edited output' : 'Output ArtifactRef JSON'; editRef.setAttribute('aria-label', editRef.placeholder); editRef.hidden = !state.features.approvalEditWithArtifactRef || !a.allowedDecisions.includes('edit'); card.append(editRef);
   const buttons = node('div', undefined, 'actions');
   for (const decision of a.allowedDecisions) {
    const b = node('button', decision[0].toUpperCase() + decision.slice(1), decision === 'approve' ? '' : 'quiet'); b.disabled = a.status !== 'pending' || (decision === 'edit' && !state.features.approvalEditWithArtifactRef); b.addEventListener('click', async () => {
     const g = state.generation; const peers = Array.from(buttons.querySelectorAll('button')); peers.forEach(x => x.disabled = true); notice('Submitting ' + decision + '…');
     try {
-     const editArtifactRef = decision === 'edit' ? JSON.parse(editRef.value) : undefined;
-     const key = [project.projectId, a.approvalRequestId, a.expectedRunVersion, decision, JSON.stringify(editArtifactRef)].join(':');
+     let editArtifactRef; let expectedRunVersion = a.expectedRunVersion;
+     if (decision === 'edit' && state.features.approvalOutputEdit) {
+      if (!editRef.value.trim()) throw new Error('Enter revised output text before choosing Edit.');
+      if (!preparedEdit || preparedEdit.content !== editRef.value) {
+       const staged = await api(projectUrl(project, '/runs/' + encodeURIComponent(a.runId) + '/approval-output'), { content: editRef.value });
+       const fresh = await api(projectUrl(project, '/approvals'));
+       const current = fresh.result.find(item => item.approvalRequestId === a.approvalRequestId);
+       if (!current || current.status !== 'pending' || current.expectedRunVersion !== a.expectedRunVersion + 1) { const error = new Error('Approval changed while staging the edit.'); error.code = 'TF_STALE_VERSION'; throw error; }
+       preparedEdit = { content: editRef.value, artifact: staged.result, version: current.expectedRunVersion };
+      }
+      editArtifactRef = preparedEdit.artifact; expectedRunVersion = preparedEdit.version;
+     } else if (decision === 'edit') editArtifactRef = JSON.parse(editRef.value);
+     const key = [project.projectId, a.approvalRequestId, expectedRunVersion, decision, JSON.stringify(editArtifactRef)].join(':');
      if (!state.commands.has(key)) state.commands.set(key, crypto.randomUUID());
-     const body = { commandId: state.commands.get(key), runId: a.runId, expectedRunVersion: a.expectedRunVersion, decision, ...(editArtifactRef === undefined ? {} : { editArtifactRef }) };
+     const body = { commandId: state.commands.get(key), runId: a.runId, expectedRunVersion, decision, ...(editArtifactRef === undefined ? {} : { editArtifactRef, editKind: 'output' }) };
      await api(projectUrl(project, '/approvals/' + encodeURIComponent(a.approvalRequestId) + '/decisions'), body);
      if (g !== state.generation) return; await refreshProject(); notice('Decision committed by control.');
     } catch (e) {

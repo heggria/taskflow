@@ -24,6 +24,9 @@ try {
 			return row.projectAdmitCommitSeq === undefined ? { status: "not-admitted" as const, reservationId: row.reservationId, projectId: row.projectId, projectControlDomainId: row.projectControlDomainId, runId: row.runId, runVersion: 0 }
 				: { ...row, projectAdmitCommitSeq: config.input.projectAdmitCommitSeq ?? 7, runVersion: 1 };
 		},
+		abandonAdmissionIfAbsent: (row) => ({ status: "abandoned" as const, reservationId: row.reservationId,
+			projectId: row.projectId, projectControlDomainId: row.projectControlDomainId, runId: row.runId,
+			runVersion: 0, abandonmentCommitSeq: 1 }),
 		readRelease: (row) => ({ ...row, projectAdmitCommitSeq: row.projectAdmitCommitSeq!, runVersion: 2, proofId: "fixture-provider-proof", status: "completed", stage: "terminal", requiresReadmission: false, providerNoLiveProcessTree: true, noAmbiguousJobs: true, reconcileTimeoutOnly: false }),
 	} });
 	if (config.mode === "persist-admission") {

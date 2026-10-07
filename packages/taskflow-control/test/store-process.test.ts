@@ -102,7 +102,7 @@ test("store crash: SIGKILL after header fsync / before journal is old-complete (
 	assertNotMixed(storePath, "old");
 });
 
-test("store crash: SIGKILL mid journal append is old-complete (A4)", UNIX_ONLY, async () => {
+test("store crash: SIGKILL mid journal append fails closed and preserves evidence (A4)", UNIX_ONLY, async () => {
 	const storePath = makeStorePath();
 	const primed = openControlStore(storePath);
 	primed.close();
@@ -115,7 +115,9 @@ test("store crash: SIGKILL mid journal append is old-complete (A4)", UNIX_ONLY, 
 	});
 	const result = await waitForExit(child);
 	assert.equal(result.signal, "SIGKILL");
-	assertNotMixed(storePath, "old");
+	const journal=path.join(storePath,"journal/000001.jsonl"), damaged=fs.readFileSync(journal);
+ assert.throws(()=>openControlStore(storePath), /incomplete journal tail/);
+ assert.deepEqual(fs.readFileSync(journal),damaged);
 });
 
 test("store crash: SIGKILL during projection rebuild is new-complete (A4)", UNIX_ONLY, async () => {

@@ -213,7 +213,7 @@ test("store: authority records are isolated from input and returned object mutat
 	let store = openControlStore(storePath, { projectId: UUID, controlDomainId: UUID });
 	try {
 		const batch = submitBatch({ responseArtifactRef: {
-			digest: "sha256:" + SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
+			digest: SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
 		} });
 		const expectedCommand = structuredClone(batch.command);
 		const expectedHeader = structuredClone(store.header);
@@ -256,9 +256,9 @@ test("store: constructor isolates recovered authority records from caller-owned 
 	const storePath = makeStorePath();
 	const opened = openControlStore(storePath);
 	const header = opened.header;
-	opened.close();
+ // The trusted recovery constructor requires the already-held writer proof.
 	const command = submitBatch({ responseArtifactRef: {
-		digest: "sha256:" + SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
+		digest: SHA256, size: 1, mediaType: "text/plain", storageClass: "project", redactionClass: "none",
 	} }).command;
 	const expectedHeader = structuredClone(header);
 	const expectedCommand = structuredClone(command);
@@ -271,6 +271,7 @@ test("store: constructor isolates recovered authority records from caller-owned 
 		assert.deepEqual(recovered.readCommand(command.commandId), expectedCommand);
 	} finally {
 		recovered.close();
+  opened.close();
 	}
 });
 
@@ -338,8 +339,11 @@ test("store: writeFile/appendFile/createWriteStream in control src stay on metad
 	}
 	const allowed = [
 		"singleton.ts",
+  "local-bootstrap.ts", // private host bootstrap credential metadata
+		"project-admin-cli.ts", // explicit offline operator export; exclusive private evidence file, never project execution data
 		"control-host.ts",
 		"store/store.ts",
+  "store/evidence-store.ts", // content-addressed immutable evidence only
 	];
 	for (const hit of hits) {
 		const file = hit.split(":")[0];

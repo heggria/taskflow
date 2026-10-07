@@ -143,8 +143,7 @@ export const LegacyControlEventPayloadSchema = Type.Union([
 	),
 ]);
 /** V2 carries complete approval and lifecycle facts. V1 remains read-only. */
-export const ControlEventPayloadSchema = Type.Union([
-	...LegacyControlEventPayloadSchema.anyOf.filter((schema) => !["approval.pending", "approval.settled"].includes(schema.properties.kind.const as string)),
+const LifecycleEventPayloadSchema = Type.Union([
 	Type.Object({ kind: Type.Literal("approval.pending"), approvalRequestId: UuidSchema, request: ApprovalRequestSchema }, { additionalProperties: false }),
 	Type.Object({ kind: Type.Literal("approval.settled"), approvalRequestId: UuidSchema, decision: StringEnum(["approved", "rejected", "edited", "expired", "cancelled"]) }, { additionalProperties: false }),
 	Type.Object({ kind: Type.Literal("run.snapshot"), run: RunSnapshotSchema }, { additionalProperties: false }),
@@ -155,7 +154,13 @@ export const ControlEventPayloadSchema = Type.Union([
 	Type.Object({ kind: Type.Literal("receipt.issued"), receipt: ReceiptSchema }, { additionalProperties: false }),
 	Type.Object({ kind: Type.Literal("artifact.recorded"), runId: UuidSchema, commandKind: CommandKindSchema, artifact: ArtifactRefSchema }, { additionalProperties: false }),
 ]);
-export type ControlEventPayload = Static<typeof ControlEventPayloadSchema> | Static<typeof LegacyControlEventPayloadSchema>;
+// Preserve the literal tuple for TypeBox static inference: a variadic filtered
+// array before new cases can otherwise erase the lifecycle discriminants.
+export const ControlEventPayloadSchema = Type.Union([
+	...LegacyControlEventPayloadSchema.anyOf.filter((schema) => !["approval.pending", "approval.settled"].includes(schema.properties.kind.const as string)),
+	...LifecycleEventPayloadSchema.anyOf,
+]);
+export type ControlEventPayload = Static<typeof LifecycleEventPayloadSchema> | Static<typeof LegacyControlEventPayloadSchema>;
 
 // ---------------------------------------------------------------------------
 // ControlEvent (P12 / RFC §10) — ledger envelope

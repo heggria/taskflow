@@ -15,13 +15,18 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { ProjectRegistry } from "./project-registry.ts";
+import { HostRuntime, type HostRuntimeOptions } from "./host-runtime.ts";
+import { RuntimeTeExecutionProvider } from "./runtime-provider.ts";
+import type { AuthorizationAuthority, VerifiedContext } from "./authorization.ts";
+import type { UdsConnection } from "./uds.ts";
 import { getBuildInfo } from "taskflow-core";
 import { ControlError, bootstrapFailed } from "./errors.ts";
 import { createHelloGate, helloRequiredError, type HelloGate, type HelloVerdict } from "./hello.ts";
 import { resolveControlMode, type ControlMode } from "./modes.ts";
 import {
 	acquireUserSingleton,
-	defaultProcessIdentity,
 	recoverStaleEndpoint,
 	renewCoordinatorLease,
 	singletonPaths,
@@ -33,12 +38,19 @@ import {
 import { connectUdsClient, startUdsServer, type UdsClient, type UdsServer } from "./uds.ts";
 import { openControlStore, type ControlStore } from "./store/index.ts";
 import { CONTROL_WIRE_SCHEMA_VERSION, PROTOCOL_MAJOR, type NegotiationHandshake } from "./schema/index.ts";
-import type { CommandRecord, ControlEvent } from "./schema/index.ts";
+
 import type { ExecutionProvider } from "./te-provider.ts";
-import type { ControlStoreHeader } from "./schema/index.ts";
-import type { RunSnapshot } from "./schema/run.ts";
+
+
 
 export interface ControlHostOptions {
+	registry?: ProjectRegistry;
+	authorization?: AuthorizationAuthority;
+	projectRoot?: string;
+	projectMounts?: {storePath: string; projectRoot: string}[];
+	trustedInProcessFeatures?: readonly string[];
+	maxActiveRuns?: number;
+	evidenceFactory?: HostRuntimeOptions["evidenceFactory"];
 	/** Default auto (fresh install, P13). */
 	mode?: ControlMode;
 	/** User control home (default `~/.taskflow/control`, TASKFLOW_HOME override). */
@@ -81,7 +93,7 @@ function defaultServerHello(): NegotiationHandshake {
 		supportedReadSchemas: ["taskflow.wire.v1"],
 		supportedWriteSchemas: ["taskflow.wire.v1"],
 		requiredFeatures: [],
-		offeredFeatures: [],
+		offeredFeatures: ["durable-approval"],
 		buildInfo: {
 			packageVersion: info.packageVersion,
 			gitCommit: info.gitCommit,
@@ -107,9 +119,18 @@ export class ControlHost {
 	#udsClient?: UdsClient;
 	#leaseTimer?: NodeJS.Timeout;
 	#store?: ControlStore;
-	#standaloneLeasePath?: string;
+	#standalonePaths?: SingletonPaths;
+	#runtime?: HostRuntime;
+	#registry?: ProjectRegistry;
+	#ownsRegistry = false;
+	#ready: Promise<void>;
+	#signalReady!: () => void;
+	#starting?: Promise<ControlHostStatus>;
+	#contextFeatures = new WeakMap<object, readonly string[]>();
+	#connections = new WeakMap<object, {context?: VerifiedContext; challengeId?: string}>();
 
 	constructor(options: ControlHostOptions) {
+		this.#ready = new Promise(resolve => { this.#signalReady = resolve; });
 		if (!options.provider || options.provider.kind !== "te-resources") {
 			throw new ControlError(
 				"TF_AUTHORITY_REVOKED",
@@ -153,6 +174,13 @@ export class ControlHost {
 
 	async start(): Promise<ControlHostStatus> {
 		if (this.#state === "started") return this.status;
+		if (this.#starting) return this.#starting;
+		const starting=this.#startOnce();this.#starting=starting;
+		try { return await starting; } finally { this.#starting=undefined; }
+	}
+
+	async #startOnce(): Promise<ControlHostStatus> {
+		this.#ready=new Promise(resolve=>{this.#signalReady=resolve;});
 		try {
 			switch (this.mode) {
 				case "standalone": {
@@ -161,6 +189,7 @@ export class ControlHost {
 					this.#acquireStandaloneLease();
 					this.#state = "started";
 					this.#singleton = "standalone";
+					this.#startLeaseTimer();
 					break;
 				}
 				case "auto":
@@ -191,7 +220,8 @@ export class ControlHost {
 								serverHello: this.#helloGate.serverHello,
 								requiredFeatures: this.#options.requiredFeatures,
 								getFencingEpoch: () => this.#fencingEpoch,
-								handleRpc: (method, params, fencingEpoch) => this.#dispatchCore(method, params, fencingEpoch),
+								handleRpc: async (method, params, fencingEpoch, connection) => { await this.#ready; return this.#dispatchWire(method, params, fencingEpoch, connection); },
+								onDisconnect: connection => { const ctx = this.#connections.get(connection.token)?.context; if (ctx) this.#options.authorization?.revokeContext(ctx); this.#connections.delete(connection.token); },
 							});
 						} catch (error) {
 							try { result.release(); } catch { /* best effort */ }
@@ -207,10 +237,7 @@ export class ControlHost {
 						// never trusted from the lock file alone (A2b).
 						let client: UdsClient;
 						try {
-							client = await connectUdsClient({
-								endpointPath: result.endpoint,
-								clientHello: this.#clientHello(),
-							});
+							client = await this.#connectWinner(result.endpoint);
 						} catch (error) {
 							throw bootstrapFailed(
 								`attached to the winner but could not reach its control endpoint ${result.endpoint}: ${error instanceof Error ? error.message : String(error)}`,
@@ -227,12 +254,18 @@ export class ControlHost {
 				}
 			}
 			this.#openProjectStore();
+			if (this.#registry && this.#options.authorization && this.provider instanceof RuntimeTeExecutionProvider && this.#singleton !== "attached") {
+				this.#runtime = new HostRuntime({ registry: this.#registry, authorization: this.#options.authorization, provider: this.provider, controlHome: this.paths.controlHome, maxActiveRuns: this.#options.maxActiveRuns, epoch: () => this.#fencingEpoch, holderId: () => this.#holderId!, liveLease: () => this.#liveLease(), evidenceFactory: this.#options.evidenceFactory, durableApprovalAvailable: context => (this.#contextFeatures.get(context) ?? this.#options.trustedInProcessFeatures ?? []).includes("durable-approval") });
+				await this.#runtime.initialize();
+			}
 		} catch (error) {
 			this.stop();
 			this.#state = "failed-closed";
+			this.#signalReady();
 			if (error instanceof ControlError) throw error;
 			throw bootstrapFailed(`ControlHost could not start in ${this.mode} mode: ${error instanceof Error ? error.message : String(error)}`);
 		}
+		this.#signalReady();
 		return this.status;
 	}
 
@@ -261,7 +294,7 @@ export class ControlHost {
 
 	/** RPC core without the in-process hello gate (the UDS layer enforces its own). */
 	async #dispatchCore<T>(method: string, params: unknown, fencingEpoch: number): Promise<T> {
-		if (fencingEpoch < this.#fencingEpoch) {
+		if (fencingEpoch !== this.#fencingEpoch) {
 			throw new ControlError(
 				"TF_AUTHORITY_REVOKED",
 				`fencing epoch ${fencingEpoch} is stale; host epoch is ${this.#fencingEpoch}`,
@@ -274,39 +307,11 @@ export class ControlHost {
 			case "control.probe": {
 				return await this.provider.probe() as unknown as T;
 			}
-			case "control.store.header": {
-				return this.#requireStore().header as unknown as T;
-			}
-			case "control.store.status": {
-				return this.#requireStore().snapshot() as unknown as T;
-			}
-			case "commands.submit": {
-				const body = params as { command?: CommandRecord; events?: ControlEvent[] };
-				if (!body || typeof body !== "object" || body.command === undefined || !Array.isArray(body.events)) {
-					throw new ControlError(
-						"TF_COMMAND_FAILED",
-						"commands.submit requires { command, events }",
-						{ recoveryAction: "retry-new-command", sideEffects: "none" },
-					);
-				}
-				return this.#requireStore().appendBatch({ command: body.command, events: body.events }) as unknown as T;
-			}
-			case "runs.status": {
-				const runId = typeof params === "object" && params !== null && "runId" in params
-					? String((params as { runId: unknown }).runId)
-					: undefined;
-				const snapshot: RunSnapshot = {
-					runId: runId ?? "00000000-0000-0000-0000-000000000000",
-					projectId: "00000000-0000-0000-0000-000000000000",
-					controlDomainId: "00000000-0000-0000-0000-000000000000",
-					status: "unknown",
-					stage: "received",
-					slot: "none",
-					needsOperator: false,
-					runVersion: 0,
-				};
-				return snapshot as unknown as T;
-			}
+			case "control.store.header":
+			case "control.store.status":
+			case "commands.submit":
+			case "runs.status":
+				throw new ControlError("TF_AUTHORITY_REVOKED", "project operations require a verified transport context");
 			default:
 				throw new ControlError(
 					"TF_COMMAND_FAILED",
@@ -318,24 +323,25 @@ export class ControlHost {
 
 	/** Renew the coordinator lease while held (best-effort; S3 wires the timer). */
 	renewLease(): void {
-		if (this.#singleton === "won" && this.#holderId !== undefined) {
-			renewCoordinatorLease(this.paths, this.#holderId, this.#fencingEpoch, this.#options.leaseTtlMs ?? 30_000, this.now);
+		if ((this.#singleton === "won" || this.#singleton === "standalone") && this.#holderId !== undefined) {
+			renewCoordinatorLease(this.#standalonePaths ?? this.paths, this.#holderId, this.#fencingEpoch, this.#options.leaseTtlMs ?? 30_000, this.now);
 		}
 	}
 
 	stop(): void {
+		this.#signalReady();
 		if (this.#leaseTimer) {
 			clearInterval(this.#leaseTimer);
 			this.#leaseTimer = undefined;
 		}
+		this.#runtime?.close(); this.#runtime = undefined;
+		if (this.#ownsRegistry) this.#registry?.close();
+		this.#registry = undefined;
 		if (this.#store) {
 			try { this.#store.close(); } catch { /* best effort */ }
 			this.#store = undefined;
 		}
-		if (this.#standaloneLeasePath) {
-			try { fs.unlinkSync(this.#standaloneLeasePath); } catch { /* best effort */ }
-			this.#standaloneLeasePath = undefined;
-		}
+		this.#standalonePaths = undefined;
 		const server = this.#udsServer;
 		this.#udsServer = undefined;
 		const client = this.#udsClient;
@@ -375,6 +381,12 @@ export class ControlHost {
 		};
 	}
 
+	async #connectWinner(endpointPath: string): Promise<UdsClient> {
+		const deadline = Date.now() + 2000;
+		for (;;) { try { return await connectUdsClient({endpointPath,clientHello:this.#clientHello()}); }
+			catch(error) { if(Date.now()>=deadline)throw error; await new Promise(resolve=>setTimeout(resolve,25)); } }
+	}
+
 	/** Keep the coordinator lease valid while the winner holds the singleton. */
 	#startLeaseTimer(): void {
 		const ttl = this.#options.leaseTtlMs ?? 30_000;
@@ -392,77 +404,65 @@ export class ControlHost {
 	}
 
 	#acquireStandaloneLease(): void {
-		const leasePath = `${this.paths.controlHome}/standalone-lease.json`;
-		const holderId = this.#options.holderId ?? `standalone-${defaultProcessIdentity().pid}`;
-		const identity = this.#options.processIdentity ?? defaultProcessIdentity();
-		try {
-			const fd = fs.openSync(leasePath, "wx", 0o600);
-			this.#standaloneLeasePath = leasePath;
-			try {
-				fs.writeFileSync(fd, JSON.stringify({
-					version: 1,
-					holderId,
-					pid: identity.pid,
-					birthToken: identity.birthToken,
-					acquiredAt: this.now(),
-					endpoint: this.paths.endpointPath,
-				}));
-			} finally {
-				fs.closeSync(fd);
-			}
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-				throw bootstrapFailed(`standalone lease already exists at ${leasePath}; a standalone control is already running for this project`);
-			}
-			throw error;
-		}
-		this.#holderId = holderId;
-		this.#fencingEpoch = 1;
-		this.#standaloneLeasePath = leasePath;
+		const standalonePaths={...this.paths,lockPath:path.join(this.paths.controlHome,"standalone-lease.json"),leasePath:path.join(this.paths.controlHome,"standalone-coordinator-lease.json"),endpointPath:path.join(this.paths.controlHome,"standalone.sock")};
+		const result=acquireUserSingleton({paths:standalonePaths,holderId:this.#options.holderId,processIdentity:this.#options.processIdentity,inspectProcess:this.#options.inspectProcess,now:this.#options.now,leaseTtlMs:this.#options.leaseTtlMs});
+		if(result.status!=="won")throw bootstrapFailed("standalone lease belongs to a live or unverified owner");
+		this.#standalonePaths=standalonePaths;this.#holderId=result.holderId;this.#fencingEpoch=result.fencingEpoch;this.#releaseSingleton=result.release;
 	}
 
 	/** Until multi-mount routing exists, never silently use another project's ledger. */
-	async #verifyAttachedProjectStore(client: UdsClient): Promise<void> {
-		const storePath = this.#options.projectStorePath;
-		if (!storePath) return;
-		try {
-			const header = await client.rpc<ControlStoreHeader>("control.store.header");
-			const canonicalPath = fs.realpathSync(storePath);
-			const stat = fs.statSync(canonicalPath);
-			if (header.directoryBinding.canonicalPath !== canonicalPath
-				|| header.directoryBinding.device !== String(stat.dev)
-				|| header.directoryBinding.inode !== String(stat.ino)) {
-				throw new Error("winner is bound to a different project store; multi-mount routing is unavailable");
-			}
-		} catch (error) {
-			throw bootstrapFailed(`cannot attach project store ${storePath}: ${error instanceof Error ? error.message : String(error)}`);
-		}
+	async #verifyAttachedProjectStore(_client: UdsClient): Promise<void> {
+		// Mount identity is checked after authenticated challenge. An unauthenticated
+		// peer cannot read another project's header or select its writer path.
 	}
 
 	#openProjectStore(): void {
-		const storePath = this.#options.projectStorePath;
-		if (!storePath) return;
-		// Attached clients read store state over UDS; only the writer opens it.
 		if (this.#singleton === "attached") return;
-		try {
-			this.#store = openControlStore(storePath);
-		} catch (error) {
-			throw bootstrapFailed(
-				`could not open project ControlStore at ${storePath}: ${error instanceof Error ? error.message : String(error)}`,
-			);
+		if (this.#options.registry) { this.#registry = this.#options.registry; if (this.#options.projectStorePath) this.#registry.mount(this.#options.projectStorePath, this.#options.projectRoot); for (const mount of this.#options.projectMounts ?? []) this.#registry.mount(mount.storePath, mount.projectRoot); return; }
+		const storePath = this.#options.projectStorePath;
+		if (!storePath && !this.#options.projectMounts?.length) return;
+		if (this.#options.authorization) {
+			this.#registry = new ProjectRegistry(path.join(this.paths.controlHome, "registry.json")); this.#ownsRegistry = true;
+			if (storePath) this.#registry.mount(storePath, this.#options.projectRoot);
+			for (const mount of this.#options.projectMounts ?? []) this.#registry.mount(mount.storePath, mount.projectRoot); return;
 		}
+		if (storePath) this.#store = openControlStore(storePath);
 	}
 
-	#requireStore(): ControlStore {
-		if (!this.#store) {
-			throw new ControlError(
-				"TF_JOURNAL_UNAVAILABLE",
-				"ControlHost has no project store open (pass projectStorePath and start as winner/standalone)",
-				{ recoveryAction: "none", sideEffects: "none" },
-			);
-		}
-		return this.#store;
+	#liveLease() {
+		if (this.#state !== "started") return null;
+		try { const lease = JSON.parse(fs.readFileSync((this.#standalonePaths ?? this.paths).leasePath, "utf8")); return lease.holderId === this.#holderId && lease.fencingEpoch === this.#fencingEpoch ? lease : null; } catch { return null; }
 	}
+
+	async dispatchAuthenticated<T = unknown>(context: VerifiedContext, method: string, params: unknown): Promise<T> {
+		if (this.#state !== "started" || !this.#runtime || !this.#options.authorization) throw new ControlError("TF_AUTHORITY_REVOKED", "authenticated runtime is unavailable");
+		this.#options.authorization.identity(context);
+		if (method === "control.status") return this.status as T;
+		if (method === "control.probe") return await this.provider.probe() as T;
+		return await this.#runtime.dispatch(context, method, params) as T;
+	}
+
+	async #dispatchWire(method: string, params: unknown, epoch: number, connection: UdsConnection): Promise<unknown> {
+		if (epoch !== this.#fencingEpoch || this.#state !== "started" || connection.closed) throw new ControlError("TF_AUTHORITY_REVOKED", "connection or epoch is no longer live");
+		if (method === "control.status" || method === "control.probe") return this.#dispatchCore(method, params, epoch);
+		const auth = this.#options.authorization; if (!auth || !this.#registry) throw new ControlError("TF_AUTHORITY_REVOKED", "transport authentication is not configured");
+		let session = this.#connections.get(connection.token); if (!session) { session = {}; this.#connections.set(connection.token, session); }
+		const body = params && typeof params === "object" ? params as Record<string, unknown> : {};
+		if (method === "auth.challenge") {
+			const mount = this.#registry.resolve(typeof body.projectId === "string" ? body.projectId : undefined);
+			const challenge = auth.createChallenge({ projectId: mount.store.header.projectId, controlDomainId: mount.store.header.controlDomainId, projectRoot: mount.projectRoot });
+			session.challengeId = challenge.id; return challenge;
+		}
+		if (method === "auth.authenticate") {
+			if (typeof body.challengeId !== "string" || body.challengeId !== session.challengeId || typeof body.proof !== "string") throw new ControlError("TF_POLICY_DENIED", "challenge belongs to another connection");
+			delete session.challengeId;
+			if (session.context) auth.revokeContext(session.context);
+			session.context = auth.authenticate(body.challengeId, body.proof); this.#contextFeatures.set(session.context, (connection.hello?.offeredFeatures ?? []).filter(feature=>this.#helloGate.serverHello.offeredFeatures.includes(feature))); return { authenticated: true };
+		}
+		if (!session.context) throw new ControlError("TF_AUTHORITY_REVOKED", "authenticate before project RPCs");
+		return this.dispatchAuthenticated(session.context, method, params);
+	}
+
 }
 
 // Re-export the mode/env surface used by hosts.

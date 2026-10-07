@@ -114,8 +114,11 @@ export interface UdsServerOptions {
 	/** Maximum UTF-8 bytes per frame, excluding newline (default 16 MiB). */
 	maxFrameBytes?: number;
 	/** Dispatch one RPC after a successful per-connection hello. */
-	handleRpc: (method: string, params: unknown, fencingEpoch: number) => Promise<unknown>;
+	handleRpc: (method: string, params: unknown, fencingEpoch: number, connection: UdsConnection) => Promise<unknown>;
+	onDisconnect?: (connection: UdsConnection) => void;
 }
+
+export interface UdsConnection { readonly token: object; readonly closed: boolean; readonly hello?: NegotiationHandshake; }
 
 export interface UdsServer {
 	readonly endpointPath: string;
@@ -172,9 +175,12 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 	// Per-connection hello gate (P4): the first frame must be a hello.
 	const gate = createHelloGate(options.serverHello, { requiredFeatures: options.requiredFeatures });
 	let greeted = false;
+	let inFlight = 0;
 	const maxFrameBytes = frameLimit(options.maxFrameBytes);
 	const reader = frameReader(maxFrameBytes);
 	let destroyed = false;
+	let clientHello: NegotiationHandshake | undefined;
+	const connection: UdsConnection = Object.freeze({ token: Object.freeze({}), get closed() { return destroyed; }, get hello() { return clientHello; } });
 	const helloTimer = setTimeout(() => {
 		destroyed = true;
 		reader.clear();
@@ -221,6 +227,7 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 	socket.on("close", () => {
 		clearTimeout(helloTimer);
 		destroyed = true;
+		try { options.onDisconnect?.(connection); } catch { /* isolate trusted cleanup failure to this connection */ }
 		reader.clear();
 	});
 	socket.on("error", () => {
@@ -244,6 +251,7 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 				}
 				const fencingEpoch = options.getFencingEpoch();
 				greeted = true;
+				clientHello = raw.hello as NegotiationHandshake;
 				clearTimeout(helloTimer);
 				send({
 					type: "hello-ack",
@@ -279,12 +287,16 @@ function handleServerConnection(socket: net.Socket, options: UdsServerOptions): 
 					failClosed({ type: "rpc-result", id, ok: false, error: errorToEnvelope(protocolError("rpc frame requires a non-negative safe integer fencingEpoch")) });
 					return;
 				}
+				if (inFlight >= 64) {
+					failClosed({type:"rpc-result",id,ok:false,error:errorToEnvelope(protocolError("too many concurrent RPCs on one control channel"))}); return;
+				}
+				inFlight++;
 				try {
-					const result = await options.handleRpc(method, raw.params, fencingEpoch);
+					const result = await options.handleRpc(method, raw.params, fencingEpoch, connection);
 					send({ type: "rpc-result", id, ok: true, result });
 				} catch (error) {
 					send({ type: "rpc-result", id, ok: false, error: errorToEnvelope(error) });
-				}
+				} finally { inFlight--; }
 				return;
 			}
 			failClosed({

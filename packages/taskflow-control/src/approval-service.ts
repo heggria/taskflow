@@ -35,17 +35,19 @@ export type ApprovalReadmissionIntent = {
 export type ApprovalOutbox = ApprovalReleaseIntent | ApprovalReadmissionIntent;
 export type ApprovalJournalEvent = { eventId: string; recordedAt: number; payload: ControlEventPayload };
 export interface ApprovalJournalState { run: ApprovalRun; approvals: DurableApprovalRequest[]; outbox: ApprovalOutbox[] }
-export interface ApprovalMutation extends ApprovalJournalState { command?: CommandRecord; events: ApprovalJournalEvent[] }
-export interface ApprovalCommit extends ApprovalJournalState { commitSeq: number }
+export interface ApprovalMutation extends ApprovalJournalState { command?: CommandRecord; responseJson?: string; events: ApprovalJournalEvent[] }
+export interface ApprovalCommit extends ApprovalJournalState { commitSeq: number; responseJson?: string }
+export type CommandBinding = Pick<CommandRecord, "commandId" | "kind" | "requestHash" | "callerPrincipal" | "projectId" | "controlDomainId">;
 export interface ApprovalStorage {
-	readRun(runId: string): ApprovalRun | undefined;
+	readCommittedCommand?(binding: CommandBinding): {record: CommandRecord; responseJson: string} | undefined;
+ readRun(runId: string): ApprovalRun | undefined;
 	readApproval(approvalRequestId: string): DurableApprovalRequest | undefined;
 	listApprovals(): DurableApprovalRequest[];
 	readOutbox(runId: string): ApprovalOutbox[];
 	/** Synchronous, writer-locked CAS; journal fsync precedes observable state.
 	 * The adapter checks runVersion and commits the complete batch atomically. */
 	mutateRun(runId: string, expectedRunVersion: number,
-		build: (state: ApprovalJournalState, meta: { commitSeq: number }) => ApprovalMutation): ApprovalCommit;
+		build: (state: ApprovalJournalState, meta: { commitSeq: number }) => ApprovalMutation, binding?: CommandBinding): ApprovalCommit;
 }
 export type ApprovalOperation = "request" | "read" | "decide" | "cancel" | "expire" | "park" | "readmit";
 export type ApprovalAuthorization = { callerPrincipal: string; authorizationContextHash: string };
@@ -107,6 +109,19 @@ export class ApprovalService<C = unknown> {
 			if (typeof authority[name] !== "function") revoked(`approval authority requires ${name}`);
 		}
 	}
+ #binding(run: ApprovalRun, input: {commandId:string}, kind: CommandRecord["kind"], auth: ApprovalAuthorization): CommandBinding {
+  return {commandId:input.commandId, kind, requestHash:commandRequestHash(input), callerPrincipal:auth.callerPrincipal, projectId:run.projectId,controlDomainId:run.controlDomainId};
+ }
+ async #replay(context:C, binding:CommandBinding, operation:ApprovalOperation, runId:string, requestId?:string):Promise<string|undefined> {
+  const authorize = () => this.authority.authorize(context,{operation,run:this.#run(runId),...(requestId ? {request:this.#request(requestId)}:{})});
+  const auth = await authorize();
+  if (auth.callerPrincipal !== binding.callerPrincipal) revoked("verified principal changed during replay");
+  const saved = this.storage.readCommittedCommand?.(binding); if (!saved) return;
+  const final = await authorize();
+  if (final.callerPrincipal !== binding.callerPrincipal) revoked("verified principal changed before disclosure");
+  return this.storage.readCommittedCommand!(binding)!.responseJson;
+ }
+
 	#run(id: string): ApprovalRun { return this.storage.readRun(id) ?? invalid("approval requires an existing durable run"); }
 	#request(id: string): DurableApprovalRequest { return this.storage.readApproval(id) ?? invalid("approval request does not exist"); }
 	#checkQuiescence(run: ApprovalRun, proof: ApprovalQuiescence): boolean {
@@ -115,10 +130,12 @@ export class ApprovalService<C = unknown> {
 			&& proof.providerNoLiveProcessTree === true && proof.noAmbiguousJobs === true
 			&& proof.noPendingResourceIntents === true && proof.reconcileTimeoutOnly === false);
 	}
+ #proof(p:ApprovalQuiescence):ApprovalQuiescence { return {proofId:p.proofId,projectId:p.projectId,projectControlDomainId:p.projectControlDomainId,runId:p.runId,projectAdmitCommitSeq:p.projectAdmitCommitSeq,providerNoLiveProcessTree:p.providerNoLiveProcessTree,noAmbiguousJobs:p.noAmbiguousJobs,noPendingResourceIntents:p.noPendingResourceIntents,reconcileTimeoutOnly:p.reconcileTimeoutOnly}; }
+
 	#release(state: ApprovalJournalState, requestId: string, proof?: ApprovalQuiescence): ApprovalOutbox[] {
 		if (!proof || !state.run.reservationId || !this.#checkQuiescence(state.run, proof)
 			|| state.outbox.some((item) => item.kind === "approval.release" && item.reservationId === state.run.reservationId && !item.complete)) return state.outbox;
-		return [...state.outbox, { kind: "approval.release", intentId: randomUUID(), approvalRequestId: requestId, runId: state.run.runId, reservationId: state.run.reservationId, evidence: proof, complete: false }];
+		return [...state.outbox, { kind: "approval.release", intentId: randomUUID(), approvalRequestId: requestId, runId: state.run.runId, reservationId: state.run.reservationId, evidence: this.#proof(proof), complete: false }];
 	}
 	async read(context: C, approvalRequestId: string): Promise<DurableApprovalRequest> {
 		const request = this.#request(approvalRequestId);
@@ -166,7 +183,10 @@ export class ApprovalService<C = unknown> {
 		const request = this.#request(input.approvalRequestId), run = this.#run(input.runId);
 		if (request.runId !== run.runId) invalid("approval does not belong to this run");
 		if (!["approve", "reject", "edit"].includes(input.decision) || !request.allowedDecisions.includes(input.decision)) invalid("decision not allowed");
-		await this.authority.authorize(context, { operation: "decide", run, request });
+		const initialAuth = await this.authority.authorize(context, { operation: "decide", run, request });
+  const binding = this.#binding(run,input,"approval.decide",initialAuth);
+  const replay = await this.#replay(context,binding,"decide",run.runId,request.approvalRequestId);
+  if (replay !== undefined) return JSON.parse(replay) as DurableApprovalRequest;
 		if (input.decision === "edit") {
 			if (!input.editArtifactRef || !Value.Check(ArtifactRefSchema, input.editArtifactRef) || !["output", "plan"].includes(input.editKind ?? "")) invalid("edit requires typed guidance artifact");
 			await this.authority.validateEdit(context, run, request, { kind: input.editKind!, artifact: input.editArtifactRef! });
@@ -174,7 +194,7 @@ export class ApprovalService<C = unknown> {
 		const proof = await this.authority.quiescence(context, run);
 		const auth = await this.authority.authorize(context, { operation: "decide", run: this.#run(run.runId), request: this.#request(request.approvalRequestId) });
 		let expired = false;
-		this.storage.mutateRun(run.runId, input.expectedRunVersion, (state, meta) => {
+		const committed = this.storage.mutateRun(run.runId, input.expectedRunVersion, (state, meta) => {
 			const current = state.approvals.find((item) => item.approvalRequestId === request.approvalRequestId) ?? invalid("missing approval");
 			if (current.status !== "pending" || state.run.status !== "paused" || current.expectedRunVersion !== input.expectedRunVersion) stale("approval is already settled or run changed");
 			if (current.deadline <= Date.now()) {
@@ -189,10 +209,14 @@ export class ApprovalService<C = unknown> {
 			const nextRun = { ...state.run, requiresReadmission: input.decision !== "reject", status: input.decision === "reject" ? "blocked" as const : stillPending ? "paused" as const : "running" as const, stage: input.decision === "reject" ? "terminal" as const : stillPending ? state.run.stage : "queued" as const };
 			const command: CommandRecord = { commandId: input.commandId, kind: "approval.decide", requestHash: commandRequestHash(input), callerPrincipal: auth.callerPrincipal, authorizationContextHash: auth.authorizationContextHash,
 				projectId: run.projectId, controlDomainId: run.controlDomainId, status: "completed", firstCommitSeq: meta.commitSeq, lastCommitSeq: meta.commitSeq, recordedAt: Date.now() };
-			return advance(state, { run: nextRun, approvals, ...(input.decision === "reject" ? { outbox: this.#release(state, current.approvalRequestId, proof) } : {}) }, [decisionEvent], command);
-		});
+			return { ...advance(state, { run: nextRun, approvals, ...(input.decision === "reject" ? { outbox: this.#release(state, current.approvalRequestId, proof) } : {}) }, [decisionEvent], command), responseJson: JSON.stringify(decided) };
+		}, binding);
 		if (expired) stale("approval expired; late decisions cannot be committed");
-		return this.read(context, request.approvalRequestId);
+  const response = await this.#replay(context,binding,"decide",run.runId,request.approvalRequestId);
+  if (response !== undefined) return JSON.parse(response) as DurableApprovalRequest;
+  // Compatibility adapters still return their own committed response, never latest state.
+  await this.authority.authorize(context,{operation:"decide",run:this.#run(run.runId),request:this.#request(request.approvalRequestId)});
+  return JSON.parse(committed.responseJson!) as DurableApprovalRequest;
 	}
 	#expireMutation(state: ApprovalJournalState, request: DurableApprovalRequest, proof?: ApprovalQuiescence): ApprovalMutation {
 		return advance(state, { run: { ...state.run, status: "blocked", stage: "terminal", requiresReadmission: false }, outbox: this.#release(state, request.approvalRequestId, proof), approvals: state.approvals.map((item) => item.status !== "pending" ? item : { ...item, status: item.approvalRequestId === request.approvalRequestId ? "expired" : "cancelled", decidedAt: Date.now() }) }, state.approvals.filter((item) => item.status === "pending").map((item) => event({ kind: "approval.settled", approvalRequestId: item.approvalRequestId, decision: item.approvalRequestId === request.approvalRequestId ? "expired" : "cancelled" })));
@@ -214,21 +238,30 @@ export class ApprovalService<C = unknown> {
 		return count;
 	}
 	async cancel(context: C, input: { commandId: string; runId: string; expectedRunVersion: number }): Promise<ApprovalRun> {
-		if (!Value.Check(UuidSchema, input.commandId)) invalid("cancel requires a command ID");
+		input = structuredClone(input);
+  if (!Value.Check(UuidSchema, input.commandId) || !Number.isSafeInteger(input.expectedRunVersion) || input.expectedRunVersion < 0) invalid("cancel requires a command ID and version");
 		const run = this.#run(input.runId);
-		await this.authority.authorize(context, { operation: "cancel", run });
+		const initialAuth = await this.authority.authorize(context, { operation: "cancel", run });
+  const binding = this.#binding(run,input,"run.cancel",initialAuth);
+  const replay = await this.#replay(context,binding,"cancel",run.runId);
+  if (replay !== undefined) return JSON.parse(replay) as ApprovalRun;
 		const proof = await this.authority.quiescence(context, run);
 		const authorization = await this.authority.authorize(context, { operation: "cancel", run: this.#run(run.runId) });
-		return this.storage.mutateRun(run.runId, input.expectedRunVersion, (state, meta) => {
+		const committed = this.storage.mutateRun(run.runId, input.expectedRunVersion, (state, meta) => {
 			if (["completed", "failed", "blocked", "cancelled"].includes(state.run.status)) stale("terminal run history cannot be cancelled again");
 			const command: CommandRecord = { commandId: input.commandId, kind: "run.cancel", requestHash: commandRequestHash(input), callerPrincipal: authorization.callerPrincipal,
 				authorizationContextHash: authorization.authorizationContextHash, projectId: run.projectId, controlDomainId: run.controlDomainId, status: "completed", firstCommitSeq: meta.commitSeq, lastCommitSeq: meta.commitSeq, recordedAt: Date.now() };
-			return advance(state, {
+			const mutation = advance(state, {
 			run: { ...state.run, requiresReadmission: false, status: this.#checkQuiescence(state.run, proof) ? "cancelled" : "unknown", stage: this.#checkQuiescence(state.run, proof) ? "terminal" : "reconciling", needsOperator: !this.#checkQuiescence(state.run, proof) },
 			approvals: state.approvals.map((item) => item.status === "pending" ? { ...item, status: "cancelled" as const, decidedAt: Date.now() } : item),
 			outbox: this.#release(state, state.approvals.at(-1)?.approvalRequestId ?? invalid("run has no approval"), proof),
 		}, state.approvals.filter((item) => item.status === "pending").map((item) => event({ kind: "approval.settled", approvalRequestId: item.approvalRequestId, decision: "cancelled" })), command);
-		}).run;
+   return {...mutation,responseJson:JSON.stringify(mutation.run)};
+		}, binding);
+  const response = await this.#replay(context,binding,"cancel",run.runId);
+  if (response !== undefined) return JSON.parse(response) as ApprovalRun;
+  await this.authority.authorize(context,{operation:"cancel",run:this.#run(run.runId)});
+  return JSON.parse(committed.responseJson!) as ApprovalRun;
 	}
 	/** Re-prove quiescence after a non-quiescent pause; never infer it from status. */
 	async park(context: C, input: { runId: string; expectedRunVersion: number }): Promise<ApprovalRun> {
@@ -240,7 +273,7 @@ export class ApprovalService<C = unknown> {
 			if (!(state.run.status === "paused" || state.run.status === "running" && state.run.stage === "queued") || state.run.requiresReadmission !== true) stale("terminal or executing runs cannot be revived by park");
 			if (!this.#checkQuiescence(state.run, proof)) throw new ControlError("TF_RECONCILE_REQUIRED", "park requires fresh TE quiescence", { recoveryAction: "operator", sideEffects: "unknown" });
 			const approval = state.approvals.find((item) => item.status === "pending" || item.status === "approved" || item.status === "edited") ?? invalid("run has no durable approval");
-			const intent: ApprovalReleaseIntent[] = state.run.reservationId ? [{ kind: "approval.release", intentId: randomUUID(), approvalRequestId: approval.approvalRequestId, runId: run.runId, reservationId: state.run.reservationId, evidence: proof, complete: false }] : [];
+			const intent: ApprovalReleaseIntent[] = state.run.reservationId ? [{ kind: "approval.release", intentId: randomUUID(), approvalRequestId: approval.approvalRequestId, runId: run.runId, reservationId: state.run.reservationId, evidence: this.#proof(proof), complete: false }] : [];
 			return advance(state, { run: { ...state.run, status: "paused", stage: "parked", requiresReadmission: true }, outbox: [...state.outbox.filter((item) => item.kind !== "approval.release" || item.complete), ...intent] }, []);
 		});
 		await this.drainReleases(context, run.runId);
