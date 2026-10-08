@@ -22,7 +22,8 @@ overrides:
   # Dependabot alert #33 / GHSA-2v37-7h3g-55p8: nanoid < 3.3.18
   nanoid: 3.3.18
   postcss: 8.5.23
-  sharp: 0.35.4
+  sharp: 0.35.5
+  source-map-js: 1.2.2
   # September 2026 undici advisories (TLS, WebSocket, retry, cache): fixed in 8.10.2.
   undici: 8.10.2
 allowBuilds:

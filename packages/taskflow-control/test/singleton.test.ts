@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -246,7 +247,7 @@ test("singleton: reclaim bumps the fencing epoch so the old holder is fenced out
 
 test("singleton: crash reclaim followed by graceful restarts never resets the fencing generation", () => {
  const paths = makePaths();
- const first = acquireUserSingleton({ paths, holderId: "dead", processIdentity: { pid: DEAD_PID, birthToken: "dead-generation", birthTokenKind: "native" } });
+ const first = acquireUserSingleton({ paths, holderId: "dead", processIdentity: { pid: DEAD_PID, birthToken: randomUUID(), birthTokenKind: "native" } });
  assert.equal(first.status, "won");
  const reclaimed = acquireUserSingleton({ paths, holderId: "recovered", inspectProcess: deadOwnerInspector() });
  assert.equal(reclaimed.status, "won");

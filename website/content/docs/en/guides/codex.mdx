@@ -3,7 +3,7 @@ title: Using taskflow on Codex
 description: Install taskflow as a Codex plugin and orchestrate multi-phase workflows via MCP.
 ---
 
-> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete Control Plane, including WebUI, is implemented and locally verified; the final commit must still pass remote release gates.
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
 
 [Codex](https://github.com/openai/codex) is a natural home for taskflow: it already thinks in terms of subagents, and taskflow gives those subagents a declarative graph to run inside. On Codex, taskflow ships as a plugin that registers an MCP server plus a routing skill, so the model can call it the moment it sees a multi-step task.
 

@@ -7,15 +7,12 @@ tag. GitHub Releases and the npm registry record the completed publication.
 
 ## Current preparation status
 
-**Unreleased 1.0.0; Draft PR #142 targets `main` from the retained historical
-branch `rc/0.3.0-beta.2`.** The branch name is not a beta.2 release target.
-Latest published prerelease remains `v0.3.0-beta.1.2`. See the
-[track reconciliation](./docs/internal/1.0.0-release-plan.md#release-track-reconciliation-2026-10-07).
-The complete approved Control Plane, including its WebUI, must be implemented
-and accepted before 1.0 can ship; the current private package is not a waiver.
-The owner authorized complete closure through publication on 2026-10-08.
-The earlier metadata-only/local-only restrictions are historical; all final
-release gates below remain required.
+**1.0.0 release transaction.** PR #142 carries the implementation; its retained
+`rc/0.3.0-beta.2` branch name is historical. The owner authorized complete
+closure through publication on 2026-10-08. A prepared version or dated changelog
+does not establish publication: consult the [tag workflow](https://github.com/heggria/taskflow/actions/workflows/publish.yml),
+[GitHub Releases](https://github.com/heggria/taskflow/releases) and npm metadata.
+All exact-commit and artifact verification gates below remain required.
 
 ## Public contract and package set
 
@@ -23,7 +20,8 @@ The stable contract is the existing declarative DAG runtime: twelve phase
 kinds, validation/planning, retries and budgets where the host can enforce
 them, Pi interactive approvals, resume/recompute/replay, background runs,
 trace, the TypeScript DSL, and resource transactions for admitted declared
-filesystem targets. MCP/headless approval phases reject automatically. Host
+filesystem targets. Ordinary host MCP/headless approval phases reject automatically; the separate
+authenticated Control MCP route supports durable approvals. Host
 permissions and usage reporting remain host-specific; Grok rejects budgets
 because its stream does not supply reliable usage.
 
@@ -164,11 +162,13 @@ coverage, plus CodeQL and all required exact-SHA CI jobs.
 
 ## Authorized tag and publish
 
-After review, all exact-SHA checks and the required live/TUI evidence pass,
-merge to `main`, rerun required checks there, and replace the `1.0.0` changelog
-heading's `Unreleased` with the actual release date. Commit that change and
-verify `node scripts/verify-release-contract.mjs --published`. The release
-owner may then push annotated `v1.0.0` from that verified main commit.
+After review and the required live/TUI evidence, replace the `1.0.0` changelog
+heading's `Unreleased` with the actual release date in a pull request. Validate
+`node scripts/verify-release-contract.mjs --published` and complete every
+required check on that final PR head before squash-merging to `main`. This
+respects the active PR-only, linear-history ruleset; do not push a direct dating
+commit to protected main. Rerun the required checks on the resulting main SHA,
+verify its release contract, then push annotated `v1.0.0` at that exact commit.
 
 `.github/workflows/publish.yml` alone publishes. It verifies tag/main ancestry,
 the dated changelog, versions/pins, immutable reproducible packed consumers,

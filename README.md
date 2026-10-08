@@ -21,7 +21,7 @@
 
 **taskflow is a declarative runtime for coding-agent workflows.** It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate work out of the host conversation. In Taskflow 1.0, the contract also describes the effects a phase is allowed to propose.
 
-> **Status: 1.0.0 development candidate — unreleased.** Latest published prerelease: `v0.3.0-beta.1.2`. Draft PR [#142](https://github.com/heggria/taskflow/pull/142) targets `main`; its head `rc/0.3.0-beta.2` retains the historical branch name, while 1.0.0 supersedes the beta.2 release target. The complete approved Control Plane, including WebUI, remains required before 1.0 publication; its current private workspace status is not a waiver. See the [release plan](./docs/internal/1.0.0-release-plan.md) and [acceptance scoreboard](./docs/internal/1.0.0-ga-scoreboard.md).
+> **Taskflow 1.0.0** includes the DAG runtime, trusted filesystem effects and complete Control Plane (CLI/MCP/WebUI). [GitHub Releases](https://github.com/heggria/taskflow/releases) and npm establish publication; see the [acceptance scoreboard](./docs/internal/1.0.0-ga-scoreboard.md) for verified scope and limits.
 
 ## The declared-effect contract
 
@@ -67,13 +67,13 @@ Use Node.js **≥ 22.19.0**. To run from the 1.0 source checkout:
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout --track origin/rc/0.3.0-beta.2
+git checkout v1.0.0
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-**The following installation commands apply only after 1.0.0 is published; use the candidate source checkout above today.**
+Install the matching 1.0.0 package set after confirming the release is available:
 
 ```bash
 npm install --global pi-taskflow@1.0.0

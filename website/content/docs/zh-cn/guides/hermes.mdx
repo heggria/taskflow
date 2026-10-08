@@ -3,7 +3,7 @@ title: 在 Hermes Agent 上使用 taskflow
 description: 在 Hermes Agent 上通过 MCP 安装 taskflow，用隔离的 Hermes 子代理编排多阶段工作流。
 ---
 
-> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整 Control Plane（包括 WebUI）已实现并通过本地验收；最终提交仍须通过远程发布门槛。
+> **Taskflow 1.0.0 文档。** 以下命令固定使用 1.0.0 包版本。发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases)，已验证范围与限制见[验收账本](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md)。Control Plane 与 WebUI 已实现，Control 命令随 `taskflow-mcp-core` 交付。
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/) 是 Nous Research 的开源 coding agent（CLI / TUI / 桌面 / 消息网关）。taskflow 的发布路径是 MCP server：Hermes 发现 `taskflow_*` 工具，每个 agent phase 会拉起隔离的 `hermes chat -q -Q` 子进程。
 

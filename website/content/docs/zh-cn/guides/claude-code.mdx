@@ -3,7 +3,7 @@ title: 在 Claude Code 上使用 taskflow
 description: 将 taskflow 作为 Claude Code 插件安装，通过 MCP 编排多阶段工作流。
 ---
 
-> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整 Control Plane（包括 WebUI）已实现并通过本地验收；最终提交仍须通过远程发布门槛。
+> **Taskflow 1.0.0 文档。** 以下命令固定使用 1.0.0 包版本。发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases)，已验证范围与限制见[验收账本](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md)。Control Plane 与 WebUI 已实现，Control 命令随 `taskflow-mcp-core` 交付。
 
 [Claude Code](https://claude.com/product/claude-code) 是 taskflow 的天然宿主：它本身就以 subagent 的方式思考，而 taskflow 给这些 subagent 提供了一个声明式图来运行。插件注册 MCP server 与路由 skill；协议层不依赖 MCP SDK。
 

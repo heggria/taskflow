@@ -8,7 +8,7 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
 
-## [1.0.0] — Unreleased
+## [1.0.0] — 2026-10-08
 
 ### Added
 

@@ -21,7 +21,7 @@
 
 **taskflow 是面向 coding-agent 工作流的声明式运行时。** 它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间过程留在宿主对话之外。在 Taskflow 1.0 中，这份合同还可以描述每个阶段被允许提出的副作用。
 
-> **状态：1.0.0 开发候选，尚未发布。** 最新已发布 prerelease 是 `v0.3.0-beta.1.2`。Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 目标为 `main`；head `rc/0.3.0-beta.2` 沿用历史分支名，当前发布目标已由 beta.2 改为 1.0.0。完整已批准 Control Plane（包括 WebUI）仍是 1.0 发布前必须完成并验收的范围；当前 private workspace 状态不能豁免这些要求。[发布计划](./docs/internal/1.0.0-release-plan.md)和[验收账本](./docs/internal/1.0.0-ga-scoreboard.md)记录范围与阻塞项。
+> **Taskflow 1.0.0**：DAG 运行时、可信文件效果及完整 Control Plane（CLI/MCP/WebUI）。公开版本与发布时间以 [GitHub Releases](https://github.com/heggria/taskflow/releases) 和 npm 为准；支持范围与验证记录见[验收账本](./docs/internal/1.0.0-ga-scoreboard.md)。
 
 ## 声明文件副作用合同
 
@@ -67,13 +67,13 @@ flow / .tf.ts
 ```bash
 git clone https://github.com/heggria/taskflow.git
 cd taskflow
-git checkout --track origin/rc/0.3.0-beta.2
+git checkout v1.0.0
 pnpm install
 pnpm run typecheck
 pnpm test
 ```
 
-**以下命令仅在 1.0.0 正式发布后适用；当前请使用上面的候选源码 checkout。**
+确认正式版本已在 registry 可用后，安装一致的 1.0.0 包版本：
 
 ```bash
 npm install --global pi-taskflow@1.0.0

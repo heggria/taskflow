@@ -3,7 +3,7 @@ title: Using taskflow on Pi
 description: Install, run, save, and resume taskflows on the Pi coding agent.
 ---
 
-> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete Control Plane, including WebUI, is implemented and locally verified; the final commit must still pass remote release gates.
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
 
 If you already use [Pi](https://pi.dev) to delegate work to subagents, taskflow turns those one-off delegations into named, resumable, multi-step workflows. You describe the work as a graph — fan-out, gates, loops, whatever you need — and only the final result comes back into your context.
 
