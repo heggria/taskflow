@@ -53,7 +53,8 @@
 		"image": "https://raw.githubusercontent.com/heggria/taskflow/main/assets/social-preview.png"
 	},
 	"dependencies": {
-		"taskflow-core": "workspace:*"
+		"taskflow-core": "workspace:*",
+		"taskflow-mcp-core": "workspace:*"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-agent-core": "*",

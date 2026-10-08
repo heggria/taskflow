@@ -3,7 +3,7 @@
  *
  * Registers:
  *   - tool `taskflow`        : run inline / saved flows, save, resume (LLM-callable)
- *   - command `/tf`          : list | run | show | save | resume | runs (user)
+ *   - command `/tf`          : list | run | show | save | resume | runs | web (user)
  *   - command `/tf:<name>`   : per-saved-flow shortcut (registered on session_start)
  *
  * Intermediate phase outputs are held in the runtime and never pushed into the
@@ -32,6 +32,7 @@ import { renderRunResult, summarizeRun } from "./render.ts";
 import { createPiSubagentRunner, PI_TASKFLOW_PI_ENTRY_ENV, resolveParentPiCliEntry, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
 import { createApprovalRequester } from "./approval-view.ts";
+import { createWebCommand } from "./web-command.ts";
 import {
 	executeTaskflow,
 	recomputeTaskflow,
@@ -630,6 +631,8 @@ export default function (pi: ExtensionAPI) {
 		registerCtxTools(pi, ctxDir, nodeId);
 		return;
 	}
+	const webCommand = createWebCommand();
+	pi.on("session_shutdown", async () => { await webCommand.close(); });
 
 	// ---- Register per-saved-flow shortcut commands on session start ----
 	// Cached for /tf argument completions (getArgumentCompletions has no ctx).
@@ -1672,9 +1675,9 @@ export default function (pi: ExtensionAPI) {
 
 	// ---- The /tf user command ----
 	pi.registerCommand("tf", {
-		description: "Taskflow: list | run <name> | show <name> | verify <name> | compile <name> | plan <name> | runs | peek <runId> [phaseId] | reconcile-workspace --ack | init",
+		description: "Taskflow: list | run <name> | show <name> | verify <name> | compile <name> | plan <name> | runs | web (Control Plane console) | peek <runId> [phaseId] | reconcile-workspace --ack | init",
 		getArgumentCompletions: (prefix) => {
-			const subs = ["list", "run", "show", "runs", "peek", "resume", "init", "save", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
+			const subs = ["list", "run", "show", "runs", "web", "peek", "resume", "init", "save", "verify", "compile", "plan", "analytics", "ir", "provenance", "trace", "replay", "why-stale", "recompute", "reconcile-workspace", "version"];
 			// Name-taking subcommands: complete saved flow names after the sub (cwd from session_start).
 			const nameSubs = new Set(["run", "show", "verify", "compile", "plan", "analytics", "ir"]);
 			const trimmed = prefix.trimStart();
@@ -1703,6 +1706,12 @@ export default function (pi: ExtensionAPI) {
 			// autocomplete may return legal names with repeated/Unicode whitespace.
 			const arg = separator < 0 ? "" : trimmedArg.slice(separator).trim();
 			const rest = arg ? arg.split(/\s+/u) : [];
+
+			if (sub === "web") {
+				if (arg) { ctx.ui.notify("Usage: /tf web", "warning"); return; }
+				await webCommand.run(ctx);
+				return;
+			}
 
 			if (!sub || sub === "list") {
 				const flows = listFlows(ctx.cwd);

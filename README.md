@@ -91,6 +91,14 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 
 This exercises the checked-in `examples/trusted-effects-write.json` path without a live LLM. For an interactive run, use the host guide for the adapter you already run. The [release guide](./RELEASE.md) covers packed-consumer validation and release gates.
 
+### Local Control Console
+
+In Pi, run `/tf web` to start the bundled local Control Console and open the default browser. If browser opening fails, the command shows a manual loopback URL. Use the one-use token in the reported private (0600) handoff file to log in; tokens are never included in the URL or command notifications.
+
+The console shows Control Plane runs, approvals, Receipts and existing evidence. Legacy Pi run transcripts are outside this view. Repeating the command in the same project reuses its service; changing projects or leaving the Pi session stops only the console process started by that session. Unix local transport is required. If another host already owns the Control home, stop that owner explicitly before launching this console.
+
+See [Pi compatibility](./docs/pi-compatibility.md) for the tested SDK matrix and the distinction between real-process fixtures and live-provider acceptance.
+
 ## Declare an effect
 
 Effects are part of the flow contract, not a free-form prompt promise:

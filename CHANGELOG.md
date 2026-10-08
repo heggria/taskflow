@@ -12,6 +12,8 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ### Added
 
+- Pi `/tf web` launches the public local console, opens the browser with a safe URL and provides manual fallback, reuses the owned service, and cleans it up on session exit. The command retains private one-use token login and exposes existing Control Plane evidence.
+- Restore the public Pi SDK compatibility guide and its reproducible matrix checks.
 - Authenticated multi-project Control Plane: durable project/domain registry, real runtime admission, global concurrency reservations, command-result replay, scoped artifacts, terminal Receipts and evidence explanations.
 - Durable approval park/CAS, output and plan edits, restart readmission, and local WebUI for runs, approvals and evidence. Plan edits preserve the DAG.
 - Public `taskflow-control` and `taskflow-project-admin` binaries bundled in `taskflow-mcp-core`, including fresh default-auto bootstrap and an installed guide. The release remains ten public packages; the private control source workspace is not a runtime dependency.

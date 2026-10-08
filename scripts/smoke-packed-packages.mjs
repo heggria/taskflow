@@ -315,12 +315,80 @@ try {
 		smokeMcpBin(binName, serverName);
 	}
 	smokeControlBundle(consumerDir);
+	await smokePiWebConsole(consumerDir);
 
 	process.stdout.write(
 		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 8 bins\n`,
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });
+}
+
+/** Exercise the registered public Pi slash command, not a source-only launcher.
+ * Keep the browser harmless while testing the real installed console process. */
+async function smokePiWebConsole(installedConsumer) {
+	const temporary = realpathSync(mkdtempSync("/tmp/tfwp-"));
+	const previousHome = process.env.TASKFLOW_HOME;
+	const previousPath = process.env.PATH;
+	let shutdown;
+	try {
+		const project = join(temporary, "project with spaces"), home = join(temporary, "home"), bin = join(temporary, "bin");
+		mkdirSync(project); mkdirSync(bin);
+		const openerCapture = join(temporary, "browser-argv.json");
+		const opener = join(bin, process.platform === "darwin" ? "open" : "xdg-open");
+		writeFileSync(opener, `#!${process.execPath}\nimport fs from 'node:fs';fs.writeFileSync(${JSON.stringify(openerCapture)},JSON.stringify(process.argv.slice(2)));process.exit(1);\n`);
+		chmodSync(opener, 0o755);
+		process.env.TASKFLOW_HOME = home;
+		process.env.PATH = `${bin}:${previousPath ?? ""}`;
+		const installedRequire = createRequire(join(installedConsumer, "pi-web-consumer.mjs"));
+		const piEntry = installedRequire.resolve("pi-taskflow");
+		assert.ok(realpathSync(piEntry).startsWith(realpathSync(join(installedConsumer, "node_modules", "pi-taskflow")) + "/"));
+		assert.equal(realpathSync(piEntry).endsWith("/dist/index.js"), true);
+		assert.doesNotMatch(piEntry, /\/src\//);
+		assert.doesNotMatch(readFileSync(join(installedConsumer, "node_modules", "pi-taskflow", "package.json"), "utf8"), /workspace:/);
+		const extension = (await import(pathToFileURL(piEntry).href)).default;
+		let tf, tool;
+		extension({
+			registerCommand(name, definition) { if (name === "tf") tf = definition; },
+			registerTool(definition) { if (definition.name === "taskflow") tool = definition; },
+			on(event, handler) { if (event === "session_shutdown") shutdown = handler; },
+		});
+		assert.ok(tf); assert.ok(shutdown); assert.ok(tool);
+		assert.ok((await tf.getArgumentCompletions("we")).some((item) => item.value === "web"));
+		assert.doesNotMatch(JSON.stringify(tool.parameters), /"web"/);
+		const messages = [];
+		const ctx = { cwd: project, ui: { notify(text, kind) { messages.push({ text, kind }); } } };
+		await tf.handler("web", ctx);
+		assert.equal(messages.some((message) => message.kind === "error"), false, JSON.stringify(messages));
+		assert.equal(messages.at(-1).kind, "warning", "failed opener must show a manual URL");
+		const info = messages.find((message) => message.text.startsWith("Control Console:")).text;
+		assert.match(info, /Control Plane runs and evidence/);
+		const url = info.match(/Control Console: (http:\/\/127\.0\.0\.1:\d+)/)[1];
+		const handoffFile = info.match(/Private login handoff: (.+)/)[1];
+		const handoff = JSON.parse(readFileSync(handoffFile, "utf8"));
+		assert.equal(handoff.url, url);
+		assert.ok(handoff.token);
+		assert.equal(messages.some((message) => message.text.includes(handoff.token)), false, "notifications must not disclose the login token");
+		assert.deepEqual(JSON.parse(readFileSync(openerCapture, "utf8")), [url], "browser receives no bootstrap secret");
+		assert.equal((await fetch(url, { signal: AbortSignal.timeout(5_000) })).status, 200);
+		assert.equal((await fetch(`${url}/api/projects`, { signal: AbortSignal.timeout(5_000) })).status, 401);
+		const lockFile = join(home, "control", "singleton.lock.json");
+		const before = readFileSync(lockFile, "utf8");
+		await tf.handler("web", ctx);
+		assert.equal(readFileSync(lockFile, "utf8"), before, "repeat command must reuse its owned carrier");
+		assert.equal(messages.some((message) => message.text.includes(handoff.token)), false);
+		await shutdown();
+		assert.equal(globSync("console-handoff-*.json", { cwd: join(home, "control") }).length, 0);
+		await assert.rejects(fetch(url, { signal: AbortSignal.timeout(5_000) }), "session shutdown must close the installed console");
+		process.stdout.write("packed Pi /tf web passed: public carrier, routing/completions, browser fallback, login boundary, reuse and owned shutdown\n");
+	} finally {
+		try { await shutdown?.(); }
+		finally {
+			if (previousHome === undefined) delete process.env.TASKFLOW_HOME; else process.env.TASKFLOW_HOME = previousHome;
+			if (previousPath === undefined) delete process.env.PATH; else process.env.PATH = previousPath;
+			rmSync(temporary, { recursive: true, force: true });
+		}
+	}
 }
 
 function exportTargets(exportsValue, condition) {
