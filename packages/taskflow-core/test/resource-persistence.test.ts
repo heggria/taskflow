@@ -371,7 +371,7 @@ test("persistent mutex abort preserves a changed waiting owner", async (t) => {
 	assert.ok(name);
 	const ticket = path.join(queue, name);
 	const record = JSON.parse(fs.readFileSync(ticket, "utf8"));
-	const replacement = JSON.stringify({ ...record, birthToken: "different-owner" });
+	const replacement = JSON.stringify({ ...record, birthToken: crypto.randomUUID() });
 	fs.writeFileSync(ticket, replacement);
 	controller.abort();
 	await rejected;
@@ -388,7 +388,7 @@ test("persistent mutex stale cleanup preserves a record replaced during process 
 	const ticket = path.join(`${lock}.queue`, `ticket-${token}.json`);
 	const old = { kind: "ticket", pid: 424242, birthToken: "old", birthTokenKind: "native", token, ticket: 1, createdAt: 1, state: "held" };
 	fs.writeFileSync(ticket, JSON.stringify(old));
-	const replacement = JSON.stringify({ ...old, birthToken: "replacement" });
+	const replacement = JSON.stringify({ ...old, birthToken: crypto.randomUUID() });
 	await assert.rejects(new PersistentFileMutex(lock, {
 		inspectProcess: () => { fs.writeFileSync(ticket, replacement); return { alive: false }; },
 	}).acquire(), /record changed during cleanup/);

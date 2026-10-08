@@ -276,14 +276,15 @@ for (const failure of [false, true]) {
 	test(`web console: revocation during owner call suppresses delayed ${failure ? "error" : "result"} without replaying mutation`, async (t) => {
 		const entered = deferred(); const resume = deferred();
 		let revoked = false; let calls = 0;
+		const privateResult = randomUUID();
 		const purposes: string[] = [];
 		const console = await launch(t, { authorize: async ({ purpose }) => {
 			purposes.push(purpose);
 			if (revoked) throw new ControlError("TF_AUTHORITY_REVOKED", "revoked");
 			return { call: async () => {
 				calls++; entered.resolve(); await resume.promise;
-				if (failure) throw new ControlError("TF_STALE_VERSION", "private-result");
-				return { secret: "private-result" };
+				if (failure) throw new ControlError("TF_STALE_VERSION", privateResult);
+				return { secret: privateResult };
 			} };
 		} });
 		const headers = await session(console);
@@ -291,7 +292,7 @@ for (const failure of [false, true]) {
 		await entered.promise; revoked = true; resume.resolve();
 		const response = await pending;
 		assert.equal(response.status, 403);
-		assert.doesNotMatch(await response.text(), /private-result/);
+		assert.equal((await response.text()).includes(privateResult), false);
 		assert.equal(calls, 1);
 		assert.deepEqual(purposes, ["execute", "disclose"]);
 	});
