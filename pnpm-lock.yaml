@@ -126,6 +126,9 @@ importers:
       taskflow-core:
         specifier: workspace:*
         version: link:../taskflow-core
+      taskflow-mcp-core:
+        specifier: workspace:*
+        version: link:../taskflow-mcp-core
     devDependencies:
       '@earendil-works/pi-agent-core':
         specifier: 1.0.0
