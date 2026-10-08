@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { RELEASE_PACKAGE_NAMES, packReleasePackages } from "./pack-release-packages.mjs";
+import { smokeControlBundle } from "./smoke-control-bundle.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageNames = RELEASE_PACKAGE_NAMES;
@@ -313,9 +314,10 @@ try {
 	]) {
 		smokeMcpBin(binName, serverName);
 	}
+	smokeControlBundle(consumerDir);
 
 	process.stdout.write(
-		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 6 bins\n`,
+		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 8 bins\n`,
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });

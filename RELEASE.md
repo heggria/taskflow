@@ -46,10 +46,21 @@ exports must use shipped JavaScript/declarations and never source-only
 `development` conditions. Codex/Claude/Grok plugin scaffolds are distributed
 from the repository, separately from their npm delivery packages.
 
-`taskflow-control` is private, workspace-only and experimental. Its Unix UDS
-and store implementation does not constitute a complete control plane:
-BoundPlan admission, authorized command-result replay, global concurrency, parked approvals/CAS/receipts,
-registry coordination, Windows named pipes and WebUI are incomplete.
+The private `taskflow-control` workspace is the source implementation; it is not
+an eleventh npm release package. The existing public `taskflow-mcp-core` tarball
+bundles its compiled JavaScript under `dist/control/` and exposes
+`taskflow-control` and `taskflow-project-admin` binaries. Its build compiles the
+bundle directly from source; consumers need neither a checkout nor the private
+package. `CONTROL_GUIDE.md` is included in that tarball. The shared release
+contract verifies these two public bin declarations.
+
+The candidate implements authenticated multi-project routing, TE admission,
+authorized durable replay, global concurrency, parked approvals/CAS, Receipt,
+CLI/MCP and the local WebUI. The operator path uses a separately provisioned
+credential and explicit risk acknowledgement for forced release. Current
+implementation and acceptance boundaries are in the [closure ledger](docs/internal/1.0.0-spec-closure.md).
+Unix UDS is the supported control transport; Windows named pipes remain non-GA
+under accepted P13. These facts replace the former scaffold-only description.
 CharterArc retains its separate experimental version/tag/workflow and is
 excluded from the ten-package transaction. These packaging boundaries do not
 waive accepted specifications: 1.0 publication remains blocked on their
@@ -57,6 +68,36 @@ implementation and acceptance. Resolve-only path checks are not an OS sandbox; u
 writes remain host-policy dependent. SecretRef/ServiceRef have no live
 vault/service backend. High-scale journals and full kernel parity are not
 claimed; the optional event kernel still falls back for unsupported features.
+
+## Bundled control: fresh installation and upgrade
+
+For a **local candidate**, install the retained `taskflow-core-1.0.0.tgz` and
+`taskflow-mcp-core-1.0.0.tgz` plus the selected TypeBox peer into a new npm project
+with lifecycle scripts disabled. No `taskflow-control` tarball is installed.
+`scripts/smoke-control-bundle.mjs`, called by the ten-package consumer gate,
+executes the installed `.bin` entries, a fresh default-auto script run, a second
+run after restart and durable status lookup, with an isolated `TASKFLOW_HOME`.
+
+After a separately authorized publication, the equivalent public installation is:
+
+```sh
+npm install --save-exact taskflow-mcp-core@1.0.0 typebox@1.3.30
+./node_modules/.bin/taskflow-control run --root /absolute/project --flow /absolute/flow.json
+```
+
+This command is a post-publication instruction, not a claim that the candidate
+has been published. With no `--mode`, `auto` creates the registry and project
+store and starts or attaches to the user singleton; no manual daemon setup is
+required. Keep `TASKFLOW_HOME` outside execution projects. The CLI executes
+script phases; agent phases require a configured embedded runner. The installed
+binary is `node_modules/taskflow-mcp-core/dist/control/control-cli.js`.
+
+For upgrade, stop the owned control process gracefully, preserve the control
+home and project journals, replace the public package, and restart via the same
+command/home. Incompatible handshakes fail closed; do not delete authority state
+to bypass version skew. An ambiguous recovery keeps capacity and requires an
+explicit operator decision. Never run old and new private/public launchers as
+separate authorities: they use the same singleton endpoint and stores.
 
 ## Required preparation and verification
 

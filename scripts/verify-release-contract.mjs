@@ -48,6 +48,9 @@ export function verifyReleaseContract(repo, { published = false } = {}) {
 	const hermesPins = hermes.match(/hermes-taskflow@[^"\s,\]]+/g) ?? [];
 	assert.deepEqual(hermesPins, [`hermes-taskflow@${version}`], "hermes: MCP pin mismatch");
 	assert.equal(readJson("packages/taskflow-control/package.json").private, true, "experimental taskflow-control must remain private");
+	const controlDelivery = readJson("packages/taskflow-mcp-core/package.json");
+	assert.equal(controlDelivery.bin?.["taskflow-control"], "./dist/control/control-cli.js", "public control binary must ship in taskflow-mcp-core");
+	assert.equal(controlDelivery.bin?.["taskflow-project-admin"], "./dist/control/project-admin-cli.js", "public project administration binary must ship in taskflow-mcp-core");
 	const charterarc = readJson("packages/charterarc/package.json");
 	assert.match(charterarc.version, /-experimental\./, "CharterArc must retain a separate experimental version");
 	assert.equal(charterarc.publishConfig?.tag, "experimental", "CharterArc must retain its experimental channel");

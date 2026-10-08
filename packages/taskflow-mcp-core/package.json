@@ -1,7 +1,7 @@
 {
 	"name": "taskflow-mcp-core",
 	"version": "1.0.0",
-	"description": "Host-neutral MCP server for taskflow: a dependency-free stdio JSON-RPC server exposing the taskflow_* tools, plus the DAG SVG/outline renderer. Shared by the codex/claude/opencode/grok/hermes adapters \u2014 depends only on taskflow-core.",
+	"description": "Host-neutral Taskflow MCP server and DAG renderer, with bundled local control and project administration binaries. Shared by the Codex, Claude, OpenCode, Grok and Hermes adapters.",
 	"keywords": [
 		"taskflow",
 		"mcp",
@@ -50,10 +50,15 @@
 		}
 	},
 	"files": [
-		"dist"
+		"dist",
+		"CONTROL_GUIDE.md"
 	],
+	"bin": {
+		"taskflow-control": "./dist/control/control-cli.js",
+		"taskflow-project-admin": "./dist/control/project-admin-cli.js"
+	},
 	"scripts": {
-		"build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/copy-readme.mjs taskflow-mcp-core",
+		"build": "rm -rf dist && tsc -p tsconfig.build.json && node ../../scripts/build-control-bundle.mjs && node ../../scripts/copy-readme.mjs taskflow-mcp-core",
 		"prepublishOnly": "npm run build"
 	},
 	"publishConfig": {
@@ -79,5 +84,8 @@
 	},
 	"dependencies": {
 		"taskflow-core": "workspace:*"
+	},
+	"peerDependencies": {
+		"typebox": "*"
 	}
 }

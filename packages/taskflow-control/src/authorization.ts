@@ -69,6 +69,9 @@ export interface AuthorizationAuthorityOptions {
 	challengeTtlMs?: number;
 }
 export interface AuthorizationAuthority {
+	/** Optional, explicitly provisioned issuer; never granted by a caller role label. */
+	issueOperatorStandalone?(binding: AuthorizationBinding): VerifiedContext;
+	createOperatorChallenge?(binding: AuthorizationBinding): AuthorizationChallenge;
 	issueStandalone(binding: AuthorizationBinding): VerifiedContext;
 	createChallenge(binding: AuthorizationBinding): AuthorizationChallenge;
 	authenticate(challengeId: string, proof: string): VerifiedContext;

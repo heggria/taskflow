@@ -55,6 +55,7 @@ test("release contract rejects drift, unpinned templates and experimental depend
 		["experimental dependency", (root) => change(root, "packages/taskflow-hosts/package.json", (m) => { m.dependencies = { "taskflow-control": "workspace:*" }; }), /experimental dependency/],
 		["mixed dependency", (root) => change(root, "packages/taskflow-hosts/package.json", (m) => { m.dependencies = { "taskflow-core": "^1.0.0" }; }), /must use workspace/],
 		["experimental latest", (root) => change(root, "packages/charterarc/package.json", (m) => { m.publishConfig = { tag: "latest" }; }), /experimental channel/],
+		["missing public control delivery", (root) => change(root, "packages/taskflow-mcp-core/package.json", (m) => { delete m.bin; }), /public control binary/],
 	];
 	for (const [name, mutate, expected] of cases) {
 		const root = fixture(); try { mutate(root); assert.throws(() => verifyReleaseContract(root), expected, name); } finally { rmSync(root, { recursive: true, force: true }); }

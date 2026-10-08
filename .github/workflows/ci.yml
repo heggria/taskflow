@@ -76,7 +76,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pi: ["0.80.3", "1.0.0"]
+        pi: ["0.80.3", "0.85.1", "1.0.4"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -86,27 +86,30 @@ jobs:
           cache: "pnpm"
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
-      # The regular Node 22/24 suite uses the locked 1.0.0 adapter dev peers.
-      # Also exercise the former adapter resolution, rather than accidentally
-      # claiming the root SDK version is used by every workspace package.
-      - name: Install previous adapter peers
-        if: matrix.pi == '0.80.3'
+      # The regular Node 22/24 suite and packed smoke retain locked 1.0.0 peers.
+      # Change only this disposable job's adapter peers; verify their direct
+      # resolution before claiming the selected SDK was actually exercised.
+      - name: Install exact adapter peers
         run: >-
           pnpm --filter pi-taskflow add --save-dev --save-exact
-          @earendil-works/pi-agent-core@0.80.3
-          @earendil-works/pi-ai@0.80.3
-          @earendil-works/pi-coding-agent@0.80.3
-          @earendil-works/pi-tui@0.80.3
+          @earendil-works/pi-agent-core@${{ matrix.pi }}
+          @earendil-works/pi-ai@${{ matrix.pi }}
+          @earendil-works/pi-coding-agent@${{ matrix.pi }}
+          @earendil-works/pi-tui@${{ matrix.pi }}
           --registry https://registry.npmjs.org/
       - name: Verify resolved SDK and run complete adapter suite
         run: pnpm run test:pi:peers
         env:
           PI_TEST_PEER_VERSION: ${{ matrix.pi }}
-      - name: Build and exercise real Pi 1.0 CLI, approvals, and crash recovery
-        if: matrix.pi == '1.0.0'
+      - name: Build core and Pi extension against selected SDK
         run: |
           pnpm --filter taskflow-core build
           pnpm --filter pi-taskflow build
+      - name: Real Pi compatibility and MCP allowlist controls
+        run: node --experimental-strip-types packages/pi-taskflow/test/e2e-pi-compat.mts
+      - name: Real Pi 1.0.4 lifecycle, approvals, usage, and crash recovery
+        if: matrix.pi == '1.0.4'
+        run: |
           pnpm run test:e2e-pi
           pnpm run test:e2e-pi-crash-resume
 

@@ -8,7 +8,7 @@ import { ControlHost, defaultServerHello } from "./control-host.ts";
 import { ProjectRegistry } from "./project-registry.ts";
 import { RuntimeTeExecutionProvider } from "./runtime-provider.ts";
 import { answerAuthorizationChallenge, type AuthorizationChallenge, type VerifiedContext, type AuthorizationCommandKind } from "./authorization.ts";
-import { bootstrapLocalAuthority, createPrivateFileOnce, ensurePrivateDirectory } from "./local-bootstrap.ts";
+import { bootstrapLocalAuthority, createPrivateFileOnce, ensurePrivateDirectory, provisionLocalOperator, readPrivateFile } from "./local-bootstrap.ts";
 import { createControlEvidenceStore, readControlEvidence } from "./store/evidence-adapter.ts";
 import { launchControlConsole } from "./control-console.ts";
 import { serveControlMcp } from "./control-mcp.ts";
@@ -23,19 +23,25 @@ import { ControlStoreHeaderSchema } from "./schema/header.ts";
 const HELP = `taskflow-control run --root DIR --flow FILE [--args JSON] [--mode auto|coordinated|standalone]
 taskflow-control status --root DIR [--run UUID]
 taskflow-control serve --root DIR [--root DIR ...] [--console] [--port NUMBER]
-taskflow-control mcp --root DIR [--mode auto|coordinated|standalone]
+taskflow-control mcp --root DIR [--mode auto|coordinated|standalone] [--operator]
+taskflow-control operator-provision --root DIR --control-home DIR
+taskflow-control coordinator-status --root DIR [--operator]
+taskflow-control set-max-active-runs --root DIR --operator --command-id UUID --max-active-runs NUMBER
+taskflow-control force-release --root DIR --operator --command-id UUID --reservation UUID --acknowledge-risk --reason TEXT
 Common: --control-home DIR (defaults to TASKFLOW_HOME/control or ~/.taskflow/control).
+Operator provisioning is an explicit OS-owner action; a separate credential and live project policy grant operations.
+maxActiveRuns is user-global. Force release does not stop execution and marks the concurrency guarantee operator-overridden.
 Local owner grants are persisted under CONTROL_HOME/policies and reread per operation.
 The CLI executes script flows directly; agent execution requires an embedded configured runner.
 Console's one-use browser token is saved to a 0600 local file, never printed or put in URLs.
 `;
 function fail(message: string): never { throw new ControlError("TF_BOOTSTRAP_FAILED", message); }
 function parse(argv: string[]) {
- const command = argv[0]; if (!["run", "status", "serve", "mcp"].includes(command)) fail(HELP);
+ const command = argv[0]; if (!["run", "status", "serve", "mcp", "operator-provision", "coordinator-status", "set-max-active-runs", "force-release"].includes(command)) fail(HELP);
  const flags = new Map<string, string[]>();
  for (let i = 1; i < argv.length; i++) {
-  const flag = argv[i]; if (!["--root", "--flow", "--args", "--mode", "--control-home", "--run", "--console", "--port"].includes(flag)) fail(`unknown option ${flag}`);
-  const value = flag === "--console" ? "true" : argv[++i]; if (!value || value.startsWith("--")) fail(`value required for ${flag}`);
+  const flag = argv[i]; if (!["--root", "--flow", "--args", "--mode", "--control-home", "--run", "--console", "--port", "--operator", "--command-id", "--max-active-runs", "--reservation", "--acknowledge-risk", "--reason"].includes(flag)) fail(`unknown option ${flag}`);
+  const value = ["--console", "--operator", "--acknowledge-risk"].includes(flag) ? "true" : argv[++i]; if (!value || value.startsWith("--")) fail(`value required for ${flag}`);
   if (flag !== "--root" && flags.has(flag)) fail(`duplicate option ${flag}`);
   flags.set(flag, [...(flags.get(flag) ?? []), value]);
  }
@@ -43,12 +49,16 @@ function parse(argv: string[]) {
  if (roots.some(root => !fs.statSync(root).isDirectory())) fail("project root must be a directory");
  if (command !== "serve" && roots.length !== 1) fail("multiple roots require serve");
  const get = (key: string) => flags.get(key)?.[0];
- const mode = get("--mode") ?? (command === "status" ? "coordinated" : "auto");
+ const mode = get("--mode") ?? (["status", "coordinator-status", "set-max-active-runs", "force-release"].includes(command) ? "coordinated" : "auto");
  if (!["auto", "coordinated", "standalone"].includes(mode)) fail("invalid control mode");
  const port = get("--port") === undefined ? undefined : Number(get("--port"));
  if (port !== undefined && (!Number.isInteger(port) || port < 0 || port > 65535)) fail("invalid console port");
  if (command !== "serve" && (get("--console") || port !== undefined)) fail("console options require serve");
- return { command, roots, mode: mode as ControlMode, controlHome: path.resolve(singletonPaths(get("--control-home")).controlHome), flow: get("--flow"), args: get("--args"), runId: get("--run"), console: !!get("--console"), port };
+ if (get("--operator") && !["mcp", "status", "coordinator-status", "set-max-active-runs", "force-release"].includes(command)) fail("--operator requires an explicit operator-capable client command");
+ if (["set-max-active-runs", "force-release"].includes(command) && !get("--command-id")) fail("operator mutations require --command-id UUID for durable retries");
+ if (command === "set-max-active-runs" && (!Number.isSafeInteger(Number(get("--max-active-runs"))) || Number(get("--max-active-runs")) < 1)) fail("--max-active-runs must be a positive safe integer");
+ if (command === "force-release" && (!get("--reservation") || !get("--acknowledge-risk") || !get("--reason")?.trim())) fail("force-release requires --reservation, --acknowledge-risk and a nonempty --reason");
+ return { operator: !!get("--operator"), commandId: get("--command-id"), maxActiveRuns: Number(get("--max-active-runs")), reservationId: get("--reservation"), reason: get("--reason"), command, roots, mode: mode as ControlMode, controlHome: path.resolve(singletonPaths(get("--control-home")).controlHome), flow: get("--flow"), args: get("--args"), runId: get("--run"), console: !!get("--console"), port };
 }
 function readHeader(root: string) {
  const file = path.join(root, ".taskflow", "control", "header");
@@ -70,6 +80,9 @@ export async function runControlCli(argv = process.argv.slice(2)): Promise<numbe
  const flow: unknown = config.command === "run" ? JSON.parse(fs.readFileSync(config.flow ?? fail("run requires --flow FILE"), "utf8")) : undefined;
  const args: unknown = JSON.parse(config.args ?? "{}");
  ensurePrivateDirectory(config.controlHome);
+ if (config.command === "operator-provision") {
+  process.stdout.write(JSON.stringify(provisionLocalOperator(config.controlHome, config.roots[0])) + "\n"); return 0;
+ }
  const registry = new ProjectRegistry(path.join(config.controlHome, "registry.json"));
  const { authorization, secret } = bootstrapLocalAuthority(config.controlHome, config.roots, {
   verifyArtifactReachability: (_principal, binding, digest, commandKind) => {
@@ -84,6 +97,7 @@ export async function runControlCli(argv = process.argv.slice(2)): Promise<numbe
    return mount.store.readJournal().some(batch => batch.command?.kind === commandKind && batch.command?.responseArtifactRef?.digest === digest);
   },
  });
+ const credentialSecret = config.operator ? readPrivateFile(path.join(config.controlHome, "operator.key")) : secret;
  const host = new ControlHost({ mode: config.mode, controlHome: config.controlHome, registry, authorization, trustedInProcessFeatures: ["durable-approval"],
   projectRoot: config.roots[0], projectStorePath: path.join(config.roots[0], ".taskflow", "control"),
   projectMounts: config.roots.slice(1).map(projectRoot => ({ projectRoot, storePath: path.join(projectRoot, ".taskflow", "control") })),
@@ -124,17 +138,25 @@ export async function runControlCli(argv = process.argv.slice(2)): Promise<numbe
   const header = readHeader(config.roots[0]);
   let context: VerifiedContext | undefined;
   if (host.status.singleton === "attached") {
-   const challenge = await host.dispatch<AuthorizationChallenge>("auth.challenge", { projectId: header.projectId }, { fencingEpoch: host.status.fencingEpoch });
+   const challenge = await host.dispatch<AuthorizationChallenge>("auth.challenge", { projectId: header.projectId, ...(config.operator ? { credential: "operator" } : {}) }, { fencingEpoch: host.status.fencingEpoch });
    if (challenge.binding.projectRoot !== config.roots[0] || challenge.binding.projectId !== header.projectId || challenge.binding.controlDomainId !== header.controlDomainId) fail("host challenge does not match the configured project");
-   await host.dispatch("auth.authenticate", { challengeId: challenge.id, proof: answerAuthorizationChallenge(secret, challenge) }, { fencingEpoch: host.status.fencingEpoch });
-  } else context = authorization.issueStandalone({ projectId: header.projectId, controlDomainId: header.controlDomainId, projectRoot: config.roots[0] });
+   await host.dispatch("auth.authenticate", { challengeId: challenge.id, proof: answerAuthorizationChallenge(credentialSecret, challenge) }, { fencingEpoch: host.status.fencingEpoch });
+  } else {
+   const binding = { projectId: header.projectId, controlDomainId: header.controlDomainId, projectRoot: config.roots[0] };
+   context = config.operator ? authorization.issueOperatorStandalone!(binding) : authorization.issueStandalone(binding);
+  }
   const call = <T>(method: string, params: unknown) => context ? host.dispatchAuthenticated<T>(context, method, params) : host.dispatch<T>(method, params, { fencingEpoch: host.status.fencingEpoch });
   if (config.command === "mcp") {
    const stopInput = () => process.stdin.destroy();
    process.on("SIGINT", stopInput); process.on("SIGTERM", stopInput);
-   try { await serveControlMcp({ call, projectId: header.projectId }); }
+   try { await serveControlMcp({ call, projectId: header.projectId, operator: config.operator }); }
    finally { process.off("SIGINT", stopInput); process.off("SIGTERM", stopInput); }
    return 0;
+  }
+  if (["coordinator-status", "set-max-active-runs", "force-release"].includes(config.command)) {
+   const method = config.command === "coordinator-status" ? "coordinator.status" : config.command === "set-max-active-runs" ? "coordinator.setMaxActiveRuns" : "coordinator.forceRelease";
+   const params = { projectId: header.projectId, ...(config.command === "set-max-active-runs" ? { commandId: config.commandId, maxActiveRuns: config.maxActiveRuns } : config.command === "force-release" ? { commandId: config.commandId, reservationId: config.reservationId, riskAcknowledgement: true, reason: config.reason } : {}) };
+   process.stdout.write(JSON.stringify(await call(method, params)) + "\n"); return 0;
   }
   if (config.command === "run") {
    const accepted = await call<{ runId: string }>("commands.submit", { projectId: header.projectId, commandId: randomUUID(), kind: "run.submit", flow, args });
@@ -182,10 +204,10 @@ export async function runControlCli(argv = process.argv.slice(2)): Promise<numbe
   process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
   await consoleServer?.close();
   if (handoffPath) { try { fs.unlinkSync(handoffPath); } catch { /* preserve primary shutdown error */ } }
-  host.stop(); registry.close(); secret.fill(0);
+  host.stop(); registry.close(); secret.fill(0); credentialSecret.fill(0);
  }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && fs.existsSync(process.argv[1]) && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
  runControlCli().then(code => { process.exitCode = code; }, error => {
   process.stderr.write(JSON.stringify({ error: error instanceof ControlError ? error.code : "TF_BOOTSTRAP_FAILED", message: error instanceof Error ? error.message : "local control failed" }) + "\n");
   process.exitCode = 1;

@@ -450,7 +450,10 @@ export class ControlHost {
 		const body = params && typeof params === "object" ? params as Record<string, unknown> : {};
 		if (method === "auth.challenge") {
 			const mount = this.#registry.resolve(typeof body.projectId === "string" ? body.projectId : undefined);
-			const challenge = auth.createChallenge({ projectId: mount.store.header.projectId, controlDomainId: mount.store.header.controlDomainId, projectRoot: mount.projectRoot });
+			if (body.credential !== undefined && body.credential !== "operator") throw new ControlError("TF_POLICY_DENIED", "unknown credential issuer");
+			const binding = { projectId: mount.store.header.projectId, controlDomainId: mount.store.header.controlDomainId, projectRoot: mount.projectRoot };
+			if (body.credential === "operator" && !auth.createOperatorChallenge) throw new ControlError("TF_POLICY_DENIED", "operator credential is not provisioned");
+			const challenge = body.credential === "operator" ? auth.createOperatorChallenge!(binding) : auth.createChallenge(binding);
 			session.challengeId = challenge.id; return challenge;
 		}
 		if (method === "auth.authenticate") {

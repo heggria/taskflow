@@ -284,7 +284,7 @@ export class ApprovalViewComponent {
 
 /** Dialogs are available over RPC, but custom terminal components are not. */
 export function createApprovalRequester(
-	ctx: Pick<ExtensionContext, "hasUI" | "ui"> & { mode?: ExtensionContext["mode"] },
+	ctx: Pick<ExtensionContext, "hasUI" | "ui"> & { mode?: "tui" | "rpc" | "json" | "print" },
 	flowName: string,
 	signal?: AbortSignal,
 ): RuntimeDeps["requestApproval"] {

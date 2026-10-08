@@ -83,6 +83,6 @@ export async function runProjectAdminCli(argv=process.argv.slice(2)):Promise<num
  publishExclusive(destination!,Buffer.from(JSON.stringify(result,null,2)+"\n"),check);
  process.stdout.write(JSON.stringify({operation,exportKind:kind,executePromise:false,integrity:result.integrity,fileCount:result.files.length,output:destination})+"\n");return 0;
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
+if(process.argv[1]&&fs.existsSync(process.argv[1])&&import.meta.url===pathToFileURL(fs.realpathSync(process.argv[1])).href){
  runProjectAdminCli().then(code=>{process.exitCode=code;},error=>{process.stderr.write(JSON.stringify({error:error instanceof ControlError?error.code:"TF_BOOTSTRAP_FAILED",message:error instanceof Error?error.message:"project administration failed"})+"\n");process.exitCode=1;});
 }

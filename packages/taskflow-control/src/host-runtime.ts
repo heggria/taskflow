@@ -95,7 +95,14 @@ export class HostRuntime {
    case "projects.list": return [{ projectId, controlDomainId: mount.store.header.controlDomainId, name: path.basename(mount.projectRoot) }];
    case "control.store.header": return mount.store.header;
    case "control.store.status": return mount.store.snapshot();
-   case "coordinator.status": return this.coordinator.snapshot(context);
+   case "coordinator.status": {
+    const snapshot = await this.coordinator.snapshot(context);
+    await this.#authorize(context, mount, "read");
+    return { ...snapshot,
+     reservations: snapshot.reservations.filter(row => row.reservation.projectId === projectId && row.reservation.projectControlDomainId === mount.store.header.controlDomainId),
+     commands: snapshot.commands.filter(command => command.record.callerPrincipal === identity.principal && (typeof command.result === "number" || command.result.reservation.projectId === projectId && command.result.reservation.projectControlDomainId === mount.store.header.controlDomainId)),
+    };
+   }
    case "coordinator.setMaxActiveRuns": return this.coordinator.setMaxActiveRuns({commandId:id(body.commandId),maxActiveRuns:body.maxActiveRuns as number},context);
    case "coordinator.forceRelease": return this.coordinator.forceRelease(id(body.reservationId),{commandId:id(body.commandId),riskAcknowledgement:body.riskAcknowledgement as true,reason:body.reason as string},context);
    case "runs.list": return mount.store.listRuns();

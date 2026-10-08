@@ -61,7 +61,11 @@ export interface StoredReservation {
 	releaseProofId?: string;
 	concurrencyGuarantee: "enforced" | "operator-overridden";
 }
+export type CoordinatorOperatorRequest = { kind: "setMaxActiveRuns"; maxActiveRuns: number }
+ | { kind: "forceRelease"; reservationId: string; riskAcknowledgement: true; reason: string };
 export interface StoredCoordinatorCommand {
+ /** New commands retain inspectable audit intent; legacy records remain readable. */
+ request?: CoordinatorOperatorRequest;
 	record: CoordinatorCommandRecord;
 	result: StoredReservation | number;
 }
@@ -88,7 +92,11 @@ const text = Type.String({ minLength: 1 });
 const rowSchema = Type.Object({ reservation: ConcurrencyReservationSchema, ownerId: text, principal: text, updatedAt: integer,
 	admitRunVersion: Type.Optional(integer), releaseKind: Type.Optional(Type.Union([Type.Literal("normal"), Type.Literal("force")])),
 	releaseProofId: Type.Optional(text), concurrencyGuarantee: Type.Union([Type.Literal("enforced"), Type.Literal("operator-overridden")]) }, { additionalProperties: false });
-const commandSchema = Type.Object({ record: CoordinatorCommandRecordSchema, result: Type.Union([rowSchema, Type.Integer({ minimum: 1 })]) }, { additionalProperties: false });
+const operatorRequestSchema = Type.Union([
+ Type.Object({ kind: Type.Literal("setMaxActiveRuns"), maxActiveRuns: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }) }, { additionalProperties: false }),
+ Type.Object({ kind: Type.Literal("forceRelease"), reservationId: UuidSchema, riskAcknowledgement: Type.Literal(true), reason: text }, { additionalProperties: false }),
+]);
+const commandSchema = Type.Object({ request: Type.Optional(operatorRequestSchema), record: CoordinatorCommandRecordSchema, result: Type.Union([rowSchema, Type.Integer({ minimum: 1 })]) }, { additionalProperties: false });
 const auditSchema = Type.Object({ commitSeq: integer, epoch: integer, recordedAt: integer, action: text, principal: text,
 	previousHash: Sha256HexSchema, stateDigest: Sha256HexSchema, hash: Sha256HexSchema }, { additionalProperties: false });
 const stateSchema = Type.Object({ version: Type.Literal(1), fencingEpoch: integer, commitSeq: integer, lastWallTime: integer,
@@ -164,10 +172,47 @@ function validateState(raw: unknown): CoordinatorState {
 	}
 	for (const [id, command] of Object.entries(state.commands)) {
 		validId(id);
+		if (command.request && (command.request.kind !== command.record.kind || commandRequestHash(command.request) !== command.record.requestHash)) fail("TF_DURABILITY_FAILED", "coordinator audit request does not match its command");
 		if (id !== command.record.commandId || command.record.status !== "completed" || command.record.firstCommitSeq !== command.record.lastCommitSeq || command.record.lastCommitSeq > state.commitSeq) fail("TF_DURABILITY_FAILED", "coordinator command authority mismatch");
 	}
 	if (capacity(state).active > state.maxActiveRuns) fail("TF_CAPACITY_EXCEEDED", "durable coordinator exceeds its capacity ceiling");
 	return state;
+}
+/** Read-only upgrade fence for homes predating coordinator-epoch.json. Never
+ * trust a bare epoch field: verify the complete ledger and its genesis binding. */
+export function readDurableCoordinatorEpoch(directory: string): number {
+ const resolved = path.resolve(directory);
+ let stat: fs.Stats;
+ try { stat = fs.lstatSync(resolved); }
+ catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
+ if (!stat.isDirectory() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) fail("TF_DURABILITY_FAILED", "legacy coordinator directory owner, mode or type is invalid");
+ function read(name: string): unknown | undefined {
+  const file = path.join(resolved, name);
+  let named: fs.Stats;
+  try { named = fs.lstatSync(file); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  if (!named.isFile() || named.isSymbolicLink() || process.getuid && named.uid !== process.getuid() || (named.mode & 0o077) !== 0) fail("TF_DURABILITY_FAILED", "legacy coordinator file owner, mode or type is invalid");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+   const opened = fs.fstatSync(fd);
+   if (opened.dev !== named.dev || opened.ino !== named.ino) fail("TF_DURABILITY_FAILED", "legacy coordinator file identity changed");
+   const value: unknown = JSON.parse(fs.readFileSync(fd, "utf8"));
+   const after = fs.lstatSync(file);
+   if (opened.dev !== after.dev || opened.ino !== after.ino) fail("TF_DURABILITY_FAILED", "legacy coordinator file identity changed");
+   return value;
+  } finally { fs.closeSync(fd); }
+ }
+ const raw = read("coordinator.json"), identity = read("coordinator.identity.json");
+ if (raw === undefined && identity === undefined) return 0;
+ if (raw === undefined || identity === undefined) fail("TF_DURABILITY_FAILED", "legacy coordinator ledger or genesis identity is missing");
+ const state = validateState(raw);
+ const identitySchema = Type.Object({ version: Type.Literal(1), canonicalPath: text, dev: integer, ino: integer, instanceId: UuidSchema }, { additionalProperties: false });
+ if (!Value.Check(identitySchema, identity) || identity.canonicalPath !== resolved || identity.dev !== stat.dev || identity.ino !== stat.ino
+  || identity.instanceId !== state.instanceId || state.directoryIdentity.canonicalPath !== resolved || state.directoryIdentity.dev !== stat.dev || state.directoryIdentity.ino !== stat.ino
+  || fs.realpathSync(resolved) !== resolved) fail("TF_DURABILITY_FAILED", "legacy coordinator directory/genesis binding is invalid");
+ const after = fs.lstatSync(resolved);
+ if (after.dev !== stat.dev || after.ino !== stat.ino) fail("TF_DURABILITY_FAILED", "legacy coordinator directory identity changed");
+ return state.fencingEpoch;
 }
 function bindingKey(row: Pick<ConcurrencyReservation, "projectId" | "projectControlDomainId" | "runId">): string { return `${row.projectId}/${row.projectControlDomainId}/${row.runId}`; }
 function matchesProof(row: StoredReservation, proof: CoordinatorAdmissionProof): boolean {
@@ -308,7 +353,7 @@ export class UserCoordinatorStore<Context> {
 	async forceRelease(id: string, input: { commandId: string; riskAcknowledgement: true; reason: string }, context: Context): Promise<StoredReservation> {
 		input = structuredClone(input);
 		validId(input.commandId);
-		if (input.riskAcknowledgement !== true || !input.reason?.trim()) fail("TF_POLICY_DENIED", "forceRelease requires explicit risk acknowledgement and reason");
+		if (input.riskAcknowledgement !== true || typeof input.reason !== "string" || !input.reason.trim()) fail("TF_POLICY_DENIED", "forceRelease requires explicit risk acknowledgement and reason");
 		return this.#transaction("forceRelease", context, id, async (state, identity, now) => {
 			this.#operator(identity!);
 			return this.#command(state, identity!, input.commandId, { kind: "forceRelease", reservationId: id, riskAcknowledgement: true, reason: input.reason }, () => {
@@ -330,7 +375,7 @@ export class UserCoordinatorStore<Context> {
 			}) as number;
 		});
 	}
-	#command(state: CoordinatorState, identity: CoordinatorIdentity, id: string, body: { kind: "forceRelease" | "setMaxActiveRuns"; [key: string]: unknown }, execute: () => StoredReservation | number): StoredReservation | number {
+	#command(state: CoordinatorState, identity: CoordinatorIdentity, id: string, body: CoordinatorOperatorRequest, execute: () => StoredReservation | number): StoredReservation | number {
 		const hash = commandRequestHash(body); const prior = state.commands[id];
 		if (prior) {
 			if (prior.record.callerPrincipal !== identity.principal) fail("TF_CROSS_PRINCIPAL_COMMAND", "coordinator result belongs to another verified principal");
@@ -338,7 +383,7 @@ export class UserCoordinatorStore<Context> {
 			return prior.result;
 		}
 		const result = execute();
-		state.commands[id] = { record: { commandId: id, kind: body.kind, requestHash: hash, callerPrincipal: identity.principal, firstCommitSeq: state.commitSeq + 1, lastCommitSeq: state.commitSeq + 1, status: "completed" }, result: structuredClone(result) };
+		state.commands[id] = { request: structuredClone(body), record: { commandId: id, kind: body.kind, requestHash: hash, callerPrincipal: identity.principal, firstCommitSeq: state.commitSeq + 1, lastCommitSeq: state.commitSeq + 1, status: "completed" }, result: structuredClone(result) };
 		return result;
 	}
 	#ttl(ttlMs: number): void { positive(ttlMs, "ttlMs"); if (ttlMs > 86_400_000) fail("TF_COMMAND_FAILED", "reservation TTL must not exceed one day"); }

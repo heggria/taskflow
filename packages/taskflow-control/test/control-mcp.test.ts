@@ -84,7 +84,7 @@ test("MCP owner uses authenticated real execution, closed tools, durable results
   session.child.stdin.write("null\n{bad-json\n");
   await initialize(session);
   const listed = (await session.request("tools/list")).result as { tools: { name: string; inputSchema: { additionalProperties: boolean } }[] };
-  assert.equal(listed.tools.length, 12); assert.ok(listed.tools.every(entry => entry.inputSchema.additionalProperties === false));
+  assert.equal(listed.tools.length, 13); assert.ok(listed.tools.every(entry => entry.inputSchema.additionalProperties === false));
   for (const forged of [{ principal: "owner" }, { callerPrincipal: "owner" }, { projectRoot: root }, { permissions: ["*"] }, { authorizationContextHash: "fake" }]) {
    assert.equal((await session.request("tools/call", { name: "taskflow_control_runs", arguments: forged })).error?.code, -32602);
   }

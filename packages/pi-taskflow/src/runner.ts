@@ -426,7 +426,21 @@ export async function runAgentTask(
 	if (piChild.resourceProfile !== "inherit") args.push("--no-extensions");
 	if (model) args.push("--model", model);
 	if (thinking) args.push("--thinking", thinking);
-	if (tools && tools.length > 0) args.push("--tools", tools.join(","));
+	if (tools && tools.length > 0) {
+		args.push("--tools", tools.join(","));
+		// Pi 1.0.4 retains MCP tools behind codemode even when --tools omits
+		// them. Keep an explicit Taskflow allowlist from gaining ambient MCP
+		// capabilities. Older supported Pi accepts this inert exclusion too.
+		if (!tools.some((name) => name === "*" || name.startsWith("mcp__"))) {
+			// Native resource tools have no mcp__ prefix but Pi also retains
+			// them for codemode. Preserve explicitly selected resource names
+			// and Pi's star-glob selectors while excluding ambient resources.
+			const resources = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"];
+			const selected = tools.map((name) => new RegExp(`^${name.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`));
+			const excluded = ["mcp__*", ...resources.filter((name) => !selected.some((pattern) => pattern.test(name)))];
+			args.push("--exclude-tools", excluded.join(","));
+		}
+	}
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
