@@ -55,8 +55,8 @@ This is **not** an OS sandbox. Resolve-only hosts cannot prevent every write to 
 | **Trusted Effects** | Closed `EffectIR`, `PathRef` / `SecretRef` / `ServiceRef`, confidentiality/integrity labels, effect validation, overlap checks, and ledger-backed `why-*` explainers | Declared-target contract |
 | **Resource transaction** | Snapshot → lease → durable intent/permit → stage → commit, or restore and reject | Declared-target contract |
 | **Host adapters** | Pi, Codex, Claude Code, OpenCode, Grok Build, and Hermes Agent use the same flow contract | Existing host surface; support remains host-specific |
-| **Control Plane** | Unix UDS singleton/fencing and files-only store; proposed wire contracts and incomplete admission/parked approvals/receipts/coordination | Currently private workspace; complete Control Plane required for 1.0 acceptance |
-| **WebUI** | Runs, approvals, receipts, and evidence browsing | Incomplete; required for 1.0 acceptance |
+| **Control Plane** | Authenticated multi-project admission, global concurrency, durable replay, approvals/CAS, Receipts and operator CLI/MCP | Bundled in public `taskflow-mcp-core`; Unix UDS, Windows pipes non-GA |
+| **WebUI** | Runs, approval edits, Receipts and evidence browsing | Local token login, live authorization and project isolation |
 
 The [1.0 release plan](./docs/internal/1.0.0-release-plan.md) defines the stable scope and acceptance gates. The filesystem-transaction details are in [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md). The 0.3-C Control Plane plan is [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md).
 
@@ -192,7 +192,7 @@ Host support is not a blanket security guarantee. Read the [host support baselin
 - Writes to undeclared paths remain host-policy dependent under resolve-only execution.
 - `SecretRef` and `ServiceRef` are typed handles only; no vault or live service adapter ships in this cut.
 - There is no FileBroker or full OS sandbox claim in 0.3 MVP.
-- Control Plane admission, authorized command-result replay, parked approvals, receipts, global coordination and WebUI remain incomplete. Publication of 1.0 is blocked pending closure of the accepted specifications. Duplicate control commands fail closed until verified caller identity and live disclosure authorization exist; request audit fields do not grant access.
+- Control Plane admission, authorized replay, durable approvals, Receipts, global coordination and WebUI are implemented. Public `taskflow-mcp-core` provides the control binaries; operator actions require an explicitly provisioned separate credential. Request audit fields never grant authority.
 
 ## Development
 

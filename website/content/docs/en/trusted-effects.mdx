@@ -2,7 +2,7 @@
 title: Trusted Effects
 ---
 
-> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete approved Control Plane, including WebUI, remains required for 1.0 acceptance; current private workspace packaging is not a waiver.
+> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete Control Plane, including WebUI, is implemented and locally verified; the final commit must still pass remote release gates.
 
 Trusted Effects makes a phase's side effects explicit. The model may propose content, but for an admitted declared filesystem target, the **resources transaction is the only finalizer**.
 
@@ -32,7 +32,7 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 - Resolve-only hosts cannot prevent every write to an undeclared path.
 - SecretRef has no vault backend in this cut.
 - ServiceRef has no live network adapter in this cut.
-- ControlHost has experimental Unix UDS and files-only store code. Admission, parked approvals/receipts, coordination and WebUI remain incomplete and are required for 1.0 acceptance. Windows pipes remain a separate unverified scope.
+- ControlHost implements authenticated admission, durable approvals/Receipts, coordination and WebUI over Unix UDS and files-only stores. The existing public MCP package bundles the control binaries. Windows pipes remain non-GA.
 
 ## Read next
 

@@ -13,8 +13,9 @@ Latest published prerelease remains `v0.3.0-beta.1.2`. See the
 [track reconciliation](./docs/internal/1.0.0-release-plan.md#release-track-reconciliation-2026-10-07).
 The complete approved Control Plane, including its WebUI, must be implemented
 and accepted before 1.0 can ship; the current private package is not a waiver.
-The 2026-10-07 metadata task keeps the PR Draft and performs no merge, tag or
-publication. Commands below describe later gated release work.
+The owner authorized complete closure through publication on 2026-10-08.
+The earlier metadata-only/local-only restrictions are historical; all final
+release gates below remain required.
 
 ## Public contract and package set
 

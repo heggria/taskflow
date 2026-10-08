@@ -55,8 +55,8 @@ flow / .tf.ts
 | **Trusted Effects** | 封闭的 `EffectIR`、`PathRef` / `SecretRef` / `ServiceRef`、机密性/完整性标签、effect 校验、重叠检查与 ledger-backed `why-*` | 声明目标合同 |
 | **Resource transaction** | snapshot → lease → durable intent/permit → stage → commit，或 restore and reject | 声明目标合同 |
 | **宿主适配器** | Pi、Codex、Claude Code、OpenCode、Grok Build、Hermes Agent 共用同一 flow 合同 | 已有宿主表面；能力仍按宿主区分 |
-| **Control Plane** | Unix UDS singleton/fencing、files-only store 与拟议 wire contract；admission、parked 审批、receipt 和全局协调尚未完成 | 当前 private workspace；完整 Control Plane 是 1.0 必须完成的验收范围 |
-| **WebUI** | runs、审批、receipts 与 evidence 浏览 | 尚未完成；1.0 必须完成的验收范围 |
+| **Control Plane** | 经认证的多项目准入、全局并发、持久命令重放、审批/CAS、Receipt 与 operator CLI/MCP | 公共 `taskflow-mcp-core` 内交付；Unix UDS，Windows pipes 非 GA |
+| **WebUI** | runs、审批及编辑、receipts 与 evidence 浏览 | 本地令牌登录；实时权限与项目隔离 |
 
 [1.0 发布计划](./docs/internal/1.0.0-release-plan.md)定义稳定范围与验收闸门。文件事务细节见 [`docs/internal/0.3.0-trusted-effects-mvp.md`](./docs/internal/0.3.0-trusted-effects-mvp.md)。0.3-C Control Plane 计划见 [`docs/internal/0.3-c-control-plane-plan.md`](./docs/internal/0.3-c-control-plane-plan.md)。
 
@@ -192,7 +192,7 @@ validate → Taskflow JSON → FlowIR + content hash
 - 在 resolve-only 执行下，未声明路径的写入仍取决于宿主策略。
 - `SecretRef` 与 `ServiceRef` 只是类型化句柄；这一版没有 vault 或 live service adapter。
 - 0.3 MVP 不声称提供 FileBroker 或完整 OS sandbox。
-- Control Plane admission、经授权的命令结果重放、parked 审批、receipt、全局协调与 WebUI 尚未完成；1.0 发布等待已接受 spec 的实现与验收闭环。可信调用者身份与实时披露授权就绪前，重复控制命令会被拒绝；请求中的审计字段不能授予访问权限。
+- Control Plane admission、经授权的命令重放、持久审批、Receipt、全局协调与 WebUI 已实现。公共 `taskflow-mcp-core` 提供 Control 命令；operator 操作需显式配置独立凭据。请求中的审计字段不能授予访问权限。
 
 ## 开发
 

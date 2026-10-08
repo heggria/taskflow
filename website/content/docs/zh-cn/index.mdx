@@ -3,7 +3,7 @@ title: taskflow 1.0 文档
 description: "面向 coding-agent 工作流的 Trusted Effects：声明 effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。"
 ---
 
-> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整已批准 Control Plane（包括 WebUI）仍是 1.0 必须完成的验收范围；当前 private workspace 状态不能豁免。
+> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整 Control Plane（包括 WebUI）已实现并通过本地验收；最终提交仍须通过远程发布门槛。
 
 taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间 transcript 留在宿主对话之外。1.0 合同包含 **Trusted Effects**：为已准入的文件 effect 提供类型化声明与受 resources 控制的提交路径。
 
@@ -96,7 +96,7 @@ taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图
 已实现基线与 1.0 待完成范围分别验收：
 
 - **Trusted Effects MVP：** 已实现的基础能力，单独完成它不足以满足 1.0 范围。覆盖 EffectIR、类型化 ref、labels、受 resources 控制的文件 transaction、重叠准入、诚实的宿主基线与 ledger-backed `why-*` explainers。
-- **实验性 Control Plane：** private workspace Unix UDS/store 代码与 proposed wire 合同；admission、parked 审批、receipt、全局协调与 WebUI 尚未完成，是 1.0 必须完成的验收范围。
+- **Control Plane：** 已实现经认证的多项目准入、持久审批/重放/Receipt、全局协调与 WebUI；Control 命令随公共 `taskflow-mcp-core` 交付。支持 Unix UDS，Windows pipes 仍非 GA。
 
 规范范围请读仓库中的 [MVP 冻结定义](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md) 与 [0.3-C 计划](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3-c-control-plane-plan.md)。
 

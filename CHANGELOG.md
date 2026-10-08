@@ -10,33 +10,29 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 ## [1.0.0] — Unreleased
 
-> **Draft PR #142 targets 1.0.0; `rc/0.3.0-beta.2` is its historical branch name.** Latest published prerelease remains `v0.3.0-beta.1.2`. Publication is blocked on historical accepted-spec closure and real Pi 1.0 compatibility. The ten existing public packages target npm `latest` only after these gates and the authorized tag workflow pass. A dated changelog is not evidence of completed publication; experimental packaging does not waive accepted requirements.
+### Added
 
-### Changed
-
-- Align the root, ten public packages, plugin manifests and all MCP installation templates to `1.0.0`; retain exact internal dependency rewriting, deterministic packed consumers, npm provenance and all security gates.
-- Validate the complete release contract before packing or publishing, including package membership, version/pin agreement, experimental-package isolation and dated release notes.
-- Keep `taskflow-control` private and workspace-only while its accepted decisions and proposed wire details await full implementation/acceptance. Admission, parked approvals/CAS/receipts, global coordination and WebUI remain incomplete and cannot be waived by this packaging boundary. CharterArc keeps its independent experimental release path.
-- Prepare Pi 1.0 compatibility and owning-run identity propagation; release acceptance requires current packed-extension, real-process, retry, approval, TUI/RPC and resume evidence.
-- Integrate dependency/Actions maintenance with retained Cisco skill-scan coverage. Historical scans using different analyzer versions do not prove historical findings were fixed.
+- Authenticated multi-project Control Plane: durable project/domain registry, real runtime admission, global concurrency reservations, command-result replay, scoped artifacts, terminal Receipts and evidence explanations.
+- Durable approval park/CAS, output and plan edits, restart readmission, and local WebUI for runs, approvals and evidence. Plan edits preserve the DAG.
+- Public `taskflow-control` and `taskflow-project-admin` binaries bundled in `taskflow-mcp-core`, including fresh default-auto bootstrap and an installed guide. The release remains ten public packages; the private control source workspace is not a runtime dependency.
+- Explicit operator provisioning with a separate credential and live project policy. CLI/MCP capacity changes and acknowledged force release retain durable audit/replay; forced release marks accounting operator-overridden without claiming execution stopped or creating a terminal Receipt.
 
 ### Fixed
 
-- Let Pi finish transient retries and overflow compaction before deciding that an assistant error is terminal; preserve successful post-run compaction exits on Pi 0.80.3 and count tool-reported model usage once.
-- Route Pi RPC approval through supported dialogs; reject cancellation, unavailable dialogs and aborted edits. Validate shorthand calls without an explicit action through the actual Pi tool schema.
-- Persist every Pi/MCP runtime checkpoint instead of dropping rapid updates. Recover a Pi foreground approval checkpoint only after the owner is proven dead, the physical project identity matches, and the DAG proves other work cannot still be dispatched. Fork a new run and preserve the original bytes; living/unknown owners and potentially active children remain rejected.
-- Reject cross-project attachment to the experimental single-store control host, preserve corrupt or identity-less ledgers, and isolate malformed UDS handshakes to the offending connection.
-- Bound UDS frames and initial handshake time; validate response discriminants, IDs and epochs before use. Keep unknown TE handles ambiguous, isolate store records from caller mutation, and reject copied/moved/replaced store identities before journal recovery.
-- Restore the default host baseline's strict evidence format. Separate six-host implementation notes from the normative sandbox allowlist; no target receives a new sandbox approval.
-- Make release reruns accept valid non-draft GitHub releases, validate real changelog dates, and require every package's release dist-tag before creating a stable release.
-- Correct macOS canonical-path test fixtures and wait for detached child completion before removing their workspaces. Add real Pi CLI and clean-installed package regressions alongside live Codex/Claude checks.
-- Update Next.js, sharp, baseline-browser-mapping, Undici and brace-expansion to patched versions; the complete workspace dependency audit, including development dependencies, reports zero vulnerabilities.
+- Preserve project isolation, reject corrupt or identity-less ledgers without overwriting them, and isolate malformed/bounded UDS clients. Validate copied/moved/replaced store identities before recovery.
+- Retain monotonic singleton fencing across crash recovery and graceful restart; validate complete legacy coordinator evidence before migrating homes without an epoch floor.
+- Let Pi finish transient retries and compaction before terminal failure, count tool-reported usage once, and use supported RPC approval dialogs with cancellation and unavailable-dialog rejection.
+- Persist every Pi/MCP checkpoint. Recover approval checkpoints only after proven dead ownership, matching physical project identity and a safe DAG barrier; fork a new run and preserve parent bytes.
+- Restrict ambient Pi 1.0.4 MCP server and native resource tools for explicit tool allowlists while preserving explicit selectors. Actual 0.80.3/0.85.1/1.0.0/1.0.4 compatibility evidence is versioned separately.
+- Preserve deterministic ten-package packing, exact internal dependency pins, npm owner/provenance/source/integrity verification and release dist-tag gates. Release reruns verify existing artifacts rather than replacing them.
 
 ### Support boundaries
 
-- Pi interactive approval is supported; MCP/headless approval auto-rejects. Grok flows with budgets are rejected when usage cannot be observed.
-- Declared filesystem effects use resource transactions. Resolve-only is not an OS sandbox; undeclared writes remain host-policy dependent. Secret/service references have no live backend. Event-kernel fallback and journal capacity limits remain explicit.
-- Registry artifacts, tag and GitHub Release are verified separately from source preparation. Current evidence is tracked in `docs/internal/1.0.0-ga-scoreboard.md`.
+- The existing twelve-phase DAG runtime, TypeScript DSL, planning, retry/budget contracts, context isolation, background execution, resume/recompute/replay and declared filesystem resource transactions remain the stable contract.
+- Pi interactive approval and the separate authenticated Control MCP durable-approval route are supported. Ordinary host MCP/headless approval phases reject automatically. Grok rejects budgets when usage is unavailable.
+- Control uses Unix UDS; Windows named pipes remain non-GA. Resolve-only containment is not an OS sandbox. Unknown effects retain capacity unless explicitly overridden; arbitrary in-flight recovery is not promised.
+- Secret/service references have no live backend. Event-kernel fallback and physical journal capacity limits remain explicit. Unavailable live hosts are recorded as unverified rather than inferred from fixtures.
+- Final source/installed verification and release records are tracked in `docs/internal/1.0.0-ga-scoreboard.md`. A dated changelog alone does not establish completed npm or GitHub publication.
 
 ## [0.3.0-beta.2] — 2026-08-18
 
