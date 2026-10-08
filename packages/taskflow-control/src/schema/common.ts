@@ -12,7 +12,9 @@ import { StringEnum } from "taskflow-core/typebox-helpers";
  * document that carries `schemaVersion` uses this constant; additive evolution
  * bumps it (wire-freeze rule 4: freeze allows only additive changes + bump).
  */
-export const CONTROL_WIRE_SCHEMA_VERSION = 1;
+export const CONTROL_WIRE_SCHEMA_VERSION = 2;
+/** Historical journal envelopes remain readable without rewriting their bytes. */
+export const LEGACY_CONTROL_WIRE_SCHEMA_VERSION = 1;
 
 /** UUID v4 scalar convention (ControlDomainId, projectId, eventId, ...). */
 export const UuidSchema = Type.String({

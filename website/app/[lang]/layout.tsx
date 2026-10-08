@@ -10,16 +10,16 @@ export function generateStaticParams() {
 
 const site = {
 	en: {
-		title: "taskflow 0.3.0-beta.1.2 — Trusted Effects beta",
+		title: "taskflow 1.0.0 — Declarative Coding-Agent Workflows",
 		brand: "taskflow",
 		description:
-		"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. 0.3.0-beta.1.2; beta channel and not GA.",
+		"Declare coding-agent effects, verify typed paths, and commit admitted filesystem changes through one resource authority. Taskflow 1.0 public contract.",
 	},
 	"zh-cn": {
-		title: "taskflow 0.3.0-beta.1.2 — Trusted Effects beta",
+		title: "taskflow 1.0.0 — Declarative Coding-Agent Workflows",
 		brand: "taskflow",
 		description:
-			"声明 coding-agent effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。0.3.0-beta.1.2，beta channel，尚未 GA。",
+			"声明 coding-agent effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。Taskflow 1.0 公开合同。",
 	},
 } as const;
 

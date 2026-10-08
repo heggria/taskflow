@@ -157,10 +157,16 @@ test("deliverable:Overlap mutating paths denied", () => {
 
 // 7 host matrix honesty
 test("deliverable:HostMatrix FileBroker unsupported", () => {
-	const p = path.join(repoRoot, "conformance/workspace/host-support-baseline.json");
+	const p = path.join(repoRoot, "conformance/workspace/host-guarantee-matrix.json");
 	const j = JSON.parse(fs.readFileSync(p, "utf8")) as {
-		cells: Array<{ capability: string; status: string; guarantee: string }>;
+		cells: Array<{ host: string; capability: string; status: string; guarantee: string }>;
 	};
+	assert.deepEqual(j.cells.filter((c) => c.capability === "pathref-resolve").map((c) => c.host).sort(),
+		["claude", "codex", "grok", "hermes", "opencode", "pi"]);
+	const hermes = j.cells.find((c) => c.host === "hermes");
+	assert.ok(hermes);
+	assert.equal(hermes.status, "structural-only");
+	assert.equal(hermes.guarantee, "resolve-only");
 	const fb = j.cells.find((c) => c.capability === "file-broker");
 	assert.ok(fb, "file-broker cell required");
 	assert.equal(fb.status, "unsupported");

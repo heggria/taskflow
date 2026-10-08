@@ -11,25 +11,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { chmodSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, globSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packReleasePackages } from "./pack-release-packages.mjs";
+import { RELEASE_PACKAGE_NAMES, packReleasePackages } from "./pack-release-packages.mjs";
+import { smokeControlBundle } from "./smoke-control-bundle.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const packageNames = [
-	"taskflow-core",
-	"taskflow-mcp-core",
-	"taskflow-hosts",
-	"taskflow-dsl",
-	"pi-taskflow",
-	"codex-taskflow",
-	"claude-taskflow",
-	"opencode-taskflow",
-	"grok-taskflow",
-	"hermes-taskflow",
-];
+const packageNames = RELEASE_PACKAGE_NAMES;
 const rootManifest = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 const peerNames = [
 	"typebox",
@@ -227,6 +217,31 @@ try {
 		else process.env.PI_TASKFLOW_PI_BIN = previousPiBin;
 	}
 
+	// Reuse the real-process regression harness as external test fixtures. Its
+	// relative dist imports and SDK resolution must come from this clean install,
+	// while the published dist files remain untouched.
+	// Node intentionally refuses to strip TypeScript inside node_modules. Keep
+	// only these test files outside it, with dist linked to the installed package.
+	const installedPiTests = join(consumerDir, "pi-e2e", "test");
+	mkdirSync(join(installedPiTests, "fixtures"), { recursive: true });
+	symlinkSync(join(consumerDir, "node_modules", "pi-taskflow", "dist"), join(consumerDir, "pi-e2e", "dist"), "junction");
+	const piProcessSuites = [
+		{ file: "e2e-pi1.mts", timeoutMs: 420_000 },
+		{ file: "e2e-pi-crash-resume.mts", timeoutMs: 180_000 },
+	];
+	for (const relative of [...piProcessSuites.map(({ file }) => file), "fixtures/pi1-provider.ts"]) {
+		copyFileSync(join(repo, "packages", "pi-taskflow", "test", relative), join(installedPiTests, relative));
+	}
+	process.stdout.write("packed Pi 1.0 real-process fixture regressions:\n");
+	for (const { file, timeoutMs } of piProcessSuites) {
+		process.stdout.write(`packed Pi suite: ${file}\n`);
+		run(process.execPath, ["--experimental-strip-types", join(installedPiTests, file)], {
+			cwd: consumerDir,
+			stdio: "inherit",
+			timeout: timeoutMs,
+		});
+	}
+
 	const publicImports = [
 		"taskflow-core",
 		"taskflow-mcp-core",
@@ -299,9 +314,10 @@ try {
 	]) {
 		smokeMcpBin(binName, serverName);
 	}
+	smokeControlBundle(consumerDir);
 
 	process.stdout.write(
-		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 6 bins\n`,
+		`packed consumer smoke passed: ${packageNames.length} packages, ${publicImports.length} explicit imports, ${wildcardExports} wildcard exports, 8 bins\n`,
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });

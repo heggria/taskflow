@@ -19,7 +19,7 @@
  *       ↑↓ scroll · PgUp/PgDn page · Home/End jump · Esc rejects.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
 	decodeKittyPrintable,
 	isKeyRelease,
@@ -30,6 +30,8 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+
+import type { ApprovalDecision, ApprovalRequest, RuntimeDeps } from "taskflow-core";
 
 export type ApprovalChoice = "approve" | "reject" | "edit";
 
@@ -278,4 +280,67 @@ export class ApprovalViewComponent {
 		this.cachedWidth = undefined;
 		this.cachedBody = undefined;
 	}
+}
+
+/** Dialogs are available over RPC, but custom terminal components are not. */
+export function createApprovalRequester(
+	ctx: Pick<ExtensionContext, "hasUI" | "ui"> & { mode?: "tui" | "rpc" | "json" | "print" },
+	flowName: string,
+	signal?: AbortSignal,
+): RuntimeDeps["requestApproval"] {
+	// Older Pi versions have no mode property; keep their TUI overlay working.
+	if (!ctx.hasUI || ctx.mode === "print" || ctx.mode === "json") return undefined;
+	return async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+		const reject = (note?: string): ApprovalDecision => ({ decision: "reject", ...(note ? { note } : {}) });
+		if (signal?.aborted) return reject("aborted");
+		let closeOverlay: (() => void) | undefined;
+		let onAbort: (() => void) | undefined;
+		const aborted = new Promise<ApprovalDecision>((resolve) => {
+			onAbort = () => {
+				resolve(reject("aborted"));
+				try { closeOverlay?.(); } catch { /* Dialog teardown must not interrupt abort. */ }
+			};
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+		const ask = async (): Promise<ApprovalDecision> => {
+			const title = `Taskflow approval — ${flowName}/${req.phaseId}`;
+			let choice: ApprovalChoice | undefined;
+			if (ctx.mode === "rpc") {
+				// Include the entire proposal in the dialog sent to the RPC client.
+				const prompt = [title, req.message, req.upstream].filter(Boolean).join("\n\n");
+				const selected = await ctx.ui.select(prompt, ["Reject", "Edit guidance", "Approve"], { signal });
+				choice = selected === "Approve" ? "approve" : selected === "Edit guidance" ? "edit" : "reject";
+			} else {
+				choice = await ctx.ui.custom<ApprovalChoice>(
+					(tui, theme, _kb, done) => {
+						closeOverlay = () => done("reject");
+						const view = new ApprovalViewComponent(theme, { title, message: req.message, upstream: req.upstream }, done, () => tui.terminal.rows);
+						if (signal?.aborted) closeOverlay();
+						return {
+							render: (w: number) => view.render(w),
+							invalidate: () => view.invalidate(),
+							handleInput: (data: string) => { view.handleInput(data); tui.requestRender(); },
+							dispose: () => view.dispose(),
+						};
+					},
+					{ overlay: true, overlayOptions: { width: "80%", minWidth: 60, maxHeight: "85%", anchor: "center" } },
+				);
+			}
+			if (signal?.aborted) return reject("aborted");
+			if (choice === "approve") return { decision: "approve" };
+			if (choice === "edit") {
+				const note = await ctx.ui.input("Guidance passed downstream as this phase's output", "type guidance…", { signal });
+				if (signal?.aborted) return reject("aborted");
+				return note === undefined ? reject("Guidance entry cancelled") : { decision: "edit", note };
+			}
+			return reject();
+		};
+		try {
+			return await Promise.race([ask(), aborted]);
+		} catch {
+			return reject("Approval dialog unavailable");
+		} finally {
+			if (onAbort) signal?.removeEventListener("abort", onAbort);
+		}
+	};
 }

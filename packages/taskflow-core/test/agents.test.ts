@@ -172,7 +172,7 @@ test("discoverAgents: discovers project agents from <cwd>/.pi/agents/", () => {
 	assert.equal(agents.length, 1);
 	assert.equal(agents[0].name, "auditor");
 	assert.equal(agents[0].source, "project");
-	assert.equal(projectAgentsDir, projAgentsDir);
+	assert.equal(projectAgentsDir, fs.realpathSync(projAgentsDir));
 });
 
 test("discoverAgents: returns empty agents when no agent dirs exist", () => {
@@ -352,7 +352,7 @@ test("discoverAgents: finds .pi/agents in parent directory", () => {
 	const { agents, projectAgentsDir } = discoverAgents(childDir, "project");
 	assert.equal(agents.length, 1);
 	assert.equal(agents[0].name, "deep");
-	assert.equal(projectAgentsDir, path.join(parentDir, ".pi", "agents"));
+	assert.equal(projectAgentsDir, fs.realpathSync(path.join(parentDir, ".pi", "agents")));
 });
 
 test("discoverAgents: prefers closest .pi/agents when multiple exist", () => {
@@ -367,7 +367,7 @@ test("discoverAgents: prefers closest .pi/agents when multiple exist", () => {
 	const { agents, projectAgentsDir } = discoverAgents(child, "project");
 	assert.equal(agents.length, 1);
 	assert.equal(agents[0].name, "parent-agent");
-	assert.equal(projectAgentsDir, path.join(parent, ".pi", "agents"));
+	assert.equal(projectAgentsDir, fs.realpathSync(path.join(parent, ".pi", "agents")));
 });
 
 test("discoverAgents: returns null projectAgentsDir when no .pi/agents found", () => {

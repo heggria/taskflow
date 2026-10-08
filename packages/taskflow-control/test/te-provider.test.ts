@@ -8,6 +8,8 @@ import {
 	type TeExecutionAuthority,
 } from "../src/te-provider.ts";
 import { ControlError } from "../src/errors.ts";
+import { Value } from "typebox/value";
+import { CancelResultSchema, CollectResultSchema, PollResultSchema, ReconcileResultSchema } from "../src/schema/transport.ts";
 
 const CAPABILITIES = {
 	resolution: "contained" as const,
@@ -174,6 +176,43 @@ test("te-provider: only TE-shaped authorities can become a provider (fail closed
 		},
 	);
 });
+
+for (const scenario of ["unknown", "plain-accepted", "reopened", "incomplete-handle"] as const) {
+	test(`te-provider: ${scenario} handle cannot establish outcome or cancellation`, async () => {
+		const calls: string[] = [];
+		const te = fakeTeAuthority(calls);
+		if (scenario === "plain-accepted") {
+			te.submit = async () => {
+				calls.push("submit");
+				return { outcome: "accepted", providerJobHandle: "te-job-1" };
+			};
+		} else if (scenario === "incomplete-handle") {
+			te.submit = async () => {
+				calls.push("submit");
+				return {
+					outcome: "accepted", providerJobHandle: "te-job-1",
+					poll: async () => { calls.push("poll"); return { outcome: "accepted", status: "running" }; },
+				} as never;
+			};
+		}
+		let provider = createTeExecutionProvider(te);
+		if (scenario !== "unknown") {
+			assert.equal((await provider.submit({ preparationId: "prep-1", owner: owner(), controlDomainId: "d" })).outcome, "accepted");
+		}
+		if (scenario === "reopened") provider = createTeExecutionProvider(te);
+		const request = { providerJobHandle: "te-job-1" };
+		const results = [await provider.poll(request), await provider.cancel(request), await provider.collect(request), await provider.reconcile(request)];
+		const schemas = [PollResultSchema, CancelResultSchema, CollectResultSchema, ReconcileResultSchema];
+		for (const [index, result] of results.entries()) {
+			assert.equal(result.outcome, "ambiguous", "missing live evidence must not authorize releasing a committed slot");
+			assert.ok(Value.Check(schemas[index]!, result));
+			assert.equal("cancelled" in result, false);
+			assert.equal("status" in result, false);
+			assert.equal("providerState" in result, false);
+		}
+		assert.deepEqual(calls, scenario === "unknown" ? [] : ["submit"], "observation must never re-submit work or call an incomplete handle");
+	});
+}
 
 test("te-provider: a provider is always marked te-resources", () => {
 	const provider = createTeExecutionProvider(fakeTeAuthority());

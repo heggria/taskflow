@@ -18,18 +18,29 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: hashgraph-online/ai-plugin-scanner-action@55616c962cf86368423f7673b2ecdfdbe613d1af # v1
+      - uses: hashgraph-online/ai-plugin-scanner-action@484da6f8e99a057233b939ab50450a14a68f5a1c # v1.2.624
         with:
           plugin_dir: "."
           mode: scan
+          # v1.2.624 makes Cisco opt-in; retain the previous deep-scan coverage.
+          install_cisco: "true"
+          cisco_skill_scan: "on"
+          cisco_policy: balanced
+          online: "false"
+          submission_enabled: "false"
+          pr_comment: "off"
           format: json
           output: plugin-security-report.json
-          pr_comment: "off"
           min_score: 80
           fail_on_severity: high
+      # Always print the full finding payload, even when the gate fails. Keep
+      # detailed evidence in this job rather than suppressing or baselining it.
       - name: Show complete scanner findings
         if: always()
         run: |
           if [ -f plugin-security-report.json ]; then
             cat plugin-security-report.json
           fi
+      - name: Require completed Cisco deep scanning
+        if: always()
+        run: node scripts/verify-plugin-scan-coverage.mjs plugin-security-report.json

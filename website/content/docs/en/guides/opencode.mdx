@@ -3,6 +3,8 @@ title: Using taskflow on OpenCode
 description: Register taskflow as an MCP server on OpenCode and orchestrate multi-phase workflows.
 ---
 
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
+
 [OpenCode](https://opencode.ai) exposes taskflow through an MCP server whose protocol layer has no MCP SDK dependency; each phase runs as an isolated `opencode run` process.
 
 This page walks through the whole arc: register the MCP server, confirm it's live, run a flow through a tool call, and understand the permission and model-resolution model.
@@ -16,7 +18,7 @@ OpenCode has no git-based plugin marketplace, so you register the MCP server dir
 ### Option A: the CLI
 
 ```bash title="Register the MCP server via the CLI"
-opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@1.0.0 opencode-taskflow-mcp
 ```
 
 ### Option B: edit opencode.json
@@ -27,7 +29,7 @@ opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-
   "mcp": {
     "taskflow": {
       "type": "local",
-      "command": ["npx", "-y", "-p", "opencode-taskflow@beta", "opencode-taskflow-mcp"],
+      "command": ["npx", "-y", "-p", "opencode-taskflow@1.0.0", "opencode-taskflow-mcp"],
       "enabled": true
     }
   },

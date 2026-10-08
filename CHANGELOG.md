@@ -8,6 +8,47 @@ All notable changes to taskflow are documented here. This project follows [Keep 
 
 - HOL plugin-scanner highs: dummy test credentials use scanner placeholders / short literals; no `eval (` in comments; smoke/runner no longer place a `${…}` template within 30 chars of `spawn`. Local scan 81/100, 0 high. **Not GA.**
 
+## [1.0.0] — 2026-10-08
+
+### Added
+
+- Authenticated multi-project Control Plane: durable project/domain registry, real runtime admission, global concurrency reservations, command-result replay, scoped artifacts, terminal Receipts and evidence explanations.
+- Durable approval park/CAS, output and plan edits, restart readmission, and local WebUI for runs, approvals and evidence. Plan edits preserve the DAG.
+- Public `taskflow-control` and `taskflow-project-admin` binaries bundled in `taskflow-mcp-core`, including fresh default-auto bootstrap and an installed guide. The release remains ten public packages; the private control source workspace is not a runtime dependency.
+- Explicit operator provisioning with a separate credential and live project policy. CLI/MCP capacity changes and acknowledged force release retain durable audit/replay; forced release marks accounting operator-overridden without claiming execution stopped or creating a terminal Receipt.
+
+### Fixed
+
+- Preserve project isolation, reject corrupt or identity-less ledgers without overwriting them, and isolate malformed/bounded UDS clients. Validate copied/moved/replaced store identities before recovery.
+- Retain monotonic singleton fencing across crash recovery and graceful restart; validate complete legacy coordinator evidence before migrating homes without an epoch floor.
+- Let Pi finish transient retries and compaction before terminal failure, count tool-reported usage once, and use supported RPC approval dialogs with cancellation and unavailable-dialog rejection.
+- Persist every Pi/MCP checkpoint. Recover approval checkpoints only after proven dead ownership, matching physical project identity and a safe DAG barrier; fork a new run and preserve parent bytes.
+- Restrict ambient Pi 1.0.4 MCP server and native resource tools for explicit tool allowlists while preserving explicit selectors. Actual 0.80.3/0.85.1/1.0.0/1.0.4 compatibility evidence is versioned separately.
+- Preserve deterministic ten-package packing, exact internal dependency pins, npm owner/provenance/source/integrity verification and release dist-tag gates. Release reruns verify existing artifacts rather than replacing them.
+
+### Support boundaries
+
+- The existing twelve-phase DAG runtime, TypeScript DSL, planning, retry/budget contracts, context isolation, background execution, resume/recompute/replay and declared filesystem resource transactions remain the stable contract.
+- Pi interactive approval and the separate authenticated Control MCP durable-approval route are supported. Ordinary host MCP/headless approval phases reject automatically. Grok rejects budgets when usage is unavailable.
+- Control uses Unix UDS; Windows named pipes remain non-GA. Resolve-only containment is not an OS sandbox. Unknown effects retain capacity unless explicitly overridden; arbitrary in-flight recovery is not promised.
+- Secret/service references have no live backend. Event-kernel fallback and physical journal capacity limits remain explicit. Unavailable live hosts are recorded as unverified rather than inferred from fixtures.
+- Final source/installed verification and release records are tracked in `docs/internal/1.0.0-ga-scoreboard.md`. A dated changelog alone does not establish completed npm or GitHub publication.
+
+## [0.3.0-beta.2] — 2026-08-18
+
+> **Historical unpublished candidate; superseded by the 1.0.0 target above.** The intended channel was npm `beta`; no `v0.3.0-beta.2` tag or publication occurred. **Not GA.** Control Plane slice: S2 Unix UDS + S3-min files-only store. Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). TypeBox contracts and `wire-freeze.md` remain **PROPOSED**. `taskflow-control` is **not** in the ten-package publish set (`publishConfig.tag` stays `next`).
+
+### Added
+
+- **ControlHost Unix UDS (S2).** Winner listens on a user-scoped socket; loser attaches and uses the winner fencing epoch. Auto never silently degrades to standalone. Unix-only process tests; not part of the 3-OS process-supervisor matrix.
+- **Files-only project ControlStore (S3-min).** Header + `commit-seq.json` + journal + store-self projections; exclusive writer lock; hardened UUID/`wx`/fsync/rename; process-level SIGKILL crash matrix (old-complete | new-complete | fail-closed). `ControlHost.start()` opens `projectStorePath` before dispatch on winner/standalone. Read-only RPCs: `control.store.header`, `control.store.status`. MCP `taskflow_control_status` is **not** added — that would force unpublished `taskflow-control` onto the ten-package face.
+
+### Notes
+
+- Rebased onto `0.3.0-beta.1.1` (`8fab2c9`).
+- All publishable surfaces aligned to `0.3.0-beta.2`.
+- Ready / merge / tag / npm still require a new instruction.
+
 ## [0.3.0-beta.1.2] — 2026-08-20
 
 > Hotfix on `0.3.0-beta.1.1`. npm `beta` dist-tag. **Not GA.** Does **not** implement `#137` (`/tf web`) or `#95` (adaptive-authority isolation). Does **not** steal `0.3.0-beta.2`.

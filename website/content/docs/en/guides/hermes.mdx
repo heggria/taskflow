@@ -3,6 +3,8 @@ title: Using taskflow on Hermes Agent
 description: Install taskflow as an MCP server on Hermes Agent and orchestrate multi-phase workflows with isolated Hermes subagents.
 ---
 
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
+
 [Hermes Agent](https://hermes-agent.nousresearch.com/) is Nous Research's open-source coding agent (CLI, TUI, desktop, messaging gateways). Taskflow's published path is its MCP server: Hermes discovers `taskflow_*` tools and each agent phase spawns an isolated `hermes chat -q -Q` child.
 
 The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/taskflow/blob/main/docs/hermes-mcp.md) in the repo.
@@ -12,7 +14,7 @@ The full reference lives in [`docs/hermes-mcp.md`](https://github.com/heggria/ta
 ### Published MCP package (after npm publish)
 
 ```bash title="Register taskflow MCP"
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@beta hermes-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@1.0.0 hermes-taskflow-mcp
 ```
 
 Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
@@ -21,7 +23,7 @@ Or paste into `~/.hermes/config.yaml` / `$HERMES_HOME/config.yaml`:
 mcp_servers:
   taskflow:
     command: "npx"
-    args: ["-y", "-p", "hermes-taskflow@beta", "hermes-taskflow-mcp"]
+    args: ["-y", "-p", "hermes-taskflow@1.0.0", "hermes-taskflow-mcp"]
     env:
       # Required for mutating agent phases (terminal / file write / coding).
       # PI_TASKFLOW_HERMES_UNSAFE_YOLO: "1"  # required for mutating agent phases

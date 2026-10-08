@@ -3,6 +3,8 @@ title: Using taskflow on Pi
 description: Install, run, save, and resume taskflows on the Pi coding agent.
 ---
 
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
+
 If you already use [Pi](https://pi.dev) to delegate work to subagents, taskflow turns those one-off delegations into named, resumable, multi-step workflows. You describe the work as a graph — fan-out, gates, loops, whatever you need — and only the final result comes back into your context.
 
 This page walks through the whole arc: install, run your first flow, save it, run it by name, and wire up model roles. By the end you'll have a reusable command that does a real job in one line.
@@ -14,7 +16,7 @@ Requires **Node.js ≥ 22.19.0**.
 taskflow is a Pi extension. Install it once:
 
 ```bash title="Install pi-taskflow"
-pi install npm:pi-taskflow@beta
+pi install npm:pi-taskflow@1.0.0
 ```
 
 That's it. The extension registers a `taskflow` tool that the model can call automatically, plus a `/tf` command for you. No model-side configuration is required to start.

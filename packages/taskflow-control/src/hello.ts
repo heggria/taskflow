@@ -12,8 +12,9 @@
  * reparse — wire-freeze rule 4).
  */
 
+import { Value } from "typebox/value";
 import { protocolError, ControlError } from "./errors.ts";
-import { PROTOCOL_MAJOR, type NegotiationHandshake } from "./schema/transport.ts";
+import { NegotiationHandshakeSchema, PROTOCOL_MAJOR, type NegotiationHandshake } from "./schema/transport.ts";
 
 export type HelloVerdict =
 	| { ok: true; serverHello: NegotiationHandshake }
@@ -54,8 +55,10 @@ export function createHelloGate(
 				),
 			};
 		}
-		if (!Array.isArray(hello.supportedReadSchemas) || !Array.isArray(hello.supportedWriteSchemas)) {
-			return { ok: false, error: protocolError("hello must declare supportedReadSchemas and supportedWriteSchemas") };
+		// Validate the complete wire shape before iterating feature lists or
+		// trusting schema/build metadata supplied by another process.
+		if (!Value.Check(NegotiationHandshakeSchema, clientHello)) {
+			return { ok: false, error: protocolError("hello must match NegotiationHandshake") };
 		}
 		const serverRead = new Set([...serverHello.supportedReadSchemas, ...(options.extraReadSchemas ?? [])]);
 		const schemaOverlap = hello.supportedReadSchemas.some((schema) => serverRead.has(schema));

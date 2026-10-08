@@ -32,6 +32,8 @@ const AGENTS: AgentConfig[] = [
 		systemPrompt: "You are terse. Reply with the minimum text required, no preamble.",
 		source: "user",
 		filePath: "",
+		...(process.env.TASKFLOW_E2E_CODEX_MODEL ? { model: process.env.TASKFLOW_E2E_CODEX_MODEL } : {}),
+		...(process.env.TASKFLOW_E2E_CODEX_THINKING ? { thinking: process.env.TASKFLOW_E2E_CODEX_THINKING } : {}),
 	},
 ];
 

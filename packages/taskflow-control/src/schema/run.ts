@@ -8,7 +8,8 @@
 
 import { Type } from "typebox";
 import { StringEnum } from "taskflow-core/typebox-helpers";
-import { UuidSchema } from "./common.ts";
+import { UuidSchema, Sha256HexSchema } from "./common.ts";
+import { ExecutionOwnerSchema, type ExecutionOwner } from "./te-mirrors.ts";
 
 export const RunStatusSchema = StringEnum([
 	"running",
@@ -62,6 +63,14 @@ export const RunSnapshotSchema = Type.Object(
 		stage: RunStageSchema,
 		slot: RunSlotStateSchema,
 		needsOperator: Type.Boolean(),
+		runVersion: Type.Integer({ minimum: 0 }),
+		boundPlanHash: Type.Optional(Type.String({ minLength: 1 })),
+		boundFragmentHash: Type.Optional(Type.String({ minLength: 1 })),
+		reservationId: Type.Optional(UuidSchema),
+		owner: Type.Optional(ExecutionOwnerSchema),
+		policyHash: Type.Optional(Sha256HexSchema),
+		authorityEpoch: Type.Optional(Type.Integer({ minimum: 0 })),
+		requiresReadmission: Type.Optional(Type.Boolean()),
 		projectAdmitCommitSeq: Type.Optional(Type.Integer({ minimum: 1 })),
 	},
 	{ additionalProperties: false },
@@ -74,5 +83,13 @@ export type RunSnapshot = {
 	stage: RunStage;
 	slot: RunSlotState;
 	needsOperator: boolean;
+	runVersion: number;
+	boundPlanHash?: string;
+	boundFragmentHash?: string;
+	reservationId?: string;
+	owner?: ExecutionOwner;
+	policyHash?: string;
+	authorityEpoch?: number;
+	requiresReadmission?: boolean;
 	projectAdmitCommitSeq?: number;
 };

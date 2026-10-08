@@ -1,160 +1,204 @@
-# Release Guide (monorepo)
+# Taskflow 1.0 release guide
 
-taskflow is a monorepo of ten independently published packages:
+This guide coordinates the ten-package Taskflow `1.0.0` release. Preparing
+or merging a release change does not publish it. Publish only after the gates
+below pass on the final release commit and the release owner authorizes the
+tag. GitHub Releases and the npm registry record the completed publication.
 
-| Package | npm name | What it is |
-|---------|----------|------------|
-| `packages/taskflow-core` | **`taskflow-core`** | Host-neutral engine (DSL, runtime, cache, verify). Zero host SDK deps. |
-| `packages/taskflow-mcp-core` | **`taskflow-mcp-core`** | Host-neutral MCP server (stdio JSON-RPC + taskflow_* tools + DAG renderer). Depends on core. |
-| `packages/taskflow-hosts` | **`taskflow-hosts`** | Shared host-runner collection: codex/claude/opencode/grok/hermes `SubagentRunner` impls + argv builders + event-stream parsers. Depends on core. |
-| `packages/taskflow-dsl` | **`taskflow-dsl`** | TypeScript DSL CLI/package: erases `.tf.ts` to Taskflow JSON and optional FlowIR. Depends on core. |
-| `packages/pi-taskflow` | **`pi-taskflow`** | Pi extension adapter. Keeps the original published name (no break for existing users). |
-| `packages/codex-taskflow` | **`codex-taskflow`** | Codex npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
-| `packages/claude-taskflow` | **`claude-taskflow`** | Claude Code npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
-| `packages/opencode-taskflow` | **`opencode-taskflow`** | OpenCode delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
-| `packages/grok-taskflow` | **`grok-taskflow`** | Grok Build npm delivery: re-exports the runner from `taskflow-hosts` + MCP bin. The plugin scaffold is repository/marketplace-distributed, not in the npm tarball. |
-| `packages/hermes-taskflow` | **`hermes-taskflow`** | Hermes Agent delivery package: re-exports the runner from `taskflow-hosts` + MCP bin + config scaffold. |
+## Current preparation status
 
-Dependency order: `taskflow-mcp-core`, `taskflow-hosts`, `taskflow-dsl`, `pi-taskflow`, `codex-taskflow`, `claude-taskflow`, `opencode-taskflow`, `grok-taskflow`, and `hermes-taskflow` all depend on `taskflow-core` (`taskflow-mcp-core`, `taskflow-hosts`, and `taskflow-dsl` directly; the adapters via both `taskflow-hosts` and `taskflow-mcp-core`), so **core publishes first, then taskflow-mcp-core, taskflow-hosts, taskflow-dsl, then the adapters (including hermes)**.
+**1.0.0 release transaction.** PR #142 carries the implementation; its retained
+`rc/0.3.0-beta.2` branch name is historical. The owner authorized complete
+closure through publication on 2026-10-08. A prepared version or dated changelog
+does not establish publication: consult the [tag workflow](https://github.com/heggria/taskflow/actions/workflows/publish.yml),
+[GitHub Releases](https://github.com/heggria/taskflow/releases) and npm metadata.
+All exact-commit and artifact verification gates below remain required.
 
-## One-time repository setup
+## Public contract and package set
 
-The beta release path is `v0.3.0-beta.1.2`: merge the reviewed release commit to `main`, then push the tag. `.github/workflows/publish.yml` validates the `0.3.0-beta.*` prerelease family, publishes the same ten packages to npm's `beta` dist-tag with provenance, and creates a prerelease GitHub Release. Do not publish from a workstation.
+The stable contract is the existing declarative DAG runtime: twelve phase
+kinds, validation/planning, retries and budgets where the host can enforce
+them, Pi interactive approvals, resume/recompute/replay, background runs,
+trace, the TypeScript DSL, and resource transactions for admitted declared
+filesystem targets. Ordinary host MCP/headless approval phases reject automatically; the separate
+authenticated Control MCP route supports durable approvals. Host
+permissions and usage reporting remain host-specific; Grok rejects budgets
+because its stream does not supply reliable usage.
 
-## Pre-flight (always)
+The ten packages below publish together at exactly `1.0.0`, in this order:
+
+1. `taskflow-core`
+2. `taskflow-mcp-core`
+3. `taskflow-hosts`
+4. `taskflow-dsl`
+5. `pi-taskflow`
+6. `codex-taskflow`
+7. `claude-taskflow`
+8. `opencode-taskflow`
+9. `grok-taskflow`
+10. `hermes-taskflow`
+
+Root and package versions, Codex/Claude/Grok plugin versions, and every host
+MCP template pin must match. Local internal dependencies stay `workspace:*`;
+the deterministic packer rewrites them to the exact release version. Published
+exports must use shipped JavaScript/declarations and never source-only
+`development` conditions. Codex/Claude/Grok plugin scaffolds are distributed
+from the repository, separately from their npm delivery packages.
+
+The private `taskflow-control` workspace is the source implementation; it is not
+an eleventh npm release package. The existing public `taskflow-mcp-core` tarball
+bundles its compiled JavaScript under `dist/control/` and exposes
+`taskflow-control` and `taskflow-project-admin` binaries. Its build compiles the
+bundle directly from source; consumers need neither a checkout nor the private
+package. `CONTROL_GUIDE.md` is included in that tarball. The shared release
+contract verifies these two public bin declarations.
+
+The candidate implements authenticated multi-project routing, TE admission,
+authorized durable replay, global concurrency, parked approvals/CAS, Receipt,
+CLI/MCP and the local WebUI. The operator path uses a separately provisioned
+credential and explicit risk acknowledgement for forced release. Current
+implementation and acceptance boundaries are in the [closure ledger](docs/internal/1.0.0-spec-closure.md).
+Unix UDS is the supported control transport; Windows named pipes remain non-GA
+under accepted P13. These facts replace the former scaffold-only description.
+CharterArc retains its separate experimental version/tag/workflow and is
+excluded from the ten-package transaction. These packaging boundaries do not
+waive accepted specifications: 1.0 publication remains blocked on their
+implementation and acceptance. Resolve-only path checks are not an OS sandbox; undeclared
+writes remain host-policy dependent. SecretRef/ServiceRef have no live
+vault/service backend. High-scale journals and full kernel parity are not
+claimed; the optional event kernel still falls back for unsupported features.
+
+## Bundled control: fresh installation and upgrade
+
+For a **local candidate**, install the retained `taskflow-core-1.0.0.tgz` and
+`taskflow-mcp-core-1.0.0.tgz` plus the selected TypeBox peer into a new npm project
+with lifecycle scripts disabled. No `taskflow-control` tarball is installed.
+`scripts/smoke-control-bundle.mjs`, called by the ten-package consumer gate,
+executes the installed `.bin` entries, a fresh default-auto script run, a second
+run after restart and durable status lookup, with an isolated `TASKFLOW_HOME`.
+
+After a separately authorized publication, the equivalent public installation is:
 
 ```sh
-pnpm install            # links the workspaces
-pnpm run typecheck      # 0 errors (resolves taskflow-core to src via the dev condition)
-pnpm test               # full unit suite green
-pnpm run build          # emit dist/ for all ten packages (tsc → .js + .d.ts)
-pnpm run test:pack      # pack → clean install → public imports/bins for all ten
+npm install --save-exact taskflow-mcp-core@1.0.0 typebox@1.3.30
+./node_modules/.bin/taskflow-control run --root /absolute/project --flow /absolute/flow.json
 ```
 
-### Skill coverage check (before every release)
+This command is a post-publication instruction, not a claim that the candidate
+has been published. With no `--mode`, `auto` creates the registry and project
+store and starts or attaches to the user singleton; no manual daemon setup is
+required. Keep `TASKFLOW_HOME` outside execution projects. The CLI executes
+script phases; agent phases require a configured embedded runner. The installed
+binary is `node_modules/taskflow-mcp-core/dist/control/control-cli.js`.
 
-The skills are the LLM-facing API surface — an engine feature the skill doesn't
-teach effectively does not exist. **Skills are authored ONCE in
-`skills-src/taskflow/` and compiled per host** by `scripts/build-skills.mjs`
-(pi → `packages/pi-taskflow/skills/taskflow/`, codex →
-`packages/codex-taskflow/plugin/skills/taskflow/`). Never edit the generated
-files — `skills-build.test.ts` fails CI on drift. For every feature/change in
-this release's CHANGELOG section, verify:
+For upgrade, stop the owned control process gracefully, preserve the control
+home and project journals, replace the public package, and restart via the same
+command/home. Incompatible handshakes fail closed; do not delete authority state
+to bypass version skew. An ambiguous recovery keeps capacity and requires an
+explicit operator decision. Never run old and new private/public launchers as
+separate authorities: they use the same singleton endpoint and stores.
 
-- [ ] New DSL fields, phase types, actions, and commands appear in the right
-      **source** layer: `core.md` (core DSL + actions), `patterns.md` (if it
-      changes best practice), `advanced.md` (context sharing / dynamic flows /
-      isolation / recompute), `configuration.md` (knobs), or the per-host
-      entry files (`entry.pi.md` / `entry.codex.md` / `entry.claude.md` / `entry.opencode.md` / `entry.grok.md` / `entry.hermes.md`) for host bindings.
-- [ ] Host-only capabilities are wrapped in `<!-- host:pi -->` /
-      `<!-- host:codex -->` blocks — never teach a host a tool it can't reach.
-- [ ] `node scripts/build-skills.mjs` ran and the generated files are committed.
-- [ ] The `taskflow` tool description in the pi adapter (`src/index.ts`) lists
-      any new `action` values.
-- [ ] Removed/renamed fields are purged from `skills-src/` (grep the old name).
+## Required preparation and verification
 
-> **Why build and packed-consumer gates both exist.** Node refuses to
-> type-strip `.ts` under `node_modules`, so packages ship `dist/*.js` and
-> `.d.ts`. Every package also has `prepublishOnly` and
-> `publishConfig.access: public`, but release safety does not rely on lifecycle
-> hooks alone: CI and the tag workflow stage pnpm's publish-ready content,
-> canonicalize its manifest, prove repeat-pack byte stability, install those
-> exact tarballs into a clean npm consumer, reject leaked
-> `workspace:*` ranges, and exercise public exports and bins.
-
-> **Note on internal dependencies.** Workspace package manifests use
-> `workspace:*` locally so `pnpm install --frozen-lockfile` never depends on a
-> not-yet-published release. The deterministic release packer converts those
-> workspace ranges before `npm publish` receives the immutable tarball. Always
-> publish `taskflow-core` first and bump all ten in lockstep.
-
-## Publish from a tag (the only supported release path)
-
-First merge the release commit to `main` and wait for every required check,
-including `packed consumer (10 packages)`, to pass. From the updated `main`, push
-the matching annotated tag:
+Use the repository-pinned pnpm and Node **22.19.0 or newer**. Run the full unit
+suite on Node 22 and Node 24; keep the three-OS process-supervisor checks and
+Pi SDK compatibility matrix. Save commands, exit status, host/SDK/model
+versions and final commit SHA in `docs/internal/1.0.0-ga-scoreboard.md`.
 
 ```sh
-git switch main
-git pull --ff-only origin main
-git tag -a v0.3.0-beta.1.2 -m "Release v0.3.0-beta.1.2"
-git push origin v0.3.0-beta.1.2
+pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+node scripts/verify-release-contract.mjs --candidate
+pnpm run typecheck
+pnpm test
+pnpm run build
+node scripts/pack-release-packages.mjs .release-tarballs
+node scripts/smoke-packed-packages.mjs .release-tarballs
+pnpm run test:pack-charterarc
+pnpm --filter taskflow-dsl run test:e2e
+pnpm run test:e2e-codex-mcp
+pnpm run test:e2e-codex-mcp-full
+pnpm run test:e2e-claude-mcp
+pnpm run test:e2e-opencode-mcp
+pnpm run test:e2e-grok-mcp
+pnpm run test:e2e-hermes-mcp
+pnpm audit --prod
+TASKFLOW_BASE_PATH=/taskflow pnpm --dir website run build
 ```
 
-`.github/workflows/publish.yml` then performs the complete release transaction:
+The package gate repeat-packs deterministic bytes, clean-installs all ten
+local tarballs, rejects leaked workspace ranges, and exercises public exports
+and bins. It must also be run on Node 24. Source or fixture checks alone do not
+prove an installed adapter can drive its real host.
 
-1. proves the tag resolves to the event commit and that commit belongs to
-   `origin/main`;
-2. runs typecheck, unit tests and build, creates repeat-verified deterministic
-   tarballs, then runs the packed-consumer gate against those exact bytes;
-3. checks the root, all ten package versions, plugin manifests, and pinned MCP
-   package versions against the tag;
-4. publishes core first, then shared packages and delivery adapters, all with
-   public access and provenance;
-5. creates the GitHub Release from the matching `CHANGELOG.md` section.
-
-The workflow is safely rerunnable. An existing npm version is skipped only
-after owner, repository/workflow provenance, tag commit, and byte-for-byte
-local tarball integrity all match; an existing GitHub Release is likewise
-validated before it is accepted.
-
-## Verify after publish
+Before approval, test the packed Pi extension against Pi 1.0 with a real
+process, run identity, terminal completion/reap, retry, context tools and
+resume. Verify the Pi TUI (approve/reject/edit, long proposal scrolling,
+confirmation, Escape/Ctrl-C, timeout) and RPC/headless approval rejection.
+Run live executor E2E for every available supported host using isolated profiles
+and declared model/binary overrides:
 
 ```sh
-pnpm view taskflow-core version --registry=https://registry.npmjs.org/
-pnpm view taskflow-mcp-core version --registry=https://registry.npmjs.org/
-pnpm view taskflow-hosts version --registry=https://registry.npmjs.org/
-pnpm view taskflow-dsl version --registry=https://registry.npmjs.org/
-pnpm view pi-taskflow  version --registry=https://registry.npmjs.org/
-pnpm view codex-taskflow version --registry=https://registry.npmjs.org/
-pnpm view claude-taskflow version --registry=https://registry.npmjs.org/
-pnpm view opencode-taskflow version --registry=https://registry.npmjs.org/
-pnpm view grok-taskflow version --registry=https://registry.npmjs.org/
-pnpm view hermes-taskflow version --registry=https://registry.npmjs.org/
+pnpm run test:e2e-pi
+node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e.mts
+pnpm run test:e2e-pi-terminal-reap
+pnpm run test:e2e-codex
+pnpm run test:e2e-claude
+pnpm run test:e2e-opencode
+pnpm run test:e2e-grok
 ```
 
-Also verify the `Publish & Release` workflow completed successfully and that
-the non-draft prerelease GitHub Release targets the tagged commit. A
-partially published ten-package set is not a completed release; fix the cause
-and rerun the same tag workflow rather than creating a replacement tag or
-publishing missing packages manually.
+Hermes currently has an MCP fixture suite, not a checked-in live executor E2E;
+perform and record an installed Hermes list/verify/run round trip before
+claiming live Hermes acceptance. Missing binaries, credentials or model access
+are blocked checks, not passes. Process-fixture results and historical live
+results must be labeled separately. Re-run SIGKILL recovery, writer races,
+resource restoration, cancellation, descendant cleanup and detached resume
+coverage in the full suite. Unix control transport tests stay Unix-only.
 
-## Upgrade and rollback
+For each changed capability, update `skills-src/taskflow/`, run
+`pnpm run build:skills`, and verify the generated host skill drift guard. Keep
+Plugin Security Scan's score 80/high-severity gate and completed Cisco skill
+coverage, plus CodeQL and all required exact-SHA CI jobs.
 
-- Upgrade all host package pins as one transaction to `0.2.10`, restart/reload the
-  host's MCP/plugin registration, and verify `taskflow_version` reports `0.2.10`.
-- This patch does not introduce a run-state migration. Keep `.pi/taskflows/` and
-  existing run history in place when upgrading or rolling back.
-- All six hosts can roll back by pinning their delivery package to `0.2.9` and
-  restarting/reloading the host. Keep all taskflow package versions aligned; do
-  not mix a `0.2.10` adapter with `0.2.9` shared packages.
-- Before rolling back, move any definitions from `.pi/taskflows/flows/**` back to
-  the legacy top-level taskflows directory and remove `scriptCwd: "flow"`; 0.2.9
-  does not discover the nested convention or understand that field.
+## Authorized tag and publish
 
-## Install (end users)
+After review and the required live/TUI evidence, replace the `1.0.0` changelog
+heading's `Unreleased` with the actual release date in a pull request. Validate
+`node scripts/verify-release-contract.mjs --published` and complete every
+required check on that final PR head before squash-merging to `main`. This
+respects the active PR-only, linear-history ruleset; do not push a direct dating
+commit to protected main. Rerun the required checks on the resulting main SHA,
+verify its release contract, then push annotated `v1.0.0` at that exact commit.
 
-The 0.3 beta is prepared for npm's `beta` channel; after the tag workflow publishes it, use `@beta` explicitly. The stable examples below remain pinned to `0.2.10`.
+`.github/workflows/publish.yml` alone publishes. It verifies tag/main ancestry,
+the dated changelog, versions/pins, immutable reproducible packed consumers,
+then publishes the ten packages with provenance to npm `latest`. Registry
+owner, workflow/source commit and exact tarball integrity are verified for
+every package, including already-existing versions on a rerun. A separate
+least-privilege job creates the non-draft, non-prerelease GitHub Release only
+after all package verification succeeds. A partial set is incomplete: repair
+and rerun the same workflow; never replace the tag or manually publish a
+missing adapter. The legacy beta dist-tag promotion workflow is not needed.
+
+## Install and verify after publication
+
+Use exact 1.0 pins for host installation, then verify the installed version:
 
 ```sh
-# Pi users:
-pi install npm:pi-taskflow@beta
-
-# Codex users (plugin source; npm MCP package uses @beta):
+pi install npm:pi-taskflow@1.0.0
 codex plugin marketplace add heggria/taskflow
 codex plugin add taskflow@taskflow
-
-# Claude Code users (plugin source; npm MCP package uses @beta):
 claude plugin marketplace add heggria/taskflow
 claude plugin install claude-taskflow@taskflow
-
-# OpenCode users (beta MCP server):
-opencode mcp add taskflow -- npx -y -p opencode-taskflow@beta opencode-taskflow-mcp
-
-# Grok Build (beta MCP package)
-grok mcp add taskflow -- npx -y -p grok-taskflow@beta grok-taskflow-mcp
-
-# Hermes Agent (beta MCP package)
-# 0.3 beta candidate (after publication, select @beta)
-hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@beta hermes-taskflow-mcp
+opencode mcp add taskflow -- npx -y -p opencode-taskflow@1.0.0 opencode-taskflow-mcp
+grok mcp add taskflow -- npx -y -p grok-taskflow@1.0.0 grok-taskflow-mcp
+hermes mcp add taskflow --command npx --args -y -p hermes-taskflow@1.0.0 hermes-taskflow-mcp
 ```
+
+Verify all ten npm versions and `dist-tags.latest=1.0.0`, the completed publish
+workflow, exact tag commit and stable GitHub Release, then installed
+`taskflow_version=1.0.0`. Keep `.pi/taskflows/` and run history when upgrading.
+Pin a previous complete ten-package version set to roll back, restart/reload
+the host registrations, and verify their reported version. Do not mix adapter
+and shared package versions; inspect definitions for fields unsupported by
+the selected earlier release before rerunning them.

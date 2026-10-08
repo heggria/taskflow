@@ -49,6 +49,7 @@ import { runCodeCompilesScorer } from "./scorer-runtime.ts";
 import { buildReflexionSummary, isContractViolation, REFLEXION_SENTINEL, type ReflexionInput } from "./reflexion.ts";
 import { hashInput, newRunId, type PhaseState, type RunState, runsDir } from "./store.ts";
 import { resolveFinalOutput } from "./final-output.ts";
+import { isQuiescentApprovalCheckpoint } from "./resume.ts";
 import { CacheStore, resolveFingerprint } from "./cache.ts";
 import { compileTaskflowToIR, phaseFingerprint } from "./flowir/index.ts";
 import { computeStaleFrontier, declaredReadMapOfDef, readMapOf } from "./stale.ts";
@@ -154,6 +155,10 @@ export interface RuntimeDeps {
 	/** Internal: a cwd-bridge flow may mutate workspace state, so output-only
 	 * cache/resume reuse is disabled for the entire nested execution tree. */
 	_disableCache?: boolean;
+	/** Internal host-only continuation of an exact durable approval checkpoint.
+	 * The host must first exclude the old writer and re-admit live authority.
+	 * Unlike cache reuse, already settled effects are never dispatched again. */
+	_approvalCheckpointContinuation?: { runId: string };
 	/** Internal: execution originated from an LLM-authored flow{def}/ctx_spawn.
 	 * Resource-bearing fields remain denied through every nested frame. */
 	_dynamic?: boolean;
@@ -4418,6 +4423,10 @@ export async function recomputeTaskflow(
 
 export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	deps = snapshotFlowLoader(deps);
+	if (deps._approvalCheckpointContinuation?.runId === state.runId &&
+		!isQuiescentApprovalCheckpoint(state, state.foregroundOwner?.approvalWait ?? [])) {
+		throw new Error("Approval continuation requires an exact quiescent checkpoint");
+	}
 	const def: Taskflow = state.def;
 	const failBeforeExecution = (finalOutput: string): RuntimeResult => {
 		state.status = "failed";
@@ -4616,6 +4625,9 @@ export async function executeTaskflow(state: RunState, deps: RuntimeDeps): Promi
 
 async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<RuntimeResult> {
 	const def: Taskflow = state.def;
+	const settledCheckpointPhases = new Set(deps._approvalCheckpointContinuation?.runId === state.runId
+		? Object.values(state.phases).filter(phase => ["done", "failed", "skipped"].includes(phase.status)).map(phase => phase.id)
+		: []);
 	// Ownership migration must happen before ANY phase in the new definition is
 	// scheduled. Definition evolution may remove/rename ordinary phases as well
 	// as graft children; neither their terminal failure nor their usage may leak
@@ -4715,6 +4727,20 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 	let budgetBlocked = false;
 	let budgetReason = "";
 	const byId = new Map(def.phases.map((p) => [p.id, p]));
+	// A concurrently completed gate may already have blocked the old execution
+	// while another branch waited for approval. Preserve that control outcome as
+	// well as its output; skipping its completed work must not reopen the gate.
+	for (const phase of def.phases) {
+		if (!settledCheckpointPhases.has(phase.id) || !["gate", "approval"].includes(phase.type ?? "agent")) continue;
+		const previous = state.phases[phase.id];
+		if (previous?.gate?.verdict === "block") {
+			gateBlocked = true;
+			gateReason = previous.gate.reason ?? "";
+			gateOutput = previous.output ?? "";
+			gatePhaseId = phase.id;
+			break;
+		}
+	}
 
 	for (const layer of layers) {
 		if (deps.signal?.aborted) {
@@ -4728,6 +4754,9 @@ async function runTaskflowLayers(state: RunState, deps: RuntimeDeps): Promise<Ru
 		// begin after a previous call has exhausted the cap.
 		const layerConcurrency = def.budget ? 1 : Math.max(1, def.concurrency ?? 8);
 		await mapWithConcurrencyLimit(layer, layerConcurrency, async (phase) => {
+			// This is continuation of this exact execution, including non-idempotent
+			// effects. Cache policy and external fingerprint changes cannot replay it.
+			if (settledCheckpointPhases.has(phase.id)) return;
 			// Snapshot prior state BEFORE marking running, so resume cache checks work.
 			const prior = state.phases[phase.id];
 

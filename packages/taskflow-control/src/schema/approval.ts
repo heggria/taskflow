@@ -46,7 +46,10 @@ export const ApprovalRequestSchema = Type.Object(
 		createdAt: Type.Integer({ minimum: 0 }),
 		decidedAt: Type.Optional(Type.Integer({ minimum: 0 })),
 		decisionCommandId: Type.Optional(UuidSchema),
+		decisionEventId: Type.Optional(UuidSchema),
+		decisionCommitSeq: Type.Optional(Type.Integer({ minimum: 1 })),
 		editArtifactRef: Type.Optional(ArtifactRefSchema),
+		editKind: Type.Optional(StringEnum(["output", "plan"])),
 	},
 	{ additionalProperties: false },
 );
@@ -67,7 +70,10 @@ export type ApprovalRequest = {
 	createdAt: number;
 	decidedAt?: number;
 	decisionCommandId?: string;
+	decisionEventId?: string;
+	decisionCommitSeq?: number;
 	editArtifactRef?: ArtifactRef;
+	editKind?: "output" | "plan";
 };
 
 /**
@@ -87,6 +93,8 @@ export const ApprovalDecisionCommandSchema = Type.Object(
 		runId: UuidSchema,
 		expectedRunVersion: Type.Integer({ minimum: 0 }),
 		decision: ApprovalDecisionSchema,
+		editArtifactRef: Type.Optional(ArtifactRefSchema),
+		editKind: Type.Optional(StringEnum(["output", "plan"])),
 		recordedAt: Type.Integer({ minimum: 0 }),
 	},
 	{ additionalProperties: false },
@@ -102,5 +110,7 @@ export type ApprovalDecisionCommand = {
 	runId: string;
 	expectedRunVersion: number;
 	decision: ApprovalDecision;
+	editArtifactRef?: ArtifactRef;
+	editKind?: "output" | "plan";
 	recordedAt: number;
 };

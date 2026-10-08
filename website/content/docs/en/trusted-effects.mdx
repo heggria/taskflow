@@ -2,13 +2,13 @@
 title: Trusted Effects
 ---
 
-> **0.3.0-beta.1.2 — beta channel candidate, not GA.** This page describes the Trusted Effects MVP prepared for the beta release; npm publication is still a release gate.
+> **Taskflow 1.0.0 documentation.** These instructions use exact 1.0.0 package pins. Check [GitHub Releases](https://github.com/heggria/taskflow/releases) for publication and [the acceptance scoreboard](https://github.com/heggria/taskflow/blob/main/docs/internal/1.0.0-ga-scoreboard.md) for tested scope and limitations. The Control Plane and WebUI are implemented; control binaries are bundled in `taskflow-mcp-core`.
 
 Trusted Effects makes a phase's side effects explicit. The model may propose content, but for an admitted declared filesystem target, the **resources transaction is the only finalizer**.
 
 ## The vertical slice
 
-The checked-in [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/examples/trusted-effects-write.json) declares one `fs.write` effect for `out/report.md`. The no-LLM fixture exercises the same resource-controlled path:
+The checked-in [`examples/trusted-effects-write.json`](https://github.com/heggria/taskflow/blob/main/examples/trusted-effects-write.json) declares one `fs.write` effect for `out/report.md`. The no-LLM fixture exercises the same resource-controlled path:
 
 ```bash
 pnpm exec node --conditions=development --experimental-strip-types --test \
@@ -32,11 +32,11 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 - Resolve-only hosts cannot prevent every write to an undeclared path.
 - SecretRef has no vault backend in this cut.
 - ServiceRef has no live network adapter in this cut.
-- ControlHost is currently a scaffold; stores, approvals, receipts, and WebUI belong to later 0.3-C stages. None is proof that 0.3 is released or GA.
+- ControlHost implements authenticated admission, durable approvals/Receipts, coordination and WebUI over Unix UDS and files-only stores. The existing public MCP package bundles the control binaries. Windows pipes remain non-GA.
 
 ## Read next
 
 - [Core concepts](/en/docs/concepts)
 - [Compiler & runtime](/en/docs/compiler-runtime)
-- [0.3 MVP freeze in the repository](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/docs/internal/0.3.0-trusted-effects-mvp.md)
-- [Host support baseline](https://github.com/heggria/taskflow/blob/rc/0.3.0-trusted-effects/conformance/workspace/host-support-baseline.json)
+- [0.3 MVP freeze in the repository](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md)
+- [Host support baseline](https://github.com/heggria/taskflow/blob/main/conformance/workspace/host-support-baseline.json)

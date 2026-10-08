@@ -19,8 +19,9 @@
  */
 
 import { validateTaskflow, dependenciesOf, type Phase, type Taskflow } from "./schema.ts";
-import { newRunId, type PhaseState, type RunState } from "./store.ts";
+import { newRunId, probeProcess, type ProcessLiveness, type PhaseState, type RunState } from "./store.ts";
 import { getBuildInfo } from "./build-info.ts";
+import { directoryIdentity } from "./cwd-bridge.ts";
 
 /** Overrides for re-running exactly one phase on resume. `phaseId` is required;
  *  at least one of the other fields must be supplied. All values are applied to
@@ -31,6 +32,73 @@ export interface ResumeOverrides {
 	model?: string;
 	timeout?: number;
 	idleTimeout?: number;
+}
+
+/** A durable approval marker is safe only when the graph itself prevents all
+ * other unfinished phases from dispatching before one of these waits settles.
+ * Best-effort progress persistence cannot prove that a concurrent child stopped.
+ * Timed approvals may settle independently of the UI callback, so a stale marker
+ * cannot prove that their downstream children remain blocked. */
+export function isQuiescentApprovalCheckpoint(prev: RunState, waitingIds: readonly string[]): boolean {
+	if (!waitingIds.length || new Set(waitingIds).size !== waitingIds.length) return false;
+	const waiting = new Set(waitingIds);
+	const phases = new Map(prev.def.phases.map((phase) => [phase.id, phase]));
+	const isStopped = (id: string) => ["done", "failed", "skipped"].includes(prev.phases[id]?.status ?? "");
+	for (const id of waiting) {
+		const phase = phases.get(id);
+		if (phase?.type !== "approval" || phase.timeoutMs !== undefined || prev.phases[id]?.status !== "running") return false;
+	}
+	if (Object.values(prev.phases).some((phase) => phase.status === "running" && !waiting.has(phase.id))) return false;
+	const blockedByApproval = (id: string, visiting = new Set<string>()): boolean => {
+		if (waiting.has(id)) return true;
+		if (isStopped(id) || visiting.has(id)) return false;
+		const phase = phases.get(id);
+		if (!phase || phase.join === "any") return false;
+		const next = new Set(visiting).add(id);
+		return dependenciesOf(phase).some((dependency) => blockedByApproval(dependency, next));
+	};
+	return prev.def.phases.every((phase) => isStopped(phase.id) || blockedByApproval(phase.id));
+}
+
+/** Prepare an orphaned foreground checkpoint for an immutable resume fork.
+ * Only a valid recorded PID whose OS probe proves ESRCH may be recovered.
+ * PID reuse, EPERM, unavailable birth tokens and missing metadata stay closed.
+ * The parent object/file is never changed and no signal other than 0 is sent. */
+export function resumeSourceAfterOwnerExit(
+	prev: RunState,
+	options: { cwd: string; inspectProcess?: (pid: number) => ProcessLiveness },
+): { ok: true; value: RunState } | { ok: false; errors: string[] } {
+	if (prev.status !== "running") return { ok: true, value: prev };
+	const owner = prev.foregroundOwner;
+	if (!owner || owner.version !== 1 || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || owner.pid > 0x7fffffff
+		|| typeof owner.instanceId !== "string" || !owner.instanceId.trim()
+		|| !Number.isFinite(owner.startedAt) || owner.startedAt < 0) {
+		return { ok: false, errors: [`Run '${prev.runId}' is running without a verifiable foreground owner; refusing orphan recovery`] };
+	}
+	const savedRoot = prev.invocationRootSnapshot;
+	const currentRoot = directoryIdentity(options.cwd);
+	if (!savedRoot || !currentRoot || savedRoot.canonicalPath !== currentRoot.canonicalPath
+		|| savedRoot.device !== currentRoot.device || savedRoot.inode !== currentRoot.inode) {
+		return { ok: false, errors: [`Run '${prev.runId}' interrupted checkpoint belongs to a missing, replaced or different invocation root`] };
+	}
+	const running = Object.values(prev.phases).filter((phase) => phase.status === "running").map((phase) => phase.id).sort();
+	const waiting = owner.approvalWait;
+	if (!Array.isArray(waiting) || !waiting.every((id) => typeof id === "string") || !running.length || waiting.length !== running.length
+		|| running.some((id, index) => [...waiting].sort()[index] !== id) || !isQuiescentApprovalCheckpoint(prev, waiting)) {
+		return { ok: false, errors: [`Run '${prev.runId}' has no proven quiescent approval checkpoint; in-flight children may still be executing`] };
+	}
+	let liveness: ProcessLiveness = "unknown";
+	if (owner.pid !== process.pid) {
+		try { liveness = (options.inspectProcess ?? probeProcess)(owner.pid); } catch { /* unknown is not dead */ }
+	}
+	if (liveness !== "dead") {
+		return { ok: false, errors: [`Run '${prev.runId}' foreground owner ${owner.pid} is alive or unobservable; refusing concurrent resume`] };
+	}
+	// This stopped-state view exists only in memory for the existing validation
+	// and fork helpers. Historical 'running' and its owner remain on disk.
+	return { ok: true, value: { ...prev, status: "failed", foregroundInterruption: {
+		kind: "approval-owner-exit", ownerPid: owner.pid, ownerInstanceId: owner.instanceId, detectedAt: Date.now(),
+	} } };
 }
 
 function resumeStatusErrors(prev: RunState): string[] {
@@ -189,6 +257,7 @@ export function forkRunForResume(
 		...(prev.flowSourceFile !== undefined ? { flowSourceFile: prev.flowSourceFile } : {}),
 		...(prev.flowSourceDirIdentity !== undefined ? { flowSourceDirIdentity: structuredClone(prev.flowSourceDirIdentity) } : {}),
 		parentRunId: prev.runId,
+		...(prev.foregroundInterruption ? { foregroundInterruption: structuredClone(prev.foregroundInterruption) } : {}),
 		// Preserve workspace provenance/authority so a resume cannot silently
 		// escape or downgrade the parent's cwd boundary.
 		...(prev.invocationRootSnapshot !== undefined ? { invocationRootSnapshot: structuredClone(prev.invocationRootSnapshot) } : {}),

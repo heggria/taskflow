@@ -300,7 +300,7 @@ Notes:
   `{{placeholder}}` is dropped so codex falls back to its configured default.
   Codex does **not** offer a strict per-tool name whitelist: read-only tool sets
   map to `-s read-only`; any mutating tool or no list maps to
-  `-s workspace-write` (never `danger-full-access`). Effective thinking maps
+  `-s workspace-write` (unrestricted filesystem access is never selected). Effective thinking maps
   to `model_reasoning_effort`: `off`/`none`/`minimal` → `none`,
   `low`/`medium`/`high`/`xhigh` pass through, and `max`/`ultra` → `xhigh`.
   Any other value fails closed before Codex is spawned. Codex usage accounting

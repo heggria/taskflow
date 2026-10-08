@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import type { Taskflow } from "../src/schema.ts";
@@ -114,6 +115,9 @@ test("store: RunState with pid/detached persists and loads correctly", () => {
 
 test("detached-runner: completes flow and persists terminal state", async () => {
 	const cwd = makeTmpCwd();
+	let child: ChildProcess | undefined;
+	let closed = false;
+	let childExit: Promise<{ code: number | null; error?: Error }> | undefined;
 	try {
 		// Create a saved flow that the runner can execute.
 		const def = minimalFlow("detach-e2e");
@@ -126,7 +130,8 @@ test("detached-runner: completes flow and persists terminal state", async () => 
 		// without needing live model access.
 		const mockRunnerPath = path.join(cwd, "mock-detached-runner.mts");
 		fs.writeFileSync(mockRunnerPath, `
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { loadRun, saveRun } from "${pathToFileURL(path.resolve("packages/taskflow-core/src/store.ts")).href}";
 
 interface DetachContext {
@@ -150,11 +155,16 @@ state.phases = {
 	},
 };
 saveRun(state);
+// The terminal run record becomes visible before the runner's final writes.
+// Keep this window deterministic so cleanup cannot race a still-live writer.
+await new Promise((resolve) => setTimeout(resolve, 200));
+saveRun(state);
+writeFileSync(join(ctx.cwd, "runner-tail-complete"), "done");
 `);
 
 		// Spawn the mock runner as a detached process.
 		const { spawn } = await import("node:child_process");
-		const tmpFile = path.join(os.tmpdir(), `taskflow-detach-ctx-${state.runId}.json`);
+		const tmpFile = path.join(cwd, `taskflow-detach-ctx-${state.runId}.json`);
 		fs.writeFileSync(tmpFile, JSON.stringify({
 			runId: state.runId,
 			defName: "detach-e2e",
@@ -162,11 +172,14 @@ saveRun(state);
 			cwd,
 		}));
 
-		const child = spawn(process.execPath, ["--experimental-strip-types", mockRunnerPath, tmpFile], {
+		child = spawn(process.execPath, ["--experimental-strip-types", mockRunnerPath, tmpFile], {
 			detached: true,
 			stdio: "ignore",
 		});
-		child.unref();
+		childExit = new Promise((resolve) => {
+			child!.once("close", (code) => { closed = true; resolve({ code }); });
+			child!.once("error", (error) => resolve({ code: null, error }));
+		});
 
 		// Record PID and persist (mirrors index.ts detach logic).
 		state.pid = child.pid ?? undefined;
@@ -185,11 +198,32 @@ saveRun(state);
 		assert.equal(loaded!.detached, true);
 		assert.equal(loaded!.pid, child.pid);
 		assert.equal(loaded!.phases.p1?.output, "detached completed");
+		// A persisted terminal record is not process-exit evidence: saveRun may
+		// still be updating its index or cleaning stale files after that rename.
+		let exitTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const exit = await Promise.race([
+				childExit,
+				new Promise<never>((_resolve, reject) => {
+					exitTimer = setTimeout(() => reject(new Error("mock detached runner did not exit")), 5000);
+				}),
+			]);
+			assert.equal(exit.error, undefined);
+			assert.equal(exit.code, 0, "mock detached runner must exit successfully");
+		} finally {
+			if (exitTimer) clearTimeout(exitTimer);
+		}
+		assert.equal(fs.readFileSync(path.join(cwd, "runner-tail-complete"), "utf8"), "done");
 
 		// Cleanup temp files.
 		try { fs.unlinkSync(mockRunnerPath); } catch { /* ignore */ }
 		try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
 	} finally {
+		// Failure paths also close the live writer before deleting its workspace.
+		if (child && !closed) {
+			child.kill("SIGKILL");
+			await childExit;
+		}
 		cleanup(cwd);
 	}
 });

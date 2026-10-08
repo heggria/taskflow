@@ -107,12 +107,21 @@ export function serveStdio(
 		const trimmed = line.trim();
 		if (!trimmed) return;
 
-		let msg: JsonRpcRequest;
+		let parsed: unknown;
 		try {
-			msg = JSON.parse(trimmed);
+			parsed = JSON.parse(trimmed);
 		} catch {
 			// No recoverable id — per JSON-RPC, a parse error uses id:null.
 			respondErr(null, { code: RPC.PARSE_ERROR, message: "Parse error" });
+			return;
+		}
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+			respondErr(null, { code: RPC.INVALID_REQUEST, message: "Invalid Request" });
+			return;
+		}
+		const msg = parsed as JsonRpcRequest;
+		if (msg.id !== undefined && msg.id !== null && typeof msg.id !== "string" && typeof msg.id !== "number") {
+			respondErr(null, { code: RPC.INVALID_REQUEST, message: "Invalid Request" });
 			return;
 		}
 
@@ -136,7 +145,7 @@ export function serveStdio(
 			return;
 		}
 
-		const handler = handlers[msg.method];
+		const handler = Object.hasOwn(handlers, msg.method) ? handlers[msg.method] : undefined;
 		if (!handler) {
 			// Unknown notifications are silently ignored (e.g. notifications/*).
 			if (!isNotification) respondErr(id, { code: RPC.METHOD_NOT_FOUND, message: `Method not found: ${msg.method}` });

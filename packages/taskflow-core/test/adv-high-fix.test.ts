@@ -73,7 +73,7 @@ test("discovery: accepts real project .pi and verifiers subdir", async () => {
 		path.join(vdir, "ok.js"),
 		"export default { name: 'ok-v', verify() { return []; } };\n",
 	);
-	assert.equal(findProjectVerifiersDir(project), vdir);
+	assert.equal(findProjectVerifiersDir(project), fs.realpathSync(vdir));
 	const r = await discoverVerifiers(project);
 	assert.ok(r.verifiers.some((v) => v.name === "ok-v"));
 });
@@ -138,7 +138,8 @@ async function prepareTx(workspace: string, relative: string, effectId = "w") {
 		journal,
 		leaseTimeoutMs: 5_000,
 		permitTtlMs: 30_000,
-		authorizationScopeRoot: workspace,
+		// Match the canonical boundPath supplied by the production authority binding.
+		authorizationScopeRoot: fs.realpathSync(workspace),
 	});
 	return { prepared, control, workspace };
 }
@@ -161,7 +162,7 @@ test("file-transaction: concurrent commit is rejected (busy)", async () => {
 	const fulfilled = results.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof prepared.commit>>> => r.status === "fulfilled");
 	const rejected = results.filter((r) => r.status === "rejected");
 	const oks = fulfilled.filter((r) => r.value.ok);
-	assert.equal(oks.length, 1, `expected exactly one ok commit, got ${oks.length}, rejected=${rejected.length}`);
+	assert.equal(oks.length, 1, `expected exactly one ok commit, got ${oks.length}, rejected=${rejected.length}: ${JSON.stringify(fulfilled.map((r) => r.value))}`);
 	const body = fs.readFileSync(path.join(workspace, "out/a.txt"), "utf8");
 	assert.ok(body === "one" || body === "two", body);
 	if (rejected.length) {
@@ -212,7 +213,7 @@ test("file-transaction: deferred lease callback throw does not flip ok:true", as
 		journal,
 		leaseTimeoutMs: 5_000,
 		permitTtlMs: 30_000,
-		authorizationScopeRoot: workspace,
+		authorizationScopeRoot: fs.realpathSync(workspace),
 		onDeferredLeaseRelease: () => {
 			throw new Error("injected deferred release failure");
 		},
@@ -220,6 +221,6 @@ test("file-transaction: deferred lease callback throw does not flip ok:true", as
 
 	// Success path: lease release usually succeeds so callback may not run; commit must still ok.
 	const r = await prepared.commit([{ effectId: "w2", content: "ok" }]);
-	assert.equal(r.ok, true);
+	assert.equal(r.ok, true, JSON.stringify(r));
 	assert.equal(fs.readFileSync(path.join(workspace, "out/b.txt"), "utf8"), "ok");
 });

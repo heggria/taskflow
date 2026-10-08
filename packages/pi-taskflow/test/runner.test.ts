@@ -588,6 +588,7 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 			`fs.writeFileSync(${JSON.stringify(capture)}, JSON.stringify({\n` +
 			`  hasExtension: argv.includes("--extension"),\n` +
 			`  tools: (() => { const j = argv.indexOf("--tools"); return j >= 0 ? argv[j + 1] : null; })(),\n` +
+			`  excluded: (() => { const j = argv.indexOf("--exclude-tools"); return j >= 0 ? argv[j + 1] : null; })(),\n` +
 			`  ctxDir: process.env.PI_TASKFLOW_CTX_DIR ?? null,\n` +
 			`  nodeId: process.env.PI_TASKFLOW_NODE_ID ?? null,\n` +
 			`  cwdBridgeMode: process.env.TASKFLOW_CWD_BRIDGE_MODE ?? null,\n` +
@@ -636,6 +637,20 @@ test("runAgentTask: ctxDir/nodeId opt-in injects env, --extension, and the guida
 		assert.ok(wl.tools, "--tools whitelist present");
 		for (const t of ["read", "grep", "ctx_read", "ctx_write", "ctx_report", "ctx_spawn"]) {
 			assert.match(wl.tools, new RegExp(`\\b${t}\\b`), `whitelist includes ${t}`);
+		}
+
+		assert.equal(wl.excluded, "mcp__*,list_mcp_resources,list_mcp_resource_templates,read_mcp_resource");
+		for (const [tools, expected] of [
+			[["codemode", "read_mcp_resource"], "mcp__*,list_mcp_resources,list_mcp_resource_templates"],
+			[["codemode", "list_mcp_*"], "mcp__*,read_mcp_resource"],
+			[["codemode", "read_*"], "mcp__*,list_mcp_resources,list_mcp_resource_templates"],
+			[["codemode", "read_mcp_resource?"], "mcp__*,list_mcp_resources,list_mcp_resource_templates,read_mcp_resource"],
+			[["codemode", "mcp__compat__*"], null],
+			[["*"], null],
+			[[], null],
+		] as const) {
+			await runAgentTask(dir, agents, "t", "check tool boundary", { tools: [...tools] });
+			assert.equal(JSON.parse(fs.readFileSync(capture, "utf8")).excluded, expected, JSON.stringify(tools));
 		}
 
 		// (2) Opted OUT.

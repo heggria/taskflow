@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -236,7 +237,43 @@ test("singleton: reclaim bumps the fencing epoch so the old holder is fenced out
 	const second = acquireUserSingleton({ paths, holderId: "holder-b", inspectProcess: deadOwnerInspector() });
 	assert.equal(second.status, "won");
 	assert.equal(second.fencingEpoch, 2);
+	assert.equal(JSON.parse(fs.readFileSync(paths.lockPath, "utf8")).holderId, second.holderId);
+	assert.equal(JSON.parse(fs.readFileSync(paths.leasePath, "utf8")).holderId, second.holderId);
 	// Old holder's RPC with epoch 1 must now be rejected by the lease gate.
 	assert.throws(() => assertFencing({ holderId: "holder-b", fencingEpoch: 2, endpoint: paths.endpointPath, expiresAt: 0 }, 1), ControlError);
 	second.release();
+});
+
+
+test("singleton: crash reclaim followed by graceful restarts never resets the fencing generation", () => {
+ const paths = makePaths();
+ const first = acquireUserSingleton({ paths, holderId: "dead", processIdentity: { pid: DEAD_PID, birthToken: randomUUID(), birthTokenKind: "native" } });
+ assert.equal(first.status, "won");
+ const reclaimed = acquireUserSingleton({ paths, holderId: "recovered", inspectProcess: deadOwnerInspector() });
+ assert.equal(reclaimed.status, "won");
+ assert.equal(reclaimed.fencingEpoch, 2);
+ reclaimed.release();
+ assert.equal(fs.existsSync(paths.lockPath), false);
+ assert.equal(fs.existsSync(paths.leasePath), false);
+ const fresh = acquireUserSingleton({ paths, holderId: "fresh" });
+ assert.equal(fresh.status, "won"); assert.equal(fresh.fencingEpoch, 3);
+ assert.throws(() => assertFencing(readCoordinatorLease(paths), 2), /stale/);
+ fresh.release();
+ const next = acquireUserSingleton({ paths, holderId: "next" });
+ assert.equal(next.status, "won"); assert.equal(next.fencingEpoch, 4); next.release();
+});
+
+test("singleton: malformed or redirected persisted epochs fail closed", () => {
+ const paths = makePaths(), file = path.join(paths.controlHome, "coordinator-epoch.json");
+ fs.writeFileSync(file, '{"version":1,"fencingEpoch":0}', { mode: 0o600 });
+ assert.throws(() => acquireUserSingleton({ paths }), /epoch floor/);
+ fs.writeFileSync(file, JSON.stringify({ version: 1, fencingEpoch: Number.MAX_SAFE_INTEGER + 1 }));
+ assert.throws(() => acquireUserSingleton({ paths }), /epoch floor/);
+ fs.writeFileSync(file, '{"version":1,"fencingEpoch":9}'); fs.chmodSync(file, 0o644);
+ assert.throws(() => acquireUserSingleton({ paths }), /epoch file/);
+ assert.equal(fs.existsSync(paths.lockPath), false);
+ fs.unlinkSync(file);
+ const outside = path.join(paths.controlHome, "saved-epoch"); fs.writeFileSync(outside, '{"version":1,"fencingEpoch":99}', { mode: 0o600 }); fs.symlinkSync(outside, file);
+ assert.throws(() => acquireUserSingleton({ paths }), /epoch file/);
+ assert.equal(fs.existsSync(paths.lockPath), false);
 });

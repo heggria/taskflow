@@ -26,6 +26,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Value } from "typebox/value";
 import { bootstrapFailed, ControlError } from "./errors.ts";
+import { readDurableCoordinatorEpoch } from "./store/coordinator-store.ts";
 import { CoordinatorLeaseSchema, type CoordinatorLease } from "./schema/coordinator.ts";
 
 // ---------------------------------------------------------------------------
@@ -353,6 +354,35 @@ function writeLease(paths: SingletonPaths, lease: CoordinatorLease): void {
 	writeJsonAtomicDurable(paths.leasePath, lease);
 }
 
+/** Monotonic generation survives normal lock/lease cleanup. Only a lock owner
+ * publishes this floor, before making its lease usable or deleting its lock. */
+function readEpochFloor(paths: SingletonPaths): number {
+ const file = path.join(paths.controlHome, "coordinator-epoch.json");
+ try {
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || process.getuid && stat.uid !== process.getuid() || (stat.mode & 0o077) !== 0) throw bootstrapFailed("coordinator epoch file owner, mode or type is invalid");
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+   const opened = fs.fstatSync(fd);
+   if (opened.dev !== stat.dev || opened.ino !== stat.ino || opened.size > 1024) throw bootstrapFailed("coordinator epoch file identity changed");
+   const value = JSON.parse(fs.readFileSync(fd, "utf8")) as { version?: number; fencingEpoch?: number };
+   const named = fs.lstatSync(file);
+   if (named.dev !== opened.dev || named.ino !== opened.ino) throw bootstrapFailed("coordinator epoch file identity changed");
+   if (!value || value.version !== 1 || !Number.isSafeInteger(value.fencingEpoch) || value.fencingEpoch! < 1 || Object.keys(value).some(key => !["version", "fencingEpoch"].includes(key))) throw bootstrapFailed("malformed coordinator epoch floor");
+   return value.fencingEpoch!;
+  } finally { fs.closeSync(fd); }
+ } catch (error) {
+  if ((error as NodeJS.ErrnoException).code === "ENOENT") return readDurableCoordinatorEpoch(path.join(paths.controlHome, "coordinator"));
+  if (error instanceof ControlError) throw error;
+  throw bootstrapFailed("unreadable coordinator epoch floor");
+ }
+}
+function persistEpochFloor(paths: SingletonPaths, epoch: number): void {
+ const floor = readEpochFloor(paths);
+ if (!Number.isSafeInteger(epoch) || epoch < 1 || epoch < floor) throw bootstrapFailed("coordinator epoch cannot move backwards");
+ if (epoch !== floor) writeJsonAtomicDurable(path.join(paths.controlHome, "coordinator-epoch.json"), { version: 1, fencingEpoch: epoch });
+}
+
 function claimPath(paths: SingletonPaths): string {
 	return `${paths.lockPath}.claim`;
 }
@@ -403,24 +433,32 @@ export function acquireUserSingleton(options: SingletonOptions): SingletonAcquir
 
 	let published: { dev: bigint; ino: bigint } | undefined;
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
-		// 1) Try to publish the lock by hard-link create.
+		// 1) Try to publish the lock by hard-link create. The durable floor
+		// survives graceful shutdown; a fresh install alone starts at one.
+		const nextEpoch = readEpochFloor(paths) + 1;
+		if (!Number.isSafeInteger(nextEpoch)) throw bootstrapFailed("coordinator epoch is exhausted");
 		const record: SingletonLockRecord = {
 			version: SINGLETON_LOCK_VERSION,
 			holderId,
 			pid: identity.pid,
 			birthToken: identity.birthToken,
 			birthTokenKind: identity.birthTokenKind,
-			fencingEpoch: 1,
+			fencingEpoch: nextEpoch,
 			endpoint,
 			acquiredAt: now(),
 		};
 		try {
 			publishLockByHardLink(paths.lockPath, record);
-			// 2) Fresh-install win: lease starts at epoch 1 (P13: fencing epoch 0
-			//    only in the BootstrapManifest before the first acquisition).
+			// A previous holder may have completed between our floor read and
+			// publication. Retry before exposing a reused generation.
+			if (readEpochFloor(paths) >= nextEpoch) {
+				fs.unlinkSync(paths.lockPath); fsyncDirectory(paths.controlHome); continue;
+			}
+			persistEpochFloor(paths, nextEpoch);
+			// 2) Publish the usable lease only after its generation is durable.
 			writeLease(paths, {
 				holderId,
-				fencingEpoch: 1,
+				fencingEpoch: nextEpoch,
 				endpoint,
 				expiresAt: now() + leaseTtlMs,
 			});
@@ -429,7 +467,7 @@ export function acquireUserSingleton(options: SingletonOptions): SingletonAcquir
 			return {
 				status: "won",
 				holderId,
-				fencingEpoch: 1,
+				fencingEpoch: nextEpoch,
 				endpoint,
 				release: () => releaseUserSingleton(paths, { holderId, dev: published!.dev, ino: published!.ino }),
 			};
@@ -454,7 +492,7 @@ export function acquireUserSingleton(options: SingletonOptions): SingletonAcquir
 		}
 
 		// 5) Identity-bound reclaim of a dead owner (fail-closed).
-		const reclaimed = reclaimStaleLock(paths, existing, identity, inspect, now, endpoint, leaseTtlMs);
+		const reclaimed = reclaimStaleLock(paths, existing, identity, inspect, now, endpoint, leaseTtlMs, holderId);
 		if (reclaimed) {
 			const stat = fs.statSync(paths.lockPath, { bigint: true });
 			published = { dev: stat.dev, ino: stat.ino };
@@ -484,6 +522,7 @@ function reclaimStaleLock(
 	now: () => number,
 	endpoint: string,
 	leaseTtlMs: number,
+	holderId: string,
 ): boolean {
 	const claimFilePath = claimPath(paths);
 	const claim: ClaimRecord = {
@@ -531,6 +570,9 @@ function reclaimStaleLock(
 		if (current === null || current.holderId !== existing.holderId || current.acquiredAt !== existing.acquiredAt) {
 			return false; // another claimant already took over — retry loop
 		}
+		// Preserve the previous generation before opening the publish gap.
+		persistEpochFloor(paths, existing.fencingEpoch);
+		if (!Number.isSafeInteger(existing.fencingEpoch + 1)) throw bootstrapFailed("coordinator epoch is exhausted");
 		// rename-to-discard: remove the dead owner's lock without a shared-name
 		// ABA window, then publish our own (hard-link create again).
 		const discard = discardPath(paths, crypto.randomBytes(8).toString("hex"));
@@ -539,7 +581,7 @@ function reclaimStaleLock(
 		fsyncDirectory(paths.controlHome);
 		publishLockByHardLink(paths.lockPath, {
 			version: SINGLETON_LOCK_VERSION,
-			holderId: claim.claimantId,
+			holderId,
 			pid: identity.pid,
 			birthToken: identity.birthToken,
 			birthTokenKind: identity.birthTokenKind,
@@ -547,8 +589,9 @@ function reclaimStaleLock(
 			endpoint,
 			acquiredAt: now(),
 		});
+		persistEpochFloor(paths, existing.fencingEpoch + 1);
 		writeLease(paths, {
-			holderId: claim.claimantId,
+			holderId,
 			fencingEpoch: existing.fencingEpoch + 1,
 			endpoint,
 			expiresAt: now() + leaseTtlMs,
@@ -571,6 +614,9 @@ export interface SingletonReleaseIdentity {
  */
 export function releaseUserSingleton(paths: SingletonPaths, acquired: SingletonReleaseIdentity): void {
 	if (!lockInodeMatches(paths, { dev: acquired.dev, ino: acquired.ino })) return; // not our lock — never delete someone else's
+	const current = readLockRecord(paths);
+	if (!current || current.holderId !== acquired.holderId) return;
+	persistEpochFloor(paths, current.fencingEpoch);
 	const discard = discardPath(paths, crypto.randomBytes(8).toString("hex"));
 	try {
 		fs.renameSync(paths.lockPath, discard);

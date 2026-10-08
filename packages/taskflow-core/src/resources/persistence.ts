@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { bindMutexQueue } from "./mutex-bootstrap.ts";
 
 /** Exact, platform-native process-birth identity when the platform exposes one.
  * Never return an uptime estimate or a lower-precision timestamp: incomparable
@@ -123,7 +124,7 @@ export function defaultProcessInspector(pid: number): ObservedProcess {
 			: { alive: true, birthToken, birthTokenKind: "native" };
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code !== "EPERM") return { alive: false };
+		if (code === "ESRCH") return { alive: false };
 		const birthToken = readProcessBirthToken(pid);
 		return birthToken === undefined
 			? { alive: true }
@@ -250,8 +251,24 @@ function ownerIsStale(record: ProcessIdentity, identity: ProcessIdentity, inspec
 		observed.birthToken !== undefined && observed.birthToken !== record.birthToken;
 }
 
+interface FileIdentity { dev: number; ino: number; }
+interface PendingRelease {
+	queueDirectory: string;
+	queueIdentity: FileIdentity;
+	record: MutexChoosingRecord | MutexTicketRecord;
+	fileIdentity: FileIdentity;
+}
 interface TaskflowPersistenceGlobal {
-	__taskflowPendingMutexTicketReleasesV1?: Map<string, string>;
+	__taskflowPendingMutexTicketReleasesV2?: Map<string, PendingRelease>;
+}
+function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
+	return a.dev === b.dev && a.ino === b.ino;
+}
+function sameOwner(a: MutexChoosingRecord | MutexTicketRecord, b: MutexChoosingRecord | MutexTicketRecord): boolean {
+	return a.kind === b.kind && a.token === b.token && a.pid === b.pid &&
+		a.birthToken === b.birthToken && a.birthTokenKind === b.birthTokenKind &&
+		a.createdAt === b.createdAt &&
+		(a.kind !== "ticket" || (b.kind === "ticket" && a.ticket === b.ticket));
 }
 
 // A mutex instance can disappear after returning a completed critical-section
@@ -260,7 +277,7 @@ interface TaskflowPersistenceGlobal {
 // on the ticket itself carries the same fact across worker isolates/processes.
 const persistenceGlobal = globalThis as typeof globalThis & TaskflowPersistenceGlobal;
 const PROCESS_PENDING_TICKET_RELEASES =
-	persistenceGlobal.__taskflowPendingMutexTicketReleasesV1 ??= new Map<string, string>();
+	persistenceGlobal.__taskflowPendingMutexTicketReleasesV2 ??= new Map<string, PendingRelease>();
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
 	if (signal?.aborted) return Promise.reject(new CoordinatorAbortError());
@@ -305,71 +322,101 @@ export class PersistentFileMutex {
 		return `${this.lockPath}.queue`;
 	}
 
-	#removeTicketBestEffort(ticketPath: string, queueDirectory: string): boolean {
+	#assertQueue(queueDirectory: string, expected: FileIdentity): void {
+		const current = fs.lstatSync(queueDirectory);
+		if (!current.isDirectory() || !sameIdentity(current, expected)) {
+			throw new Error("TFWS_MUTEX_IDENTITY: mutex queue was replaced");
+		}
+	}
+
+	#bindQueue(queueDirectory: string): FileIdentity {
+		return bindMutexQueue(queueDirectory, this.identity,
+			(owner) => ownerIsStale(owner, this.identity, this.inspectProcess), fsyncDirectory);
+	}
+
+	#removeTicketBestEffort(ticketPath: string, pending: PendingRelease, terminalOnly = true): boolean {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			try {
+				this.#assertQueue(pending.queueDirectory, pending.queueIdentity);
+				const stat = fs.lstatSync(ticketPath);
+				if (!stat.isFile() || !sameIdentity(stat, pending.fileIdentity)) return false;
+				const current = JSON.parse(fs.readFileSync(ticketPath, "utf8")) as MutexTicketRecord;
+				if (!sameOwner(current, pending.record) || current.state !== (terminalOnly ? "done" : pending.record.state)) return false;
+				if (!sameIdentity(fs.lstatSync(ticketPath), stat)) return false;
 				fs.unlinkSync(ticketPath);
-				fsyncDirectory(queueDirectory);
+				fsyncDirectory(pending.queueDirectory);
 				return true;
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+				// A missing ticket is already released, but a missing queue is not.
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					try { this.#assertQueue(pending.queueDirectory, pending.queueIdentity); }
+					catch { return false; }
+					return true;
+				}
 			}
 		}
 		return false;
 	}
 
-	#markQueueRecordDone(
-		recordPath: string,
-		expected: MutexChoosingRecord | MutexTicketRecord,
-	): boolean {
-		const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+	#markQueueRecordDone(recordPath: string, pending: PendingRelease): boolean {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			let fd: number | undefined;
 			try {
-				fd = fs.openSync(recordPath, fs.constants.O_RDWR | noFollow);
+				this.#assertQueue(pending.queueDirectory, pending.queueIdentity);
+				fd = fs.openSync(recordPath, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW);
+				const stat = fs.fstatSync(fd);
+				if (!stat.isFile() || !sameIdentity(stat, pending.fileIdentity) ||
+					!sameIdentity(stat, fs.lstatSync(recordPath))) return false;
 				const raw = fs.readFileSync(fd, "utf8");
 				const current = JSON.parse(raw) as MutexChoosingRecord | MutexTicketRecord;
-				if (current.kind !== expected.kind || current.token !== expected.token ||
-					(current.kind === "ticket" && expected.kind === "ticket" && current.ticket !== expected.ticket) ||
-					current.pid !== expected.pid ||
-					current.birthToken !== expected.birthToken || current.birthTokenKind !== expected.birthTokenKind) {
-					return false;
-				}
+				if (!sameOwner(current, pending.record)) return false;
 				if (current.state === "done") return true;
 				if (current.state !== "held") return false;
 				const terminal = Buffer.from(JSON.stringify({ ...current, state: "done" }));
 				if (terminal.byteLength !== Buffer.byteLength(raw)) return false;
 				let offset = 0;
-				while (offset < terminal.byteLength) {
-					offset += fs.writeSync(fd, terminal, offset, terminal.byteLength - offset, offset);
-				}
+				while (offset < terminal.byteLength) offset += fs.writeSync(fd, terminal, offset, terminal.byteLength - offset, offset);
 				fs.fsyncSync(fd);
 				return true;
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-			} finally {
-				if (fd !== undefined) fs.closeSync(fd);
-			}
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					try { this.#assertQueue(pending.queueDirectory, pending.queueIdentity); }
+					catch { return false; }
+					return true;
+				}
+			} finally { if (fd !== undefined) fs.closeSync(fd); }
 		}
 		return false;
 	}
 
 	#drainPendingTicketReleases(): void {
 		const ownQueueDirectory = this.#queueDirectory();
-		for (const [ticketPath, queueDirectory] of PROCESS_PENDING_TICKET_RELEASES) {
-			if (queueDirectory !== ownQueueDirectory) continue;
-			if (this.#removeTicketBestEffort(ticketPath, queueDirectory)) {
+		for (const [ticketPath, pending] of PROCESS_PENDING_TICKET_RELEASES) {
+			if (pending.queueDirectory !== ownQueueDirectory) continue;
+			if (this.#markQueueRecordDone(ticketPath, pending) && this.#removeTicketBestEffort(ticketPath, pending)) {
 				PROCESS_PENDING_TICKET_RELEASES.delete(ticketPath);
 			}
 		}
-		if ([...PROCESS_PENDING_TICKET_RELEASES.values()].some((queueDirectory) => queueDirectory === ownQueueDirectory)) {
+		if ([...PROCESS_PENDING_TICKET_RELEASES.values()].some((pending) => pending.queueDirectory === ownQueueDirectory)) {
 			throw new Error("TFWS_CONTROL_PLANE_CLEANUP: a prior mutex ticket could not be released");
 		}
 	}
 
-	#readQueueRecord(filePath: string): MutexChoosingRecord | MutexTicketRecord | undefined {
+	#readQueueRecord(filePath: string, queueIdentity: FileIdentity, allowCorruptCleanup = true): {
+		record: MutexChoosingRecord | MutexTicketRecord;
+		fileIdentity: FileIdentity;
+	} | undefined {
+		let fd: number | undefined;
+		let stat: fs.Stats | undefined;
+		let raw: string | undefined;
+		const queueDirectory = path.dirname(filePath);
 		try {
-			const record = readJsonFile<MutexChoosingRecord | MutexTicketRecord | undefined>(filePath, undefined);
+			this.#assertQueue(queueDirectory, queueIdentity);
+			fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+			stat = fs.fstatSync(fd);
+			if (!stat.isFile()) throw new Error("invalid mutex queue file");
+			raw = fs.readFileSync(fd, "utf8");
+			const record = JSON.parse(raw) as MutexChoosingRecord | MutexTicketRecord;
 			if (!record || (record.kind !== "choosing" && record.kind !== "ticket") ||
 				typeof record.token !== "string" || !Number.isSafeInteger(record.pid) ||
 				typeof record.birthToken !== "string" || record.birthToken.length === 0 ||
@@ -377,30 +424,29 @@ export class PersistentFileMutex {
 				(record.state !== "held" && record.state !== "done")) {
 				throw new Error("invalid mutex queue record");
 			}
-			if (record.kind === "ticket" &&
-				(!Number.isSafeInteger(record.ticket) || record.ticket < 1)) {
+			if (record.kind === "ticket" && (!Number.isSafeInteger(record.ticket) || record.ticket < 1)) {
 				throw new Error("invalid mutex ticket");
 			}
-			return record;
+			if (!sameIdentity(stat, fs.lstatSync(filePath))) throw new Error("mutex queue record was replaced");
+			return { record, fileIdentity: stat };
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-			try {
-				const stat = fs.statSync(filePath);
-				if (this.now() - stat.mtimeMs >= this.corruptLockStaleMs) {
-					// Queue filenames contain a never-reused UUID. Removing this exact
-					// corrupt path cannot delete a newer owner's ticket (unlike renaming
-					// one shared lockPath after a stale read).
+			// A corrupt record is reclaimable only if its exact inode and bytes
+			// still match our observation. Never follow or remove symlink records.
+			if (allowCorruptCleanup && stat?.isFile() && raw !== undefined && this.now() - stat.mtimeMs >= this.corruptLockStaleMs) {
+				this.#assertQueue(queueDirectory, queueIdentity);
+				const current = fs.lstatSync(filePath);
+				if (current.isFile() && sameIdentity(current, stat) && fs.readFileSync(filePath, "utf8") === raw &&
+					sameIdentity(fs.lstatSync(filePath), stat)) {
 					fs.unlinkSync(filePath);
 					return undefined;
 				}
-			} catch (statError) {
-				if ((statError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 			}
 			throw error;
-		}
+		} finally { if (fd !== undefined) fs.closeSync(fd); }
 	}
 
-	#queueSnapshot(queueDirectory: string): {
+	#queueSnapshot(queueDirectory: string, queueIdentity: FileIdentity, own?: PendingRelease): {
 		choosing: Array<{ path: string; record: MutexChoosingRecord }>;
 		tickets: Array<{ path: string; record: MutexTicketRecord }>;
 	} {
@@ -410,7 +456,7 @@ export class PersistentFileMutex {
 		try {
 			names = fs.readdirSync(queueDirectory);
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return { choosing, tickets };
+			// Missing queue evidence cannot be interpreted as an empty mutex.
 			throw error;
 		}
 		for (const name of names) {
@@ -418,25 +464,21 @@ export class PersistentFileMutex {
 			const ticketName = /^ticket-([0-9a-f-]+)\.json$/.exec(name);
 			if (!choosingName && !ticketName) continue;
 			const filePath = path.join(queueDirectory, name);
-			const record = this.#readQueueRecord(filePath);
-			if (!record) continue;
+			const isOwn = own !== undefined && (choosingName?.[1] ?? ticketName?.[1]) === own.record.token;
+			const observed = this.#readQueueRecord(filePath, queueIdentity, !isOwn);
+			if (!observed) continue;
+			const { record, fileIdentity } = observed;
+			const pending = { queueDirectory, queueIdentity, record, fileIdentity };
+			if (isOwn && (!sameOwner(record, own.record) || record.state !== "held" ||
+				!sameIdentity(fileIdentity, own.fileIdentity))) {
+				throw new Error("TFWS_MUTEX_IDENTITY: own waiting record was replaced");
+			}
 			if (record.token !== (choosingName?.[1] ?? ticketName?.[1])) {
 				throw new Error("mutex queue token does not match its immutable filename");
 			}
-			if (record.state === "done") {
-				// The owner durably ended its critical section before cleanup failed.
-				// Any process/worker may remove this exact immutable terminal ticket;
-				// no birth-token inference is involved.
-				try { fs.unlinkSync(filePath); } catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				}
-				continue;
-			}
-			if (ownerIsStale(record, this.identity, this.inspectProcess)) {
-				// Every contender owns a unique immutable file, so stale recovery is
-				// exact-path deletion with no shared-name ABA window.
-				try { fs.unlinkSync(filePath); } catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			if (record.state === "done" || ownerIsStale(record, this.identity, this.inspectProcess)) {
+				if (!this.#removeTicketBestEffort(filePath, pending, false)) {
+					throw new Error("TFWS_MUTEX_IDENTITY: observed queue record changed during cleanup");
 				}
 				continue;
 			}
@@ -454,7 +496,18 @@ export class PersistentFileMutex {
 		const timeoutMs = options.timeoutMs ?? 10_000;
 		const deadline = this.now() + timeoutMs;
 		const queueDirectory = this.#queueDirectory();
-		ensureDirectory(queueDirectory);
+		let queueIdentity: FileIdentity;
+		while (true) {
+			try { queueIdentity = this.#bindQueue(queueDirectory); break; }
+			catch (error) {
+				// A concurrent first creator may still be publishing its anchor.
+				// Existing queues never authorize us to synthesize that anchor.
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT" || this.now() >= deadline) {
+					throw new Error("TFWS_MUTEX_IDENTITY: queue anchor is missing or invalid", { cause: error });
+				}
+				await delay(Math.min(this.pollMs, Math.max(1, deadline - this.now())), options.signal);
+			}
+		}
 		const token = crypto.randomUUID();
 		const choosingPath = path.join(queueDirectory, `choosing-${token}.json`);
 		const ticketPath = path.join(queueDirectory, `ticket-${token}.json`);
@@ -465,12 +518,14 @@ export class PersistentFileMutex {
 			createdAt: this.now(),
 			state: "held",
 		};
-		let publishedTicket = false;
-		let own: MutexTicketRecord | undefined;
+		let choosingPending: PendingRelease | undefined;
+		let ticketPending: PendingRelease | undefined;
 		try {
+			this.#assertQueue(queueDirectory, queueIdentity);
 			writeJsonAtomicDurable(choosingPath, choosing);
+			choosingPending = { queueDirectory, queueIdentity, record: choosing, fileIdentity: fs.lstatSync(choosingPath) };
 			if (options.signal?.aborted) throw new CoordinatorAbortError();
-			const initial = this.#queueSnapshot(queueDirectory);
+			const initial = this.#queueSnapshot(queueDirectory, queueIdentity, choosingPending);
 			const maxTicket = initial.tickets.reduce((max, item) => Math.max(max, item.record.ticket), 0);
 			if (maxTicket >= Number.MAX_SAFE_INTEGER) throw new Error("mutex ticket space exhausted");
 			const ticketRecord: MutexTicketRecord = {
@@ -481,31 +536,42 @@ export class PersistentFileMutex {
 				createdAt: this.now(),
 				state: "held",
 			};
-			own = ticketRecord;
+			this.#assertQueue(queueDirectory, queueIdentity);
 			writeJsonAtomicDurable(ticketPath, ticketRecord);
-			publishedTicket = true;
-			fs.unlinkSync(choosingPath);
+			ticketPending = { queueDirectory, queueIdentity, record: ticketRecord, fileIdentity: fs.lstatSync(ticketPath) };
+			if (!this.#markQueueRecordDone(choosingPath, choosingPending) ||
+				!this.#removeTicketBestEffort(choosingPath, choosingPending)) {
+				throw new Error("TFWS_MUTEX_IDENTITY: choosing record could not be retired");
+			}
 			fsyncDirectory(queueDirectory);
 
 			while (true) {
 				if (options.signal?.aborted) throw new CoordinatorAbortError();
-				const snapshot = this.#queueSnapshot(queueDirectory);
+				this.#assertQueue(queueDirectory, queueIdentity);
+				const snapshot = this.#queueSnapshot(queueDirectory, queueIdentity, ticketPending);
+				const ownTicket = snapshot.tickets.find((item) => item.path === ticketPath)?.record;
+				if (!ownTicket || !sameOwner(ownTicket, ticketRecord) ||
+					!sameIdentity(fs.lstatSync(ticketPath), ticketPending.fileIdentity)) {
+					throw new Error("TFWS_MUTEX_IDENTITY: own waiting ticket was lost or replaced");
+				}
 				const otherChoosing = snapshot.choosing.some((item) => item.record.token !== token);
 				const earlier = snapshot.tickets.some((item) =>
 					item.record.token !== token &&
 					(item.record.ticket < ticketRecord.ticket ||
 						(item.record.ticket === ticketRecord.ticket && item.record.token < token)));
 				if (!otherChoosing && !earlier) {
+					this.#assertQueue(queueDirectory, queueIdentity);
+					const pending = ticketPending;
 					let released = false;
 					return () => {
 						if (released) return;
-						const terminal = this.#markQueueRecordDone(ticketPath, ticketRecord);
-						if (this.#removeTicketBestEffort(ticketPath, queueDirectory)) {
+						const terminal = this.#markQueueRecordDone(ticketPath, pending);
+						if (terminal && this.#removeTicketBestEffort(ticketPath, pending)) {
 							released = true;
 							PROCESS_PENDING_TICKET_RELEASES.delete(ticketPath);
 							return;
 						}
-						PROCESS_PENDING_TICKET_RELEASES.set(ticketPath, queueDirectory);
+						PROCESS_PENDING_TICKET_RELEASES.set(ticketPath, pending);
 						console.warn(
 							`[taskflow] mutex ticket cleanup deferred for ${path.basename(ticketPath)}` +
 							(terminal ? " (critical section durably released)" : " (release marker unavailable; fail-closed)"),
@@ -518,16 +584,15 @@ export class PersistentFileMutex {
 				await delay(Math.min(this.pollMs, Math.max(1, deadline - this.now())), options.signal);
 			}
 		} catch (error) {
-			const candidates: Array<[string, MutexChoosingRecord | MutexTicketRecord]> = [
-				[choosingPath, choosing],
-				...(publishedTicket && own ? [[ticketPath, own] as [string, MutexTicketRecord]] : []),
+			const candidates: Array<[string, PendingRelease]> = [
+				...(choosingPending ? [[choosingPath, choosingPending] as [string, PendingRelease]] : []),
+				...(ticketPending ? [[ticketPath, ticketPending] as [string, PendingRelease]] : []),
 			];
 			for (const [candidate, record] of candidates) {
 				// A cancelled/timed-out contender is no longer live. Persist that fact in
 				// the immutable queue record before unlink so permission failures cannot
 				// leave a same-process ticket that blocks the queue forever.
-				this.#markQueueRecordDone(candidate, record);
-				this.#removeTicketBestEffort(candidate, queueDirectory);
+				if (this.#markQueueRecordDone(candidate, record)) this.#removeTicketBestEffort(candidate, record);
 			}
 			fsyncDirectory(queueDirectory);
 			throw error;

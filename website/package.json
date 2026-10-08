@@ -16,23 +16,23 @@
 		"prepare-source": "fumadocs-mdx"
 	},
 	"dependencies": {
-		"fumadocs-core": "16.14.0",
-		"fumadocs-mdx": "15.2.3",
-		"fumadocs-ui": "16.14.4",
-		"lucide-react": "^1.31.0",
-		"next": "16.3.1",
+		"fumadocs-core": "16.15.1",
+		"fumadocs-mdx": "15.3.1",
+		"fumadocs-ui": "16.15.1",
+		"lucide-react": "1.33.0",
+		"next": "16.3.8",
 		"react": "19.2.8",
 		"react-dom": "19.2.8"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.8",
+		"@biomejs/biome": "2.5.13",
 		"@tailwindcss/postcss": "4.3.3",
 		"@types/mdx": "^2.0.14",
-		"@types/node": "26.2.0",
+		"@types/node": "26.5.1",
 		"@types/react": "19.2.18",
 		"@types/react-dom": "19.2.4",
 		"tailwindcss": "4.3.3",
 		"typescript": "6.0.3",
-		"zod": "^4.4.3"
+		"zod": "^4.6.4"
 	}
 }
