@@ -3,6 +3,8 @@ title: TypeScript DSL（`taskflow-dsl`）
 description: 编译期 .tf.ts 写法 —— rune erase 成 Taskflow JSON，再进 FlowIR。
 ---
 
+> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整已批准 Control Plane（包括 WebUI）仍是 1.0 必须完成的验收范围；当前 private workspace 状态不能豁免。
+
 # TypeScript DSL（`taskflow-dsl`）
 
 S4 增加**编译期** TypeScript 前端：用 rune（`agent`、`map`、`race`…）写 `*.tf.ts`，CLI erase 成普通 Taskflow JSON。宿主仍通过 `taskflow_run` / `/tf run` 跑 **JSON**——**没有**解释执行路径，也**没有**宿主对 `.tf.ts` 的自动 build。

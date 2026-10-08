@@ -3,7 +3,7 @@ title: Using taskflow on Hermes Agent
 description: Install taskflow as an MCP server on Hermes Agent and orchestrate multi-phase workflows with isolated Hermes subagents.
 ---
 
-> **Taskflow 1.0 installation.** Use the exact npm pins below. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases).
+> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete approved Control Plane, including WebUI, remains required for 1.0 acceptance; current private workspace packaging is not a waiver.
 
 [Hermes Agent](https://hermes-agent.nousresearch.com/) is Nous Research's open-source coding agent (CLI, TUI, desktop, messaging gateways). Taskflow's published path is its MCP server: Hermes discovers `taskflow_*` tools and each agent phase spawns an isolated `hermes chat -q -Q` child.
 

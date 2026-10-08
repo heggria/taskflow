@@ -2,7 +2,7 @@
 title: Trusted Effects
 ---
 
-> **Taskflow 1.0 公开合同。** 稳定范围是成熟 DAG runtime、DSL、六宿主适配器和已准入的声明文件事务。Control Plane wire 合同仍为 proposed，只在 workspace 实验；parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。
+> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整已批准 Control Plane（包括 WebUI）仍是 1.0 必须完成的验收范围；当前 private workspace 状态不能豁免。
 
 Trusted Effects 把阶段的副作用写进合同。模型可以提出内容，但对于已准入的已声明文件目标，**resources transaction 是唯一最终提交者**。
 
@@ -32,7 +32,7 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 - Resolve-only 宿主无法阻止所有对未声明路径的写入。
 - 这一版没有 SecretRef vault 后端。
 - 这一版没有 ServiceRef live network adapter。
-- ControlHost 有实验性 Unix UDS 和 files-only store 代码。admission、parked 审批/receipt、协调、Windows pipe 与 WebUI 尚未完成，不属于 1.0 稳定 API。
+- ControlHost 有实验性 Unix UDS 和 files-only store 代码。admission、parked 审批/receipt、协调与 WebUI 尚未完成，是 1.0 必须完成的验收范围。Windows pipe 仍单独列为未验证范围。
 
 ## 接下来阅读
 

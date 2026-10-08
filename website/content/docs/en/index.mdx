@@ -3,7 +3,7 @@ title: taskflow 1.0 Documentation
 description: "Trusted Effects for coding-agent workflows: declare effects, verify typed paths, and commit admitted filesystem changes through one resource authority."
 ---
 
-> **Taskflow 1.0 public contract.** The stable scope is the mature DAG runtime, DSL, six host adapters and admitted declared-filesystem transactions. Control Plane wire contracts remain proposed and workspace-only; parked approvals, receipts, global coordination and WebUI are excluded.
+> **1.0.0 is unreleased.** Installation pins for 1.0.0 on this page apply only after publication. Current candidate source is on Draft PR [#142](https://github.com/heggria/taskflow/pull/142), using the historical branch `rc/0.3.0-beta.2`. Latest published prerelease: `v0.3.0-beta.1.2`. The complete approved Control Plane, including WebUI, remains required for 1.0 acceptance; current private workspace packaging is not a waiver.
 
 taskflow is a declarative runtime for coding-agent workflows. It turns a graph into a verifiable execution contract, runs phases in isolation, and keeps intermediate transcripts out of the host conversation. The 1.0 contract includes **Trusted Effects**: a typed declaration and resource-controlled commit path for admitted filesystem effects.
 
@@ -47,7 +47,7 @@ taskflow is a declarative runtime for coding-agent workflows. It turns a graph i
 
 ## Install on your host
 
-Install an exact `@1.0.0` version. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases) and the [npm registry](https://www.npmjs.com/package/pi-taskflow).
+After 1.0.0 publication, install an exact `@1.0.0` version. Publication status is recorded in [GitHub Releases](https://github.com/heggria/taskflow/releases) and the [npm registry](https://www.npmjs.com/package/pi-taskflow).
 
 <Callout type="tip">
   Every taskflow package requires **Node.js 22.19.0 or newer**. Source and fixture checks use pnpm from the repository checkout.
@@ -93,10 +93,10 @@ Install an exact `@1.0.0` version. Publication status is recorded in [GitHub Rel
 
 ## Release boundary
 
-The stable contract and workspace experiments have separate release boundaries:
+The implemented baseline and outstanding 1.0 requirements have distinct acceptance states:
 
-- **Trusted Effects MVP:** the release-bound product definition. It covers EffectIR, typed refs, labels, resource-controlled filesystem transactions, overlap admission, host-baseline honesty, and ledger-backed `why-*` explainers.
-- **Experimental Control Plane:** private workspace Unix UDS/store code with proposed wire contracts; admission, parked approvals, receipts, global coordination and WebUI remain incomplete and excluded from the stable API.
+- **Trusted Effects MVP:** the implemented baseline; it does not alone close the 1.0 scope. It covers EffectIR, typed refs, labels, resource-controlled filesystem transactions, overlap admission, host-baseline honesty, and ledger-backed `why-*` explainers.
+- **Experimental Control Plane:** private workspace Unix UDS/store code with proposed wire contracts; admission, parked approvals, receipts, global coordination and WebUI remain incomplete and are required for 1.0 acceptance.
 
 Read the [MVP freeze in the repository](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md) and the [0.3-C plan](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3-c-control-plane-plan.md) for the normative scope.
 
@@ -113,3 +113,5 @@ Read the [MVP freeze in the repository](https://github.com/heggria/taskflow/blob
     Source, issues, CI, and contribution workflow.
   </Card>
 </Cards>
+
+For the active 1.0 scope and blockers, see the [PR #142 release plan](https://github.com/heggria/taskflow/blob/rc/0.3.0-beta.2/docs/internal/1.0.0-release-plan.md).

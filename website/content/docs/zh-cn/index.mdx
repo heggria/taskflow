@@ -3,7 +3,7 @@ title: taskflow 1.0 文档
 description: "面向 coding-agent 工作流的 Trusted Effects：声明 effect，验证类型化路径，让已准入的文件修改经过唯一 resource authority。"
 ---
 
-> **Taskflow 1.0 公开合同。** 稳定范围是成熟 DAG runtime、DSL、六宿主适配器和已准入的声明文件事务。Control Plane wire 合同仍为 proposed，只在 workspace 实验；parked 审批、receipt、全局协调与 WebUI 不属于稳定 API。
+> **1.0.0 尚未发布。** 本页的 1.0.0 安装 pin 仅供发布后使用；当前候选代码位于 Draft PR [#142](https://github.com/heggria/taskflow/pull/142) 的历史分支 `rc/0.3.0-beta.2`。最新已发布 prerelease 为 `v0.3.0-beta.1.2`。完整已批准 Control Plane（包括 WebUI）仍是 1.0 必须完成的验收范围；当前 private workspace 状态不能豁免。
 
 taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图变成可验证的执行合同，让阶段隔离运行，并把中间 transcript 留在宿主对话之外。1.0 合同包含 **Trusted Effects**：为已准入的文件 effect 提供类型化声明与受 resources 控制的提交路径。
 
@@ -47,7 +47,7 @@ taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图
 
 ## 在你的宿主上使用
 
-使用精确 `@1.0.0` 版本安装。实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases) 与 [npm registry](https://www.npmjs.com/package/pi-taskflow)。
+1.0.0 正式发布后，使用精确 `@1.0.0` 版本安装。实际发布状态见 [GitHub Releases](https://github.com/heggria/taskflow/releases) 与 [npm registry](https://www.npmjs.com/package/pi-taskflow)。
 
 <Callout type="tip">
   所有 taskflow package 都要求 **Node.js 22.19.0 或更高版本**。源码与 fixture 检查使用仓库内的 pnpm。
@@ -93,10 +93,10 @@ taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图
 
 ## 发布边界
 
-稳定合同与 workspace 实验有独立发布边界：
+已实现基线与 1.0 待完成范围分别验收：
 
-- **Trusted Effects MVP：** 面向发布的产品定义。覆盖 EffectIR、类型化 ref、labels、受 resources 控制的文件 transaction、重叠准入、诚实的宿主基线与 ledger-backed `why-*` explainers。
-- **实验性 Control Plane：** private workspace Unix UDS/store 代码与 proposed wire 合同；admission、parked 审批、receipt、全局协调与 WebUI 尚未完成，不属于稳定 API。
+- **Trusted Effects MVP：** 已实现的基础能力，单独完成它不足以满足 1.0 范围。覆盖 EffectIR、类型化 ref、labels、受 resources 控制的文件 transaction、重叠准入、诚实的宿主基线与 ledger-backed `why-*` explainers。
+- **实验性 Control Plane：** private workspace Unix UDS/store 代码与 proposed wire 合同；admission、parked 审批、receipt、全局协调与 WebUI 尚未完成，是 1.0 必须完成的验收范围。
 
 规范范围请读仓库中的 [MVP 冻结定义](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3.0-trusted-effects-mvp.md) 与 [0.3-C 计划](https://github.com/heggria/taskflow/blob/main/docs/internal/0.3-c-control-plane-plan.md)。
 
@@ -113,3 +113,5 @@ taskflow 是面向 coding-agent 工作流的声明式运行时。它把任务图
     源码、issue、CI 与贡献流程。
   </Card>
 </Cards>
+
+当前 1.0 范围与阻塞项见[PR #142 release plan](https://github.com/heggria/taskflow/blob/rc/0.3.0-beta.2/docs/internal/1.0.0-release-plan.md).
