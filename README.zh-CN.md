@@ -91,6 +91,14 @@ pnpm exec node --conditions=development --experimental-strip-types --test \
 
 它会在没有 live LLM 的情况下执行仓库内的 `examples/trusted-effects-write.json` 路径。要交互式运行，请按当前使用的宿主查看对应指南。[发布指南](./RELEASE.md)说明打包消费验证和正式发布闸门。
 
+### 本地 Control Console
+
+在 Pi 中运行 `/tf web`，启动公开包内附的本地 Control Console 并打开默认浏览器。浏览器打开失败时会显示可手工访问的 loopback URL。使用提示中私有（0600）handoff 文件的一次性令牌登录；URL 和命令通知不会包含令牌。
+
+页面展示 Control Plane 的 runs、审批、Receipt 和已有 evidence；不展示旧 Pi run 的原始 transcript。同一项目重复执行会复用服务；切换项目或退出 Pi 会话时，只清理该会话启动的 Console 进程。需要 Unix 本地传输；已有其他 Host 占用 Control home 时，需先显式停止该 Host。
+
+[Pi 兼容性说明](./docs/pi-compatibility.md)列出已验证的 SDK 矩阵，并区分真实进程 fixture 与 live-provider 验收。
+
 ## 声明一个 effect
 
 Effect 是 flow 合同的一部分，不是 prompt 里的自由文本承诺：
