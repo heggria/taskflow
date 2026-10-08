@@ -49,7 +49,7 @@ Top-level keys of the taskflow definition object.
 | `agentScope` | `user`\|`project`\|`both` | `user` | Which agent dirs to load. See §6. |
 | `scriptCwd` | `invocation`\|`flow` | `invocation` | Default cwd policy for `script` phases. `flow` requires trusted saved-flow/`defineFile` provenance; explicit phase `cwd` wins, and inherited cwd-bridge boundaries still constrain the resolved source directory. `taskFile` is the same class of load-time trusted source (see §2). |
 | `args` | record | `{}` | Declared invocation arguments. See §3. |
-| `hooks` | object | — | **0.2.7.** Terminal fire-and-forget notifications: `onComplete` / `onFail` / `onBlocked` arrays of `{type:"webhook"\|"file"\|"command", …}`. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status. `https` or `http://127.0.0.1\|localhost` for webhooks; `command.run` is argv-only (no shell string). |
+| `hooks` | object | — | **0.2.7.** Terminal fire-and-forget notifications: `onComplete` / `onFail` / `onBlocked` arrays of `{type:"webhook"\|"file"\|"command", ...}`. Payload is summary-only (`taskflow.hook.v1`) — never transcripts. Hook failure never changes run status. `https` or `http://127.0.0.1\|localhost` for webhooks; `command.run` is argv-only (no shell string). |
 | `phases` | array | — | **Required.** The phase DAG. See §2. |
 | `version` | number | `1` | Informational metadata in 0.2.x; it does not select runtime semantics or migrate a flow. |
 
@@ -66,11 +66,11 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
   "id": "audit",            // required, unique — referenced via {steps.audit.output}
   "type": "map",            // agent | parallel | map | gate | reduce | approval | flow | loop | tournament | script | race | expand (default: agent)
   "agent": "analyst",       // agent name to run this phase
-  "task": "Audit {item.route}…",
+  "task": "Audit {item.route}...",
   "dependsOn": ["discover"],// DAG edges
   "over": "{steps.discover.json}",  // [map] array to fan out over
   "as": "item",             // [map] loop var name (default: item)
-  "branches": [ /* … */ ],  // [parallel|race] static task list
+  "branches": [ /* ... */ ],  // [parallel|race] static task list
   "from": ["audit"],        // [reduce] phase ids to aggregate
   "def": "{steps.plan.json}", // [expand|flow] inline fragment / dynamic sub-flow
   "expandMode": "nested",   // [expand] nested | graft
@@ -86,7 +86,7 @@ Keys of each object in `phases[]`. Some only apply to specific `type`s.
 
 | Key | Applies to | Default | Notes |
 |-----|-----------|---------|-------|
-| `id` | all | — | **Required, unique.** Used in `{steps.<id>…}`. |
+| `id` | all | — | **Required, unique.** Used in `{steps.<id>...}`. |
 | `type` | all | `agent` | One of the **12** phase types (agent, parallel, map, gate, reduce, approval, flow, loop, tournament, script, **race**, **expand**). |
 | `agent` | all | first available | Agent name; resolved from the scoped pool. |
 | `task` | agent, gate, map, reduce | — | Prompt; supports interpolation. Required for these types unless `taskFile` is set. |
@@ -268,8 +268,8 @@ There are **two independent concurrency limits**:
   "concurrency": 6,                 // ≤6 sibling phases run at once
   "phases": [
     { "id": "scan", "type": "map", "over": "{steps.list.json}",
-      "concurrency": 3,             // …but this map only fans out 3 at a time
-      "task": "…", "dependsOn": ["list"] }
+      "concurrency": 3,             // ...but this map only fans out 3 at a time
+      "task": "...", "dependsOn": ["list"] }
   ]
 }
 ```
@@ -431,7 +431,7 @@ fingerprint folds **“did the world change?”** signals into that key, so an
 external change becomes a cache **miss** even when the task text is identical.
 Each entry is one of:
 
-| Entry | Becomes a miss when… | Resolves to |
+| Entry | Becomes a miss when... | Resolves to |
 |-------|----------------------|-------------|
 | `git:HEAD` / `git:<ref>` | the commit moves | the resolved SHA (30s timeout → `<timeout>`; no git → `<no-git>`) |
 | `glob:<pattern>` | the **set of matching paths** or their metadata changes | sorted path list with size + mtime (content-hashed globs use `glob!:` instead, which is mtime-independent) |
@@ -493,7 +493,7 @@ Each entry is one of:
 ```jsonc
 { "id": "review", "type": "gate", "agent": "reviewer",
   "model": "claude-opus-4", "thinking": "high",
-  "task": "…\nVERDICT:", "dependsOn": ["audit"] }
+  "task": "...\nVERDICT:", "dependsOn": ["audit"] }
 ```
 
 **Sandbox a phase to read-only in a subdirectory:**
@@ -512,7 +512,7 @@ Each entry is one of:
 
 **Project-only agents:**
 ```jsonc
-{ "name": "ci-audit", "agentScope": "project", "phases": [ /* … */ ] }
+{ "name": "ci-audit", "agentScope": "project", "phases": [ /* ... */ ] }
 ```
 
 ---
@@ -551,22 +551,22 @@ symlinks, and commit atomically; `--emit both` preflights both destinations.
 
 **Authoring notes (kinds ↔ runes)**
 
-Import: `import { flow, agent, map, … } from "taskflow-dsl"`. Runes erase to Taskflow
+Import: `import { flow, agent, map, ... } from "taskflow-dsl"`. Runes erase to Taskflow
 JSON kinds (single source: `PHASE_TYPES` in core + `erase/kinds/*` registry).
 
 | JSON `type` | DSL rune(s) | Notes |
 |-------------|-------------|--------|
 | `agent` | `agent(task, opts?)` | templates → `{steps.*}` / `{item.*}` |
-| `parallel` | `parallel([agent…])` | waits for all branches |
-| `map` | `map(source, item => agent…)` | `over` + `as` |
+| `parallel` | `parallel([agent...])` | waits for all branches |
+| `map` | `map(source, item => agent...)` | `over` + `as` |
 | `gate` | `gate(up, opts?, task?)` · `gate.automated` · `gate.scored` | sugar → `eval` / `score` |
-| `reduce` | `reduce([…], () => agent…)` | `from` |
+| `reduce` | `reduce([...], () => agent...)` | `from` |
 | `approval` | `approval({ request })` | |
 | `flow` | `subflow("name")` · `subflow.def(plan)` | use vs def |
-| `loop` | `loop({ task, until?, … })` | |
-| `tournament` | `tournament({ branches/variants, judge, … })` | |
+| `loop` | `loop({ task, until?, ... })` | |
+| `tournament` | `tournament({ branches/variants, judge, ... })` | |
 | `script` | `script(run, opts?)` | string or argv array |
-| `race` | `race([agent…], { cancelLosers? })` | first **success** wins; cooperative loser usage is counted |
+| `race` | `race([agent...], { cancelLosers? })` | first **success** wins; cooperative loser usage is counted |
 | `expand` | `expand` / `expand.nested` / `expand.graft` | `def` + `expandMode` |
 
 - `const [a,b] = parallel([agent(...), agent(...)])` desugars to **two real agent phases** (`a`, `b`) that run concurrently (no `dependsOn` between them). Prefer this when you need `{steps.a.output}`.
