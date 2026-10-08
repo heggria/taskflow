@@ -347,7 +347,7 @@ for (const replacement of ["owner", "inode"] as const) {
 			fs.writeFileSync(ticket, bytes);
 		} else {
 			const record = JSON.parse(bytes.toString());
-			fs.writeFileSync(ticket, JSON.stringify({ ...record, birthToken: "replacement-owner" }));
+			fs.writeFileSync(ticket, JSON.stringify({ ...record, birthToken: crypto.randomUUID() }));
 		}
 		const preserved = fs.readFileSync(ticket);
 		release();

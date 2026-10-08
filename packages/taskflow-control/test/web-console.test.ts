@@ -239,6 +239,7 @@ for (const boundary of ["execute", "call", "disclose"] as const) {
 			const resume = deferred();
 			const finished = deferred();
 			let calls = 0;
+			const privateResult = randomUUID();
 			const console = await launch(t, {
 				sessionTtlMs: invalidation === "expiry" ? 200 : 60_000,
 				authorize: async ({ purpose }) => {
@@ -246,7 +247,7 @@ for (const boundary of ["execute", "call", "disclose"] as const) {
 					return { call: async () => {
 						calls++;
 						if (boundary === "call") { entered.resolve(); await resume.promise; finished.resolve(); }
-						return { secret: "private-result" };
+						return { secret: privateResult };
 					} };
 				},
 			});
@@ -265,7 +266,7 @@ for (const boundary of ["execute", "call", "disclose"] as const) {
 			assert.equal(calls, boundary === "execute" ? 0 : 1);
 			if (invalidation === "logout" || invalidation === "expiry") {
 				assert.equal(result?.status, 401);
-				assert.doesNotMatch(result!.text, /private-result/);
+				assert.equal(result!.text.includes(privateResult), false);
 			} else assert.equal(result, null);
 		});
 	}
