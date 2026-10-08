@@ -176,6 +176,8 @@ validate → Taskflow JSON → FlowIR + content hash
 同一份 flow 合同可以通过六个 coding-agent 宿主交付：
 
 - **Pi**：原生扩展、`/tf` 命令、实时运行视图与交互式审批。
+
+  Pi 兼容性矩阵覆盖 **0.80.3、0.85.1 和 1.0.4**，运行完整 adapter 测试，以及使用本地确定性 provider 的真实 CLI 扩展和子进程测试。覆盖范围与工具过滤语义见 [Pi 兼容性说明](./docs/pi-compatibility.md)。此说明针对当前源码分支，不代表发布了新版本。
 - **Codex**：plugin 与 stdio MCP server。
 - **Claude Code**：plugin 与 stdio MCP server。
 - **OpenCode**：MCP 配置与生成的 skill。

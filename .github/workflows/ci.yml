@@ -70,6 +70,41 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+  pi-peers:
+    name: pi adapter (SDK ${{ matrix.pi }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pi: ["0.80.3", "0.85.1", "1.0.4"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile --registry https://registry.npmjs.org/
+      # Change only this disposable job's adapter peers. Root dependency pins
+      # and the committed lockfile retain the main-branch baseline.
+      - name: Install exact adapter peers
+        run: >-
+          pnpm --filter pi-taskflow add --save-dev --save-exact
+          @earendil-works/pi-agent-core@${{ matrix.pi }}
+          @earendil-works/pi-ai@${{ matrix.pi }}
+          @earendil-works/pi-coding-agent@${{ matrix.pi }}
+          @earendil-works/pi-tui@${{ matrix.pi }}
+          --registry https://registry.npmjs.org/
+      - name: Verify adapter-local versions and run complete adapter suite
+        run: pnpm run test:pi:peers
+        env:
+          PI_TEST_PEER_VERSION: ${{ matrix.pi }}
+      - name: Build core and Pi extension against selected SDK
+        run: pnpm --filter taskflow-core build && pnpm --filter pi-taskflow build
+      - name: Real Pi CLI compatibility (local provider, no credentials)
+        run: pnpm run test:e2e-pi-compat
+
   e2e:
     # Required status context: keep this literal stable; the job now covers all MCP hosts.
     name: e2e (codex MCP, network-free)

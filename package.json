@@ -39,7 +39,9 @@
 		"test:e2e-grok-mcp": "node --conditions=development --experimental-strip-types packages/grok-taskflow/test/e2e-grok-mcp.mts",
 		"test:e2e-pi-terminal-reap": "node --conditions=development --experimental-strip-types packages/pi-taskflow/test/e2e-terminal-reap.mts",
 		"test:hermes": "PI_TASKFLOW_BUILTIN_AGENTS_DIR= node --conditions=development --experimental-strip-types --test 'packages/hermes-taskflow/test/*.test.ts'",
-		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts"
+		"test:e2e-hermes-mcp": "node --conditions=development --experimental-strip-types packages/hermes-taskflow/test/e2e-hermes-mcp.mts",
+		"test:pi:peers": "node scripts/verify-pi-peers.mjs && pnpm run test:pi",
+		"test:e2e-pi-compat": "node packages/pi-taskflow/test/e2e-pi-compat.mts"
 	},
 	"devDependencies": {
 		"@earendil-works/pi-agent-core": "^0.84.2",

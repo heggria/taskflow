@@ -30,7 +30,7 @@ import { type AgentScope, discoverAgents, readSubagentSettings, shouldSyncBuilti
 import { renderRunResult, summarizeRun } from "./render.ts";
 import { createPiSubagentRunner, PI_TASKFLOW_PI_ENTRY_ENV, resolveParentPiCliEntry, runnerModulePath } from "./runner.ts";
 import { RunHistoryComponent, type RunHistoryResult } from "./runs-view.ts";
-import { ApprovalViewComponent, type ApprovalChoice } from "./approval-view.ts";
+import { createApprovalRequester } from "./approval-view.ts";
 import {
 	executeTaskflow,
 	recomputeTaskflow,
@@ -45,8 +45,6 @@ import {
 	formatPreflightReport,
 	analyzeFlowRuns,
 	formatAnalyticsReport,
-	type ApprovalDecision,
-	type ApprovalRequest,
 	type RecomputeReport,
 	type ReplayReport,
 	type ReplayOverrides,
@@ -511,59 +509,7 @@ async function runFlow(
 		(heartbeat as { unref?: () => void }).unref?.();
 	}
 
-	// Human-in-the-loop approver — only when an interactive UI is available.
-	// Renders a centered modal popup (TUI overlay) with a scrollable viewport
-	// so long upstream output (e.g. a plan) can be reviewed in full before
-	// deciding (mouse wheel / ↑↓ / PgUp / PgDn to scroll).
-	const requestApproval = ctx.hasUI
-		? async (req: ApprovalRequest): Promise<ApprovalDecision> => {
-				const choice = await ctx.ui.custom<ApprovalChoice>(
-					(tui, theme, _kb, done) => {
-						const view = new ApprovalViewComponent(
-							theme,
-							{
-								title: `Taskflow approval — ${def.name}/${req.phaseId}`,
-								message: req.message,
-								upstream: req.upstream,
-							},
-							done,
-							() => tui.terminal.rows,
-						);
-						const onAbort = () => done("reject");
-						signal?.addEventListener("abort", onAbort, { once: true });
-						return {
-							render: (w: number) => view.render(w),
-							invalidate: () => view.invalidate(),
-							handleInput: (data: string) => {
-								view.handleInput(data);
-								tui.requestRender();
-							},
-							dispose: () => {
-								view.dispose();
-								signal?.removeEventListener("abort", onAbort);
-							},
-						};
-					},
-					{
-						overlay: true,
-						overlayOptions: {
-							width: "80%",
-							minWidth: 60,
-							maxHeight: "85%",
-							anchor: "center",
-						},
-					},
-				);
-				if (choice === "reject") return { decision: "reject" };
-				if (choice === "edit") {
-					const note = await ctx.ui.input("Guidance passed downstream as this phase's output", "type guidance…", {
-						signal,
-					});
-					return { decision: "edit", note: note ?? "" };
-				}
-				return { decision: "approve" };
-			}
-		: undefined;
+	const requestApproval = createApprovalRequester(ctx, def.name, signal);
 
 	try {
 		// Discover settings/agents inside try so a YAML/IO crash in

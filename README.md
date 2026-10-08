@@ -181,6 +181,8 @@ The same flow contract can be delivered through six coding-agent hosts:
 - **Grok Build** — MCP configuration and generated skill.
 - **Hermes Agent** — MCP delivery with explicit child toolsets and isolation policy.
 
+Pi compatibility is continuously checked against **0.80.3, 0.85.1, and 1.0.4**: the complete adapter suite plus real CLI extension/child-process tests using a local deterministic provider. See [Pi compatibility](./docs/pi-compatibility.md) for coverage and tool-filter semantics. This describes the source branch; it does not announce a new package release.
+
 Host support is not a blanket security guarantee. Read the [host support baseline](./conformance/workspace/host-support-baseline.json) and the [Trusted Effects documentation](./docs/internal/0.3.0-trusted-effects-mvp.md) before enabling mutating phases.
 
 ## Security boundaries we state plainly
