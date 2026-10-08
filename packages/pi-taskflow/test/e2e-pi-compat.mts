@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { runAgentTask, defaultResolveInstalledPiCli } from "../dist/runner.js";
 
@@ -18,7 +19,7 @@ console.log(`Actual Pi SDK/CLI: ${sdkVersion}`);
 const cli = defaultResolveInstalledPiCli();
 assert.ok(cli, "resolve the adapter-local Pi CLI");
 assert.equal(execFileSync(process.execPath, [cli, "--version"], { encoding: "utf8" }).trim(), sdkVersion);
-const env = { ...process.env, PI_OFFLINE: "1", PI_CODING_AGENT_DIR: agentDir, TASKFLOW_AGENT_DIR: agentDir, TASKFLOW_COMPAT_FIXTURE: "1" };
+const env = { ...process.env, PI_OFFLINE: "1", PI_CODING_AGENT_DIR: agentDir, TASKFLOW_AGENT_DIR: agentDir, TASKFLOW_COMPAT_FIXTURE: randomUUID() };
 delete env.PI_TASKFLOW_PI_BIN; delete env.PI_TASKFLOW_PI_ENTRY; delete env.PI_TASKFLOW_BUILTIN_AGENTS_DIR;
 fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({
 	defaultProvider: "taskflow-compat", defaultModel: "fixture", modelRoles: { executor: "taskflow-compat/fixture" },

@@ -1,10 +1,11 @@
 // Deterministic model at the provider boundary; the installed Pi CLI, extension,
 // tool dispatch, child process and JSON/RPC protocols remain real.
 export default function (pi) {
-	if (!process.env.TASKFLOW_COMPAT_FIXTURE) throw new Error("Test fixture requires explicit opt-in");
+	const handshake = process.env.TASKFLOW_COMPAT_FIXTURE;
+	if (!handshake) throw new Error("Test fixture requires explicit opt-in");
 	let attempts = 0;
 	pi.registerProvider("taskflow-compat", {
-		api: "taskflow-compat-api", baseUrl: "http://127.0.0.1", apiKey: "local-fixture",
+		api: "taskflow-compat-api", baseUrl: "http://127.0.0.1", apiKey: handshake,
 		models: [{ id: "fixture", name: "Local fixture", reasoning: false, input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 4096 }],
 		streamSimple(model, context) {
