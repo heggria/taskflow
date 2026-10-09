@@ -45,16 +45,16 @@
 		"test:e2e-pi-crash-resume": "node --experimental-strip-types packages/pi-taskflow/test/e2e-pi-crash-resume.mts"
 	},
 	"devDependencies": {
-		"@earendil-works/pi-agent-core": "1.0.0",
-		"@earendil-works/pi-ai": "1.0.0",
-		"@earendil-works/pi-coding-agent": "1.0.0",
-		"@earendil-works/pi-tui": "1.0.0",
+		"@earendil-works/pi-agent-core": "1.0.2",
+		"@earendil-works/pi-ai": "1.0.2",
+		"@earendil-works/pi-coding-agent": "1.0.2",
+		"@earendil-works/pi-tui": "1.0.2",
 		"@types/node": "^26",
 		"charterarc": "workspace:*",
 		"taskflow-control": "workspace:*",
 		"taskflow-core": "workspace:*",
 		"taskflow-hosts": "workspace:*",
-		"typebox": "^1.3.30",
+		"typebox": "^1.3.34",
 		"typescript": "^7.0.2"
 	}
 }
