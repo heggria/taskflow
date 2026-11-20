@@ -24,8 +24,9 @@ overrides:
   postcss: 8.5.23
   sharp: 0.35.5
   source-map-js: 1.2.2
-  # September 2026 undici advisories (TLS, WebSocket, retry, cache): fixed in 8.10.2.
-  undici: 8.10.2
+  # undici advisories (September 2026 TLS/WebSocket/retry/cache, November 2026
+  # Dependabot high/medium alerts): fixed in 8.12.2.
+  undici: 8.12.4
 allowBuilds:
   "@google/genai": true
   esbuild: true
