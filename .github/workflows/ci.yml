@@ -95,7 +95,11 @@ jobs:
       # rather than an upstream semver break.
       - name: Pin matching pi-codemode for SDK 1.0.x
         if: startsWith(matrix.pi, '1.0.')
-        run: sed -i 's/^overrides:$/overrides:\n  "@earendil-works\/pi-codemode": ${{ matrix.pi }}/' pnpm-workspace.yaml
+        env:
+          PI_VERSION: ${{ matrix.pi }}
+        run: |
+          sed -i "s|^overrides:\$|overrides:\n  '@earendil-works/pi-codemode': ${PI_VERSION}|" pnpm-workspace.yaml
+          grep -n "pi-codemode" pnpm-workspace.yaml
       - name: Install exact adapter peers
         run: >-
           pnpm --filter pi-taskflow add --save-dev --save-exact
