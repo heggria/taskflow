@@ -36,7 +36,7 @@ function launch(args: string[]) {
   request(method: string, params?: unknown): Promise<RpcResponse> {
    const id = ++sequence;
    return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`MCP ${method} timed out: ${stderr}`)); }, 10000);
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`MCP ${method} timed out: ${stderr}`)); }, 30000);
     waiting.set(id, { resolve(value) { clearTimeout(timer); resolve(value); }, reject(error) { clearTimeout(timer); reject(error); } });
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, ...(params === undefined ? {} : { params }) }) + "\n");
    });

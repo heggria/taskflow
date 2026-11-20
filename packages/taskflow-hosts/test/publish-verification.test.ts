@@ -86,8 +86,8 @@ test("publish workflow pins actions and isolates npm provenance from release per
 		uses.filter((use) => use.includes("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7")).length,
 		2,
 	);
-	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0")));
-	assert.ok(uses.some((use) => use.includes("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7")));
+	assert.ok(uses.some((use) => use.includes("pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1")));
+	assert.ok(uses.some((use) => use.includes("actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7")));
 	assert.doesNotMatch(source, /uses:\s+\S+@v\d+/);
 
 	const publish = workflowJob(source, "publish");
@@ -146,7 +146,7 @@ function verifyActionPins(source: string, trustedPins: ReadonlyMap<string, strin
 }
 
 test("action pin validation accepts major and semver comments without skipping either", () => {
-	const sha = "ea17c68df8912ef543352723c149a84f56e3d413";
+	const sha = "73e46992e05b19abd31f2f3c20e0e7370d762115";
 	const pins = new Map([["pnpm/action-setup", sha]]);
 	assert.equal(verifyActionPins(`  - uses: pnpm/action-setup@${sha} # v6\n    uses: pnpm/action-setup@${sha} # v6.1.0`, pins, "fixture"), 2);
 	for (const use of [
@@ -166,13 +166,13 @@ test("every repository workflow pins third-party actions to verified full SHAs",
 	const workflowDir = new URL("../../../.github/workflows/", import.meta.url);
 	const trustedPins = new Map([
 		["actions/checkout", "3d3c42e5aac5ba805825da76410c181273ba90b1"],
-		["pnpm/action-setup", "ea17c68df8912ef543352723c149a84f56e3d413"], // v6.1.0
-		["actions/setup-node", "820762786026740c76f36085b0efc47a31fe5020"],
+		["pnpm/action-setup", "73e46992e05b19abd31f2f3c20e0e7370d762115"], // v6.1.1
+		["actions/setup-node", "949feb2413d6458794dcd2491c4babbbce0c15c1"],
 		["actions/upload-pages-artifact", "fc324d3547104276b827a68afc52ff2a11cc49c9"],
 		["actions/deploy-pages", "368f82528645a54fb793d4d04e342629a3f51346"],
-		["github/codeql-action/init", "cdf488f595d80d6e07e03d4674febd5ab45fa938"], // v4.37.9
-		["github/codeql-action/analyze", "cdf488f595d80d6e07e03d4674febd5ab45fa938"],
-		["hashgraph-online/ai-plugin-scanner-action", "484da6f8e99a057233b939ab50450a14a68f5a1c"],
+		["github/codeql-action/init", "33d7b85da1a04171e211befe2c739303b9a4c066"], // v4.39.3
+		["github/codeql-action/analyze", "33d7b85da1a04171e211befe2c739303b9a4c066"],
+		["hashgraph-online/ai-plugin-scanner-action", "9b169fc65d09b24726b66d70b3563ab563158b58"],
 	]);
 	const files = readdirSync(workflowDir).filter((file) => /\.ya?ml$/.test(file));
 	assert.ok(files.length > 0, "no workflow files found");

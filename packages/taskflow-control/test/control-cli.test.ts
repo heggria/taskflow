@@ -25,7 +25,8 @@ async function stop(child: ChildProcessWithoutNullStreams) {
  const timeout = setTimeout(() => child.kill("SIGKILL"), 3000); await done; clearTimeout(timeout);
 }
 async function ready(process: ReturnType<typeof start>) {
- const deadline = Date.now() + 10000;
+ // Cold child startup can exceed 10s while the full suite saturates CI runners.
+ const deadline = Date.now() + 30000;
  while (!process.output().stdout.includes("\n")) {
   if (process.child.exitCode !== null || Date.now() > deadline) throw new Error(`CLI not ready: ${JSON.stringify(process.output())}`);
   await new Promise(resolve => setTimeout(resolve, 25));
