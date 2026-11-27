@@ -14,11 +14,12 @@ import { bindMutexQueue, type DirectoryIdentity } from "./resources/mutex-bootst
 import { defaultProcessIdentity } from "./resources/persistence.ts";
 
 const fault = (detail: string) => new Error(`TFWS_LEGACY_EXCLUSION_REQUIRED: ${detail}`);
-const same = (a: DirectoryIdentity, b: DirectoryIdentity) => a.dev === b.dev && a.ino === b.ino;
+const same = (a: DirectoryIdentity, b: DirectoryIdentity) => a != null && b != null &&
+	String(a.dev) === String(b.dev) && String(a.ino) === String(b.ino);
 function directory(file: string): DirectoryIdentity {
 	const stat = fs.lstatSync(file);
 	if (!stat.isDirectory() || stat.isSymbolicLink()) throw fault("namespace must be a real directory");
-	return { dev: stat.dev, ino: stat.ino };
+	return { dev: String(stat.dev), ino: String(stat.ino) };
 }
 function syncDirectory(file: string): void {
 	const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);

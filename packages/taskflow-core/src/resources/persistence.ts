@@ -251,7 +251,7 @@ function ownerIsStale(record: ProcessIdentity, identity: ProcessIdentity, inspec
 		observed.birthToken !== undefined && observed.birthToken !== record.birthToken;
 }
 
-interface FileIdentity { dev: number; ino: number; }
+interface FileIdentity { dev: number | bigint | string; ino: number | bigint | string; }
 interface PendingRelease {
 	queueDirectory: string;
 	queueIdentity: FileIdentity;
@@ -262,7 +262,7 @@ interface TaskflowPersistenceGlobal {
 	__taskflowPendingMutexTicketReleasesV2?: Map<string, PendingRelease>;
 }
 function sameIdentity(a: FileIdentity, b: FileIdentity): boolean {
-	return a.dev === b.dev && a.ino === b.ino;
+	return a != null && b != null && String(a.dev) === String(b.dev) && String(a.ino) === String(b.ino);
 }
 function sameOwner(a: MutexChoosingRecord | MutexTicketRecord, b: MutexChoosingRecord | MutexTicketRecord): boolean {
 	return a.kind === b.kind && a.token === b.token && a.pid === b.pid &&
