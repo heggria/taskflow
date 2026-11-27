@@ -4,7 +4,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export interface DirectoryIdentity { dev: number; ino: number; }
+export type IdentityComponent = number | bigint | string;
+export interface DirectoryIdentity { dev: IdentityComponent; ino: IdentityComponent; }
 interface BootstrapOwner { pid: number; birthToken: string; birthTokenKind: "native" | "opaque"; }
 interface BootstrapIntent {
 	version: 1;
@@ -16,7 +17,8 @@ interface BootstrapIntent {
 }
 interface ObservedJson { value: unknown; identity: DirectoryIdentity; }
 
-const same = (a: DirectoryIdentity, b: DirectoryIdentity) => a.dev === b.dev && a.ino === b.ino;
+const same = (a: DirectoryIdentity, b: DirectoryIdentity) => a != null && b != null &&
+	String(a.dev) === String(b.dev) && String(a.ino) === String(b.ino);
 const fault = (message: string) => new Error(`TFWS_MUTEX_IDENTITY: ${message}`);
 const waiting = () => Object.assign(fault("mutex initialization is pending"), { code: "ENOENT" });
 function exists(file: string): boolean {
@@ -26,20 +28,25 @@ function exists(file: string): boolean {
 function directoryIdentity(directory: string): DirectoryIdentity {
 	const stat = fs.lstatSync(directory);
 	if (!stat.isDirectory()) throw fault("bootstrap path must be a real directory");
-	return { dev: stat.dev, ino: stat.ino };
+	return { dev: String(stat.dev), ino: String(stat.ino) };
 }
 function read(file: string): ObservedJson {
 	const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
 	try {
 		const stat = fs.fstatSync(fd);
 		if (!stat.isFile() || !same(stat, fs.lstatSync(file))) throw fault("bootstrap record was replaced");
-		return { value: JSON.parse(fs.readFileSync(fd, "utf8")), identity: { dev: stat.dev, ino: stat.ino } };
+		return { value: JSON.parse(fs.readFileSync(fd, "utf8")), identity: { dev: String(stat.dev), ino: String(stat.ino) } };
 	} finally { fs.closeSync(fd); }
+}
+function isIdentityComponent(value: IdentityComponent): boolean {
+	if (typeof value === "bigint") return value >= 0n;
+	if (typeof value === "number") return Number.isSafeInteger(value) && value >= 0;
+	return /^\d+$/.test(value);
 }
 function identity(value: unknown): value is DirectoryIdentity {
 	if (!value || typeof value !== "object") return false;
 	const v = value as DirectoryIdentity;
-	return Number.isSafeInteger(v.dev) && Number.isSafeInteger(v.ino) && v.dev >= 0 && v.ino > 0;
+	return isIdentityComponent(v.dev) && isIdentityComponent(v.ino) && BigInt(v.ino) > 0n;
 }
 function intent(value: unknown, queueName: string): BootstrapIntent {
 	if (!value || typeof value !== "object") throw fault("invalid bootstrap intent");

@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fork, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { test, type TestContext } from "node:test";
 import { PersistentFileMutex } from "../src/resources/persistence.ts";
@@ -11,6 +12,10 @@ function fixture(t: TestContext) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tfws-bootstrap-"));
 	t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
 	return { dir, lock: path.join(dir, "mutex"), marker: path.join(dir, "marker") };
+}
+function identity(file: string): { dev: string; ino: string } {
+	const stat = fs.lstatSync(file, { bigint: true });
+	return { dev: stat.dev.toString(), ino: stat.ino.toString() };
 }
 function child(t: TestContext, args: string[]): ChildProcess {
 	const process = fork(worker, args, { stdio: ["ignore", "pipe", "pipe", "ipc"] });
@@ -119,6 +124,25 @@ for (const missing of ["initializing", "identity"] as const) {
 		assert.deepEqual(fs.readFileSync(`${lock}.queue.initialized`), completion);
 	});
 }
+
+test("mutex bootstrap accepts string identities larger than Number.MAX_SAFE_INTEGER", async t => {
+	const { dir, lock } = fixture(t);
+	const token = randomUUID();
+	const stage = `${path.basename(lock)}.queue.staging-${token}`;
+	fs.mkdirSync(path.join(dir, stage));
+	fs.writeFileSync(`${lock}.queue.initializing`, JSON.stringify({
+		version: 1,
+		token,
+		owner: { pid: 2_147_483_647, birthToken: "opaque:dead-test-owner", birthTokenKind: "opaque" },
+		parent: identity(dir),
+		directory: identity(path.join(dir, stage)),
+		stage,
+	}));
+	const release = await new PersistentFileMutex(lock, { pollMs: 1 }).acquire({ timeoutMs: 1000 });
+	release();
+	assert.equal(fs.existsSync(`${lock}.queue.identity`), true);
+	assert.equal(fs.existsSync(`${lock}.queue.initialized`), true);
+});
 
 test("mutex bootstrap ignores an unpublished staging directory after initializer SIGKILL", async t => {
 	const { dir, lock, marker } = fixture(t);
